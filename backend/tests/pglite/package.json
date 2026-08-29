@@ -1,0 +1,9 @@
+{
+  "name": "spielplan-ddl-check",
+  "private": true,
+  "type": "module",
+  "description": "Applies backend/migrations/*.sql to an in-process Postgres (PGlite) so DDL errors are caught without Docker.",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}

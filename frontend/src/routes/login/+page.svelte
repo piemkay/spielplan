@@ -1,0 +1,94 @@
+<script>
+  /**
+   * Password login. Spec v2.1 §3.2: passkeys are primary and land at M1; password login is
+   * "always available" and is what M0 ships. §3.1: an account created with a one-time password
+   * is locked to a password change at first login, so a successful login can legitimately
+   * land somewhere other than Home.
+   */
+  import '$lib/design.css';
+  import { goto } from '$app/navigation';
+  import { post } from '$lib/api.js';
+  import { setUser } from '$lib/session.svelte.js';
+
+  let name = $state('');
+  let password = $state('');
+  let error = $state('');
+  let busy = $state(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    error = '';
+    busy = true;
+    try {
+      const user = await post('/auth/login', { name, password, device_label: navigator.userAgent });
+      setUser(user);
+      await goto(user.must_change_password ? '/account/password' : '/');
+    } catch (err) {
+      error = err.message;
+    } finally {
+      busy = false;
+    }
+  }
+</script>
+
+<div class="page">
+  <form class="card" onsubmit={submit}>
+    <div class="brand">SPIELPLAN</div>
+    <h1>Sign in</h1>
+    <p class="why">
+      Passkeys arrive with the Jellyfin milestone. Until then, the password you were given —
+      or set — is the way in.
+    </p>
+
+    <label>
+      <span class="data">NAME</span>
+      <input type="text" bind:value={name} autocomplete="username" required />
+    </label>
+    <label>
+      <span class="data">PASSWORD</span>
+      <input type="password" bind:value={password} autocomplete="current-password" required />
+    </label>
+
+    {#if error}<div class="err">{error}</div>{/if}
+
+    <button class="btn-primary" type="submit" disabled={busy || !name || !password}>
+      {busy ? 'Checking…' : 'Sign in'}
+    </button>
+  </form>
+</div>
+
+<style>
+  .page {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  form {
+    width: min(380px, 100%);
+    padding: 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .brand {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.13em;
+    color: var(--ink-4);
+  }
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .err {
+    color: var(--ember-lift);
+    font-size: 12.5px;
+  }
+</style>

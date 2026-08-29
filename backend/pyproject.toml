@@ -1,0 +1,60 @@
+[project]
+name = "spielplan"
+version = "0.1.0"
+description = "Spielplan — household media graph: catalog, taste ledger, tonight sessions"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "asyncpg>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "argon2-cffi>=23.1",
+    "cryptography>=43.0",
+    "itsdangerous>=2.2",
+    "python-multipart>=0.0.12",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "zstandard>=0.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[project.scripts]
+spielplan-migrate = "spielplan.db.migrate:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spielplan"]
+
+[tool.ruff]
+# 108, not the usual 100: this codebase quotes spec sentences inline next to the code they
+# govern, and wrapping those quotes across lines makes them harder to diff against the spec.
+line-length = 108
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 forbids calls in argument defaults, which is exactly how FastAPI declares parameter
+# metadata. These four are the framework's idiom, not a mutable-default bug.
+extend-immutable-calls = [
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.Cookie",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

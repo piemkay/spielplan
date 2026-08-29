@@ -1,0 +1,3 @@
+# Repo-root lint config, so `ruff check .` covers ops/ as well as backend/.
+# The rules live with the package in backend/pyproject.toml; this only widens the scope.
+extend = "backend/pyproject.toml"

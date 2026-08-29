@@ -1,0 +1,11 @@
+# Development overlay. Publishes the database port so tests and a host-run backend can reach
+# it. NOT auto-loaded — pass it explicitly, so a production `docker compose up` cannot pick it
+# up by accident:
+#
+#   docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db
+#   TEST_DATABASE_URL=postgresql://spielplan:<POSTGRES_PASSWORD>@127.0.0.1:5432/spielplan_test
+#
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

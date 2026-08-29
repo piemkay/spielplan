@@ -1,0 +1,1077 @@
+# Spec coverage map — the contract between the spec and the test suite.
+#
+# One row per testable requirement. `milestone` names the build-order step that owes it a test
+# (§12); `tests` names the tests that actually assert it.
+#
+# `tests/test_spec_coverage.py` enforces two things:
+#   1. every requirement at or before `current_milestone` names at least one test, and
+#   2. every named test exists.
+#
+# So the way a milestone gets its tests is mechanical: raise `current_milestone`, run the suite,
+# and it fails with the list of what is now owed. Nothing here is aspirational — a row with no
+# test either blocks the milestone or carries an explicit `waived` reason.
+#
+# `kind` is the cheapest thing that can falsify the requirement:
+#   backend      pytest, no database
+#   integration  pytest against a real Postgres (TEST_DATABASE_URL)
+#   e2e          Playwright driving the real UI
+#   static       a guard that reads the source, for rules no runtime can enforce
+
+current_milestone = "M0"
+
+[[requirement]]
+id = "platform-compose-http-port-and-volumes"
+spec = "§1 diagram; §2 TLS/ingress, Backups"
+milestone = "M0"
+kind = "static"
+what = "A guard over docker-compose.yml asserts the app publishes exactly one plain-HTTP internal port and configures no TLS certificate or termination of its own, and that the volume set covers /data/pg, /data/raw, /data/artifacts, /data/cache and /data/backups."
+why = "§2: the operator's existing Traefik+Cloudflare terminates TLS; §1 names four volumes and §2's nightly dump target adds the fifth. (Corrected: /data/import rests only on unsettled proposal 138.)"
+tests = ["backend/tests/test_static_contracts.py::test_the_app_publishes_one_plain_http_port_and_terminates_no_tls", "backend/tests/test_static_contracts.py::test_every_data_volume_the_spec_names_is_mounted"]
+
+[[requirement]]
+id = "platform-cpu-only-torch-wheels"
+spec = "§1 hard constraint; §2 \"No GPU anywhere\""
+milestone = "M0"
+kind = "static"
+what = "A source guard fails if any dependency spec, lockfile or Dockerfile pulls a CUDA/ROCm torch build, an nvidia-* wheel, or a GPU base image: torch must resolve from the CPU-only index and the image must build on a GPU-less base."
+why = "§1: every in-app model update runs on CPU; reference target is a 4 vCPU / 6-8 GB GPU-less VM, and a CUDA wheel silently balloons the image and breaks that box."
+tests = ["backend/tests/test_static_contracts.py::test_the_image_pulls_torch_from_the_cpu_index_only"]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-importer-rejects-renumbered-rating-sources"
+spec = "§10 + §4.1 rule 4"
+milestone = "M0"
+kind = "integration"
+what = "The importer fails validation, names the rule, and imports nothing when a bundle's `rating_source` ids differ from the frozen set {1,2,3,4,7,11,21,23,26,28,31}, or when `rating_source` is absent; a bundle carrying the frozen ids imports and the ids survive verbatim into the DB."
+why = "Those ids key `fitted_cuts`, `equating_map` and the dataset arrays — renumbering them silently mis-maps every calibrated cut-point, and `rating_source` is mandatory in every bundle."
+tests = ["backend/tests/test_bundle_validation.py::test_frozen_rating_source_ids", "backend/tests/test_bundle_validation.py::test_missing_rating_source_table_fails", "backend/tests/test_landmine_guards.py::test_frozen_rating_source_ids_match_the_spec", "backend/tests/test_schema_contracts.py::test_the_database_refuses_a_renumbered_rating_source"]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-bundle-swap-and-active-version-invariant"
+spec = "§10 swap sequence"
+milestone = "M0"
+kind = "integration"
+what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding."
+why = "§10's invariant: everything expressed in the old Backbone's basis is garbage against a new one, so a half-swapped state must be unreachable and a stale in-process bundle must be fatal, not silent."
+tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_imports_over_the_first", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs"]
+
+[[requirement]]
+id = "platform-backup-rotation-and-ciphertext"
+spec = "§2 Backups"
+milestone = "M0"
+kind = "integration"
+what = "The nightly job writes a pg_dump into /data/backups and prunes to the newest 14; the resulting dump contains no plaintext connector secret (searching it for a known secret value finds nothing) and restoring it without SECRETS_KEY leaves connector config undecryptable rather than usable."
+why = "§2: \"Dumps contain ciphertext only — back up the env file (SECRETS_KEY) alongside them\"; rotation 14 is the stated retention."
+tests = []
+waived = "The nightly dump job does not exist yet: docker-compose.yml declares only db, backend and worker (the /data/backups volume is mounted but nothing writes to it), and ops/ holds only backend.Dockerfile, compose.dev.yml and devstub.py, so there is no rotation code to assert against. The restore half additionally needs a pg_dump binary and a restore-into-a-second-database harness that conftest.py's single-connection `db` fixture does not provide."
+
+[[requirement]]
+id = "platform-key-rotation-semantics"
+spec = "§2 Configuration"
+milestone = "M0"
+kind = "integration"
+what = "Rotating SECRETS_KEY re-wraps the single DEK row and leaves every connector secret decryptable with the stored ciphertexts unchanged; rotating SESSION_SECRET invalidates all existing sessions and leaves stored connector secrets readable."
+why = "§2 states the two rotations have disjoint blast radii — conflating them either loses connector config or forces needless re-auth. (Corrected: SECRETS_KEY rotation re-wraps the DEK, so ciphertext key_ids do not advance.)"
+tests = ["backend/tests/test_secrets.py::test_rotation_rewraps_the_dek_without_touching_secrets", "backend/tests/test_auth_logic.py::test_rotating_session_secret_invalidates_every_cookie"]
+
+[[requirement]]
+id = "platform-required-config-refuses-boot"
+spec = "§2 Configuration"
+milestone = "M0"
+kind = "backend"
+what = "Startup config validation rejects a missing or empty PUBLIC_URL, and secret-dependent connectors refuse to initialise when SECRETS_KEY is absent — never falling back to SESSION_SECRET or a derived key."
+why = "§2: PUBLIC_URL is required because WebAuthn binds credentials to the origin; §2 explicitly forbids the SESSION_SECRET fallback for connector secrets."
+tests = ["backend/tests/test_static_contracts.py::test_the_stack_refuses_to_start_without_its_required_config", "backend/tests/test_secrets.py::test_secrets_key_never_falls_back_to_session_secret"]
+
+[[requirement]]
+id = "platform-dek-aead-key-id"
+spec = "§2 Configuration; §4.2 connector_config"
+milestone = "M0"
+kind = "integration"
+what = "First boot creates exactly one random 256-bit data-encryption key row wrapped under SECRETS_KEY; every connector_config.secrets_encrypted ciphertext is AEAD and carries a key_id, and the first-boot web-push VAPID keypair is stored under the same wrapping. Flipping one ciphertext byte makes decryption fail rather than return plaintext."
+why = "§2 mandates AEAD under one DEK with a key_id for rotation agility; §14 risk 3 — a leaked Jellyfin key is admin-equivalent on the media server."
+tests = ["backend/tests/test_secrets.py::test_dek_wrap_round_trip", "backend/tests/test_secrets.py::test_dek_unwrap_fails_under_wrong_key", "backend/tests/test_secrets.py::test_seal_round_trip_and_tamper_detection", "backend/tests/test_schema_contracts.py::test_a_connector_secret_cannot_be_stored_without_naming_its_key"]
+
+[[requirement]]
+id = "platform-connector-config-env-seed-only"
+spec = "§2 Configuration; §6.6 Connectors"
+milestone = "M0"
+kind = "integration"
+what = "Connector settings (Jellyfin, LLM, TMDB, OMDb, Trakt) are read from connector_config, not env: env vars seed a connector row only when none exists at first boot, and a changed env var on a later boot does not overwrite or shadow the stored row."
+why = "§2: the owner wants connector setup in the admin UI; env may only seed for automated installs, so a stale env var must never silently win over a stored row."
+tests = []
+waived = "Not a test gap but an implementation gap, recorded so it is not mistaken for coverage: nothing reads JELLYFIN_*/TMDB_*/OMDB_*/TRAKT_* at boot — Settings has no connector fields — so the env-seeds-once-then-DB-wins precedence rule has no implementation to assert against. Build the seeding step, then test it."
+
+[[requirement]]
+id = "platform-bundleless-boot-is-legal"
+spec = "§3.1 first boot; §4.3"
+milestone = "M0"
+kind = "integration"
+what = "With /data/artifacts empty and artifact_bundle empty, the app boots healthy, serves the setup wizard and admin routes, and every artifact-dependent surface/endpoint returns an explicit \"no bundle imported\" state rather than a 5xx or an empty-looking success."
+why = "§3.1: \"a bundle-less app is a legal state\" — the wizard's own import step runs inside this state, so erroring here makes first boot unrecoverable."
+tests = ["e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so", "e2e/specs/01-first-boot.spec.js::Home renders the no-bundle state rather than an error", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written", "backend/tests/test_artifact_store.py::test_empty_store_is_legal_and_says_so", "backend/tests/test_artifact_store.py::test_empty_store_refuses_to_hand_out_paths"]
+
+[[requirement]]
+id = "platform-wizard-step-gating"
+spec = "§3.1 wizard sequence"
+milestone = "M0"
+kind = "integration"
+what = "Wizard steps run in the order create admin → connector seed → bundle import → member creation; only the admin step is mandatory (connector config and bundle import can be skipped and the app still functions), and a wizard re-entered after the admin step has completed does not create a second admin account or re-issue its credential."
+why = "§3.1 gives the sequence and declares a bundle-less app legal, so import cannot be a gate; a re-entered wizard that restarts would mint a second admin credential."
+tests = ["e2e/specs/01-first-boot.spec.js::an admin cannot be created twice", "e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so", "e2e/specs/01-first-boot.spec.js::Home renders the no-bundle state rather than an error"]
+
+[[requirement]]
+id = "platform-wizard-public-url-warning"
+spec = "§3.1; §14.4; §6 preamble; §12 M2"
+milestone = "M0"
+kind = "e2e"
+what = "Wizard step one shows the PUBLIC_URL it will bind to and states that changing it later invalidates every registered passkey; the wizard requests no push permission and runs no Add-to-Home-Screen walkthrough on the admin's device."
+why = "§14.4: \"PUBLIC_URL change invalidates passkeys; wizard warns loudly\"; §6 preamble puts the gesture-bound push prompt and standalone detection on each member's own device, and §12 schedules member PWA-install/push onboarding in M2."
+tests = ["e2e/specs/01-first-boot.spec.js::the first step warns that PUBLIC_URL is load-bearing for passkeys"]
+
+[[requirement]]
+id = "platform-forced-first-login-change"
+spec = "§3.1; §3.2 fallbacks"
+milestone = "M0"
+kind = "integration"
+what = "An account in pending_first_login state can reach only the password-change endpoint — every other authenticated route is refused — and after the change the flag clears, the new password verifies as an argon2 hash (no plaintext or non-argon2 digest in the DB), and normal password login works."
+why = "§3.1 locks a new account to a password change at first login; §3.2 makes argon2 password login the always-available fallback."
+tests = ["backend/tests/test_auth_integration.py::test_a_new_account_is_locked_to_a_password_change", "backend/tests/test_auth_integration.py::test_changing_the_password_clears_the_lock_and_invalidates_the_otp"]
+
+[[requirement]]
+id = "platform-otp-lifecycle"
+spec = "§3.1; §6.6 Users"
+milestone = "M0"
+kind = "integration"
+what = "The one-time password is returned exactly once, in the account-creation response; it is persisted only as a hash (no plaintext column anywhere), no later user-list or user-detail response contains it, and it no longer authenticates once the forced first-login password change has landed."
+why = "§3.1 calls it a one-time password — a roster row that renders it permanently is the natural but wrong reading, and makes it neither one-time nor secret."
+tests = ["backend/tests/test_auth_integration.py::test_the_otp_is_stored_only_as_a_hash", "backend/tests/test_auth_integration.py::test_changing_the_password_clears_the_lock_and_invalidates_the_otp", "backend/tests/test_auth_logic.py::test_one_time_password_avoids_ambiguous_glyphs", "backend/tests/test_auth_logic.py::test_one_time_passwords_do_not_repeat"]
+
+[[requirement]]
+id = "platform-session-cookie-contract"
+spec = "§3.2 sessions"
+milestone = "M0"
+kind = "integration"
+what = "The session cookie is HttpOnly and carries a 90-day expiry that slides: a request made inside the window extends the expiry, while a request after the window has lapsed is rejected as unauthenticated."
+why = "§3.2: 90-day sliding per-device cookies are the \"appliance\" feel — you authenticate rarely — so the sliding renewal is the behaviour, not the fixed 90 days."
+tests = ["backend/tests/test_auth_integration.py::test_loading_a_session_slides_its_expiry", "backend/tests/test_auth_integration.py::test_an_expired_session_does_not_load", "backend/tests/test_auth_integration.py::test_logout_removes_one_session_and_leaves_the_others", "backend/tests/test_auth_integration.py::test_a_password_change_revokes_every_other_session", "e2e/specs/07-boundaries.spec.js::the session cookie is HttpOnly and same-site", "e2e/specs/07-boundaries.spec.js::a tampered session cookie is rejected"]
+
+[[requirement]]
+id = "platform-admin-gating-and-reprompt"
+spec = "§3.2; §6.6 heading"
+milestone = "M0"
+kind = "integration"
+what = "A `member` session is refused on every admin route, and an `admin` session whose last admin authentication is older than 24 h is refused until it re-authenticates; a fresh admin auth restores access."
+why = "§3.2: \"admin routes re-prompt after 24 h\"; §6.6 is admin-role-only and §3.1 defines member as full product, no admin."
+tests = ["backend/tests/test_auth_integration.py::test_a_password_login_stamps_the_admin_clock_and_a_pin_switch_does_not", "backend/tests/test_auth_integration.py::test_the_admin_reprompt_fires_after_the_window", "backend/tests/test_auth_logic.py::test_a_non_admin_is_always_refused_admin_routes", "e2e/specs/07-boundaries.spec.js::admin routes refuse a signed-out caller"]
+
+[[requirement]]
+id = "data-rules-dna-evidence-required"
+spec = "§4.1 rule 1"
+milestone = "M0"
+kind = "backend"
+what = "Bundle validation fails when dna_evidence is absent, or when any dna_tag row has no evidence quote, and the report names the orphan count."
+why = "dna_evidence ships with the extracted tier — a tag without its quote is unfalsifiable."
+tests = ["backend/tests/test_bundle_validation.py::test_tag_without_evidence_fails"]
+
+[[requirement]]
+id = "data-rules-dna-tiers-never-merged"
+spec = "§4.1 rule 1"
+milestone = "M0"
+kind = "integration"
+what = "After import, dna_tag (extracted, 2,016 titles) and dna_projected (inferred, 11,324 titles) are two distinct relations, and each of the ~14,181 (title,term) pairs present in both is retrievable from each side carrying its own tier; a bundle that ships the two tiers as one unioned table fails validation."
+why = "merging makes an inferred tag indistinguishable from a quote-verified one; the spec says never merged, never unioned."
+tests = ["backend/tests/test_import_integration.py::test_rule1_both_tiers_land_separately_and_shared_pairs_survive", "backend/tests/test_bundle_validation.py::test_merged_tiers_fail", "backend/tests/test_bundle_validation.py::test_shared_dna_pairs_are_counted_not_deduped", "backend/tests/test_migrations.py::test_both_dna_tiers_exist_as_separate_tables", "backend/tests/test_landmine_guards.py::test_the_only_sanctioned_dna_union_is_the_tier_labelled_view"]
+
+[[requirement]]
+id = "data-rules-weights-never-filters"
+spec = "§4.1 rule 2"
+milestone = "M0"
+kind = "static"
+what = "A source guard fails if any SQL or query builder under backend/ applies a comparison predicate to salience, confidence or n_sources (WHERE/HAVING/filter threshold); those columns may appear only in select lists and weight expressions."
+why = "a 0.5 confidence cut deletes 44% of the extracted tier; union recalls 93%, intersection 67%."
+tests = ["backend/tests/test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter", "backend/tests/test_landmine_guards.py::test_weight_filter_guard_catches_a_real_violation", "backend/tests/test_landmine_guards.py::test_weight_filter_guard_does_not_flag_legitimate_usage"]
+
+[[requirement]]
+id = "data-rules-platform-rating-display-only"
+spec = "§4.1 rule 3"
+milestone = "M0"
+kind = "integration"
+what = "platform_rating exists only inside the display-only schema, and the DB role the feature builder connects as cannot read it — selecting it as that role raises insufficient_privilege."
+why = "aggregate platform scores are a popularity conduit and are banned as model features; the measured popularity penalty is −0.010 Spearman for nothing."
+tests = []
+waived = "The privilege half cannot be asserted at M0: there is no separate feature-builder DB role. I grepped every file under backend/migrations for CREATE ROLE, GRANT and REVOKE and found zero hits — 0003_content.sql only comments that a separate schema makes the boundary grantable — and conftest.py connects as the single owner, so nothing can raise insufficient_privilege. The schema-separation half is meanwhile already asserted by test_rule3_platform_ratings_land_in_the_display_schema_only and test_display_only_schema_exists_and_holds_only_platform_ratings."
+
+[[requirement]]
+id = "data-rules-rating-source-ids-frozen"
+spec = "§4.1 rule 4, §10"
+milestone = "M0"
+kind = "backend"
+what = "Validation fails a bundle whose rating_source contains any id outside the frozen set {1,2,3,4,7,11,21,23,26,28,31}, and fails a bundle in which rating_source is missing entirely."
+why = "these ids key fitted_cuts, equating_map and the dataset arrays, and §10 makes rating_source mandatory in every bundle."
+tests = ["backend/tests/test_bundle_validation.py::test_frozen_rating_source_ids", "backend/tests/test_bundle_validation.py::test_missing_rating_source_table_fails", "backend/tests/test_landmine_guards.py::test_frozen_rating_source_ids_match_the_spec"]
+
+[[requirement]]
+id = "data-rules-kind-non-null-indexed"
+spec = "§4.1 rule 5"
+milestone = "M0"
+kind = "integration"
+what = "Validation fails a bundle containing any title whose kind is NULL or outside {movie,series}, and the loaded title.kind column is NOT NULL, CHECK-constrained to those two values, and indexed."
+why = "every ranking surface partitions by kind; the unpartitioned crowd top-10 is 8/10 TV series."
+tests = ["backend/tests/test_bundle_validation.py::test_null_kind_fails", "backend/tests/test_schema_contracts.py::test_kind_is_not_null_and_constrained_to_two_values", "backend/tests/test_schema_contracts.py::test_kind_is_indexed"]
+
+[[requirement]]
+id = "data-rules-pk-fixes-and-no-unique-ids"
+spec = "§4.1 rule 6"
+milestone = "M0"
+kind = "integration"
+what = "Import coalesces NULLable PK components (title_alias.region and siblings) to '' so the rows survive a Postgres primary key, creates no UNIQUE constraint on title.tmdb_id/trakt_id/slug, and a bundle carrying ~315 duplicate tmdb_ids and ~171 duplicate trakt_ids loads without error."
+why = "those duplicates are legitimate, mostly movie/series pairs; Postgres rejects NULL PK components that SQLite tolerated."
+tests = ["backend/tests/test_import_integration.py::test_rule6_null_pk_components_became_empty_strings", "backend/tests/test_load_mapping.py::test_null_pk_components_are_coalesced_to_empty_string", "backend/tests/test_landmine_guards.py::test_no_unique_constraint_on_tmdb_or_trakt_ids", "backend/tests/test_bundle_validation.py::test_legitimate_duplicates_are_notes_not_failures", "backend/tests/test_import_integration.py::test_bundle_imports_clean"]
+
+[[requirement]]
+id = "data-rules-denylist-live-tables-only"
+spec = "§4.1 rule 7"
+milestone = "M0"
+kind = "backend"
+what = "Validation fails a bundle containing any table matching %_bak% or %_good, naming the offending tables in the report."
+why = "the _bak/_good tables predate the adjudication repairs; the importer enforces the deny-list."
+tests = ["backend/tests/test_bundle_validation.py::test_denylisted_table_fails"]
+
+[[requirement]]
+id = "data-rules-utf8-never-cleaned"
+spec = "§4.1 rule 8"
+milestone = "M0"
+kind = "integration"
+what = "Titles, aliases and review bodies containing CJK, RTL scripts, ZWSP and emoji round-trip through import byte-identical, and only the 73 enumerated mojibake review rows differ from their input, each by its own per-row repair."
+why = "the corpus legitimately contains non-ASCII; a blanket cleaner destroys real data while the 73 known-bad rows need individual fixes."
+tests = ["backend/tests/test_import_integration.py::test_rule8_non_ascii_survives_the_round_trip", "backend/tests/test_bundle_validation.py::test_non_ascii_survives_the_read_path", "backend/tests/test_review_mojibake.py::test_leaves_legitimate_text_exactly_as_it_arrived", "backend/tests/test_review_mojibake.py::test_repairs_cp1252_over_utf8", "e2e/specs/03-library.spec.js::non-ASCII titles survive to the screen"]
+
+[[requirement]]
+id = "data-rules-seen-state-binary"
+spec = "§4.2 user_title"
+milestone = "M0"
+kind = "integration"
+what = "user_title.state accepts only 'unseen' and 'seen' — an insert of 'forgotten' is rejected by the CHECK constraint — and updating a row from seen to unseen leaves its verdict, duel and tier_edit rows present and still attributable."
+why = "owner decision 2026-08-29: no 'forgotten' state; verdict/duel history is append-only and survives the flip."
+tests = ["backend/tests/test_landmine_guards.py::test_user_title_state_has_no_forgotten_value", "backend/tests/test_schema_contracts.py::test_seen_state_has_exactly_two_values", "backend/tests/test_schema_contracts.py::test_flipping_seen_to_unseen_keeps_the_history"]
+
+[[requirement]]
+id = "data-rules-empty-artifact-store-legal"
+spec = "§4.3, §3.1"
+milestone = "M0"
+kind = "integration"
+what = "Booting with no active artifact_bundle row — or with an active row whose directory is absent — leaves the app serving setup, auth and Library, and artifact-dependent endpoints return their documented no-bundle state rather than raising."
+why = "§4.3/§3.1: an empty store is legal and a bundle-less app is a defined state, not an error path."
+tests = ["e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so", "e2e/specs/01-first-boot.spec.js::Home renders the no-bundle state rather than an error", "backend/tests/test_artifact_store.py::test_empty_store_is_legal_and_says_so", "backend/tests/test_artifact_store.py::test_empty_store_refuses_to_hand_out_paths", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_scoring_with_no_bundle_at_all"]
+
+[[requirement]]
+id = "library-rate-catalog-filters"
+spec = "§6.0 (\"filter/search on title/alias/genre/decade/seen-state\")"
+milestone = "M0"
+kind = "integration"
+what = "A title findable only by an alias row is returned by the search field; genre, decade and seen-state each narrow the result set on their own; combining them intersects, and the reported total matches the filtered set rather than the unfiltered one."
+why = "§4.1 keeps an alias table precisely so a title the household knows by another name is findable; alias matching is the only reason it exists."
+tests = ["backend/tests/test_import_integration.py::test_genre_and_decade_filters_actually_narrow", "backend/tests/test_import_integration.py::test_a_filter_that_matches_nothing_returns_nothing", "backend/tests/test_import_integration.py::test_library_search_matches_titles_and_aliases", "backend/tests/test_import_integration.py::test_seen_filter_treats_a_missing_row_as_unseen", "backend/tests/test_import_integration.py::test_combined_filters_number_their_parameters_correctly", "e2e/specs/03-library.spec.js::search matches an alias, not just the title"]
+
+[[requirement]]
+id = "library-rate-platform-scores-display-only"
+spec = "§6.0 (\"platform scores, display-only, labelled as such\") + §4.1 rule 3"
+milestone = "M0"
+kind = "integration"
+what = "Platform scores come back from the title-card route flagged display_only with the caption \"display-only schema — platform scores are a popularity conduit and are never model features\" in the same object as the number, so no client can render the number bare."
+why = "Aggregate platform scores are a popularity conduit (measured −0.010 Spearman for nothing); the label has to travel with the number or the compact layout drops it."
+tests = ["e2e/specs/04-title-card.spec.js::platform scores travel with their display-only caption"]
+
+[[requirement]]
+id = "library-rate-dna-two-tiers"
+spec = "§6.0 (DNA card) + §4.1 rule 1"
+milestone = "M0"
+kind = "integration"
+what = "The title detail payload returns extracted and projected DNA as two separate labelled lists — never merged or unioned — every extracted tag carries its evidence quote, and a (title, term) pair present in both tiers appears in both lists and stays distinguishable."
+why = "14,181 (title,term) pairs exist in both tiers; a tag without its quote is unfalsifiable."
+tests = ["backend/tests/test_import_integration.py::test_title_card_payload_is_complete", "backend/tests/test_import_integration.py::test_rule1_every_extracted_tag_keeps_its_quote", "backend/tests/test_import_integration.py::test_rule1_both_tiers_land_separately_and_shared_pairs_survive", "backend/tests/test_landmine_guards.py::test_the_only_sanctioned_dna_union_is_the_tier_labelled_view", "e2e/specs/04-title-card.spec.js::the two DNA tiers are visibly distinct and a shared term appears in both", "e2e/specs/04-title-card.spec.js::every extracted tag shows its evidence quote and source"]
+
+[[requirement]]
+id = "library-rate-person-filter-keeps-partition"
+spec = "§6.0 (credits tappable → filmography) + decision 18"
+milestone = "M0"
+kind = "integration"
+what = "Filtering the catalog by person_id does not alter the kind toggles: with both active, a person credited on a film and on a series gets a complete filmography in one response; with Films only, the series credit is absent from items but counted in the hidden line."
+why = "Decision 18 refused to suspend the partition; at catalog scale the cross-kind credit is the common case, so a filmography silently missing half is the live bug."
+tests = ["backend/tests/test_import_integration.py::test_the_person_filter_hides_the_other_kind_until_both_are_selected", "e2e/specs/03-library.spec.js::a person filter keeps the kind partition and can be cleared"]
+
+[[requirement]]
+id = "library-rate-kind-toggle-set"
+spec = "§6.0 (kind control) + §4.1 rule 5 + decision 18"
+milestone = "M0"
+kind = "integration"
+what = "The catalog route takes kind as a SET: a request with an empty kind set is rejected rather than silently returning everything; with both kinds selected the response contains titles of both; with one selected the response carries the count of titles the other kind holds (\"6 films · 2 series hidden\")."
+why = "Decision 18 made kind two independent toggles, either or both, never neither; a hiding control that does not say what it hides is the failure the toggle was introduced to fix."
+tests = ["backend/tests/test_import_integration.py::test_selecting_no_kind_is_an_error_not_everything", "backend/tests/test_import_integration.py::test_both_kinds_selected_returns_everything", "backend/tests/test_import_integration.py::test_library_lists_titles_partitioned_by_kind", "backend/tests/test_import_integration.py::test_hidden_counts_report_the_unselected_kind", "backend/tests/test_landmine_guards.py::test_every_listing_query_partitions_by_kind", "e2e/specs/03-library.spec.js::the API refuses an empty kind selection outright", "e2e/specs/03-library.spec.js::films only, and the hidden count names what is missing", "e2e/specs/03-library.spec.js::both kinds on shows everything and nothing is reported hidden"]
+
+[[requirement]]
+id = "library-rate-model-line-no-bundle"
+spec = "§6.0 (model line in the data voice) + §3.1"
+milestone = "M0"
+kind = "integration"
+what = "With an empty artifact store the title card's model line reports unavailable with a reason instead of erroring or emitting invented b(t)/β/gate numbers; with a bundle loaded it names the bundle version and returns the numbers."
+why = "§3.1 makes a bundle-less app a legal state and requires artifact-dependent surfaces to render an explicit \"no bundle imported\" state."
+tests = ["e2e/specs/04-title-card.spec.js::the card carries metadata, overview and the model line"]
+waived = "Only the bundle-loaded branch is asserted. The no-bundle branch is unreachable through the UI at M0 for a good reason: with no bundle there are no titles, so there is no card to open. It becomes reachable at M5, when a locally acquired title can outlive a deactivated bundle; test it there against that case."
+
+[[requirement]]
+id = "map-taste-admin-bundle-report-and-diff"
+spec = "§6.6 Data + §10"
+milestone = "M0"
+kind = "integration"
+what = "Import produces a retrievable migration report — per-table counts, validation failures grouped by the §4.1 rule that caught them, vocabulary version — and a re-import additionally produces a diff against the active bundle naming the recompute set (fold-in vectors, blend weights, Ledger MAP refit, Cold Tower re-placement) with no map rebuild in it; only the hot-swap step flips artifact_bundle.active, and it requires explicit confirmation."
+why = "§10 mandates both reports and 'never a silent sync', and states the v1 axis-scatter map needs no rebuild; today 'report' is a stage chip with nothing behind it."
+tests = ["backend/tests/test_import_integration.py::test_the_report_counts_every_loaded_table", "backend/tests/test_import_integration.py::test_an_unmapped_bundle_column_is_reported_not_dropped_silently", "backend/tests/test_import_integration.py::test_a_second_import_reports_the_same_counts", "backend/tests/test_bundle_validation.py::test_report_renders_human_readable", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written"]
+
+[[requirement]]
+id = "map-taste-admin-palette-facet-binding-and-accent"
+spec = "§6.8 + §6.4 binding note"
+milestone = "M0"
+kind = "static"
+what = "A source guard asserts the UI's facet colour keys are exactly vocabulary v1's eleven facets (no invented dialogue/tone/setting/craft, none of place/era/sensibility/register missing) and that no facet colour or user identity colour reuses the ember accent #c8613a."
+why = "§6.4 binds everything facet-shaped to the real 11 facets; §6.8 spends the accent on selection and primary actions, so a facet or avatar wearing it makes selection and data indistinguishable."
+tests = ["backend/tests/test_static_contracts.py::test_facet_colours_are_exactly_vocabulary_v1", "backend/tests/test_static_contracts.py::test_no_prototype_facet_survives", "backend/tests/test_static_contracts.py::test_the_facet_colours_are_distinguishable", "backend/tests/test_static_contracts.py::test_the_ember_accent_is_not_reused_as_a_neutral", "backend/tests/test_static_contracts.py::test_the_data_voice_is_monospace_and_the_display_face_is_not"]
+
+[[requirement]]
+id = "platform-pin-profile-switch"
+spec = "§3.2 shared devices"
+milestone = "M1"
+kind = "integration"
+what = "Switching the active member from the account chip requires that member's 4-digit PIN: the switch is refused and the session identity is unchanged on a wrong PIN, commits on a correct one, and a member with no PIN set must supply their password instead."
+why = "§3.2 makes the PIN gate normative for shared/TV devices; an ungated switch hands one member's Ledger and admin reach to whoever holds the device. (Corrected from e2e: the gate is a server-side identity decision, and the menu/landing-surface details rest only on unsettled proposal 3.)"
+tests = []
+
+[[requirement]]
+id = "platform-passkey-origin-and-lifecycle"
+spec = "§3.2; §3.3; §14.4; §4.2 webauthn_credential"
+milestone = "M1"
+kind = "integration"
+what = "WebAuthn registration binds the credential to the PUBLIC_URL origin/rp_id and a user may hold several (phone + desktop); an assertion presented for a different origin or rp_id is rejected; a replayed assertion whose sign_count does not exceed the stored value is rejected; and logout clears the session cookie only, leaving credential rows intact so the same passkey signs in again."
+why = "§14 risk 4 — WebAuthn origin coupling is why PUBLIC_URL is required config; §4.2 stores sign_count for exactly this check; §3.2: \"Logout clears the session cookie only — passkeys remain registered.\""
+tests = []
+
+[[requirement]]
+id = "platform-jellyfin-link-optional-one-to-one"
+spec = "§3.3"
+milestone = "M1"
+kind = "integration"
+what = "Each app user maps to at most one Jellyfin user and each Jellyfin user to at most one app user — a second link attempt to an already-linked Jellyfin id is refused — the link is optional (unlinked users function normally), and all authentication succeeds while the Jellyfin connector is unreachable or unconfigured."
+why = "§3.3: authentication is never delegated to Jellyfin — the app must work when Jellyfin is down; the link only drives seen-sync, playback attribution and the P(seen) prior."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-admin-route-gating-and-reauth"
+spec = "§6.6 heading + §3.1 + §3.2"
+milestone = "M1"
+kind = "integration"
+what = "A member-role session receives 403 on every admin route and gets no admin/setup entry in its navigation payload (hidden, not merely disabled); an admin session whose last admin authentication is older than 24 h is re-prompted before any admin route resolves."
+why = "§6.6 is admin-role only, §3.1 gives member 'no admin', and §3.2 mandates the 24-hour re-prompt; the prototype hardcodes the capability flag to true."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-title-upsert-fill-never-clobber"
+spec = "§7.1 (with §4.1 rules 6)"
+milestone = "M1"
+kind = "integration"
+what = "A Jellyfin item whose ProviderIds carry imdb/tmdb/tvdb resolves to a `title` row by `title.id` and fills only NULL identity columns: an existing non-null `imdb_id`/`tmdb_id` is never overwritten, `jellyfin_id` is attached, and an item with no ProviderIds at all still upserts without error and without creating a duplicate title. Two owned titles sharing a `tmdb_id` both survive the upsert (no UNIQUE constraint on `tmdb_id`/`trakt_id`/slug)."
+why = "`imdb_id` is NULL on 21% of titles so it can never be the join key, and 315 duplicate `tmdb_id` values exist legitimately (mostly movie/series pairs) — hence fill-never-clobber and §4.1 rule 6's ban on those UNIQUE constraints."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-playback-arms-prompt-never-writes"
+spec = "§7.3"
+milestone = "M1"
+kind = "integration"
+what = "A Jellyfin session reaching ≥90% playback of a title arms a per-user finish prompt and leaves `user_title.state` untouched; only the user's explicit tap writes `seen`. Repeated polls of `/Sessions` over the same session arm the prompt exactly once, not once per poll."
+why = "\"Jellyfin playback is a suggestion, never a silent write\" — inferred state must never outrank the person, and rating capture is measured against finished playbacks (§13)."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-seen-sync-no-echo-loop"
+spec = "§7.3"
+milestone = "M1"
+kind = "integration"
+what = "When the app's explicit `seen`/`unseen` action and Jellyfin's Played flag disagree, the app's action wins; the write stamps `jf_synced_at`, and the next 15-minute sync reading back the value the app just wrote produces no further write and no state change. A Jellyfin-side change made after `jf_synced_at` is accepted."
+why = "Two-way sync is new relative to the corpus project's read-only stance; last-writer-wins with app-explicit precedence plus `jf_synced_at` is the stated loop guard."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-seen-write-uses-per-user-token"
+spec = "§7.3"
+milestone = "M1"
+kind = "backend"
+what = "Setting `seen` in the app issues `POST /UserPlayedItems/{itemId}?userId=` and `unseen` issues `DELETE`, both authenticated with that linked user's own access token and never the admin API key; a 401 on the write marks that link as needing re-link and neither retries with the admin key nor silently drops the write."
+why = "Jellyfin API keys are unscoped and admin-equivalent — there is no read-only variant — so write restraint is enforced by this app's code alone (§14 risk 3); a per-user token can only set its own state."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-finish-prompt-banner-path"
+spec = "§7.3 (with §12 M1, decision-doc proposal 150)"
+milestone = "M1"
+kind = "e2e"
+what = "With push undeliverable, an armed finish prompt queues and appears as an in-app card on the user's next app open, naming exactly one title (\"Did you finish X?\"); its first tap writes `seen` for that user, and the card does not reappear on subsequent opens."
+why = "§7.3 names the banner path as the whole M1 behaviour (push waits for M4), and proposal 150 separates this one-title, `seen`-writing prompt from Home's pending-verdicts banner; only a browser can prove the queued prompt surfaces on next open."
+tests = []
+
+[[requirement]]
+id = "library-rate-undo-block-depth"
+spec = "decision 35 + §6.1 (blocks of 15)"
+milestone = "M2"
+kind = "integration"
+what = "Undo reaches back only to the start of the current block of 15: repeated Undo stops at the block's first observation and the response reports undo as unavailable rather than silently no-opping, and once a new block starts the previous block's observations are no longer undoable."
+why = "Decision 35: the depth matches the counter the user is already reading (\"7 / 15 this block\"), the boundary is refused explicitly rather than silently, and starting a new block commits the previous one."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-reimport-rebuild-set"
+spec = "§10 rebuild set (with decision-doc proposals 141, 111)"
+milestone = "M2"
+kind = "integration"
+what = "A re-import against a different Backbone recomputes exactly four things and nothing else: user fold-in vectors, per-label-count blend weights, a full Ledger MAP refit, and Cold Tower re-placement of every app-acquired title using feature vectors rebuilt from the staged bundle's contract (whose column set may differ). Every `verdict`, `duel` and `tier_edit` row survives the re-import unchanged."
+why = "Ledger observations reference `title.id` and vocabulary-independent facts so they survive, while anything expressed in the old basis does not; the v1 Map is a deterministic axis scatter with no rebuild step, so its presence in the recompute set is a bug."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-silent-reask-stream"
+spec = "§13 stream (b) (with decision-doc proposal 50)"
+milestone = "M2"
+kind = "integration"
+what = "About 10% of queue slots are silent re-asks of verdicts and duels at least 3 days old; the payload served to the client carries no marker distinguishing a re-ask from a first observation, the re-ask is stored distinguishably server-side so the flip rate σ is computable over ~200 re-asks, and it is counted neither as a second independent observation by the Ledger nor in the class-balance widget."
+why = "The re-ask stream is a different instrument from the uniform-random stream — the latter cannot measure test–retest consistency — and σ sets the tier budget and settles the corpus's zero-test-retest-data unknown."
+tests = []
+
+[[requirement]]
+id = "data-rules-ranking-partitions-by-kind"
+spec = "§4.1 rule 5 (decision 18)"
+milestone = "M2"
+kind = "integration"
+what = "A ranked-list request carries two independent kind toggles: with both on the response is two kind-headed sections each ordered within itself and never one merged ordering; with neither on the request is rejected; adding a person filter does not suspend the partition."
+why = "decision 18: kind is two toggles, either or both, never neither; both-on renders two headed sections on a surface that ranks, and the person filter does not suspend the partition."
+tests = []
+
+[[requirement]]
+id = "data-rules-verdict-append-only"
+spec = "§4.2 verdict"
+milestone = "M2"
+kind = "integration"
+what = "Re-rating a title inserts a new verdict row and stamps superseded_by on the previous one rather than mutating it, the nightly refit's observation set contains both rows, and outside the block-scoped Undo journal (decision 35) no write path updates a verdict's value or deletes a verdict row."
+why = "a rewatch re-rating is a new ordinal observation (drift signal for free), not a correction of the old one."
+tests = []
+
+[[requirement]]
+id = "data-rules-feature-contract-sole-input"
+spec = "§4.3 feature_contract.json"
+milestone = "M2"
+kind = "backend"
+what = "A title's feature vector is built from feature_contract.json alone: the nine content blocks in the contract's declared order and sizes (6,435 columns) with absent blocks dropped and genome zero-imputed, plus columns 0..63 of the 256-d review-text SVD scaled by the contract's frozen text_scale; editing a block size or text_scale in the contract changes the produced vector correspondingly."
+why = "§8 stage 9 builds vectors from this file and nothing else; text_scale is frozen at export time so placements stay comparable across runs."
+tests = []
+
+[[requirement]]
+id = "data-rules-ledger-hyperparams-from-bundle"
+spec = "§4.3 ledger_hyperparams.json"
+milestone = "M2"
+kind = "backend"
+what = "Refitting the Ledger against a ledger_hyperparams.json with altered constants (ridge λ, λ_bt, step count, learning rate, margin-weight form, tie prior δ₀, b_i prior τ, σ-inflation rate and cap) changes the fit for every one of them, and bundle validation accepts a bundle that ships no per-user cutpoints and no per-arm sensitivities."
+why = "§4.3 ships those constants for offline re-tuning and deliberately withholds the per-user quantities, which are fitted in-app."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-cpu-job-budgets"
+spec = "§5.3"
+milestone = "M2"
+kind = "backend"
+what = "On CPU only, with no GPU present: a Ledger incremental update for one observation completes under 50 ms, Cold Tower placement of one title under 1 s, per-title DNA projection under 1 s, and a full Ledger MAP refit plus cutpoints and σ over both users' full owned library (839+ titles) completes in under 60 s."
+why = "\"Every in-app model update runs on CPU\" is a hard constraint with measured budgets; the image must build and run on a GPU-less 4-vCPU/6–8 GB VM, so a budget regression is a deployability failure, not a slowdown."
+tests = []
+
+[[requirement]]
+id = "library-rate-home-grid-switch"
+spec = "§6.0 (\"Search or an active person-filter switches Home into the catalog grid; clearing it returns the shelves\")"
+milestone = "M2"
+kind = "e2e"
+what = "Typing into search, or tapping a credit on a title card, replaces Home's shelves with the catalog grid (and closes the open detail card); clearing the query and removing the person chip restores the shelves."
+why = "The only stated state machine between Home's two modes; nothing else in the spec says how a user gets back out of the grid."
+tests = []
+
+[[requirement]]
+id = "library-rate-shelf-why-line"
+spec = "§6.0 M2 (\"a shelf that cannot say why it exists doesn't ship\")"
+milestone = "M2"
+kind = "integration"
+what = "Every shelf in the Home payload carries a non-empty one-line why in vocabulary terms, and the DNA terms the why-line names are carried by every card on that shelf, not only by the shelf's anchor."
+why = "§6.8's \"quiet reasons\" register is normative; a card shown under a reason it does not satisfy is a shelf that says the wrong why."
+tests = []
+
+[[requirement]]
+id = "library-rate-pending-verdicts-banner"
+spec = "§6.0 M2 (pending-verdicts banner) + §7.3"
+milestone = "M2"
+kind = "integration"
+what = "The banner's population is exactly the titles the user has marked seen and given no verdict, at most three named; its CTA opens the §6.1 queue with those titles at the head of the queue, not at whatever position the standing queue held."
+why = "The banner is §7.3's capture prompt given a permanent surface; naming titles and then presenting a different card is worse than no prompt."
+tests = []
+
+[[requirement]]
+id = "library-rate-shelves-partition-both-kinds"
+spec = "§6.0 M2 shelves + §4.1 rule 5 + decision 18"
+milestone = "M2"
+kind = "integration"
+what = "With both Films and Series selected, every ranking shelf in the Home payload comes back as two kind-headed sections and never as one interleaved ranked list; the catalog listing, ordered by year or title, may interleave the two kinds freely."
+why = "Decision 18's precise reading of rule 5: the measured failure is a shared ranking (unpartitioned crowd top-10 is 8/10 series), not a shared screen — so the falsifiable property is the ordering, not the rendering."
+tests = []
+
+[[requirement]]
+id = "library-rate-mix-alternates-blocks"
+spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\")"
+milestone = "M2"
+kind = "integration"
+what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and flips the served card type between sweep and battle, so a run of duels still returns sweep cards; the counter runs 1..15 and rolls into a new block."
+why = "Mix is the default mode and the block of 15 is the unit Undo's depth and the counter copy both hang off (decision 35)."
+tests = []
+
+[[requirement]]
+id = "library-rate-no-prediction-before-tap"
+spec = "§6.1 (\"Prediction reveal strictly after the tap\"; Cosley 2003)"
+milestone = "M2"
+kind = "integration"
+what = "The sweep card payload contains no predicted class, ledger score, σ or tier for the title being rated; the predicted class and its data-voice score appear only in the response to the verdict write."
+why = "Anchoring: a card that shows the model's belief before the answer contaminates the label it exists to collect."
+tests = []
+
+[[requirement]]
+id = "library-rate-battle-pairs-within-band"
+spec = "§6.1 (\"drawn at random from the user's seen titles within verdict bands\") + §0 row 6"
+milestone = "M2"
+kind = "backend"
+what = "The battle pair sampler only ever draws titles the user has marked seen that already carry a verdict, and both members of a pair always share a verdict class; over many draws the distribution over eligible in-class pairs is uniform rather than concentrated on any subset."
+why = "For profiles no selection rule beats random (best +0.0013, CI spans 0); within-class pairs are what add resolution, cross-class pairs re-derive a boundary the ordered-logit arm already knows."
+tests = []
+
+[[requirement]]
+id = "library-rate-queue-seed-and-reason"
+spec = "§6.1 (Queue) + §6.8"
+milestone = "M2"
+kind = "integration"
+what = "A user's first queue is the imported 100-title decade-stratified seed_list; subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\")."
+why = "The queue's job is to put titles the user has actually seen in front of them (§13 flags >50% not-seen as a queue bug), and §6.8 requires every question to carry its one-line why."
+tests = []
+
+[[requirement]]
+id = "library-rate-duel-write"
+spec = "§6.1 (Tie, decisive toggle) + §4.2 duel + §5.2"
+milestone = "M2"
+kind = "integration"
+what = "One battle answer writes exactly one duel row with context 'profile_battle' and outcome A, B or TIE; with the decisive toggle on the stored margin weight is ~1.6, with it off ~1.0; a Tie is a stored outcome feeding the Davidson tie term, never a skip or a dropped row."
+why = "22% of random pairs are genuine ties, so \"about the same\" is first-class data; margin weighting was selected by tuning — a decisive pick teaches more than a hesitant one."
+tests = []
+
+[[requirement]]
+id = "library-rate-class-balance"
+spec = "§6.1 (class-balance widget + warning copy) + §5.2"
+milestone = "M2"
+kind = "integration"
+what = "The Rate payload carries the running three-class verdict distribution over the user's labels, and the warning copy (\"Spreading across all three classes matters about five times more than anything else you can do here.\") is present once one class exceeds 60% of that distribution and absent below it."
+why = "Spreading verdicts across all three classes is the measured 5× lever; §5.2 fixes the 60% figure — a 60%-\"liked\" labeller gives up ~0.07 ρ."
+tests = []
+
+[[requirement]]
+id = "library-rate-corrections-row"
+spec = "§6.1 (corrections zone) + §7.3"
+milestone = "M2"
+kind = "integration"
+what = "`not seen: [left] [both] [right]` sets exactly the named side(s) to unseen — `both` swaps the whole pair, `left`/`right` swap only that half — writes no duel row for the pair, and queues the Jellyfin seen-state sync."
+why = "The correction exists to remove a title from the duel pool without inventing a comparison the user never made; a correction that writes a duel row poisons the arm it was meant to protect."
+tests = []
+
+[[requirement]]
+id = "library-rate-seen-state-two-values"
+spec = "§6.1 (one seen-state control) + §4.2 user_title"
+milestone = "M2"
+kind = "integration"
+what = "A verdict writes user_title.state = 'seen'; the `Not seen` control writes 'unseen'; no third state is accepted by the write path or the column; and flipping a title back to unseen leaves its earlier verdict and duel rows in place."
+why = "Owner decision 2026-08-29 removed 'forgotten' — \"seen, don't remember\" is plain unseen — and the verdict/duel history is append-only and survives the flip."
+tests = []
+
+[[requirement]]
+id = "library-rate-undo-any-observation"
+spec = "§6.1 (persistent Undo) + §6 preamble (\"undo everywhere\") + decision 35"
+milestone = "M2"
+kind = "integration"
+what = "Undo pops the most recent observation of ANY kind — verdict, not-seen, skip, duel, tie, correction — restores the exact card or pair that produced it (not the neighbouring queue position), and emits the compensating Ledger write."
+why = "Decision 35 makes Undo a bounded observation journal with compensating writes; a single last-verdict slot cannot satisfy \"undo everywhere\" or cover the corrections row."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-show-model-toggle-scope"
+spec = "§6.7 (decision 117)"
+milestone = "M2"
+kind = "e2e"
+what = "A single per-user 'show the model' toggle lives in the account dropdown and is off by default: with it off the event rail and every inline numeric annotation are absent while the title card's b(t) · β · gate line still renders; turning it on reveals them for that user only and leaves another user's session unchanged."
+why = "Decision 117: one global per-user toggle, default off, a debugging instrument — the title card's model line is the M0 transparency promise and stays ungated."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-placement-vector-from-feature-contract"
+spec = "§8 stage 9 + §4.3 + §5.3 reconciliation"
+milestone = "M2"
+kind = "backend"
+what = "The placement feature vector is built from `feature_contract.json` and nothing else: the nine content blocks in the declared order and sizes (6,435 columns), then review-text columns 0..63 of the SVD embedding multiplied by the contract's frozen `text_scale`; the genome block is zero-imputed and absent blocks are dropped rather than defaulted. A title with no keywords and no DNA row still yields a vector and a coordinate."
+why = "The contract is the exhaustive definition of the tower's input and records all placement-time preprocessing; the tower's dropout training anticipates absent blocks, and M2's exit criterion is that every owned title has a coordinate (19 such titles arrive with the bundle, 3 with no DNA row)."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes"
+spec = "§13 stream (a) (with decision-doc 54b, proposal 146)"
+milestone = "M3"
+kind = "integration"
+what = "One comparison in ten is drawn uniformly at random from the eligible pool and stored on the `duel` row with a `uniform_holdout` selection discriminator; those rows are excluded both from the boundary-targeted selector's inputs and from every model-tuning/refit read path, the evaluation read path admits only those rows, and no held-out pair is recorded or narrated as boundary-targeted."
+why = "Adaptively-selected pairs inflate reliability (measured effect); §13 calls the guard non-negotiable and it is the only data admissible for evaluating the tier model."
+tests = []
+
+[[requirement]]
+id = "data-rules-cutpoints-tier-set-per-user"
+spec = "§4.2 ledger_cutpoints (decision 11)"
+milestone = "M3"
+kind = "integration"
+what = "ledger_cutpoints is keyed (user_id, kind) and enforces length(boundaries) = length(tier_set) − 1; saving a new tier set for one user re-initialises that user's boundaries to the equal-mass quantiles of their own fitted s for the new K, queues a refit for that user alone, and leaves their tier_edit rows and every other user's cutpoints untouched."
+why = "decision 11: the tier set is a per-user preference; a change in K invalidates boundaries but never observations, and the authored F3/D7/C15/B25/A25/A+17/S8 shape is defined only for K=7."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-straddle-equals-eligible"
+spec = "§6.3 badges and queue (proposals 157, 76)"
+milestone = "M3"
+kind = "backend"
+what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, and the threshold constant is read from ledger_hyperparams.json rather than hard-coded."
+why = "One predicate doing both jobs; the prototype badged at σ>0.13 and queued at σ>0.09, so a title at σ 0.11 was queue-eligible and unbadged, and an S-tier title rendered 'S/S'."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-queue-selection-mix"
+spec = "§6.3 comparison queue"
+milestone = "M3"
+kind = "backend"
+what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, and the held-out 10% feeds neither the selection rule nor any tier-model quality figure."
+why = "The adaptive-inflation guard: adaptively selected pairs inflate measured reliability, so the evaluation stream cannot be the selection stream."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-drop-writes-observations"
+spec = "§6.3 drag-and-drop"
+milestone = "M3"
+kind = "integration"
+what = "Dropping a title into a tier writes exactly one tier_edit with via='drag_drop'; dropping it between two titles writes that edit plus exactly two duels against the two new neighbours with context='tier_insert' and margin NULL."
+why = "Drag-and-drop is data, not override — the rearrange is an observation into the Ledger, and the two neighbour duels are what carry the placement."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-tension-not-snapback"
+spec = "§6.3 drag-and-drop (proposal 71)"
+milestone = "M3"
+kind = "backend"
+what = "After the incremental refit, a title whose assigned tier falls outside its posterior's 80% credible interval stays in the assigned tier and carries a tension badge naming both tiers; a one-level disagreement inside the interval produces neither a badge nor a move."
+why = "'The user is a data source, not a tyrant, and vice versa' — snapping back is exactly the failure the rule forbids, and the 80% CI is the operational reading of 'disagrees strongly'."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-tap-to-tier-and-cancel"
+spec = "§6.3 phones (proposals 74, 75)"
+milestone = "M3"
+kind = "e2e"
+what = "On a phone, tapping a title lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes; re-tapping the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
+why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift with an undiscoverable exit is the classic tap-to-move failure."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-tier-set-per-user-reinit"
+spec = "§6.3 tiers (decision 11)"
+milestone = "M3"
+kind = "integration"
+what = "Saving a new tier set for one user discards only that user's ledger_cutpoints boundaries, re-initialises them to equal-mass quantiles of that user's fitted s distribution for the new K, queues a refit for that user alone, leaves their tier_edit rows intact, and leaves every other user's cutpoints unchanged."
+why = "Decision 11: per user. §4.2 fixes length = |tier set| − 1, so a change in K necessarily invalidates the boundaries; the authored F3/D7/C15/B25/A25/A+17/S8 shape is defined only for K = 7."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-log-names-selection-arm"
+spec = "§6.7 + §13 uniform-random guard"
+milestone = "M3"
+kind = "integration"
+what = "A comparison-queue answer stores its selection arm on the duel row (boundary-targeted / exploration / uniform-random held-out) and the model-log line names that same arm; a held-out pair is never stored or narrated as boundary-targeted."
+why = "The 10% uniform-random stream is the only data allowed to evaluate the tier model, so it must be identifiable end to end; the shipped log line asserts boundary-targeting unconditionally."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-answer-neither"
+spec = "§4.2 session_answer (v2.2 §54c/§54g, decision 154)"
+milestone = "M4"
+kind = "backend"
+what = "An answer outside A|B|EITHER|NEITHER is rejected, and in the tonight-score update EITHER raises both candidates of the pair while NEITHER lowers both."
+why = "decision 154: both ship — either is an equality constraint, neither a rejection of both and the escape from a badly-built pool."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-holdout-excluded"
+spec = "§4.2 session_answer.selection (v2.2 §54b)"
+milestone = "M4"
+kind = "backend"
+what = "One pair in ten is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; pair selection and the per-participant stopping rule produce identical choices and stop points whether those answers are present or removed, and round evaluation reads only those rows."
+why = "§13's non-negotiable guard: adaptively-selected pairs inflate reliability, and a stopping rule cannot share data with its own evaluation."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-ballot-blind"
+spec = "§4.2 session_ballot (v2.2 §54e/§54g)"
+milestone = "M4"
+kind = "integration"
+what = "session_ballot rows are unreadable through the API by any participant until every seated participant has submitted; on the last submission all approvals become readable together, and session_outcome.approval_share equals approvals-for-the-winner over participants, with ties on approval count broken by group score."
+why = "the blind approval ballot is the only place approval share exists, and it is the number §13 evaluates Tonight on."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-ended-by"
+spec = "§4.2 session_participant.ended_by (v2.2 §54c/§54g)"
+milestone = "M4"
+kind = "backend"
+what = "Every participant's round terminates with ended_by set to exactly one of converged|cap|escape — 'cap' at the 20th answered pair, 'escape' only from an escape request at or after the 6th pair (an earlier one is refused), 'converged' when the shortlist boundary resolves — and converged_at is stamped only in the converged case."
+why = "the round is dynamic with a hard cap of 20 and an escape from pair 6; §14 risk 6 requires the rate of each to be measurable."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-holdout-one-in-ten"
+spec = "§6.2 step 4 (rewritten, 54b)"
+milestone = "M4"
+kind = "backend"
+what = "Every tenth pair a participant is served is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; replaying the round with those answers removed produces the identical shortlist and the identical stopping point."
+why = "§13's uniform-random guard is non-negotiable — adaptive pairs inflate reliability, and a stopping rule that shares data with its own evaluation looks confident whether or not it is right."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-pair-selection-straddle"
+spec = "§6.2 step 4 (rewritten, 54c)"
+milestone = "M4"
+kind = "backend"
+what = "Among candidates whose posterior interval still straddles the shortlist boundary, the pair served is the one whose answer would most reduce the number still straddling; ties break toward the pair spanning the widest DNA axis, so a near-identical pair is never served while a wider-spanning tie exists."
+why = "Best-arm identification inside a pool, not ranking estimation — the regime §0's measured selection null does not cover; a pair of near-identical titles teaches nothing about the tilt."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-waiting-shows-progress-only"
+spec = "§6.2 step 4 (rewritten, 54c)"
+milestone = "M4"
+kind = "integration"
+what = "A participant who has finished receives other participants' answered/expected counts over the session channel and, at every point before the reveal, no title, pair or answer content belonging to them."
+why = "'Blind by construction' means the payload cannot carry the answers, not that the UI declines to draw them."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-four-answers"
+spec = "§6.2 step 4 (rewritten, 54c; decision 154)"
+milestone = "M4"
+kind = "backend"
+what = "session_answer accepts exactly A|B|EITHER|NEITHER: A/B separate the two candidates' posteriors, EITHER raises both together, NEITHER lowers both, and a NEITHER is never stored as EITHER nor dropped from the update."
+why = "Decision 154 ships both as opposite signals; the prototype collected NO_PULL, logged it, and discarded it in tilt() — 'collected but ignored' is the specific regression."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-escape-from-pair-six"
+spec = "§6.2 step 4 (rewritten, 54c; schema 54g)"
+milestone = "M4"
+kind = "backend"
+what = "The round state reports the 'just pick for us' escape as unavailable through pair 5 and available from pair 6 onward; invoking it before pair 6 is rejected, and invoking it from pair 6 ends that participant's round immediately on what is known, still yielding a shortlist, with session_participant.ended_by='escape'."
+why = "Neither cap nor escape is a failure state, but the escape must not be reachable before the round has learned anything, and §14 risk 6 wants the rate at which it fires."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-stopping-and-cap"
+spec = "§6.2 step 4 (rewritten, 54c; schema 54g)"
+milestone = "M4"
+kind = "backend"
+what = "A participant's round ends when the leading candidates' intervals have separated from the rest, and otherwise at a hard cap of 20 pairs; two participants in one session may stop at different pair counts, and session_participant.ended_by records 'converged' or 'cap' accordingly."
+why = "Dynamic per-participant length is the substance of decision 54; §14 risk 6 requires the rate at which the cap fires to be recoverable."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-split-reserves-third-slot"
+spec = "§6.2 step 5 (rewritten, 54d)"
+milestone = "M4"
+kind = "backend"
+what = "When answers diverge on the leading candidates or D ≥ 0.20, the contested facet is zeroed rather than averaged in scoring, and the third finalist slot holds the highest-scoring title on the opposite pole of that facet — replacing the third-ranked title, not appended alongside it."
+why = "Zeroing removes an influence and cannot by itself produce an alternative; the prototype printed 'one of each' over a plain top-3 that could land wholly on one pole."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-three-finalists-wildcard"
+spec = "§6.2 step 5 (rewritten, 54d)"
+milestone = "M4"
+kind = "backend"
+what = "The round yields exactly three finalists — the top three by plain average of per-participant tonight scores — plus one wildcard from the exploratory slot, labelled as a step outside the usual and never counted among the three."
+why = "Plain averaging is measured undominated (dominance rules cost −0.012); roughly one exploratory slot in six."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-conflict-copy-bounds"
+spec = "§6.2 step 5 (rewritten, 54d; §6.5)"
+milestone = "M4"
+kind = "backend"
+what = "The conflict copy emitted for a surfaced split asserts only that one participant is likely to land below their usual; a candidate phrasing that predicts dislike or hate of the title never reaches the participant, the sanctioned string being emitted in its place."
+why = "D's measured power is AUC 0.610 for 'below your usual' (DNA_MODEL §5.3) — a hate prediction is not supported by the measurement, and this is a hard rule on the conflict-phrasing LLM task."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-winner-approval-share"
+spec = "§6.2 step 6 (rewritten, 54e)"
+milestone = "M4"
+kind = "integration"
+what = "The winner is the finalist or wildcard with the most approvals, ties broken by group score; session_outcome persists chosen_title_id and approval_share equal to approving participants divided by participants."
+why = "Approval share is §13's headline metric for the whole feature and has no other data path; without persistence M4 is unmeasurable (§14 risk 6)."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-ballot-blind-until-all"
+spec = "§6.2 step 6 (rewritten, 54e; schema 54g)"
+milestone = "M4"
+kind = "integration"
+what = "Each participant's approvals are written to session_ballot on submit, and no other client can read any participant's approvals until the last participant has submitted, at which point all are released together."
+why = "The ballot is the only place approval exists, and simultaneity is the blind round's whole social property."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-result-card-inventory"
+spec = "§6.2 step 7 (rewritten, 54e; proposals 58, 60, 68)"
+milestone = "M4"
+kind = "e2e"
+what = "The reveal renders the 'VOTES REVEALED TOGETHER' beat before the winner appears, and the winner card carries the approval share as a data-voice count, one match line per participant — including the honest negative and 'no profile yet' for a profile-less guest — the budget-fit line, runners-up, the wildcard strip, and Play on Jellyfin as the primary CTA."
+why = "The prototype's result screen showed none of the share, match lines, runners-up or wildcard, and this is the terminal screen the whole round exists to produce."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-solo-lands-on-picks"
+spec = "§6.2 step 8 (rewritten, 54f)"
+milestone = "M4"
+kind = "e2e"
+what = "Solo opens directly on three picks and a wildcard ranked by the personal Ledger with no tilt, with no pair round and no ballot anywhere in the flow; 'sharpen this' runs the adaptive round and re-ranks in place, after which the provenance line reads 'tilted by your N answers' instead of 'unseen first'."
+why = "The fastest path to a film must not be slower than browsing Home, and with one participant approval share is not a measurement."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-guest-not-borrowed-ledger"
+spec = "§6.2 steps 1/3 (proposal 59; 54c guests)"
+milestone = "M4"
+kind = "backend"
+what = "A guest with no grid profile is ranked by the candidate pool's own member-average order, contributes no term to that average, and is excluded from D; no member's Ledger is substituted for theirs."
+why = "The prototype ranked every guest with the host's ledger (`const u = guest ? 'p' : who`) — that is a privacy-shaped bug, not 'contributes no taste term'."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-cost-estimate-before-enabling"
+spec = "§6.6 Connectors spend guard + §8.4"
+milestone = "M5"
+kind = "integration"
+what = "Enabling an extraction provider or parallel mode returns its per-title cost estimate and the projected monthly figure against the remaining cap before the setting is persisted, and the flywheel's queued cost estimates recompute at the configured pass count once it changes."
+why = "§6.6 spend guard: 'per-title cost estimate before enabling'. Whether parallel mode defaults on or off is still an open question, so no test may assert the default."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-three-ledger-editors-corrections-last"
+spec = "§6.6 Data + §8 stage 3 + §14.5"
+milestone = "M5"
+kind = "integration"
+what = "Three separate editors write three separate artifacts — adjudications_v1.tsv (DNA verdicts), corrections_v1.tsv (credit facts), the per-facet axis TSVs — with no merged write path; re-deriving a title that carries a curated credit correction re-applies corrections_v1.tsv last, so the derived rows still carry the correction after the derive completes."
+why = "A derive that regenerates rows without re-applying the curated ledgers silently reverts fixes — the §14.5 scar where 787 rows reverted twice."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-spend-cap-parks-paid-stage"
+spec = "§6.6 spend guard + §8 stage 6 + §9"
+milestone = "M5"
+kind = "integration"
+what = "With the monthly meter at the cap, an acquisition job reaching stage 6 parks with reason 'over spend cap' instead of calling a provider or failing silently, never auto-retries, and an admin-initiated retry that would breach the cap is refused with that reason; the meter's spend includes provider thinking tokens."
+why = "§8: paid stages never auto-retry past the cap; §9: Gemini bills thinking tokens as output, so counting visible JSON understates cost ~5×."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-new-title-trigger-one-job-per-title"
+spec = "§7.2"
+milestone = "M5"
+kind = "integration"
+what = "Both trigger paths enqueue exactly one acquisition job per newly added title: a burst of `ItemAdded` webhook events for many episodes of one series inside the 10-minute debounce window yields one job for the show, not one per episode; and with the webhook plugin absent the 15-minute `DateCreated > last_sync` delta poll enqueues the same set once and does not re-enqueue titles from a previous poll. A title present in the DB but absent from the current Jellyfin mirror flips `is_owned = false`, and flips back when re-added."
+why = "Owner requirement: every Jellyfin add triggers acquisition. Library scans add seasons in bursts; the corpus connector is full-mirror only, so the delta path is new code, and `is_owned` is re-derived because a stale flag is wrong the moment the library changes."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-derive-applies-both-ledgers-corrections-last"
+spec = "§8 stage 3 (with §14 risk 5)"
+milestone = "M5"
+kind = "integration"
+what = "A re-derive of an already-derived title regenerates its rows and then applies `adjudications_v1.tsv` (DNA verdicts) and `corrections_v1.tsv` (credit facts), with corrections applied last; a curated credit fix present before the re-derive is still present after it, and the two ledgers are applied at their own points rather than merged into one pass."
+why = "A derive that regenerates rows without re-applying both ledgers silently reverts curated fixes — the 787-rows-reverted-twice scar named in §14.5."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-stage-park-retry-idempotent"
+spec = "§8 stage 4 (with §14 risk 5)"
+milestone = "M5"
+kind = "integration"
+what = "A title whose pack has a plot but fewer than two review sources or under 50 words parks at `reviews gate` with that reason and a 30-day retry window rather than advancing to `dna pack`; the admin retry resumes from the parked stage, re-uses the content-addressed raw store instead of re-fetching, and produces no duplicated derived rows."
+why = "New releases accrue reviews over weeks; the raw/derived split and idempotent re-ingest are the corpus invariants that must be ported or the per-title derive inherits the bugs they were built to kill."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-spend-cap-meters-billed-tokens"
+spec = "§8 stage 6 + §9 (with decision-doc proposals 107, 109)"
+milestone = "M5"
+kind = "integration"
+what = "The spend meter charges billed output tokens including a provider's reasoning/thinking tokens, not the visible JSON alone; once the running month is at the configured cap, stage 6 parks with the reason `over spend cap` without issuing any paid call, and a manual retry of a parked stage-6 job that would breach the cap is refused with that reason rather than queued."
+why = "Gemini bills thinking tokens as output — counting visible JSON understates cost ~5× — and §8 forbids paid stages auto-retrying past the cap; a cap computed from the wrong number is not a cap."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-extraction-verify-trust-boundary"
+spec = "§8 stage 7"
+milestone = "M5"
+kind = "backend"
+what = "The verifier drops, never repairs, any extracted tag whose term is not in vocabulary v1 after alias repair and adjudication rename, whose quote is not a substring of the pack under `norm()`, or whose salience is outside {1,2,3}; every tag it passes carries its evidence quote, and a fabricated tag inside an otherwise well-formed provider response is absent from the verifier's output."
+why = "The ported trust boundary caught 100% of fabricated tags in the corpus pilot, and §4.1 rule 1 requires that an extracted tag without its quote is unfalsifiable and must not exist."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-flywheel-enqueues-naming-failures"
+spec = "§8.4 (with decision-doc proposals 135, 104)"
+milestone = "M5"
+kind = "integration"
+what = "A naming failure — a bound-vocabulary query returning zero owned titles, a frontier with no vocabulary coverage, a thin-facet title — appends a flywheel row carrying its reason at the moment it happens and is readable from the admin queue immediately, not after a nightly job; the batch an admin launches from that queue targets exactly the selected rows and no others."
+why = "DNA breadth is the measured binding constraint (zero owned titles carry `themes.robots`); §8.4 and proposal 135 make the queue a live instrument with per-batch approve/launch controls."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-llm-validator-two-attempt"
+spec = "§9"
+milestone = "M5"
+kind = "backend"
+what = "A provider response that satisfies the request schema but violates the extraction contract (an out-of-vocabulary term, an unquotable evidence string) is rejected by the validator and retried exactly once with the specific violation named in the retry prompt; a second violation fails the stage and writes nothing. The behaviour is identical across the Gemini, Anthropic and OpenAI adapters despite their different structured-output mechanisms."
+why = "\"The schema is a cost-saving device, not the guarantee — the guarantee is the validator\"; the three adapters solve structured output in three different ways (forced tool-use, strict-schema stripping, responseSchema) and must not diverge in enforcement."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-kind-partition-ranked-lists-only"
+spec = "§4.1 rule 5 + §6.4 + §6.5 (decision 18)"
+milestone = "M6"
+kind = "backend"
+what = "Compositional-search survivors, the explore-frontier list, Divisive and Shared sweet spot return kind-partitioned results — with both Films and Series toggles on, two headed sections rather than one ordering over two per-kind CDF populations — while the map canvas and the facet silhouette return unpartitioned, and the match-for-you lens carries one colour ramp per kind rather than a single ramp over a mixed field."
+why = "Rule 5 binds ranking surfaces only; the CDF is computed per kind, so a series at .9 and a film at .9 are percentiles of different populations. Decision 18 mandates headed sections wherever a surface ranks."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-map-deterministic-across-reimport"
+spec = "§6.4 (determinism)"
+milestone = "M6"
+kind = "integration"
+what = "Re-importing a bundle built on a different backbone leaves every map coordinate identical, given unchanged axis TSVs and DNA rows — no rebuild step runs and no coordinate shifts."
+why = "§6.4: deterministic axis scatter — no nightly rebuild, no Procrustes anchoring, no map shift on bundle re-import."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-map-touch-controls"
+spec = "§6.4 (zoom/pan) + §6 preamble (phone-first)"
+milestone = "M6"
+kind = "e2e"
+what = "On a mobile viewport the map zooms by pinch, pans by drag past the threshold without selecting a node, has a touch reset, and renders all four pole labels plus the facet legend with its isolate behaviour."
+why = "§6.4's 'zoom/pan' is unqualified by form factor and §6 calls the phone primary, yet wheel zoom is bound on the wide canvas only and no touch gesture exists anywhere."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-axis-value-not-rank"
+spec = "§6.4 Placement (decision 84)"
+milestone = "M6"
+kind = "backend"
+what = "A title's coordinate on a facet axis is the salience-weighted mean of its terms' axis weights (weights from the facet's axis TSV, salience joined at read time from dna_tag/dna_projected), scaled to the axis's observed distribution and not to a rank percentile: two titles with identical term sets get identical coordinates, and a library that genuinely clusters on an axis plots clustered rather than spread edge to edge with hash tie-breaks."
+why = "Decision 84 chose the value plot: a named pole must mean the pole, not 'median in this library'."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-axis-no-coverage-gutter"
+spec = "§6.4 Placement (decision 84, adopted consequence)"
+milestone = "M6"
+kind = "backend"
+what = "A title carrying no term on the selected axis is returned with an explicit no-coverage marker and placed in a gutter outside the plotted field — never 0.0, never at a pole, never at the origin — and is emitted as a §8.4 flywheel candidate."
+why = "The field's edge is a named pole, so a title with no evidence must not be made to assert the strongest possible claim on that axis."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-search-two-distinct-failures"
+spec = "§6.4 compositional search + §8.4"
+milestone = "M6"
+kind = "integration"
+what = "A query that binds vocabulary terms but yields no owned title writes exactly one flywheel row carrying its reason ('no owned title carries robots + gladiatorial'); a query that binds no term writes zero flywheel rows and its response does not report a queue write."
+why = "§6.4 enqueues on empty predicates only; a UI that reports a queue write which did not happen is worse than one reporting nothing."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-search-two-tier-split"
+spec = "§6.4 two-tier rule + §4.1 rule 1"
+milestone = "M6"
+kind = "integration"
+what = "Compositional-search survivors return as two separately ordered groups — extracted tier first, projected tier second under the label 'PROJECTED TIER — INFERRED, NOT QUOTE-VERIFIED' — and a (title,term) pair present in both tables stays distinguishable per tier rather than being unioned into one list."
+why = "§4.1 rule 1: dna_tag and dna_projected are never merged or unioned; 14,181 pairs exist in both tiers."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-wander-edges-named"
+spec = "§6.4 wander"
+milestone = "M6"
+kind = "backend"
+what = "Every neighbour edge returned for a selected title carries at least one shared vocabulary term as its label; an edge whose shared-term set is empty is not returned at all."
+why = "§6.4: every connection is nameable — edges are DNA terms, never opaque similarity."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-divisive-beats-crowd-baseline"
+spec = "§6.5 Divisive-title list"
+milestone = "M6"
+kind = "backend"
+what = "The divisive list ranks by contestedness measured against the crowd baseline, not a bare |Δ CDF| sort — a title the two users split on that the crowd also splits ranks below one whose split is specific to these two — and each row exposes both figures (Δ and crowd Δ)."
+why = "§6.5 requires the list reflect these two people rather than films that divide audiences in general; the shipped footer asserts exactly that over a bare Δ sort."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-facet-affinity-centred"
+spec = "§6.5 Facet silhouette + §4.1 rule 2"
+milestone = "M6"
+kind = "backend"
+what = "Facet affinity is the salience-weighted mean of the user's Ledger CDF over titles carrying that facet's terms, centred on that user's own mean CDF: a uniformly generous rater's silhouette sits flat near zero rather than uniformly high, and two users with identical relative pull but different offsets produce identical silhouettes."
+why = "The generosity/mean-affinity offset is the same confound (r = −0.80) that holds the eighth axis back; uncentred, the chart measures how generous a rater is."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-sweet-spot-plain-average"
+spec = "§6.5 Shared sweet spot + §6.2 step 3"
+milestone = "M6"
+kind = "backend"
+what = "Shared sweet spot is ordered by the plain average of the two users' Ledger scores, matching the §6.2 candidate-pool order for the same two members: a pair where min(A,B) favours title X but the mean favours Y ranks Y first."
+why = "No aggregation rule dominates plain averaging; dominance rules such as max-min cost −0.012 against a 0.003–0.008 noise floor, and the sweet spot is the Tonight prior."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-seven-axes-plotted-from-ledger"
+spec = "§6.5 seven axes"
+milestone = "M6"
+kind = "backend"
+what = "The taste-axes response carries exactly the seven shipped axes with Small-and-observed↔Big-and-staged absent, and each user's position on an axis is a deterministic function of that user's Ledger-weighted DNA profile — identical Ledgers give identical positions, a changed verdict moves the dot — never a function of the user id or a hash."
+why = "§6.5 ships 7 not 8 (the eighth carries the r = −0.80 generosity confound) and plots both users per axis; the prototype placed both dots by hash noise, making the panel decorative."
+tests = []
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-home-assistant-is-additive-only"
+spec = "§11"
+milestone = "M7"
+kind = "static"
+what = "No module outside the three declared Home Assistant seams — the token-authed `POST /events/playback` handler, the optional presence-hint input to session lobbies, and the session-launch webhook — imports or references Home Assistant code, and no core flow reads Home Assistant configuration."
+why = "§11 guarantees the app is fully standalone with HA integration additive; a guard that reads the source is the cheapest way to keep that from eroding as M7 lands."
+tests = []

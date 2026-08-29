@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "spielplan",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "prototype",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8123", "--directory", "C:/Users/pmk/AppData/Local/Temp/claude/C--Users-pmk-Workspace-spielplan/a7bf9477-3738-445c-81e1-57182535515e/scratchpad/proto"],
+      "port": 8123
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+# Spielplan — spec v2.1 §2. One internal HTTP port, no GPU anywhere.
+# TLS/ingress is the operator's existing Traefik + Cloudflare; this stack speaks plain HTTP.
+#
+# §1 draws four services (frontend/backend/worker/db). The frontend is a *static* SvelteKit
+# build and §1 explicitly permits it to be "served by backend"; it is therefore compiled in a
+# node build stage of ops/backend.Dockerfile and served by the backend, so nothing is lost and
+# there is one fewer long-running process on a 4-vCPU box. See README §Deployment.
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql://spielplan:spielplan@db:5432/spielplan}
+  PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is required — WebAuthn binds credentials to this origin}
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+  SECRETS_KEY: ${SECRETS_KEY:?SECRETS_KEY is required — connector secrets never fall back to SESSION_SECRET}
+  TZ: ${TZ:-Europe/Berlin}
+  DATA_DIR: /data
+
+x-app-volumes: &app-volumes
+  - ./data/raw:/data/raw
+  - ./data/artifacts:/data/artifacts
+  - ./data/cache:/data/cache
+  - ./data/import:/data/import
+  - ./data/backups:/data/backups
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-spielplan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spielplan}
+      POSTGRES_DB: ${POSTGRES_DB:-spielplan}
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+      - ./data/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spielplan} -d ${POSTGRES_DB:-spielplan}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: ops/backend.Dockerfile
+    environment:
+      <<: *app-env
+      SPIELPLAN_ROLE: backend
+    volumes: *app-volumes
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: ops/backend.Dockerfile
+    command: ["python", "-m", "spielplan.worker"]
+    environment:
+      <<: *app-env
+      SPIELPLAN_ROLE: worker
+    volumes: *app-volumes
+    depends_on:
+      db:
+        condition: service_healthy
+    # The image's HEALTHCHECK curls the backend's HTTP port. The worker shares the image but
+    # serves no HTTP, so that check can only ever fail — disable it rather than run a service
+    # that is permanently "unhealthy" and teaches the operator to ignore the column.
+    healthcheck:
+      disable: true
+    restart: unless-stopped

@@ -1,0 +1,31 @@
+# Keep the build context small and keep host state out of the image.
+# Without this, `context: .` ships data/pg, three node_modules trees and .env — and the host
+# node_modules would be COPYed over the one installed in the image.
+
+.git
+.gitignore
+.claude
+
+# runtime state and secrets
+data/
+.env
+.env.local
+*.log
+
+# dependency trees — installed inside the image, never copied from the host
+**/node_modules
+**/.svelte-kit
+**/build
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# not needed to build or run
+docs/
+README.md
+ops/devstub.py
+e2e/
+.github/

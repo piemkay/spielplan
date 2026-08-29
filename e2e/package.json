@@ -1,0 +1,18 @@
+{
+  "name": "spielplan-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:desktop": "playwright test --project=desktop",
+    "test:phone": "playwright test --project=phone",
+    "test:ui": "playwright test --ui",
+    "reset": "node reset.mjs",
+    "fresh": "node run.mjs",
+    "report": "playwright show-report",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
