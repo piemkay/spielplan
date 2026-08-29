@@ -14,7 +14,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const COMPOSE = ['compose', '-f', 'docker-compose.yml', '-f', 'ops/compose.dev.yml'];
+const COMPOSE = [
+  'compose',
+  '-f', 'docker-compose.yml',
+  '-f', 'ops/compose.dev.yml',
+  // §7.3's two-way sync needs a Jellyfin that answers; ops/compose.e2e.yml provides a fake.
+  '-f', 'ops/compose.e2e.yml',
+];
 
 function docker(args, opts = {}) {
   return execFileSync('docker', args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', ...opts });
@@ -55,7 +61,20 @@ console.log('clearing staged artifacts…');
 rmSync(join(ROOT, 'data', 'artifacts'), { recursive: true, force: true });
 
 console.log('starting app services…');
-docker([...COMPOSE, 'up', '-d', 'backend', 'worker']);
+// Retried, because `depends_on: db: service_healthy` is evaluated once and a Postgres that is
+// briefly busy answers `pg_isready` with "no response". Dropping and recreating a database is
+// exactly the moment it is busiest, so the first attempt can lose a race it would win a second
+// later — and failing the whole suite for that reads as a broken app.
+for (let attempt = 1; ; attempt++) {
+  try {
+    docker([...COMPOSE, 'up', '-d', 'backend', 'worker']);
+    break;
+  } catch (err) {
+    if (attempt === 5) throw err;
+    console.log(`  the database was not ready yet (attempt ${attempt}) — retrying`);
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
 
 // Wait for the backend to apply migrations and answer.
 const base = publicUrl.replace(/\/$/, '');

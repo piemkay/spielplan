@@ -12,6 +12,9 @@
  */
 
 :root {
+  /* §6.8: dark-first and single-theme. Telling the UA so is what makes an unstyled or
+     future control degrade to a dark default rather than a white one. */
+  color-scheme: dark;
   --ground: #0d0d0f;
   --ground-raised: #0f0f11;
   --card: #141416;
@@ -148,7 +151,12 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
   cursor: pointer;
 }
 
-input[type='text'], input[type='password'], input[type='search'], input[type='number'] {
+/* Matched by exclusion, not enumeration. An attribute selector reads the DOM attribute rather
+   than the IDL default, so `<input>` with no `type` matched none of the old rules: it kept
+   `color: var(--ink)` from the bare element rule and got the user agent's light background,
+   which is near-white text on white — invisible, and impossible to see in any snapshot test
+   that reads attributes rather than pixels. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
   width: 100%;
   padding: 11px 13px;
   border-radius: var(--r-sm);
@@ -183,10 +191,7 @@ input::placeholder { color: var(--ink-5); }
   .btn-ghost {
     padding-inline: 20px;
   }
-  input[type='text'],
-  input[type='password'],
-  input[type='search'],
-  input[type='number'] {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
     min-height: var(--touch);
   }
 }

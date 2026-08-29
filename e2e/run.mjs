@@ -13,7 +13,13 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
-const COMPOSE = ['compose', '-f', 'docker-compose.yml', '-f', 'ops/compose.dev.yml'];
+const COMPOSE = [
+  'compose',
+  '-f', 'docker-compose.yml',
+  '-f', 'ops/compose.dev.yml',
+  // §7.3's two-way sync needs a Jellyfin that answers; ops/compose.e2e.yml provides a fake.
+  '-f', 'ops/compose.e2e.yml',
+];
 const passthrough = process.argv.slice(2);
 
 const play = (args) =>
@@ -23,7 +29,8 @@ const play = (args) =>
     shell: process.platform === 'win32',
   });
 
-console.log('\n── phase 0: reset to first boot ──');
+console.log('\n── phase 0: bring the stack up (app + fake Jellyfin), then reset to first boot ──');
+execFileSync('docker', [...COMPOSE, 'up', '-d'], { cwd: ROOT, stdio: 'inherit' });
 execFileSync('node', [join(HERE, 'reset.mjs')], { stdio: 'inherit' });
 
 console.log('\n── phase 1: first boot and bundle import ──');
@@ -33,7 +40,7 @@ if (first.status !== 0) process.exit(first.status ?? 1);
 console.log('\n── restarting so the imported bundle is loaded (§10) ──');
 execFileSync('docker', [...COMPOSE, 'restart', 'backend', 'worker'], { cwd: ROOT, stdio: 'inherit' });
 
-const base = process.env.BASE_URL ?? 'http://127.0.0.1:8080';
+const base = process.env.BASE_URL ?? 'http://localhost:8080';
 for (let i = 0; i < 60; i++) {
   try {
     const res = await fetch(`${base}/api/health`);

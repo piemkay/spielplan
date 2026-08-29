@@ -145,3 +145,83 @@ def test_the_stack_refuses_to_start_without_its_required_config(required):
     aspirational — a missing SECRETS_KEY must stop the stack, not silently weaken it."""
     compose = COMPOSE.read_text(encoding="utf-8")
     assert re.search(rf"\$\{{{required}:\?", compose), f"{required} is not a required variable"
+
+
+# --- §2: the env-seed variables are documented exactly ----------------------------------
+
+
+def test_env_example_names_every_connector_seed_variable():
+    """§2 lets env vars seed connector config on first boot. An operator writing an automated
+    install reads `.env.example`, so a name that drifts from what `Settings` actually reads
+    produces a connector that silently never seeds — which looks exactly like a working file.
+    """
+    from spielplan.core.config import Settings
+
+    example = (REPO / ".env.example").read_text(encoding="utf-8")
+    seeds = [
+        name.upper()
+        for name in Settings.model_fields
+        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_"))
+    ]
+    assert seeds, "Settings should carry the connector seed fields"
+    missing = [name for name in seeds if f"{name}=" not in example]
+    assert not missing, f".env.example does not document: {missing}"
+
+
+def test_env_example_marks_the_seed_variables_optional():
+    """They are commented out on purpose: an uncommented empty `JELLYFIN_URL=` is not the same
+    as absent, and "configured empty" is a state §2 never wants."""
+    example = (REPO / ".env.example").read_text(encoding="utf-8")
+    for line in example.splitlines():
+        if line.startswith(("JELLYFIN_", "TMDB_", "OMDB_", "TRAKT_")):
+            raise AssertionError(f"connector seed left uncommented in .env.example: {line}")
+
+
+def test_the_required_variables_are_not_commented_out():
+    """The counterpart: PUBLIC_URL, SESSION_SECRET and SECRETS_KEY are required, and compose
+    refuses to start without them, so the template has to actually ask for them."""
+    example = (REPO / ".env.example").read_text(encoding="utf-8")
+    for required in ("PUBLIC_URL", "SESSION_SECRET", "SECRETS_KEY"):
+        assert re.search(rf"^{required}=", example, re.M), f"{required} is not in .env.example"
+
+
+# --- §1: the image installs from pyproject, so imports must be declared there -------------
+
+
+def test_every_third_party_import_is_a_declared_dependency():
+    """The container installs from `pyproject.toml` and nothing else.
+
+    A package that is in a developer's virtualenv but not in that file builds a perfectly
+    healthy image which then dies on its first import — the failure is at *runtime*, in the
+    container, after everything green. This walks the actual imports instead.
+    """
+    import ast
+    import sys
+    from importlib.metadata import packages_distributions
+
+    pyproject = (REPO / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+    declared = {
+        re.split(r"[><=\[!~ ]", line.strip().strip('",'))[0].lower().replace("_", "-")
+        for line in pyproject.splitlines()
+        if line.strip().startswith('"') and "=" not in line.split('"')[0]
+    }
+
+    modules: set[str] = set()
+    for path in (REPO / "backend" / "spielplan").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules.add(node.module.split(".")[0])
+
+    third_party = modules - set(sys.stdlib_module_names) - {"spielplan", "__future__"}
+    dist_of = packages_distributions()
+    undeclared = []
+    for module in sorted(third_party):
+        dists = {d.lower().replace("_", "-") for d in dist_of.get(module, [])}
+        if not dists:
+            continue  # not installed here; the import would already have failed elsewhere
+        if not (dists & declared):
+            undeclared.append(f"{module} (provided by {sorted(dists)})")
+    assert not undeclared, f"imported but not in pyproject dependencies: {undeclared}"

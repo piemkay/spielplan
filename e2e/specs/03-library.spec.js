@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { kindToggle, signedIn } from '../helpers.js';
+import { kindToggle, openTitle, signedIn } from '../helpers.js';
 
 /**
  * §6.0 — the catalog, and §4.1 rule 5 as read by owner decision 18: kind is two independent
@@ -85,9 +85,10 @@ test('non-ASCII titles survive to the screen', async ({ page }) => {
 test('a person filter keeps the kind partition and can be cleared', async ({ page }) => {
   // Owner decision 18: the filter does NOT suspend the partition — turning both kinds on is
   // how a whole filmography is seen.
-  await page.locator('.card-wrap').first().click();
-  const panel = page.getByLabel('Title detail');
-  await expect(panel).toBeVisible();
+  // Heat by name: the first card in the grid is the newest film, Paddington 2, which carries
+  // no credits in the fixture — so `.person` would never appear and the timeout would look
+  // like a broken person filter.
+  const panel = await openTitle(page, 'Heat', { ensureKinds: ['Films'] });
 
   const person = panel.locator('.person').first();
   const name = (await person.locator('.pname').textContent())?.trim();

@@ -120,10 +120,19 @@ Full table with exit criteria: spec §12.
 
 ### Status
 
-M0 is in place and verified end to end against Postgres 16 in Docker: `docker compose up`
+**M0** is in place and verified end to end against Postgres 16 in Docker: `docker compose up`
 brings up db + backend + worker, the first-boot wizard creates the admin, the importer runs the
 full §10 swap sequence (validate → stage → load → transactional flip → restart), and the Library
 and title detail card render the imported titles. Both §12 exit criteria are met.
+
+**M1** is in place: the Jellyfin connector (≥ 10.9 routes, the corpus field set), optional
+one-to-one user linking with per-user access tokens, two-way seen-state sync, the ≥ 90%
+playback watcher and its in-app finish prompt, and WebAuthn passkeys. §12's exit criterion —
+"seen states flow both ways" — is asserted in a browser against a Jellyfin that answers
+(`ops/fake_jellyfin.py`) and that **refuses the admin API key on the Played write**, so §7.3's
+per-user-token rule is something a test can break rather than a comment. Passkeys are exercised
+as real ceremonies: a software authenticator in the backend tests, Chromium's virtual
+authenticator in the browser.
 
 The corpus bundle does not exist in this repo, so the importer is verified against a synthetic
 fixture reproducing the landmines — both DNA tiers with overlapping pairs, the frozen

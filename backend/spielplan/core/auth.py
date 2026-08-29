@@ -79,6 +79,13 @@ def needs_rehash(stored_hash: str) -> bool:
     return _hasher.check_needs_rehash(stored_hash)
 
 
+# A real argon2 hash of a value nobody has, so the "no such account" branch of a login can pay
+# the same tens of milliseconds the "wrong password" branch does. Without it the two answer in
+# very different times while saying the same thing, and the route becomes an account-name
+# oracle for anyone who can measure a round trip.
+ABSENT_ACCOUNT_HASH = _hasher.hash(pysecrets.token_urlsafe(32))
+
+
 def hash_pin(pin: str) -> str:
     """§3.2: a 4-digit PIN. argon2 anyway — but the search space is 10^4, so the work factor is
     not the defence. `check_pin` below is: a PIN is only ever accepted from an already
@@ -118,16 +125,29 @@ async def check_pin(conn: asyncpg.Connection, user_id: int, pin: str) -> tuple[b
         )
         return True, None
 
-    failures = (row["pin_failed_count"] or 0) + 1
-    lock: datetime | None = None
-    if failures >= PIN_ATTEMPT_LIMIT:
-        backoff = min(PIN_LOCKOUT_BASE * 2 ** (failures - PIN_ATTEMPT_LIMIT), PIN_LOCKOUT_MAX)
-        lock = datetime.now(UTC) + backoff
-    await conn.execute(
-        "UPDATE app_user SET pin_failed_count = $2, pin_locked_until = $3 WHERE id = $1",
-        user_id, failures, lock,
+    # Incremented in the database, not in Python. The read above happens before an argon2
+    # verify that takes tens of milliseconds, so a read-modify-write here would let every
+    # request that got its SELECT in first write the same number: ten concurrent guesses would
+    # cost one failure. The lockout is the actual defence for a 10^4 keyspace (the hash is
+    # not), so it has to count every attempt.
+    updated = await conn.fetchrow(
+        """
+        UPDATE app_user
+           SET pin_failed_count = pin_failed_count + 1,
+               pin_locked_until = CASE
+                   WHEN pin_failed_count + 1 >= $2
+                   THEN now() + least(
+                            $3::interval * power(2, pin_failed_count + 1 - $2),
+                            $4::interval)
+                   ELSE pin_locked_until
+               END
+         WHERE id = $1
+        RETURNING pin_failed_count, pin_locked_until
+        """,
+        user_id, PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_BASE, PIN_LOCKOUT_MAX,
     )
-    return False, "too many attempts — try again later" if lock else "wrong PIN"
+    locked = updated is not None and updated["pin_failed_count"] >= PIN_ATTEMPT_LIMIT
+    return False, "too many attempts — try again later" if locked else "wrong PIN"
 
 
 @dataclass(frozen=True)

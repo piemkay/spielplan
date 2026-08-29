@@ -11,6 +11,7 @@
   import { onMount } from 'svelte';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
+  import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PosterCard from '$lib/components/PosterCard.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
@@ -124,12 +125,23 @@
     load();
   }
 
+  // The grid holds `seen_state` per card, so a toggle on the open panel has to reach it — and
+  // when the seen filter is active the card has just stopped matching, so it leaves.
+  function onSeenChange(titleId, state) {
+    items = items.map((t) => (t.id === titleId ? { ...t, seen_state: state } : t));
+    if (seen !== 'any' && seen !== state) load();
+  }
+
   function clearPerson() {
     personId = null;
     personName = '';
     load();
   }
 </script>
+
+<!-- §7.3: the queued finish prompt, above everything, because it is about the thing that
+     just happened in the living room. -->
+<FinishPrompt />
 
 <div class="head">
   <h1>{greeting}{session.user ? `, ${session.user.name}` : ''}</h1>
@@ -224,6 +236,7 @@
     titleId={selected}
     onClose={() => (selected = null)}
     onPerson={filterToPerson}
+    onStateChange={onSeenChange}
   />
 {/if}
 

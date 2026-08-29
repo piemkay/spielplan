@@ -10,7 +10,7 @@
     "reset": "node reset.mjs",
     "fresh": "node run.mjs",
     "report": "playwright show-report",
-    "install-browsers": "playwright install --with-deps chromium"
+    "install-browsers": "playwright install --with-deps chromium webkit"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0"

@@ -6,14 +6,23 @@
  */
 
 export class ApiError extends Error {
-  /** @param {number} status @param {string} message @param {any} [detail] */
-  constructor(status, message, detail) {
+  /** @param {number} status @param {string} message @param {any} [detail] @param {boolean} [reauth] */
+  constructor(status, message, detail, reauth = false) {
     super(message);
     this.status = status;
     this.detail = detail;
+    this.reauth = reauth;
   }
   get isUnauthenticated() {
     return this.status === 401;
+  }
+  /**
+   * §3.2: "admin routes re-prompt after 24 h". The server says so with a header rather than a
+   * different status, because to everything else this is an ordinary 401 — but the shell has
+   * to tell "sign in again" apart from "you were signed out".
+   */
+  get needsAdminReauth() {
+    return this.status === 401 && this.reauth;
   }
   get needsPasswordChange() {
     return this.status === 403 && /password change required/.test(this.message);
@@ -49,7 +58,12 @@ export async function api(path, opts = {}) {
     const detail = payload && typeof payload === 'object' ? payload.detail : payload;
     const message =
       typeof detail === 'string' ? detail : (detail && detail.text) || res.statusText;
-    throw new ApiError(res.status, message, detail);
+    throw new ApiError(
+      res.status,
+      message,
+      detail,
+      res.headers.get('x-spielplan-reauth') === 'admin'
+    );
   }
   return payload;
 }

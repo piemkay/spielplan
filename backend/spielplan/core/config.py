@@ -38,6 +38,22 @@ class Settings(BaseSettings):
     session_days: int = 90
     admin_reauth_hours: int = 24
 
+    # §2: "Everything connector-related … is configured in the admin UI and stored in
+    # `connector_config` — not env vars … env vars may *seed* connector config on first boot
+    # for automated installs." These fields are that seed and nothing else: they are read once
+    # at boot by `connectors.registry.seed_from_env`, only for a connector with no row yet, and
+    # no runtime code path reads them again. After first boot the database is the source.
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
+    tmdb_api_key: str = ""
+    omdb_api_key: str = ""
+    trakt_client_id: str = ""
+    trakt_client_secret: str = ""
+
+    # §7.3: ">= 90% playback … arms a per-user prompt". A threshold, not a constant, because
+    # a household that watches through the credits will want it lower.
+    finish_threshold: float = 0.9
+
     @field_validator("public_url")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:

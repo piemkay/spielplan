@@ -12,7 +12,9 @@ concurrency:
 
 env:
   # Test-only values. The real ones live in .env, which is not in the repository.
-  PUBLIC_URL: http://127.0.0.1:8080
+  # `localhost`, not `127.0.0.1`: WebAuthn binds credentials to the *origin* (§2, §14.4), and
+  # the browser tests must run against the same one the app was told it has.
+  PUBLIC_URL: http://localhost:8080
   SESSION_SECRET: ci-session-secret-not-a-real-one
   SECRETS_KEY: ci-secrets-key-not-a-real-one
   POSTGRES_USER: spielplan
@@ -112,18 +114,24 @@ jobs:
           print('fixture bundle written')
           PY
 
-      - run: docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d --build
-      - name: wait for the backend
+      # ops/compose.e2e.yml adds the fake Jellyfin §7.3's two-way sync is tested against.
+      - run: >
+          docker compose -f docker-compose.yml -f ops/compose.dev.yml -f ops/compose.e2e.yml
+          up -d --build
+      - name: wait for the backend and the fake Jellyfin
         run: |
           for i in $(seq 1 90); do
-            curl -fsS http://127.0.0.1:8080/api/health && exit 0
+            curl -fsS http://127.0.0.1:8096/System/Info/Public > /dev/null || { sleep 2; continue; }
+            curl -fsS http://localhost:8080/api/health && exit 0
             sleep 2
           done
           docker compose logs --no-color
           exit 1
 
       - run: npm --prefix e2e ci || npm --prefix e2e install
-      - run: npx --prefix e2e playwright install --with-deps chromium
+      # Both engines: the `phone` project is an iPhone 13, which Playwright runs on WebKit —
+      # §6's phone-first layout is the primary one, not a resize of the desktop.
+      - run: npx --prefix e2e playwright install --with-deps chromium webkit
       - name: playwright (first boot, restart, then everything)
         run: node e2e/run.mjs
 

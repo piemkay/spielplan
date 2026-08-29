@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M0"
+current_milestone = "M1"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -99,8 +99,7 @@ milestone = "M0"
 kind = "integration"
 what = "Connector settings (Jellyfin, LLM, TMDB, OMDb, Trakt) are read from connector_config, not env: env vars seed a connector row only when none exists at first boot, and a changed env var on a later boot does not overwrite or shadow the stored row."
 why = "§2: the owner wants connector setup in the admin UI; env may only seed for automated installs, so a stale env var must never silently win over a stored row."
-tests = []
-waived = "Not a test gap but an implementation gap, recorded so it is not mistaken for coverage: nothing reads JELLYFIN_*/TMDB_*/OMDB_*/TRAKT_* at boot — Settings has no connector fields — so the env-seeds-once-then-DB-wins precedence rule has no implementation to assert against. Build the seeding step, then test it."
+tests = ["backend/tests/test_connector_registry.py::test_no_env_means_no_seed", "backend/tests/test_connector_registry.py::test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable", "backend/tests/test_connector_registry.py::test_the_other_connectors_seed_too", "backend/tests/test_connector_registry.py::test_the_first_boot_seeds_and_records_the_wizard_step", "backend/tests/test_connector_registry.py::test_a_second_boot_leaves_the_admins_edit_alone", "backend/tests/test_connector_registry.py::test_seeding_is_idempotent", "backend/tests/test_connector_registry.py::test_a_secret_without_secrets_key_refuses_rather_than_falls_back", "backend/tests/test_connector_registry.py::test_a_stored_secret_is_ciphertext_carrying_its_key_id", "backend/tests/test_static_contracts.py::test_env_example_names_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_env_example_marks_the_seed_variables_optional"]
 
 [[requirement]]
 id = "platform-bundleless-boot-is-legal"
@@ -345,7 +344,7 @@ milestone = "M1"
 kind = "integration"
 what = "Switching the active member from the account chip requires that member's 4-digit PIN: the switch is refused and the session identity is unchanged on a wrong PIN, commits on a correct one, and a member with no PIN set must supply their password instead."
 why = "§3.2 makes the PIN gate normative for shared/TV devices; an ungated switch hands one member's Ledger and admin reach to whoever holds the device. (Corrected from e2e: the gate is a server-side identity decision, and the menu/landing-surface details rest only on unsettled proposal 3.)"
-tests = []
+tests = ["backend/tests/test_api_gating.py::test_a_wrong_pin_leaves_the_session_identity_unchanged", "backend/tests/test_api_gating.py::test_a_correct_pin_switches_the_session", "backend/tests/test_api_gating.py::test_switching_to_an_account_with_no_pin_is_refused", "backend/tests/test_api_gating.py::test_the_switch_route_refuses_an_anonymous_caller", "backend/tests/test_api_gating.py::test_a_locked_out_account_refuses_even_the_right_pin", "backend/tests/test_api_gating.py::test_the_switch_list_only_names_profiles_with_a_pin", "backend/tests/test_auth_integration.py::test_a_correct_pin_passes_and_clears_the_failure_count", "backend/tests/test_auth_integration.py::test_repeated_wrong_pins_lock_the_account_out", "backend/tests/test_auth_integration.py::test_concurrent_wrong_pins_each_count"]
 
 [[requirement]]
 id = "platform-passkey-origin-and-lifecycle"
@@ -354,7 +353,7 @@ milestone = "M1"
 kind = "integration"
 what = "WebAuthn registration binds the credential to the PUBLIC_URL origin/rp_id and a user may hold several (phone + desktop); an assertion presented for a different origin or rp_id is rejected; a replayed assertion whose sign_count does not exceed the stored value is rejected; and logout clears the session cookie only, leaving credential rows intact so the same passkey signs in again."
 why = "§14 risk 4 — WebAuthn origin coupling is why PUBLIC_URL is required config; §4.2 stores sign_count for exactly this check; §3.2: \"Logout clears the session cookie only — passkeys remain registered.\""
-tests = []
+tests = ["backend/tests/test_webauthn.py::test_a_passkey_registers_and_then_signs_in", "backend/tests/test_webauthn.py::test_the_credential_is_bound_to_the_public_url_origin", "backend/tests/test_webauthn.py::test_a_user_may_hold_several_passkeys", "backend/tests/test_webauthn.py::test_registration_from_a_different_origin_is_refused", "backend/tests/test_webauthn.py::test_an_assertion_for_a_different_rp_id_is_refused", "backend/tests/test_webauthn.py::test_an_assertion_from_a_different_origin_is_refused", "backend/tests/test_webauthn.py::test_a_credential_registered_for_another_address_stops_working", "backend/tests/test_webauthn.py::test_a_replayed_assertion_is_refused", "backend/tests/test_webauthn.py::test_the_stored_counter_advances_with_each_use", "backend/tests/test_webauthn.py::test_a_challenge_is_single_use", "backend/tests/test_webauthn.py::test_logout_leaves_the_passkey_registered", "e2e/specs/09-passkeys.spec.js::a passkey registers from the profile page", "e2e/specs/09-passkeys.spec.js::signing out and back in with the passkey works, with no password typed", "e2e/specs/09-passkeys.spec.js::logout leaves the passkeys registered", "backend/tests/test_webauthn.py::test_the_credential_records_the_configured_origin_not_the_default", "backend/tests/test_webauthn.py::test_a_credential_from_the_old_origin_is_refused_after_the_move", "backend/tests/test_webauthn.py::test_a_credential_id_cannot_be_claimed_by_another_account", "backend/tests/test_webauthn.py::test_a_sign_in_ceremony_never_narrows_to_an_account"]
 
 [[requirement]]
 id = "platform-jellyfin-link-optional-one-to-one"
@@ -363,7 +362,7 @@ milestone = "M1"
 kind = "integration"
 what = "Each app user maps to at most one Jellyfin user and each Jellyfin user to at most one app user — a second link attempt to an already-linked Jellyfin id is refused — the link is optional (unlinked users function normally), and all authentication succeeds while the Jellyfin connector is unreachable or unconfigured."
 why = "§3.3: authentication is never delegated to Jellyfin — the app must work when Jellyfin is down; the link only drives seen-sync, playback attribution and the P(seen) prior."
-tests = []
+tests = ["backend/tests/test_jellyfin_link.py::test_one_jellyfin_user_cannot_be_linked_to_two_accounts", "backend/tests/test_jellyfin_link.py::test_one_account_maps_to_at_most_one_jellyfin_user", "backend/tests/test_jellyfin_link.py::test_a_link_without_credentials_is_real_but_incomplete", "backend/tests/test_jellyfin_link.py::test_linking_with_credentials_stores_that_users_own_token", "backend/tests/test_jellyfin_link.py::test_credentials_for_a_different_jellyfin_user_are_refused", "backend/tests/test_jellyfin_link.py::test_unlinking_leaves_a_working_account", "backend/tests/test_jellyfin_link.py::test_signing_in_works_while_jellyfin_is_unreachable", "backend/tests/test_seen_sync.py::test_an_unlinked_account_keeps_its_own_state", "backend/tests/test_seen_sync.py::test_unlinking_forgets_the_token_and_keeps_the_seen_state", "e2e/specs/08-jellyfin.spec.js::unlinking leaves a working account", "backend/tests/test_jellyfin_link.py::test_re_mapping_without_credentials_drops_the_old_token", "backend/tests/test_connector_registry.py::test_moving_the_server_drops_the_credentials_bound_to_it", "backend/tests/test_connector_registry.py::test_a_same_origin_edit_keeps_them"]
 
 [[requirement]]
 id = "map-taste-admin-admin-route-gating-and-reauth"
@@ -372,7 +371,7 @@ milestone = "M1"
 kind = "integration"
 what = "A member-role session receives 403 on every admin route and gets no admin/setup entry in its navigation payload (hidden, not merely disabled); an admin session whose last admin authentication is older than 24 h is re-prompted before any admin route resolves."
 why = "§6.6 is admin-role only, §3.1 gives member 'no admin', and §3.2 mandates the 24-hour re-prompt; the prototype hardcodes the capability flag to true."
-tests = []
+tests = ["backend/tests/test_api_gating.py::test_every_admin_route_refuses_a_member", "backend/tests/test_api_gating.py::test_every_admin_route_refuses_a_signed_out_caller", "backend/tests/test_api_gating.py::test_a_member_receives_no_admin_entry_in_its_navigation", "backend/tests/test_api_gating.py::test_an_admin_receives_the_admin_entries", "backend/tests/test_api_gating.py::test_a_stale_admin_session_is_re_prompted", "backend/tests/test_api_gating.py::test_the_me_payload_reports_the_re_prompt", "backend/tests/test_api_gating.py::test_the_app_actually_has_admin_routes_to_gate", "backend/tests/test_api_gating.py::test_a_wrong_name_and_a_wrong_password_cost_the_same"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-title-upsert-fill-never-clobber"
@@ -381,7 +380,7 @@ milestone = "M1"
 kind = "integration"
 what = "A Jellyfin item whose ProviderIds carry imdb/tmdb/tvdb resolves to a `title` row by `title.id` and fills only NULL identity columns: an existing non-null `imdb_id`/`tmdb_id` is never overwritten, `jellyfin_id` is attached, and an item with no ProviderIds at all still upserts without error and without creating a duplicate title. Two owned titles sharing a `tmdb_id` both survive the upsert (no UNIQUE constraint on `tmdb_id`/`trakt_id`/slug)."
 why = "`imdb_id` is NULL on 21% of titles so it can never be the join key, and 315 duplicate `tmdb_id` values exist legitimately (mostly movie/series pairs) — hence fill-never-clobber and §4.1 rule 6's ban on those UNIQUE constraints."
-tests = []
+tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_kinds", "backend/tests/test_jellyfin_resolve.py::test_a_tmdb_match_is_qualified_by_kind", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_provider_ids_falls_back_to_name_and_year", "backend/tests/test_jellyfin_resolve.py::test_a_null_identity_column_is_filled", "backend/tests/test_jellyfin_resolve.py::test_an_existing_identity_column_is_never_overwritten", "backend/tests/test_jellyfin_resolve.py::test_two_titles_sharing_a_tmdb_id_both_survive_the_upsert", "backend/tests/test_jellyfin_resolve.py::test_an_unresolvable_item_is_reported_and_creates_nothing", "backend/tests/test_jellyfin_resolve.py::test_reimporting_the_same_library_is_idempotent", "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale", "backend/tests/test_seen_sync.py::test_an_unresolvable_jellyfin_item_is_reported_not_invented", "backend/tests/test_jellyfin_resolve.py::test_an_unchanged_row_is_not_rewritten", "backend/tests/test_jellyfin_resolve.py::test_a_changed_row_is_still_rewritten", "backend/tests/test_jellyfin_client.py::test_items_are_requested_recursively", "backend/tests/test_jellyfin_client.py::test_items_are_narrowed_to_movies_and_series", "backend/tests/test_jellyfin_client.py::test_the_field_set_is_actually_requested"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-playback-arms-prompt-never-writes"
@@ -390,7 +389,7 @@ milestone = "M1"
 kind = "integration"
 what = "A Jellyfin session reaching ≥90% playback of a title arms a per-user finish prompt and leaves `user_title.state` untouched; only the user's explicit tap writes `seen`. Repeated polls of `/Sessions` over the same session arm the prompt exactly once, not once per poll."
 why = "\"Jellyfin playback is a suggestion, never a silent write\" — inferred state must never outrank the person, and rating capture is measured against finished playbacks (§13)."
-tests = []
+tests = ["backend/tests/test_playback_prompt.py::test_a_session_past_the_threshold_arms_a_prompt", "backend/tests/test_playback_prompt.py::test_arming_writes_no_seen_state", "backend/tests/test_playback_prompt.py::test_a_session_below_the_threshold_arms_nothing", "backend/tests/test_playback_prompt.py::test_jellyfins_own_played_flag_arms_below_the_threshold", "backend/tests/test_playback_prompt.py::test_repeated_polls_of_one_viewing_arm_it_once", "backend/tests/test_playback_prompt.py::test_a_second_viewing_while_the_first_is_unanswered_adds_no_card", "backend/tests/test_playback_prompt.py::test_the_poll_reads_sessions_and_arms", "e2e/specs/08-jellyfin.spec.js::the prompt marks nothing until it is tapped", "e2e/specs/08-jellyfin.spec.js::repeated polls of one viewing do not re-arm it", "backend/tests/test_playback_prompt.py::test_the_threshold_is_the_one_the_spec_names", "backend/tests/test_playback_prompt.py::test_the_boundary_is_inclusive", "backend/tests/test_playback_prompt.py::test_a_rewatch_on_the_same_device_asks_again", "backend/tests/test_playback_prompt.py::test_a_title_already_seen_arms_nothing", "backend/tests/test_playback_prompt.py::test_an_open_prompt_closes_when_the_state_arrives_another_way"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-seen-sync-no-echo-loop"
@@ -399,7 +398,7 @@ milestone = "M1"
 kind = "integration"
 what = "When the app's explicit `seen`/`unseen` action and Jellyfin's Played flag disagree, the app's action wins; the write stamps `jf_synced_at`, and the next 15-minute sync reading back the value the app just wrote produces no further write and no state change. A Jellyfin-side change made after `jf_synced_at` is accepted."
 why = "Two-way sync is new relative to the corpus project's read-only stance; last-writer-wins with app-explicit precedence plus `jf_synced_at` is the stated loop guard."
-tests = []
+tests = ["backend/tests/test_seen_sync.py::test_reading_back_our_own_write_changes_nothing", "backend/tests/test_seen_sync.py::test_a_jellyfin_side_change_after_the_sync_is_accepted", "backend/tests/test_seen_sync.py::test_an_action_taken_while_jellyfin_was_down_is_pushed_by_the_next_sync", "backend/tests/test_seen_sync.py::test_the_first_sync_after_linking_never_erases_jellyfin_history", "backend/tests/test_seen_sync.py::test_the_app_side_write_never_depends_on_jellyfin", "backend/tests/test_seen_sync.py::test_sync_all_runs_every_linked_user_and_reports", "e2e/specs/08-jellyfin.spec.js::a flag set in jellyfin arrives in the app", "e2e/specs/08-jellyfin.spec.js::a second sync reads back our own write and changes nothing", "backend/tests/test_seen_sync.py::test_each_linked_user_syncs_their_own_state", "backend/tests/test_seen_sync.py::test_one_users_action_is_pushed_under_their_own_token", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_cannot_erase_an_explicit_seen", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_marked_in_jellyfin_is_adopted", "backend/tests/test_seen_sync.py::test_an_action_taken_during_the_sweep_is_pushed_not_adopted", "backend/tests/test_seen_sync.py::test_an_owed_write_for_a_vanished_title_is_reported"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-seen-write-uses-per-user-token"
@@ -408,7 +407,7 @@ milestone = "M1"
 kind = "backend"
 what = "Setting `seen` in the app issues `POST /UserPlayedItems/{itemId}?userId=` and `unseen` issues `DELETE`, both authenticated with that linked user's own access token and never the admin API key; a 401 on the write marks that link as needing re-link and neither retries with the admin key nor silently drops the write."
 why = "Jellyfin API keys are unscoped and admin-equivalent — there is no read-only variant — so write restraint is enforced by this app's code alone (§14 risk 3); a per-user token can only set its own state."
-tests = []
+tests = ["backend/tests/test_jellyfin_client.py::test_a_played_write_uses_the_users_own_token", "backend/tests/test_jellyfin_client.py::test_the_admin_key_is_refused_on_a_played_write", "backend/tests/test_jellyfin_client.py::test_a_write_with_no_token_never_reaches_the_network", "backend/tests/test_jellyfin_client.py::test_one_users_token_cannot_write_another_users_state", "backend/tests/test_seen_sync.py::test_marking_seen_writes_played_with_the_users_own_token", "backend/tests/test_seen_sync.py::test_marking_unseen_issues_the_delete", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_refuses_the_write_and_asks_for_a_re_link", "backend/tests/test_seen_sync.py::test_a_rejected_token_marks_the_link_and_keeps_the_write_owed", "e2e/specs/08-jellyfin.spec.js::a tap in the app arrives in jellyfin, under the per-user token", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_is_not_promoted_to_linked", "backend/tests/test_seen_sync.py::test_an_unreachable_jellyfin_does_not_promote_a_broken_link"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-finish-prompt-banner-path"
@@ -417,7 +416,7 @@ milestone = "M1"
 kind = "e2e"
 what = "With push undeliverable, an armed finish prompt queues and appears as an in-app card on the user's next app open, naming exactly one title (\"Did you finish X?\"); its first tap writes `seen` for that user, and the card does not reappear on subsequent opens."
 why = "§7.3 names the banner path as the whole M1 behaviour (push waits for M4), and proposal 150 separates this one-title, `seen`-writing prompt from Home's pending-verdicts banner; only a browser can prove the queued prompt surfaces on next open."
-tests = []
+tests = ["e2e/specs/08-jellyfin.spec.js::finishing a title arms a prompt that surfaces on the next app open", "e2e/specs/08-jellyfin.spec.js::the first tap writes seen, and the card does not come back", "backend/tests/test_state_routes.py::test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen", "backend/tests/test_state_routes.py::test_declining_the_prompt_writes_nothing_and_closes_it", "backend/tests/test_state_routes.py::test_answering_a_prompt_twice_is_a_404", "backend/tests/test_playback_prompt.py::test_the_queue_surfaces_the_prompt_and_marks_it_shown", "backend/tests/test_playback_prompt.py::test_an_answered_prompt_does_not_come_back"]
 
 [[requirement]]
 id = "library-rate-undo-block-depth"
@@ -1075,3 +1074,12 @@ kind = "static"
 what = "No module outside the three declared Home Assistant seams — the token-authed `POST /events/playback` handler, the optional presence-hint input to session lobbies, and the session-launch webhook — imports or references Home Assistant code, and no core flow reads Home Assistant configuration."
 why = "§11 guarantees the app is fully standalone with HA integration additive; a guard that reads the source is the cheapest way to keep that from eroding as M7 lands."
 tests = []
+
+[[requirement]]
+id = "platform-passkey-registration-prompted-after-first-change"
+spec = "§3.1; §3.2"
+milestone = "M1"
+kind = "e2e"
+what = "After the forced first-login password change, an account with no passkey and a browser that supports WebAuthn lands on the account page with a prompt to add one; the prompt is one-time (it does not reappear once a passkey exists) and it never replaces the password, which stays available."
+why = "§3.1's sequence ends \"and passkey registration is prompted afterwards\" — a control that exists but is never offered is not a prompt, and §3.2 makes passkeys primary rather than compulsory, so a standing nag would be wrong too."
+tests = ["e2e/specs/09-passkeys.spec.js::a new member is prompted to add a passkey right after the forced change", "e2e/specs/09-passkeys.spec.js::the password fallback is never hidden behind the passkey button"]

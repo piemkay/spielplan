@@ -25,10 +25,18 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
+from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from tests.fixtures import make_bundle as fx  # noqa: E402
 
 BUNDLE = ROOT / "data" / "devstub-bundle"
-STATE: dict[str, Any] = {"imported": False, "users": {}, "next_id": 1}
+STATE: dict[str, Any] = {
+    "imported": False,
+    "users": {},
+    "next_id": 1,
+    "seen": {},
+    "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
+                 "linked_users": 0},
+}
 
 app = FastAPI(title="Spielplan dev harness")
 
@@ -39,6 +47,32 @@ def _db() -> sqlite3.Connection:
     db = sqlite3.connect(f"file:{BUNDLE / 'content.sqlite'}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     return db
+
+
+def _nav(role: str) -> dict[str, list[dict[str, str]]]:
+    """§6.6 is admin-role only, so the harness has to hide the admin entries too — a UI built
+    against a stub that always returns them would never exercise the member shell."""
+    account = [
+        {"key": "account", "href": "/account", "label": "Account & passkeys"},
+        {"key": "taste", "href": "/taste", "label": "My Taste"},
+    ]
+    if role == "admin":
+        account += [
+            {"key": "admin", "href": "/admin/data", "label": "Admin view"},
+            {"key": "setup", "href": "/setup", "label": "Setup wizard"},
+        ]
+    return {"surfaces": [dict(s) for s in SURFACES], "account": account}
+
+
+def _user(name: str, role: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": STATE["next_id"], "name": name, "role": role,
+        "must_change_password": False, "auth_method": "password",
+        "admin_reauth_required": False, "show_model": False,
+        "nav": _nav(role), "has_pin": False, "passkeys": 0,
+        "jellyfin": {"linked": False, "state": None},
+        **extra,
+    }
 
 
 def _me(sid: str | None) -> dict[str, Any]:
@@ -123,18 +157,14 @@ def _sign_in(response: Response, user: dict[str, Any]) -> dict[str, Any]:
 def create_admin(body: AdminInit, response: Response) -> dict[str, Any]:
     if any(u["role"] == "admin" for u in STATE["users"].values()):
         raise HTTPException(409, "an admin account already exists")
-    user = {"id": STATE["next_id"], "name": body.name, "role": "admin",
-            "must_change_password": False, "auth_method": "password",
-            "admin_reauth_required": False, "show_model": False}
+    user = _user(body.name, "admin")
     STATE["next_id"] += 1
     return _sign_in(response, user)
 
 
 @app.post("/api/setup/members", status_code=201)
 def create_member(body: MemberInit) -> dict[str, Any]:
-    user = {"id": STATE["next_id"], "name": body.name, "role": body.role,
-            "must_change_password": True, "auth_method": "password",
-            "admin_reauth_required": False, "show_model": False}
+    user = _user(body.name, body.role, must_change_password=True)
     STATE["next_id"] += 1
     STATE["users"][f"pending-{user['id']}"] = user
     return {**user, "one_time_password": "kq7mrn24tphs",
@@ -399,6 +429,167 @@ def person(person_id: int) -> dict[str, Any]:
         ]
     return {"person": {"id": p["id"], "name": p["name"], "profile_path": None},
             "filmography": films}
+
+
+# --- M1: passkeys, seen state, finish prompts, Jellyfin ----------------------
+#
+# Dumb on purpose. The passkey routes here answer with shapes, not ceremonies: WebAuthn cannot
+# be faked usefully without a real authenticator, and pretending otherwise would teach the UI
+# that a passkey always works. `tests/test_webauthn.py` runs the real ceremony against a
+# software authenticator; this only keeps the harness from 404-ing on the paths the UI calls.
+
+
+class PasskeyRegisterVerify(BaseModel):
+    ceremony_id: str
+    credential: dict
+    label: str | None = None
+
+
+class PasskeyLoginOptions(BaseModel):
+    name: str | None = None
+
+
+class PasskeyLoginVerify(BaseModel):
+    ceremony_id: str
+    credential: dict
+    device_label: str | None = None
+
+
+class StateRequest(BaseModel):
+    state: str
+
+
+class PromptAnswer(BaseModel):
+    finished: bool
+
+
+class JellyfinSettings(BaseModel):
+    url: str = ""
+    api_key: str = ""
+
+
+class LinkRequest(BaseModel):
+    jellyfin_user_id: str
+    jellyfin_username: str | None = None
+    jellyfin_password: str | None = None
+
+
+@app.post("/api/auth/passkey/register/options")
+def passkey_register_options(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    _me(spielplan_session)
+    raise HTTPException(501, "the dev harness has no authenticator — run the real stack")
+
+
+@app.post("/api/auth/passkey/register")
+def passkey_register(
+    body: PasskeyRegisterVerify, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    raise HTTPException(501, "the dev harness has no authenticator — run the real stack")
+
+
+@app.get("/api/auth/passkey/credentials")
+def passkey_credentials(spielplan_session: str | None = Cookie(default=None)) -> list[dict[str, Any]]:
+    _me(spielplan_session)
+    return []
+
+
+@app.delete("/api/auth/passkey/credentials/{credential_id:path}")
+def passkey_delete(credential_id: str) -> dict[str, bool]:
+    raise HTTPException(404, "no such passkey on this account")
+
+
+@app.post("/api/auth/passkey/login/options")
+def passkey_login_options(body: PasskeyLoginOptions) -> dict[str, Any]:
+    raise HTTPException(501, "the dev harness has no authenticator — run the real stack")
+
+
+@app.post("/api/auth/passkey/login")
+def passkey_login(body: PasskeyLoginVerify) -> dict[str, Any]:
+    raise HTTPException(501, "the dev harness has no authenticator — run the real stack")
+
+
+@app.get("/api/titles/{title_id}/state")
+def get_state(title_id: int) -> dict[str, Any]:
+    return {"state": STATE["seen"].get(title_id, "unseen"), "state_changed_at": None,
+            "jf_synced_at": None}
+
+
+@app.post("/api/titles/{title_id}/state")
+def set_state(title_id: int, body: StateRequest) -> dict[str, Any]:
+    if body.state not in ("seen", "unseen"):
+        raise HTTPException(400, "state must be one of seen, unseen")
+    STATE["seen"][title_id] = body.state
+    return {"state": body.state, "synced": False, "reason": "Jellyfin not configured"}
+
+
+@app.get("/api/prompts/finish")
+def finish_prompts() -> list[dict[str, Any]]:
+    return []
+
+
+@app.post("/api/prompts/finish/{event_id}")
+def answer_finish_prompt(event_id: int, body: PromptAnswer) -> dict[str, Any]:
+    raise HTTPException(404, "no open prompt with that id")
+
+
+@app.get("/api/admin/connectors/jellyfin")
+def get_jellyfin() -> dict[str, Any]:
+    # Like the real route, this never returns the key itself (§14.3) — only whether one is set.
+    return dict(STATE["jellyfin"])
+
+
+@app.put("/api/admin/connectors/jellyfin")
+def put_jellyfin(body: JellyfinSettings) -> dict[str, Any]:
+    STATE["jellyfin"] = {
+        "url": body.url,
+        "has_api_key": bool(body.api_key) or STATE["jellyfin"]["has_api_key"],
+        "configured": bool(body.url) and (bool(body.api_key) or STATE["jellyfin"]["has_api_key"]),
+        "library_ids": [],
+        "linked_users": 0,
+    }
+    return STATE["jellyfin"]
+
+
+@app.post("/api/admin/connectors/jellyfin/test")
+def test_jellyfin() -> dict[str, Any]:
+    return {"ok": False, "error": "the dev harness has no Jellyfin", "status": None}
+
+
+@app.get("/api/admin/connectors/jellyfin/users")
+def jellyfin_users() -> list[dict[str, Any]]:
+    return []
+
+
+@app.post("/api/admin/connectors/jellyfin/sync")
+def jellyfin_sync() -> dict[str, Any]:
+    return {"pushed": 0, "adopted": 0, "unchanged": 0, "needs_relink": [], "resolve": {},
+            "users": [], "skipped_no_link": True}
+
+
+@app.post("/api/admin/connectors/jellyfin/poll")
+def jellyfin_poll() -> dict[str, Any]:
+    return {"armed": 0, "already_armed": 0, "watching": 0, "unresolved": [],
+            "skipped_no_link": True}
+
+
+@app.get("/api/admin/users")
+def admin_users() -> list[dict[str, Any]]:
+    return [
+        {**u, "is_active": True, "jellyfin_user_id": None, "jellyfin_link_state": None,
+         "has_jellyfin_token": False}
+        for u in STATE["users"].values()
+    ]
+
+
+@app.post("/api/admin/users/{user_id}/jellyfin")
+def link_jellyfin(user_id: int, body: LinkRequest) -> dict[str, Any]:
+    raise HTTPException(409, "Jellyfin is not configured — set its URL and API key first")
+
+
+@app.delete("/api/admin/users/{user_id}/jellyfin")
+def unlink_jellyfin(user_id: int) -> dict[str, bool]:
+    return {"ok": True}
 
 
 if __name__ == "__main__":

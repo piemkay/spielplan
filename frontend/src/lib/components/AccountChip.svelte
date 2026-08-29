@@ -5,7 +5,7 @@
    *    (the chip reads 'member · passkey + PIN'). Logout clears the session cookie only —
    *    passkeys remain registered."
    */
-  import { session, setShowModel } from '$lib/session.svelte.js';
+  import { refreshUser, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { goto } from '$app/navigation';
 
@@ -40,8 +40,10 @@
   async function submitPin() {
     error = '';
     try {
-      const user = await post('/auth/switch', { user_id: switching.id, pin });
-      session.user = { ...user, must_change_password: false };
+      await post('/auth/switch', { user_id: switching.id, pin });
+      // The switch response is identity only; the new profile's navigation is a different
+      // answer (§6.6 is admin-role only), so re-read rather than patching the old object.
+      await refreshUser();
       open = false;
       pin = '';
       switching = null;
@@ -85,13 +87,12 @@
           </div>
         </div>
       {:else}
+        <!-- §6.6 is admin-role only. The entries come from the server's nav payload, so a
+             member's browser never receives the admin links at all — hidden, not disabled. -->
         <div class="group">
-          <a href="/account">Account &amp; passkeys</a>
-          <a href="/taste">My Taste</a>
-          {#if session.user?.role === 'admin'}
-            <a href="/admin/data">Admin view</a>
-            <a href="/setup">Setup wizard</a>
-          {/if}
+          {#each session.user?.nav?.account ?? [] as entry (entry.key)}
+            <a href={entry.href} data-nav={entry.key}>{entry.label}</a>
+          {/each}
         </div>
 
         <!-- §6.7, owner decision 2026-08-29: one global per-user "show the model" toggle,

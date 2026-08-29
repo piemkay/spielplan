@@ -4,24 +4,31 @@
    * Taste. The prototype called Map "Explore" and hid Taste in the account menu; the spec's
    * names win, and every surface is visible with the milestone that owns it, so the shape of
    * the finished app is legible from day one rather than appearing later as a surprise.
+   *
+   * The list comes from `/auth/me` rather than from here. §6.6 is admin-role only, and a
+   * client-side `{#if role === 'admin'}` hides a link from someone reading the screen while
+   * showing it to anyone reading the response. Navigation is a server decision.
    */
   import { page } from '$app/stores';
+  import { session } from '$lib/session.svelte.js';
 
-  const surfaces = [
-    { href: '/', label: 'Home', milestone: 'M0', icon: 'M3 8.5 10 3l7 5.5V17H3z M8 17v-5h4v5' },
-    { href: '/rate', label: 'Rate', milestone: 'M2', icon: 'M3 4h9v12H3z M14.5 6.5 17 8v8.5' },
-    { href: '/tonight', label: 'Tonight', milestone: 'M4', icon: 'M8.4 7.2 13 10l-4.6 2.8z' },
-    { href: '/rank', label: 'Rank', milestone: 'M3', icon: 'M3 5h13 M3 10h9 M3 15h5' },
-    { href: '/map', label: 'Map', milestone: 'M6', icon: 'M12.8 7.2 8.9 8.9 7.2 12.8l3.9-1.7z' },
-    { href: '/taste', label: 'Taste', milestone: 'M6', icon: 'M4 15V8 M8 15V5 M12 15v-6 M16 15v-9' }
-  ];
+  // Presentation only, keyed by the server's surface key.
+  const ICONS = {
+    home: 'M3 8.5 10 3l7 5.5V17H3z M8 17v-5h4v5',
+    rate: 'M3 4h9v12H3z M14.5 6.5 17 8v8.5',
+    tonight: 'M8.4 7.2 13 10l-4.6 2.8z',
+    rank: 'M3 5h13 M3 10h9 M3 15h5',
+    map: 'M12.8 7.2 8.9 8.9 7.2 12.8l3.9-1.7z',
+    taste: 'M4 15V8 M8 15V5 M12 15v-6 M16 15v-9'
+  };
 
+  const surfaces = $derived(session.user?.nav?.surfaces ?? []);
   const current = $derived($page.url.pathname);
   const isActive = (href) => (href === '/' ? current === '/' : current.startsWith(href));
 </script>
 
 <nav aria-label="Surfaces">
-  {#each surfaces as s (s.href)}
+  {#each surfaces as s (s.key)}
     <a href={s.href} class:on={isActive(s.href)} title={s.label} data-surface={s.label}>
       <svg
         width="17"
@@ -34,8 +41,8 @@
         stroke-linejoin="round"
         aria-hidden="true"
       >
-        {#if s.label === 'Tonight' || s.label === 'Map'}<circle cx="10" cy="10" r="7" />{/if}
-        <path d={s.icon} />
+        {#if s.key === 'tonight' || s.key === 'map'}<circle cx="10" cy="10" r="7" />{/if}
+        <path d={ICONS[s.key]} />
       </svg>
       <span class="label">{s.label}</span>
     </a>

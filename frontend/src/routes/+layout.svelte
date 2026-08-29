@@ -18,6 +18,18 @@
 
   let { children } = $props();
 
+  const canAdmin = $derived(
+    (session.user?.nav?.account ?? []).some((entry) => entry.key === 'admin')
+  );
+
+  // §3.2: "admin routes re-prompt after 24 h". The gate is server-side and returns a 401 that
+  // an admin can do nothing about from an admin page, so the shell says what it is and where
+  // to go. Only on the surfaces it actually blocks — elsewhere it is not yet true of anything.
+  const needsReauth = $derived(
+    !!session.user?.admin_reauth_required &&
+      ($page.url.pathname.startsWith('/admin') || $page.url.pathname.startsWith('/setup'))
+  );
+
   const bare = $derived(
     $page.url.pathname.startsWith('/setup') ||
       $page.url.pathname.startsWith('/login') ||
@@ -67,14 +79,31 @@
       <span class="brand">SPIELPLAN</span>
       <div class="spacer"></div>
       {#if !session.hasBundle}
-        <!-- §3.1: a bundle-less app is a legal state, said out loud rather than crashed on. -->
-        <a class="nobundle data" href="/admin/data">no bundle imported</a>
+        <!-- §3.1: a bundle-less app is a legal state, said out loud rather than crashed on.
+             Only an admin gets a link out of it: importing is §6.6's Data tab, and offering a
+             member a door they will meet a 403 behind is worse than stating the fact. -->
+        {#if canAdmin}
+          <a class="nobundle data" href="/admin/data">no bundle imported</a>
+        {:else}
+          <span class="nobundle data">no bundle imported</span>
+        {/if}
       {/if}
       <AccountChip onLogout={logout} />
     </header>
     <div class="body">
       <NavRail />
-      <main>{@render children()}</main>
+      <main>
+        {#if needsReauth}
+          <div class="reauth" role="alert">
+            <span>
+              This admin session is more than 24 hours old. Sign in again to reach the admin
+              view.
+            </span>
+            <a class="btn-primary" href="/login">Sign in again</a>
+          </div>
+        {/if}
+        {@render children()}
+      </main>
     </div>
   </div>
 {/if}
@@ -110,6 +139,19 @@
   }
   .spacer {
     flex: 1;
+  }
+  .reauth {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 12px 15px;
+    border: 1px solid var(--ember-edge);
+    background: var(--ember-wash);
+    border-radius: var(--r-md);
+    font-size: 13px;
   }
   .nobundle {
     border: 1px solid var(--ember-edge);

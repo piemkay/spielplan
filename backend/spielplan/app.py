@@ -17,10 +17,14 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from spielplan.api import admin as admin_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
 from spielplan.api import library as library_api
+from spielplan.api import passkeys as passkeys_api
 from spielplan.api import setup as setup_api
+from spielplan.api import state as state_api
+from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import migrate, pool
 from spielplan.models.artifacts import ArtifactStore
@@ -37,6 +41,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         applied = await migrate.apply_all(conn)
         if applied:
             log.info("applied migrations: %s", ", ".join(applied))
+        # §2: "env vars may *seed* connector config on first boot for automated installs."
+        # First boot only — a connector that already has a row is left alone, so the admin UI
+        # stays the source of truth the owner asked for.
+        await registry.seed_from_env(conn, cfg)
         # §4.3: artifacts load "when present"; an empty store is legal.
         app.state.artifacts = await ArtifactStore.load_active(conn, cfg.artifacts_dir)
 
@@ -53,9 +61,12 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Spielplan", version="0.1.0", lifespan=lifespan, docs_url="/api/docs")
 
     app.include_router(auth_api.router)
+    app.include_router(passkeys_api.router)
     app.include_router(setup_api.router)
     app.include_router(artifacts_api.router)
     app.include_router(library_api.router)
+    app.include_router(state_api.router)
+    app.include_router(admin_api.router)
 
     @app.get("/api/health")
     async def health() -> dict[str, object]:

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { signedIn } from '../helpers.js';
+import { openTitle, signedIn } from '../helpers.js';
 
 /**
  * §6.0's title detail card, and the §4.1 rules that are only observable at the last step —
@@ -12,10 +12,11 @@ test.beforeEach(async ({ page }) => {
   await signedIn(page);
   const config = await (await page.request.get('/api/config')).json();
   test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
-  await page.goto('/');
-  await page.getByLabel('Search titles').fill('heat');
-  await page.locator('.card-wrap').first().click();
-  await expect(page.getByLabel('Title detail')).toBeVisible();
+  // By name. Clicking the first card opens whatever the grid shows before the debounced
+  // search lands — the catalog is ordered by year descending, so that is Paddington 2, and
+  // every Heat-specific assertion below then fails for a reason that has nothing to do with
+  // what it is testing.
+  await openTitle(page, 'Heat');
 });
 
 test('the card carries metadata, overview and the model line', async ({ page }) => {

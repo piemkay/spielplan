@@ -17,8 +17,7 @@ const PENDING = [
   { path: '/tonight', surface: 'Tonight', milestone: 'M4' },
   { path: '/rank', surface: 'Rank', milestone: 'M3' },
   { path: '/map', surface: 'Map', milestone: 'M6' },
-  { path: '/taste', surface: 'Taste', milestone: 'M6' },
-  { path: '/account', surface: 'Account', milestone: 'M1' },
+  { path: '/taste', surface: 'Taste', milestone: 'M6' }
 ];
 
 test.beforeEach(async ({ page }) => {
@@ -42,13 +41,25 @@ test('a placeholder still describes what the surface will do', async ({ page }) 
   await expect(page.locator('main li')).not.toHaveCount(0);
 });
 
-test('the admin Data tab is real, and its siblings are labelled with their milestone', async ({
+test('Account is built — M1 landed, so it is no longer a placeholder', async ({ page }) => {
+  // This test replaces the placeholder assertion Account carried at M0. The routine in
+  // docs/TESTING.md is exactly this: the placeholder fails when the surface ships, and that
+  // failure is the reminder to write the real test. 09-passkeys.spec.js is that real test.
+  await page.goto('/account');
+  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Passkeys' })).toBeVisible();
+  await expect(page.getByText(/Not built yet/)).toHaveCount(0);
+});
+
+test('the admin Data and Connectors tabs are real; the rest name their milestone', async ({
   page,
 }) => {
-  // §3.1 scopes the bundle-import page to M0: "that one page is M0 scope".
+  // §3.1 scopes the bundle-import page to M0: "that one page is M0 scope". §6.6's Jellyfin
+  // card is M1; its LLM/TMDB half and the Users and System cards are M5.
   await page.goto('/admin/data');
   await expect(page.getByRole('heading', { name: 'Artifact bundle' })).toBeVisible();
-  for (const tab of ['Connectors', 'Users', 'System']) {
+  await expect(page.getByRole('link', { name: 'Connectors' })).toBeVisible();
+  for (const tab of ['Users', 'System']) {
     await expect(page.getByText(tab, { exact: true })).toBeVisible();
   }
 });

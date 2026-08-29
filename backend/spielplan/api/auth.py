@@ -41,7 +41,9 @@ class PreferencesRequest(BaseModel):
     show_model: bool
 
 
-def _set_cookie(response: Response, sid: str) -> None:
+def set_session_cookie(response: Response, sid: str) -> None:
+    """One place that knows the cookie's shape, so the passkey and password paths cannot
+    drift apart on HttpOnly, SameSite or the sliding window (§3.2)."""
     cfg = settings()
     response.set_cookie(
         auth.SESSION_COOKIE,
@@ -54,6 +56,39 @@ def _set_cookie(response: Response, sid: str) -> None:
     )
 
 
+# §6: the surface names are normative — Home / Rate / Tonight / Rank / Map / Taste — and each
+# one is visible from day one with the milestone that owns it, so the shape of the finished app
+# is legible rather than appearing later as a surprise.
+SURFACES: tuple[dict[str, str], ...] = (
+    {"key": "home", "href": "/", "label": "Home", "milestone": "M0"},
+    {"key": "rate", "href": "/rate", "label": "Rate", "milestone": "M2"},
+    {"key": "tonight", "href": "/tonight", "label": "Tonight", "milestone": "M4"},
+    {"key": "rank", "href": "/rank", "label": "Rank", "milestone": "M3"},
+    {"key": "map", "href": "/map", "label": "Map", "milestone": "M6"},
+    {"key": "taste", "href": "/taste", "label": "Taste", "milestone": "M6"},
+)
+
+
+def _nav(user: auth.SessionUser) -> dict[str, list[dict[str, str]]]:
+    """The navigation payload. §6.6 is admin-role only and §3.1 gives a member 'no admin'.
+
+    Computed here rather than in the client, because "hidden" has to mean the entry does not
+    exist in what the member's browser receives. A client-side `{#if role === 'admin'}` hides
+    a link from someone reading the screen and shows it to anyone reading the response — and
+    the prototype it replaces hardcoded the capability flag to true.
+    """
+    account = [
+        {"key": "account", "href": "/account", "label": "Account & passkeys"},
+        {"key": "taste", "href": "/taste", "label": "My Taste"},
+    ]
+    if user.is_admin:
+        account += [
+            {"key": "admin", "href": "/admin/data", "label": "Admin view"},
+            {"key": "setup", "href": "/setup", "label": "Setup wizard"},
+        ]
+    return {"surfaces": [dict(s) for s in SURFACES], "account": account}
+
+
 def _me(user: auth.SessionUser) -> dict[str, object]:
     return {
         "id": user.id,
@@ -63,6 +98,7 @@ def _me(user: auth.SessionUser) -> dict[str, object]:
         "auth_method": user.auth_method,
         "admin_reauth_required": user.is_admin and user.admin_reauth_required(),
         "show_model": user.show_model,
+        "nav": _nav(user),
     }
 
 
@@ -73,8 +109,15 @@ async def login(body: LoginRequest, response: Response, conn: DB) -> dict[str, o
         "WHERE lower(name) = lower($1) AND is_active",
         body.name,
     )
-    if row is None or not auth.verify_password(row["password_hash"], body.password):
-        # One message for both cases: an attacker learns nothing about which names exist.
+    # Verified unconditionally, against a throwaway hash when the name does not exist. One
+    # message for both cases is not enough on its own: argon2 costs tens of milliseconds and an
+    # index miss costs none, so short-circuiting on `row is None` would answer "no such name"
+    # in the timing while the body said nothing. That is an account-enumeration oracle, and the
+    # names it leaks are the ones worth guessing passwords against.
+    matched = auth.verify_password(
+        row["password_hash"] if row is not None else auth.ABSENT_ACCOUNT_HASH, body.password
+    )
+    if row is None or not matched:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "wrong name or password")
 
     if auth.needs_rehash(row["password_hash"]):
@@ -87,7 +130,7 @@ async def login(body: LoginRequest, response: Response, conn: DB) -> dict[str, o
     sid = await auth.create_session(
         conn, row["id"], auth_method="password", device_label=body.device_label
     )
-    _set_cookie(response, sid)
+    set_session_cookie(response, sid)
     return {
         "id": row["id"],
         "name": row["name"],
@@ -118,7 +161,7 @@ async def pin_switch(
     # The device is handed over, so the session it was holding does not travel with it.
     await auth.destroy_session(conn, current.session_id)
     sid = await auth.create_session(conn, row["id"], auth_method="pin")
-    _set_cookie(response, sid)
+    set_session_cookie(response, sid)
     return {"id": row["id"], "name": row["name"], "role": row["role"]}
 
 
@@ -133,8 +176,31 @@ async def logout(request: Request, response: Response, conn: DB) -> dict[str, bo
 
 
 @router.get("/me")
-async def me(user: CurrentUser) -> dict[str, object]:
-    return _me(user)
+async def me(user: CurrentUser, conn: DB) -> dict[str, object]:
+    """Everything the shell needs about the signed-in person, including what they may reach.
+
+    The passkey count and the Jellyfin link travel with it because both drive prompts the
+    shell owns: §3.1 prompts passkey registration after the first password change, and §7.3
+    needs somewhere to say a link went stale.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT u.jellyfin_user_id, u.jellyfin_link_state, u.pin_hash IS NOT NULL AS has_pin,
+               (SELECT count(*) FROM webauthn_credential c
+                 WHERE c.user_id = u.id AND c.rp_id = $2) AS passkeys
+          FROM app_user u WHERE u.id = $1
+        """,
+        user.id,
+        settings().rp_id,
+    )
+    payload = _me(user)
+    payload["has_pin"] = bool(row["has_pin"])
+    payload["passkeys"] = int(row["passkeys"])
+    payload["jellyfin"] = {
+        "linked": row["jellyfin_user_id"] is not None,
+        "state": row["jellyfin_link_state"],
+    }
+    return payload
 
 
 @router.post("/password")

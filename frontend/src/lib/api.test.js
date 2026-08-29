@@ -44,11 +44,14 @@ describe('api', () => {
     vi.unstubAllGlobals();
   });
 
-  const respond = (status, body, ok = status < 400) =>
+  const respond = (status, body, ok = status < 400, headers = {}) =>
     Promise.resolve({
       ok,
       status,
       statusText: 'x',
+      // A real Response always has headers, and the client reads one of them (§3.2's admin
+      // re-prompt travels in `X-Spielplan-Reauth`). A double without them fails everywhere.
+      headers: new Headers(headers),
       text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
     });
 
@@ -77,6 +80,24 @@ describe('api', () => {
       status: 422,
       message: 'select at least one kind',
     });
+  });
+
+  it("tells §3.2's admin re-prompt apart from an ordinary sign-out", async () => {
+    // Both are 401. Only the header says "sign in again" rather than "you are signed out",
+    // and the shell renders a different thing for each.
+    fetch.mockReturnValue(
+      respond(401, { detail: 'admin re-authentication required' }, false, {
+        'x-spielplan-reauth': 'admin'
+      })
+    );
+    const reauth = await api('/admin/users').catch((e) => e);
+    expect(reauth.isUnauthenticated).toBe(true);
+    expect(reauth.needsAdminReauth).toBe(true);
+
+    fetch.mockReturnValue(respond(401, { detail: 'not signed in' }, false));
+    const plain = await api('/auth/me').catch((e) => e);
+    expect(plain.isUnauthenticated).toBe(true);
+    expect(plain.needsAdminReauth).toBe(false);
   });
 
   it('flags an unauthenticated error so the shell can redirect', async () => {

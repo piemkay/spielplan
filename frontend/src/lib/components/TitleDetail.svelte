@@ -11,12 +11,17 @@
    * here, and each degrades to an honest disabled state rather than disappearing when the
    * thing behind it (a bundle, a Jellyfin link) does not exist yet.
    */
-  import { get } from '$lib/api.js';
+  import { get, post } from '$lib/api.js';
 
-  let { titleId, onClose, onPerson } = $props();
+  let { titleId, onClose, onPerson, onStateChange } = $props();
 
   let data = $state(null);
+  // Two separate channels on purpose. `error` is the *load* failing, and the template replaces
+  // the whole card with it; an action failing must not take the title, the credits and both DNA
+  // tiers off the screen with it.
   let error = $state('');
+  let syncNote = $state('');
+  let saving = $state(false);
 
   // Vocabulary v1's eleven facets (§6.8: "a fixed colour per vocabulary facet (11)").
   const FACETS = new Set([
@@ -34,6 +39,7 @@
     let cancelled = false;
     data = null;
     error = '';
+    syncNote = '';
     get(`/titles/${id}`)
       .then((res) => {
         if (!cancelled) data = res;
@@ -45,6 +51,28 @@
       cancelled = true;
     };
   });
+
+  /**
+   * §7.3: "App is authoritative for explicit user actions" — this is that action. The app-side
+   * write never depends on Jellyfin, so the response also carries whether the media server was
+   * told, and `syncNote` says so plainly rather than pretending it succeeded.
+   */
+  async function toggleSeen() {
+    if (!data || saving) return;
+    const next = data.title.seen_state === 'seen' ? 'unseen' : 'seen';
+    saving = true;
+    syncNote = '';
+    try {
+      const res = await post(`/titles/${data.title.id}/state`, { state: next });
+      data = { ...data, title: { ...data.title, seen_state: next } };
+      syncNote = res.synced ? 'synced to Jellyfin' : res.reason || '';
+      onStateChange?.(data.title.id, next);
+    } catch (err) {
+      syncNote = `could not save that — ${err.message}`;
+    } finally {
+      saving = false;
+    }
+  }
 
   const runtime = $derived(
     data?.title?.runtime_min
@@ -100,6 +128,17 @@
     </div>
 
     <div class="actions">
+      <!-- §4.2: two states and only two — there is no 'forgotten' (owner decision
+           2026-08-29). §7.3: this explicit action outranks whatever Jellyfin inferred. -->
+      <button
+        class="btn-ghost seen"
+        aria-pressed={t.seen_state === 'seen'}
+        onclick={toggleSeen}
+        disabled={saving}
+        data-seen={t.seen_state ?? 'unseen'}
+      >
+        {t.seen_state === 'seen' ? 'Seen' : 'Mark seen'}
+      </button>
       {#if data.actions.play_on_jellyfin}
         <a class="btn-primary" href={data.actions.play_on_jellyfin} target="_blank" rel="noreferrer">
           Play on Jellyfin
@@ -111,6 +150,9 @@
       {/if}
       <a class="btn-ghost" href="/map?title={t.id}">Show on map</a>
     </div>
+    {#if syncNote}
+      <div class="data syncnote" role="status">{syncNote}</div>
+    {/if}
 
     {#if data.credits.length}
       <section>
@@ -240,6 +282,10 @@
     border-radius: var(--r-sm);
     background: var(--card);
     margin: 12px 0;
+  }
+  .syncnote {
+    margin-top: -4px;
+    color: var(--ink-4);
   }
   .actions {
     display: flex;

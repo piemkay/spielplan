@@ -3,7 +3,7 @@
 The suite exists to make the spec falsifiable. Every layer answers a different question, and
 the coverage map is the contract that says which requirement each milestone owes a test.
 
-## The four layers
+## The six layers
 
 | Layer | Command | Needs | Answers |
 |---|---|---|---|
@@ -18,6 +18,29 @@ Two of those layers exist because of bugs that reached the running app and could
 caught anywhere cheaper: SQLite integer booleans hitting Postgres `boolean` columns (integration),
 and `json` columns arriving as text and being iterated character by character (e2e).
 
+### Two test doubles that are not mocks
+
+M1 added both, and the distinction matters: each one can *refuse*, which is what makes the
+assertions above it capable of failing.
+
+- **`ops/fake_jellyfin.py`** — a real HTTP server implementing the handful of Jellyfin ≥ 10.9
+  routes §7.1 names. It runs two ways: mounted in-process through `httpx.ASGITransport` for the
+  integration tests, and as a compose service (`ops/compose.e2e.yml`) for the browser tests.
+  **It refuses the admin API key on `/UserPlayedItems` on purpose.** A real Jellyfin would
+  accept it — the key is admin-equivalent with no read-only variant (§14.3) — so §7.3's
+  per-user-token rule is enforced by this app's code and nothing else. Refusing it here is what
+  turns that restraint into something a test can break.
+- **`backend/tests/fixtures/soft_authenticator.py`** — a software WebAuthn authenticator that
+  signs genuine CTAP2 structures with a real P-256 key. It makes the interesting cases
+  reachable: an assertion for the wrong origin, one for the wrong rp_id, and a replay whose
+  signature verifies perfectly and whose counter has not moved. In the browser, Chromium's
+  virtual authenticator (CDP `WebAuthn` domain) plays the same part.
+
+**The e2e origin is load-bearing.** WebAuthn binds a credential to the origin (§2, §14.4), so
+the suite runs against `PUBLIC_URL`'s origin — `http://localhost:8080`, not `http://127.0.0.1:8080`.
+Same host, same port, different origin, and a passkey registered under one is correctly refused
+under the other.
+
 ## Running it
 
 ```bash
@@ -31,8 +54,7 @@ docker compose exec db createdb -U spielplan spielplan_test
 echo 'TEST_DATABASE_URL=postgresql://spielplan:<pw>@127.0.0.1:5432/spielplan_test' > .env.test
 python -m pytest backend/tests -q
 
-# the whole stack, from a cold start
-docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d --build
+# the whole stack, from a cold start — run.mjs brings it up itself, fake Jellyfin included
 node e2e/run.mjs
 ```
 
@@ -48,7 +70,7 @@ CI runs all of it on every push: `.github/workflows/ci.yml`.
 `backend/tests/spec_coverage.toml` holds one row per testable requirement:
 
 ```toml
-current_milestone = "M0"
+current_milestone = "M1"
 
 [[requirement]]
 id = "data-rules-dna-evidence-required"
@@ -80,7 +102,13 @@ The update is mechanical, and it happens *before* the code:
    section, its kind, and what it has to assert. That list is the milestone's test plan, and you
    did not have to write it.
 3. **Write the tests first**, at the `kind` the row names. Fill in `tests = [...]` as each lands.
-4. **The milestone is closed when the suite is green** — which is a stronger statement than
+4. **Review it adversarially before closing it.** A green suite proves the tests pass, not that
+   the tests are the right ones. M1's review ran six independent lenses — auth, the connector,
+   security, the data layer, test quality, the front end — and put every finding through a
+   skeptic told to refute it. What survived was real: a duplicate Jellyfin item silently
+   erasing a person's explicit `seen`, three inputs rendering white-on-white, a broken link
+   reporting itself healthy. None of them would have failed a test that existed.
+5. **The milestone is closed when the suite is green** — which is a stronger statement than
    §12's exit criterion, because every requirement behind it is named.
 
 Two things happen on the way that are easy to miss:
@@ -95,15 +123,25 @@ Two things happen on the way that are easy to miss:
 ### Current state
 
 ```
-> M0    35 requirements
-  M1     9
-  M2    23
+> M0    33/35 covered (2 waived)
+> M1    10/10 covered
+  M2    23 requirements
   M3     9
   M4    18
   M5    10
   M6    12
   M7     1
 ```
+
+The two standing M0 waivers are backup rotation (no backup job exists yet) and the title
+card's no-bundle model line (unreachable until M5, when a locally acquired title can outlive a
+deactivated bundle). M1 closed the third — connector env-seeding, which was an implementation
+gap, not a test gap, and now has both.
+
+M1's tenth row was added *during* the milestone, by the review: §3.1's sequence ends "and
+passkey registration is prompted afterwards", and the map — written from the spec at M0 — had
+no row for that clause. The map is a contract, not a ceiling; a requirement the spec states and
+the map missed is added when it is found.
 
 `pytest backend/tests/test_spec_coverage.py -s` prints the live version.
 

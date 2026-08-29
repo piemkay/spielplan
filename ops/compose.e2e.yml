@@ -1,0 +1,36 @@
+# End-to-end overlay. NOT auto-loaded — pass it explicitly, so a production
+# `docker compose up` cannot pick it up by accident:
+#
+#   docker compose -f docker-compose.yml -f ops/compose.dev.yml -f ops/compose.e2e.yml up -d
+#
+# `node e2e/run.mjs` passes all three itself, so the suite is self-sufficient.
+#
+# It adds one thing the real stack must never have: a fake Jellyfin. §7.3 promises that seen
+# state flows *both ways* and that the Played write uses each linked person's own token rather
+# than the admin key, and the only honest way to show that in a browser is a server that
+# actually answers — and that refuses the admin key on the write, so the restraint can fail.
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  jellyfin-fake:
+    # Reuses the backend image purely for its Python + FastAPI + uvicorn; the file itself is
+    # mounted, so editing the fake does not mean rebuilding an image.
+    build:
+      context: .
+      dockerfile: ops/backend.Dockerfile
+    working_dir: /ops
+    command: ["uvicorn", "fake_jellyfin:app", "--host", "0.0.0.0", "--port", "8096"]
+    volumes:
+      - ./ops/fake_jellyfin.py:/ops/fake_jellyfin.py:ro
+    environment:
+      FAKE_JELLYFIN_API_KEY: ${FAKE_JELLYFIN_API_KEY:-e2e-jellyfin-key}
+      FAKE_JELLYFIN_PASSWORD: ${FAKE_JELLYFIN_PASSWORD:-e2e-jellyfin-password}
+    ports:
+      # Published so Playwright can drive the control surface directly — "someone marked it
+      # watched in Jellyfin" has to be expressible from the test, not only from the app.
+      - "127.0.0.1:8096:8096"
+    # The image's HEALTHCHECK curls the backend's port 8080, which this service does not serve.
+    healthcheck:
+      disable: true

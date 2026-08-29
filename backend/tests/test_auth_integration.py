@@ -205,3 +205,35 @@ async def test_an_account_without_a_pin_cannot_be_switched_to(db):
     ok, reason = await auth.check_pin(db, user_id, "1234")
     assert not ok
     assert "no switch PIN" in reason
+
+
+# --- §3.2: the lockout is the defence, so it has to count every attempt --------------------
+
+
+async def test_concurrent_wrong_pins_each_count(db):
+    """A read-modify-write would let ten simultaneous guesses cost one failure — and the
+    lockout, not the argon2 work factor, is what defends a 10,000-value keyspace."""
+    import asyncio
+
+    import asyncpg as _asyncpg
+
+    from tests.conftest import test_database_url
+
+    user_id, _ = await _member(db)
+    await db.execute(
+        "UPDATE app_user SET pin_hash = $2 WHERE id = $1", user_id, auth.hash_pin("1234")
+    )
+
+    async def guess() -> None:
+        conn = await _asyncpg.connect(test_database_url())
+        try:
+            await auth.check_pin(conn, user_id, "9999")
+        finally:
+            await conn.close()
+
+    await asyncio.gather(*(guess() for _ in range(5)))
+    row = await db.fetchrow(
+        "SELECT pin_failed_count, pin_locked_until FROM app_user WHERE id = $1", user_id
+    )
+    assert row["pin_failed_count"] == 5, "every attempt has to be counted, not just the last"
+    assert row["pin_locked_until"] is not None

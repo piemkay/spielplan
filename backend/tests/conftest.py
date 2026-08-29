@@ -68,3 +68,94 @@ async def db(pg_url):
     finally:
         await conn.close()
         await pool.close_pool()
+
+
+@pytest.fixture
+async def fake_jellyfin():
+    """`ops/fake_jellyfin.py` mounted in-process.
+
+    Returns (app, transport). The transport goes into `JellyfinClient`, so the client's real
+    request building — headers, query parameters, the >= 10.9 routes — is exercised end to
+    end with no socket. §7.1's field list and §7.3's per-user write are both HTTP facts, and
+    a mock would only assert that we call ourselves.
+    """
+    import importlib.util
+
+    import httpx
+
+    spec = importlib.util.spec_from_file_location(
+        "fake_jellyfin", ROOT.parent / "ops" / "fake_jellyfin.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.state.reset()
+    yield module, httpx.ASGITransport(app=module.app)
+
+
+@pytest.fixture
+async def app(db, pg_url, tmp_path):
+    """The real FastAPI app, over ASGI, against the test database.
+
+    Routes are where §3.1's role gating and §3.2's re-prompt actually live — a unit test of the
+    `admin_user` dependency proves the dependency, not that every admin route is behind it. This
+    runs the genuine lifespan, so migrations and §2's env seeding happen the way they do at boot.
+
+    Yields a factory: each call returns a fresh client with its own cookie jar, which is how one
+    test can hold an admin session and a member session at the same time.
+    """
+    import contextlib
+    import os
+
+    import httpx
+
+    from spielplan.core.config import settings
+
+    previous = {k: os.environ.get(k) for k in ("DATABASE_URL", "DATA_DIR")}
+    os.environ["DATABASE_URL"] = pg_url
+    os.environ["DATA_DIR"] = str(tmp_path)
+    settings.cache_clear()
+
+    from spielplan.app import create_app
+
+    application = create_app()
+    opened: list[httpx.AsyncClient] = []
+
+    def make() -> httpx.AsyncClient:
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://test"
+        )
+        opened.append(client)
+        return client
+
+    try:
+        async with application.router.lifespan_context(application):
+            yield make
+    finally:
+        for client in opened:
+            with contextlib.suppress(Exception):
+                await client.aclose()
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        settings.cache_clear()
+
+
+@pytest.fixture
+async def app_client(app):
+    """One anonymous client against the app fixture, for the common single-identity case."""
+    return app()
+
+
+@pytest.fixture
+def secrets_key(monkeypatch):
+    """§2: connector secrets are AEAD-encrypted under a DEK wrapped by SECRETS_KEY, and the app
+    refuses to start secret-dependent connectors without it. Tests that store a connector
+    secret therefore need one; tests that assert the refusal deliberately do not take this."""
+    from spielplan.core.config import settings
+
+    monkeypatch.setenv("SECRETS_KEY", "test-secrets-key-not-a-real-one")
+    settings.cache_clear()
+    yield "test-secrets-key-not-a-real-one"
+    settings.cache_clear()

@@ -12,7 +12,11 @@ import { defineConfig, devices } from '@playwright/test';
  * Tests carry a `@needs-db` tag when they require the real backend; `npm run test:ui-only`
  * skips them.
  */
-const BASE_URL = process.env.BASE_URL ?? 'http://127.0.0.1:8080';
+// Must be the app's own PUBLIC_URL origin, not merely an address that reaches it. WebAuthn
+// binds credentials to the origin (§2, §14.4), so a passkey registered from
+// http://127.0.0.1:8080 against an rp_id of `localhost` is refused — correctly, and
+// confusingly. Same host, same port, different origin.
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
 
 export default defineConfig({
   testDir: './specs',

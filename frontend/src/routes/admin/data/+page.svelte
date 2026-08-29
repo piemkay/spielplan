@@ -8,6 +8,7 @@
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import { bootstrap } from '$lib/session.svelte.js';
+  import AdminTabs from '$lib/components/AdminTabs.svelte';
   import BundleImport from '$lib/components/BundleImport.svelte';
 
   let state = $state(null);
@@ -38,12 +39,7 @@
   onMount(refresh);
 </script>
 
-<div class="tabs">
-  <span class="pill on">Data</span>
-  <span class="pill" title="M5">Connectors</span>
-  <span class="pill" title="M1">Users</span>
-  <span class="pill" title="M5">System</span>
-</div>
+<AdminTabs active="data" />
 
 <h1>Artifact bundle</h1>
 
@@ -113,11 +109,6 @@
 {/if}
 
 <style>
-  .tabs {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 18px;
-  }
   h1 {
     margin: 0 0 12px;
     font-size: 19px;

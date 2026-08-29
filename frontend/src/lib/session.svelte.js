@@ -57,6 +57,23 @@ export function setUser(user) {
 }
 
 /**
+ * Re-read the signed-in user from the server.
+ *
+ * Sign-in and profile-switch responses carry identity only; `/auth/me` carries the navigation
+ * payload the shell renders from (§6.6: admin entries are a server decision, so the client has
+ * no list of its own to fall back on). Anything that changes *who* is signed in calls this.
+ */
+export async function refreshUser() {
+  try {
+    session.user = await get('/auth/me');
+  } catch (err) {
+    if (err instanceof ApiError && err.isUnauthenticated) session.user = null;
+    else throw err;
+  }
+  return session.user;
+}
+
+/**
  * §6.7, owner decision 2026-08-29: one global per-user "show the model" preference, default
  * off, toggled from the account dropdown. It reveals the transparency rail and the inline
  * numeric annotations; the title card's model line is deliberately outside it (§6.0).
