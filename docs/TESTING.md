@@ -125,13 +125,17 @@ Two things happen on the way that are easy to miss:
 ```
 > M0    33/35 covered (2 waived)
 > M1    10/10 covered
-  M2    23 requirements
+> M2     1/23 covered   ← open, on branch `m2`
   M3     9
   M4    18
   M5    10
   M6    12
   M7     1
 ```
+
+M2 is open, so its gate is red on purpose — that is what an in-progress milestone looks like
+here, and the 22 remaining rows are the plan. `main` stays green at M1; the work lands on `m2`
+and merges when the gate closes.
 
 The two standing M0 waivers are backup rotation (no backup job exists yet) and the title
 card's no-bundle model line (unreachable until M5, when a locally acquired title can outlive a
