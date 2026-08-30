@@ -1158,22 +1158,64 @@ async def test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone(db, ra
         assert held["token"] == standing["token"], f"head={absent} should not have redrawn"
 
 
-async def test_a_correction_keeps_the_surviving_half_even_in_a_small_verdict_band(db, rate_client):
+async def test_a_correction_repairs_the_pair_from_the_survivors_own_band(db, rate_client):
     """§6.1: "`not seen: [left] [both] [right]` sets exactly the named side(s) to unseen" — the
-    other half keeps its place, against a fresh opponent from its own band.
+    other half keeps its place, against a fresh opponent from its own verdict band.
 
-    The failing shape is a skewed labeller, which is the common one and the one §5.2's
-    class-balance warning is aimed at. The opponent used to be found by drawing whole pairs and
-    rejecting any outside the survivor's class, eight times; `battle.draw` weights strata by
-    pair count, so a minority band was missed on every attempt about half the time and the
-    battle silently turned into a sweep card with nothing on screen saying why.
+    The opponent used to be found by asking for whole PAIRS and rejecting any outside the
+    survivor's class, eight times. `battle.draw` weights strata by pair count n(n-1)/2, so on a
+    60/20/20 labeller — the shape §5.2's class-balance warning pushes people toward — a minority
+    band was missed on all eight attempts about half the time, and the battle silently became a
+    sweep card with nothing on screen saying why.
 
-    12 liked, 4 fine, 4 disliked, correcting inside a minority band — repeated, because the old
-    code failed this probabilistically rather than always.
+    Driven directly rather than through whatever the surface happens to deal: the failure only
+    shows when the SURVIVOR is in a small band, and a test that waits for random draws to put it
+    there detects the bug about two times in three. Here the band is chosen, so the assertion is
+    about the rule rather than about the draw.
     """
     client, user_id = rate_client
-    titles = [(i, "movie", f"Title {i}") for i in range(1, 25)]
-    await make_titles(db, titles)
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 25)])
+    for title_id in range(1, 19):          # a large majority band: 18 liked, 153 pairs
+        await label(db, user_id, title_id, 2)
+    for title_id in range(19, 23):         # and a small one: 4 disliked, 6 pairs
+        await label(db, user_id, title_id, 0)
+
+    await client.post("/api/rate/session", json={"mode": "battle", "restart": True})
+    s = await session.open_or_resume(db, user_id=user_id)
+
+    # A pair from the SMALL band, every time — the case the old redraw lost.
+    for corrected, survivor in ((19, 20), (20, 19)):
+        card = {
+            "type": "battle", "kind": "movie",
+            "title_a": 19, "title_b": 20,
+            "verdict_class": 0, "reason": "same band", "reask_of": None,
+        }
+        repaired = await session._redraw_pair(db, s, card, corrected=[corrected])
+        assert repaired is not None, "the correction produced no card at all"
+        assert repaired["type"] == "battle", (
+            "the survivor was abandoned and the slot fell through to a sweep card — with "
+            "nothing on screen saying why the battle vanished"
+        )
+        pair = {repaired["title_a"], repaired["title_b"]}
+        assert survivor in pair, "the half the person did NOT correct must keep its place"
+        assert corrected not in pair, "the corrected half must be gone"
+        assert repaired["verdict_class"] == 0
+        opponent = (pair - {survivor}).pop()
+        assert opponent in (21, 22), (
+            f"the opponent must come from the survivor's own band, not {opponent}"
+        )
+
+
+async def test_a_correction_through_the_surface_swaps_only_the_named_side(db, rate_client):
+    """The same rule as the test above, through the route the person actually taps — the pair
+    that comes back keeps the half they did not correct.
+
+    This one takes whatever band the draw deals, so it says nothing about small bands; the
+    deterministic test above is what pins that. Kept because the wiring between the route, the
+    correction and the redraw is not exercised anywhere else.
+    """
+    client, user_id = rate_client
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 25)])
     for title_id in range(1, 13):
         await label(db, user_id, title_id, 2)
     for title_id in range(13, 17):
@@ -1181,27 +1223,27 @@ async def test_a_correction_keeps_the_surviving_half_even_in_a_small_verdict_ban
     for title_id in range(17, 21):
         await label(db, user_id, title_id, 0)
 
-    kept_as_battle = 0
-    for _ in range(12):
+    card = (await client.get("/api/rate")).json()["card"]
+    while card["type"] != "battle":
         await client.post("/api/rate/session", json={"mode": "battle", "restart": True})
         card = (await client.get("/api/rate")).json()["card"]
-        assert card["type"] == "battle", "a battle-mode session must serve a battle"
-        left = card["left"]["id"]
-        right = card["right"]["id"]
 
-        body = (
-            await client.post(
-                "/api/rate/correction", json={"card_token": card["token"], "side": "left"}
-            )
-        ).json()
-        after = body["card"]
-        if after and after["type"] == "battle":
-            kept_as_battle += 1
-            titles_now = {after["left"]["id"], after["right"]["id"]}
-            assert right in titles_now, "the half the person did NOT correct must keep its place"
-            assert left not in titles_now, "the corrected half must be gone"
+    left, right = card["left"]["id"], card["right"]["id"]
+    body = (
+        await client.post(
+            "/api/rate/correction", json={"card_token": card["token"], "side": "left"}
+        )
+    ).json()
 
-    assert kept_as_battle == 12, (
-        f"the pair survived only {kept_as_battle}/12 corrections — the survivor is being "
-        "abandoned when its verdict band is small"
-    )
+    after = body["card"]
+    assert after is not None
+    if after["type"] == "battle":
+        titles_now = {after["left"]["id"], after["right"]["id"]}
+        assert right in titles_now, "the half the person did NOT correct must keep its place"
+        assert left not in titles_now, "the corrected half must be gone"
+
+    # §6.1: the correction "writes no duel row for the pair" and does not advance the counter.
+    assert await db.fetchval("SELECT count(*) FROM duel WHERE user_id = $1", user_id) == 0
+    assert await db.fetchval(
+        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = $2", user_id, left
+    ) == "unseen"
