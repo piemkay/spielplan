@@ -518,17 +518,32 @@ async def run_rebuild(
     breath.
     """
     await assert_staged(conn, store, version)
-    results: list[dict[str, Any]] = []
-    for step in rebuild_plan(
-        fold_in=fold_in, blend_weights=blend_weights, ledger_refit=ledger_refit
-    ):
+
+    plan = rebuild_plan(fold_in=fold_in, blend_weights=blend_weights, ledger_refit=ledger_refit)
+
+    # §10 LISTS the four steps in the order it lists them; it does not claim that is an execution
+    # order, and it is not one. Steps 1-3 all read the coordinates step 4 writes: §5.1's e(t)
+    # needs ê for a cold or low-support title, and §5.2's fit takes the same coordinates as its
+    # embeddings. Run in listed order against a freshly staged bundle, the fold-in materialises
+    # `title_prior` and every `user_score` row before a single title has been placed in the new
+    # basis — so the newly-activated bundle serves a library with its cold titles missing and its
+    # low-support ones shrunk toward μ instead of toward b̂, until the next nightly sweep.
+    #
+    # This is the same mistake the nightly jobs made (`worker.Job.stage`), in the one path §10
+    # actually mandates. The REPORT stays in §10's order, so the import screen reads as the spec
+    # does; only the execution is reordered, and the reordering is named here rather than implied
+    # by how the tuple happens to be written.
+    order = {"cold-tower-replacement": 0}
+    outcomes: dict[str, dict[str, Any]] = {}
+    for step in sorted(plan, key=lambda s: order.get(s.id, 1)):
         began = time.perf_counter()
         outcome = await step.run(conn, store, version)
-        results.append({
+        outcomes[step.id] = {
             "id": step.id,
             "title": step.title,
             "elapsed_ms": int(round((time.perf_counter() - began) * 1000)),
             **(outcome or {}),
-        })
+        }
+    results = [outcomes[step.id] for step in plan]
     log.info("rebuild set for %s: %s", version, [r["id"] for r in results])
     return results

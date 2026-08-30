@@ -157,6 +157,73 @@ def chain(*sources: EmbeddingSource) -> EmbeddingSource:
     return rows
 
 
+# The person's CURRENT label on each title, `$1` = user id. One definition, because three
+# modules wrote it out by hand and two of them wrote it wrong.
+#
+#   * `NOT is_reask` — §13's re-ask "is a separate silent stream": it measures the stability of a
+#     judgement and must not *be* one. `load_observations` excludes it from the fit for the same
+#     reason.
+#   * The NEWEST row wins, rather than `superseded_by IS NULL`. `record_verdict` stamps
+#     `superseded_by` on the previous row for a re-ask too — deliberately, because it is the
+#     person's latest answer. So after a re-ask the original row is superseded AND the only
+#     un-superseded row is a re-ask, and a predicate spelling both conditions with AND matches
+#     NEITHER: the title drops out of the label set entirely. §13's instrument then does not
+#     merely fail to count twice, it erases the person's real label — from §5.1's fold-in, from
+#     `blend_beta`, and from the band counts §6.1's reveal is computed against.
+LIVE_LABEL_SQL = """
+    SELECT DISTINCT ON (v.title_id) v.title_id, v.value, v.id AS verdict_id, v.created_at
+      FROM verdict v
+     WHERE v.user_id = $1 AND NOT v.is_reask
+     ORDER BY v.title_id, v.created_at DESC, v.id DESC
+"""
+
+
+def backbone_embeddings(backbone: Any) -> EmbeddingSource:
+    """§5.1: a warm title's coordinate is its Backbone row.
+
+    Read straight out of the loaded npz, because §8 stage 10 deliberately stores no Postgres row
+    for a warm title — `title_placement` holds only what this app computed.
+    """
+
+    def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+        ids = list(title_ids)
+        matrix = np.zeros((len(ids), 64))
+        present = np.zeros(len(ids), dtype=bool)
+        for i, title_id in enumerate(ids):
+            vector = backbone.embedding(int(title_id))
+            if vector is not None:
+                matrix[i] = vector
+                present[i] = True
+        return matrix, present
+
+    return rows
+
+
+def standard_embeddings(conn: Any, backbone: Any = None) -> EmbeddingSource:
+    """§5.1's coordinate for every title, in the one order the whole app must agree on:
+    the warm Backbone row first, the Cold Tower placement second.
+
+    THIS FUNCTION EXISTS BECAUSE THE COMPOSITION WAS GOT WRONG. The nightly `ledger-map-refit`
+    and §10's rebuild step 3 both passed `placement_embeddings` alone. `classify_warm` writes no
+    `title_placement` row for a title with `item_n >= WARM_SUPPORT`, so on a Backbone-covered
+    library — the normal case — every warm title entered the MAP fit with `e = 0` and
+    `embedded = False`. The 64-d user vector came out at or near zero, §5.2's generalisation arm
+    never ran, and every *unrated* owned title was written with an identical `s`, `cdf` and tier:
+    the numbers §6.0's shelf badges, §6.3's board and §6.1's "we'd have guessed" reveal all read.
+    Worse, the Rate surface composed the two sources correctly, so each tap then updated a cached
+    `v` against coordinates it was never fitted against — and `load_cache` checks `hp_digest` and
+    `bundle_version`, neither of which records a basis.
+
+    The precondition was documented in four places and honoured in one. One function now, so a
+    caller cannot get it wrong by omission.
+    """
+    sources: list[EmbeddingSource] = []
+    if backbone is not None and not getattr(backbone, "is_empty", True):
+        sources.append(backbone_embeddings(backbone))
+    sources.append(placement_embeddings(conn))
+    return chain(*sources)
+
+
 async def resolve_embeddings(
     embeddings: EmbeddingSource, title_ids: Sequence[int]
 ) -> tuple[np.ndarray, np.ndarray]:

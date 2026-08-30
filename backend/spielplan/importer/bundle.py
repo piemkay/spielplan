@@ -87,10 +87,14 @@ async def _rebuild_ledger_refit(conn: Any, store: Any, _version: str) -> dict[st
     """§10 step 3: "a **full** Personal Ledger MAP refit" — full history, every user and kind."""
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
+    from spielplan.scoring import backbone as bb
 
     hp, _notes = load_hp(store)
+    # Against the STAGED bundle's Backbone, not the active one: §10's whole point is that the
+    # two bases are incompatible, and this refit exists to move every fitted number into the new
+    # one. The placement source alone would fit every warm title at e = 0.
     reports = await refit.refit_all(
-        conn, hp, embeddings=observations.placement_embeddings(conn)
+        conn, hp, embeddings=observations.standard_embeddings(conn, bb.load_for(store))
     )
     return {"fits": [r.as_dict() for r in reports]}
 

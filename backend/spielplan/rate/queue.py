@@ -400,7 +400,9 @@ async def next_sweep_cards(
         reasks = await reask_stream.verdict_candidates(
             conn, user_id=user_id, kinds=kinds, limit=limit, exclude=skip, rng=rng
         )
-    return _interleave(fresh, reasks, limit=limit, rate=reask_rate, rng=rng)
+    return _interleave(
+        fresh, reasks, limit=limit, rate=reask_rate, rng=rng, head=tuple(head)
+    )
 
 
 def _interleave(
@@ -410,6 +412,7 @@ def _interleave(
     limit: int,
     rate: float,
     rng: random.Random,
+    head: Sequence[int] = (),
 ) -> list[QueueCard]:
     """Spend about `rate` of the slots on re-asks, and fall through when either pool runs dry.
 
@@ -417,13 +420,24 @@ def _interleave(
     still gets a full queue, and a household that has rated everything still gets asked
     something — a queue made only of re-asks is what §13's stream looks like at the end of the
     catalog.
+
+    `head` is the exception, and it has to be. §6.0's pending-verdicts banner names up to three
+    titles and its CTA "opens the §6.1 queue with those titles at the head of the queue". The
+    pin is applied upstream as an ORDER BY, so without this the coin comes up re-ask on ~10% of
+    taps and spends the pinned slot on a different title — the banner names three films and
+    serves a fourth, which is the exact failure that requirement exists to prevent. A pinned
+    card is never traded for a re-ask; §13 has every other slot.
     """
     fresh_q = list(fresh)
     reask_q = list(reasks)
+    pinned = set(head)
     out: list[QueueCard] = []
     taken: set[int] = set()
     while len(out) < limit and (fresh_q or reask_q):
-        take_reask = bool(reask_q) and (not fresh_q or rng.random() < rate)
+        next_is_pinned = bool(fresh_q) and fresh_q[0].title_id in pinned
+        take_reask = (
+            bool(reask_q) and not next_is_pinned and (not fresh_q or rng.random() < rate)
+        )
         if take_reask:
             candidate = reask_q.pop(0)
             if candidate.title_id in taken:

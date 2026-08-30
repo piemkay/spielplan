@@ -829,3 +829,41 @@ async def test_a_block_of_cards_is_drawn_well_inside_the_two_second_budget(db, c
             f"p95 {sorted(timings)[18]:.1f} ms, max {max(timings):.1f} ms  (budget 2,000 ms/card)"
         )
     assert statistics.median(timings) < 2_000
+
+
+def test_a_head_pinned_slot_is_never_spent_on_a_reask():
+    """§6.0's pending-verdicts banner names up to three titles and its CTA "opens the §6.1 queue
+    with those titles at the head of the queue" — because "naming titles and then presenting a
+    different card is worse than no prompt".
+
+    The pin is applied upstream as an ORDER BY, and §13's stream then replaced the drawn card
+    with a re-ask on ~10% of taps. The banner named three films and the surface served a fourth,
+    with nothing to distinguish the substitution — §13 requires exactly that invisibility, so
+    the person had no way to tell the CTA had not worked.
+
+    `rate = 1.0` forces the coin every time, so this is deterministic rather than a 10% flake.
+    """
+    from spielplan.rate import queue as q
+    from spielplan.rate.reask import VerdictReask
+
+    fresh = [
+        q.QueueCard(title_id=41, reason="r", p_seen=1.0, source="pending_verdict", reask_of=None),
+        q.QueueCard(title_id=57, reason="r", p_seen=1.0, source="pending_verdict", reask_of=None),
+        q.QueueCard(title_id=99, reason="r", p_seen=0.4, source="p_seen", reask_of=None),
+    ]
+    reasks = [VerdictReask(verdict_id=7, title_id=1012, value=2, asked_at=None)]
+
+    out = q._interleave(
+        fresh, reasks, limit=3, rate=1.0, rng=random.Random(0), head=(41, 57)
+    )
+    assert [c.title_id for c in out][:2] == [41, 57], (
+        "the two titles the banner named must be served first, whatever the re-ask coin says"
+    )
+
+    # And §13 still gets every slot that is not pinned — the stream is protected, not disabled.
+    assert 1012 in [c.title_id for c in out], "the re-ask should take the first unpinned slot"
+
+    # Without a pin, the same call spends the first slot on the re-ask, which is the behaviour
+    # §13 asks for and the reason this needed an exception rather than a rewrite.
+    unpinned = q._interleave(fresh, reasks, limit=3, rate=1.0, rng=random.Random(0))
+    assert unpinned[0].title_id == 1012

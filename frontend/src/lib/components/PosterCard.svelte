@@ -29,6 +29,13 @@
   // Built in JS, not in markup: Svelte collapses the whitespace around an {#if} block, which
   // turned "1995 · 2h 50m" into "1995· 2h 50m".
   const meta = $derived([title.year ?? '—', minutes].filter(Boolean).join(' · '));
+  // §8 stage 10's badge. `e_source` comes from `title_prior` where the payload has it; where it
+  // does not, fall back to the placement stamp rather than silently badging nothing.
+  const noCrowdData = $derived(
+    title.e_source
+      ? title.e_source === 'cold_tower'
+      : title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower')
+  );
 </script>
 
 <button class="card-wrap" onclick={onSelect} title={title.name}>
@@ -36,8 +43,15 @@
     class="poster"
     style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
   >
-    {#if title.placement === 'cold_tower'}
-      <!-- §8 stage 10: "new — model placement, no crowd data" until ratings accrue. -->
+    {#if noCrowdData}
+      <!-- §8 stage 10: "new — model placement, no crowd data" until ratings accrue.
+
+           Off `e_source`/`item_n`, NOT off `title.placement`. Those stopped being the same
+           question when warm was defined from §5.1's gate: a title with 55 crowd ratings and a
+           Backbone row is still placed by the Cold Tower, because 15% of its coordinate comes
+           from there — and it would have worn a chip reading "no crowd data yet" on every
+           poster in the library. `e_source = 'cold_tower'` is the honest test: no Backbone row
+           at all. -->
       <span class="badge data" title="placed by the Cold Tower — no crowd data yet">new</span>
     {/if}
     {#if title.seen_state === 'seen'}

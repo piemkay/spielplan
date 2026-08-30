@@ -36,12 +36,12 @@ shared between two modules is a place where a parameter number silently changes 
 
 from __future__ import annotations
 
-LIVE_LABEL = """
-    SELECT DISTINCT ON (v.title_id) v.title_id, v.value, v.id AS verdict_id
-      FROM verdict v
-     WHERE v.user_id = $1 AND NOT v.is_reask
-     ORDER BY v.title_id, v.created_at DESC, v.id DESC
-"""
+from spielplan.ledger import observations
+
+# Defined in `ledger.observations`, because the rule is about the Ledger's own observations and
+# `scoring.foldin` needs the same one. Re-exported here so this package's existing readers are
+# unchanged.
+LIVE_LABEL = observations.LIVE_LABEL_SQL
 
 # §4.2: "value: 0 disliked / 1 ok / 2 liked". §6.1's visible labels are lowercase and ordered
 # worst -> best, which is also the stored ordinal, so one tuple serves the copy and the index.

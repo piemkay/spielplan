@@ -135,8 +135,13 @@ async def list_titles(
     rows = await conn.fetch(
         f"""
         SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.is_owned,
-               t.placement, {seen_select}
+               t.placement, tp.item_n, tp.e_source, {seen_select}
           FROM title t
+          -- §8 stage 10's cold badge is about CROWD DATA, and `title.placement` stopped meaning
+          -- that when warm was redefined from §5.1's gate: a title with a Backbone row and low
+          -- support is placed by the Cold Tower so the blend can fire, while having plenty of
+          -- crowd data behind it. `title_prior` carries the quantity the badge is named for.
+          LEFT JOIN title_prior tp ON tp.title_id = t.id
           {seen_join}
          WHERE {clause}
          ORDER BY t.year DESC NULLS LAST, lower(t.name)

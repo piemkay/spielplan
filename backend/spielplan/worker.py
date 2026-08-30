@@ -120,13 +120,18 @@ async def _ledger_map_refit() -> None:
     """
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
+    from spielplan.scoring import backbone as bb
 
     async with pool.acquire() as conn:
         store = await _active_store(conn)
         hp, notes = load_hp(store or ArtifactStore.empty())
         for note in notes:
             log.info("ledger hyperparameters: %s", note)
-        embeddings = observations.placement_embeddings(conn) if store else None
+        # §5.1's basis, composed the one way the whole app must agree on. Passing the placement
+        # source alone here fitted every warm title at e = 0 — see `standard_embeddings`.
+        embeddings = (
+            observations.standard_embeddings(conn, bb.load_for(store)) if store else None
+        )
         reports = await refit.refit_all(conn, hp, embeddings=embeddings)
         for r in reports:
             log.info("ledger refit: %s", r.as_dict())
@@ -147,6 +152,36 @@ async def _fold_in_user_vectors() -> None:
             only_stale=False, with_priors=True,
         )
         log.info("fold-in: %s", report.as_dict())
+
+
+async def _fold_in_tick() -> None:
+    """§12's M2 exit criterion, which a strictly nightly job cannot meet.
+
+    "50-100 verdicts each produce **visibly personal rankings**" is a claim about what a person
+    sees after a sitting, and §6.0's every shelf orders by `user_score`. Only the fold-in writes
+    that table: the interactive path writes `ledger_state` (tier badges move immediately) and
+    nothing else. Without this tick, a household rates all evening, watches every tier badge
+    change, and every shelf stays in exactly the order it had that morning — for up to 24 hours.
+    `foldin.run`'s docstring named this tick as the answer; nothing called it.
+
+    Cheap enough to run often: the fold-in is a closed-form ridge solve, measured at 6-7 ms for
+    100 labels against 839 titles, and `only_stale=True` skips every user whose label count has
+    not moved. `with_priors=False` because `title_prior` is a property of the bundle, not of a
+    person, and re-materialising it every minute would be work with no reader.
+    """
+    from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    async with pool.acquire() as conn:
+        store = await _active_store(conn)
+        if store is None:
+            return
+        report = await foldin.run(
+            conn, bb.load_for(store), bundle_version=store.version,
+            only_stale=True, with_priors=False,
+        )
+        if report.refit:
+            log.info("fold-in tick: %s", report.as_dict())
 
 
 async def _placement_reconciliation() -> None:
@@ -176,6 +211,11 @@ JOBS: tuple[Job, ...] = (
     Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400),
     Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
         every=86400),
+    # Not in §5.3's table, and named here rather than smuggled in: §5.3 gives the fold-in a
+    # nightly cadence, but §12's M2 exit criterion is about what a person sees *within a
+    # sitting*, and every §6.0 shelf orders by a table only the fold-in writes. `foldin.run`
+    # documents this tick as the answer to exactly that.
+    Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60),
     Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title"),
     Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
         _placement_reconciliation, every=86400, stage=0),

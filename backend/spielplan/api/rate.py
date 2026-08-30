@@ -22,7 +22,6 @@ import logging
 from typing import Annotated, Any, Literal
 
 import asyncpg
-import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
@@ -30,7 +29,6 @@ from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
 from spielplan.ledger import hyperparams, observations
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.model import EMBED_DIM
 from spielplan.ledger.observations import EmbeddingSource
 from spielplan.rate import session
 
@@ -95,38 +93,13 @@ def _hyperparams(request: Request) -> Hyperparams:
     return hp
 
 
-def _backbone_embeddings(backbone: Any) -> EmbeddingSource:
-    """§5.1: a rated title's coordinate is its Backbone row. Read straight out of the loaded
-    npz, because §8 stage 10 deliberately stores no Postgres row for a warm title."""
-
-    def rows(title_ids):
-        ids = list(title_ids)
-        matrix = np.zeros((len(ids), EMBED_DIM))
-        present = np.zeros(len(ids), dtype=bool)
-        for i, title_id in enumerate(ids):
-            vector = backbone.embedding(int(title_id))
-            if vector is not None:
-                matrix[i] = vector
-                present[i] = True
-        return matrix, present
-
-    return rows
-
-
 def _embeddings(request: Request, conn: asyncpg.Connection) -> EmbeddingSource:
-    """The source the cached fit was built with — §5.1's "warm Backbone row first, Cold Tower
-    placement second".
+    """§5.1's coordinate source: the warm Backbone row first, the Cold Tower placement second.
 
-    `refit.update_incrementally` is explicit that the caller owns this precondition: `v` lives
-    in that basis and nothing in the database records which one it was. So the nightly
-    `ledger-map-refit` job must compose these two sources in this order too.
+    One definition, in `observations.standard_embeddings`, because the nightly job and §10's
+    rebuild both got this wrong by passing the placement source alone.
     """
-    sources = []
-    backbone = getattr(request.app.state, "backbone", None)
-    if backbone is not None and not getattr(backbone, "is_empty", True):
-        sources.append(_backbone_embeddings(backbone))
-    sources.append(observations.placement_embeddings(conn))
-    return observations.chain(*sources)
+    return observations.standard_embeddings(conn, getattr(request.app.state, "backbone", None))
 
 
 async def _jellyfin(conn: asyncpg.Connection) -> session.Jellyfin:

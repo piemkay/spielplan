@@ -1156,3 +1156,52 @@ async def test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone(db, ra
     for absent in (3, 90, 12345):
         held = (await client.get("/api/rate", params=[("head", absent)])).json()["card"]
         assert held["token"] == standing["token"], f"head={absent} should not have redrawn"
+
+
+async def test_a_correction_keeps_the_surviving_half_even_in_a_small_verdict_band(db, rate_client):
+    """§6.1: "`not seen: [left] [both] [right]` sets exactly the named side(s) to unseen" — the
+    other half keeps its place, against a fresh opponent from its own band.
+
+    The failing shape is a skewed labeller, which is the common one and the one §5.2's
+    class-balance warning is aimed at. The opponent used to be found by drawing whole pairs and
+    rejecting any outside the survivor's class, eight times; `battle.draw` weights strata by
+    pair count, so a minority band was missed on every attempt about half the time and the
+    battle silently turned into a sweep card with nothing on screen saying why.
+
+    12 liked, 4 fine, 4 disliked, correcting inside a minority band — repeated, because the old
+    code failed this probabilistically rather than always.
+    """
+    client, user_id = rate_client
+    titles = [(i, "movie", f"Title {i}") for i in range(1, 25)]
+    await make_titles(db, titles)
+    for title_id in range(1, 13):
+        await label(db, user_id, title_id, 2)
+    for title_id in range(13, 17):
+        await label(db, user_id, title_id, 1)
+    for title_id in range(17, 21):
+        await label(db, user_id, title_id, 0)
+
+    kept_as_battle = 0
+    for _ in range(12):
+        await client.post("/api/rate/session", json={"mode": "battle", "restart": True})
+        card = (await client.get("/api/rate")).json()["card"]
+        assert card["type"] == "battle", "a battle-mode session must serve a battle"
+        left = card["left"]["id"]
+        right = card["right"]["id"]
+
+        body = (
+            await client.post(
+                "/api/rate/correction", json={"card_token": card["token"], "side": "left"}
+            )
+        ).json()
+        after = body["card"]
+        if after and after["type"] == "battle":
+            kept_as_battle += 1
+            titles_now = {after["left"]["id"], after["right"]["id"]}
+            assert right in titles_now, "the half the person did NOT correct must keep its place"
+            assert left not in titles_now, "the corrected half must be gone"
+
+    assert kept_as_battle == 12, (
+        f"the pair survived only {kept_as_battle}/12 corrections — the survivor is being "
+        "abandoned when its verdict band is small"
+    )

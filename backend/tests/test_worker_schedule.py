@@ -41,10 +41,10 @@ def test_a_job_that_has_never_run_is_due_immediately():
 def test_only_the_elapsed_jobs_are_due():
     last = {job.name: 0.0 for job in worker.JOBS}
     at_90s = {job.name for job in worker.due(now=90.0, last_run=last)}
-    assert at_90s == {"jellyfin-sessions-poll"}
+    assert at_90s == {"jellyfin-sessions-poll", "fold-in-tick"}
 
     at_1000s = {job.name for job in worker.due(now=1000.0, last_run=last)}
-    assert at_1000s == {"jellyfin-sessions-poll", "jellyfin-seen-sync"}
+    assert at_1000s == {"jellyfin-sessions-poll", "fold-in-tick", "jellyfin-seen-sync"}
 
 
 def test_a_job_awaiting_its_milestone_is_never_due():
@@ -82,3 +82,20 @@ def test_the_placement_sweep_runs_before_the_fits_that_read_its_coordinates():
     # …and the table itself is still §5.3's, so the registry has not been reordered to fake it.
     table = [j.name for j in worker.JOBS]
     assert table.index("ledger-map-refit") < table.index("placement-reconciliation")
+
+
+def test_the_fold_in_runs_often_enough_to_answer_within_a_sitting():
+    """§12's M2 exit criterion — "50-100 verdicts each produce visibly personal rankings" — is a
+    claim about what a person sees during a sitting, and every §6.0 shelf orders by a table only
+    the fold-in writes.
+
+    A strictly nightly fold-in cannot meet it: the tier badges move on every tap (the
+    interactive path writes `ledger_state`) while the shelves stay in the order they had that
+    morning, for up to a day. §5.3's nightly pass stays exactly as §5.3 writes it; this asserts
+    the tick exists alongside it and is measured in minutes, not hours.
+    """
+    tick = next(j for j in worker.JOBS if j.name == "fold-in-tick")
+    nightly = next(j for j in worker.JOBS if j.name == "fold-in-user-vectors")
+    assert tick.run is not None, "M2 owes this one an implementation"
+    assert tick.every <= 300, "a sitting is minutes long; an hourly tick is a nightly job"
+    assert nightly.every == 86400, "§5.3's nightly pass is not replaced by the tick"

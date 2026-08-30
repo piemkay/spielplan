@@ -450,3 +450,41 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
         "SELECT count(*) FROM user_vector WHERE bundle_version = 'test-v2'"
     ) > 0, "step 1 wrote no fold-in vector against the staged basis"
     assert await db.fetchval("SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick) > 0
+
+
+async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db, bundle, tmp_path):
+    """§10's rebuild set exists so that the moment a bundle goes active, every fitted number is
+    expressed in its basis. That has to include the coordinates the other three steps read.
+
+    §10 lists the fold-in first and the Cold Tower re-placement fourth, and the first
+    implementation executed them in that order — so `title_prior` and every `user_score` row
+    were materialised against a `title_placement` table the new bundle had not been written into
+    yet. The import returned ok, the flip happened, and the library served from that instant had
+    its coordinate-less titles missing from every ranked list and its low-support titles shrunk
+    toward μ instead of toward b̂ — until the next nightly sweep, hours later.
+
+    The listing order is §10's prose; the execution order is what the steps actually need.
+    """
+    patrick = await db.fetchval(
+        "INSERT INTO app_user (name, role) VALUES ('Patrick', 'admin') RETURNING id"
+    )
+    report = await _import(db, bundle, tmp_path / "artifacts")
+    assert report.ok, report.render()
+
+    # Title 8 has no Backbone row at all (the fixture makes §5.1's cold branch reachable), so it
+    # exists only if step 4 ran before the step that materialised the priors.
+    priced = await db.fetchrow(
+        "SELECT b, e_source FROM title_prior WHERE title_id = 8 AND bundle_version = 'test-v1'"
+    )
+    assert priced is not None, "the cold title has no prior at all"
+    assert priced["e_source"] == "cold_tower", (
+        f"a freshly activated bundle prices its cold title as {priced['e_source']!r} — the "
+        "fold-in ran before the placement it reads"
+    )
+    assert priced["b"] is not None
+
+    # And the report still reads in §10's order, so the import screen matches the spec's prose.
+    rebuild = [f.message for f in report.findings if f.rule == "rebuild"]
+    assert len(rebuild) == 4
+    assert "fold-in" in rebuild[0] and "Cold Tower" in rebuild[3]
+    assert patrick

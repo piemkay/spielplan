@@ -40,6 +40,7 @@ nobody ever sees.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Mapping, Sequence
@@ -49,6 +50,7 @@ from typing import Any
 import numpy as np
 
 from spielplan.db.library import KINDS, Kind
+from spielplan.ledger.observations import LIVE_LABEL_SQL
 from spielplan.scoring import serve
 from spielplan.scoring.backbone import EMBED_DIM, Backbone, Coordinate, pack_vec
 
@@ -333,11 +335,11 @@ async def live_labels(conn, *, user_id: int, kind: Kind) -> list[tuple[int, int]
     """
     rows = await conn.fetch(
         """
-        SELECT DISTINCT ON (v.title_id) v.title_id, v.value
-          FROM verdict v JOIN title t ON t.id = v.title_id
-         WHERE v.user_id = $1 AND t.kind = $2 AND v.superseded_by IS NULL AND NOT v.is_reask
-         ORDER BY v.title_id, v.created_at DESC, v.id DESC
-        """,
+        WITH label AS ({LIVE_LABEL})
+        SELECT l.title_id, l.value
+          FROM label l JOIN title t ON t.id = l.title_id
+         WHERE t.kind = $2
+        """.replace("{LIVE_LABEL}", LIVE_LABEL_SQL),
         user_id, kind,
     )
     return [(int(r["title_id"]), int(r["value"])) for r in rows]
@@ -373,7 +375,16 @@ async def refit_user(
     labels = await live_labels(conn, user_id=user_id, kind=kind)
     # Seeded from the identity of the fit, so a refit of the same (user, kind, basis) draws the
     # same folds and the §6.7 log line means the same thing twice.
-    seed = abs(hash((user_id, kind, bundle_version))) % (2**32)
+    #
+    # NOT `hash()`. `str.__hash__` is salted per interpreter — PYTHONHASHSEED is random by
+    # default — so the seed changed on every worker restart, and with it the 5-fold shuffle, the
+    # selected ridge λ and the written vector. Two consecutive nightly runs with no new ratings
+    # reordered Home overnight, and the `cv_rho` in the refit report was not reproducible. A
+    # digest is stable across processes and across machines, which is what "the same fit draws
+    # the same folds" has to mean.
+    seed = int.from_bytes(
+        hashlib.sha256(f"{user_id}|{kind}|{bundle_version}".encode()).digest()[:4], "big"
+    )
 
     fit = fit_user(labels, coords, reference, seed=seed)
     if fit.beta_clamped:
@@ -441,25 +452,38 @@ async def run(
 
 
 async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> bool:
-    """Never fitted, fitted against another basis (§10), or the live label count moved.
+    """Never fitted, fitted against another basis (§10), or a label moved since the last fit.
 
-    A label count is a cheap and complete trigger for what a *rating sitting* changes. It is
-    deliberately not a trigger for what a *placement* changes — a title that gained a coordinate
-    today does not move anyone's label count — so the nightly `only_stale=False` pass is what
-    picks those up, and the docstring says so rather than the count pretending to cover it.
+    A label COUNT alone is not the trigger, and that was a real gap: re-rating is the second
+    half of a rating sitting — §4.2 exists so that changing your mind about a title is an
+    INSERT — and it leaves the count exactly where it was. A person who reversed every verdict
+    they had ever given would have been skipped by every tick, indefinitely, because the number
+    of titles they had labelled had not changed.
+
+    So the trigger is the count OR a label newer than the fit. Both clocks here are Postgres's
+    (`user_vector.updated_at` and `verdict.created_at` are both `now()`), so this is not the
+    cross-clock comparison §7.3's sweep got wrong.
+
+    It is deliberately not a trigger for what a *placement* changes — a title that gained a
+    coordinate today moves nobody's labels — so the nightly `only_stale=False` pass is what
+    picks those up, and this says so rather than pretending to cover it.
     """
     row = await conn.fetchrow(
-        "SELECT label_count, bundle_version FROM user_vector "
+        "SELECT label_count, bundle_version, updated_at FROM user_vector "
         "WHERE user_id = $1 AND kind = $2 AND purpose = 'foldin'",
         user_id, kind,
     )
     if row is None or row["bundle_version"] != bundle_version:
         return True
-    live = await conn.fetchval(
+    live = await conn.fetchrow(
         """
-        SELECT count(DISTINCT v.title_id) FROM verdict v JOIN title t ON t.id = v.title_id
-         WHERE v.user_id = $1 AND t.kind = $2 AND v.superseded_by IS NULL AND NOT v.is_reask
-        """,
+        WITH label AS ({LIVE_LABEL})
+        SELECT count(*) AS n, max(l.created_at) AS newest
+          FROM label l JOIN title t ON t.id = l.title_id WHERE t.kind = $2
+        """.replace("{LIVE_LABEL}", LIVE_LABEL_SQL),
         user_id, kind,
     )
-    return int(live or 0) != int(row["label_count"] or 0)
+    if int(live["n"] or 0) != int(row["label_count"] or 0):
+        return True
+    newest = live["newest"]
+    return newest is not None and newest > row["updated_at"]

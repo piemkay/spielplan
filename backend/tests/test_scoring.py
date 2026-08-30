@@ -815,3 +815,47 @@ async def test_the_gate_on_the_card_is_a_crowd_number_and_not_a_per_viewer_one(d
     jenny = await serve.model_line(db, user_id=world["jenny"], title_id=1, bundle_version=BUNDLE)
     assert patrick["gate"] == jenny["gate"] == pytest.approx(bb.gate(SUPPORT[1]))
     assert patrick["b"] == jenny["b"]
+
+
+async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
+    """§13's re-ask stream "measures test-retest consistency" — it is an instrument, and an
+    instrument that moves what it measures is not one.
+
+    The rule everyone agreed on was "a re-ask must not count as a second observation". What
+    shipped did something else: `record_verdict` stamps `superseded_by` on the previous row for
+    a re-ask too (deliberately — it is the person's latest answer), so a predicate spelling
+    `superseded_by IS NULL AND NOT is_reask` matched NEITHER row and the title left the label
+    set entirely. §13 aims for ~200 re-asks; each one silently deleted a real label from §5.1's
+    fold-in, from `blend_beta`, and from the count Home's why-line prints.
+
+    Same answer both times, so nothing about this person's taste has changed and the label count
+    must not move either.
+    """
+    from spielplan.ledger import observations
+
+    patrick = world["patrick"]
+    for title_id, value in ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1)):
+        await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
+
+    before = await foldin.live_labels(db, user_id=patrick, kind="movie")
+    assert len(before) == 5
+    rows_before = await db.fetchval(
+        "SELECT count(*) FROM verdict WHERE user_id = $1 AND title_id = 1", patrick
+    )
+
+    original = await db.fetchval(
+        "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", patrick
+    )
+    await observations.record_verdict(
+        db, user_id=patrick, title_id=1, value=2, is_reask=True, reask_of=original
+    )
+
+    after = await foldin.live_labels(db, user_id=patrick, kind="movie")
+    assert len(after) == 5, f"the re-ask erased a label: {sorted(before)} -> {sorted(after)}"
+    assert dict(after)[1] == 2, "and the erased title keeps the answer the person actually gave"
+    assert sorted(after) == sorted(before), "a same-answer re-ask must change nothing at all"
+
+    # The append-only history is intact: §4.2 keeps every row, the fit just reads one of them.
+    assert await db.fetchval(
+        "SELECT count(*) FROM verdict WHERE user_id = $1 AND title_id = 1", patrick
+    ) == rows_before + 1

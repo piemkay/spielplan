@@ -24,6 +24,7 @@ take it back.
 from __future__ import annotations
 
 import logging
+import random
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ from spielplan.home import rail
 from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import VERDICT_LABELS, EmbeddingSource, PriorState
-from spielplan.rate import balance, battle, queue
+from spielplan.rate import LIVE_LABEL, balance, battle, queue
 from spielplan.sync import seen
 
 log = logging.getLogger("spielplan.rate.session")
@@ -61,10 +62,6 @@ OUTCOMES: tuple[str, ...] = ("A", "B", "TIE")
 BATTLE_CONTEXT = "profile_battle"
 BATTLE_SELECTION = "random"
 
-# The corrections row redraws the half it un-sees, and the seam draws *pairs*, not opponents.
-# A bounded number of redraws is how the surviving half keeps its own verdict class without
-# widening `battle.next_battle_pair`'s contract.
-REDRAW_ATTEMPTS = 8
 
 DRAINED = {
     "text": (
@@ -560,12 +557,12 @@ async def predicted_class(
     counts = [0, 0, 0]
     for label in await conn.fetch(
         """
-        SELECT v.value, count(*) AS n
-          FROM verdict v JOIN title t ON t.id = v.title_id
-         WHERE v.user_id = $1 AND t.kind = $2
-           AND v.superseded_by IS NULL AND NOT v.is_reask
-         GROUP BY v.value
-        """,
+        WITH label AS ({LIVE_LABEL})
+        SELECT l.value, count(*) AS n
+          FROM label l JOIN title t ON t.id = l.title_id
+         WHERE t.kind = $2
+         GROUP BY l.value
+        """.replace("{LIVE_LABEL}", LIVE_LABEL),
         user_id,
         kind,
     ):
@@ -1061,10 +1058,20 @@ async def _redraw_pair(
 ) -> dict[str, Any] | None:
     """Keep the half the person did not correct; replace the half they did.
 
-    `battle.next_battle_pair` draws pairs, not opponents, so the survivor keeps its place by
-    redrawing until a pair from its own verdict class arrives — bounded, because a pool with
-    only one member left in that class has no opponent to offer and the honest answer is to
-    fall through to whatever the slot can serve.
+    §6.1's correction exists to remove a title from the duel pool without inventing a comparison
+    the person never made — so the half they kept must keep its place, against a fresh opponent
+    from its own verdict band.
+
+    The opponent is drawn from the band DIRECTLY. It used to be drawn by asking
+    `battle.next_battle_pair` for a whole pair and rejecting any that fell outside the
+    survivor's class, eight times. `battle.draw` weights strata by pair count n(n-1)/2, so the
+    chance of hitting a small band is small by construction: on a 60/20/20 labeller — exactly
+    the shape §5.2's class-balance warning pushes people toward — correcting a title in one of
+    the minority bands missed on every attempt about half the time, and the battle silently
+    became a sweep card with nothing on screen saying why.
+
+    Uniform within the band, for the same reason `battle.draw` is: §0 row 6 measured that no
+    selection rule beats random for profiles (best +0.0013, CI spans 0).
     """
     survivor = next((t for t in (card["title_a"], card["title_b"]) if t not in corrected), None)
     exclude = set(await _skipped_title_ids(conn, s.id)) | set(corrected)
@@ -1073,19 +1080,15 @@ async def _redraw_pair(
             conn, s, exclude=sorted(await _observed_title_ids(conn, s.id)), head=()
         )
 
-    for _ in range(REDRAW_ATTEMPTS):
-        pair = await battle.next_battle_pair(
-            conn,
-            user_id=s.user_id,
-            kinds=[card["kind"]],
-            exclude=tuple(sorted(exclude | {survivor})),
-            rng=rng,
-        )
-        if pair is None:
-            break
-        if pair.verdict_class != card["verdict_class"]:
-            continue
-        opponent = pair.title_a if pair.title_a != survivor else pair.title_b
+    pool = await battle.battle_pool(
+        conn,
+        user_id=s.user_id,
+        kinds=[card["kind"]],
+        exclude=tuple(sorted(exclude | {survivor})),
+    )
+    band = sorted(m.title_id for m in pool if m.verdict_class == card["verdict_class"])
+    if band:
+        opponent = (rng or random).choice(band)
         keep_left = survivor == card["title_a"]
         return {
             "type": "battle",
