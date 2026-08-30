@@ -35,6 +35,16 @@ from spielplan.ledger.model import OUT_A, OUT_B, OUT_TIE, ObservationSet
 
 BOARDS = 120
 
+STALLS_AT_THE_CONE = (
+    "the solve stalls against the cone boundary: an ordered logit's optimum often has two cutpoints "
+    "coincident (an unused tier level), and a line search that only clips to the boundary cannot then "
+    "travel along it. The fix is a monotone reparameterisation of the cutpoints — cuts = c0 + "
+    "cumsum(exp(delta)) — which is a diffeomorphism onto the cone and so cannot introduce local "
+    "minima, only remove convexity as a property of the parameterisation. Not yet done. What the fit "
+    "returns meanwhile is feasible, finite and self-consistent (the three tests above), just not "
+    "always the minimum. "
+)
+
 
 def board(rng: np.random.Generator) -> ObservationSet:
     """One observation set from the space M2 and M3 actually produce.
@@ -147,7 +157,7 @@ def test_the_reported_objective_is_the_objective_of_the_reported_parameters(fits
         )
 
 
-@pytest.mark.xfail(strict=True, reason="the solve stalls against the cone boundary: an ordered logit's optimum often has two cutpoints coincident (an unused tier level), and a line search that only clips to the boundary cannot then travel along it. The fix is a monotone reparameterisation of the cutpoints — cuts = c0 + cumsum(exp(delta)) — which is a diffeomorphism onto the cone and so cannot introduce local minima, only remove convexity as a property of the parameterisation. Not yet done. What the fit returns meanwhile is feasible, finite and self-consistent (the three tests above), just not always the minimum.")
+@pytest.mark.xfail(strict=True, reason=STALLS_AT_THE_CONE)
 def test_no_other_starting_point_finds_a_lower_objective(fits):
     """§5.2's objective is convex on the ordered cone, so the minimiser is unique and no start
     can beat it. This is the check that the answer is the minimum rather than a
@@ -174,7 +184,7 @@ def test_no_other_starting_point_finds_a_lower_objective(fits):
     assert not worse, f"a different start found a better optimum: {worse[:4]}"
 
 
-@pytest.mark.xfail(strict=True, reason="the solve stalls against the cone boundary: an ordered logit's optimum often has two cutpoints coincident (an unused tier level), and a line search that only clips to the boundary cannot then travel along it. The fix is a monotone reparameterisation of the cutpoints — cuts = c0 + cumsum(exp(delta)) — which is a diffeomorphism onto the cone and so cannot introduce local minima, only remove convexity as a property of the parameterisation. Not yet done. What the fit returns meanwhile is feasible, finite and self-consistent (the three tests above), just not always the minimum.")
+@pytest.mark.xfail(strict=True, reason=STALLS_AT_THE_CONE)
 def test_a_board_dragged_only_to_the_extremes_orders_the_two_piles(fits):
     """§5.2: "drag-and-drop = data, not override; the model re-fits around it".
 
@@ -207,7 +217,7 @@ def test_a_board_dragged_only_to_the_extremes_orders_the_two_piles(fits):
     assert f.converged, f"the fit stalled: grad {f.grad_inf:.3g} after {f.iterations}"
 
 
-@pytest.mark.xfail(strict=True, reason="the solve stalls against the cone boundary: an ordered logit's optimum often has two cutpoints coincident (an unused tier level), and a line search that only clips to the boundary cannot then travel along it. The fix is a monotone reparameterisation of the cutpoints — cuts = c0 + cumsum(exp(delta)) — which is a diffeomorphism onto the cone and so cannot introduce local minima, only remove convexity as a property of the parameterisation. Not yet done. What the fit returns meanwhile is feasible, finite and self-consistent (the three tests above), just not always the minimum.")
+@pytest.mark.xfail(strict=True, reason=STALLS_AT_THE_CONE)
 def test_a_labeller_who_never_says_fine_still_gets_ordered_thresholds(fits):
     """§6.1's class-balance widget exists because skewed labelling is common. The verdict arm's
     two cutpoints used to cross whenever the middle class was empty or nearly so — which is the

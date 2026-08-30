@@ -11,6 +11,7 @@ someone's defaults while reporting them as measured is worse than one that says 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -187,5 +188,5 @@ def test_the_fixture_ships_no_per_user_constants(tmp_path):
 
 def test_hyperparams_are_frozen():
     """A fit that mutates its own constants half way through is a fit nobody can reproduce."""
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         Hyperparams().lambda_ridge = 9.0
