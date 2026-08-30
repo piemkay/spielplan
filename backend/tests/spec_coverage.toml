@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M1"
+current_milestone = "M2"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -479,7 +479,7 @@ milestone = "M2"
 kind = "backend"
 what = "Refitting the Ledger against a ledger_hyperparams.json with altered constants (ridge λ, λ_bt, step count, learning rate, margin-weight form, tie prior δ₀, b_i prior τ, σ-inflation rate and cap) changes the fit for every one of them, and bundle validation accepts a bundle that ships no per-user cutpoints and no per-arm sensitivities."
 why = "§4.3 ships those constants for offline re-tuning and deliberately withholds the per-user quantities, which are fitted in-app."
-tests = []
+tests = ["backend/tests/test_ledger_hyperparams.py::test_a_bundle_constant_replaces_the_default", "backend/tests/test_ledger_hyperparams.py::test_per_user_keys_are_ignored_and_reported", "backend/tests/test_ledger_hyperparams.py::test_the_fixture_ships_no_per_user_constants", "backend/tests/test_ledger_hyperparams.py::test_a_bundle_that_omits_everything_still_fits", "backend/tests/test_ledger_hyperparams.py::test_a_nonsensical_constant_is_refused_at_the_boundary", "backend/tests/test_ledger_hyperparams.py::test_the_digest_changes_with_any_constant_that_changes_a_fit", "backend/tests/test_ledger_model.py::test_every_shipped_constant_changes_the_fit", "backend/tests/test_ledger_model.py::test_the_solver_constants_reach_the_work_not_the_answer", "backend/tests/test_ledger_model.py::test_turning_margin_weighting_off_flattens_the_toggle", "backend/tests/test_ledger_model.py::test_sigma_inflates_with_the_square_root_of_neglect_and_stops_at_the_prior"]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-cpu-job-budgets"

@@ -18,6 +18,10 @@ dependencies = [
     "python-multipart>=0.0.12",
     "httpx>=0.27",
     "numpy>=1.26",
+    # §5.2's Ledger and §5.1's scoring stack are numpy; §8 stage 9's Cold Tower is a torch
+    # module the corpus project exports as `cold_tower.pt`. §1: "Torch CPU wheels only. The
+    # image must build and run on a GPU-less VM" — ops/backend.Dockerfile pins the CPU index.
+    "torch>=2.5",
     "zstandard>=0.23",
 ]
 
