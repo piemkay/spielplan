@@ -2,8 +2,12 @@
   /**
    * Account. Spec v2.1 §3.2, §3.3, §14.4.
    *
-   * Three things live here because all three are per-person and per-device:
+   * Four things live here because all four are per-person and per-device:
    *   - passkeys, which are primary auth and are registered *from the profile page* (§3.2);
+   *   - first-run onboarding — home-screen install and push permission (§6 preamble) — which
+   *     is §3.1's fifth setup step and the only surface that can complete it. It sits first
+   *     while it is still owed, because a member arriving here from the forced password change
+   *     (`?welcome=1`) is exactly the person it was written for;
    *   - the switch PIN, which is a shared-device convenience, not a login;
    *   - the Jellyfin link, which is optional and drives seen-sync only (§3.3).
    *
@@ -16,6 +20,7 @@
   import { get, post, api } from '$lib/api.js';
   import { session, bootstrap } from '$lib/session.svelte.js';
   import { registerPasskey, supported } from '$lib/passkeys.js';
+  import Onboarding from '$lib/components/Onboarding.svelte';
 
   let credentials = $state([]);
   let label = $state('');
@@ -110,6 +115,11 @@
 
   {#if error}<div class="err" role="alert">{error}</div>{/if}
   {#if note}<div class="note" role="status">{note}</div>{/if}
+
+  <!-- §6 preamble / §3.1's fifth step. Its own component because it owns four asynchronous
+       browser facts (permission, subscription, install prompt, standalone) that have nothing
+       to do with the rest of this page. -->
+  <Onboarding />
 
   <section class="card">
     <h2>Passkeys</h2>

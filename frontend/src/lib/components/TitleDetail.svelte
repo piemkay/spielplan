@@ -118,10 +118,20 @@
       </a>
     {/if}
 
-    <!-- §6.0: the model line, in the data voice, never bare. -->
-    <div class="modelline">
+    <!-- §6.0: the model line, in the data voice, never bare: `b(t) 0.52 · β 0.8 · gate 0.93`.
+         Rendered from the server's own `text`, not recomposed here, so the card and §6.7's rail
+         print the same number to the same precision.
+
+         NOT gated by decision 117's "show the model" toggle, deliberately. §6.0 lists this line
+         unconditionally as the M0 transparency promise, and proposal 19 says so again: it is the
+         one place a model number is part of the product rather than part of the debugging. -->
+    <div class="modelline" data-testid="title-model-line">
       {#if data.model_line.available}
-        <span class="data-lg">bundle {data.model_line.bundle}</span>
+        <span class="data-lg">{data.model_line.text}</span>
+        {#if data.model_line.second_line}
+          <span class="data support">{data.model_line.second_line}</span>
+        {/if}
+        <span class="data source">{data.model_line.e_source} · bundle {data.model_line.bundle}</span>
       {:else}
         <span class="data-lg">model line unavailable — {data.model_line.reason}</span>
       {/if}
@@ -277,6 +287,10 @@
     border-radius: var(--r-sm);
   }
   .modelline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    align-items: flex-start;
     padding: 9px 11px;
     border: 1px solid var(--line);
     border-radius: var(--r-sm);

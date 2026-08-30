@@ -79,6 +79,12 @@ test('a query with no matches says so instead of showing an empty grid', async (
 test('non-ASCII titles survive to the screen', async ({ page }) => {
   // §4.1 rule 8: never "clean" non-ASCII — the corpus legitimately contains CJK, RTL scripts,
   // ZWSP and emoji. The round trip is only proven at the last step, which is this one.
+  //
+  // §6.0 M2 made shelves Home's default surface, so the catalog is no longer on screen at load
+  // and the title has to be asked for. Asking for it in its own script is the stronger test
+  // anyway: the query makes the same round trip as the row, through a different code path.
+  await page.getByRole('searchbox', { name: 'Search titles' }).fill('重慶');
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByText('重慶森林')).toBeVisible();
 });
 

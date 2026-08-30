@@ -545,3 +545,54 @@ async def test_an_unreachable_jellyfin_does_not_promote_a_broken_link(db, world)
     assert await db.fetchval(
         "SELECT jellyfin_link_state FROM app_user WHERE id = $1", world["patrick"]
     ) == "needs_relink"
+
+
+async def test_the_sweep_boundary_ignores_this_processs_clock(db, world, monkeypatch):
+    """§7.3's loop rule turns on one comparison: was the row changed before this sweep started,
+    or during it? Before → the disagreement came from Jellyfin and is adopted. During → the
+    person just acted, and their action is pushed rather than overwritten.
+
+    `state_changed_at` is stamped by Postgres `now()`, so taking the sweep's snapshot from
+    `datetime.now(UTC)` compares two clocks — and they are not the same clock. Measured on this
+    machine, Postgres sits 78 ms from the app process; another run of this project measured
+    220 ms the other way. Both signs fail silently. Server ahead: a change that came from
+    Jellyfin is never adopted. Server behind: an action taken *during* the sweep looks older
+    than the snapshot and gets adopted, reverting what the person just did.
+
+    Wall-clock offsets cannot express this — any margin small enough to sit inside real skew is
+    smaller than the time between two statements. So the process clock is moved instead: ten
+    seconds behind, which is the failing direction. Code that reads its snapshot from the
+    database does not notice. Code that reads it from here decides every row the wrong way.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    class SlowClock:
+        @staticmethod
+        def now(tz=None):
+            return datetime.now(tz or UTC) - timedelta(seconds=10)
+
+    # `raising=False`: the fixed module does not import `datetime` at all, and that is the point.
+    monkeypatch.setattr(seen, "datetime", SlowClock, raising=False)
+
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    await seen.set_state(
+        db, world["client"], world["cfg"], user_id=world["patrick"], title_id=1, state="seen"
+    )
+    # Someone opens Jellyfin and marks it unwatched — a genuine Jellyfin-side change, made
+    # after the app and Jellyfin last agreed.
+    world["module"].state.played[PATRICK_JF].discard("jf-1")
+    world["module"].state.write_log.clear()
+
+    report = seen.SyncReport()
+    await seen.sync_user(
+        db, world["client"],
+        seen.LinkedUser(world["patrick"], "patrick", PATRICK_JF, world["token"], "linked"),
+        report,
+    )
+
+    assert report.adopted == 1 and report.pushed == 0, (
+        "the change predates the sweep, so it is Jellyfin's and must be adopted — a snapshot "
+        "taken from a slow process clock makes every row look like it changed mid-sweep"
+    )
+    assert (await _state(db, world["patrick"], 1))["state"] == "unseen"
+    assert world["module"].state.write_log == [], "nothing should have been pushed back"

@@ -408,3 +408,45 @@ async def test_a_second_import_reports_the_same_counts(db, bundle, tmp_path):
     second = await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
     assert first.table_counts["loaded:title"] == second.table_counts["loaded:title"]
     assert first.table_counts["loaded:dna_tag"] == second.table_counts["loaded:dna_tag"]
+
+
+async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle, tmp_path):
+    """§10's sequence: "validate -> stage -> recompute the rebuild set against the **staged**
+    bundle -> transactionally flip".
+
+    M0 shipped the *report* of the rebuild set with nothing behind it, which was correct then —
+    none of the four things existed before M2. What that leaves behind is an import that reads
+    as if it rebuilt and did not, so this asserts the work actually happened: a user vector and
+    a ledger state exist afterwards, both stamped with the bundle that was staged.
+
+    Before the flip matters as much as the recompute. Run after it, a failing rebuild leaves a
+    new basis active with every fitted number still expressed in the old one — §10's "garbage
+    against a new one", made active and served.
+    """
+    from spielplan.ledger import observations
+
+    patrick = await db.fetchval(
+        "INSERT INTO app_user (name, role) VALUES ('Patrick', 'admin') RETURNING id"
+    )
+    report = await _import(db, bundle, tmp_path / "artifacts")
+    assert report.ok, report.render()
+
+    for title_id, value in ((1, 2), (2, 1), (3, 0), (4, 2), (5, 1)):
+        await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
+
+    # Re-import the same content as a second version, which is the case §10 is actually about.
+    fx.make_bundle(tmp_path / "b2", version="test-v2")
+    second = bundle_import.Bundle.open(tmp_path / "b2")
+    report2 = await _import(db, second, tmp_path / "artifacts")
+    assert report2.ok, report2.render()
+
+    notes = [f for f in report2.findings if f.rule in ("rebuild", "rebuild-set")]
+    assert notes, "the import reported no rebuild at all"
+    titles = " ".join(f.message for f in notes)
+    for expected in ("fold-in", "blend", "Ledger", "Cold Tower"):
+        assert expected.lower() in titles.lower(), f"§10 names {expected} and the report omits it"
+
+    assert await db.fetchval(
+        "SELECT count(*) FROM user_vector WHERE bundle_version = 'test-v2'"
+    ) > 0, "step 1 wrote no fold-in vector against the staged basis"
+    assert await db.fetchval("SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick) > 0

@@ -126,3 +126,105 @@ def test_report_renders_human_readable(clean):
     assert "bundle test-v1" in text
     assert "vocabulary v1" in text
     assert "rows:" in text
+
+
+# --- §4.3's model artifacts, checked against each other -----------------------------------------
+#
+# §10 puts validation before the flip so a bad bundle never becomes the active one. Every failure
+# below otherwise surfaces later and somewhere else, and one of them never surfaces at all.
+
+
+def _artifacts(root):
+    return root / "artifacts"
+
+
+def test_a_tower_whose_width_disagrees_with_its_contract_is_refused_at_import(clean):
+    """The one silent failure in the set, and the reason the check exists.
+
+    §8 stage 9 builds the vector from the contract; the tower consumes it. If the two disagree
+    the placement does not raise — it runs a short vector into a wide first layer, or a wide one
+    into a narrow one, and writes coordinates that are the right shape and the wrong numbers.
+    Every downstream surface then works perfectly on a library placed at plausible nonsense.
+    """
+    import json
+
+    path = _artifacts(clean) / "feature_contract.json"
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    contract["blocks"]["genre"] += 3          # the tower still expects the old width
+    path.write_text(json.dumps(contract), encoding="utf-8")
+
+    report = bundle_import.validate(bundle_import.Bundle.open(clean))
+    assert not report.ok
+    assert "cold-tower" in _rules(report, "fail")
+    assert any("wrong columns" in f.message for f in report.failures)
+
+
+def test_a_backbone_with_no_title_id_array_is_refused(clean):
+    """§4.3 lists "E, E_full, b_i, μ … item_n" and names no id mapping — but E's rows have no
+    stated correspondence to `title.id`, so without one the basis is unusable and the only safe
+    reading is a refusal. Matching by row order instead would give every title a plausible
+    coordinate belonging to some other film."""
+    import numpy as np
+
+    path = _artifacts(clean) / "backbone.npz"
+    with np.load(path, allow_pickle=False) as npz:
+        kept = {k: npz[k] for k in npz.files if k != "title_id"}
+    np.savez(path, **kept)
+
+    report = bundle_import.validate(bundle_import.Bundle.open(clean))
+    assert not report.ok
+    assert any("title_id" in f.message for f in report.failures)
+
+
+def test_a_backbone_in_the_wrong_number_of_dimensions_is_refused(clean):
+    """§1 fixes "one frozen 64-d collaborative item space". A 32-d basis is not a smaller
+    version of it — every consumer indexes into 64 columns."""
+    import numpy as np
+
+    path = _artifacts(clean) / "backbone.npz"
+    with np.load(path, allow_pickle=False) as npz:
+        kept = {k: npz[k] for k in npz.files}
+    kept["E"] = kept["E"][:, :32]
+    np.savez(path, **kept)
+
+    report = bundle_import.validate(bundle_import.Bundle.open(clean))
+    assert not report.ok
+    assert any("64" in f.message for f in report.failures)
+
+
+def test_a_cold_tower_that_is_not_v2_is_refused(clean):
+    """§4.3: "the live model; the exporter **must** ship v2"."""
+    import torch
+
+    path = _artifacts(clean) / "cold_tower.pt"
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
+    ckpt["version"] = 1
+    torch.save(ckpt, path)
+
+    report = bundle_import.validate(bundle_import.Bundle.open(clean))
+    assert not report.ok
+    assert any("v2" in f.message for f in report.failures)
+
+
+def test_a_contract_the_placer_will_reject_fails_validation_rather_than_the_import(clean):
+    """§10 recomputes the rebuild set during import, and step 4 builds every unplaced title's
+    vector from this contract. So a contract §8 stage 9's parser refuses does not produce a
+    bad placement — it takes the whole import down.
+
+    That is the right failure, in the wrong place. Without this check the operator standing in
+    front of the import screen gets a 500 out of a background step; with it they get the
+    parser's own sentence, on the validate pass, before anything is staged. The bundle shipped
+    to this project's own e2e fixture was exactly this shape: block sizes declared, per-column
+    `feature_names` absent.
+    """
+    import json
+
+    path = _artifacts(clean) / "feature_contract.json"
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    contract.pop("feature_names")
+    path.write_text(json.dumps(contract), encoding="utf-8")
+
+    report = bundle_import.validate(bundle_import.Bundle.open(clean))
+    assert not report.ok
+    assert "feature-contract" in _rules(report, "fail")
+    assert any("feature_names" in f.message for f in report.failures)

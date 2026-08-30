@@ -30,9 +30,14 @@ export async function createAdminThroughWizard(page, admin = ADMIN) {
   await page.locator('input[type=password]').fill(admin.password);
   await page.getByRole('button', { name: 'Create admin' }).click();
   // The wizard signs the new admin in and lands on Home (§3.1).
-  await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)/ })).toBeVisible();
+  await expect(page.getByTestId('home-greeting')).toBeVisible();
 }
 
+// Landing on Home is the assertion, not the sentence Home happens to open with. These
+// waited on /Good (morning|afternoon|evening)/ until M2 moved the greeting server-side, where
+// proposal 22 gives it FOUR bands against §2's TZ — the fourth is "Up late". Every e2e run
+// between 00:00 and 05:00 Europe/Berlin would have timed out here, in a helper, with a failure
+// pointing at whichever spec happened to run first.
 export async function login(page, admin = ADMIN) {
   await page.goto('/login');
   await page.locator('input[type=text]').first().fill(admin.name);
@@ -40,7 +45,7 @@ export async function login(page, admin = ADMIN) {
   // `exact`, because M1 put "Sign in with a passkey" on the same page (§3.2 keeps password
   // login always available alongside it) and a substring match now resolves to two buttons.
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)/ })).toBeVisible();
+  await expect(page.getByTestId('home-greeting')).toBeVisible();
 }
 
 /** Ensure we are signed in, creating the admin on a first-boot app. */

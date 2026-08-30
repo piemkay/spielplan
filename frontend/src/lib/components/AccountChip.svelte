@@ -7,6 +7,7 @@
    */
   import { refreshUser, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
+  import { modelGateSettled } from '$lib/home.svelte.js';
   import { goto } from '$app/navigation';
 
   let { onLogout } = $props();
@@ -32,6 +33,10 @@
   async function toggleModel() {
     try {
       await setShowModel(!session.user?.show_model);
+      // AFTER the await, not before. Decision 117's gate is applied by the server, so a
+      // surface that re-reads its payload on the optimistic local flip races this write and
+      // gets the pre-toggle answer back — the switch moves and the rail never appears.
+      modelGateSettled();
     } catch (err) {
       error = err.message;
     }
@@ -57,7 +62,7 @@
 </script>
 
 <div class="wrap">
-  <button class="chip" onclick={toggle} aria-expanded={open}>
+  <button class="chip" onclick={toggle} aria-expanded={open} data-testid="account-chip">
     <span class="avatar">{initial}</span>
     <span>{session.user?.name ?? 'signed out'}</span>
     <span class="data">▾</span>
@@ -106,11 +111,16 @@
             role="switch"
             aria-checked={!!session.user?.show_model}
             onclick={toggleModel}
+            data-testid="show-model-toggle"
+            data-on={!!session.user?.show_model}
           >
             <span class="track" class:on={session.user?.show_model}><span class="knob"></span></span>
             <span class="preflabel">Show the model</span>
           </button>
-          <div class="why hint">the event rail and the numbers behind each surface</div>
+          <div class="why hint">
+            the §6.7 event rail and every inline number — the title card's b(t) · β · gate line
+            is not gated and stays either way
+          </div>
         </div>
 
         {#if switchable.filter((u) => u.id !== session.user?.id).length}

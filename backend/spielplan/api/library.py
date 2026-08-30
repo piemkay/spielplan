@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
 from spielplan.db import library
+from spielplan.scoring import serve
 
 router = APIRouter(prefix="/api", tags=["library"])
 
@@ -64,8 +65,12 @@ async def list_titles(
         "kinds": kinds,
         "total": total,
         # §6.0: a toggle that hides things has to say how many. Silent truncation is the
-        # failure this control was introduced to fix, so the count travels with the list.
-        "hidden": await library.count_by_kind(conn, exclude=kinds),
+        # failure this control was introduced to fix, so the count travels with the list —
+        # under the SAME filters, or the number promises more than the toggle can reveal.
+        "hidden": await library.count_by_kind(
+            conn, exclude=kinds, user_id=user.id, q=q, genre=genre, decade=decade,
+            seen=seen, person_id=person_id, owned_only=owned_only,
+        ),
         "limit": limit,
         "offset": offset,
         "items": rows,
@@ -119,10 +124,17 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         },
         # §6.0: "the model line in the data voice (`b(t) 0.52 · β 0.8 · gate 0.93`)".
         # With no bundle there is nothing honest to print, so the card says so (§3.1).
+        #
+        # Decision 117 gates §6.7's rail and every other inline number behind the per-user
+        # "show the model" toggle. This line is deliberately NOT gated: §6.0 lists it
+        # unconditionally as the M0 transparency promise, and it is the one place a model number
+        # is part of the product rather than part of the debugging.
         "model_line": (
             {"available": False, "reason": "no artifact bundle imported"}
             if store.is_empty
-            else {"available": True, "bundle": store.version}
+            else await serve.model_line(
+                conn, user_id=user.id, title_id=title_id, bundle_version=store.version
+            )
         ),
         "actions": {
             "play_on_jellyfin": jf_url,

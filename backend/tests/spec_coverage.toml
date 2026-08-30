@@ -425,7 +425,12 @@ milestone = "M2"
 kind = "integration"
 what = "Undo reaches back only to the start of the current block of 15: repeated Undo stops at the block's first observation and the response reports undo as unavailable rather than silently no-opping, and once a new block starts the previous block's observations are no longer undoable."
 why = "Decision 35: the depth matches the counter the user is already reading (\"7 / 15 this block\"), the boundary is refused explicitly rather than silently, and starting a new block commits the previous one."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_opping",
+    "backend/tests/test_rate_session.py::test_undo_walks_back_to_the_first_observation_of_the_block_and_then_refuses",
+    "backend/tests/test_rate_session.py::test_the_route_reports_undo_as_unavailable_rather_than_no_opping",
+    "e2e/specs/11-rate.spec.js::the counter runs to 15 and rolls, and Undo then disables visibly at the boundary",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-reimport-rebuild-set"
@@ -434,7 +439,13 @@ milestone = "M2"
 kind = "integration"
 what = "A re-import against a different Backbone recomputes exactly four things and nothing else: user fold-in vectors, per-label-count blend weights, a full Ledger MAP refit, and Cold Tower re-placement of every app-acquired title using feature vectors rebuilt from the staged bundle's contract (whose column set may differ). Every `verdict`, `duel` and `tier_edit` row survives the re-import unchanged."
 why = "Ledger observations reference `title.id` and vocabulary-independent facts so they survive, while anything expressed in the old basis does not; the v1 Map is a deterministic axis scatter with no rebuild step, so its presence in the recompute set is a bug."
-tests = []
+tests = [
+    "backend/tests/test_placement.py::test_a_reimport_runs_exactly_the_four_rebuild_steps_and_no_map_rebuild",
+    "backend/tests/test_placement.py::test_a_reimport_rebuilds_vectors_from_the_staged_contract",
+    "backend/tests/test_placement.py::test_verdicts_duels_and_tier_edits_survive_a_reimport_unchanged",
+    "backend/tests/test_placement.py::test_the_rebuild_refuses_a_bundle_that_was_never_staged",
+    "backend/tests/test_import_integration.py::test_the_import_recomputes_the_rebuild_set_before_it_flips",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-silent-reask-stream"
@@ -443,7 +454,16 @@ milestone = "M2"
 kind = "integration"
 what = "About 10% of queue slots are silent re-asks of verdicts and duels at least 3 days old; the payload served to the client carries no marker distinguishing a re-ask from a first observation, the re-ask is stored distinguishably server-side so the flip rate σ is computable over ~200 re-asks, and it is counted neither as a second independent observation by the Ledger nor in the class-balance widget."
 why = "The re-ask stream is a different instrument from the uniform-random stream — the latter cannot measure test–retest consistency — and σ sets the tier budget and settles the corpus's zero-test-retest-data unknown."
-tests = []
+tests = [
+    "backend/tests/test_rate_queue.py::test_the_served_payload_carries_no_marker_distinguishing_a_re_ask",
+    "backend/tests/test_rate_queue.py::test_the_re_ask_is_stored_distinguishably_and_sigma_is_computable_from_it",
+    "backend/tests/test_rate_queue.py::test_a_re_ask_is_not_a_second_observation_for_the_ledger_or_the_widget",
+    "backend/tests/test_rate_queue.py::test_a_verdict_younger_than_three_days_is_never_re_asked",
+    "backend/tests/test_rate_queue.py::test_the_same_verdict_is_not_re_asked_again_inside_the_cooldown",
+    "backend/tests/test_rate_queue.py::test_a_duel_re_ask_preserves_the_order_it_was_asked_in",
+    "backend/tests/test_rate_queue.py::test_about_one_slot_in_ten_is_a_re_ask",
+    "backend/tests/test_rate_session.py::test_a_re_ask_is_written_distinguishably_and_shown_indistinguishably",
+]
 
 [[requirement]]
 id = "data-rules-ranking-partitions-by-kind"
@@ -452,7 +472,13 @@ milestone = "M2"
 kind = "integration"
 what = "A ranked-list request carries two independent kind toggles: with both on the response is two kind-headed sections each ordered within itself and never one merged ordering; with neither on the request is rejected; adding a person filter does not suspend the partition."
 why = "decision 18: kind is two toggles, either or both, never neither; both-on renders two headed sections on a surface that ranks, and the person filter does not suspend the partition."
-tests = []
+tests = [
+    "backend/tests/test_scoring.py::test_the_ranked_list_returns_two_kind_headed_sections_and_never_one_merged_ordering",
+    "backend/tests/test_scoring.py::test_a_limit_applies_per_section_and_not_across_a_merge",
+    "backend/tests/test_scoring.py::test_a_section_is_identical_with_and_without_the_other_kind_selected",
+    "backend/tests/test_scoring.py::test_neither_kind_is_refused_rather_than_defaulted",
+    "backend/tests/test_scoring.py::test_a_person_filter_does_not_suspend_the_partition",
+]
 
 [[requirement]]
 id = "data-rules-verdict-append-only"
@@ -461,7 +487,14 @@ milestone = "M2"
 kind = "integration"
 what = "Re-rating a title inserts a new verdict row and stamps superseded_by on the previous one rather than mutating it, the nightly refit's observation set contains both rows, and outside the block-scoped Undo journal (decision 35) no write path updates a verdict's value or deletes a verdict row."
 why = "a rewatch re-rating is a new ordinal observation (drift signal for free), not a correction of the old one."
-tests = []
+tests = [
+    "backend/tests/test_ledger_observations.py::test_a_re_rating_inserts_a_row_and_stamps_the_old_one_rather_than_mutating_it",
+    "backend/tests/test_ledger_observations.py::test_the_fit_sees_both_the_superseded_verdict_and_the_live_one",
+    "backend/tests/test_ledger_observations.py::test_the_insert_and_the_supersede_stamp_are_one_transaction",
+    "backend/tests/test_ledger_observations.py::test_no_write_path_outside_undo_deletes_a_verdict_or_edits_its_value",
+    "backend/tests/test_ledger_observations.py::test_undo_unstamps_the_row_it_superseded_and_stops_at_the_block_boundary",
+    "backend/tests/test_ledger_observations.py::test_a_verdict_implies_seen_and_undo_restores_the_exact_prior_state",
+]
 
 [[requirement]]
 id = "data-rules-feature-contract-sole-input"
@@ -470,7 +503,14 @@ milestone = "M2"
 kind = "backend"
 what = "A title's feature vector is built from feature_contract.json alone: the nine content blocks in the contract's declared order and sizes (6,435 columns) with absent blocks dropped and genome zero-imputed, plus columns 0..63 of the 256-d review-text SVD scaled by the contract's frozen text_scale; editing a block size or text_scale in the contract changes the produced vector correspondingly."
 why = "§8 stage 9 builds vectors from this file and nothing else; text_scale is frozen at export time so placements stay comparable across runs."
-tests = []
+tests = [
+    "backend/tests/test_placement.py::test_every_block_lands_at_the_offset_the_contract_declares",
+    "backend/tests/test_placement.py::test_editing_a_block_size_moves_every_later_column",
+    "backend/tests/test_placement.py::test_text_scale_is_frozen_in_the_contract_and_scales_only_the_last_64_columns",
+    "backend/tests/test_placement.py::test_a_contract_that_ships_no_text_scale_is_refused_rather_than_defaulted",
+    "backend/tests/test_placement.py::test_genome_is_zero_imputed_and_an_absent_block_is_dropped_not_defaulted",
+    "backend/tests/test_placement.py::test_a_key_the_contract_does_not_declare_is_counted_and_never_grows_the_vector",
+]
 
 [[requirement]]
 id = "data-rules-ledger-hyperparams-from-bundle"
@@ -488,7 +528,12 @@ milestone = "M2"
 kind = "backend"
 what = "On CPU only, with no GPU present: a Ledger incremental update for one observation completes under 50 ms, Cold Tower placement of one title under 1 s, per-title DNA projection under 1 s, and a full Ledger MAP refit plus cutpoints and σ over both users' full owned library (839+ titles) completes in under 60 s."
 why = "\"Every in-app model update runs on CPU\" is a hard constraint with measured budgets; the image must build and run on a GPU-less 4-vCPU/6–8 GB VM, so a budget regression is a deployability failure, not a slowdown."
-tests = []
+tests = [
+    "backend/tests/test_ledger_observations.py::test_an_incremental_update_lands_inside_the_fifty_millisecond_budget",
+    "backend/tests/test_ledger_observations.py::test_a_full_map_refit_of_both_users_over_the_owned_library_lands_inside_the_budget",
+    "backend/tests/test_ledger_observations.py::test_the_incremental_cost_does_not_grow_with_the_library",
+    "backend/tests/test_placement.py::test_cold_tower_placement_of_one_title_stays_under_one_second",
+]
 
 [[requirement]]
 id = "library-rate-home-grid-switch"
@@ -497,7 +542,53 @@ milestone = "M2"
 kind = "e2e"
 what = "Typing into search, or tapping a credit on a title card, replaces Home's shelves with the catalog grid (and closes the open detail card); clearing the query and removing the person chip restores the shelves."
 why = "The only stated state machine between Home's two modes; nothing else in the spec says how a user gets back out of the grid."
-tests = []
+tests = [
+    "e2e/specs/10-home.spec.js::search replaces the shelves with the catalog grid and closes the open title card",
+    "e2e/specs/10-home.spec.js::clearing the search box returns the shelves",
+    "e2e/specs/10-home.spec.js::tapping a credit swaps the shelves for a filmography behind a person chip",
+    "e2e/specs/10-home.spec.js::removing the person chip returns the shelves",
+]
+
+[[requirement]]
+# Added during M2. §12's M2 row names "member PWA-install/push onboarding" in the milestone's
+# scope and this map had no row for it — a gap in the map, not a feature out of scope. Split in
+# two because the cheapest falsifier differs: the subscription is a row in a table, the install
+# guidance is a screen.
+id = "library-rate-push-subscription-write"
+spec = "§12 M2 scope + §4.2 `push_subscription` + §7.3"
+milestone = "M2"
+kind = "integration"
+what = "Granting push permission stores exactly one `push_subscription` row for that (user, endpoint), re-subscribing the same endpoint updates the existing row rather than adding a second, a subscription is scoped to the member who granted it and never to the household, and declining stores nothing while still allowing onboarding to complete."
+why = "§7.3's finish prompt is a push notification whose \"undeliverable\" fallback (M1) is only meaningful if the deliverable path exists; §4.2 already carries the table and the worker already prunes it, so M2 owes the write that fills it."
+tests = [
+    "backend/tests/test_push.py::test_granting_push_permission_stores_exactly_one_subscription",
+    "backend/tests/test_push.py::test_resubscribing_the_same_endpoint_updates_the_row_rather_than_adding_a_second",
+    "backend/tests/test_push.py::test_a_subscription_belongs_to_the_member_who_granted_it",
+    "backend/tests/test_push.py::test_one_member_cannot_unsubscribe_anothers_device",
+    "backend/tests/test_push.py::test_a_phone_handed_to_another_member_moves_rather_than_duplicating",
+    "backend/tests/test_push.py::test_declining_stores_nothing_and_still_completes_onboarding",
+    "backend/tests/test_push.py::test_the_endpoint_and_auth_key_never_come_back_out_of_the_api",
+    "backend/tests/test_push.py::test_the_endpoint_and_auth_key_never_reach_the_log",
+    "e2e/specs/12-onboarding.spec.js::granting push permission registers exactly one device, and re-opening adds none",
+]
+
+[[requirement]]
+id = "library-rate-member-pwa-install-onboarding"
+spec = "§12 M2 scope + §6 preamble + §3.1 (fifth setup step)"
+milestone = "M2"
+kind = "e2e"
+what = "A member's first run offers install guidance and a push-permission request, and completing or declining either records the `onboarding` setup step so it is not offered again; the guidance is platform-specific, because iOS exposes no programmatic install prompt and the flow there is a guided act rather than a button."
+why = "§6's preamble makes onboarding a guided act for exactly that reason, and `POST /api/setup/onboarding/complete` already exists with nothing calling it — an onboarding step that no surface can complete is a step that blocks the wizard forever."
+tests = [
+    "e2e/specs/12-onboarding.spec.js::a member arrives at the onboarding prompt and is asked once",
+    "e2e/specs/12-onboarding.spec.js::on iOS the screen guides Share → Add to Home Screen and offers no install button",
+    "e2e/specs/12-onboarding.spec.js::the install button appears only when the browser offers one, and spends it",
+    "e2e/specs/12-onboarding.spec.js::granting push permission registers exactly one device, and re-opening adds none",
+    "e2e/specs/12-onboarding.spec.js::declining stores nothing, finishes the step, and is not asked again",
+    "e2e/specs/12-onboarding.spec.js::the service worker push depends on is served, registers, and caches no api response",
+    "backend/tests/test_push.py::test_declining_stores_nothing_and_still_completes_onboarding",
+    "backend/tests/test_push.py::test_onboarding_is_recorded_per_member_so_the_other_phone_is_still_asked",
+]
 
 [[requirement]]
 id = "library-rate-shelf-why-line"
@@ -506,7 +597,16 @@ milestone = "M2"
 kind = "integration"
 what = "Every shelf in the Home payload carries a non-empty one-line why in vocabulary terms, and the DNA terms the why-line names are carried by every card on that shelf, not only by the shelf's anchor."
 why = "§6.8's \"quiet reasons\" register is normative; a card shown under a reason it does not satisfy is a shelf that says the wrong why."
-tests = []
+tests = [
+    "backend/tests/test_home.py::test_every_section_carries_a_why_line_and_every_card_carries_every_named_term",
+    "backend/tests/test_home.py::test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_shelf",
+    "backend/tests/test_home.py::test_the_ledger_shelf_names_the_beta_its_own_ranking_used",
+    "backend/tests/test_home.py::test_the_school_night_shelf_names_the_threshold_its_cards_obey",
+    "backend/tests/test_home.py::test_a_shelf_that_cannot_justify_itself_is_absent_not_empty",
+    "backend/tests/test_home.py::test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_support",
+    "backend/tests/test_home.py::test_the_frontier_shelf_names_a_term_no_seen_title_carries",
+    "backend/tests/test_home.py::test_the_sweet_spot_is_unseen_by_both_and_high_for_both",
+]
 
 [[requirement]]
 id = "library-rate-pending-verdicts-banner"
@@ -515,7 +615,14 @@ milestone = "M2"
 kind = "integration"
 what = "The banner's population is exactly the titles the user has marked seen and given no verdict, at most three named; its CTA opens the §6.1 queue with those titles at the head of the queue, not at whatever position the standing queue held."
 why = "The banner is §7.3's capture prompt given a permanent surface; naming titles and then presenting a different card is worse than no prompt."
-tests = []
+tests = [
+    "backend/tests/test_home.py::test_the_banner_is_exactly_the_seen_titles_with_no_live_verdict",
+    "backend/tests/test_home.py::test_the_banner_that_names_at_most_three_counts_the_rest",
+    "backend/tests/test_home.py::test_three_pending_titles_are_all_named",
+    "backend/tests/test_home.py::test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head",
+    "backend/tests/test_home.py::test_following_the_banners_own_link_serves_the_first_named_title",
+    "backend/tests/test_home.py::test_rendering_home_writes_nothing",
+]
 
 [[requirement]]
 id = "library-rate-shelves-partition-both-kinds"
@@ -524,7 +631,12 @@ milestone = "M2"
 kind = "integration"
 what = "With both Films and Series selected, every ranking shelf in the Home payload comes back as two kind-headed sections and never as one interleaved ranked list; the catalog listing, ordered by year or title, may interleave the two kinds freely."
 why = "Decision 18's precise reading of rule 5: the measured failure is a shared ranking (unpartitioned crowd top-10 is 8/10 series), not a shared screen — so the falsifiable property is the ordering, not the rendering."
-tests = []
+tests = [
+    "backend/tests/test_home.py::test_every_shelf_returns_one_section_per_kind_and_no_shelf_has_items",
+    "backend/tests/test_home.py::test_a_kind_that_loses_a_merged_ranking_still_gets_its_own_section",
+    "backend/tests/test_home.py::test_selecting_one_kind_returns_one_section_and_selecting_none_is_a_422",
+    "backend/tests/test_home.py::test_the_catalog_grid_may_interleave_the_two_kinds",
+]
 
 [[requirement]]
 id = "library-rate-mix-alternates-blocks"
@@ -533,7 +645,16 @@ milestone = "M2"
 kind = "integration"
 what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and flips the served card type between sweep and battle, so a run of duels still returns sweep cards; the counter runs 1..15 and rolls into a new block."
 why = "Mix is the default mode and the block of 15 is the unit Undo's depth and the counter copy both hang off (decision 35)."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_mix_alternates_on_the_counter_and_not_on_the_last_card_served",
+    "backend/tests/test_rate_session.py::test_a_run_of_duels_still_returns_sweep_cards",
+    "backend/tests/test_rate_session.py::test_every_kind_of_observation_advances_the_counter_by_exactly_one",
+    "backend/tests/test_rate_session.py::test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block",
+    "backend/tests/test_rate_session.py::test_the_card_type_is_a_pure_function_of_the_slot_and_the_block_rolls_at_fifteen",
+    "e2e/specs/11-rate.spec.js::a fresh session opens in Mix, at 1 / 15, on a sweep card that says why it is here",
+    "e2e/specs/11-rate.spec.js::Mix alternates on the counter, so an answered duel is followed by a sweep card",
+    "e2e/specs/11-rate.spec.js::the counter runs to 15 and rolls, and Undo then disables visibly at the boundary",
+]
 
 [[requirement]]
 id = "library-rate-no-prediction-before-tap"
@@ -542,7 +663,14 @@ milestone = "M2"
 kind = "integration"
 what = "The sweep card payload contains no predicted class, ledger score, σ or tier for the title being rated; the predicted class and its data-voice score appear only in the response to the verdict write."
 why = "Anchoring: a card that shows the model's belief before the answer contaminates the label it exists to collect."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_the_sweep_card_carries_no_model_belief_and_the_reveal_arrives_with_the_verdict",
+    "backend/tests/test_rate_session.py::test_the_battle_card_hides_the_verdict_band_it_was_drawn_from",
+    "backend/tests/test_rate_session.py::test_the_reveal_is_read_before_the_write_and_not_after_it",
+    "backend/tests/test_rate_session.py::test_the_reveal_is_suppressed_rather_than_invented_before_the_first_fit",
+    "backend/tests/test_rate_session.py::test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo_state",
+    "e2e/specs/11-rate.spec.js::the sweep card carries no model belief, and the reveal arrives only with the write",
+]
 
 [[requirement]]
 id = "library-rate-battle-pairs-within-band"
@@ -551,7 +679,13 @@ milestone = "M2"
 kind = "backend"
 what = "The battle pair sampler only ever draws titles the user has marked seen that already carry a verdict, and both members of a pair always share a verdict class; over many draws the distribution over eligible in-class pairs is uniform rather than concentrated on any subset."
 why = "For profiles no selection rule beats random (best +0.0013, CI spans 0); within-class pairs are what add resolution, cross-class pairs re-derive a boundary the ordered-logit arm already knows."
-tests = []
+tests = [
+    "backend/tests/test_rate_queue.py::test_the_battle_sampler_is_uniform_over_every_eligible_in_class_pair",
+    "backend/tests/test_rate_queue.py::test_a_pair_never_crosses_a_verdict_class_or_a_kind",
+    "backend/tests/test_rate_queue.py::test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted",
+    "backend/tests/test_rate_queue.py::test_no_pair_exists_until_one_class_holds_two_titles",
+    "backend/tests/test_rate_queue.py::test_which_poster_is_a_and_which_is_b_is_itself_random",
+]
 
 [[requirement]]
 id = "library-rate-queue-seed-and-reason"
@@ -560,7 +694,13 @@ milestone = "M2"
 kind = "integration"
 what = "A user's first queue is the imported 100-title decade-stratified seed_list; subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\")."
 why = "The queue's job is to put titles the user has actually seen in front of them (§13 flags >50% not-seen as a queue bug), and §6.8 requires every question to carry its one-line why."
-tests = []
+tests = [
+    "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_imported_seed_list_in_position_order",
+    "backend/tests/test_rate_queue.py::test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending_p_seen",
+    "backend/tests/test_rate_queue.py::test_p_seen_moves_the_queue_when_a_signal_moves",
+    "backend/tests/test_rate_queue.py::test_every_card_carries_the_one_line_why_that_names_its_dominant_cause",
+    "backend/tests/test_rate_queue.py::test_a_title_the_app_already_holds_as_seen_leads_the_queue",
+]
 
 [[requirement]]
 id = "library-rate-duel-write"
@@ -569,7 +709,11 @@ milestone = "M2"
 kind = "integration"
 what = "One battle answer writes exactly one duel row with context 'profile_battle' and outcome A, B or TIE; with the decisive toggle on the stored margin weight is ~1.6, with it off ~1.0; a Tie is a stored outcome feeding the Davidson tie term, never a skip or a dropped row."
 why = "22% of random pairs are genuine ties, so \"about the same\" is first-class data; margin weighting was selected by tuning — a decisive pick teaches more than a hesitant one."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_one_battle_answer_writes_exactly_one_duel_row",
+    "backend/tests/test_rate_session.py::test_the_decisive_toggle_is_persistent_and_sets_the_stored_margin",
+    "backend/tests/test_rate_session.py::test_one_answer_may_override_the_toggle_without_moving_it",
+]
 
 [[requirement]]
 id = "library-rate-class-balance"
@@ -578,7 +722,13 @@ milestone = "M2"
 kind = "integration"
 what = "The Rate payload carries the running three-class verdict distribution over the user's labels, and the warning copy (\"Spreading across all three classes matters about five times more than anything else you can do here.\") is present once one class exceeds 60% of that distribution and absent below it."
 why = "Spreading verdicts across all three classes is the measured 5× lever; §5.2 fixes the 60% figure — a 60%-\"liked\" labeller gives up ~0.07 ρ."
-tests = []
+tests = [
+    "backend/tests/test_rate_queue.py::test_the_warning_appears_above_sixty_percent_and_is_absent_below",
+    "backend/tests/test_rate_queue.py::test_the_warning_copy_is_the_measured_sentence_and_names_the_heavy_class",
+    "backend/tests/test_rate_queue.py::test_the_widget_counts_one_current_label_per_title",
+    "backend/tests/test_rate_queue.py::test_a_re_ask_is_not_a_second_observation_for_the_ledger_or_the_widget",
+    "e2e/specs/11-rate.spec.js::the class-balance warning appears when a class passes 60%, in the measured words",
+]
 
 [[requirement]]
 id = "library-rate-corrections-row"
@@ -587,7 +737,14 @@ milestone = "M2"
 kind = "integration"
 what = "`not seen: [left] [both] [right]` sets exactly the named side(s) to unseen — `both` swaps the whole pair, `left`/`right` swap only that half — writes no duel row for the pair, and queues the Jellyfin seen-state sync."
 why = "The correction exists to remove a title from the duel pool without inventing a comparison the user never made; a correction that writes a duel row poisons the arm it was meant to protect."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_a_correction_unsees_exactly_the_named_side_and_writes_no_duel",
+    "backend/tests/test_rate_session.py::test_both_swaps_the_whole_pair",
+    "backend/tests/test_rate_session.py::test_a_correction_does_not_advance_the_counter",
+    "backend/tests/test_rate_session.py::test_a_correction_queues_the_jellyfin_seen_state_sync",
+    "backend/tests/test_rate_session.py::test_with_no_connector_the_push_is_owed_rather_than_lost",
+    "e2e/specs/11-rate.spec.js::the corrections row swaps the named side, writes no duel, and does not advance",
+]
 
 [[requirement]]
 id = "library-rate-seen-state-two-values"
@@ -596,7 +753,11 @@ milestone = "M2"
 kind = "integration"
 what = "A verdict writes user_title.state = 'seen'; the `Not seen` control writes 'unseen'; no third state is accepted by the write path or the column; and flipping a title back to unseen leaves its earlier verdict and duel rows in place."
 why = "Owner decision 2026-08-29 removed 'forgotten' — \"seen, don't remember\" is plain unseen — and the verdict/duel history is append-only and survives the flip."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_a_verdict_writes_seen_and_not_seen_writes_unseen",
+    "backend/tests/test_rate_session.py::test_no_third_seen_state_is_reachable_from_the_write_path_or_the_column",
+    "backend/tests/test_rate_session.py::test_flipping_a_rated_title_back_to_unseen_leaves_its_verdicts_and_duels_in_place",
+]
 
 [[requirement]]
 id = "library-rate-undo-any-observation"
@@ -605,7 +766,17 @@ milestone = "M2"
 kind = "integration"
 what = "Undo pops the most recent observation of ANY kind — verdict, not-seen, skip, duel, tie, correction — restores the exact card or pair that produced it (not the neighbouring queue position), and emits the compensating Ledger write."
 why = "Decision 35 makes Undo a bounded observation journal with compensating writes; a single last-verdict slot cannot satisfy \"undo everywhere\" or cover the corrections row."
-tests = []
+tests = [
+    "backend/tests/test_rate_session.py::test_undo_pops_a_verdict_restores_the_exact_card_and_retracts_the_row",
+    "backend/tests/test_rate_session.py::test_undo_restores_the_pair_it_was_asked_about_rather_than_reshuffling_it",
+    "backend/tests/test_rate_session.py::test_undo_pops_an_observation_of_any_kind",
+    "backend/tests/test_rate_session.py::test_undo_lifts_the_skip_suppression_so_the_card_can_be_answered",
+    "backend/tests/test_rate_session.py::test_undo_of_a_re_rating_makes_the_previous_verdict_live_again",
+    "backend/tests/test_rate_session.py::test_undo_pushes_back_exactly_what_the_forward_action_pushed",
+    "backend/tests/test_rate_session.py::test_undo_pushes_nothing_where_the_forward_action_pushed_nothing",
+    "e2e/specs/11-rate.spec.js::Undo pops a verdict, restores the exact card, and takes the label back with it",
+    "e2e/specs/11-rate.spec.js::Undo pops a duel too, and the same pair comes back rather than a reshuffled one",
+]
 
 [[requirement]]
 id = "map-taste-admin-show-model-toggle-scope"
@@ -614,7 +785,12 @@ milestone = "M2"
 kind = "e2e"
 what = "A single per-user 'show the model' toggle lives in the account dropdown and is off by default: with it off the event rail and every inline numeric annotation are absent while the title card's b(t) · β · gate line still renders; turning it on reveals them for that user only and leaves another user's session unchanged."
 why = "Decision 117: one global per-user toggle, default off, a debugging instrument — the title card's model line is the M0 transparency promise and stays ungated."
-tests = []
+tests = [
+    "e2e/specs/10-home.spec.js::with the toggle off the rail and every inline number are absent, not merely hidden",
+    "e2e/specs/10-home.spec.js::the title card model line renders with the toggle off and with it on",
+    "e2e/specs/10-home.spec.js::turning the toggle on reveals the rail, the inline numbers and what did not ship",
+    "e2e/specs/10-home.spec.js::the toggle is off by default, and one user turning it on leaves the other unchanged",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-placement-vector-from-feature-contract"
@@ -623,7 +799,20 @@ milestone = "M2"
 kind = "backend"
 what = "The placement feature vector is built from `feature_contract.json` and nothing else: the nine content blocks in the declared order and sizes (6,435 columns), then review-text columns 0..63 of the SVD embedding multiplied by the contract's frozen `text_scale`; the genome block is zero-imputed and absent blocks are dropped rather than defaulted. A title with no keywords and no DNA row still yields a vector and a coordinate."
 why = "The contract is the exhaustive definition of the tower's input and records all placement-time preprocessing; the tower's dropout training anticipates absent blocks, and M2's exit criterion is that every owned title has a coordinate (19 such titles arrive with the bundle, 3 with no DNA row)."
-tests = []
+tests = [
+    "backend/tests/test_placement.py::test_the_shipped_bundle_ships_a_contract_that_matches_its_own_tower",
+    "backend/tests/test_placement.py::test_the_forward_pass_is_the_checkpoints_own_arithmetic",
+    "backend/tests/test_placement.py::test_the_tower_is_in_eval_mode_and_two_passes_agree_bit_for_bit",
+    "backend/tests/test_placement.py::test_a_tower_whose_width_disagrees_with_the_contract_is_refused_loudly",
+    "backend/tests/test_placement.py::test_nothing_in_the_placer_reaches_for_a_gpu",
+    "backend/tests/test_placement.py::test_a_title_with_no_keywords_and_no_dna_row_still_gets_a_coordinate",
+    "backend/tests/test_placement.py::test_every_owned_title_has_a_coordinate_after_reconciliation",
+    "backend/tests/test_placement.py::test_a_low_support_title_is_served_as_a_genuine_blend_of_both_coordinates",
+    "backend/tests/test_placement.py::test_a_thin_title_is_placed_badged_and_parked_and_a_complete_one_is_not",
+    "backend/tests/test_placement.py::test_the_vector_is_built_from_the_database_through_the_contracts_own_columns",
+    "backend/tests/test_placement.py::test_reconciliation_is_idempotent",
+    "backend/tests/test_placement.py::test_a_bundle_with_no_backbone_row_for_a_title_never_calls_it_warm",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes"

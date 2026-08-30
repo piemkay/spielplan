@@ -20,14 +20,18 @@ from fastapi.staticfiles import StaticFiles
 from spielplan.api import admin as admin_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
+from spielplan.api import home as home_api
 from spielplan.api import library as library_api
 from spielplan.api import passkeys as passkeys_api
+from spielplan.api import push as push_api
+from spielplan.api import rate as rate_api
 from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import migrate, pool
 from spielplan.models.artifacts import ArtifactStore
+from spielplan.scoring import backbone
 
 log = logging.getLogger("spielplan")
 
@@ -47,6 +51,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await registry.seed_from_env(conn, cfg)
         # §4.3: artifacts load "when present"; an empty store is legal.
         app.state.artifacts = await ArtifactStore.load_active(conn, cfg.artifacts_dir)
+        # §5.1's basis, loaded once per process. §10 restarts on a bundle swap, so a process
+        # never has to reload it — and a Backbone that fails to load degrades the scoring
+        # surfaces rather than stopping a boot the admin needs in order to fix the bundle.
+        try:
+            app.state.backbone = backbone.load_for(app.state.artifacts)
+        except backbone.BackboneError:
+            log.exception("backbone.npz is unusable — serving without collaborative scores")
+            app.state.backbone = backbone.Backbone.empty()
 
     if app.state.artifacts.is_empty:
         log.info("no artifact bundle active — serving setup wizard and admin routes (§3.1)")
@@ -66,6 +78,9 @@ def create_app() -> FastAPI:
     app.include_router(artifacts_api.router)
     app.include_router(library_api.router)
     app.include_router(state_api.router)
+    app.include_router(rate_api.router)
+    app.include_router(home_api.router)
+    app.include_router(push_api.router)
     app.include_router(admin_api.router)
 
     @app.get("/api/health")

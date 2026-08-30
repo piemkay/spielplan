@@ -16,7 +16,27 @@ export const session = $state({
   // bundle import finished.
   loading: true,
   booted: false,
-  /** @type {null | {id:number,name:string,role:string,must_change_password:boolean}} */
+  // Everything `/api/auth/me` returns. It listed four fields while the route had grown to ten
+  // across M1 and M2, so `svelte-check` reported an error at every use of the other six — forty
+  // of the repo's forty-two, which is how a type that is not maintained stops being read at all.
+  /**
+   * @type {null | {
+   *   id: number,
+   *   name: string,
+   *   role: string,
+   *   must_change_password: boolean,
+   *   show_model?: boolean,
+   *   has_pin?: boolean,
+   *   passkeys?: number,
+   *   jellyfin?: any,
+   *   auth_method?: string,
+   *   nav?: {
+   *     surfaces: {key: string, href: string, label: string, milestone?: string}[],
+   *     account: {key: string, href: string, label: string}[]
+   *   },
+   *   admin_reauth_required?: boolean
+   * }}
+   */
   user: null,
   /** @type {null | {required:boolean, steps:{step:string,done:boolean}[], has_admin:boolean, member_count:number, bundle:any, note:string}} */
   setup: null,

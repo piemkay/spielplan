@@ -102,7 +102,7 @@ test.describe('passkeys', () => {
 
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByRole('heading', { name: /Good (morning|afternoon|evening)/ })
+      page.getByTestId('home-greeting')
     ).toBeVisible();
     await expect(page.locator('.chip')).toContainText(ADMIN.name);
   });
@@ -121,7 +121,7 @@ test.describe('passkeys', () => {
 
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByRole('heading', { name: /Good (morning|afternoon|evening)/ })
+      page.getByTestId('home-greeting')
     ).toBeVisible();
 
     await page.goto('/account');
@@ -147,7 +147,7 @@ test.describe('passkeys', () => {
     await menu.getByRole('button', { name: 'Log out' }).click();
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByRole('heading', { name: /Good (morning|afternoon|evening)/ })
+      page.getByTestId('home-greeting')
     ).toBeVisible();
   });
 

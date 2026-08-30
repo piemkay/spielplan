@@ -63,3 +63,22 @@ def test_the_registry_covers_the_milestones_it_claims():
     assert live_m1 == {
         "jellyfin-seen-sync", "jellyfin-sessions-poll", "webauthn-challenge-prune"
     }
+
+
+def test_the_placement_sweep_runs_before_the_fits_that_read_its_coordinates():
+    """§5.3 lists the two nightly fits above the placement sweep, but both fits read the
+    coordinates the sweep writes: §5.1's `e(t)` needs ê for a cold or low-support title, and
+    §5.2's fit takes the same coordinates as its embeddings.
+
+    Left in table order, the night a bundle arrives fits every user against a library whose
+    newly-owned titles have no coordinate yet, and the sweep corrects it a day later — once per
+    import, silently, and only ever in the direction that makes the first night's tiers worse.
+    The registry stays in §5.3's order for reading; `due` sorts by `stage`.
+    """
+    order = [j.name for j in worker.due(1e9, {})]
+    assert order.index("placement-reconciliation") < order.index("fold-in-user-vectors")
+    assert order.index("placement-reconciliation") < order.index("ledger-map-refit")
+
+    # …and the table itself is still §5.3's, so the registry has not been reordered to fake it.
+    table = [j.name for j in worker.JOBS]
+    assert table.index("ledger-map-refit") < table.index("placement-reconciliation")

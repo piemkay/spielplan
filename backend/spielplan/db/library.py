@@ -38,8 +38,7 @@ def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
     return chosen
 
 
-async def list_titles(
-    conn: asyncpg.Connection,
+def _filters(
     *,
     kinds: Sequence[str],
     user_id: int | None = None,
@@ -49,10 +48,15 @@ async def list_titles(
     seen: SeenFilter = "any",
     person_id: int | None = None,
     owned_only: bool = False,
-    limit: int = 60,
-    offset: int = 0,
-) -> tuple[list[dict[str, Any]], int]:
-    """Return (rows, total). `kinds` is mandatory and non-empty — see rule 5 above."""
+) -> tuple[str, list[Any]]:
+    """The catalog's WHERE clause and its arguments, over alias `t`.
+
+    Extracted so the listing and the hidden-by-kind count are the *same* predicate. They were
+    not: the count read every title of the unselected kinds, ignoring the filters the listing
+    had applied, so a person filter over a four-title filmography reported "26 series hidden".
+    §6.0's count line exists to name what a toggle is hiding, and a number larger than anything
+    the toggle could reveal is a worse answer than no number.
+    """
     where = ["t.kind = ANY($1)"]
     args: list[Any] = [normalise_kinds(kinds)]
 
@@ -93,8 +97,33 @@ async def list_titles(
                 f"NOT EXISTS (SELECT 1 FROM user_title ut WHERE ut.title_id = t.id "
                 f"AND ut.user_id = {uid} AND ut.state = 'seen')"
             )
+    return " AND ".join(where), args
 
-    clause = " AND ".join(where)
+
+async def list_titles(
+    conn: asyncpg.Connection,
+    *,
+    kinds: Sequence[str],
+    user_id: int | None = None,
+    q: str | None = None,
+    genre: str | None = None,
+    decade: int | None = None,
+    seen: SeenFilter = "any",
+    person_id: int | None = None,
+    owned_only: bool = False,
+    limit: int = 60,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return (rows, total). `kinds` is mandatory and non-empty — see rule 5 above."""
+    clause, args = _filters(
+        kinds=kinds, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
+        person_id=person_id, owned_only=owned_only,
+    )
+
+    def arg(value: Any) -> str:
+        args.append(value)
+        return f"${len(args)}"
+
     total = await conn.fetchval(f"SELECT count(*) FROM title t WHERE {clause}", *args)
 
     seen_join, seen_select = "", "NULL::text AS seen_state"
@@ -119,16 +148,36 @@ async def list_titles(
 
 
 async def count_by_kind(
-    conn: asyncpg.Connection, *, exclude: Sequence[str] = ()
+    conn: asyncpg.Connection,
+    *,
+    exclude: Sequence[str] = (),
+    user_id: int | None = None,
+    q: str | None = None,
+    genre: str | None = None,
+    decade: int | None = None,
+    seen: SeenFilter = "any",
+    person_id: int | None = None,
+    owned_only: bool = False,
 ) -> dict[str, int]:
-    """How many titles each unselected kind holds.
+    """How many titles each unselected kind holds **under the same filters as the listing**.
 
     §6.0's count line has to be able to say "6 films · 2 series hidden": a toggle that hides
     things without saying how many is the silent truncation this control was introduced to fix.
+
+    The filters are not optional decoration. Counting the whole catalog instead made a person
+    filter over a four-title filmography report "26 series hidden" — a promise the toggle cannot
+    keep, since turning Series on reveals two. Every caller that filters the listing must pass
+    the same arguments here.
     """
+    hidden = [k for k in KINDS if k not in set(exclude)]
+    if not hidden:
+        return {}
+    clause, args = _filters(
+        kinds=hidden, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
+        person_id=person_id, owned_only=owned_only,
+    )
     rows = await conn.fetch(
-        "SELECT kind, count(*) AS n FROM title WHERE NOT (kind = ANY($1)) GROUP BY kind",
-        list(exclude),
+        f"SELECT t.kind, count(*) AS n FROM title t WHERE {clause} GROUP BY t.kind", *args
     )
     return {r["kind"]: r["n"] for r in rows}
 

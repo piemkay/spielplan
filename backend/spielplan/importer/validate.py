@@ -286,6 +286,20 @@ def validate_artifacts(root: Path, report: ImportReport) -> ImportReport:
                 "be reproduced without it",
             )
 
+        # Parse it with the SAME parser §8 stage 9 uses, and report its refusal as a validation
+        # failure. Two readers of one file drift; more to the point, §10 now recomputes the
+        # rebuild set during import, so a contract this parser rejects takes the whole import
+        # down — and without this the operator gets a stack trace out of a background step
+        # instead of a line in the report they are standing in front of.
+        from spielplan.placement.contract import ContractError, FeatureContract
+
+        try:
+            FeatureContract.load(contract)
+        except ContractError as exc:
+            report.fail("feature-contract", str(exc))
+
+    _validate_model_artifacts(root, report)
+
     vocab_dir = root / "dna_vocab"
     if not vocab_dir.is_dir():
         report.warn("vocabulary", "no dna_vocab/ in the bundle — the naming layer will be empty")
@@ -307,3 +321,105 @@ def validate_artifacts(root: Path, report: ImportReport) -> ImportReport:
             )
 
     return report
+
+
+def _validate_model_artifacts(root: Path, report: ImportReport) -> None:
+    """§4.3's three model files, checked against each other rather than only for presence.
+
+    §10's sequence puts validation before the flip precisely so a bad bundle never becomes the
+    active one. Without this, the failures below all surface later and somewhere else: a Backbone
+    with no `title_id` array raises on the first fold-in, and a tower whose input width disagrees
+    with the contract does not raise at all — it broadcasts a short vector into a wide layer and
+    places the whole library at plausible, wrong coordinates. That one is the reason this
+    function exists; it is silent by construction everywhere except here.
+    """
+    import numpy as np
+
+    backbone = root / "backbone.npz"
+    if backbone.is_file():
+        try:
+            with np.load(backbone, allow_pickle=False) as npz:
+                keys = set(npz.files)
+                # §4.3 names E, E_full, b_i, μ and item_n — and no id mapping, which is the gap.
+                # E is a matrix of rows with no stated correspondence to `title.id`, so without
+                # `title_id` the basis is unusable: every row would be matched by position, and a
+                # wrong index is a plausible number for the wrong film.
+                if "title_id" not in keys:
+                    report.fail(
+                        "backbone",
+                        "backbone.npz ships no `title_id` array, so its rows cannot be matched "
+                        "to titles (§4.3 names none; the exporter must add it)",
+                        keys=sorted(keys),
+                    )
+                for name in ("E", "b_i", "item_n"):
+                    if name not in keys:
+                        report.fail("backbone", f"backbone.npz is missing `{name}` (§4.3)")
+                if {"title_id", "E"} <= keys:
+                    ids, e = npz["title_id"], npz["E"]
+                    if e.ndim != 2 or e.shape[0] != ids.shape[0]:
+                        report.fail(
+                            "backbone",
+                            f"E is {e.shape} but there are {ids.shape[0]} title ids — the rows "
+                            "and the mapping disagree",
+                        )
+                    elif e.shape[1] != 64:
+                        report.fail(
+                            "backbone",
+                            f"E is {e.shape[1]}-dimensional; §1 fixes the item space at 64",
+                        )
+                    if ids.size and not np.all(np.diff(ids.astype("int64")) > 0):
+                        report.fail("backbone", "`title_id` is not strictly increasing")
+        except Exception as exc:                                   # noqa: BLE001
+            report.fail("backbone", f"backbone.npz is unreadable: {exc}")
+
+    contract_path = root / "feature_contract.json"
+    tower_path = root / "cold_tower.pt"
+    if not tower_path.is_file():
+        return
+
+    try:
+        import torch
+
+        ckpt = torch.load(tower_path, map_location="cpu", weights_only=True)
+    except Exception as exc:                                       # noqa: BLE001
+        report.fail("cold-tower", f"cold_tower.pt is unreadable: {exc}")
+        return
+
+    if not isinstance(ckpt, dict):
+        report.fail("cold-tower", "cold_tower.pt is not the checkpoint dict §4.3 describes")
+        return
+
+    # §4.3: "the live model; the exporter must ship v2."
+    version = ckpt.get("version")
+    if version != 2:
+        report.fail(
+            "cold-tower",
+            f"cold_tower.pt is version {version!r}; §4.3 requires v2",
+            version=version,
+        )
+
+    input_dim = ckpt.get("input_dim")
+    if not isinstance(input_dim, int):
+        report.fail("cold-tower", "cold_tower.pt declares no integer `input_dim`")
+    elif contract_path.is_file():
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        blocks = contract.get("blocks", {})
+        content = sum(int(v) for v in blocks.values()) if isinstance(blocks, dict) else 0
+        used = int((contract.get("review_text") or {}).get("used", 64))
+        expected = content + used
+        if content and expected != input_dim:
+            report.fail(
+                "cold-tower",
+                f"the feature contract describes {expected} columns ({content} content + {used} "
+                f"review-text) but the tower takes {input_dim} — every placement built from this "
+                "pair would be arithmetic on the wrong columns",
+                contract=expected, tower=input_dim,
+            )
+
+    embed_dim = ckpt.get("embed_dim")
+    if embed_dim is not None and embed_dim != 64:
+        report.fail(
+            "cold-tower",
+            f"the tower emits {embed_dim}-d coordinates; the Backbone's space is 64-d, and a "
+            "cold title's coordinate has to live in the same space as a warm one",
+        )

@@ -36,6 +36,16 @@ class Job:
     # How often the trigger column actually means, in seconds. A job with no implementation
     # yet carries its interval anyway, so the registry stays a readable copy of §5.3.
     every: int = 3600
+    # Execution order within one tick, low first. The registry below is in §5.3's table order,
+    # which is documentation order and not an execution order: §5.3 lists the two nightly fits
+    # above the placement sweep, but both fits read the coordinates the sweep writes. Left in
+    # table order, the night a bundle arrives would fit every user against a library where the
+    # newly-owned titles have no coordinate yet, and the sweep would correct it a day late —
+    # once per import, silently, in the one direction nobody checks.
+    #
+    # `stage` keeps the table readable and the order right: 0 produces coordinates, 1 consumes
+    # them. Equal stages keep their registry order.
+    stage: int = 1
 
 
 async def _prune_expired_sessions() -> None:
@@ -89,6 +99,72 @@ async def _prune_dead_push_subscriptions() -> None:
         )
 
 
+# --- M2's nightly passes ---------------------------------------------------------------------
+#
+# All three read the ACTIVE bundle, and all three are no-ops without one: §3.1 makes a
+# bundle-less household legal, so "no basis yet" is a normal state to log once and skip, not an
+# error to retry every night.
+
+
+async def _active_store(conn) -> ArtifactStore | None:
+    store = await ArtifactStore.load_active(conn, settings().artifacts_dir)
+    return None if store.is_empty else store
+
+
+async def _ledger_map_refit() -> None:
+    """§5.2: the four-arm MAP fit "refit nightly (full-history MAP; seconds at this scale)".
+
+    Measured on the development box at M2's scale: 0.24-0.39 s per (user, kind) fit over a
+    900-title owned library, 1.2 s for both members across both kinds. §5.3's budget is
+    "seconds".
+    """
+    from spielplan.ledger import observations, refit
+    from spielplan.ledger.hyperparams import load as load_hp
+
+    async with pool.acquire() as conn:
+        store = await _active_store(conn)
+        hp, notes = load_hp(store or ArtifactStore.empty())
+        for note in notes:
+            log.info("ledger hyperparameters: %s", note)
+        embeddings = observations.placement_embeddings(conn) if store else None
+        reports = await refit.refit_all(conn, hp, embeddings=embeddings)
+        for r in reports:
+            log.info("ledger refit: %s", r.as_dict())
+
+
+async def _fold_in_user_vectors() -> None:
+    """§5.3: "User fold-in + blend weights — nightly, seconds"."""
+    from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    async with pool.acquire() as conn:
+        store = await _active_store(conn)
+        if store is None:
+            log.info("fold-in skipped: no active bundle (§3.1)")
+            return
+        report = await foldin.run(
+            conn, bb.load_for(store), bundle_version=store.version,
+            only_stale=False, with_priors=True,
+        )
+        log.info("fold-in: %s", report.as_dict())
+
+
+async def _placement_reconciliation() -> None:
+    """§5.3: "any owned title lacking a coordinate gets a feature vector built from DB data per
+    the feature contract … and runs §8 stages 9-10 only". Trigger: "bundle import + nightly
+    sweep" — the import half lives in the importer, this is the sweep."""
+    from spielplan.placement import reconcile
+
+    async with pool.acquire() as conn:
+        store = await _active_store(conn)
+        if store is None:
+            log.info("placement sweep skipped: no active bundle (§3.1)")
+            return
+        report = await reconcile.reconcile(conn, store, scope="owned_missing")
+        if report.placed or report.failed or report.demoted:
+            log.info("placement: %s", report.as_dict())
+
+
 # §5.3's table, in order. `run=None` means the milestone that owns it has not arrived.
 JOBS: tuple[Job, ...] = (
     Job("session-prune", "M0", "hourly", "ms", _prune_expired_sessions, every=3600),
@@ -97,10 +173,12 @@ JOBS: tuple[Job, ...] = (
     Job("webauthn-challenge-prune", "M1", "hourly", "ms", _prune_webauthn_challenges,
         every=3600),
     Job("ledger-incremental", "M2", "every observation", "<50 ms"),
-    Job("ledger-map-refit", "M2", "nightly", "seconds", every=86400),
-    Job("fold-in-user-vectors", "M2", "nightly", "seconds", every=86400),
+    Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400),
+    Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
+        every=86400),
     Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title"),
-    Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds"),
+    Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
+        _placement_reconciliation, every=86400, stage=0),
     Job("dna-projection", "M5", "acquisition", "<1 s"),
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60),
@@ -120,11 +198,13 @@ def due(now: float, last_run: dict[str, float]) -> list[Job]:
     A job that has never run is due immediately: a worker restart should reconcile, not wait
     out a fifteen-minute interval it has no memory of.
     """
-    return [
+    ready = [
         job
         for job in JOBS
         if job.run is not None and now - last_run.get(job.name, float("-inf")) >= job.every
     ]
+    # Stable, so equal stages keep §5.3's table order and only the declared dependency moves.
+    return sorted(ready, key=lambda j: j.stage)
 
 
 async def _tick(now: float, last_run: dict[str, float]) -> None:

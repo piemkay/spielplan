@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
@@ -265,7 +264,17 @@ async def sync_user(
     # Taken before the read, not after: the loop below re-reads `user_title` live but compares
     # it against this one snapshot of Jellyfin. An action taken *during* the sweep is newer
     # than the data it would be reconciled against, so it must be pushed, never adopted.
-    snapshot_at = datetime.now(UTC)
+    #
+    # From the DATABASE's clock, not this process's. `state_changed_at` is stamped by `now()`,
+    # so a `datetime.now(UTC)` here compares two different clocks — and they are not the same
+    # clock: measured on the development box, Postgres runs tens to hundreds of milliseconds
+    # away from the application process, in either direction depending on the day. Both signs
+    # break §7.3's rule silently. Server ahead: an action that finished before the sweep began
+    # reads as "acted during the sweep" and is pushed, so a genuine Jellyfin-side change is
+    # never adopted. Server behind: an action taken *during* the sweep reads as older than the
+    # snapshot and is adopted — which reverts what the person just did, and is the reason this
+    # is a correctness fix rather than a tidy-up.
+    snapshot_at = await conn.fetchval("SELECT now()")
     items = await client.all_items(user.jf_user_id)
     resolved = resolve.ResolveReport()
     collapsed = await _collapse(conn, items, resolved)

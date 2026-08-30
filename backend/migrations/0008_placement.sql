@@ -50,6 +50,12 @@ CREATE INDEX title_acquired ON title (id) WHERE origin = 'acquired';
 -- `title.placement` (unplaced|cold_tower|warm) already exists and stays the denormalised state
 -- §8 stage 10's badge reads. What it lacked was the basis it was computed in: without this a
 -- post-import 'warm' is indistinguishable from a pre-import one.
+--
+-- 'warm' is narrower than "the Backbone covers it": §5.1's middle line
+-- `e(t) = gate·E[t] + (1-gate)·ê(t)` needs BOTH coordinates for a low-support title, so a title
+-- with a Backbone row and `item_n` below `scoring.backbone.WARM_SUPPORT` is 'cold_tower' here
+-- and gets a row, and the gate decides how much of each the serving path uses. Stamping every
+-- covered title 'warm' would leave that line permanently unreachable.
 ALTER TABLE title ADD COLUMN placement_bundle text
     REFERENCES artifact_bundle(version) ON DELETE SET NULL;
 

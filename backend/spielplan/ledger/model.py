@@ -469,6 +469,62 @@ def _grad_hess(
     return g_z, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, coupling
 
 
+
+# --- the monotone parameterisation ---------------------------------------------------------
+#
+# The cutpoints of an ordered logit must ascend, and the optimum frequently sits ON that
+# constraint — two cutpoints coincide whenever a tier level carries no observations, which on a
+# day-one board is most of them. A line search that merely clips to the boundary reaches it and
+# then cannot travel along it, so the fit stalls somewhere feasible and suboptimal.
+#
+# So the search runs in
+#
+#     cuts_j = c0 + sum_{i<=j} exp(delta_i)
+#
+# whose gaps are positive by construction. It is a smooth bijection onto the open cone, so it
+# cannot introduce a local minimum the original problem does not have; what it gives up is
+# convexity *of the parameterisation*, which no line search needs. A coincident pair is now the
+# limit delta -> -inf, which the optimiser approaches smoothly instead of colliding with.
+
+
+def _to_raw(values: np.ndarray) -> np.ndarray:
+    """(v_0, v_1, ...) ascending  ->  (v_0, log gaps)."""
+    if values.size == 0:
+        return values.copy()
+    gaps = np.maximum(np.diff(values), 1e-12)
+    return np.concatenate([[values[0]], np.log(gaps)])
+
+
+def _from_raw(raw: np.ndarray) -> np.ndarray:
+    """(a_0, deltas) -> ascending values. Clipped only to stop exp from overflowing."""
+    if raw.size == 0:
+        return raw.copy()
+    return raw[0] + np.concatenate([[0.0], np.cumsum(np.exp(np.clip(raw[1:], -60.0, 30.0)))])
+
+
+def _raw_jacobian(raw: np.ndarray) -> np.ndarray:
+    """d values / d raw. Lower-triangular in the delta block, with a column of ones for a_0."""
+    m = raw.size
+    jac = np.zeros((m, m))
+    jac[:, 0] = 1.0
+    if m > 1:
+        gaps = np.exp(np.clip(raw[1:], -60.0, 30.0))
+        for i in range(1, m):
+            jac[i:, i] = gaps[i - 1]
+    return jac
+
+
+def _raw_curvature(raw: np.ndarray, grad_values: np.ndarray) -> np.ndarray:
+    """The second-derivative term of the change of basis: d2 v_j / d delta_i^2 = exp(delta_i)."""
+    m = raw.size
+    extra = np.zeros(m)
+    if m > 1:
+        gaps = np.exp(np.clip(raw[1:], -60.0, 30.0))
+        for i in range(1, m):
+            extra[i] = float(np.sum(grad_values[i:])) * gaps[i - 1]
+    return extra
+
+
 def _schur_solve(h_zz, h_zr, h_rr, g_z, g_r):
     """One arrowhead solve. H_rr is diagonal because r_i appears only in title i's own
     observations, which is what makes this O(n·p^2 + p^3) rather than O((n+p)^3)."""
@@ -497,6 +553,46 @@ def _pack(mu, v, gamma, cuts, log_nu):
     return np.concatenate([[mu], v, gamma, cuts, [log_nu]])
 
 
+def _unpack_raw(z, lay: _Layout):
+    """Raw coordinates -> the values the maths is written in."""
+    mu = float(z[0])
+    v = z[1 : 1 + EMBED_DIM]
+    extra = z[1 + EMBED_DIM :]
+    gamma = _from_raw(extra[: lay.n_gamma])
+    cuts = _from_raw(extra[lay.n_gamma : lay.n_gamma + lay.n_cuts])
+    return mu, v, gamma, cuts, float(extra[-1])
+
+
+def _pack_raw(mu, v, gamma, cuts, log_nu):
+    return np.concatenate([[mu], v, _to_raw(gamma), _to_raw(cuts), [log_nu]])
+
+
+def _to_raw_space(z, lay: _Layout, g_values, h_zz, h_zr):
+    """Move a gradient and Hessian from value space into the raw coordinates the search uses."""
+    extra = z[1 + EMBED_DIM :]
+    raw_gamma = extra[: lay.n_gamma]
+    raw_cuts = extra[lay.n_gamma : lay.n_gamma + lay.n_cuts]
+
+    transform = np.eye(lay.p)
+    off = 1 + EMBED_DIM
+    transform[off : off + lay.n_gamma, off : off + lay.n_gamma] = _raw_jacobian(raw_gamma)
+    off2 = off + lay.n_gamma
+    transform[off2 : off2 + lay.n_cuts, off2 : off2 + lay.n_cuts] = _raw_jacobian(raw_cuts)
+
+    g_raw = transform.T @ g_values
+    h_raw = transform.T @ h_zz @ transform
+    # …plus the curvature of the map itself, which is diagonal in the delta coordinates.
+    bend = np.zeros(lay.p)
+    bend[off : off + lay.n_gamma] = _raw_curvature(
+        raw_gamma, g_values[off : off + lay.n_gamma]
+    )
+    bend[off2 : off2 + lay.n_cuts] = _raw_curvature(
+        raw_cuts, g_values[off2 : off2 + lay.n_cuts]
+    )
+    h_raw = h_raw + np.diag(bend)
+    return g_raw, h_raw, transform.T @ h_zr
+
+
 # §5.2 mandates preconditioning by the ridge Hessian. It does not mandate evaluating it once
 # and never again — and at 839 titles a preconditioner frozen at the anchor leaves the fit
 # short of the optimum inside the bundle's step budget. Re-deriving it costs one O(n·p²) pass
@@ -516,10 +612,11 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
     limit = max_iter if max_iter is not None else hp.newton_max_iter
     eta = step0
     for iterations in range(1, limit + 1):
-        mu, v, gamma, cuts, log_nu = _unpack(z, lay)
-        g_z, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, _cpl = _grad_hess(
+        mu, v, gamma, cuts, log_nu = _unpack_raw(z, lay)
+        g_v, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, _cpl = _grad_hess(
             obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=with_duels
         )
+        g_z, h_zz, h_zr = _to_raw_space(z, lay, g_v, h_zz, h_zr)
         grad_inf = max(np.abs(g_z).max(initial=0.0), np.abs(g_r).max(initial=0.0))
         if grad0 is None:
             grad0 = grad_inf
@@ -527,46 +624,57 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
             break
 
         if refresh_preconditioner and iterations % PRECONDITIONER_REFRESH == 1 and iterations > 1:
-            a_zz, a_zr, a_rr = _grad_hess(
+            a_g, _agr, a_zz, a_zr, a_rr, *_ = _grad_hess(
                 obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=False
-            )[2:5]
+            )
+            _ga, a_zz, a_zr = _to_raw_space(z, lay, a_g, a_zz, a_zr)
             precondition_from = (a_zz, a_zr, a_rr)
 
         if precondition_from is None:
-            dz, dr, _ = _schur_solve(h_zz, h_zr, h_rr, g_z, g_r)
+            solve_zz, solve_zr, solve_rr = h_zz, h_zr, h_rr
         else:
             # Stage B: step with the *anchor's* curvature, not the current one. This is the
             # scar §5.2 names — the duel arm's curvature spread is what a fixed step cannot
             # serve, and dividing by the anchor's curvature makes one step size right for a
             # title with two duels and one with two hundred alike.
-            p_zz, p_zr, p_rr = precondition_from
-            dz, dr, _ = _schur_solve(p_zz, p_zr, p_rr, g_z, g_r)
+            solve_zz, solve_zr, solve_rr = precondition_from
+
+        # Levenberg damping until the step actually points downhill.
+        #
+        # The objective is convex in the VALUES, but the monotone parameterisation is not: its
+        # curvature term is `sum_j g_v[j] * exp(delta_i)`, which is negative wherever the
+        # value-space gradient pushes a gap shut. That cannot create a local minimum — the map
+        # is a bijection onto the cone — but it can hand back a direction that is not a descent
+        # direction, and a line search given one backtracks to nothing and stops. Two iterations
+        # into a board with an unobserved tier level, that is exactly what happened.
+        damping = 0.0
+        for _attempt in range(24):
+            trial_zz = solve_zz + damping * np.eye(solve_zz.shape[0])
+            trial_rr = solve_rr + damping
+            dz, dr, _ = _schur_solve(trial_zz, solve_zr, trial_rr, g_z, g_r)
+            slope = float(g_z @ dz + g_r @ dr)
+            if slope > 0 and np.all(np.isfinite(dz)) and np.all(np.isfinite(dr)):
+                break
+            damping = max(damping * 4.0, 1e-6)
+        else:
+            # Nothing worked; the gradient itself always descends.
+            dz, dr = g_z.copy(), g_r.copy()
+            slope = float(g_z @ dz + g_r @ dr)
 
         f0 = _objective(obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=with_duels)
-        slope = float(g_z @ dz + g_r @ dr)
         # Carry the accepted step across iterations, trying twice the last one first. The
         # anchor preconditioner's mismatch with the true curvature is roughly constant along
         # the path, so restarting the search at step0 every iteration re-pays the same
         # halvings hundreds of times over.
         eta = min(1.0, max(step0, eta * 2.0))
-        # Clip to just inside the ordered cone before searching, so a direction that points at
-        # the boundary produces a short useful step rather than a rejected one.
-        d_gamma = dz[65 : 65 + lay.n_gamma]
-        d_cuts = dz[65 + lay.n_gamma : 65 + lay.n_gamma + lay.n_cuts]
-        boundary = _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay)
-        if np.isfinite(boundary):
-            eta = min(eta, boundary)
         accepted = False
         while eta >= hp.lr_min:
             z_try, r_try = z - eta * dz, r - eta * dr
-            m2, v2, ga2, c2, ln2 = _unpack(z_try, lay)
-            # Feasibility first: an infeasible trial point has an infinite objective, and
-            # evaluating it only to compare +inf is wasted work on the common path.
-            if feasible(ga2, c2):
-                f1 = _objective(obs, hp, m2, v2, ga2, c2, ln2, r_try, with_duels=with_duels)
-                if np.isfinite(f1) and f1 <= f0 - 1e-4 * eta * slope:
-                    accepted = True
-                    break
+            m2, v2, ga2, c2, ln2 = _unpack_raw(z_try, lay)
+            f1 = _objective(obs, hp, m2, v2, ga2, c2, ln2, r_try, with_duels=with_duels)
+            if np.isfinite(f1) and f1 <= f0 - 1e-4 * eta * slope:
+                accepted = True
+                break
             eta *= 0.5
             backtracks += 1
         if not accepted:
@@ -576,10 +684,11 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
             break
         z, r = z - eta * dz, r - eta * dr
 
-    mu, v, gamma, cuts, log_nu = _unpack(z, lay)
-    g_z, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, _cpl = _grad_hess(
+    mu, v, gamma, cuts, log_nu = _unpack_raw(z, lay)
+    g_v, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, _cpl = _grad_hess(
         obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=with_duels
     )
+    g_z, _hraw, _hzr_raw = _to_raw_space(z, lay, g_v, h_zz, h_zr)
     grad_inf = max(np.abs(g_z).max(initial=0.0), np.abs(g_r).max(initial=0.0))
     return z, r, (h_zz, h_zr, h_rr), grad_inf, iterations, backtracks, anchor_curv, duel_curv
 
@@ -598,8 +707,14 @@ def fit(
     can actually supply a different start.
     """
     lay = _Layout(obs.n, obs.n_levels)
-    z = _pack(0.0, np.zeros(EMBED_DIM), initial_cutpoints(3), initial_cutpoints(obs.n_levels),
-              float(np.log(hp.nu0()))) if z0 is None else np.asarray(z0, dtype=float).copy()
+    z = _pack_raw(0.0, np.zeros(EMBED_DIM), initial_cutpoints(3),
+                  initial_cutpoints(obs.n_levels), float(np.log(hp.nu0())))
+    if z0 is not None:
+        # A caller supplies a start in VALUE space — that is the space the model is written in
+        # and the only one a test can reason about.
+        z0 = np.asarray(z0, dtype=float)
+        mu0, v0, gamma0, cuts0, nu0 = _unpack(z0, lay)
+        z = _pack_raw(mu0, v0, gamma0, cuts0, nu0)
     r = np.zeros(obs.n) if r0 is None else np.asarray(r0, dtype=float).copy()
 
     # Stage A — the ordinal arms alone, solved exactly.
@@ -611,7 +726,7 @@ def fit(
     rho = 0.0
     it_b = bt_b = 0
     if obs.duel_a.size:
-        mu, v, gamma, cuts, log_nu = _unpack(z, lay)
+        mu, v, gamma, cuts, log_nu = _unpack_raw(z, lay)
         _gz, _gr, _hzz, _hzr, _hrr, anchor_diag, duel_diag, _cpl = _grad_hess(
             obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=True
         )
@@ -636,11 +751,23 @@ def fit(
         duel_curv = np.zeros(obs.n)
         blocks = blocks_a
 
-    mu, v, gamma, cuts, log_nu = _unpack(z, lay)
+    mu, v, gamma, cuts, log_nu = _unpack_raw(z, lay)
     s = mu + obs.embeddings @ v + r
     h_zz, h_zr, h_rr = blocks
-    g_z, g_r, oh_zz, oh_zr, oh_rr, _ac, _dc, coupling = _grad_hess(
+    g_v, g_r, oh_zz, oh_zr, oh_rr, _ac, _dc, coupling = _grad_hess(
         obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=obs.duel_a.size > 0
+    )
+    # Measured in the coordinates the search actually optimises, not in value space.
+    #
+    # The two differ exactly where it matters. An ordered logit's optimum frequently has two
+    # cutpoints coincident — every tier level nobody has used — and that is a *constrained*
+    # optimum, so the value-space gradient is non-zero there by construction (it is the KKT
+    # multiplier of an active constraint pushing the gap shut). Reporting it would call a fit
+    # that has landed exactly on the optimum "not converged", which is how a correct solve gets
+    # chased for an afternoon. The monotone parameterisation is unconstrained, so its gradient
+    # is zero at the optimum and nowhere else.
+    g_z, _h_raw, _hzr_raw = _to_raw_space(
+        _pack_raw(mu, v, gamma, cuts, log_nu), lay, g_v, oh_zz, oh_zr
     )
     grad_inf = max(np.abs(g_z).max(initial=0.0), np.abs(g_r).max(initial=0.0))
 

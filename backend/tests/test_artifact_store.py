@@ -50,8 +50,15 @@ def test_open_reads_the_manifest_and_the_vocabulary_version(artifacts):
 def test_presence_map_covers_every_declared_bundle_file(artifacts):
     store = ArtifactStore.open(artifacts, "test-v1")
     assert set(store.present) == set(BUNDLE_FILES)
-    assert store.present["manifest.json"] is True
-    assert store.present["backbone.npz"] is False       # M2 artifact, absent from the fixture
+    assert all(store.present.values()), "the fixture is meant to be a complete §4.3 bundle"
+
+    # The absent branch, against a real absence rather than whatever the fixture happens not to
+    # ship. It asserted `backbone.npz is False` until M2 gave the fixture a Backbone — at which
+    # point it was testing the fixture's contents, not the presence map.
+    (artifacts / "cold_tower.pt").unlink()
+    stripped = ArtifactStore.open(artifacts, "test-v1")
+    assert stripped.present["cold_tower.pt"] is False
+    assert stripped.present["manifest.json"] is True
 
 
 def test_missing_required_lists_only_required_absences(artifacts):

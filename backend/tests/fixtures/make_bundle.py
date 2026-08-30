@@ -16,6 +16,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import numpy as np
+
 # §4.1 rule 4 — the frozen ids.
 RATING_SOURCE_IDS = (1, 2, 3, 4, 7, 11, 21, 23, 26, 28, 31)
 
@@ -238,21 +240,42 @@ def _write_artifacts(root: Path, version: str) -> None:
         ),
         encoding="utf-8",
     )
+    # §4.3: "the **exhaustive** definition of the tower's input: the nine content blocks in
+    # order with sizes … per-column `feature_names`, then the review-text block = columns 0..63
+    # of the 256-d SVD embedding … multiplied by a frozen scalar `text_scale`".
+    #
+    # The corpus widths (433/556/983/179/3884/244/97/2/57 = 6,435) would make this fixture a
+    # 165 MB matrix and prove nothing the shapes do not. The block NAMES and their ORDER are
+    # exact — those are what §8 stage 9 reads — and the widths are shrunk to fit the eight
+    # fixture titles. `corpus_sizes` records what the real contract carries so a reader can
+    # see the fixture is a scale model rather than a different design.
+    blocks = {
+        "dna_x": 12, "dna_p": 10, "genome": 8, "genre": 9, "keyword": 11,
+        "credit": 6, "country": 4, "award": 2, "meta": 5,
+    }
+    feature_names = {
+        name: [f"{name}:{i}" for i in range(width)] for name, width in blocks.items()
+    }
     (root / "feature_contract.json").write_text(
         json.dumps(
             {
-                "blocks": {
+                "blocks": blocks,
+                "block_order": list(blocks),
+                "feature_names": feature_names,
+                "corpus_sizes": {
                     "dna_x": 433, "dna_p": 556, "genome": 983, "genre": 179, "keyword": 3884,
                     "credit": 244, "country": 97, "award": 2, "meta": 57,
                 },
                 "review_text": {"svd_dims": 256, "used": 64, "order": "singular-value"},
                 "text_scale": 0.031_25,
                 "genome_imputation": "zero",
+                "absent_blocks": "dropped",
             },
             indent=1,
         ),
         encoding="utf-8",
     )
+    _write_model_artifacts(root, blocks)
     (root / "seed_list.json").write_text(
         json.dumps({"titles": [{"title_id": t[0], "decade": (t[3] // 10) * 10} for t in TITLES]}),
         encoding="utf-8",
@@ -333,3 +356,105 @@ def break_salience(root: Path) -> None:
     db.execute("UPDATE dna_tag SET salience = 7 WHERE id = 2")
     db.commit()
     db.close()
+
+
+# §4.3's model artifacts. The Backbone's dimension is 64 everywhere in the spec (§5.2's "64-d
+# user vector", §4.2's `user_vector.vec`), so the fixture matches it exactly — a scale model of
+# the widths is fine, a scale model of the embedding dimension is not, because every consumer
+# indexes into it.
+EMBED_DIM = 64
+REVIEW_SVD_DIMS = 256
+
+# §5.1's gate input, n_t. Deliberately spread: title 1 is well covered, title 8 has nothing, so
+# gate = n/(n+10) has a value near 1, a value near 0, and something in between.
+ITEM_SUPPORT = {1: 4218, 2: 900, 3: 120, 4: 30, 5: 6, 6: 240, 7: 55, 8: 0}
+# Titles the Backbone actually has a row for. Title 8 is deliberately absent: §5.1's cold
+# branch has to be reachable, and §12's M2 exit criterion is about exactly those titles.
+BACKBONE_TITLES = (1, 2, 3, 4, 5, 6, 7)
+
+
+def _write_model_artifacts(root: Path, blocks: dict[str, int]) -> None:
+    """backbone.npz, cold_tower.pt, review_text_emb.npz, content_X.npz.
+
+    Deterministic: a seeded generator, so a fit that changes is a code change and never a
+    fixture that happened to be drawn differently.
+    """
+    rng = np.random.default_rng(20260830)
+
+    # backbone.npz — §4.3: "E, E_full, b_i, mu, plus the per-title support counts `item_n`".
+    # `title_id` is not in §4.3's prose but has to exist: E is indexed by the corpus's own row
+    # order, and without the mapping the app cannot tell which row is which title. The absence
+    # of that mapping from the spec is the kind of thing a fixture makes visible.
+    ids = np.array(BACKBONE_TITLES, dtype=np.int32)
+    e = rng.normal(scale=0.35, size=(ids.size, EMBED_DIM)).astype(np.float32)
+    np.savez(
+        root / "backbone.npz",
+        title_id=ids,
+        E=e,
+        E_full=e,
+        b_i=rng.normal(scale=0.6, size=ids.size).astype(np.float32),
+        mu=np.float32(0.12),
+        item_n=np.array([ITEM_SUPPORT[i] for i in ids], dtype=np.int32),
+    )
+
+    # review_text_emb.npz — §4.3: "columns 0..63 of the 256-d SVD embedding (singular-value
+    # order)". The full 256 ships so that taking only the first 64 is a decision this app makes
+    # from the contract rather than a shape it is handed.
+    text_ids = np.array([1, 2, 5], dtype=np.int32)      # the titles _write_reviews gives text
+    np.savez(
+        root / "review_text_emb.npz",
+        title_id=text_ids,
+        emb=rng.normal(scale=1.0, size=(text_ids.size, REVIEW_SVD_DIMS)).astype(np.float32),
+        components=rng.normal(scale=0.1, size=(REVIEW_SVD_DIMS, 32)).astype(np.float32),
+    )
+
+    # content_X.npz — the corpus's own feature matrix, in the contract's column order.
+    width = sum(blocks.values())
+    all_ids = np.array([t[0] for t in TITLES], dtype=np.int32)
+    dense = (rng.random((all_ids.size, width)) < 0.15).astype(np.float32)
+    np.savez(root / "content_X.npz", title_id=all_ids, X=dense,
+             columns=np.array(
+                 [f"{name}:{i}" for name, w in blocks.items() for i in range(w)], dtype=object
+             ))
+
+    _write_cold_tower(root, width + 64)
+
+
+def _write_cold_tower(root: Path, input_dim: int) -> None:
+    """cold_tower.pt — §4.3: "the live model; the exporter must ship v2".
+
+    A real torch module, saved the way the exporter saves it, so §8 stage 9's forward pass is a
+    forward pass and not a stub. Two heads because §5.1 needs both halves of the cold branch:
+    ê(t), the coordinate, and b̂(t), the item prior.
+
+    §1 is CPU-only, and this is built and saved on the CPU with no device in the state dict.
+    """
+    import torch
+    from torch import nn
+
+    torch.manual_seed(20260830)
+
+    class ColdTower(nn.Module):
+        def __init__(self, in_dim: int, out_dim: int = EMBED_DIM) -> None:
+            super().__init__()
+            self.trunk = nn.Sequential(
+                nn.Linear(in_dim, 128), nn.ReLU(), nn.Dropout(0.1), nn.Linear(128, 96), nn.ReLU()
+            )
+            self.embed = nn.Linear(96, out_dim)
+            self.prior = nn.Linear(96, 1)
+
+        def forward(self, x):
+            h = self.trunk(x)
+            return self.embed(h), self.prior(h).squeeze(-1)
+
+    tower = ColdTower(input_dim).eval()
+    torch.save(
+        {
+            "version": 2,
+            "input_dim": input_dim,
+            "embed_dim": EMBED_DIM,
+            "state_dict": tower.state_dict(),
+            "arch": "cold_tower_v2",
+        },
+        root / "cold_tower.pt",
+    )

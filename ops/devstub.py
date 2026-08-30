@@ -14,18 +14,32 @@ Run:  python ops/devstub.py            (serves http://127.0.0.1:8080)
 
 from __future__ import annotations
 
+import hashlib
+import random
 import sqlite3
 import sys
+import uuid
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
+from spielplan.core.config import settings  # noqa: E402
+from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
+from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
+from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
+from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
+from spielplan.rate import VERDICT_LABELS, balance, battle, queue  # noqa: E402
+from spielplan.rate import session as rate_session  # noqa: E402
 from tests.fixtures import make_bundle as fx  # noqa: E402
 
 BUNDLE = ROOT / "data" / "devstub-bundle"
@@ -34,6 +48,20 @@ STATE: dict[str, Any] = {
     "users": {},
     "next_id": 1,
     "seen": {},
+    # M2. `verdicts` and `rate` are per user id; `seen` is not, because M1 already made it a
+    # household fact here and two spellings of "seen" in one harness is the bug this file
+    # exists to keep out of the front end. §6.7's rail is NOT here: `home.rail` keeps its own
+    # in-process buffer and the harness writes to that one.
+    "verdicts": {},
+    "rate": {},
+    # §12 M2's onboarding. Keyed by endpoint, because §4.2 makes `push_subscription.endpoint`
+    # UNIQUE — one endpoint is one device is one row, and re-subscribing must not accumulate.
+    "push": {},
+    "onboarding_complete": False,
+    "next_row_id": 1,
+    "catalog": None,
+    "dna": None,
+    "scores": {},
     "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
                  "linked_users": 0},
 }
@@ -178,7 +206,79 @@ def seed_connector() -> dict[str, Any]:
 
 @app.post("/api/setup/onboarding/complete")
 def complete_onboarding() -> dict[str, bool]:
+    STATE["onboarding_complete"] = True
     return {"ok": True}
+
+
+# --- §12 M2's member PWA-install/push onboarding ------------------------------------------------
+#
+# The harness has no VAPID key and no push service, so `vapid_public_key` is always null — which
+# is the state a real install is in until M4 ships the sender, and the state the onboarding screen
+# has to render honestly rather than throwing a DOMException at the member. What IS reproduced is
+# the shape and the one rule the UI depends on: one row per endpoint, so re-subscribing the same
+# device updates rather than accumulating.
+
+
+def _device_handle(endpoint: str) -> str:
+    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:12]
+
+
+def _subscriptions() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": row["id"],
+            "device_label": row["device_label"],
+            # Never the endpoint: it is a bearer capability (see spielplan/api/push.py).
+            "device": _device_handle(row["endpoint"]),
+            "created_at": row["created_at"],
+            "last_seen_ok": None,
+        }
+        for row in STATE["push"].values()
+    ]
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str
+    keys: dict[str, str] = {}
+    device_label: str | None = None
+
+
+class PushEndpointRequest(BaseModel):
+    endpoint: str
+
+
+@app.get("/api/push/state")
+def push_state() -> dict[str, Any]:
+    return {
+        "onboarding_complete": STATE["onboarding_complete"],
+        "vapid_public_key": None,
+        "subscriptions": _subscriptions(),
+    }
+
+
+@app.post("/api/push/subscribe", status_code=201)
+def push_subscribe(body: PushSubscribeRequest) -> dict[str, Any]:
+    existing = STATE["push"].get(body.endpoint)
+    row = existing or {
+        "id": len(STATE["push"]) + 1,
+        "endpoint": body.endpoint,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    row["device_label"] = body.device_label
+    STATE["push"][body.endpoint] = row
+    return {
+        "ok": True,
+        "id": row["id"],
+        "device": _device_handle(body.endpoint),
+        "subscriptions": _subscriptions(),
+    }
+
+
+@app.delete("/api/push/subscription")
+def push_unsubscribe(body: PushEndpointRequest) -> dict[str, Any]:
+    if STATE["push"].pop(body.endpoint, None) is None:
+        raise HTTPException(404, "no such subscription")
+    return {"ok": True, "subscriptions": _subscriptions()}
 
 
 @app.post("/api/auth/login")
@@ -272,6 +372,23 @@ def _titles(kind: str) -> list[sqlite3.Row]:
         return db.execute("SELECT * FROM title WHERE kind = ? ORDER BY year DESC", (kind,)).fetchall()
 
 
+def _seen_state(title_id: int) -> str:
+    """The harness's ONE seen state.
+
+    `/api/titles`, `/api/titles/{id}/state`, `/api/rate` and `/api/home` all read it. Two
+    spellings of "seen" in one harness is a day the front end spends chasing a card that is
+    seen on the shelf and unseen on the queue — and the real app has one column.
+    """
+    return STATE["seen"].get(title_id, "unseen")
+
+
+def _placement(title_id: int) -> str:
+    """Stand-in for §8 stage 10's Cold Tower badge. One rule, read by the catalog and by
+    Home's `new_in_library` shelf, so a title cannot be cold on one surface and warm on the
+    next."""
+    return "cold_tower" if title_id % 3 == 0 else "warm"
+
+
 @app.get("/api/titles")
 def list_titles(
     kind: list[str] = Query(...),
@@ -312,8 +429,8 @@ def list_titles(
             items.append({
                 "id": r["id"], "kind": r["kind"], "name": r["name"], "year": r["year"],
                 "runtime_min": r["runtime_min"], "poster_path": None, "is_owned": True,
-                "placement": "cold_tower" if r["id"] % 3 == 0 else "warm",
-                "seen_state": "seen" if r["id"] % 2 else "unseen",
+                "placement": _placement(r["id"]),
+                "seen_state": _seen_state(r["id"]),
             })
     if seen != "any":
         items = [i for i in items if i["seen_state"] == seen]
@@ -377,8 +494,8 @@ def title_detail(title_id: int) -> dict[str, Any]:
             "original_name": t["original_name"], "year": t["year"],
             "runtime_min": t["runtime_min"], "overview": t["overview"], "tagline": None,
             "poster_path": None, "backdrop_path": None, "trailer_key": None,
-            "is_owned": True, "placement": "warm",
-            "seen_state": "seen" if t["id"] % 2 else "unseen",
+            "is_owned": True, "placement": _placement(t["id"]),
+            "seen_state": _seen_state(t["id"]),
             "imdb_id": t["imdb_id"], "tmdb_id": t["tmdb_id"],
         },
         "credits": credits,
@@ -590,6 +707,1514 @@ def link_jellyfin(user_id: int, body: LinkRequest) -> dict[str, Any]:
 @app.delete("/api/admin/users/{user_id}/jellyfin")
 def unlink_jellyfin(user_id: int) -> dict[str, bool]:
     return {"ok": True}
+
+
+# --- M2: shared reading of the fixture catalog -------------------------------
+#
+# Everything below answers out of the bundle `tests/fixtures/make_bundle.py` writes, plus the
+# in-memory journal. Where the real app reads a fitted number, this reads an INVENTED one —
+# see `_scores`. Where the real app decides something, the decision is imported from the real
+# module rather than restated: `rate_session.card_type_for` and `.advance` run the block
+# machine, `balance.ClassBalance.of` renders the widget, `queue.reason_for` and
+# `battle.reason_for` write the why-lines, `shelves.greeting` picks the band, and
+# `rail.redact` is decision 117's gate. A harness that re-derived any of those would drift
+# from the app on exactly the properties the front end is built against.
+
+KINDS: tuple[str, ...] = ("movie", "series")
+NOW_YEAR = datetime.now().year
+HP = Hyperparams()          # §4.3's real margins — 1.6 decisive, 1.0 hesitant
+RNG = random.Random(20260830)
+
+
+def _catalog() -> list[dict[str, Any]]:
+    """Every title in the fixture bundle, read once."""
+    cached = STATE.get("catalog")
+    if cached is None:
+        with _db() as db:
+            cached = [
+                dict(r) for r in db.execute(
+                    "SELECT id, kind, name, year, runtime_min, overview FROM title ORDER BY id"
+                )
+            ]
+        STATE["catalog"] = cached
+    return cached
+
+
+def _title(title_id: int) -> dict[str, Any] | None:
+    return next((t for t in _catalog() if t["id"] == title_id), None)
+
+
+def _verdicts(user_id: int) -> dict[int, int]:
+    """The person's current label per title — the harness's `rate.LIVE_LABEL`."""
+    return STATE["verdicts"].setdefault(user_id, {})
+
+
+def _label_counts(user_id: int, kinds: Sequence[str]) -> list[int]:
+    counts = [0, 0, 0]
+    for title_id, value in _verdicts(user_id).items():
+        title = _title(title_id)
+        if title is not None and title["kind"] in kinds:
+            counts[value] += 1
+    return counts
+
+
+def _dna() -> dict[int, list[tuple[WhyTerm, float]]]:
+    """The two DNA tiers, ranked the way `home.why.TERM_RANK` ranks them.
+
+    §4.1 rule 1: a (title, term) pair may exist in both tiers and must stay distinguishable.
+    So a term carried by both is returned once and tiered `extracted` — the pool cannot
+    silently promote an inferred tag — and the rank is the larger of the two.
+    """
+    cached = STATE.get("dna")
+    if cached is not None:
+        return cached
+    ranked: dict[int, dict[str, tuple[WhyTerm, float]]] = {}
+
+    def offer(title_id: int, term: str, facet: str, tier: str, rank: float) -> None:
+        slot = ranked.setdefault(title_id, {})
+        held = slot.get(term)
+        if held is None:
+            slot[term] = (WhyTerm(term=term, facet=facet, tier=tier), rank)
+            return
+        best_tier = "extracted" if "extracted" in (held[0].tier, tier) else "projected"
+        slot[term] = (WhyTerm(term=term, facet=facet, tier=best_tier), max(held[1], rank))
+
+    with _db() as db:
+        for r in db.execute("SELECT title_id, term, facet, salience FROM dna_tag"):
+            offer(r["title_id"], r["term"], r["facet"], "extracted",
+                  0.60 + 0.40 * ((r["salience"] or 1.0) / 3.0))
+        for r in db.execute("SELECT title_id, term, facet, weight FROM dna_projected"):
+            offer(r["title_id"], r["term"], r["facet"], "projected", 0.30 * (r["weight"] or 0.5))
+
+    cached = {
+        title_id: sorted(slot.values(), key=lambda pair: (-pair[1], pair[0].term))
+        for title_id, slot in ranked.items()
+    }
+    STATE["dna"] = cached
+    return cached
+
+
+def _terms_for(title_id: int) -> list[WhyTerm]:
+    return [term for term, _rank in _dna().get(title_id, [])]
+
+
+def _carries(title_id: int, term: str) -> bool:
+    return any(t.term == term for t in _terms_for(title_id))
+
+
+def _common_terms(title_ids: Sequence[int], limit: int = NAMED_TERM_CAP) -> list[WhyTerm]:
+    """The terms carried by EVERY one of these titles, best-named first — `why.common_terms`.
+
+    Computed by intersection over the cards actually returned, so a vocabulary clause built
+    from it cannot be false (§6.8)."""
+    ids = sorted({int(t) for t in title_ids})
+    if not ids:
+        return []
+    pooled: dict[str, tuple[WhyTerm, float, int]] = {}
+    for title_id in ids:
+        for term, rank in _dna().get(title_id, []):
+            held, top, seen = pooled.get(term.term, (term, 0.0, 0))
+            tier = "extracted" if "extracted" in (held.tier, term.tier) else "projected"
+            pooled[term.term] = (
+                WhyTerm(term=term.term, facet=term.facet, tier=tier), max(top, rank), seen + 1
+            )
+    everywhere = [(t, rank) for t, rank, n in pooled.values() if n == len(ids)]
+    everywhere.sort(key=lambda pair: (-pair[1], pair[0].term))
+    return [t for t, _rank in everywhere[:limit]]
+
+
+def _scores(user_id: int, kind: str) -> dict[int, float]:
+    """INVENTED, deterministic, per (user, kind). Only the SHAPE is a contract.
+
+    There is no Ledger here — no fold-in, no MAP fit, no Backbone arithmetic — so a harness
+    that returned `null` for every model number would teach the front end that the tier badge
+    and the §6.7 annotations never render, which is as wrong as leaking one that will never
+    arrive. These are stable pseudo-random numbers standing where a fitted `user_score.score`
+    would be, and every quantity derived from them (`cdf`, `tier`, `s`) is derived by the same
+    arithmetic the real code uses.
+    """
+    cache = STATE["scores"].get((user_id, kind))
+    if cache is None:
+        cache = {
+            t["id"]: random.Random(f"{user_id}:{kind}:{t['id']}").random()
+            for t in _catalog() if t["kind"] == kind
+        }
+        STATE["scores"][(user_id, kind)] = cache
+    return cache
+
+
+def _cdfs(user_id: int, kind: str) -> dict[int, float]:
+    """§5.2's 0..1 weight: "the empirical CDF of the user's own fitted `s` values, computed
+    per kind". Postgres' `percent_rank()`, in Python."""
+    scores = _scores(user_id, kind)
+    order = sorted(scores, key=lambda title_id: (scores[title_id], title_id))
+    n = len(order)
+    return {title_id: (0.0 if n < 2 else i / (n - 1)) for i, title_id in enumerate(order)}
+
+
+def _tier_index(cdf: float, tier_set: Sequence[str]) -> int:
+    return min(int(cdf * len(tier_set)), len(tier_set) - 1)
+
+
+def _beta(user_id: int, kind: str) -> tuple[float, bool]:
+    """(β, fitted?). §5.1's optimum is 0.8, but a profile the fold-in has never touched was
+    ranked by the crowd prior alone, i.e. at β 0 — printing 0.80 there is the decorative
+    why-line §6.0 forbids. The harness has no nightly job, so five labels of the kind stand in
+    for "the fold-in has run"."""
+    if sum(_label_counts(user_id, [kind])) >= 5:
+        return shelves.DEFAULT_BETA, True
+    return 0.0, False
+
+
+# --- M2: the Rate surface (§6.1, §6.7, §13, decision 35) ---------------------
+#
+# Four disciplines are taken from `spielplan/rate/session.py`, because they are the properties
+# the front end is built against:
+#
+#   1. THE CARD IS THE SERVER'S. Every write names a `card_token`, never a title id. A token
+#      that is not the current one is a 409 carrying a reason — which is also the double-tap
+#      guard, and the reason string the chip renders.
+#   2. NO PREDICTION BEFORE THE TAP (§6.1; anchoring, Cosley 2003). `_public_card` is an
+#      ALLOW-LIST built field by field. It never copies the stored card and deletes keys: a
+#      deny-list leaks the first time a field is added, and the two fields it would leak are
+#      §13's re-ask reference and the pair's verdict band.
+#   3. THE CARD TYPE IS A FUNCTION OF THE SLOT, never of the last card served, and the counter
+#      runs 1..15 and rolls. Both come from `rate_session.card_type_for` / `.advance`.
+#   4. A CORRECTION DOES NOT ADVANCE. It repairs the question rather than answering it.
+#
+# The reveal is the one place the harness invents a belief, and it invents it strictly after
+# the tap: the `cdf` is `_scores`', the BANDING around it is `predicted_class`'s real
+# arithmetic (the person's own live label counts cut their own axis), and the sentence is
+# built by the real `rate_session.reveal_for`.
+
+
+def _new_rate_session(user_id: int, kinds: Sequence[str]) -> dict[str, Any]:
+    return {
+        "id": user_id, "user_id": user_id, "kinds": list(kinds), "mode": "mix",
+        "decisive": False, "block_index": 0, "slot": 1, "seq": 0,
+        "current_card": None, "card_token": None, "observations": [],
+    }
+
+
+def _rate(user: dict[str, Any]) -> dict[str, Any]:
+    """One live session per person — `rate_session_one_live`, in a dict."""
+    s = STATE["rate"].get(user["id"])
+    if s is None:
+        s = _new_rate_session(user["id"], KINDS)
+        STATE["rate"][user["id"]] = s
+    return s
+
+
+def _observed_title_ids(s: dict[str, Any]) -> set[int]:
+    return {t for o in s["observations"] if not o["undone"] for t in o["title_ids"]}
+
+
+def _skipped_title_ids(s: dict[str, Any]) -> set[int]:
+    return {
+        t for o in s["observations"]
+        if not o["undone"] and o["kind_of"] == "skip" for t in o["title_ids"]
+    }
+
+
+def _features(title: dict[str, Any]) -> tuple[queue.Features, int]:
+    """§6.1's P(seen) features over what the harness actually knows: the title is owned and it
+    has an age. No Jellyfin history, no crowd counts, no household co-seen — so the why-line
+    names `owned` or `age` and never claims a signal that is not there."""
+    years_out = max(0, NOW_YEAR - (title["year"] or NOW_YEAR))
+    return (
+        queue.Features(
+            seen=_seen_state(title["id"]) == "seen",
+            owned=True,
+            age=min(years_out / queue.AGE_SATURATION_YEARS, 1.0),
+        ),
+        years_out,
+    )
+
+
+def _sweep_card(title: dict[str, Any], *, source: str) -> dict[str, Any]:
+    features, years_out = _features(title)
+    return {
+        "type": "sweep",
+        "kind": title["kind"],
+        "title_id": title["id"],
+        "reason": queue.reason_for(features, source=source, years_out=years_out),
+        "p_seen": None if source == "seed" else queue.p_seen(features),
+        # §13: `source` and `reask_of` are both re-ask markers. They live on the card the
+        # server holds and are never projected — see `_public_card`.
+        "source": source,
+        "reask_of": None,
+        "substituted_for": None,
+    }
+
+
+def _draw_sweep(s: dict[str, Any], *, exclude: set[int], head: Sequence[int]) -> dict | None:
+    """§6.1's queue, P(seen)-ordered, with §6.0's banner head pinned to the front."""
+    verdicts = _verdicts(s["user_id"])
+    pool = [t for t in _catalog() if t["kind"] in s["kinds"] and t["id"] not in exclude]
+    if not pool:
+        return None
+    pinned = {title_id: i for i, title_id in enumerate(head)}
+
+    def rank(title: dict[str, Any]) -> tuple[Any, ...]:
+        seen = _seen_state(title["id"]) == "seen"
+        pending = seen and title["id"] not in verdicts
+        return (
+            pinned.get(title["id"], len(pinned)),
+            0 if pending else 1,
+            -queue.p_seen(_features(title)[0]),
+            title["id"],
+        )
+
+    title = min(pool, key=rank)
+    seen = _seen_state(title["id"]) == "seen"
+    return _sweep_card(
+        title, source="pending_verdict" if seen and title["id"] not in verdicts else "p_seen"
+    )
+
+
+def _draw_battle(s: dict[str, Any], *, exclude: set[int]) -> dict[str, Any] | None:
+    """§6.1: "Pairs drawn **at random** from the user's seen titles within verdict bands."
+
+    None when no (kind, class) stratum holds two members — which is what makes the
+    substitution in `_ensure_card` reachable rather than theoretical.
+    """
+    verdicts = _verdicts(s["user_id"])
+    strata: dict[tuple[str, int], list[int]] = {}
+    for title in _catalog():
+        title_id = title["id"]
+        if title["kind"] not in s["kinds"] or title_id in exclude:
+            continue
+        if title_id not in verdicts or _seen_state(title_id) != "seen":
+            continue
+        strata.setdefault((title["kind"], verdicts[title_id]), []).append(title_id)
+    eligible = sorted(k for k, members in strata.items() if len(members) >= 2)
+    if not eligible:
+        return None
+    kind, verdict_class = RNG.choice(eligible)
+    title_a, title_b = RNG.sample(sorted(strata[(kind, verdict_class)]), 2)
+    return {
+        "type": "battle",
+        "kind": kind,
+        "title_a": title_a,
+        "title_b": title_b,
+        # The band the pair was drawn from. Server-side only: a card that carried it would
+        # hand the person their own prior label back before they answered.
+        "verdict_class": verdict_class,
+        "reason": battle.reason_for(verdict_class),
+        "reask_of": None,
+        "substituted_for": None,
+    }
+
+
+def _stash(s: dict[str, Any], card: dict[str, Any] | None) -> dict[str, Any]:
+    """The card and its token move together — `rate_session_card_has_token` as an invariant
+    rather than a reminder."""
+    s["current_card"] = card
+    s["card_token"] = str(uuid.uuid4()) if card is not None else None
+    return s
+
+
+def _ensure_card(s: dict[str, Any], *, head: Sequence[int] = ()) -> dict[str, Any]:
+    """Idempotent: draws only when the table is empty, because a GET that redrew would make
+    "next card preloaded" a lie.
+
+    The substitution rule is the wrinkle: when the slot calls for a battle and no verdict band
+    yet holds two titles, a sweep is served in its place and THE SLOT IS NOT CHANGED — so
+    alternation resumes by itself rather than the surface silently becoming Sweep-only.
+    """
+    if s["current_card"] is not None:
+        return s
+    served = _observed_title_ids(s)
+    skipped = _skipped_title_ids(s)
+    wanted = rate_session.card_type_for(s["mode"], s["slot"])
+    card: dict[str, Any] | None
+    if wanted == "battle":
+        card = _draw_battle(s, exclude=skipped)
+        if card is None and s["mode"] != "battle":
+            card = _draw_sweep(s, exclude=served, head=head)
+            if card is not None:
+                card["substituted_for"] = "battle"
+    else:
+        card = _draw_sweep(s, exclude=served, head=head)
+        if card is None and s["mode"] != "sweep":
+            card = _draw_battle(s, exclude=skipped)
+            if card is not None:
+                card["substituted_for"] = "sweep"
+    return _stash(s, card)
+
+
+def _card_title(title_id: int) -> dict[str, Any] | None:
+    """The poster-forward card of §6.8 and nothing else: no score, no tier, no placement —
+    a badge that says "no crowd data yet" is still a statement about the model."""
+    title = _title(title_id)
+    if title is None:
+        return None
+    return {
+        "id": title["id"], "kind": title["kind"], "name": title["name"], "year": title["year"],
+        "runtime_min": title["runtime_min"], "poster_path": None,
+        # The real truncation, not a second one: §6.1's task on a sweep card is "did you see
+        # this?", so the aid is the plot logline, never "cleaned" (§4.1 rule 8).
+        "recall_aid": rate_session._recall_aid(title["overview"]),
+    }
+
+
+def _public_card(s: dict[str, Any]) -> dict[str, Any] | None:
+    """§6.1's allow-list, field by field — the construction of `rate.session.public_card`."""
+    card = s["current_card"]
+    if card is None or s["card_token"] is None:
+        return None
+    if card["type"] == "sweep":
+        return {
+            "type": "sweep",
+            "token": s["card_token"],
+            "kind": card["kind"],
+            "title": _card_title(card["title_id"]),
+            "reason": card["reason"],
+            "p_seen": card.get("p_seen"),
+            "substituted_for": card.get("substituted_for"),
+            # §6.8 / proposal 52: lowercase, worst -> best, matching the stored ordinal.
+            "verdict_labels": [[i, label] for i, label in enumerate(VERDICT_LABELS)],
+            "controls": ["verdict", "not_seen", "skip"],
+        }
+    return {
+        "type": "battle",
+        "token": s["card_token"],
+        "kind": card["kind"],
+        "left": {**(_card_title(card["title_a"]) or {}), "outcome": "A"},
+        "right": {**(_card_title(card["title_b"]) or {}), "outcome": "B"},
+        "reason": card["reason"],
+        "substituted_for": card.get("substituted_for"),
+        "outcomes": list(rate_session.OUTCOMES),
+        "corrections": {"label": "not seen", "sides": ["left", "both", "right"]},
+        "controls": ["duel", "correction", "skip"],
+    }
+
+
+def _stale(reason: str) -> HTTPException:
+    return HTTPException(409, detail={
+        "reason": reason,
+        "message": {
+            "no_card": "there is no card on the table",
+            "stale_card": "that card has already been answered",
+            "wrong_card_type": "that answer does not fit the card on the table",
+        }.get(reason, "the card token is not current"),
+    })
+
+
+def _take_card(s: dict[str, Any], token: str, *, want: str) -> dict[str, Any]:
+    if s["current_card"] is None or s["card_token"] is None:
+        raise _stale("no_card")
+    if s["card_token"] != token:
+        raise _stale("stale_card")
+    if s["current_card"]["type"] != want:
+        raise _stale("wrong_card_type")
+    return s["current_card"]
+
+
+def _append(
+    s: dict[str, Any],
+    *,
+    kind_of: str,
+    card: dict[str, Any],
+    title_ids: Sequence[int],
+    prior: Sequence[dict[str, Any]] = (),
+    row_id: int | None = None,
+) -> None:
+    """One journal row, then the cursor moves — decision 35's "observation journal with
+    compensating writes rather than a lastAction variable".
+
+    `advances` is derived from `kind_of`, which is `rate_observation_advances_rule` in DDL: a
+    correction is a repair, not an observation, so the counter the person is reading does not
+    move.
+    """
+    advances = kind_of != "correction"
+    block_index, slot = (
+        rate_session.advance(s["block_index"], s["slot"]) if advances
+        else (s["block_index"], s["slot"])
+    )
+    s["seq"] += 1
+    s["observations"].append({
+        "seq": s["seq"], "block_index": s["block_index"], "slot": s["slot"],
+        "kind_of": kind_of, "advances": advances, "card": card,
+        "title_ids": list(title_ids), "prior": [dict(p) for p in prior],
+        "row_id": row_id, "undone": False,
+    })
+    s["block_index"], s["slot"] = block_index, slot
+    s["current_card"], s["card_token"] = None, None
+
+
+def _prior_of(user_id: int, title_id: int) -> dict[str, Any]:
+    """What Undo has to put back: the seen state and the label, exactly as they stand now."""
+    return {
+        "title_id": title_id,
+        "state": STATE["seen"].get(title_id),
+        "verdict": _verdicts(user_id).get(title_id),
+    }
+
+
+def _next_row_id() -> int:
+    STATE["next_row_id"] += 1
+    return STATE["next_row_id"] - 1
+
+
+def _sync_line(state: str, reason: str = "Jellyfin not configured") -> str:
+    """§6.7's rail reports what actually happened, never a write that did not happen. The dev
+    harness has no Jellyfin, so the §7.3 push is always owed rather than made."""
+    return f"user_title.state = {state} -> not pushed ({reason})"
+
+
+def _undo_availability(s: dict[str, Any]) -> dict[str, Any]:
+    """Decision 35: "the chip disables visibly at the boundary"."""
+    live = [o for o in s["observations"] if not o["undone"]]
+    if not live:
+        return {"available": False, "kind": None, "reason": "empty"}
+    if live[-1]["block_index"] != s["block_index"]:
+        return {"available": False, "kind": None, "reason": "block_boundary"}
+    return {"available": True, "kind": live[-1]["kind_of"], "reason": None}
+
+
+def _class_balance(s: dict[str, Any]) -> dict[str, Any]:
+    """§5.2's measured 5x lever, rendered by `balance`'s own projection so the widget's copy
+    and its 60% threshold have exactly one home."""
+    return balance.ClassBalance.of(_label_counts(s["user_id"], s["kinds"])).as_dict()
+
+
+def _rate_payload(
+    s: dict[str, Any],
+    *,
+    reveal: dict[str, Any] | None = None,
+    log: Sequence[str] = (),
+    ledger: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One envelope for every route, carrying the next card — §6 preamble's "next card
+    preloaded"."""
+    card = _public_card(s)
+    return {
+        "session": {
+            "id": s["id"], "mode": s["mode"], "kinds": s["kinds"], "decisive": s["decisive"],
+            "block": {
+                "index": s["block_index"], "slot": s["slot"], "size": rate_session.BLOCK_SIZE,
+                "counter": f"{s['slot']} / {rate_session.BLOCK_SIZE}",
+                "serving": rate_session.card_type_for(s["mode"], s["slot"]),
+            },
+        },
+        "card": card,
+        "drained": None if card else rate_session.DRAINED,
+        "class_balance": _class_balance(s),
+        "undo": _undo_availability(s),
+        "reveal": reveal,
+        "ledger": ledger,
+        "log": list(log),
+    }
+
+
+def _prediction(user_id: int, title_id: int, kind: str) -> dict[str, Any]:
+    """What the model would have guessed — READ BEFORE THE WRITE, served after it.
+
+    The banding is `rate.session.predicted_class`'s, unchanged: the person's own three-class
+    habit says where the cuts on their own axis fall, so a labeller who calls 20% of what they
+    watch disliked has their disliked band at the bottom 20% of their ranking.
+    """
+    counts = _label_counts(user_id, [kind])
+    total = sum(counts)
+    if total == 0:
+        return {"available": False, "reason": "no labels of your own to band against yet"}
+    cdf = _cdfs(user_id, kind).get(title_id)
+    if cdf is None:
+        return {
+            "available": False,
+            "reason": "no fitted ranking for this title yet — rate a few more first",
+        }
+    low, high = counts[0] / total, (counts[0] + counts[1]) / total
+    guess = 0 if cdf < low else (1 if cdf < high else 2)
+    return {
+        "available": True, "predicted": guess, "predicted_label": VERDICT_LABELS[guess],
+        "cdf": cdf, "s": round((cdf - 0.5) * 4.0, 4), "label_count": total,
+    }
+
+
+def _ledger_delta(user_id: int, kind: str, title_ids: Sequence[int]) -> dict[str, Any]:
+    """§5.3's "<50 ms" row. Invented like every other number here; the shape is the contract."""
+    tier_set = shelves.DEFAULT_TIER_SET
+    cdfs = _cdfs(user_id, kind)
+    return {
+        "applied": True,
+        "kind": kind,
+        "refit": False,
+        "ms": 3.1,
+        "rows": [
+            {"title_id": t, "cdf": cdfs.get(t), "tier": _tier_index(cdfs.get(t, 0.0), tier_set)}
+            for t in title_ids
+        ],
+    }
+
+
+def _rail_record(kind: str, line: str, *, user_id: int | None = None,
+                 title_id: int | None = None) -> None:
+    """§6.7's journal — THE REAL WRITER, not a copy.
+
+    `rail` keeps its ring buffer in the process rather than in Postgres ("never persisted"), so
+    the harness can call it verbatim. That is the whole point: the event shape, the per-user
+    scope and the refusal of an unknown kind are the app's, and there is no second projection
+    here to drift from `rail.recent`'s.
+    """
+    rail.record(kind=kind, line=line, user_id=user_id, title_id=title_id,
+                bundle_version=_bundle_version())
+
+
+def _rail_recent(user_id: int, limit: int = rail.RAIL_LIMIT) -> list[dict[str, Any]]:
+    """This person's events and the household's, newest first — never another person's."""
+    return rail.recent(user_id=user_id, limit=limit)
+
+
+Head = Annotated[list[int], Field(default_factory=list)]
+
+
+class ControlsBody(BaseModel):
+    mode: Literal["mix", "sweep", "battle"] | None = None
+    kinds: list[Literal["movie", "series"]] | None = None
+    decisive: bool | None = None
+    restart: bool = False
+    head: Head
+
+
+class VerdictBody(BaseModel):
+    card_token: str
+    value: Literal[0, 1, 2]
+    latency_ms: int | None = None
+    head: Head
+
+
+class CardBody(BaseModel):
+    card_token: str
+    latency_ms: int | None = None
+    head: Head
+
+
+class DuelBody(BaseModel):
+    card_token: str
+    outcome: Literal["A", "B", "TIE"]
+    decisive: bool | None = None
+    latency_ms: int | None = None
+    head: Head
+
+
+class CorrectionBody(BaseModel):
+    card_token: str
+    side: Literal["left", "both", "right"]
+
+
+# PEP 563 (`from __future__ import annotations`) leaves the bodies above as strings, and
+# pydantic resolves them through `sys.modules[cls.__module__]`. `tests/test_devstub_contract.py`
+# loads this file with `spec_from_file_location`, which never registers it there, so the
+# schemas would be "not fully defined" the moment that test asks for `app.openapi()`. Rebuilt
+# here, from module scope, where the parent frame IS this module's namespace.
+for _body in (ControlsBody, VerdictBody, CardBody, DuelBody, CorrectionBody):
+    _body.model_rebuild(force=True)
+
+
+@app.get("/api/rate")
+def rate_current(
+    spielplan_session: str | None = Cookie(default=None), head: list[int] = Query(default=[])
+) -> dict[str, Any]:
+    return _rate_payload(_ensure_card(_rate(_me(spielplan_session)), head=head))
+
+
+@app.post("/api/rate/session")
+def rate_controls(
+    body: ControlsBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§6.1's mode and kind controls, plus the persistent decisive toggle. A fresh session
+    opens in Mix, so every entry point lands on the same card type."""
+    user = _me(spielplan_session)
+    try:
+        kinds = normalise_kinds(body.kinds) if body.kinds is not None else None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if body.restart:
+        STATE["rate"].pop(user["id"], None)
+    s = _rate(user)
+    # Changing the mode or the kinds drops the card on the table — a battle pair is meaningless
+    # once Sweep is selected, and a film pair is meaningless once Films is switched off. The
+    # decisive toggle does not: it changes the WEIGHT of the next answer, not the question.
+    wanted = kinds if kinds is not None else s["kinds"]
+    redraw = (body.mode is not None and body.mode != s["mode"]) or wanted != s["kinds"]
+    s["mode"] = body.mode or s["mode"]
+    s["kinds"] = wanted
+    if body.decisive is not None:
+        s["decisive"] = body.decisive
+    if redraw:
+        _stash(s, None)
+    return _rate_payload(_ensure_card(s, head=body.head))
+
+
+@app.delete("/api/rate/session")
+def rate_end(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    """Close the live session. The journal stays: §4.2 is append-only and the rows are the
+    record of what the person actually said."""
+    user = _me(spielplan_session)
+    return {"ended": STATE["rate"].pop(user["id"], None) is not None}
+
+
+@app.post("/api/rate/verdict")
+def rate_verdict(
+    body: VerdictBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`".
+
+    The reveal rides on this response and on no other — §6.1's anchoring rule expressed as a
+    route: the card carried no belief, the answer to the card carries it.
+    """
+    user = _me(spielplan_session)
+    s = _rate(user)
+    card = _take_card(s, body.card_token, want="sweep")
+    title_id, kind = card["title_id"], card["kind"]
+    # Strictly first: the reveal is what the model believed BEFORE this label existed.
+    prediction = _prediction(user["id"], title_id, kind)
+    prior = _prior_of(user["id"], title_id)
+    implied_seen = prior["state"] != "seen"
+    _verdicts(user["id"])[title_id] = body.value
+    STATE["seen"][title_id] = "seen"
+    row_id = _next_row_id()
+    _append(s, kind_of="verdict", card=card, title_ids=[title_id], prior=[prior], row_id=row_id)
+    ledger = _ledger_delta(user["id"], kind, [title_id])
+    _rail_record(
+        "verdict",
+        rail.verdict_line(user["name"], _title(title_id)["name"],
+                          VERDICT_LABELS[body.value], refit_ms=ledger["ms"]),
+        user_id=user["id"], title_id=title_id,
+    )
+    log = (
+        f"verdict(title {title_id}) = {VERDICT_LABELS[body.value]} -> ordered-logit arm"
+        + (" · implies seen" if implied_seen else ""),
+        _sync_line("seen"),
+    )
+    return _rate_payload(
+        _ensure_card(s, head=body.head),
+        reveal=rate_session.reveal_for(prediction, body.value),
+        log=log,
+        ledger=ledger,
+    )
+
+
+@app.post("/api/rate/not-seen")
+def rate_not_seen(
+    body: CardBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§6.1's one seen-state control. Owner decision 2026-08-29: a title you cannot remember is
+    plain `unseen`, and the verdict and duel rows survive the flip (§4.2)."""
+    user = _me(spielplan_session)
+    s = _rate(user)
+    card = _take_card(s, body.card_token, want="sweep")
+    title_id = card["title_id"]
+    prior = _prior_of(user["id"], title_id)
+    STATE["seen"][title_id] = "unseen"
+    _append(s, kind_of="not_seen", card=card, title_ids=[title_id], prior=[prior])
+    return _rate_payload(
+        _ensure_card(s, head=body.head),
+        log=(f"not_seen(title {title_id}) -> state unseen, no observation row",
+             _sync_line("unseen")),
+    )
+
+
+@app.post("/api/rate/skip")
+def rate_skip(
+    body: CardBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """`Skip` writes nothing to any arm. The journal row IS the suppression, and it is not a
+    `not_seen`, so §13's not-seen-rate instrument does not count it."""
+    user = _me(spielplan_session)
+    s = _rate(user)
+    if s["current_card"] is None or s["card_token"] is None:
+        raise _stale("no_card")
+    if s["card_token"] != body.card_token:
+        raise _stale("stale_card")
+    card = s["current_card"]
+    titles = (
+        [card["title_id"]] if card["type"] == "sweep" else [card["title_a"], card["title_b"]]
+    )
+    _append(s, kind_of="skip", card=card, title_ids=titles)
+    return _rate_payload(
+        _ensure_card(s, head=body.head), log=("skipped — no observation row written",)
+    )
+
+
+@app.post("/api/rate/duel")
+def rate_duel(
+    body: DuelBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§6.1's battle answer, `Tie` included — one duel row, never a dropped one. §4.2: "about
+    the same" is first-class data (22% of random pairs are genuine ties)."""
+    user = _me(spielplan_session)
+    s = _rate(user)
+    card = _take_card(s, body.card_token, want="battle")
+    hard = s["decisive"] if body.decisive is None else body.decisive
+    margin = HP.margin_for(hard)
+    row_id = _next_row_id()
+    _append(
+        s, kind_of="tie" if body.outcome == "TIE" else "duel", card=card,
+        title_ids=[card["title_a"], card["title_b"]], row_id=row_id,
+    )
+    ledger = _ledger_delta(user["id"], card["kind"], [card["title_a"], card["title_b"]])
+    _rail_record(
+        "duel",
+        f"duel({_title(card['title_a'])['name']} vs {_title(card['title_b'])['name']}) "
+        f"= {body.outcome} → Davidson arm, margin {margin:g}",
+        user_id=user["id"],
+    )
+    return _rate_payload(
+        _ensure_card(s, head=body.head),
+        log=(f"duel(title {card['title_a']} vs {card['title_b']}) = {body.outcome} -> "
+             f"Davidson arm, profile_battle/random · margin {margin:g}",),
+        ledger=ledger,
+    )
+
+
+@app.post("/api/rate/correction")
+def rate_correction(
+    body: CorrectionBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§6.1's corrections zone: "`not seen: [left] [both] [right]` -> sets that side `unseen`,
+    swaps it out of the pair (`both` swaps the whole pair), **writes no duel row**, syncs per
+    §7.3, covered by the persistent Undo."
+
+    IT DOES NOT ADVANCE. A correction is a repair of the question, not an answer to it.
+    """
+    user = _me(spielplan_session)
+    s = _rate(user)
+    card = _take_card(s, body.card_token, want="battle")
+    corrected = {
+        "left": [card["title_a"]], "right": [card["title_b"]],
+        "both": [card["title_a"], card["title_b"]],
+    }[body.side]
+    priors, lines = [], []
+    for title_id in corrected:
+        priors.append(_prior_of(user["id"], title_id))
+        STATE["seen"][title_id] = "unseen"
+        lines.append(_sync_line("unseen"))
+    _append(s, kind_of="correction", card=card, title_ids=corrected, prior=priors)
+    _stash(s, _redraw_pair(s, card, corrected=corrected))
+    lines.append(
+        "pair swapped, no duel row written" if body.side == "both"
+        else "pair half swapped, no duel row written"
+    )
+    return _rate_payload(s, log=lines)
+
+
+def _redraw_pair(
+    s: dict[str, Any], card: dict[str, Any], *, corrected: Sequence[int]
+) -> dict[str, Any] | None:
+    """Keep the half the person did not correct; replace the half they did.
+
+    A pool with only one member left in that class has no opponent to offer, and the honest
+    answer is to fall through to whatever the slot can serve.
+    """
+    survivor = next((t for t in (card["title_a"], card["title_b"]) if t not in corrected), None)
+    exclude = _skipped_title_ids(s) | set(corrected)
+    if survivor is None:
+        return _draw_battle(s, exclude=exclude) or _draw_sweep(
+            s, exclude=_observed_title_ids(s), head=()
+        )
+    verdicts = _verdicts(s["user_id"])
+    opponents = sorted(
+        t["id"] for t in _catalog()
+        if t["kind"] == card["kind"] and t["id"] not in exclude and t["id"] != survivor
+        and verdicts.get(t["id"]) == card["verdict_class"] and _seen_state(t["id"]) == "seen"
+    )
+    if not opponents:
+        return _draw_sweep(s, exclude=_observed_title_ids(s) | set(corrected), head=())
+    opponent = RNG.choice(opponents)
+    keep_left = survivor == card["title_a"]
+    return {
+        "type": "battle", "kind": card["kind"],
+        "title_a": survivor if keep_left else opponent,
+        "title_b": opponent if keep_left else survivor,
+        "verdict_class": card["verdict_class"], "reason": card["reason"],
+        "reask_of": None, "substituted_for": None,
+    }
+
+
+@app.post("/api/rate/undo")
+def rate_undo(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    """Decision 35. Refused at the block boundary WITH A REASON, never silently no-opped — the
+    chip has to be able to disable visibly, and `GET /api/rate` carries the same
+    `undo.available` flag so it can do that before the tap."""
+    user = _me(spielplan_session)
+    s = _rate(user)
+    live = [o for o in s["observations"] if not o["undone"]]
+    if not live:
+        raise HTTPException(409, detail={
+            "reason": "empty", "message": "nothing to undo in this block"})
+    row = live[-1]
+    if row["block_index"] != s["block_index"]:
+        raise HTTPException(409, detail={
+            "reason": "block_boundary",
+            "message": "undo reaches back to the start of this block of 15 and no further",
+        })
+    for prior in row["prior"]:
+        if prior["state"] is None:
+            STATE["seen"].pop(prior["title_id"], None)
+        else:
+            STATE["seen"][prior["title_id"]] = prior["state"]
+        if prior["verdict"] is None:
+            _verdicts(user["id"]).pop(prior["title_id"], None)
+        else:
+            _verdicts(user["id"])[prior["title_id"]] = prior["verdict"]
+    row["undone"] = True
+    # The EXACT card comes back, so a battle pair is itself rather than a reshuffle.
+    s["block_index"], s["slot"] = row["block_index"], row["slot"]
+    _stash(s, row["card"])
+    arm = {"verdict": "verdict", "duel": "duel", "tie": "duel",
+           "not_seen": "not_seen", "correction": "not_seen"}.get(row["kind_of"])
+    ledger = None
+    if arm in ("verdict", "duel"):
+        ledger = _ledger_delta(user["id"], row["card"]["kind"], row["title_ids"])
+    _rail_record("undo", f"undo: {row['kind_of']} retracted", user_id=user["id"])
+    removed = 0 if arm in (None, "not_seen") else 1
+    line = (
+        f"undo: {arm or row['kind_of']} {row['row_id'] or ''} retracted -> "
+        f"{removed} observation(s) removed, {len(row['prior'])} state(s) restored"
+    ).replace("  ", " ")
+    return _rate_payload(s, log=(line,), ledger=ledger)
+
+
+@app.get("/api/rate/balance")
+def rate_balance(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    """§5.2's running class balance on its own, for the widget's own poll. Not partitioned by
+    kind: §4.1 rule 5 binds surfaces that RANK, and this one ranks nothing."""
+    return _class_balance(_rate(_me(spielplan_session)))
+
+
+# --- M2: Home and the model-log rail (§6.0, §6.7, decisions 18 and 117) ------
+#
+# Two things here are not stubbed at all, because they are the parts of §6.0 a front end can
+# get wrong invisibly:
+#
+#   * A SHELF HAS NO `items`. It has `sections`, exactly one per selected kind. §4.1 rule 5 is
+#     measured ("the unpartitioned crowd top-10 is 8/10 TV series"), and decision 18's reading
+#     is that a ranking surface renders two headed sections and never one interleaved ranking.
+#     The `shelves.Shelf` / `shelves.Section` dataclasses are imported rather than re-declared,
+#     so an interleaved ranking is unrepresentable here for the same reason it is there.
+#   * A SHELF THAT CANNOT SAY WHY IT EXISTS DOES NOT SHIP. With eight fixture titles most
+#     sections are under proposal 28's floor of three, and they are ABSENT — not present and
+#     empty — with the reason in `suppressed`. That is the honest harness: a front end built
+#     against six always-full shelves would have no empty state at all.
+#
+# Decision 117's gate is `rail.redact`, applied at the one exit, and `rail.visible_to` asks the
+# one question. A stub that hid the numbers in the client instead would keep the promise in CSS.
+
+
+def _now_local() -> tuple[datetime, str]:
+    """§2's `TZ`. Proposal 22 puts the greeting on the household clock, not the device clock."""
+    tz = settings().tz
+    try:
+        return datetime.now(ZoneInfo(tz)), tz
+    except Exception:  # noqa: BLE001 - a bad TZ must not take Home down (§3.1)
+        return datetime.now(), tz
+
+
+def _home_kinds(kind: list[str]) -> list[str]:
+    try:
+        return normalise_kinds(kind)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def _bundle_version() -> str | None:
+    return "test-v1" if STATE["imported"] else None
+
+
+def _vocabulary_version() -> str | None:
+    return "v1" if STATE["imported"] else None
+
+
+def _show_model(user: dict[str, Any]) -> bool:
+    """Decision 117's one question, asked by the real function. A dict has no attributes, so
+    the flag is lifted onto a namespace rather than the gate being reimplemented."""
+    return rail.visible_to(SimpleNamespace(show_model=user.get("show_model", False)))
+
+
+def _pending_verdicts(user_id: int) -> dict[str, Any] | None:
+    """§6.0's standing banner: titles already `seen` that carry no verdict. None if there are
+    none. Proposal 150: it never writes `seen`.
+
+    Beyond three the copy names two and counts the rest, so the NAMED set — and therefore the
+    queue head — is two, not three. Naming one set and queueing another is the failure that
+    proposal exists to prevent.
+    """
+    verdicts = _verdicts(user_id)
+    rows = [
+        t for t in _catalog()
+        if _seen_state(t["id"]) == "seen" and t["id"] not in verdicts
+    ]
+    if not rows:
+        return None
+    total = len(rows)
+    cap = shelves.NAMED_TITLES_CAP
+    named = rows[: total if total <= cap else cap - 1]
+    head = [int(r["id"]) for r in named]
+    # `_name_list` is proposal 21's copy. Reached through the real module rather than restated:
+    # "two and N more" is a sentence the harness must not be free to spell differently.
+    text = shelves._name_list([r["name"] for r in named], total)
+    # REPEATED, not comma-joined: `GET /api/rate` declares `head: list[int]`, so `head=1,2` is
+    # a 422 and `head=1&head=2` is the contract.
+    query = "&".join(["mode=sweep"] + [f"head={i}" for i in head])
+    return {
+        "count": total,
+        "named": [{"title_id": int(r["id"]), "name": r["name"], "kind": r["kind"]}
+                  for r in named],
+        "head_title_ids": head,
+        "copy": {
+            "wide": f"You watched {text} — a quick verdict keeps your profile sharp.",
+            "compact": f"Watched, not rated: {text}",
+        },
+        "cta": {
+            "label_wide": "Rate now", "label_compact": "Rate",
+            "route": f"/rate?{query}", "api": f"/api/rate?{query}",
+            "mode": "sweep", "head": head,
+        },
+    }
+
+
+def _partner_for(user_id: int) -> dict[str, Any] | None:
+    """Proposal 26: `{other}` is the member with the most co-seen titles. The harness's seen
+    state is a household fact, so every seen title is co-seen."""
+    others = [
+        u for u in STATE["users"].values()
+        if u["id"] != user_id and u["role"] in ("admin", "member")
+    ]
+    if not others:
+        return None
+    other = min(others, key=lambda u: u["id"])
+    co_seen = sum(1 for t in _catalog() if _seen_state(t["id"]) == "seen")
+    return {"user_id": other["id"], "name": other["name"], "co_seen": co_seen}
+
+
+def _home_card(
+    title: dict[str, Any],
+    rank: int,
+    *,
+    user_id: int,
+    tier_set: Sequence[str],
+    terms: Sequence[str],
+    beta: float,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One shelf card.
+
+    Proposal 29: the rank, the seen dot and the tier LETTER are chrome and stay ungated; every
+    NUMBER behind them lives in `model`, which decision 117's gate removes wholesale. §6.3's
+    straddle and tension badges deliberately do not appear — Home shows the settled tier.
+    """
+    title_id, kind = title["id"], title["kind"]
+    cdf = _cdfs(user_id, kind)[title_id]
+    score = _scores(user_id, kind)[title_id]
+    index = _tier_index(cdf, tier_set)
+    placement = _placement(title_id)
+    # Kept coherent with the placement: a cold title has no crowd support, which is exactly the
+    # predicate §6.0's "New in the library" shelf checks from the model's side.
+    item_n = 0 if placement == "cold_tower" else 40 + title_id * 7
+    card = {
+        "title_id": title_id, "kind": kind, "name": title["name"], "year": title["year"],
+        "runtime_min": title["runtime_min"], "poster_path": None, "placement": placement,
+        "seen": _seen_state(title_id) == "seen", "rank": rank, "tier": tier_set[index],
+        "terms": list(terms),
+        "model": {
+            "score": round(score, 4),
+            "cf": None if beta == 0.0 else round(score, 4),
+            "b": round(score, 4),
+            "gate": round(item_n / (item_n + 10), 4),
+            "item_n": item_n,
+            "e_source": "cold_tower" if placement == "cold_tower" else "backbone",
+            "beta": beta,
+            "s": round((cdf - 0.5) * 4.0, 4),
+            "sigma": 0.4,
+            "cdf": round(cdf, 4),
+            "tier_index": index,
+        },
+    }
+    if extra:
+        card["model"].update(extra)
+    return card
+
+
+def _finish(
+    section: shelves.Section, *, shelf_id: str, vocabulary: str | None
+) -> tuple[shelves.Section | None, shelves.Suppressed | None]:
+    """The one gate every section passes through. Three conditions, all from §6.0: proposal
+    28's floor of three, a why-line at all, and — independently re-read — every card actually
+    carrying every term the why-line NAMES."""
+    if len(section.items) < shelves.SECTION_FLOOR:
+        return None, shelves.Suppressed(
+            shelf_id, section.kind,
+            f"{len(section.items)} qualifying titles · the floor is {shelves.SECTION_FLOOR}",
+        )
+    if not section.why.strip():
+        return None, shelves.Suppressed(
+            shelf_id, section.kind,
+            "no why-line — a shelf that cannot say why it exists does not ship",
+        )
+    if vocabulary:
+        ids = [c["title_id"] for c in section.items]
+        broken = [
+            t.term for t in section.why_terms
+            if t.role == "member" and not all(_carries(i, t.term) for i in ids)
+        ]
+        if broken:
+            return None, shelves.Suppressed(
+                shelf_id, section.kind,
+                f"why-line named {', '.join(broken)}, which not every card carries",
+            )
+        section.shared_terms = _common_terms(ids)
+    return section, None
+
+
+def _unseen_owned(user_id: int, kind: str) -> list[dict[str, Any]]:
+    """Proposal 25: unless a shelf's why-line says otherwise, shelves exclude titles the user
+    has already seen."""
+    scores = _scores(user_id, kind)
+    return sorted(
+        (t for t in _catalog() if t["kind"] == kind and _seen_state(t["id"]) == "unseen"),
+        key=lambda t: (-scores[t["id"]], -(t["year"] or 0), t["id"]),
+    )
+
+
+def _because_anchor(user_id, kind, *, vocabulary):
+    """§6.0 row 1 — "Because you put *{anchor}* in {tier}" / "shares {term} + {term} with it".
+
+    THE INVERSION IS THE POINT (proposal 24): the pair is chosen for the size of its
+    intersection and the shelf IS that intersection, so the why-line is true of every card by
+    construction rather than being the anchor's first two terms pasted over a looser predicate.
+    """
+    sid = "because_anchor"
+    if not vocabulary:
+        return None, shelves.Suppressed(sid, kind, "no DNA vocabulary imported — no terms to name")
+    verdicts, scores = _verdicts(user_id), _scores(user_id, kind)
+    placed = [
+        t for t in _catalog()
+        if t["kind"] == kind and t["id"] in verdicts and _seen_state(t["id"]) == "seen"
+    ]
+    if not placed:
+        return None, shelves.Suppressed(
+            sid, kind, "no seen title of this kind carries a fitted tier yet")
+    anchor = min(placed, key=lambda t: (-scores[t["id"]], t["id"]))
+    tier_set = shelves.DEFAULT_TIER_SET
+    index = _tier_index(_cdfs(user_id, kind)[anchor["id"]], tier_set)
+
+    pool = _terms_for(anchor["id"])
+    candidates = _unseen_owned(user_id, kind)
+    best: tuple[WhyTerm, WhyTerm, list[dict[str, Any]]] | None = None
+    for i, t1 in enumerate(pool):
+        for t2 in pool[i + 1:]:
+            members = [
+                c for c in candidates
+                if c["id"] != anchor["id"] and _carries(c["id"], t1.term)
+                and _carries(c["id"], t2.term)
+            ]
+            if len(members) >= shelves.SECTION_FLOOR and (best is None or len(members) > len(best[2])):
+                best = (t1, t2, members)
+    if best is None:
+        return None, shelves.Suppressed(
+            sid, kind,
+            f"no pair of {anchor['name']}'s terms covers {shelves.SECTION_FLOOR} unseen owned titles",
+        )
+    t1, t2, members = best
+    beta, _fitted = _beta(user_id, kind)
+    section = shelves.Section(
+        kind=kind,
+        heading=shelves.KIND_HEADINGS[kind],
+        title=f"Because you put {anchor['name']} in {tier_set[index]}",
+        why=f"shares {t1.term} + {t2.term} with it",
+        why_terms=[t1.with_role("member"), t2.with_role("member")],
+        anchor={"title_id": anchor["id"], "name": anchor["name"], "tier": tier_set[index]},
+        items=[
+            _home_card(t, i + 1, user_id=user_id, tier_set=tier_set,
+                       terms=[t1.term, t2.term], beta=beta)
+            for i, t in enumerate(members[: shelves.SHELF_CAP])
+        ],
+    )
+    return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+
+
+def _top_of_ledger(user_id, kind, *, bundle_version, vocabulary):
+    """§6.0 row 2 — "Top of your ledger" / "clean item prior + your fold-in, blended at β 0.8".
+
+    Proposal 25: this is the one shelf that includes titles the user has already seen, and its
+    why-line says so ("your highest, rewatches included").
+    """
+    sid = "top_of_ledger"
+    if not bundle_version:
+        return None, shelves.Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
+    beta, fitted = _beta(user_id, kind)
+    scores = _scores(user_id, kind)
+    tier_set = shelves.DEFAULT_TIER_SET
+    rows = sorted(
+        (t for t in _catalog() if t["kind"] == kind),
+        key=lambda t: (-scores[t["id"]], t["id"]),
+    )[: shelves.SHELF_CAP]
+    label_count = sum(_label_counts(user_id, [kind]))
+    why = (
+        f"clean item prior + your fold-in, blended at β {beta:.2f} — your highest, "
+        "rewatches included"
+        if fitted
+        else f"clean item prior alone — β {beta:.2f}, no fold-in yet — your highest, "
+             "rewatches included"
+    )
+    section = shelves.Section(
+        kind=kind,
+        heading=shelves.KIND_HEADINGS[kind],
+        title="Top of your ledger",
+        why=why,
+        why_numbers={"beta": beta, "beta_fitted": fitted,
+                     "beta_optimum": shelves.DEFAULT_BETA, "label_count": label_count,
+                     "gate_k": 10},
+        caption=(
+            None if fitted
+            else f"§5.1's measured optimum is β {shelves.DEFAULT_BETA:.2f}; this profile is "
+                 "not there yet"
+        ),
+        items=[
+            _home_card(t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta)
+            for i, t in enumerate(rows)
+        ],
+    )
+    return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+
+
+def _never_watched_term(user_id, kind, *, vocabulary):
+    """§6.0 row 3 — "You've never watched anything *{term}*" (§6.4's frontier as a shelf).
+
+    `role` is what keeps it honest: the candidate term is a **member** (every card carries it);
+    the neighbouring liked term is **anchor_side**, describing the user's region rather than
+    the cards, which are unvisited by definition.
+    """
+    sid = "never_watched_term"
+    if not vocabulary:
+        return None, shelves.Suppressed(sid, kind, "no DNA vocabulary imported — no terms to name")
+    thin = (
+        f"no zero-coverage term carries {shelves.SECTION_FLOOR} unseen owned titles next to a "
+        f"term you rate high, or fewer than {shelves.FRONTIER_MIN_SEEN} seen titles of this "
+        f"kind to call any region unvisited"
+    )
+    seen_titles = [t for t in _catalog() if t["kind"] == kind and _seen_state(t["id"]) == "seen"]
+    if len(seen_titles) < shelves.FRONTIER_MIN_SEEN:
+        return None, shelves.Suppressed(sid, kind, thin)
+    covered = {term.term for t in seen_titles for term in _terms_for(t["id"])}
+    liked = [
+        term for t in seen_titles if _verdicts(user_id).get(t["id"]) == 2
+        for term in _terms_for(t["id"])
+    ]
+    candidates = _unseen_owned(user_id, kind)
+    for term in sorted({t for c in candidates for t in _terms_for(c["id"])},
+                       key=lambda t: t.term):
+        if term.term in covered or not liked:
+            continue
+        members = [c for c in candidates if _carries(c["id"], term.term)]
+        if len(members) < shelves.SECTION_FLOOR:
+            continue
+        neighbour = liked[0]
+        beta, _fitted = _beta(user_id, kind)
+        tier_set = shelves.DEFAULT_TIER_SET
+        section = shelves.Section(
+            kind=kind,
+            heading=shelves.KIND_HEADINGS[kind],
+            title=f"You've never watched anything {term.term}",
+            why=("unvisited region of DNA space next to what you like "
+                 f"— sits beside {neighbour.term} · cos 0.50"),
+            why_terms=[term.with_role("member"), neighbour.with_role("anchor_side")],
+            why_numbers={"cos": 0.5, "affinity": 0.5, "min_seen": shelves.FRONTIER_MIN_SEEN},
+            caption=("one exploratory slot in six · costs about a point of top-hit rate, "
+                     "honestly labelled"),
+            items=[
+                _home_card(t, i + 1, user_id=user_id, tier_set=tier_set,
+                           terms=[term.term], beta=beta)
+                for i, t in enumerate(members[: shelves.SHELF_CAP])
+            ],
+        )
+        return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+    return None, shelves.Suppressed(sid, kind, thin)
+
+
+def _shared_sweet_spot(user_id, kind, *, partner, bundle_version, vocabulary):
+    """§6.0 row 4 — "You and {other} both rate these highly" / "the shared sweet spot — doubles
+    as the Tonight prior". Ranked by the PLAIN AVERAGE of the two scores, which is what §6.2
+    step 3 ranks the Tonight pool by; that shared arithmetic is what makes "doubles as" true."""
+    sid = "shared_sweet_spot"
+    if partner is None:
+        return None, shelves.Suppressed(sid, kind, "no other member to share a sweet spot with")
+    if not bundle_version:
+        return None, shelves.Suppressed(
+            sid, kind, "no active artifact bundle — no scores to intersect")
+    mine, theirs = _cdfs(user_id, kind), _cdfs(partner["user_id"], kind)
+    my_score, their_score = _scores(user_id, kind), _scores(partner["user_id"], kind)
+    floor = shelves.SWEET_SPOT_MIN_CDF
+    rows = sorted(
+        (t for t in _catalog()
+         if t["kind"] == kind and _seen_state(t["id"]) == "unseen"
+         and mine[t["id"]] >= floor and theirs[t["id"]] >= floor),
+        key=lambda t: (-(my_score[t["id"]] + their_score[t["id"]]) / 2.0, t["id"]),
+    )[: shelves.SHELF_CAP]
+    beta, _fitted = _beta(user_id, kind)
+    tier_set = shelves.DEFAULT_TIER_SET
+    section = shelves.Section(
+        kind=kind,
+        heading=shelves.KIND_HEADINGS[kind],
+        title=f"You and {partner['name']} both rate these highly",
+        why="the shared sweet spot — doubles as the Tonight prior",
+        why_numbers={"min_cdf": floor, "partner_user_id": partner["user_id"],
+                     "co_seen": partner["co_seen"]},
+        caption=(f"neither of you has seen these — both of you land above {floor:.2f} on your "
+                 "own ledgers, ranked by the plain average that seeds Tonight"),
+        items=[
+            _home_card(
+                t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta,
+                extra={"mine_cdf": round(mine[t["id"]], 4),
+                       "theirs_cdf": round(theirs[t["id"]], 4),
+                       "pair_score": round((my_score[t["id"]] + their_score[t["id"]]) / 2.0, 4)},
+            )
+            for i, t in enumerate(rows)
+        ],
+    )
+    return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+
+
+def _school_night(user_id, kind, *, vocabulary):
+    """§6.0 row 5 — "Under 110 minutes" / "for a school night", restated per proposal 27.
+
+    A NULL runtime is excluded (a shelf that claims a runtime bound must know the runtime) and
+    the comparison is strict, so a title at exactly the threshold is not "under" it."""
+    sid = "school_night"
+    limit_min = shelves.SCHOOL_NIGHT_MAX_MIN[kind]
+    beta, _fitted = _beta(user_id, kind)
+    tier_set = shelves.DEFAULT_TIER_SET
+    rows = [
+        t for t in _unseen_owned(user_id, kind)
+        if t["runtime_min"] is not None and t["runtime_min"] < limit_min
+    ][: shelves.SHELF_CAP]
+    section = shelves.Section(
+        kind=kind,
+        heading=shelves.KIND_HEADINGS[kind],
+        title=shelves.SCHOOL_NIGHT_TITLE[kind],
+        why="for a school night",
+        why_numbers={"max_minutes": limit_min},
+        caption="series runtime is minutes per episode" if kind == "series" else None,
+        items=[
+            _home_card(t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta)
+            for i, t in enumerate(rows)
+        ],
+    )
+    return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+
+
+def _new_in_library(user_id, kind, *, vocabulary):
+    """§6.0 row 6 — "New in the library" / "placed by the Cold Tower — no crowd data yet".
+
+    Ordered by recency rather than by score, which is why it is the one shelf that still ships
+    for a user with no verdicts (proposal 20 suppresses every score-ordered shelf)."""
+    sid = "new_in_library"
+    beta, _fitted = _beta(user_id, kind)
+    tier_set = shelves.DEFAULT_TIER_SET
+    rows = sorted(
+        (t for t in _catalog()
+         if t["kind"] == kind and _seen_state(t["id"]) == "unseen"
+         and _placement(t["id"]) == "cold_tower"),
+        key=lambda t: -t["id"],
+    )[: shelves.SHELF_CAP]
+    section = shelves.Section(
+        kind=kind,
+        heading=shelves.KIND_HEADINGS[kind],
+        title="New in the library",
+        why="placed by the Cold Tower — no crowd data yet",
+        why_numbers={"gate_k": 10},
+        items=[
+            _home_card(t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta)
+            for i, t in enumerate(rows)
+        ],
+    )
+    return _finish(section, shelf_id=sid, vocabulary=vocabulary)
+
+
+def _build_shelves(user_id, kinds, *, bundle_version, vocabulary, verdicts, partner):
+    """§6.0's six shelves, in the table's order, each as one section per selected kind.
+
+    Proposal 20's zero-verdict state is applied here rather than in a second code path, and
+    `new_in_library` — ordered by recency, not by a ledger nobody has yet — survives it.
+    """
+    zero = verdicts == 0 and bundle_version is not None
+    built: list[shelves.Shelf] = []
+    dropped: list[shelves.Suppressed] = []
+    for shelf_id in shelves.SHELF_IDS:
+        ranking = shelf_id in shelves.RANKING_SHELVES
+        shelf = shelves.Shelf(shelf_id, ranking=ranking)
+        for kind in kinds:
+            if zero and ranking:
+                dropped.append(shelves.Suppressed(
+                    shelf_id, kind, "no verdicts yet — a score-ordered shelf would rank on a "
+                                    "ledger this profile does not have"))
+                continue
+            if shelf_id == "because_anchor":
+                section, note = _because_anchor(user_id, kind, vocabulary=vocabulary)
+            elif shelf_id == "top_of_ledger":
+                section, note = _top_of_ledger(
+                    user_id, kind, bundle_version=bundle_version, vocabulary=vocabulary)
+            elif shelf_id == "never_watched_term":
+                section, note = _never_watched_term(user_id, kind, vocabulary=vocabulary)
+            elif shelf_id == "shared_sweet_spot":
+                section, note = _shared_sweet_spot(
+                    user_id, kind, partner=partner, bundle_version=bundle_version,
+                    vocabulary=vocabulary)
+            elif shelf_id == "school_night":
+                section, note = _school_night(user_id, kind, vocabulary=vocabulary)
+            else:
+                section, note = _new_in_library(user_id, kind, vocabulary=vocabulary)
+            if section is not None:
+                shelf.sections.append(section)
+            elif note is not None:
+                dropped.append(note)
+        # §6.0: a shelf that cannot justify itself is ABSENT, never present and empty.
+        if shelf.sections:
+            built.append(shelf)
+    return built, dropped
+
+
+def _catalog_page(kinds, *, q, person_id, limit, offset):
+    """Decision 18: a surface that merely LISTS in a kind-independent order may interleave
+    freely. This is that surface — `/api/titles`' own ordering, by year."""
+    rows = [t for t in _catalog() if t["kind"] in kinds]
+    if q and q.strip():
+        rows = [t for t in rows if q.strip().lower() in t["name"].lower()]
+    if person_id is not None:
+        with _db() as db:
+            credited = {
+                r[0] for r in db.execute(
+                    "SELECT title_id FROM credit WHERE person_id = ?", (person_id,))
+            }
+        rows = [t for t in rows if t["id"] in credited]
+    rows.sort(key=lambda t: (-(t["year"] or 0), t["name"].lower()))
+    hidden: dict[str, int] = {}
+    for other in KINDS:
+        if other in kinds:
+            continue
+        n = sum(1 for t in _catalog() if t["kind"] == other)
+        if n:
+            hidden[other] = n
+    items = [
+        {"id": t["id"], "kind": t["kind"], "name": t["name"], "year": t["year"],
+         "runtime_min": t["runtime_min"], "poster_path": None, "is_owned": True,
+         "placement": _placement(t["id"]), "seen_state": _seen_state(t["id"])}
+        for t in rows[offset : offset + limit]
+    ]
+    return {"total": len(rows), "hidden": hidden, "limit": limit, "offset": offset,
+            "q": q, "person_id": person_id, "items": items}
+
+
+def _build_home(user, kinds, *, q=None, person_id=None, limit=60, offset=0) -> dict[str, Any]:
+    """§6.0's Home payload, UNGATED — every caller redacts. THE MODE IS THE SERVER'S: with `q`
+    or `person_id` set the payload carries `catalog` and no shelves, otherwise the shelves and
+    no catalog. A client cannot render shelves over a person filter, because with one set there
+    are no shelves in the payload to render."""
+    user_id = user["id"]
+    verdicts = len(_verdicts(user_id))
+    bundle_version, vocabulary = _bundle_version(), _vocabulary_version()
+    mode = "grid" if (q and q.strip()) or person_id is not None else "shelves"
+    partner = _partner_for(user_id)
+    now_local, tz = _now_local()
+    payload: dict[str, Any] = {
+        "mode": mode,
+        "kinds": kinds,
+        "greeting": shelves.greeting(now_local, user["name"], tz=tz),
+        "banner": _pending_verdicts(user_id),
+        "verdict_count": verdicts,
+        "bundle": bundle_version,
+        "vocabulary": vocabulary,
+        "partner": partner,
+        "shelves": [],
+        "sections": [],
+        "shelves_total": 0,
+        "catalog": None,
+        # Proposal 20's two first-week states, from the real builder so Home and Rate promise
+        # the same thing about the learning curve.
+        "degraded": shelves._degraded(bundle_version, verdicts),
+        "suppressed": [],
+        "rail": _rail_recent(user_id),
+    }
+    if mode == "grid":
+        payload["catalog"] = _catalog_page(
+            kinds, q=q, person_id=person_id, limit=limit, offset=offset)
+        return payload
+    built, dropped = _build_shelves(
+        user_id, kinds, bundle_version=bundle_version, vocabulary=vocabulary,
+        verdicts=verdicts, partner=partner)
+    payload["shelves"] = [s.as_dict() for s in built]
+    payload["sections"] = shelves.sections_by_kind(built, kinds)
+    payload["shelves_total"] = len(built)
+    payload["suppressed"] = [s.as_dict() for s in dropped]
+    return payload
+
+
+@app.get("/api/home")
+def home(
+    kind: list[Literal["movie", "series"]] = Query(...),
+    q: str | None = None,
+    person_id: int | None = None,
+    limit: int = Query(60, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    payload = _build_home(
+        user, _home_kinds(kind), q=q, person_id=person_id, limit=limit, offset=offset)
+    return rail.redact(payload, show_model=_show_model(user))
+
+
+@app.get("/api/home/shelves")
+def home_shelves(
+    kind: list[Literal["movie", "series"]] = Query(...),
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """The shelves alone, for a client that renders the greeting and banner separately. Same
+    builder, same gate, same partition — and it deliberately cannot be asked for the grid."""
+    user = _me(spielplan_session)
+    payload = _build_home(user, _home_kinds(kind))
+    slim = {
+        key: payload[key]
+        for key in ("kinds", "shelves", "sections", "shelves_total", "verdict_count",
+                    "degraded", "partner", "bundle", "vocabulary", "suppressed")
+        if key in payload
+    }
+    return rail.redact(slim, show_model=_show_model(user))
+
+
+@app.get("/api/home/pending-verdicts")
+def home_pending(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    """§6.0's banner on its own. `{count: 0, …}` rather than a 404 for an empty population:
+    "nothing to rate" is an answer, and a client that has to tell an error from an empty banner
+    will get it wrong on the first flaky request."""
+    user = _me(spielplan_session)
+    return _pending_verdicts(user["id"]) or {
+        "count": 0, "named": [], "head_title_ids": [], "copy": None, "cta": None}
+
+
+@app.get("/api/model-log")
+def model_log(
+    limit: int = Query(rail.RAIL_LIMIT, ge=1, le=50),
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """§6.7's rail. Decision 117: one per-user toggle, default off.
+
+    With the toggle OFF the response has NO `events` key at all — not an empty list, not a list
+    the client is trusted to hide. A promise kept in CSS is not kept: the payload would still
+    be in the network tab and in the service-worker cache.
+    """
+    user = _me(spielplan_session)
+    if not _show_model(user):
+        return {
+            "show_model": False,
+            "hint": "turn on 'show the model' in the account menu to see the model log",
+        }
+    events = _rail_recent(user["id"], limit)
+    return {"show_model": True, "limit": limit, "kinds": rail.kinds_present(events),
+            "events": events}
 
 
 if __name__ == "__main__":

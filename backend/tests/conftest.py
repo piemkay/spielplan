@@ -30,12 +30,69 @@ def test_database_url() -> str | None:
     return os.environ.get("TEST_DATABASE_URL")
 
 
+def _worker_suffix() -> str:
+    """What makes this pytest process distinct from every other one on the machine.
+
+    `PYTEST_XDIST_WORKER` under -n, the pid otherwise. The pid is enough because the database
+    is dropped at the end of the session and recreated at the start of the next one.
+    """
+    return os.environ.get("PYTEST_XDIST_WORKER") or f"p{os.getpid()}"
+
+
+async def _make_database(admin_url: str, name: str) -> None:
+    import asyncpg
+
+    conn = await asyncpg.connect(admin_url)
+    try:
+        # WITH (FORCE) so a previous run that died holding a connection cannot wedge this one.
+        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        await conn.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await conn.close()
+
+
+async def _drop_database(admin_url: str, name: str) -> None:
+    import asyncpg
+
+    conn = await asyncpg.connect(admin_url)
+    try:
+        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+    finally:
+        await conn.close()
+
+
 @pytest.fixture(scope="session")
 def pg_url() -> str:
+    """A database this pytest process owns outright.
+
+    `db` below drops and recreates schema `public` for every test. On one shared database that
+    makes two concurrent pytest processes destroy each other's schema mid-test — which is not a
+    hypothetical: three agents building M2 in parallel each hit it, and the failures
+    (DuplicateTable, UndefinedTable, unique violations on pg_namespace) look like product bugs
+    while having nothing to do with the code under test.
+
+    So the URL from the environment names a *template*: the real database is per process, made
+    at session start and dropped at the end. One extra CREATE DATABASE per session buys a suite
+    that can be run concurrently by anything.
+    """
+    import asyncio
+    from urllib.parse import urlsplit, urlunsplit
+
     url = test_database_url()
     if not url:
         pytest.skip("TEST_DATABASE_URL is unset (see tests/conftest.py)")
-    return url
+
+    parts = urlsplit(url)
+    base = parts.path.lstrip("/") or "postgres"
+    name = f"{base}_{_worker_suffix()}"[:62]
+    admin = urlunsplit(parts._replace(path="/postgres"))
+    mine = urlunsplit(parts._replace(path=f"/{name}"))
+
+    asyncio.run(_make_database(admin, name))
+    try:
+        yield mine
+    finally:
+        asyncio.run(_drop_database(admin, name))
 
 
 @pytest.fixture

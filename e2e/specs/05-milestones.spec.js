@@ -13,7 +13,6 @@ import { signedIn } from '../helpers.js';
  */
 
 const PENDING = [
-  { path: '/rate', surface: 'Rate', milestone: 'M2' },
   { path: '/tonight', surface: 'Tonight', milestone: 'M4' },
   { path: '/rank', surface: 'Rank', milestone: 'M3' },
   { path: '/map', surface: 'Map', milestone: 'M6' },
@@ -39,6 +38,16 @@ test('a placeholder still describes what the surface will do', async ({ page }) 
   await page.goto('/tonight');
   await expect(page.getByText(/roughly ten candidate votes|adaptive|blind/i)).toBeVisible();
   await expect(page.locator('main li')).not.toHaveCount(0);
+});
+
+test('Rate is built — M2 landed, so it is no longer a placeholder', async ({ page }) => {
+  // Same routine as Account below, one milestone on: the placeholder assertion failed the day
+  // Rate shipped, and that failure was the reminder to write this. 11-rate.spec.js is the real
+  // test; this one only asserts the surface stopped naming a milestone it no longer owes.
+  await page.goto('/rate');
+  await expect(page.getByTestId('rate-surface')).toBeVisible();
+  await expect(page.getByText(/Not built yet/)).toHaveCount(0);
+  await expect(page.getByTestId('rate-counter')).toBeVisible();
 });
 
 test('Account is built — M1 landed, so it is no longer a placeholder', async ({ page }) => {

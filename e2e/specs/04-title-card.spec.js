@@ -95,11 +95,21 @@ test('platform scores travel with their display-only caption', async ({ page }) 
 });
 
 test('tapping a second poster re-fetches instead of showing the first', async ({ page }) => {
+  // Both posters have to come from the SAME grid. §6.0 M2 makes typing into search switch Home
+  // into the grid AND close the open card, so re-searching between the two taps would close the
+  // panel and reopen it — which proves only that a reopened panel shows what it was reopened
+  // with. The bug this guards against is a panel that keeps the first title's data, and it is
+  // only observable when the panel is already open as the second poster is tapped.
   const panel = page.getByLabel('Title detail');
-  await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
+  await page.getByRole('searchbox', { name: 'Search titles' }).fill('e');
+  const heat = page.locator('.card-wrap', { hasText: 'Heat' }).first();
+  const prisoners = page.locator('.card-wrap', { hasText: 'Prisoners' }).first();
+  await expect(heat).toBeVisible();
+  await expect(prisoners).toBeVisible();
 
-  await page.getByLabel('Search titles').fill('');
-  await page.locator('.card-wrap').filter({ hasText: 'Prisoners' }).click();
+  await heat.click();
+  await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
+  await prisoners.click();
   await expect(panel.getByRole('heading', { name: 'Prisoners' })).toBeVisible();
   await expect(panel.getByRole('heading', { name: 'Heat' })).toHaveCount(0);
 });

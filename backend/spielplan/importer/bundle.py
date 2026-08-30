@@ -20,6 +20,7 @@ import sqlite3
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 
@@ -28,15 +29,70 @@ from spielplan.importer import load as content_loader
 from spielplan.importer import reviews as review_loader
 from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
+from spielplan.models.artifacts import ArtifactStore
+from spielplan.placement import reconcile as placement
 
 # §10: the rebuild set. "Everything expressed in the old Backbone's basis is garbage against a
-# new one." Listed here so a re-import always reports what must be recomputed.
-REBUILD_SET = (
-    "user fold-in vectors (closed-form, ms)",
-    "per-label-count blend weights",
-    "full Personal Ledger MAP refit",
-    "Cold Tower re-placement of every app-acquired title",
-)
+# new one." Defined once, in the module that runs it — M0 kept a copy here to report from, and
+# two hand-maintained copies of a four-item list is how a fifth item lands in one of them.
+REBUILD_SET = placement.REBUILD_SET
+
+
+# §10's first three steps belong to the scoring and Ledger lenses; `placement.rebuild_plan`
+# takes them injected so the rebuild set is defined by the spec sentence rather than by which
+# module happens to import which. Each is `async (conn, store, version) -> dict`, and the dict
+# lands in that step's row of the import report.
+
+
+async def _rebuild_fold_in(conn: Any, store: Any, version: str) -> dict[str, Any]:
+    """§10 step 1 and 2, in one pass.
+
+    §10 lists "user fold-in vectors" and "per-label-count blend weights" as two items, and they
+    are two things — but one cross-validated fit produces both, and running it twice would
+    double the work to make the report's shape match the sentence's. So this step does the fit
+    and step 2 reports the weights it wrote.
+    """
+    from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    report = await foldin.run(
+        conn, bb.load_for(store), bundle_version=version, only_stale=False, with_priors=True
+    )
+    return report.as_dict()
+
+
+async def _rebuild_blend_weights(conn: Any, _store: Any, version: str) -> dict[str, Any]:
+    """§10 step 2. Reports the β the step-1 fit produced, per user and kind.
+
+    §5.1's β is not a separate computation — it is chosen by the same cross-validation that
+    produces the vector. Recomputing it here would either repeat step 1 or invent a second
+    estimator, and a second estimator for a number that already has one is how two parts of an
+    app come to disagree about the same user.
+    """
+    rows = await conn.fetch(
+        "SELECT user_id, kind, blend_beta, label_count FROM user_vector "
+        " WHERE bundle_version = $1 ORDER BY user_id, kind",
+        version,
+    )
+    return {
+        "weights": [
+            {"user_id": r["user_id"], "kind": r["kind"],
+             "beta": float(r["blend_beta"] or 0.0), "labels": r["label_count"]}
+            for r in rows
+        ]
+    }
+
+
+async def _rebuild_ledger_refit(conn: Any, store: Any, _version: str) -> dict[str, Any]:
+    """§10 step 3: "a **full** Personal Ledger MAP refit" — full history, every user and kind."""
+    from spielplan.ledger import observations, refit
+    from spielplan.ledger.hyperparams import load as load_hp
+
+    hp, _notes = load_hp(store)
+    reports = await refit.refit_all(
+        conn, hp, embeddings=observations.placement_embeddings(conn)
+    )
+    return {"fits": [r.as_dict() for r in reports]}
 
 
 # The version string comes out of the bundle's own manifest — untrusted input that becomes a
@@ -212,6 +268,19 @@ async def import_bundle(
                 report.as_dict(),
             )
             if activate:
+                # §10's sequence: "recompute the rebuild set against the **staged** bundle ->
+                # transactionally flip". Before the flip, so a rebuild that fails takes the whole
+                # import down with it rather than leaving a new basis active with every fitted
+                # number still expressed in the old one.
+                steps = await placement.run_rebuild(
+                    conn, ArtifactStore.open(staged, bundle.version), bundle.version,
+                    fold_in=_rebuild_fold_in,
+                    blend_weights=_rebuild_blend_weights,
+                    ledger_refit=_rebuild_ledger_refit,
+                )
+                for step in steps:
+                    report.note("rebuild", f"{step['title']}: {step.get('result', step)}")
+
                 # §10: transactionally flip. The partial unique index guarantees one active row.
                 await conn.execute(
                     "UPDATE artifact_bundle SET state = 'superseded' WHERE state = 'active'"
@@ -226,7 +295,9 @@ async def import_bundle(
                     "artifact_bundle flipped to active — restart backend and worker; "
                     "no process may score or refit with a different loaded version",
                 )
-                report.note("rebuild-set", "recompute after this import: " + "; ".join(REBUILD_SET))
+                report.note(
+                    "rebuild-set", "recomputed against the staged bundle: " + "; ".join(REBUILD_SET)
+                )
     except _Rollback:
         # The DB transaction rolled back, but the artifact copy happened before it (so a failed
         # copy could not leave the DB pointing at absent files). Say which is which rather than

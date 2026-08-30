@@ -54,6 +54,12 @@ ALTER TABLE user_vector
 -- §5.1 calls β = 0.8 "the measured optimum; also exactly where per-user top-10s stop being the
 -- global chart". A fit that exceeds it is unsupported by anything measured, so the ceiling is
 -- a constraint rather than a comment somebody may edit past.
+--
+-- The literal is cast, and that is load-bearing rather than decorative. `blend_beta` is `real`;
+-- an uncast `0.8` is `numeric`, and Postgres resolves `real <= numeric` through float8, where
+-- float4(0.8) widens to 0.800000011920929. `SELECT 0.8::real <= 0.8` is therefore FALSE — the
+-- ceiling would have rejected the one value §5.1 actually measured, and a nightly fold-in that
+-- clamped a user to β = 0.8 would have failed its INSERT inside a background job.
 ALTER TABLE user_vector
     ADD CONSTRAINT user_vector_beta_range
-    CHECK (blend_beta IS NULL OR (blend_beta >= 0.0 AND blend_beta <= 0.8));
+    CHECK (blend_beta IS NULL OR (blend_beta >= 0.0::real AND blend_beta <= 0.8::real));
