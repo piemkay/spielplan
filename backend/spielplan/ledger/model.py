@@ -143,6 +143,53 @@ class Fit:
 # --- the ordinal arm ----------------------------------------------------------------------
 
 
+def feasible(gamma: np.ndarray, cuts: np.ndarray) -> bool:
+    """§4.2: `ledger_cutpoints.boundaries` is "ordered ascending", and §5.2 makes the tier arm's
+    cutpoints the displayed boundaries. Outside the ordered cone there is no likelihood to
+    minimise, so the cone is where the search stays.
+
+    The cone is CLOSED: two cutpoints may coincide. That is not a degenerate case to be fenced
+    off, it is the ordered logit's honest answer when a level carries no observations — the
+    interval for that level has zero width because nobody has ever put anything in it. Forcing a
+    strict gap instead makes the search stall against a boundary the optimum sits on, which on a
+    board dragged entirely to F and S left every title in the middle tier.
+
+    A level that IS observed still needs positive probability, and `_ordinal_terms` charges
+    +inf when it does not — so an impossible observation is refused where it happens, rather
+    than by a blanket constraint that also forbids the possible.
+    """
+    return bool(
+        (gamma.size < 2 or np.all(np.diff(gamma) >= 0))
+        and (cuts.size < 2 or np.all(np.diff(cuts) >= 0))
+    )
+
+
+def _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay) -> float:
+    """The largest step along -d that keeps every cutpoint gap positive.
+
+    Rejecting infeasible trial points is not enough on its own: near the boundary the Newton
+    direction points out of the cone, every trial is rejected, the step halves to nothing and
+    the fit stalls at a feasible but badly suboptimal point — which is how a board dragged
+    entirely to F and S came back with all forty titles in the middle tier even after the
+    crossing itself was fixed.
+
+    So the step is clipped to the boundary first (the standard interior-point ratio test) and
+    Armijo searches inside that. The iterates then slide along the constraint instead of
+    walking into it.
+    """
+    _ = lay
+    limit = np.inf
+    for values, direction in ((gamma, d_gamma), (cuts, d_cuts)):
+        if values.size < 2:
+            continue
+        gaps = np.diff(values)
+        closing = np.diff(direction)           # the step is x - eta*d, so a positive
+        moving = closing > 0                   # difference closes the gap
+        if np.any(moving):
+            limit = min(limit, float(np.min(gaps[moving] / closing[moving])))
+    return limit
+
+
 def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
     """§4.3 ships "margin-weighting flag + functional form (weights normalised as
     margin/mean(margin))", so the form is applied here rather than baked into whatever wrote
@@ -185,7 +232,16 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
     phi_b = np.where(lower, sb * (1.0 - sb), 0.0)
 
     # log P, in the stable form for each of the three shapes.
-    with np.errstate(over="ignore", invalid="ignore"):
+    #
+    # A crossed pair of cutpoints has no probability: P(level) = sigma(a) - sigma(b) is <= 0
+    # for a <= b, so the NLL is +inf and the point is outside the ordered cone. Clamping the
+    # gap instead — which is what this used to do — replaces an infinite barrier with about
+    # 27.6 per observation, and the minimiser then walks straight out of the cone: cutpoints
+    # come back crossed, `sigma` goes NaN, and the tier a title displays in stops matching the
+    # tier the person dragged it to. So it is a branch, not a clamp. Note that
+    # log(-expm1(-gap)) is NaN rather than +inf at gap <= 0, which is why this cannot be left
+    # to the arithmetic.
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         interior = upper & lower
         log_p = np.empty_like(s, dtype=float)
         only_upper = upper & ~lower
@@ -194,10 +250,15 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
         log_p[only_lower] = _log_sigmoid(-b[only_lower])
         if np.any(interior):
             ai, bi = a[interior], b[interior]
-            gap = np.maximum(ai - bi, 1e-12)
-            log_p[interior] = (
-                _log_sigmoid(ai) + _log_sigmoid(-bi) + np.log(-np.expm1(-gap))
+            gap = ai - bi
+            ordered = gap > 0
+            block = np.full(ai.shape, -np.inf)
+            block[ordered] = (
+                _log_sigmoid(ai[ordered])
+                + _log_sigmoid(-bi[ordered])
+                + np.log(-np.expm1(-gap[ordered]))
             )
+            log_p[interior] = block
     p = np.exp(log_p)
     p = np.maximum(p, 1e-300)
 
@@ -207,7 +268,11 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
     dphi_b = phi_b * (1.0 - 2.0 * sb)
     f_aa = -dphi_a / p + (phi_a / p) ** 2
     f_bb = dphi_b / p + (phi_b / p) ** 2
-    f_ab = -(phi_a * phi_b) / p**2
+    # Divide first, then multiply — the same shape as f_aa and f_bb above. Written as
+    # `-(phi_a * phi_b) / p**2` this is the only expression in the module that squares a
+    # probability which can legitimately be tiny, and it overflows to NaN where its neighbours
+    # do not, poisoning the whole arrowhead diagonal from one row.
+    f_ab = -(phi_a / p) * (phi_b / p)
     return -log_p, f_a, f_b, f_aa, f_ab, f_bb
 
 
@@ -281,6 +346,8 @@ class _Layout:
 def _objective(
     obs: ObservationSet, hp: Hyperparams, mu, v, gamma, cuts, log_nu, r, *, with_duels: bool
 ) -> float:
+    if not feasible(gamma, cuts):
+        return np.inf
     s = mu + obs.embeddings @ v + r
     total = 0.0
     if obs.ord_index.size:
@@ -482,17 +549,32 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
         # the path, so restarting the search at step0 every iteration re-pays the same
         # halvings hundreds of times over.
         eta = min(1.0, max(step0, eta * 2.0))
-        while True:
+        # Clip to just inside the ordered cone before searching, so a direction that points at
+        # the boundary produces a short useful step rather than a rejected one.
+        d_gamma = dz[65 : 65 + lay.n_gamma]
+        d_cuts = dz[65 + lay.n_gamma : 65 + lay.n_gamma + lay.n_cuts]
+        boundary = _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay)
+        if np.isfinite(boundary):
+            eta = min(eta, boundary)
+        accepted = False
+        while eta >= hp.lr_min:
             z_try, r_try = z - eta * dz, r - eta * dr
             m2, v2, ga2, c2, ln2 = _unpack(z_try, lay)
-            f1 = _objective(obs, hp, m2, v2, ga2, c2, ln2, r_try, with_duels=with_duels)
-            if f1 <= f0 - 1e-4 * eta * slope or eta < hp.lr_min:
-                break
+            # Feasibility first: an infeasible trial point has an infinite objective, and
+            # evaluating it only to compare +inf is wasted work on the common path.
+            if feasible(ga2, c2):
+                f1 = _objective(obs, hp, m2, v2, ga2, c2, ln2, r_try, with_duels=with_duels)
+                if np.isfinite(f1) and f1 <= f0 - 1e-4 * eta * slope:
+                    accepted = True
+                    break
             eta *= 0.5
             backtracks += 1
-        z, r = z - eta * dz, r - eta * dr
-        if eta < hp.lr_min:
+        if not accepted:
+            # The search exhausted itself. Keep the last point that DID decrease the
+            # objective — applying the step that was just rejected is how a converged-looking
+            # fit ends up reporting its own divergence.
             break
+        z, r = z - eta * dz, r - eta * dr
 
     mu, v, gamma, cuts, log_nu = _unpack(z, lay)
     g_z, g_r, h_zz, h_zr, h_rr, anchor_curv, duel_curv, _cpl = _grad_hess(
@@ -502,12 +584,23 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
     return z, r, (h_zz, h_zr, h_rr), grad_inf, iterations, backtracks, anchor_curv, duel_curv
 
 
-def fit(obs: ObservationSet, hp: Hyperparams) -> Fit:
-    """The full MAP fit: ridge anchor, then the preconditioned BT perturbation."""
+def fit(
+    obs: ObservationSet,
+    hp: Hyperparams,
+    *,
+    z0: np.ndarray | None = None,
+    r0: np.ndarray | None = None,
+) -> Fit:
+    """The full MAP fit: ridge anchor, then the preconditioned BT perturbation.
+
+    `z0`/`r0` exist so a caller can start somewhere else. The objective is convex on the ordered
+    cone, so every start must reach the same optimum — which is only a checkable claim if a test
+    can actually supply a different start.
+    """
     lay = _Layout(obs.n, obs.n_levels)
     z = _pack(0.0, np.zeros(EMBED_DIM), initial_cutpoints(3), initial_cutpoints(obs.n_levels),
-              float(np.log(hp.nu0())))
-    r = np.zeros(obs.n)
+              float(np.log(hp.nu0()))) if z0 is None else np.asarray(z0, dtype=float).copy()
+    r = np.zeros(obs.n) if r0 is None else np.asarray(r0, dtype=float).copy()
 
     # Stage A — the ordinal arms alone, solved exactly.
     z, r, blocks_a, _g_a, it_a, bt_a, anchor_curv, _ = _minimise(
@@ -553,8 +646,11 @@ def fit(obs: ObservationSet, hp: Hyperparams) -> Fit:
 
     n_obs = obs.ord_index.size + obs.duel_a.size
     sigma, sigma_prior, z_cov = _laplace(obs, hp, oh_zz, oh_zr, oh_rr, coupling)
+    # NOT np.sort. Sorting would return a permutation of parameters that were never jointly
+    # fitted, next to an `objective` computed on the unsorted ones — a fit that looks ordered
+    # and is not the fit it reports. The cone constraint above is what makes them ordered.
     return Fit(
-        mu=mu, v=v, gamma=np.sort(gamma), cuts=np.sort(cuts), log_nu=log_nu, r=r, s=s,
+        mu=mu, v=v, gamma=gamma, cuts=cuts, log_nu=log_nu, r=r, s=s,
         sigma=sigma, sigma_prior=sigma_prior, z_cov=z_cov,
         anchor_curv=anchor_curv, duel_curv=duel_curv,
         objective=_objective(obs, hp, mu, v, gamma, cuts, log_nu, r,
@@ -565,7 +661,11 @@ def fit(obs: ObservationSet, hp: Hyperparams) -> Fit:
         # observations, so an absolute threshold would call a 50-verdict fit converged and an
         # identically-good 800-verdict one diverged. `n_obs` is the scale the gradient is
         # measured against.
-        converged=bool(grad_inf <= 1e-3 * max(1.0, n_obs)),
+        converged=bool(
+            grad_inf <= 1e-3 * max(1.0, n_obs)
+            and np.all(np.isfinite(s))
+            and np.all(np.isfinite(sigma))
+        ),
     )
 
 

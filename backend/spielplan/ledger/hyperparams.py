@@ -32,7 +32,12 @@ MARGIN_FORMS: tuple[str, ...] = ("margin/mean(margin)", "none")
 # §4.3: "Per-user cutpoints and per-arm sensitivities are not shipped — they are fitted in-app
 # by design." A bundle that ships them anyway is not rejected (it is a corpus-side mistake, not
 # a landmine), but the values are ignored and the fact is reported.
-PER_USER_KEY = re.compile(r"cutpoint|boundar|sensitiv|per_user", re.I)
+# Anchored on whole words, because `cutpoint_prior_precision` IS one of this app's own
+# constants — a substring match on "cutpoint" swallowed it, so the one knob the corpus
+# project would reach for to damp a crossing could never arrive from a bundle.
+PER_USER_KEY = re.compile(
+    r"^(cutpoints?|boundaries|boundary|sensitivities|sensitivity|per_user\w*)$", re.I
+)
 
 
 @dataclass(frozen=True)
@@ -99,7 +104,9 @@ DEFAULTS = Hyperparams()
 _POSITIVE = (
     "lambda_ridge", "lambda_bt", "b_i_tau", "mu_prior_tau", "lr",
     "cutpoint_prior_precision", "tie_prior_precision", "sigma_inflation_grace_months",
+    "sigma_inflation_c", "margin_decisive", "margin_hesitant", "straddle_z",
 )
+_BOOLEAN = ("margin_weighting",)
 
 
 def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperparams, list[str]]:
@@ -127,6 +134,16 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
     for key in _POSITIVE:
         if key in fields and not (isinstance(fields[key], int | float) and fields[key] > 0):
             raise ValueError(f"{key} must be a positive number, got {fields[key]!r}")
+    for key in _BOOLEAN:
+        # `"false"` is a string, and a string is truthy. A corpus-side decision to turn margin
+        # weighting off would otherwise leave it silently on — precisely the "knob tuned into a
+        # void" this module exists to prevent.
+        if key in fields and not isinstance(fields[key], bool):
+            raise ValueError(f"{key} must be a boolean, got {fields[key]!r}")
+    if "newton_max_iter" in fields and not (
+        isinstance(fields["newton_max_iter"], int) and fields["newton_max_iter"] > 0
+    ):
+        raise ValueError("newton_max_iter must be a positive integer")
     if "steps" in fields and not (isinstance(fields["steps"], int) and fields["steps"] > 0):
         raise ValueError(f"steps must be a positive integer, got {fields['steps']!r}")
     if "tie_prior_delta0" in fields and not 0.0 < fields["tie_prior_delta0"] < 1.0:
