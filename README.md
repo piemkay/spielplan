@@ -134,6 +134,22 @@ per-user-token rule is something a test can break rather than a comment. Passkey
 as real ceremonies: a software authenticator in the backend tests, Chromium's virtual
 authenticator in the browser.
 
+**M2** is in place, and it is the gate: §5.2's Personal Ledger (all four arms in one
+likelihood, refit nightly and incrementally), §5.1's scoring stack, §5.3's placement
+reconciliation, §6.1's Rate surface, §6.0's Home shelves, §6.7's transparency rail behind
+decision 117's per-user toggle, and §12's member PWA-install/push onboarding. §12's second exit
+criterion — "every owned title has a coordinate" — is one query, and the partial index exists
+for it. The first — "50–100 verdicts each produce visibly personal rankings" — is a claim about
+a real household with a real bundle, so what ships here is the machinery and the test that the
+loop closes: a sitting of verdicts moves the ranking every shelf is built from, within the
+sitting rather than overnight.
+
+Two caveats worth stating rather than discovering. The push **sender** is M4's: there is no
+VAPID key, so onboarding registers a device and §7.3's "undeliverable" fallback is still the
+only path that delivers. And the Ledger's numbers have never met a real corpus Backbone — every
+measurement in this repo is against a synthetic fixture, which is exactly the caveat §12 says
+M2 exists to settle.
+
 The corpus bundle does not exist in this repo, so the importer is verified against a synthetic
 fixture reproducing the landmines — both DNA tiers with overlapping pairs, the frozen
 `rating_source` ids, duplicate `tmdb_id`, NULL alias PK components, CJK/emoji/ZWSP — plus six

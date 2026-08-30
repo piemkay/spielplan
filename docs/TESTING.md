@@ -70,7 +70,7 @@ CI runs all of it on every push: `.github/workflows/ci.yml`.
 `backend/tests/spec_coverage.toml` holds one row per testable requirement:
 
 ```toml
-current_milestone = "M1"
+current_milestone = "M2"
 
 [[requirement]]
 id = "data-rules-dna-evidence-required"
@@ -125,7 +125,7 @@ Two things happen on the way that are easy to miss:
 ```
 > M0    33/35 covered (2 waived)
 > M1    10/10 covered
-> M2     1/23 covered   ← open, on branch `m2`
+> M2    25/25 covered
   M3     9
   M4    18
   M5    10
@@ -133,9 +133,9 @@ Two things happen on the way that are easy to miss:
   M7     1
 ```
 
-M2 is open, so its gate is red on purpose — that is what an in-progress milestone looks like
-here, and the 22 remaining rows are the plan. `main` stays green at M1; the work lands on `m2`
-and merges when the gate closes.
+M2's gate was red for most of the milestone, on purpose: that is what an in-progress milestone
+looks like here, and the open rows were the plan. The work landed on `m2` and merged when the
+gate closed, which is the rule this section describes rather than an exception to it.
 
 The two standing M0 waivers are backup rotation (no backup job exists yet) and the title
 card's no-bundle model line (unreachable until M5, when a locally acquired title can outlive a
@@ -146,6 +146,15 @@ M1's tenth row was added *during* the milestone, by the review: §3.1's sequence
 passkey registration is prompted afterwards", and the map — written from the spec at M0 — had
 no row for that clause. The map is a contract, not a ceiling; a requirement the spec states and
 the map missed is added when it is found.
+
+M2 added two the same way, and they are worth naming because they widened the milestone rather
+than sharpening it. §12's M2 row lists "member PWA-install/push onboarding" and the map had no
+row for any of it — no service worker, no subscribe route, no screen, and
+`POST /api/setup/onboarding/complete` sitting there with nothing on earth calling it. Read as a
+gap in the map, that is M2 work; read as prose, it is M4's. It was built, and it is flagged here
+because the map going 25/25 should not quietly stand in for a scope decision somebody else might
+have made differently. The push *sender* remains M4's: there is no VAPID key, so §7.3's
+"undeliverable" fallback is still the only path that works end to end.
 
 `pytest backend/tests/test_spec_coverage.py -s` prints the live version.
 
