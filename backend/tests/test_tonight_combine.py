@@ -207,15 +207,41 @@ def test_the_reserved_slot_replaces_the_third_rather_than_being_appended():
     assert 3 not in slate.finalists, "the third-ranked left-pole title is the one displaced"
 
 
-def test_the_contested_axis_is_zeroed_rather_than_averaged():
-    """"The contested axis is **zeroed, not averaged**" — its influence is removed from the
-    ranking, which is a different operation from splitting the difference between two tilts."""
-    base = {1: 1.0, 4: 1.0, 6: 1.0}
+def test_the_contested_axis_stops_explaining_the_ranking():
+    """"The contested axis is **zeroed, not averaged**" — its INFLUENCE is removed, which is a
+    statement about how much of the ranking it explains.
+
+    An earlier version subtracted the axis position from the score, and the review measured
+    what that costs: `axis_position` is normalised to [−1, 1] while a group score sits on
+    §5.1's scale, where a whole pool may span 0.1. Subtracting one from the other does not zero
+    the axis — it multiplies its influence with the sign flipped, so the two unreserved slots
+    end up decided by the axis's own pole convention, which is the opposite of what 54d asks.
+    The assertion is corrected to the property rather than to the arithmetic.
+    """
+    # A pool the axis explains completely: score rises with the mood position.
+    base = {1: 0.10, 3: 0.15, 2: 0.20, 5: 0.60, 4: 0.70}
+    poles = {t: C.axis_position(DNA[t], AXES["mood"]) for t in base}
     out = C.zeroed(base, facet="mood", dna=DNA, axes=AXES)
 
-    assert out[1] > base[1], "a left-pole title had a negative axis position removed"
-    assert out[4] < base[4], "a right-pole title had a positive one removed"
-    assert out[6] == pytest.approx(base[6]), "a title off the axis is untouched"
+    def covariance(y):
+        mx = sum(poles.values()) / len(poles)
+        my = sum(y.values()) / len(y)
+        return sum((poles[t] - mx) * (y[t] - my) for t in y)
+
+    assert covariance(base) > 0.0, "the fixture is only meaningful while the axis explains it"
+    assert covariance(out) == pytest.approx(0.0, abs=1e-9), (
+        "after zeroing, the axis explains none of the ranking"
+    )
+    assert sum(out.values()) == pytest.approx(sum(base.values())), (
+        "removing an influence is not moving the whole pool"
+    )
+
+
+def test_a_pool_the_axis_does_not_explain_is_left_alone():
+    """Zeroing an axis nothing varies on is a no-op, not a rescale — a title off the axis
+    entirely must not move because two other titles disagree about mood."""
+    flat = {6: 0.5, 1: 0.4}
+    assert C.zeroed(flat, facet="pacing", dna=DNA, axes=AXES) == pytest.approx(flat)
 
 
 def test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one():

@@ -909,9 +909,12 @@ async def test_every_participant_gets_a_match_line_naming_terms_the_title_carrie
     satisfy is the defect `home/why.py` was inverted to make unrepresentable. The winner card
     is that claim on the screen the whole round exists to produce."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"], z=Z)
+    # The rank-1 row's OWN title, not `slate.finalists[0]`: `rank` orders the slate by group
+    # score, while `finalists` is its membership — and a surfaced split reorders the second by
+    # the zeroed score, so the two are not the same title.
     winner_row = await db.fetchrow(
-        "SELECT per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
+        "SELECT title_id, per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
         room["session_id"],
     )
     lines = winner_row["per_user_match"]
@@ -923,7 +926,7 @@ async def test_every_participant_gets_a_match_line_naming_terms_the_title_carrie
     carried = {
         r["term"]
         for r in await db.fetch(
-            "SELECT term FROM dna_tagged WHERE title_id = $1", slate.finalists[0]
+            "SELECT term FROM dna_tagged WHERE title_id = $1", winner_row["title_id"]
         )
     }
     for line in lines.values():
@@ -1064,18 +1067,19 @@ async def test_the_match_lines_actually_name_something(db, world):
     the winner carries.
     """
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
-    lines = (await db.fetchrow(
-        "SELECT per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
+    await play.finish(db, room["session_id"], z=Z)
+    top = await db.fetchrow(
+        "SELECT title_id, per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
         room["session_id"],
-    ))["per_user_match"]
+    )
+    lines = top["per_user_match"]
 
     named = [t["term"] for line in lines.values() for t in line["terms"]]
     assert named, "the fixture carries no DNA, so this row's assertions are vacuous"
     carried = {
         r["term"] for r in await db.fetch(
             "SELECT term FROM dna_tagged WHERE title_id = $1 AND version = $2",
-            slate.finalists[0], VOCAB,
+            top["title_id"], VOCAB,
         )
     }
     assert set(named) <= carried
@@ -1504,3 +1508,62 @@ async def test_the_sharpen_pair_carries_no_score(db, world):
     for side in ("a", "b"):
         assert "scores" not in out["pair"][side]
         assert "group_score" not in out["pair"][side]
+
+
+# --- the adversarial review's survivors ------------------------------------------------------
+
+
+async def test_the_answer_after_an_undo_is_accepted(db, world):
+    """§6 preamble's "undo everywhere" — the whole of it, which is undo AND carry on.
+
+    `retract` tombstones the row (§14 risk 6: log every vote) and rewinds the counter, so the
+    replacement answer arrives at the seq the retraction freed. 0013's non-partial unique index
+    on (participant_id, seq) made that insert collide with the tombstone forever: one tap on
+    Undo ended that participant's round, and because 54e's reveal waits for every seat, the
+    household's evening with it. The row's own words — "the round is served a pair again rather
+    than advancing" — are what this asserts, and no test reached the *re-answer*.
+    """
+    room = await running_room(db, world)
+    seat = room["seats"][0]["id"]
+    await answer_once(db, seat)
+    await answer_once(db, seat)
+    await play.retract(db, seat)
+
+    assert await answer_once(db, seat) is not None, "the round has to be able to continue"
+    live = await db.fetch(
+        "SELECT seq FROM session_answer WHERE participant_id = $1 AND retracted_at IS NULL "
+        "ORDER BY seq",
+        seat,
+    )
+    assert [r["seq"] for r in live] == [1, 2]
+    assert await db.fetchval(
+        "SELECT count(*) FROM session_answer WHERE participant_id = $1", seat
+    ) == 3, "and the tombstone is still there, because §14 risk 6 says log every vote"
+
+
+async def test_a_guest_is_ranked_by_the_pools_order_rather_than_a_flat_prior(db, world):
+    """`tonight-rank-guest-not-borrowed-ledger`: "A guest with no grid profile is **ranked by
+    the candidate pool's own member-average order**".
+
+    54c says the same thing from the other side — a participant with no Ledger "starts from the
+    **pool prior**". A flat prior is not the pool prior: it is no prior, it ranks nothing, and
+    it makes every candidate straddle the shortlist boundary at once, which turns the selection
+    rule's pair search from O(k²) over the straddlers into O(n²) over the whole pool with an
+    O(n) update inside each — the guest's evening gets measurably slower than everyone else's
+    for no information gained.
+    """
+    room = await running_room(db, world, guests=1)
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    guest = next(s for s in room["seats"] if s["role"] == "guest")
+
+    beliefs = rnd.initial(snapshot.member_average(), prior_var=1.0, has_profile=False)
+    means = {t: b.mu for t, b in beliefs.items()}
+    pool_order = sorted(snapshot.member_average(), key=lambda t: -snapshot.member_average()[t])
+    guest_order = sorted(means, key=lambda t: -means[t])
+
+    assert guest_order == pool_order, "the guest is ranked by the pool's own order"
+    assert len(set(means.values())) > 1, "a flat prior ranks nothing and straddles everything"
+    # And still no member's Ledger: the pool average is not any one person's scores.
+    host = next(s for s in room["seats"] if s["role"] == "host")
+    assert means != snapshot.pool_scores_for(host["id"])
+    assert guest["id"] not in {p for s in snapshot.scores.values() for p in s}

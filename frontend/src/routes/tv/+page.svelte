@@ -12,12 +12,18 @@
    *
    * Deliberately read-only. A television is a shared device with no signed-in person at it; a
    * control on this screen would be an anonymous write, and §6.2 gives it none.
+   *
+   * THE CODE IS RESOLVED ONCE AND THE SESSION IS HELD. The open-rooms list is *live* rooms
+   * (§6.2 step 2), so a resolved evening leaves it — and a screen that re-resolved its code on
+   * every poll would lose the room at the exact moment it had a winner to show, which is the
+   * one state §6.2 names it for. The e2e caught this; it is why `sessionId` is state.
    */
   import { onDestroy, onMount } from 'svelte';
   import { ApiError, get } from '$lib/api.js';
-  import { progressLine, approvalShare, REVEAL_BEAT } from '$lib/tonight.svelte.js';
+  import { REVEAL_BEAT, approvalShare, progressLine } from '$lib/tonight.svelte.js';
 
   let code = $state('');
+  let sessionId = $state(null);
   let lobby = $state(null);
   let result = $state(null);
   let error = $state('');
@@ -31,27 +37,36 @@
       code = fromUrl;
       attach();
     }
-    // Polled rather than socketed: a kiosk has no session cookie, so it cannot authenticate the
-    // channel — and a screen that is a minute stale is a screen, not a bug.
-    timer = setInterval(() => lobby && attach(), 4000);
+    // Polled rather than socketed: a kiosk has no session cookie of its own to authenticate a
+    // channel with, and a screen a few seconds stale is a screen, not a bug.
+    timer = setInterval(refresh, 3000);
   });
   onDestroy(() => clearInterval(timer));
 
   async function attach() {
     try {
       const rooms = await get('/tonight/rooms');
-      const room = rooms.rooms.find((r) => r.room_code.toUpperCase() === code.toUpperCase());
+      const room = rooms.rooms.find((r) => r.room_code.toUpperCase() === code.toUpperCase().trim());
       if (!room) {
         error = 'no live room has that code';
+        sessionId = null;
         lobby = null;
         return;
       }
       error = '';
-      lobby = await get(`/tonight/sessions/${room.session_id}`);
+      sessionId = room.session_id;
+      await refresh();
+    } catch (err) {
+      error = err instanceof ApiError ? err.detail?.message || err.message : 'not reachable';
+    }
+  }
+
+  async function refresh() {
+    if (sessionId === null) return;
+    try {
+      lobby = await get(`/tonight/sessions/${sessionId}`);
       if (lobby.ballot?.revealed) {
-        result = await get(`/tonight/sessions/${room.session_id}/result`);
-      } else {
-        result = null;
+        result = await get(`/tonight/sessions/${sessionId}/result`);
       }
     } catch (err) {
       // A 409 is the blind rule holding, not a failure: somebody has not submitted yet.
@@ -63,7 +78,13 @@
 </script>
 
 <section data-testid="tv-surface">
-  {#if !lobby}
+  {#if result}
+    <div data-testid="tv-result">
+      <p class="data beat">{REVEAL_BEAT}</p>
+      <h1>{result.winner?.name}</h1>
+      <p class="data" data-testid="tv-approval">{approvalShare(result)}</p>
+    </div>
+  {:else if !lobby}
     <form
       onsubmit={(e) => {
         e.preventDefault();
@@ -75,12 +96,6 @@
       <button class="pill" type="submit" data-testid="tv-attach">Show</button>
       {#if error}<p class="why" data-testid="tv-error">{error}</p>{/if}
     </form>
-  {:else if result}
-    <div data-testid="tv-result">
-      <p class="data beat">{REVEAL_BEAT}</p>
-      <h1>{result.winner?.name}</h1>
-      <p class="data" data-testid="tv-approval">{approvalShare(result)}</p>
-    </div>
   {:else if lobby.state === 'open'}
     <div data-testid="tv-lobby">
       <p class="data code">{lobby.room_code}</p>

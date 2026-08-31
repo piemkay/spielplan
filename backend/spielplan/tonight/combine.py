@@ -197,15 +197,33 @@ def contested_facet(
 def zeroed(scores: Mapping[int, float], *, facet: str, dna, axes) -> dict[int, float]:
     """"The contested axis is **zeroed, not averaged**."
 
-    Remove each title's position on the contested axis from its group score, so the axis stops
-    deciding the ranking. It cannot by itself produce an alternative — which is exactly what
-    54d says, and why the reservation below exists.
+    Remove the axis's influence on the ranking — which is a statement about *variance*, not a
+    subtraction. `axis_position` returns a normalised value in [−1, 1]; a group score is on
+    §5.1's scale, where the whole pool may span 0.1. Subtracting one from the other does not
+    zero the axis: it multiplies its influence, with the sign flipped, and the two "free"
+    finalist slots end up decided by the contested axis's own pole convention — the opposite of
+    what 54d asks for. The review found this by measuring the two scales.
+
+    So the influence is removed by regression: fit the group score on the axis position across
+    the pool and keep the residual. On a pool where the axis explains nothing the scores are
+    unchanged; on one where it explains everything they collapse to their mean, and the ranking
+    is then decided by whatever else the household's answers said. Zeroing still cannot by
+    itself produce an alternative — which is exactly why the reservation below exists.
     """
     weights = axes.get(facet, {})
-    return {
-        t: s - axis_position(dna.get(t, {}), weights)
-        for t, s in scores.items()
-    }
+    positions = {t: axis_position(dna.get(t, {}), weights) for t in scores}
+    n = len(scores)
+    if n < 2:
+        return dict(scores)
+    mean_x = sum(positions.values()) / n
+    mean_y = sum(scores.values()) / n
+    var_x = sum((positions[t] - mean_x) ** 2 for t in scores)
+    if var_x <= 1e-12:
+        # Every candidate sits at the same point on this axis, so it decides nothing already.
+        return dict(scores)
+    cov = sum((positions[t] - mean_x) * (scores[t] - mean_y) for t in scores)
+    slope = cov / var_x
+    return {t: scores[t] - slope * (positions[t] - mean_x) for t in scores}
 
 
 # --- the slate -------------------------------------------------------------------------------
@@ -281,17 +299,23 @@ def combine(
         adjusted_order = ranked(adjusted)
         finalists = [t for t, _ in adjusted_order[:FINALISTS - 1]]
         weights = axes.get(contested, {})
-        lead_pole = axis_position(dna.get(finalists[0], {}), weights)
+        poles = {t: axis_position(dna.get(t, {}), weights) for t, _ in adjusted_order}
+        lead_pole = poles.get(finalists[0], 0.0)
         opposite = [
             t for t, _ in adjusted_order
-            if t not in finalists
-            and axis_position(dna.get(t, {}), weights) * lead_pole < 0.0
+            if t not in finalists and poles.get(t, 0.0) * lead_pole < 0.0
         ]
         if opposite:
             finalists.append(opposite[0])
+        elif any(poles.get(t, 0.0) * lead_pole < 0.0 for t in finalists):
+            # The two free slots already span the axis, so "one of each" is true without a
+            # reservation and the third goes to the next best. The split is still SURFACED —
+            # dropping the copy here would be the review's finding in reverse: a slate that has
+            # one of each and does not say why.
+            finalists.append(next(t for t, _ in adjusted_order if t not in finalists))
         else:
-            # Nothing on the other pole is a fact about the library, not a reason to silently
-            # promise one anyway. The slate falls back to the plain third and the copy says so.
+            # Nothing anywhere on the other pole is a fact about the library, not a reason to
+            # promise one. §0: "a surfaced split must never ship bare."
             finalists = [t for t, _ in adjusted_order[:FINALISTS]]
             contested = None
         if contested:

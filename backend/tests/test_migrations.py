@@ -294,3 +294,23 @@ def test_no_v11_posterior_columns_survive_anywhere_in_the_schema(schema):
                   "session_ballot", "session_result", "session_outcome"):
         present = set(_columns(schema, table)) & banned
         assert not present, f"{table} carries deleted v1.1 machinery: {sorted(present)}"
+
+
+def test_a_retracted_answer_does_not_block_its_own_replacement(schema):
+    """§6 preamble's "undo everywhere", reaching `session_answer`.
+
+    `play.retract` tombstones rather than deletes (§14 risk 6: log every vote), and the next
+    answer arrives at the seq the retraction freed. A NON-partial unique index on
+    `(participant_id, seq)` makes that insert collide with the tombstone forever — one tap on
+    Undo ends that participant's round, and because the reveal waits for every seat (54e), the
+    household's evening with it. 0014 scopes it to the live rows.
+    """
+    seq = [
+        r for r in schema["indexes"]
+        if r["table_name"] == "session_answer" and r["indexname"] == "session_answer_seq"
+    ]
+    assert seq, "the double-submit guard still has to exist"
+    assert "UNIQUE" in seq[0]["indexdef"].upper()
+    assert "retracted_at IS NULL" in seq[0]["indexdef"], (
+        "a non-partial unique index here turns undo into a one-way door"
+    )

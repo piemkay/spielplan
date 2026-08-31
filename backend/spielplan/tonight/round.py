@@ -172,20 +172,25 @@ def initial(
     A member starts at their own §5.1 score — 54c: "their Ledger score for that title — their
     stable taste — plus a **mood tilt** learned from this round's answers".
 
-    A guest starts **flat**: same mean for every candidate, wider variance. That is 54c's "a
-    participant with no Ledger … starts from the pool prior and is carried entirely by their
-    answers", and the flatness is the whole point. The prototype's bug was literal substitution
-    — `const u = guest ? 'p' : who`, the host's Ledger wearing the guest's name — which is a
-    privacy-shaped defect rather than "contributes no taste term". What a guest is *shown* is
-    still the pool's own order, because that is the order the pairs are drawn from; what they
-    are *scored* by starts at nothing.
+    A guest starts from **the pool's own order**, wide. 54c: "a participant with no Ledger …
+    starts from the pool prior and is carried entirely by their answers", and the coverage row
+    says the same thing from the other side — "ranked by the candidate pool's own member-average
+    order". The caller hands that average in as `pool_scores`; the only difference from a member
+    is the variance, which is what "carried entirely by their answers" means and what makes a
+    guest's round "a little longer".
+
+    It is emphatically NOT the host's Ledger wearing the guest's name — the prototype's `const
+    u = guest ? 'p' : who`, which is a privacy-shaped defect rather than "contributes no taste
+    term". The pool average is nobody's scores.
+
+    An earlier draft flattened it, and the review found what that costs: with every mean equal,
+    the shortlist boundary equals that mean and EVERY candidate straddles it, so the selection
+    rule searches all n(n−1)/2 pairs with an O(n) update inside each instead of the handful the
+    boundary actually separates. A guest's evening got measurably slower than everybody else's
+    for no information gained — and the ordering the row requires was not there either.
     """
-    if not has_profile:
-        flat = sum(pool_scores.values()) / len(pool_scores) if pool_scores else 0.0
-        return {
-            t: Belief(mu=flat, var=prior_var * GUEST_VAR_FACTOR) for t in pool_scores
-        }
-    return {t: Belief(mu=float(s), var=prior_var) for t, s in pool_scores.items()}
+    var = prior_var * (GUEST_VAR_FACTOR if not has_profile else 1.0)
+    return {t: Belief(mu=float(s), var=var) for t, s in pool_scores.items()}
 
 
 def anchor_of(beliefs: Mapping[int, Belief]) -> float:
@@ -541,7 +546,15 @@ def replay(
     count = len(answers)
     reason = ESCAPE if escaped else stop_reason(beliefs, answered=count, z=z)
     unresolved = frozenset(straddlers(beliefs, z=z))
-    asked = {frozenset({x.title_a, x.title_b}) for x in answers}
+    # Live ADAPTIVE answers only. A hold-out pair suppressed from the adaptive arm is a
+    # hold-out steering selection, which is exactly what 54b forbids — 'used for neither
+    # selection nor stopping' is a statement about the whole selector, not only about the
+    # posterior. The review found it here rather than in the update.
+    asked = {
+        frozenset({x.title_a, x.title_b})
+        for x in answers
+        if x.selection != SELECTION_HOLDOUT
+    }
     nxt = (
         None
         if reason

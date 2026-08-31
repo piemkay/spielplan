@@ -402,19 +402,29 @@ def test_a_hold_out_answer_still_counts_toward_the_cap():
 
 def test_a_guest_starts_from_the_pool_prior_rather_than_a_borrowed_ledger():
     """54c: "A participant with no Ledger (a guest, a member with too few labels) starts from
-    the pool prior and is carried entirely by their answers." The prototype's bug was literal
-    substitution — `const u = guest ? 'p' : who` — which is a privacy-shaped defect, not
-    "contributes no taste term"."""
+    the pool prior and is carried entirely by their answers", and the coverage row: "ranked by
+    the candidate pool's own **member-average order**".
+
+    An earlier version of this test asserted the opposite — that the guest's prior is FLAT —
+    and the review found both halves of what that costs. It does not rank the pool, which the
+    row requires; and with every mean equal, every candidate straddles the shortlist boundary
+    at once, so the selection rule searches every pair in the pool instead of the handful the
+    boundary separates. The assertion is corrected here rather than loosened: the property the
+    row states is stronger than the one it replaced.
+
+    What a guest does NOT get is a member's Ledger under their name — the prototype's `const u
+    = guest ? 'p' : who`. The pool average is nobody's scores, which is what the caller hands
+    in (`play.Snapshot.member_average`).
+    """
     pool_order = {5: 0.9, 6: 0.5, 7: 0.1}
     member = rnd.initial(pool_order, prior_var=1.0)
     guest = rnd.initial(pool_order, prior_var=1.0, has_profile=False)
 
     assert [t for t, _ in sorted(guest.items(), key=lambda kv: -kv[1].mu)] == [5, 6, 7]
-    assert len({b.mu for b in guest.values()}) == 1, (
-        "a guest's own posterior starts flat — the pool's ORDER is what they are shown, not a "
-        "member's scores wearing their name"
+    assert len({b.mu for b in guest.values()}) == 3, "a flat prior ranks nothing"
+    assert {t: b.mu for t, b in guest.items()} == {t: b.mu for t, b in member.items()}, (
+        "the ORDER is the pool's; only the confidence differs"
     )
-    assert len({b.mu for b in member.values()}) == 3
 
 
 def test_a_guest_starts_wider_than_a_member():

@@ -573,6 +573,14 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
 
     slate = [card(r) for r in rows if r["slot"] in ("finalist", "wildcard")]
     winner = next((c for c in slate if c["title_id"] == outcome["chosen_title_id"]), None)
+    # §6.2 step 7's "runners-up" are the titles that RAN — the rest of the ballot, ordered by
+    # how close they came. The `runner_up` slot is the candidate pool's tail: never on any
+    # ballot, therefore always "0 approved", and drawing it here put the two losing finalists —
+    # the ones people actually approved — nowhere on the screen at all. The review found it.
+    runners_up = sorted(
+        (c for c in slate if winner is None or c["title_id"] != winner["title_id"]),
+        key=lambda c: (-c["approvals"], -c["rank"]),
+    )
     return {
         "session_id": session_id,
         # 54e/proposal 60: the reveal opens with an explicit beat before the winner appears —
@@ -582,7 +590,7 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
         "approval_share": outcome["approval_share"],
         "participants": outcome["participants"],
         "unanimous": winner is not None and winner["approvals"] == outcome["participants"],
-        "runners_up": [card(r) for r in rows if r["slot"] == "runner_up"][:4],
+        "runners_up": runners_up,
         "wildcard": next((c for c in slate if c["slot"] == "wildcard"), None),
         "finalists": [c for c in slate if c["slot"] == "finalist"],
     }
@@ -648,12 +656,16 @@ async def channel(socket: WebSocket, session_id: int | None = None) -> None:
         # wait for the next change to know what it is looking at.
         async with db_pool.acquire() as conn:
             await socket.send_json(
-                channel_rules.rooms_changed(await rooms.open_rooms(conn, viewer_id=user.id))
+                channel_rules.wire(
+                    channel_rules.rooms_changed(await rooms.open_rooms(conn, viewer_id=user.id))
+                )
             )
             if session_id is not None:
                 await socket.send_json(
-                    channel_rules.progress_frame(
-                        session_id, await play.progress(conn, session_id)
+                    channel_rules.wire(
+                        channel_rules.progress_frame(
+                            session_id, await play.progress(conn, session_id)
+                        )
                     )
                 )
         while True:

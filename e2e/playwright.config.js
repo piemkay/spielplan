@@ -57,7 +57,12 @@ export default defineConfig({
       // drops)" — so 13-rank runs here as well as on desktop. It seeds a member per
       // project, because §4.2's observations are append-only and the two runs would
       // otherwise share a board.
-      testMatch: /(shell|library|responsive|13-rank)\.spec\.js/,
+      //
+      // 14-tonight joins them for the same reason: §6.2 step 2's hand-the-phone is a
+      // statement about a PHONE ("Guests use the initiator's phone"), and solo is the
+      // one-tap path §6's preamble is written around. 15-tonight-group needs two browser
+      // contexts and 16-tonight-tv is a television, so both stay on desktop.
+      testMatch: /(shell|library|responsive|13-rank|14-tonight)\.spec\.js/,
     },
   ],
 });

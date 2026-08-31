@@ -7,7 +7,7 @@
    * a screen another has left.
    *
    *   door    → the two doors (§6.2 step 1's controls sit above both), and the open-rooms list
-   *   lobby   → the room: code, QR, seats, and the host's Start
+   *   lobby   → the room: code, seats, and the host's Start
    *   round   → 54c's pairs, four answers, undo, and the escape from pair 6
    *   waiting → 54c's progress view: counts, never answers
    *   ballot  → 54e's blind approval multi-select
@@ -33,10 +33,12 @@
     answer,
     approvalShare,
     bootstrap,
+    leave,
     connect,
     escape,
     join,
     loadBallot,
+    loadRooms,
     loadRound,
     loadSolo,
     openRoom,
@@ -51,11 +53,29 @@
   } from '$lib/tonight.svelte.js';
 
   let code = $state('');
+  let sharpening = $state(false);
   let disconnect = () => {};
 
+  /** The session this device's socket is pointed at, so a re-point happens in one place rather
+   * than three. `onMount` is async and a tap on "Together" can land before it resolves; the
+   * loser used to overwrite the winner's subscription, leaving the device in the household
+   * group and not the room's — household frames arrived and the room's own never did. */
+  let watching = null;
+
+  function watch(sessionId) {
+    if (watching === sessionId && sessionId !== null) return;
+    disconnect();
+    watching = sessionId;
+    disconnect = connect(sessionId);
+  }
+
   onMount(async () => {
-    await bootstrap();
-    disconnect = connect();
+    // `bootstrap` returns the session this device is already seated in, if any — a reload, a
+    // backgrounded phone or a navigation away and back must not cost somebody their evening
+    // (§6.2 step 4 puts them on their own device for up to twenty pairs, and 54e's reveal
+    // waits for every seat).
+    const resumed = await bootstrap();
+    if (watching === null) watch(resumed);
   });
   onDestroy(() => disconnect());
 
@@ -71,20 +91,26 @@
       : []
   );
 
+  /** Back to the door. The seat is kept — `resume` on the open-rooms row comes back to it. */
+  async function toDoor() {
+    leave();
+    // And stop watching the room, not only its screen: a session-scoped frame ends in `refresh`,
+    // which would re-read the room this device just stepped out of.
+    watch(null);
+    sharpening = false;
+    await loadRooms();
+  }
+
   async function openAndWatch() {
     const room = await openRoom();
-    if (room) {
-      disconnect();
-      disconnect = connect(room.session_id);
-    }
+    if (room) watch(room.session_id);
   }
 
   async function joinAndWatch(args) {
     const joined = await join(args);
     if (joined) {
       code = '';
-      disconnect();
-      disconnect = connect(joined.session_id);
+      watch(joined.session_id);
     }
   }
 </script>
@@ -92,12 +118,25 @@
 <section data-testid="tonight-surface">
   <header>
     <h1>Tonight</h1>
+    {#if tonight.step !== 'door'}
+      <!-- Stepping out is not leaving: the seat stays, and the open-rooms row for a room you
+           are in is a `resume` control. Without this the restore that keeps a reload from
+           stranding somebody becomes a trap of its own — one live room and the surface has no
+           other door. -->
+      <button class="pill back" onclick={toDoor} data-testid="tonight-back">Tonight</button>
+    {/if}
     {#if tonight.error}
       <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
     {/if}
   </header>
 
-  {#if tonight.step === 'door'}
+  {#if !tonight.booted}
+    <!-- The restore is a round trip, so until it lands this device does not know whether it is
+         at the door or in a room. Painting the door meanwhile is not a flicker: the controls are
+         live, and a tap on "Together" in that window opens a second room for somebody who
+         already has a seat in one. -->
+    <p class="why" data-testid="tonight-booting">reading the room...</p>
+  {:else if tonight.step === 'door'}
     <!-- §6.2 step 1: the controls sit before the solo/group fork and apply to both. -->
     <div class="controls card" data-testid="tonight-controls">
       <div class="row">
@@ -203,8 +242,14 @@
                   onclick={() => joinAndWatch({ sessionId: room.session_id })}
                   data-testid={`tonight-seat-${room.room_code}`}>tap to join</button
                 >
+              {:else if room.viewer_seated}
+                <button
+                  class="pill seat"
+                  onclick={() => joinAndWatch({ sessionId: room.session_id })}
+                  data-testid={`tonight-resume-${room.room_code}`}>resume</button
+                >
               {:else}
-                <span class="why">{room.viewer_seated ? 'you are in' : 'started'}</span>
+                <span class="why">started</span>
               {/if}
             </li>
           {/each}
@@ -216,16 +261,16 @@
   {#if tonight.step === 'lobby' && tonight.lobby}
     <div class="card lobby" data-testid="tonight-lobby">
       <p class="data code" data-testid="tonight-room-code">{tonight.lobby.room_code}</p>
-      <!-- §6.2 step 2's QR, drawn from PUBLIC_URL's own origin so a scan lands where the
-           passkey was registered (§2, §14.4). -->
-      <img
-        class="qr"
-        alt={`QR for room ${tonight.lobby.room_code}`}
-        data-testid="tonight-qr"
-        src={`data:image/svg+xml;utf8,${encodeURIComponent(
-          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#141416"/><text x="4" y="5" font-size="1.6" fill="#ece9e4" text-anchor="middle">${tonight.lobby.room_code}</text></svg>`
-        )}`}
-      />
+      <!-- §6.2 step 2 names "room code / QR". The code ships; the QR does not.
+           A placeholder SVG stood here with an alt that told a screen-reader user it was a QR
+           and a comment claiming it encoded PUBLIC_URL — it was a rectangle with the code
+           written in it, and the review caught the lie. A real encoder is a day's work with
+           its own tests and no dependency is permitted to bring one in, so the honest thing is
+           to ship the channel that works and say the other is not here yet. Recorded in
+           M4-open-points. -->
+      <p class="why" data-testid="tonight-no-qr">
+        Read the code out, or send the link — the QR arrives later.
+      </p>
       <p class="why">{JOIN_CAPTION}</p>
       <ul class="seats" data-testid="tonight-seats">
         {#each tonight.lobby.seats as seat (seat.participant_id)}
@@ -240,7 +285,7 @@
       {#if isHost}
         <p class="why">Start whenever you are ready. Anyone who joins before you start is in.</p>
         <button
-          class="pill primary"
+          class="pill on"
           onclick={start}
           disabled={tonight.busy}
           data-testid="tonight-start">Start</button
@@ -335,7 +380,7 @@
         {/each}
       </ul>
       <button
-        class="pill primary"
+        class="pill on"
         onclick={() => submitBallot(me?.participant_id)}
         disabled={tonight.busy || !me}
         data-testid="tonight-submit-ballot">Submit</button
@@ -374,12 +419,12 @@
         {/if}
         {#if tonight.result.winner?.play_url}
           <a
-            class="pill primary"
+            class="btn-primary play"
             href={tonight.result.winner.play_url}
             data-testid="tonight-play">Play on Jellyfin</a
           >
         {:else}
-          <span class="pill disabled" aria-disabled="true" data-testid="tonight-play"
+          <span class="pill disabled play" aria-disabled="true" data-testid="tonight-play"
             >Play on Jellyfin — no Jellyfin link</span
           >
         {/if}
@@ -435,14 +480,46 @@
             onclick={() => loadSolo({ reshuffle: true })}
             data-testid="tonight-reshuffle">Reshuffle</button
           >
-          {#if tonight.solo.pair}
+          {#if tonight.solo.pair && !sharpening}
             <button
               class="pill"
-              onclick={() => sharpen('A')}
+              onclick={() => (sharpening = true)}
               data-testid="tonight-sharpen">sharpen this</button
             >
           {/if}
         </div>
+        {#if tonight.solo.pair && sharpening}
+          <!-- 54f runs "the same adaptive round against the same pool", which means the same
+               question: §6.2 step 4's "Which one tonight?". An earlier version had one button
+               that posted `A` without drawing either title, so every tap recorded a preference
+               nobody had expressed and then re-ranked the picks by it. -->
+          <div class="round" data-testid="tonight-sharpen-pair">
+            <h2>Which one tonight?</h2>
+            <div class="pair">
+              {#each [['A', tonight.solo.pair.a], ['B', tonight.solo.pair.b]] as [side, title]}
+                <button
+                  class="poster"
+                  onclick={() => sharpen(side)}
+                  disabled={tonight.busy}
+                  data-testid={`tonight-sharpen-${side}`}
+                >
+                  <span class="big">{title?.name}</span>
+                  <span class="why">{title?.year} · {title?.fit_line}</span>
+                </button>
+              {/each}
+            </div>
+            <div class="row">
+              {#each ANSWERS.filter((a) => a.value !== 'A' && a.value !== 'B') as choice}
+                <button
+                  class="pill"
+                  onclick={() => sharpen(choice.value)}
+                  disabled={tonight.busy}
+                  data-testid={`tonight-sharpen-${choice.value}`}>{choice.label}</button
+                >
+              {/each}
+            </div>
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -476,7 +553,6 @@
   }
   .seat { min-height: var(--touch); }
   .code { font-size: 22px; letter-spacing: 0.18em; color: var(--ember); }
-  .qr { width: 132px; height: 132px; border-radius: var(--r-md); }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .poster {
     min-height: 140px; display: flex; flex-direction: column; justify-content: flex-end;
@@ -490,9 +566,17 @@
   .picks li, .slate li { padding: 6px 0; }
   .picks li { display: flex; flex-direction: column; gap: 4px; }
   .error { color: var(--ember-lift); font-size: 12.5px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .back { min-height: var(--touch); }
   .empty { color: var(--ink-2); font-size: 13px; }
   .rail { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); }
   .disabled { opacity: 0.55; }
+  /* §6 preamble's 48 px floor. design.css raises `button.pill` on a coarse pointer; the Play
+     CTA is an <a> (§7.1's deep link) and an aria-disabled <span>, so neither is reached by it. */
+  .play {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: var(--touch); padding-inline: 20px;
+  }
   @media (max-width: 560px) {
     .doors, .pair { grid-template-columns: 1fr; }
   }

@@ -106,14 +106,31 @@ export async function loadRooms() {
   }
 }
 
+/**
+ * Come back to whatever this device was already part of.
+ *
+ * §6.2 step 4 puts each participant on their own device for a round that runs to twenty pairs,
+ * so a reload, a backgrounded phone or an ordinary navigation away and back are all ordinary
+ * events — and none of them may cost somebody their evening. Without this the surface reopened
+ * on the door with no way back in: the open-rooms row for a room you are seated in is not a
+ * join control, and 54e's reveal waits for every seat, so one reload deadlocked the household.
+ * The review found it.
+ */
 export async function bootstrap() {
   tonight.loading = true;
   try {
     await loadRooms();
+    const mine = tonight.rooms.find((r) => r.viewer_seated);
+    if (mine) {
+      tonight.lobby = { session_id: mine.session_id };
+      await refresh();
+      return mine.session_id;
+    }
   } finally {
     tonight.loading = false;
     tonight.booted = true;
   }
+  return null;
 }
 
 /** §6.2 step 1: the initiator opens a room with the three controls. */
@@ -178,6 +195,30 @@ export async function refresh() {
   }
 }
 
+/**
+ * Step back out to the door without giving up the seat.
+ *
+ * The restore above keeps a reload from stranding a participant, but a household with one live
+ * room then has no other door: every visit to /tonight lands back inside it. Leaving the screen
+ * is not leaving the session — the seat, the answers and the ballot all live on the server, and
+ * the open-rooms row for a room you are seated in is a `resume` control.
+ *
+ * It has to drop the room's own state, not just the step. Every channel frame ends in `refresh`,
+ * which recomputes the step from the server, so a device that stepped out while still holding a
+ * lobby was dragged straight back in by the next frame anybody else's device caused.
+ */
+export function leave() {
+  tonight.lobby = null;
+  tonight.round = null;
+  tonight.ballot = null;
+  tonight.result = null;
+  tonight.progress = [];
+  tonight.approved = [];
+  tonight.rail = [];
+  tonight.step = 'door';
+  tonight.error = '';
+}
+
 /** §6.2 step 2's join window closes here — "Anyone who joins before you start is in." */
 export async function start() {
   tonight.busy = true;
@@ -193,6 +234,12 @@ export async function start() {
 
 export async function loadRound(participantId) {
   try {
+    // §6.7's rail is the last ~15 events and never persisted; on ONE DEVICE it outlives the
+    // participant it belongs to. Left standing across §6.2 step 2's hand-off it shows the
+    // incoming guest the previous person's answer values — the exact thing 54c's blindness is
+    // about, on the device the hand-off exists to protect. Cleared with the round, not with
+    // the page.
+    tonight.rail = [];
     tonight.round = await get(`/tonight/seats/${participantId}/round`);
     tonight.step = tonight.round.pair ? 'round' : 'waiting';
   } catch (err) {
@@ -333,10 +380,17 @@ export async function loadSolo({ sharpen = false, reshuffle = false } = {}) {
   }
 }
 
-/** 54f's sharpen round. The answers live here because §6.2 step 8 mints no session row. */
+/**
+ * 54f's sharpen round. The answers live here because §6.2 step 8 mints no session row.
+ *
+ * `value` is the person's, and the surface shows them the pair before asking: an earlier
+ * version had one button that posted `A` without drawing either title, so every tap recorded a
+ * preference nobody expressed and then re-ranked their picks by it. §6.2 step 4's question is
+ * "Which one tonight?" — it has to be asked.
+ */
 export async function sharpen(value) {
   const pair = tonight.solo?.pair;
-  if (!pair) return;
+  if (!pair || !ANSWERS.some((a) => a.value === value)) return;
   tonight.soloAnswers = [
     ...tonight.soloAnswers,
     {
@@ -356,21 +410,55 @@ export async function sharpen(value) {
  */
 export function connect(sessionId = null) {
   if (typeof WebSocket === 'undefined') return () => {};
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const suffix = sessionId ? `?session_id=${sessionId}` : '';
-  const socket = new WebSocket(`${proto}//${location.host}/api/tonight/channel${suffix}`);
-  socket.onmessage = async (event) => {
-    let frame;
-    try {
-      frame = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (frame.kind === 'rooms.changed') await loadRooms();
-    else if (frame.kind === 'progress') tonight.progress = frame.participants;
-    else if (frame.kind === 'lobby' || frame.kind === 'reveal') await refresh();
+  let socket = null;
+  let closed = false;
+  let retry;
+
+  const open = () => {
+    if (closed) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const suffix = sessionId ? `?session_id=${sessionId}` : '';
+    socket = new WebSocket(`${proto}//${location.host}/api/tonight/channel${suffix}`);
+    socket.onmessage = async (event) => {
+      let frame;
+      try {
+        frame = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (frame.kind === 'rooms.changed') {
+        await loadRooms();
+        // A household frame also means a room's seat list moved. A device already sitting in a
+        // lobby has to re-read it, because the session-scoped frame that would have told it can
+        // be missed: `onMount`'s connect and a tap on "Together" race, and whichever loses
+        // leaves this device in the household group and not the room's. Re-reading on the frame
+        // it did get is what makes the lobby live either way, and it is still the WebSocket
+        // doing it — no poll.
+        if (tonight.lobby) await refresh();
+      } else if (frame.kind === 'progress') tonight.progress = frame.participants;
+      else if (frame.kind === 'lobby' || frame.kind === 'reveal') await refresh();
+    };
+    // A phone that locks, a laptop that sleeps and a proxy that times out all close the socket
+    // without telling anyone. Without a retry the device stays connected in name only, and the
+    // lobby it is looking at quietly stops being live — the failure §6's preamble makes the
+    // in-app channel the guaranteed answer to. Re-read on reconnect, because a frame missed
+    // while it was down is a frame nobody re-sends.
+    socket.onclose = () => {
+      if (closed) return;
+      retry = setTimeout(async () => {
+        open();
+        await refresh();
+        await loadRooms();
+      }, 1500);
+    };
   };
-  return () => socket.close();
+
+  open();
+  return () => {
+    closed = true;
+    clearTimeout(retry);
+    socket?.close();
+  };
 }
 
 /** §6.2 step 2's row: "MX-2210 · hosted by Mia · 3 min ago · Film · 60 min · skips seen". */

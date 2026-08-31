@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Protocol
 
 log = logging.getLogger("spielplan.tonight.channel")
@@ -41,6 +42,31 @@ REVEAL = "reveal"
 # One household, one process, a handful of devices: a per-socket queue this deep is a slow
 # client, and a slow client is dropped rather than allowed to stall the hub.
 QUEUE_DEPTH = 32
+
+
+def wire(value: Any) -> Any:
+    """A frame, in the types a WebSocket can actually put on the wire.
+
+    `WebSocket.send_json` is plain `json.dumps` — unlike a FastAPI response, which runs
+    `jsonable_encoder` first. So `session.started_at` (a `datetime`, and the "3 min ago" in
+    §6.2 step 2's own example row) raises `TypeError` on the very first frame, the socket dies
+    before it has ever delivered anything, and the lobby silently falls back to whatever the
+    last REST read said. Nothing logs on the client and nothing is visibly broken on the
+    server — the e2e is what found it.
+
+    Converted here rather than at each call site, and here rather than by importing FastAPI's
+    encoder, because the hub takes a `Socket` Protocol precisely so it can be tested without an
+    ASGI server; a framework import would take that back.
+    """
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {k: wire(v) for k, v in value.items()}
+    if isinstance(value, str | bytes):
+        return value
+    if isinstance(value, Sequence):
+        return [wire(v) for v in value]
+    return value
 
 
 class Socket(Protocol):
@@ -87,7 +113,7 @@ class Hub:
         sent = 0
         for sub in list(targets):
             try:
-                await sub.socket.send_json(frame)
+                await sub.socket.send_json(wire(frame))
                 sent += 1
             except Exception:
                 # A device that has gone away must not stop the frame reaching the others: the
@@ -150,6 +176,7 @@ __all__ = [
     "ROOMS_CHANGED",
     "Socket",
     "Subscriber",
+    "wire",
     "lobby_frame",
     "progress_frame",
     "reveal_frame",

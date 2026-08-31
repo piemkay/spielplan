@@ -522,6 +522,13 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
         "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
         "api/rank.py": "skips the incremental refit after a held-out answer, so the evaluation "
                        "stream cannot move the freshness clock the selector reads",
+        # M4. 54b binds §13's guard to Tonight's round as well, so the stream has two more
+        # deliberate readers — one that excludes it and one that admits only it, which is the
+        # same pairing `ledger/observations.py` and `rank/evaluation.py` already make.
+        "tonight/round.py": "names the arm, and excludes those answers from the posterior that "
+                            "selection and stopping read (54b)",
+        "tonight/evaluation.py": "admits only those rows (54b's one evaluation read path for "
+                                 "the round)",
     }
     offenders = [
         rel for rel in _files_naming_the_held_out_stream(PACKAGE) if rel not in allowed

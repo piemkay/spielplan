@@ -11,9 +11,11 @@ import {
   MAX_GUESTS,
   REVEAL_BEAT,
   approvalShare,
+  leave,
   minutesAgo,
   progressLine,
-  roomLine
+  roomLine,
+  tonight
 } from './tonight.svelte.js';
 
 /**
@@ -124,5 +126,50 @@ describe('the constants the spec fixes', () => {
     expect(REVEAL_BEAT).toBe('VOTES REVEALED TOGETHER');
     expect(ESCAPE_LABEL).toBe('just pick for us');
     expect(JOIN_CAPTION).toContain('Push is best effort');
+  });
+});
+
+describe('stepping back out to the door (§6.2 step 2)', () => {
+  it('drops the room, not the seat', () => {
+    // The restore that keeps a reload from stranding a participant gives a household with one
+    // live room no other door — every visit lands back inside it. `leave` is the way out, and it
+    // is a client-side step: nothing here calls the API, because the seat, the answers and the
+    // ballot stay on the server for `resume` to come back to.
+    Object.assign(tonight, {
+      step: 'ballot',
+      lobby: { session_id: 7 },
+      round: { pair: {} },
+      ballot: { slate: [] },
+      result: { winner: {} },
+      progress: [{ answered: 3 }],
+      approved: [11],
+      rail: [{ kind: 'session_answer' }]
+    });
+
+    leave();
+
+    expect(tonight.step).toBe('door');
+    for (const held of ['lobby', 'round', 'ballot', 'result']) expect(tonight[held]).toBeNull();
+    for (const held of ['progress', 'approved', 'rail']) expect(tonight[held]).toEqual([]);
+  });
+
+  it('clears the lobby, because a frame would otherwise drag the device back in', () => {
+    // Every channel frame ends in `refresh`, and `refresh` recomputes the step from the server
+    // for whoever still holds a lobby. Leaving only the step behind left a device that stepped
+    // out being pulled back by the next frame anybody else's device caused — which is how the
+    // e2e found it: the back control worked, and then undid itself.
+    Object.assign(tonight, { step: 'ballot', lobby: { session_id: 7 } });
+    leave();
+    expect(tonight.lobby).toBeNull();
+  });
+
+  it("keeps the controls, because they are the door's and not the room's", () => {
+    // §6.2 step 1 puts the three controls before the fork. Coming back to a door that had
+    // forgotten the budget you set would make stepping out cost something.
+    tonight.controls.runtime_budget_min = 95;
+    tonight.controls.include_rewatches = true;
+    leave();
+    expect(tonight.controls.runtime_budget_min).toBe(95);
+    expect(tonight.controls.include_rewatches).toBe(true);
   });
 });

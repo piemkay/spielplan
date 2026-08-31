@@ -22,7 +22,7 @@ JENNY_JF = "jf-user-jenny"
 
 
 @pytest.fixture
-async def admin(app, fake_jellyfin, secrets_key, monkeypatch):
+async def admin(secrets_key, app, fake_jellyfin, monkeypatch):
     """An admin session with the app's Jellyfin client pointed at the in-process fake."""
     module, transport = fake_jellyfin
 
@@ -265,7 +265,7 @@ async def test_unlinking_leaves_a_working_account(admin):
 # --- §3.3: authentication is never delegated to Jellyfin -------------------------------------
 
 
-async def test_signing_in_works_while_jellyfin_is_unreachable(app, monkeypatch, secrets_key):
+async def test_signing_in_works_while_jellyfin_is_unreachable(secrets_key, app, monkeypatch):
     """The promise that decides the whole connector design: the app must work when Jellyfin is
     down. Nothing on the auth path may touch it."""
     monkeypatch.setattr(

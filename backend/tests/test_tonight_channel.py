@@ -139,3 +139,47 @@ def test_every_frame_names_its_kind(builder):
     assert frame["kind"] in (
         channel.ROOMS_CHANGED, channel.LOBBY, channel.PROGRESS, channel.REVEAL
     )
+
+
+def test_a_frame_is_encoded_for_the_wire_before_it_is_sent():
+    """`WebSocket.send_json` is plain `json.dumps` — unlike a FastAPI response, which runs
+    `jsonable_encoder` first. §6.2 step 2's own open-rooms row carries an age ("3 min ago"), so
+    the very first frame a device receives holds a `datetime`.
+
+    The e2e found this: the socket raised `TypeError` on its first send, died before delivering
+    anything, and the lobby silently fell back to the last REST read. Nothing logged on the
+    client and nothing looked broken on the server — which is why it is asserted here, on the
+    frame, rather than left to the transport.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    frame = channel.rooms_changed(
+        [{"session_id": 1, "room_code": "MX-2210", "started_at": datetime.now(UTC)}]
+    )
+    with pytest.raises(TypeError):
+        json.dumps(frame)
+    assert json.dumps(channel.wire(frame)), "the wired frame has to survive json.dumps"
+
+
+async def test_every_frame_the_hub_sends_survives_json_dumps():
+    """The hub is where it is fixed, so a later frame that grows a timestamp inherits it — and
+    the `lobby` frame already has one."""
+    import json
+    from datetime import UTC, datetime
+
+    hub = channel.Hub()
+    seen = Recorder()
+    hub.subscribe(seen, user_id=1, session_id=7)
+    await hub.to_session(
+        7, channel.lobby_frame({"session_id": 7, "started_at": datetime.now(UTC), "seats": []})
+    )
+    assert seen.frames
+    assert json.dumps(seen.frames[0])
+
+
+def test_wiring_leaves_everything_else_alone():
+    """A converter that stringified more than it had to would change what the client sees."""
+    frame = {"kind": "progress", "session_id": 7, "n": 3, "ok": True, "name": "patrick",
+             "seats": [{"answered": 6, "ended_by": None}]}
+    assert channel.wire(frame) == frame
