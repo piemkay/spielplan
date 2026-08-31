@@ -1091,7 +1091,13 @@ milestone = "M4"
 kind = "backend"
 what = "An answer outside A|B|EITHER|NEITHER is rejected, and in the tonight-score update EITHER raises both candidates of the pair while NEITHER lowers both."
 why = "decision 154: both ship — either is an equality constraint, neither a rejection of both and the escape from a badly-built pool."
-tests = []
+tests = [
+    "backend/tests/test_schema_contracts.py::test_a_session_answer_is_one_of_four_values",
+    "backend/tests/test_tonight_round.py::test_only_the_four_answers_exist",
+    "backend/tests/test_tonight_round.py::test_either_raises_both_candidates",
+    "backend/tests/test_tonight_round.py::test_neither_lowers_both_candidates",
+    "backend/tests/test_tonight_round.py::test_either_and_neither_are_opposite_and_neither_is_a_no_op",
+]
 
 [[requirement]]
 id = "data-rules-session-holdout-excluded"
@@ -1136,7 +1142,16 @@ milestone = "M4"
 kind = "backend"
 what = "Among candidates whose posterior interval still straddles the shortlist boundary, the pair served is the one whose answer would most reduce the number still straddling; ties break toward the pair spanning the widest DNA axis, so a near-identical pair is never served while a wider-spanning tie exists."
 why = "Best-arm identification inside a pool, not ranking estimation — the regime §0's measured selection null does not cover; a pair of near-identical titles teaches nothing about the tilt."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_the_boundary_sits_between_the_third_and_fourth_candidate",
+    "backend/tests/test_tonight_round.py::test_a_pool_smaller_than_the_shortlist_has_no_boundary_to_resolve",
+    "backend/tests/test_tonight_round.py::test_a_candidate_straddles_when_its_interval_crosses_the_boundary",
+    "backend/tests/test_tonight_round.py::test_the_pair_served_comes_from_the_straddling_set",
+    "backend/tests/test_tonight_round.py::test_the_pair_served_is_the_one_that_resolves_the_most_straddlers",
+    "backend/tests/test_tonight_round.py::test_a_tie_on_information_breaks_toward_the_widest_dna_axis",
+    "backend/tests/test_tonight_round.py::test_selection_never_serves_a_pair_the_participant_has_already_answered",
+    "backend/tests/test_tonight_round.py::test_a_pair_never_names_one_title_twice",
+]
 
 [[requirement]]
 id = "tonight-rank-waiting-shows-progress-only"
@@ -1154,7 +1169,16 @@ milestone = "M4"
 kind = "backend"
 what = "session_answer accepts exactly A|B|EITHER|NEITHER: A/B separate the two candidates' posteriors, EITHER raises both together, NEITHER lowers both, and a NEITHER is never stored as EITHER nor dropped from the update."
 why = "Decision 154 ships both as opposite signals; the prototype collected NO_PULL, logged it, and discarded it in tilt() — 'collected but ignored' is the specific regression."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_only_the_four_answers_exist",
+    "backend/tests/test_tonight_round.py::test_a_and_b_separate_the_two_posteriors",
+    "backend/tests/test_tonight_round.py::test_either_raises_both_candidates",
+    "backend/tests/test_tonight_round.py::test_neither_lowers_both_candidates",
+    "backend/tests/test_tonight_round.py::test_either_and_neither_are_opposite_and_neither_is_a_no_op",
+    "backend/tests/test_tonight_round.py::test_neither_eliminates_two_candidates_at_once",
+    "backend/tests/test_tonight_round.py::test_an_answer_shrinks_the_uncertainty_of_the_titles_it_names",
+    "backend/tests/test_schema_contracts.py::test_a_session_answer_is_one_of_four_values",
+]
 
 [[requirement]]
 id = "tonight-rank-escape-from-pair-six"
