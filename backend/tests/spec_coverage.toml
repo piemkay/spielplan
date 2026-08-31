@@ -1261,7 +1261,20 @@ milestone = "M4"
 kind = "integration"
 what = "The candidate pool is exactly the owned titles of the session's kind that pass the runtime budget and the rewatch setting: an unowned title and a series in a film session never appear in the pool, in any pair served, or among the finalists; the budget is soft — a title is admitted up to budget + 40 min and none past it — and an admitted title over the budget carries 'runs N min over' with N its runtime minus the budget in whole minutes; with the rewatch toggle in its default position a title every seated member has seen is excluded and a title one of two members has not seen is kept."
 why = "§4.1 rule 5 binds every ranking surface and Tonight ends in Play on Jellyfin, so an unowned or wrong-kind title is an evening the household cannot watch; the '+40 with a label' grace and the *every*-participant quantifier are the two places a plausible implementation silently gets it wrong in the direction nobody notices."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_pool_holds_only_owned_titles_of_the_sessions_kind",
+    "backend/tests/test_tonight_integration.py::test_ownership_is_re_read_rather_than_remembered",
+    "backend/tests/test_tonight_integration.py::test_the_rewatch_default_removes_only_what_everyone_has_seen",
+    "backend/tests/test_tonight_integration.py::test_include_rewatches_admits_both",
+    "backend/tests/test_tonight_integration.py::test_the_budget_admits_forty_minutes_of_grace_and_labels_it",
+    "backend/tests/test_tonight_integration.py::test_a_wider_budget_admits_the_long_one",
+    "backend/tests/test_tonight_integration.py::test_a_title_only_one_member_has_a_score_for_is_not_a_candidate",
+    "backend/tests/test_tonight_pool.py::test_the_budget_is_soft_by_exactly_forty_minutes",
+    "backend/tests/test_tonight_pool.py::test_an_over_budget_title_says_how_far_over_and_a_fitting_one_says_nothing",
+    "backend/tests/test_tonight_pool.py::test_a_title_of_unknown_runtime_is_admitted_rather_than_dropped",
+    "backend/tests/test_tonight_pool.py::test_a_candidate_carries_its_own_over_budget_label",
+    "backend/tests/test_tonight_pool.py::test_the_budget_filter_drops_only_what_it_must",
+]
 
 [[requirement]]
 id = "tonight-rank-pool-order-plain-average"
@@ -1270,7 +1283,16 @@ milestone = "M4"
 kind = "backend"
 what = "The pool's order is the unweighted arithmetic mean of the seated members' §5.1 scores and nothing else — a title where the minimum favours one candidate but the mean favours another places the mean's winner first, every member counts equally regardless of label count, and no mood tilt (this session's or a stored one) enters the pool prior, so two sessions opened over the same filters against the same Ledgers produce the identical order."
 why = "No aggregation rule dominates plain averaging and dominance rules cost −0.012 against a 0.003–0.008 noise floor; the stored mood profile is worth 0.000 for choose-tonight, so a tilt in the prior is measured harm rather than a refinement."
-tests = []
+tests = [
+    "backend/tests/test_tonight_pool.py::test_the_group_score_is_the_unweighted_arithmetic_mean",
+    "backend/tests/test_tonight_pool.py::test_the_pool_is_ordered_by_the_mean_and_not_by_the_minimum",
+    "backend/tests/test_tonight_pool.py::test_no_dominance_rule_survives_in_the_ordering",
+    "backend/tests/test_tonight_pool.py::test_every_member_counts_equally_regardless_of_who_they_are",
+    "backend/tests/test_tonight_pool.py::test_a_guest_seat_contributes_no_term_to_the_average",
+    "backend/tests/test_tonight_pool.py::test_the_order_is_stable_and_deterministic",
+    "backend/tests/test_tonight_pool.py::test_no_tilt_can_reach_the_pool_prior",
+    "backend/tests/test_tonight_integration.py::test_the_pool_is_ordered_by_the_plain_average_of_both_members",
+]
 
 [[requirement]]
 id = "tonight-rank-pool-never-shown-as-a-step"
