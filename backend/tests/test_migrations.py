@@ -131,3 +131,51 @@ def test_auth_session_does_not_squat_on_the_tonight_session_name(schema):
     public = _names(schema, "public")
     assert "auth_session" in public
     assert "session" not in public
+
+
+def _columns(schema: dict, table: str, table_schema: str = "public") -> dict[str, dict]:
+    return {
+        r["column_name"]: r
+        for r in schema["columns"]
+        if r["table_schema"] == table_schema and r["table_name"] == table
+    }
+
+
+def test_the_ledger_output_columns_the_rank_board_reads_exist(schema):
+    """§6.3's board and its badges are read off `ledger_state`, and both of the columns that
+    carry a badge arrived by ALTER rather than in the CREATE — which `relations` cannot see.
+
+    `tier` and `straddle` come from 0005, `kind` and `sigma_eff` from 0010. A migration that
+    applied cleanly and added none of them would have passed every other assertion in this file.
+    """
+    columns = _columns(schema, "ledger_state")
+    for name in ("kind", "s", "sigma", "sigma_eff", "cdf", "tier", "straddle", "observed"):
+        assert name in columns, f"ledger_state.{name} is missing"
+
+
+def test_a_tier_set_change_has_somewhere_to_record_the_refit_it_owes(schema):
+    """Decision 11: changing the tier set "queues a Ledger refit for that user alone".
+
+    0012 adds `ledger_cutpoints.refit_requested_at` for exactly that, with a partial index so
+    the worker's sweep does not scan a table that grows with the household. Both halves are
+    asserted: a nullable column nobody indexed would make the sweep a table scan, and an index
+    over every row would defeat the point of the column being empty almost always.
+    """
+    columns = _columns(schema, "ledger_cutpoints")
+    assert "refit_requested_at" in columns, "0012 must add ledger_cutpoints.refit_requested_at"
+    assert columns["refit_requested_at"]["is_nullable"] == "YES", (
+        "a queued refit is an exception, so its absence must be representable"
+    )
+    # §4.2 already keyed the row (user_id, kind) and already held the tier set; 0012 adds one
+    # column and nothing else, which is what "decision 11 needs no new table" means.
+    for name in ("user_id", "kind", "boundaries", "tier_set"):
+        assert name in columns
+
+    owed = [
+        r for r in schema["indexes"]
+        if r["table_name"] == "ledger_cutpoints" and "refit_requested_at" in r["indexdef"]
+    ]
+    assert owed, "the refit sweep needs an index on ledger_cutpoints.refit_requested_at"
+    assert any("WHERE" in r["indexdef"].upper() for r in owed), (
+        "the index must be partial: the answer is empty almost always"
+    )

@@ -235,6 +235,11 @@ def _write_artifacts(root: Path, version: str) -> None:
                 "margin_weighting": True, "margin_form": "margin/mean(margin)",
                 "tie_prior_delta0": 0.22, "b_i_tau": 1.0,
                 "sigma_inflation_c": 0.05, "sigma_inflation_cap": "prior",
+                # §6.3's two thresholds, shipped rather than defaulted. Proposal 157: "any
+                # threshold that is a bare σ constant belongs in ledger_hyperparams.json".
+                # A fixture that omits them makes "read from the bundle" untestable — the
+                # value would be the app default either way, and the two are indistinguishable.
+                "straddle_z": 1.0, "tension_credible_mass": 0.80,
             },
             indent=1,
         ),
@@ -356,6 +361,34 @@ def break_salience(root: Path) -> None:
     db.execute("UPDATE dna_tag SET salience = 7 WHERE id = 2")
     db.commit()
     db.close()
+
+
+def break_straddle_z(root: Path, value: float = 0.0) -> None:
+    """§4.3 / §6.3 — a non-positive straddle threshold.
+
+    The only §6.3 rule a *bundle* can violate. At z = 0 no posterior ever reaches a neighbour,
+    so no title is ever badged and the comparison queue draws from an empty pool: the surface
+    looks calm and is broken, which is the failure mode `from_mapping`'s refusal exists for.
+    Written into the artifacts directory rather than the sqlite export because that is where
+    §4.3 puts the constants.
+    """
+    path = root / "artifacts" / "ledger_hyperparams.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["straddle_z"] = value
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+
+
+def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
+    """§4.3 / §6.3 — a credible mass that is not a probability.
+
+    At 1.0 the interval is the whole line, so no assigned tier is ever outside it and the
+    tension badge silently stops existing — §6.3's "shows the tension rather than snapping
+    back" turns off with no error anywhere.
+    """
+    path = root / "artifacts" / "ledger_hyperparams.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["tension_credible_mass"] = value
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
 
 
 # §4.3's model artifacts. The Backbone's dimension is 64 everywhere in the spec (§5.2's "64-d

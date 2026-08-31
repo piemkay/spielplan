@@ -69,6 +69,13 @@ class Hyperparams:
     tie_prior_precision: float = 1.0
     # §6.3: a posterior within this many σ of a boundary is an "A/S straddle".
     straddle_z: float = 1.0
+    # §6.3: "if the model disagrees strongly, the title's badge shows the tension rather than
+    # snapping back". "Strongly" is operationally the 80% credible interval — the tier the
+    # person assigned and the posterior's interval are disjoint. A probability rather than a σ
+    # multiple because that is the form the rule is stated in; `straddle_z` is a σ multiple
+    # because §6.3 states *that* one as "the posterior reaches the next tier". Both live here
+    # so neither is a literal inside a board renderer.
+    tension_credible_mass: float = 0.80
     newton_tol: float = 1e-9
     newton_max_iter: int = 50
     lr_min: float = 1e-6
@@ -88,6 +95,18 @@ class Hyperparams:
 
     def margin_for(self, decisive: bool) -> float:
         return self.margin_decisive if decisive else self.margin_hesitant
+
+    def tension_z(self) -> float:
+        """§6.3's "disagrees strongly", as a σ multiple.
+
+        The Ledger's σ is a Laplace (Gaussian) posterior sd, so a central credible interval of
+        mass `m` is ±Φ⁻¹((1+m)/2)·σ — 1.2816 at the default 0.80. `statistics` rather than
+        scipy because scipy is not a dependency and this is one stdlib call, not a numerics
+        library; `model.py` stays numpy-only for the arithmetic that matters.
+        """
+        from statistics import NormalDist
+
+        return float(NormalDist().inv_cdf(0.5 * (1.0 + self.tension_credible_mass)))
 
     def digest(self) -> str:
         """A stable hash of everything that changes a fit. `source` is excluded on purpose: the
@@ -148,6 +167,10 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
         raise ValueError(f"steps must be a positive integer, got {fields['steps']!r}")
     if "tie_prior_delta0" in fields and not 0.0 < fields["tie_prior_delta0"] < 1.0:
         raise ValueError("tie_prior_delta0 is a probability and must lie in (0, 1)")
+    if "tension_credible_mass" in fields and not 0.0 < fields["tension_credible_mass"] < 1.0:
+        # Not merely positive: at 1.0 the interval is the whole line and no title is ever in
+        # tension, which is a silently disabled badge rather than a loud misconfiguration.
+        raise ValueError("tension_credible_mass is a probability and must lie in (0, 1)")
     if "margin_form" in fields and fields["margin_form"] not in MARGIN_FORMS:
         raise ValueError(
             f"margin_form must be one of {MARGIN_FORMS}, got {fields['margin_form']!r}"
