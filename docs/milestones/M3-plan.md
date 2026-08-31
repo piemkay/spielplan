@@ -1,5 +1,9 @@
 # M3 — Rank: tiers, filters, drag-drop, comparison queue
 
+> Everything this milestone left open — decisions needed, spec defects for v2.2, known
+> defects not fixed, and test debt — is collected in
+> [`M3-open-points.md`](M3-open-points.md).
+
 §12's row: **"Rank view: tiers, filters, drag-drop, comparison queue"**, exit criterion
 **"stable tier lists both users endorse"**. Branch `m3`, off `main` at `95f1b0f`.
 
