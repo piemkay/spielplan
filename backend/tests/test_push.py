@@ -305,16 +305,23 @@ def test_the_device_handle_is_stable_and_does_not_contain_the_endpoint():
 
 
 async def test_the_state_route_reports_no_application_server_key_until_one_is_configured(
-    household, monkeypatch
+    household, db
 ):
-    """§12 puts the push *sender* in M4. Chrome refuses `pushManager.subscribe()` without an
-    application server key, so the screen has to know the difference between "not configured
-    yet" and "your browser said no" — answering null is how it can say so honestly."""
-    _admin, _admin_id, member, _member_id = household
-    monkeypatch.delenv("VAPID_PUBLIC_KEY", raising=False)
-    assert (await member.get("/api/push/state")).json()["vapid_public_key"] is None
+    """Chrome refuses `pushManager.subscribe()` without an application server key, so the
+    screen has to know the difference between "not configured yet" and "your browser said no" —
+    answering null is how it can say so honestly.
 
-    monkeypatch.setenv("VAPID_PUBLIC_KEY", "BFakePublicKeyForTests")
-    assert (
-        await member.get("/api/push/state")
-    ).json()["vapid_public_key"] == "BFakePublicKeyForTests"
+    M4 changed where the key comes from, not what null means: §2 generates the pair at first
+    boot and stores it, so "not configured" is now the pair being absent — §3.1's legal
+    half-configured boot, without SECRETS_KEY to seal a private half under. The
+    `VAPID_PUBLIC_KEY` env var this test used to set is gone with M2's stopgap: a public half
+    whose private half nothing holds makes every browser subscribe against a key the sender
+    cannot sign with, and every delivery is then rejected with nothing failing visibly."""
+    _admin, _admin_id, member, _member_id = household
+    stored = await db.fetchval(
+        "SELECT value ->> 'public_key' FROM app_setting WHERE key = 'push.vapid'"
+    )
+    assert (await member.get("/api/push/state")).json()["vapid_public_key"] == stored
+
+    await db.execute("DELETE FROM app_setting WHERE key = 'push.vapid'")
+    assert (await member.get("/api/push/state")).json()["vapid_public_key"] is None

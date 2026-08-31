@@ -157,8 +157,9 @@ row for any of it — no service worker, no subscribe route, no screen, and
 `POST /api/setup/onboarding/complete` sitting there with nothing on earth calling it. Read as a
 gap in the map, that is M2 work; read as prose, it is M4's. It was built, and it is flagged here
 because the map going 25/25 should not quietly stand in for a scope decision somebody else might
-have made differently. The push *sender* remains M4's: there is no VAPID key, so §7.3's
-"undeliverable" fallback is still the only path that works end to end.
+have made differently. The push *sender* was M4's, and shipped there: §2's VAPID keypair is
+generated at first boot, and §7.3's prompt is delivered as a real web push with the in-app
+banner still the guaranteed fallback.
 
 M3 added six — four before any code, two from the review. The first four came from reading
 §6.3 and §12's M3 row clause by clause against the map. §12 lists "filters" among M3's contents and no row had one; §6.3's

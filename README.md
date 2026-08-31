@@ -144,11 +144,12 @@ a real household with a real bundle, so what ships here is the machinery and the
 loop closes: a sitting of verdicts moves the ranking every shelf is built from, within the
 sitting rather than overnight.
 
-Two caveats worth stating rather than discovering. The push **sender** is M4's: there is no
-VAPID key, so onboarding registers a device and §7.3's "undeliverable" fallback is still the
-only path that delivers. And the Ledger's numbers have never met a real corpus Backbone — every
-measurement in this repo is against a synthetic fixture, which is exactly the caveat §12 says
-M2 exists to settle.
+One caveat worth stating rather than discovering: the Ledger's numbers have never met a real
+corpus Backbone — every measurement in this repo is against a synthetic fixture, which is
+exactly the caveat §12 says M2 exists to settle. M2's second caveat has since been answered:
+the push **sender** was M4's and shipped there, so §2's VAPID keypair is generated at first
+boot and §7.3's prompt is carried as a real web push, with the in-app banner still the
+guaranteed fallback.
 
 The corpus bundle does not exist in this repo, so the importer is verified against a synthetic
 fixture reproducing the landmines — both DNA tiers with overlapping pairs, the frozen

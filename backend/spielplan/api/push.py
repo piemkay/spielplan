@@ -18,20 +18,20 @@ Three properties this module is built around, all of them from §6's preamble an
     neither comes back out of the API. Devices are identified to the UI by a hash of the
     endpoint instead.
 
-The *sending* half is M4 (§12); this is only the subscribe/unsubscribe path plus the read the
-onboarding screen needs. `router` is exported for `spielplan.app` to register.
+The *sending* half is M4's `spielplan.push` (§12); this is the subscribe/unsubscribe path plus
+the read the onboarding screen needs. `router` is exported for `spielplan.app` to register.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-import os
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from spielplan.api.deps import DB, ActiveUser
+from spielplan.push import keys
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 log = logging.getLogger(__name__)
@@ -66,16 +66,23 @@ def device_handle(endpoint: str) -> str:
     return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:12]
 
 
-def vapid_public_key() -> str | None:
+async def vapid_public_key(conn) -> str | None:
     """The application server key the browser needs at subscribe time, or None.
 
-    Chrome and Edge refuse `pushManager.subscribe()` without one. §12 puts the push *sender*
-    in M4, and the key pair belongs to that half, so this reads the environment rather than
-    growing a settings field the sender will own — and answers None honestly when there is no
-    key, which the onboarding screen renders as "notifications aren't configured yet" instead
-    of throwing a DOMException at the member.
+    Chrome and Edge refuse `pushManager.subscribe()` without one. M2 read `VAPID_PUBLIC_KEY`
+    from the environment because the sender that owns the pair was still M4 work; that env var
+    is gone with this milestone, and deliberately not kept as an override. A subscription is
+    bound to the key it was created against, so an env-supplied public half whose private half
+    nothing holds would let every browser subscribe against a key `push/send.py` cannot sign
+    with — the push service would reject every delivery and no screen would ever say so. §2
+    puts the pair in the database ("generated at first boot and stored the same way"), and the
+    database is now the only answer.
+
+    Still None when the pair is absent (§3.1's half-configured boot), which the onboarding
+    screen renders as "notifications aren't configured yet" rather than throwing a
+    DOMException at the member.
     """
-    return os.environ.get("VAPID_PUBLIC_KEY") or None
+    return await keys.public_key(conn)
 
 
 async def _subscriptions(conn, user_id: int) -> list[dict[str, object]]:
@@ -117,7 +124,7 @@ async def state(user: ActiveUser, conn: DB) -> dict[str, object]:
     """Everything the onboarding screen needs, in one round trip."""
     return {
         "onboarding_complete": await _onboarding_done(conn, user.id),
-        "vapid_public_key": vapid_public_key(),
+        "vapid_public_key": await vapid_public_key(conn),
         "subscriptions": await _subscriptions(conn, user.id),
     }
 

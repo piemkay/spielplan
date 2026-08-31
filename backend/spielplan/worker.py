@@ -90,8 +90,11 @@ async def _jellyfin_sessions_poll() -> None:
 
 
 async def _prune_dead_push_subscriptions() -> None:
-    """§4.2: push targets are 'pruned on 404/410 from the push service'. Until push ships (M4)
-    the only thing to clean is a subscription whose device never came back."""
+    """§4.2: push targets are "pruned on 404/410 from the push service".
+
+    The 404/410 half now happens at the moment of the send (`push/send.py`), which is the only
+    place those codes are observable. This is the other half: a subscription whose device never
+    came back at all — no delivery, no rejection, ninety days of silence."""
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM push_subscription "

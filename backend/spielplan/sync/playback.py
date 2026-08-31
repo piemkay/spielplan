@@ -138,8 +138,45 @@ async def observe(
             progress=playing.fraction,
         ):
             report.armed += 1
+            await notify(conn, user_id=user_id, title_id=title_id)
         else:
             report.already_armed += 1
+
+
+async def notify(conn: asyncpg.Connection, *, user_id: int, title_id: int) -> None:
+    """§7.3: "Push notification if the user isn't in the app — best-effort (§6 preamble); when
+    undeliverable, the prompt queues and surfaces as an in-app banner on next open."
+
+    The banner path was the whole M1 behaviour and is unchanged: this adds the carrier §7.3
+    dates to "the M4 stack". It runs **after** the prompt is armed and its outcome is discarded,
+    which is what makes the two independent — a household with no keypair, no subscription or
+    no network still has an armed prompt waiting on next open, and a delivery failure is never
+    a reason for the prompt not to exist.
+
+    Sent once, when the prompt is armed, rather than on every poll: the poll runs each minute
+    and `arm` is idempotent per viewing, so notifying from anywhere else would be a notification
+    a minute for as long as the credits run.
+    """
+    try:
+        from spielplan.push import send as push_send
+
+        name = await conn.fetchval("SELECT name FROM title WHERE id = $1", title_id)
+        await push_send.send_to_user(
+            conn,
+            user_id,
+            {
+                "kind": "playback.finished",
+                "title_id": title_id,
+                "title": "Spielplan",
+                # §7.3's own words for the prompt, so the notification and the banner ask the
+                # same question.
+                "body": f"Did you finish {name}?",
+            },
+        )
+    except Exception:
+        # Best-effort in the strongest sense: §6's preamble guarantees an in-app equivalent for
+        # every push-carried prompt, and this one is already queued.
+        log.info("finish-prompt push for user %s was not delivered", user_id)
 
 
 async def poll(conn: asyncpg.Connection, client: JellyfinClient | None = None) -> WatchReport:

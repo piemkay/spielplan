@@ -28,10 +28,12 @@ from spielplan.api import rank as rank_api
 from spielplan.api import rate as rate_api
 from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
+from spielplan.api import tonight as tonight_api
 from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import migrate, pool
 from spielplan.models.artifacts import ArtifactStore
+from spielplan.push import keys as push_keys
 from spielplan.scoring import backbone
 
 log = logging.getLogger("spielplan")
@@ -50,6 +52,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # First boot only — a connector that already has a row is left alone, so the admin UI
         # stays the source of truth the owner asked for.
         await registry.seed_from_env(conn, cfg)
+        # §2: "A web-push VAPID keypair is generated at first boot and stored the same way."
+        # Here rather than on first use: the pair the browser subscribes against must exist
+        # before the member's onboarding screen asks for it, and a pair minted later would
+        # differ from the one the phone already holds. Returns None without SECRETS_KEY —
+        # §3.1 makes a half-configured boot legal, and the wizard is what fixes it.
+        if await push_keys.ensure_keypair(conn) is None:
+            log.info("no web-push keypair — prompts fall back to §6's in-app banner")
         # §4.3: artifacts load "when present"; an empty store is legal.
         app.state.artifacts = await ArtifactStore.load_active(conn, cfg.artifacts_dir)
         # §5.1's basis, loaded once per process. §10 restarts on a bundle swap, so a process
@@ -82,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(rate_api.router)
     app.include_router(rank_api.router)
     app.include_router(home_api.router)
+    app.include_router(tonight_api.router)
     app.include_router(push_api.router)
     app.include_router(admin_api.router)
 
