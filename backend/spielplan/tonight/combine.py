@@ -153,6 +153,22 @@ def axis_position(dna: Mapping[str, float], weights: Mapping[str, float]) -> flo
     return total / engaged
 
 
+def axis_positions(
+    dna: Mapping[int, Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
+) -> dict[int, dict[str, float]]:
+    """Every candidate's position on every authored axis.
+
+    54c's tie-break is "the pair spanning the widest **DNA axis**", which is a statement about
+    §6.4's authored axes and not about raw term overlap: two films sharing no terms at all can
+    sit at the same point on the mood axis, and asking about them teaches nothing about the
+    tilt. So the round is handed positions, not vectors.
+    """
+    return {
+        title_id: {facet: axis_position(vec, weights) for facet, weights in axes.items()}
+        for title_id, vec in dna.items()
+    }
+
+
 def contested_facet(
     tilts: Sequence[Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
 ) -> str | None:
@@ -307,6 +323,7 @@ __all__ = [
     "Slate",
     "WILDCARD_LABEL",
     "axis_position",
+    "axis_positions",
     "combine",
     "contested_facet",
     "divergence",

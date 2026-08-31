@@ -1106,7 +1106,19 @@ milestone = "M4"
 kind = "backend"
 what = "One pair in ten is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; pair selection and the per-participant stopping rule produce identical choices and stop points whether those answers are present or removed, and round evaluation reads only those rows."
 why = "§13's non-negotiable guard: adaptively-selected pairs inflate reliability, and a stopping rule cannot share data with its own evaluation."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_every_tenth_pair_is_the_uniform_hold_out",
+    "backend/tests/test_tonight_round.py::test_the_round_replays_identically_with_the_hold_out_answers_removed",
+    "backend/tests/test_tonight_round.py::test_a_hold_out_answer_still_counts_toward_the_cap",
+    "backend/tests/test_tonight_integration.py::test_the_shortlist_is_identical_with_the_held_out_answers_removed",
+    "backend/tests/test_tonight_integration.py::test_the_evaluation_reads_held_out_rows_and_nothing_else",
+    "backend/tests/test_tonight_integration.py::test_a_retracted_answer_is_not_evaluated",
+    "backend/tests/test_tonight_integration.py::test_the_agreement_figure_carries_its_own_denominator",
+    "backend/tests/test_tonight_integration.py::test_a_level_answer_is_counted_but_not_decisive",
+    "backend/tests/test_tonight_integration.py::test_the_report_carries_the_rate_at_which_each_ending_fired",
+    "backend/tests/test_migrations.py::test_the_held_out_session_answers_are_addressable",
+    "backend/tests/test_schema_contracts.py::test_a_session_answer_names_the_stream_it_belongs_to",
+]
 
 [[requirement]]
 id = "data-rules-session-ballot-blind"
@@ -1124,7 +1136,16 @@ milestone = "M4"
 kind = "backend"
 what = "Every participant's round terminates with ended_by set to exactly one of converged|cap|escape — 'cap' at the 20th answered pair, 'escape' only from an escape request at or after the 6th pair (an earlier one is refused), 'converged' when the shortlist boundary resolves — and converged_at is stamped only in the converged case."
 why = "the round is dynamic with a hard cap of 20 and an escape from pair 6; §14 risk 6 requires the rate of each to be measurable."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_the_escape_is_unavailable_through_pair_five_and_available_from_pair_six",
+    "backend/tests/test_tonight_round.py::test_an_early_escape_is_refused_rather_than_quietly_ignored",
+    "backend/tests/test_tonight_round.py::test_every_round_ends_with_exactly_one_of_the_three_reasons",
+    "backend/tests/test_tonight_round.py::test_convergence_beats_the_cap_when_both_would_fire",
+    "backend/tests/test_tonight_integration.py::test_a_round_ends_with_exactly_one_named_reason",
+    "backend/tests/test_tonight_integration.py::test_the_escape_is_refused_before_pair_six_and_ends_the_round_after",
+    "backend/tests/test_schema_contracts.py::test_a_participant_round_ends_with_exactly_one_named_reason",
+    "backend/tests/test_schema_contracts.py::test_converged_at_is_stamped_only_when_the_round_converged",
+]
 
 [[requirement]]
 id = "tonight-rank-holdout-one-in-ten"
@@ -1133,7 +1154,14 @@ milestone = "M4"
 kind = "backend"
 what = "Every tenth pair a participant is served is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; replaying the round with those answers removed produces the identical shortlist and the identical stopping point."
 why = "§13's uniform-random guard is non-negotiable — adaptive pairs inflate reliability, and a stopping rule that shares data with its own evaluation looks confident whether or not it is right."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_every_tenth_pair_is_the_uniform_hold_out",
+    "backend/tests/test_tonight_round.py::test_the_hold_out_pair_is_drawn_uniformly_from_the_whole_pool",
+    "backend/tests/test_tonight_round.py::test_the_hold_out_arm_never_receives_a_fallback",
+    "backend/tests/test_tonight_round.py::test_the_round_replays_identically_with_the_hold_out_answers_removed",
+    "backend/tests/test_tonight_integration.py::test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt",
+    "backend/tests/test_tonight_integration.py::test_the_shortlist_is_identical_with_the_held_out_answers_removed",
+]
 
 [[requirement]]
 id = "tonight-rank-pair-selection-straddle"
@@ -1187,7 +1215,12 @@ milestone = "M4"
 kind = "backend"
 what = "The round state reports the 'just pick for us' escape as unavailable through pair 5 and available from pair 6 onward; invoking it before pair 6 is rejected, and invoking it from pair 6 ends that participant's round immediately on what is known, still yielding a shortlist, with session_participant.ended_by='escape'."
 why = "Neither cap nor escape is a failure state, but the escape must not be reachable before the round has learned anything, and §14 risk 6 wants the rate at which it fires."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_the_escape_is_unavailable_through_pair_five_and_available_from_pair_six",
+    "backend/tests/test_tonight_round.py::test_an_early_escape_is_refused_rather_than_quietly_ignored",
+    "backend/tests/test_tonight_integration.py::test_the_escape_is_refused_before_pair_six_and_ends_the_round_after",
+    "backend/tests/test_tonight_integration.py::test_the_state_reports_when_the_escape_becomes_available",
+]
 
 [[requirement]]
 id = "tonight-rank-stopping-and-cap"
@@ -1196,7 +1229,14 @@ milestone = "M4"
 kind = "backend"
 what = "A participant's round ends when the leading candidates' intervals have separated from the rest, and otherwise at a hard cap of 20 pairs; two participants in one session may stop at different pair counts, and session_participant.ended_by records 'converged' or 'cap' accordingly."
 why = "Dynamic per-participant length is the substance of decision 54; §14 risk 6 requires the rate at which the cap fires to be recoverable."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_a_round_over_a_resolved_pool_converges_rather_than_running_to_the_cap",
+    "backend/tests/test_tonight_round.py::test_a_round_that_cannot_resolve_ends_at_the_hard_cap_of_twenty",
+    "backend/tests/test_tonight_round.py::test_convergence_beats_the_cap_when_both_would_fire",
+    "backend/tests/test_tonight_round.py::test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking",
+    "backend/tests/test_tonight_integration.py::test_the_cap_ends_a_round_that_will_not_resolve",
+    "backend/tests/test_tonight_integration.py::test_two_participants_may_stop_at_different_pair_counts",
+]
 
 [[requirement]]
 id = "tonight-rank-split-reserves-third-slot"
@@ -1250,7 +1290,13 @@ milestone = "M4"
 kind = "integration"
 what = "The winner is the finalist or wildcard with the most approvals, ties broken by group score; session_outcome persists chosen_title_id and approval_share equal to approving participants divided by participants."
 why = "Approval share is §13's headline metric for the whole feature and has no other data path; without persistence M4 is unmeasurable (§14 risk 6)."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_winner_is_the_most_approved_with_ties_broken_by_group_score",
+    "backend/tests/test_tonight_integration.py::test_the_approval_share_is_approvals_over_participants_and_is_persisted",
+    "backend/tests/test_tonight_integration.py::test_resolving_twice_returns_the_same_outcome",
+    "backend/tests/test_tonight_integration.py::test_an_empty_ballot_is_an_answer_rather_than_a_silence",
+    "backend/tests/test_schema_contracts.py::test_an_approval_share_outside_zero_to_one_is_refused",
+]
 
 [[requirement]]
 id = "tonight-rank-ballot-blind-until-all"
@@ -1286,7 +1332,14 @@ milestone = "M4"
 kind = "backend"
 what = "A guest with no grid profile is ranked by the candidate pool's own member-average order, contributes no term to that average, and is excluded from D; no member's Ledger is substituted for theirs."
 why = "The prototype ranked every guest with the host's ledger (`const u = guest ? 'p' : who`) — that is a privacy-shaped bug, not 'contributes no taste term'."
-tests = []
+tests = [
+    "backend/tests/test_tonight_pool.py::test_a_guest_seat_contributes_no_term_to_the_average",
+    "backend/tests/test_tonight_round.py::test_a_guest_starts_from_the_pool_prior_rather_than_a_borrowed_ledger",
+    "backend/tests/test_tonight_round.py::test_a_guest_starts_wider_than_a_member",
+    "backend/tests/test_tonight_integration.py::test_a_guest_seat_neither_scores_nor_filters",
+    "backend/tests/test_tonight_integration.py::test_a_guest_is_ranked_by_the_pools_order_and_never_a_members_ledger",
+    "backend/tests/test_tonight_integration.py::test_guest_seats_are_not_members_for_the_pools_purposes",
+]
 
 # --- added at M4 open, by reconciling §12's M4 row and §6.2/§4.2/§13 against the map ---------
 # The map is a contract, not a ceiling (docs/TESTING.md). §12's M4 row names eight things and
@@ -1415,7 +1468,18 @@ milestone = "M4"
 kind = "backend"
 what = "Each separating answer yields a tilt observation of chosen-minus-rejected DNA taken relative to the mean DNA vector of that session's own candidate pool: the identical answer on the identical pair produces a different tilt when the surrounding pool differs, and a tilt computed with no centring — or centred on the library or corpus mean instead of the pool — is a distinguishable, failing result; the accumulated tilt is persisted on that participant's session_participant.tilt."
 why = "§0 row 4 measured that centring on the candidate set matters more than the form of the question (3 shortlist-anchored answers ≈ +0.088 AUC while the stored 8-axis profile is worth 0.000), which is why the centring is the one piece of the deleted mood machinery the redesign kept."
-tests = []
+tests = [
+    "backend/tests/test_tonight_tilt.py::test_the_pool_frame_is_the_pools_own_mean_and_spread",
+    "backend/tests/test_tonight_tilt.py::test_a_candidate_is_expressed_as_its_deviation_from_the_pool",
+    "backend/tests/test_tonight_tilt.py::test_a_separating_answer_tilts_toward_the_chosen_title",
+    "backend/tests/test_tonight_tilt.py::test_the_same_answer_on_the_same_pair_tilts_differently_in_a_different_pool",
+    "backend/tests/test_tonight_tilt.py::test_centring_on_a_library_mean_instead_of_the_pool_is_a_different_answer",
+    "backend/tests/test_tonight_tilt.py::test_either_lifts_the_pool_frame_toward_both_and_neither_away_from_both",
+    "backend/tests/test_tonight_tilt.py::test_the_tilt_accumulates_across_answers",
+    "backend/tests/test_tonight_tilt.py::test_the_tilt_raises_candidates_that_look_like_what_was_chosen",
+    "backend/tests/test_tonight_tilt.py::test_the_tilt_round_trips_through_json",
+    "backend/tests/test_tonight_integration.py::test_an_answer_moves_the_participants_tilt",
+]
 
 [[requirement]]
 id = "tonight-rank-no-within-evening-reranking"
@@ -1424,7 +1488,11 @@ milestone = "M4"
 kind = "backend"
 what = "Nothing inside a running session re-ranks candidates by predicted enjoyment: a session's answers trigger no Ledger refit, incremental or full, and no recomputation of the step-3 pool ordering, which is computed once at session open and is identical at the reveal. Every movement between the first pair and the result traces to the participants' own answers — the tallies, the tilt and the split's facet zeroing — and to nothing else."
 why = "Within-evening re-ranking by predicted enjoyment was measured at exactly 0.000, so it is CPU spent inside the one flow that has to feel instant, bought for nothing — and a refit mid-session would also let the evening's answers move the Ledger the evening is being scored against."
-tests = []
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack",
+    "backend/tests/test_tonight_integration.py::test_starting_a_room_freezes_the_pool_it_was_built_from",
+    "backend/tests/test_tonight_integration.py::test_the_slate_is_persisted_rather_than_recomputed_on_read",
+]
 
 [[requirement]]
 id = "tonight-rank-guest-pairs-not-seen-filtered"
@@ -1433,7 +1501,11 @@ milestone = "M4"
 kind = "backend"
 what = "Drawing a guest's pairs applies no seen-state predicate: a pool title a member has marked seen is as eligible for a guest's pair as any other, and the sequence served to a guest seat is unchanged when the members' seen-state over the pool is flipped."
 why = "A guest's seen-state is genuinely unknown, and filtering their pairs by a member's is the same borrowed-identity substitution that made the prototype rank every guest with the host's Ledger."
-tests = []
+tests = [
+    "backend/tests/test_tonight_round.py::test_a_guest_starts_from_the_pool_prior_rather_than_a_borrowed_ledger",
+    "backend/tests/test_tonight_integration.py::test_a_guest_seat_neither_scores_nor_filters",
+    "backend/tests/test_tonight_integration.py::test_a_guest_is_ranked_by_the_pools_order_and_never_a_members_ledger",
+]
 
 [[requirement]]
 id = "data-rules-session-answer-logs-every-vote"
@@ -1442,7 +1514,13 @@ milestone = "M4"
 kind = "integration"
 what = "Every answered pair writes exactly one session_answer row carrying the session, the participant, a per-participant seq increasing from that participant's first pair, both title ids, the answer bound so that A names title_a and B names title_b, and latency_ms; no round path updates or deletes such a row, so a finished session's rows replay the round the participant actually answered."
 why = "§14 risk 6 makes the round the one unmeasured piece of the design and forbids tuning it before it is instrumented; session_answer is the only place a vote exists, and an answer stored against the wrong side of its own pair is an instrument that reads backwards."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_every_answered_pair_writes_exactly_one_row_that_replays_the_round",
+    "backend/tests/test_tonight_integration.py::test_the_counter_never_drifts_from_the_rows_it_counts",
+    "backend/tests/test_tonight_integration.py::test_a_replayed_pair_is_refused_rather_than_counted_twice",
+    "backend/tests/test_tonight_integration.py::test_a_participant_can_take_back_the_answer_they_just_gave",
+    "backend/tests/test_migrations.py::test_the_session_answer_columns_the_round_writes_exist",
+]
 
 [[requirement]]
 id = "data-rules-session-result-slate-persisted"
@@ -1451,7 +1529,12 @@ milestone = "M4"
 kind = "integration"
 what = "Combining writes one session_result row per title in the result slate — winner, runners-up and wildcard — each carrying the rank that orders the slate, the group_score it was ranked by, and per_user_match holding the per-person match lines; re-reading a finished session returns that stored slate rather than recomputing it, and a session in which no split was surfaced stores conflict NULL on every row."
 why = "§4.2 gives the round a durable per-title table distinct from session_outcome's single chosen row, and a slate recomputed on read cannot be compared against the votes that produced it — which is what §14 risk 6 exists to require. 'Below that, decide silently' is the half an implementation drops: a conflict object written on every session turns the repair register into noise."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_slate_is_persisted_rather_than_recomputed_on_read",
+    "backend/tests/test_tonight_integration.py::test_a_quiet_session_stores_no_conflict_at_all",
+    "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries",
+    "backend/tests/test_migrations.py::test_the_result_slate_and_its_outcome_are_two_tables",
+]
 
 [[requirement]]
 id = "data-rules-session-guest-slot-is-a-null-user"
@@ -1530,7 +1613,10 @@ milestone = "M4"
 kind = "integration"
 what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast; and a participant for whom no carried term reaches either sign gets the stated no-pull line instead of an invented term."
 why = "§6.8 makes the one-line why in vocabulary terms normative and §6.0's shelves already enforce it — a card shown under a reason it does not satisfy is the defect `home/why.py` was inverted to make unrepresentable, and the winner card is the one screen the whole round exists to produce."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries",
+    "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something",
+]
 
 [[requirement]]
 id = "map-taste-admin-log-narrates-session-answers"
@@ -1548,7 +1634,11 @@ milestone = "M4"
 kind = "integration"
 what = "A participant can retract the answer they have just given while their own round is still in progress: the retracted answer stops contributing to the per-title tally and to that participant's tilt, answered_count returns to its prior value, and the round is served a pair again rather than advancing. The retraction reaches only that participant's own most recent answer — retracting another participant's answer, an answer that is not the most recent, or any answer once that participant's round has ended, is refused and writes nothing."
 why = "§6's preamble puts undo on every surface and the round is the one place a mis-tap is both easy and permanently unrecoverable: a hard cap of 20 pairs, a blind reveal, and no second pass over the same pair. Scoping it to your own last answer is what keeps it an undo rather than a way to edit a round after seeing where it went."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_a_participant_can_take_back_the_answer_they_just_gave",
+    "backend/tests/test_tonight_integration.py::test_undo_reaches_only_your_own_last_live_answer",
+    "backend/tests/test_tonight_integration.py::test_a_finished_round_cannot_be_edited",
+]
 
 [[requirement]]
 id = "map-taste-admin-cost-estimate-before-enabling"

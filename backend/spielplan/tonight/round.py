@@ -548,6 +548,14 @@ def replay(
         else select(beliefs, seq=count + 1, rng=rng or random.Random(0), z=z, axes=axes,
                     asked=asked)
     )
+    if reason is None and nxt is None:
+        # §6.2 describes the happy path and never a pool small enough to run out of distinct
+        # pairs — but a household library can be, and a round with nothing left to ask and no
+        # way to end is a deadlock. It is the same terminal state as the cap (the round ended
+        # without resolving the boundary), and 54g fixes `ended_by` at three values, so `cap`
+        # is what it is recorded as rather than a fourth value nobody defined. Reported as a
+        # v2.2 spec defect.
+        reason = CAP
     return Round(
         beliefs=beliefs, answered=count, straddlers=unresolved,
         next_pair=nxt, stop_reason=reason,

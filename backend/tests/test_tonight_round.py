@@ -425,3 +425,27 @@ def test_a_guest_starts_wider_than_a_member():
     guest = rnd.initial(pool_order, prior_var=1.0, has_profile=False)
 
     assert all(guest[t].var > member[t].var for t in pool_order)
+
+
+def test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking():
+    """§6.2 describes the happy path and never a pool small enough to exhaust its own pairs —
+    but a household library can be, and `select` refuses to re-serve a pair the participant has
+    already answered (M3-open-points §3.1). A round with nothing left to ask and no way to end
+    is a deadlock: the person taps and nothing happens, forever.
+
+    It is the same terminal state as the cap — the round ended without resolving the boundary —
+    and 54g fixes `ended_by` at three values, so that is what it records. Reported as a v2.2
+    spec defect rather than smuggled in as a fourth value.
+    """
+    four = {i: 0.5 for i in range(1, 5)}
+    answers = [
+        rnd.Answered(seq=s, title_a=a, title_b=b, answer=EITHER)
+        for s, (a, b) in enumerate(
+            [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)], start=1
+        )
+    ]
+    played = rnd.replay(four, answers, z=1.0)
+
+    assert played.next_pair is None
+    assert played.stop_reason == rnd.CAP, "a round that cannot ask must still end"
+    assert played.answered == 6, "and it ends short of the twenty-pair cap"
