@@ -459,3 +459,73 @@ def test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking():
     assert played.next_pair is None
     assert played.stop_reason == rnd.CAP, "a round that cannot ask must still end"
     assert played.answered == 6, "and it ends short of the twenty-pair cap"
+
+
+def test_selection_falls_back_to_the_pool_when_the_straddlers_own_pair_is_spent():
+    """`tonight-rank-stopping-and-cap`: "'cap' at the 20th answered pair".
+
+    `select` searches among the straddlers when there are two or more of them, and falls back to
+    the whole pool when there are fewer than two. It did not fall back when there were exactly
+    two and their one pair had already been answered — it returned None, and `replay` reads a
+    None pair as the exhaustion ending. So a forty-title pool ended, recorded as `cap`, at pair
+    fourteen: six pairs of the person's budget unspent, two candidates still unplaced, and
+    §14 risk 6's rate of each ending reporting `cap` for something that was not the cap.
+
+    A straddler against a well-placed neighbour is still an informative question — that is
+    already why the fallback exists at all. Asking it is what the round is for.
+    """
+    board = {
+        1: rnd.Belief(mu=2.00, var=0.0001),
+        2: rnd.Belief(mu=1.80, var=0.0001),
+        3: rnd.Belief(mu=1.00, var=0.2500),
+        4: rnd.Belief(mu=0.95, var=0.2500),
+        5: rnd.Belief(mu=0.20, var=0.0001),
+        6: rnd.Belief(mu=0.10, var=0.0001),
+    }
+    assert rnd.straddlers(board, z=1.0) == {3, 4}, "the board this test is about"
+
+    spent = {frozenset({3, 4})}
+    pair = rnd.select(board, seq=2, rng=random.Random(0), z=1.0, asked=spent)
+
+    assert pair is not None, "the round had nineteen pairs of budget and something left to ask"
+    assert frozenset({pair.title_a, pair.title_b}) not in spent
+    assert {pair.title_a, pair.title_b} & {3, 4}, "and it is still about the unresolved pair"
+    assert pair.selection == rnd.SELECTION_ADAPTIVE
+
+
+def test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool():
+    """The same claim from the other end, over whole rounds rather than one selection.
+
+    §14 risk 6 reads the rate of each ending, so an ending has to mean what it says: `cap` at
+    twenty answered pairs, `converged` when the boundary resolves, and short of either only a
+    pool with no distinct pair left to serve. Simulated because the failure was statistical —
+    it fired on most seeds and on none of the hand-built boards above.
+    """
+    for seed in range(40):
+        rng = random.Random(seed)
+        pool = {i: rng.gauss(0.0, 1.0) for i in range(30)}
+        answers: list[rnd.Answered] = []
+        for seq in range(1, rnd.CAP_PAIRS + 1):
+            played = rnd.replay(pool, answers, z=1.0, rng=random.Random(seed))
+            if played.stop_reason is not None:
+                break
+            pair = played.next_pair
+            assert pair is not None
+            answers.append(
+                rnd.Answered(
+                    seq=seq, title_a=pair.title_a, title_b=pair.title_b,
+                    answer=A if pool[pair.title_a] > pool[pair.title_b] else B,
+                    selection=pair.selection,
+                )
+            )
+        else:
+            played = rnd.replay(pool, answers, z=1.0, rng=random.Random(seed))
+
+        assert played.stop_reason in (rnd.CAP, rnd.CONVERGED)
+        if played.stop_reason == rnd.CAP and played.answered < rnd.CAP_PAIRS:
+            distinct = {frozenset({x.title_a, x.title_b}) for x in answers}
+            possible = len(pool) * (len(pool) - 1) // 2
+            assert len(distinct) == possible, (
+                f"seed {seed}: ended as `cap` at {played.answered} pairs with "
+                f"{len(distinct)} of {possible} distinct pairs asked"
+            )

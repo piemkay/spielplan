@@ -475,13 +475,10 @@ def select(
     already = set(asked or ())
     anchor = anchor_of(beliefs)
     unresolved = sorted(straddlers(beliefs, z=z))
-    # An adaptive slot with nothing left to resolve still has to serve something if the round
-    # is being asked for a pair — but it says `adaptive`, because that is the arm that drew it.
-    candidates = unresolved if len(unresolved) >= 2 else pool
 
-    best: tuple[float, float, int, int] | None = None
-    for i, a in enumerate(candidates):
-        for b in candidates[i + 1 :]:
+    def _best(pairs: Iterable[tuple[int, int]]) -> tuple[float, float, int, int] | None:
+        best: tuple[float, float, int, int] | None = None
+        for a, b in pairs:
             if frozenset({a, b}) in already:
                 continue
             expected = expected_straddlers(
@@ -492,6 +489,41 @@ def select(
             key = (round(expected, 9), -_axis_span(axes, a, b), a, b)
             if best is None or key < best:
                 best = key
+        return best
+
+    def _within(xs: Sequence[int]) -> Iterable[tuple[int, int]]:
+        return ((xs[i], xs[j]) for i in range(len(xs)) for j in range(i + 1, len(xs)))
+
+    def _touching(xs: Sequence[int]) -> Iterable[tuple[int, int]]:
+        return (
+            (min(x, other), max(x, other)) for x in xs for other in pool if other != x
+        )
+
+    # Three searches, narrowest first, and the order is 54c's sentence: "Among candidates whose
+    # posterior interval still straddles the shortlist boundary, the round picks the pair whose
+    # answer would most reduce the number of titles still straddling it."
+    #
+    #   1. Between straddlers, which is the sentence as written.
+    #   2. A straddler against anyone, once every pair *between* straddlers has been answered.
+    #      Still a question about the unresolved candidates, which is what the round is for.
+    #   3. Anything left, when there is no straddler at all — the case this fallback already
+    #      covered.
+    #
+    # Only the first two existed, and the second only fired when there were fewer than two
+    # straddlers. With exactly two and their one pair already answered nothing matched, and
+    # `replay` reads a None pair as the exhaustion ending: a forty-title pool ended, recorded as
+    # `cap`, at pair fourteen — six pairs of the person's budget unspent, two candidates still
+    # unplaced, and §14 risk 6's rate of each ending calling that the cap.
+    #
+    # Widening straight to the whole pool would have been the smaller diff and the wrong one:
+    # with nothing able to reduce the straddler count, every pair ties on information and the
+    # argmin falls through to the lowest title ids — two well-placed candidates, asked about
+    # for no reason, while the two the round exists to separate go unmentioned.
+    best = _best(_within(unresolved)) if len(unresolved) >= 2 else None
+    if best is None and unresolved:
+        best = _best(_touching(unresolved))
+    if best is None:
+        best = _best(_within(pool))
     if best is None:
         return None
     _, _, a, b = best

@@ -1152,6 +1152,7 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_the_escape_is_refused_before_pair_six_and_ends_the_round_after",
     "backend/tests/test_schema_contracts.py::test_a_participant_round_ends_with_exactly_one_named_reason",
     "backend/tests/test_schema_contracts.py::test_converged_at_is_stamped_only_when_the_round_converged",
+    "backend/tests/test_tonight_round.py::test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool",
 ]
 
 [[requirement]]
@@ -1249,6 +1250,8 @@ tests = [
     "backend/tests/test_tonight_round.py::test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking",
     "backend/tests/test_tonight_integration.py::test_the_cap_ends_a_round_that_will_not_resolve",
     "backend/tests/test_tonight_integration.py::test_two_participants_may_stop_at_different_pair_counts",
+    "backend/tests/test_tonight_round.py::test_selection_falls_back_to_the_pool_when_the_straddlers_own_pair_is_spent",
+    "backend/tests/test_tonight_round.py::test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool",
 ]
 
 [[requirement]]
