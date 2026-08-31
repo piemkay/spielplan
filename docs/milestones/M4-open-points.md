@@ -142,7 +142,8 @@ which made this table unreadable: the rate §14 risk 6 asks for was reporting th
 that had six pairs of budget left and two candidates still unplaced.
 
 The fixture library cannot show any of this. `ops/m4_exit_criterion.py` runs over a pool of
-**six** candidates — the eight-title fixture, minus the two neither member owns — so both seats
+**six** candidates — the eight-title fixture is six films and two series, and the harness opens a
+`movie` room, so §4.1 rule 5's kind partition drops the two series — and both seats
 answer all fifteen distinct pairs plus one hold-out, sixteen in total, and the round ends by
 exhaustion (§2.2), recorded as `cap`. Convergence has no room to fire and the twenty-pair cap is
 never reached, so neither number in §1.1 is observable against the fixture. It is a claim about
@@ -175,3 +176,65 @@ extended — recorded here because the pattern is what to look for next time:
 
 Each is now asserted against something the implementation does not itself provide: a database
 constraint, an independently computed entropy, an HTTP refusal.
+
+A second audit ran at merge time, over the whole branch diff, with a skeptic on every finding.
+Ten survived; six were fixed, and the four below are what it leaves behind. The pattern it added
+to the list above is a fifth: **a test that scores the implementation with the same function the
+implementation optimises**. `test_the_pair_served_is_the_one_that_resolves_the_most_straddlers`
+ranks the served pair by `expected_straddlers` — the function `select` minimises — so it can
+only catch a selector that fails to call it, never one that calls it with a wrong weighting.
+`test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole` did the same in miniature:
+`opposite[-1]` for `opposite[0]` left all twenty-nine combine tests green. Both now have a
+companion asserting the thing from outside — an entropy computed in the test, and a board where
+the reservation has to choose.
+
+---
+
+## 6. Left for later, from the merge-time audit
+
+### 6.1 The hold-out pair is redrawn on every read of the round
+
+`select` branches to `_holdout` before the `asked` set is built, `_holdout` draws with the
+request's own rng, and `record_answer` validates only that the seq is next. So a reload at pair
+10 or 20 serves a different uniform-random pair, and a client can reload until it likes the one
+it is asked — which is the selection bias §13's arm exists to exclude, arriving through the one
+door that arm cannot close.
+
+Not fixed because the harm is bounded to instrumentation: hold-out answers are excluded from the
+tilt, from `replay` and from the posterior, and the shortlist does not exist until every seat
+has finished, so nothing a re-roll touches can move the evening. What it can move is
+`evaluation.shortlist_agreement`, over a sample §3.2 already calls too thin to read. The fix is
+to seal the hold-out draw against the seq the way the pair token is sealed, which is a change to
+what the round persists rather than a line.
+
+### 6.2 Two coverage rows describe things that do not exist
+
+Both need the owner, because the rule is that a row's `spec` and `what` are never edited to
+match what was built.
+
+* `tonight-rank-join-channels-equivalent` lists "joining by room code, from the open-rooms list,
+  or **by following a join link**". No join link exists: the Tonight surface reads no query
+  parameter, and the invitation payload carries no `url`. §6.2 step 2 does not name one either —
+  it enumerates push, the room code and QR, the in-app banner, the open-rooms list and the TV
+  route. So the row claims coverage of a channel neither the spec nor the code has. Nobody is
+  stranded (the notification body carries the code), but the row is wrong about the world.
+* `tonight-rank-conflict-copy-bounded` clause 3 says a participant with no term reaching either
+  sign "gets the stated no-pull line". The code gives that participant a **fourth** line —
+  "nothing here reads either way for {name} yet" — and reserves `NO_PULL_LINE` for a different
+  case. One of the two is wrong and it is not mine to choose. Both branches also have no test
+  reader at all: mutating the sign comparison in `play.py` leaves 109 tests green.
+
+### 6.3 What neither audit read
+
+Recorded so the next milestone knows where the thin ice is, not as a defect:
+
+* **The two migrations were never reviewed as DDL.** Both audits worked from Python and docs.
+  They are covered by tests — `test_migrations.py`, `test_schema_contracts.py` and the PGlite
+  layer assert the constraints and the checksums — but nobody read the 201 lines of
+  `0013_tonight.sql` asking what a good schema would have done differently. They are
+  sha256-checksummed the moment they land, so anything wrong in them needs a follow-up migration
+  forever.
+* **The push sender's cryptography** was flagged as unread by the merge-time audit, which did
+  not know it had already been through two lenses at build time — `_encrypt` was verified against
+  RFC 8291 Appendix A's published test vector, byte-identical, and the four findings that pass
+  produced are decisions 19–23 in `M4-plan.md`. Not a gap.

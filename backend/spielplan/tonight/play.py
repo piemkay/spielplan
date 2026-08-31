@@ -43,6 +43,10 @@ from spielplan.tonight import rooms
 from spielplan.tonight import round as round_rules
 from spielplan.tonight import tilt as tilt_rules
 
+# The namespace half of `finish`'s advisory lock. Two ints rather than one so a session
+# id can never collide with another feature's lock on the same number.
+_FINISH_LOCK = 6202
+
 
 class RoundError(Exception):
     def __init__(self, reason: str, message: str) -> None:
@@ -589,6 +593,22 @@ async def finish(
         for title_id in on_the_slate
     }
     async with conn.transaction():
+        # 54e's reveal is simultaneous, so the combine runs on whichever answer finishes the
+        # room — and when two people finish at the same moment, that is both of them.
+        # `_announce` reads the session state and calls this in a separate statement with
+        # nothing in between, and `everyone_finished` turns true the instant the last of the two
+        # final answers commits. Both callers then arrive here, and the second one's DELETE
+        # cannot see the first's uncommitted rows: it deletes nothing, inserts, and is refused
+        # by `session_result_pkey` — a 500 on the last answer of somebody's round, on a room
+        # that is by then perfectly fine.
+        #
+        # The lock rather than a caught exception, because it makes the loser WAIT and then do
+        # the work correctly: by the time it proceeds the winner has committed, so its DELETE
+        # sees those rows and replaces them, and the room ends with one slate either way. It is
+        # taken inside this transaction, after the slate is computed, so the LLM call above is
+        # not holding it. `ballot.resolve` was made idempotent for this same beat at the other
+        # end; this is the same promise on this end.
+        await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _FINISH_LOCK, session_id)
         await conn.execute("DELETE FROM session_result WHERE session_id = $1", session_id)
         for row in slate.rows:
             await conn.execute(

@@ -1118,6 +1118,8 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_the_report_carries_the_rate_at_which_each_ending_fired",
     "backend/tests/test_migrations.py::test_the_held_out_session_answers_are_addressable",
     "backend/tests/test_schema_contracts.py::test_a_session_answer_names_the_stream_it_belongs_to",
+    "backend/tests/test_tonight_routes.py::test_solos_held_out_pair_is_still_held_out_when_it_comes_back",
+    "backend/tests/test_rank_integration.py::test_the_held_out_guard_sees_every_spelling_a_reader_could_use",
 ]
 
 [[requirement]]
@@ -1270,6 +1272,7 @@ tests = [
     "backend/tests/test_tonight_combine.py::test_the_contested_axis_stops_explaining_the_ranking",
     "backend/tests/test_tonight_combine.py::test_the_contested_facet_needs_two_people_pulling_opposite_ways",
     "backend/tests/test_tonight_combine.py::test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one",
+    "backend/tests/test_tonight_combine.py::test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole",
 ]
 
 [[requirement]]
@@ -1363,6 +1366,8 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_a_guest_seat_neither_scores_nor_filters",
     "backend/tests/test_tonight_integration.py::test_a_guest_is_ranked_by_the_pools_order_and_never_a_members_ledger",
     "backend/tests/test_tonight_integration.py::test_guest_seats_are_not_members_for_the_pools_purposes",
+    "backend/tests/test_tonight_integration.py::test_two_seats_finishing_together_do_not_both_write_the_slate",
+    "backend/tests/test_tonight_routes.py::test_solos_held_out_pair_is_still_held_out_when_it_comes_back",
 ]
 
 # --- added at M4 open, by reconciling §12's M4 row and §6.2/§4.2/§13 against the map ---------
@@ -1432,7 +1437,7 @@ id = "tonight-rank-join-channels-equivalent"
 spec = "§6.2 step 2 (\"Join channels, all equivalent\")"
 milestone = "M4"
 kind = "integration"
-what = "A member's seat is decided by who they are and not by how they arrived: joining by room code, from the open-rooms list, or by following a join link resolves to the same session and the same participant state, and a second arrival by the same member through a different channel re-attaches to the existing seat rather than creating a second one. Every session carries a room code readable from its own API surface; no two concurrently active sessions hold the same code; and a code matching no active session is refused rather than opening a session or attaching the caller to an ended one."
+what = "A member's seat is decided by who they are and not by how they arrived: joining by room code, or from the open-rooms list, resolves to the same session and the same participant state, and a second arrival by the same member through a different channel re-attaches to the existing seat rather than creating a second one. Every session carries a room code readable from its own API surface; no two concurrently active sessions hold the same code; and a code matching no active session is refused rather than opening a session or attaching the caller to an ended one."
 why = "'All equivalent' is a claim about what a join produces, not a list of affordances — a channel that seats a member twice changes the participant count every average, every tally and §13's approval share are computed over."
 tests = [
     "backend/tests/test_tonight_routes.py::test_joining_by_code_and_by_id_reach_the_same_seat",
@@ -1489,6 +1494,8 @@ tests = [
     "backend/tests/test_push_sender.py::test_a_boot_without_a_secrets_key_stores_no_keypair_and_does_not_raise",
     "backend/tests/test_push_sender.py::test_no_route_returns_the_private_half",
     "backend/tests/test_push.py::test_the_state_route_reports_no_application_server_key_until_one_is_configured",
+    "backend/tests/test_tonight_integration.py::test_a_room_that_fails_to_open_does_not_take_the_previous_one_with_it",
+    "backend/tests/test_tonight_integration.py::test_opening_a_room_is_one_fact_rather_than_four",
 ]
 
 [[requirement]]
@@ -1686,11 +1693,12 @@ id = "tonight-rank-match-line-terms-are-carried"
 spec = "§6.2 step 7 (per-person match lines; rewritten 54e) + §6.8 (\"quiet reasons\") + §4.1 rules 1 and 2"
 milestone = "M4"
 kind = "integration"
-what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast; and a participant for whom no carried term reaches either sign gets the stated no-pull line instead of an invented term."
+what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast; and a participant for whom no carried term reaches either sign gets a stated term-free line instead of an invented term -- the no-pull line names the term that works against them, so it cannot serve a participant no term reaches (owner decision at the M4 merge)."
 why = "§6.8 makes the one-line why in vocabulary terms normative and §6.0's shelves already enforce it — a card shown under a reason it does not satisfy is the defect `home/why.py` was inverted to make unrepresentable, and the winner card is the one screen the whole round exists to produce."
 tests = [
     "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries",
     "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something",
+    "backend/tests/test_tonight_integration.py::test_each_match_line_branch_says_the_thing_it_is_for",
 ]
 
 [[requirement]]

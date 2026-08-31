@@ -286,6 +286,7 @@ async def test_a_guest_seat_neither_scores_nor_filters(db, world):
 # --- §6.2 step 2: the room, its seats, and "join channels, all equivalent" ----------------
 
 
+import asyncio  # noqa: E402
 import random  # noqa: E402
 
 import asyncpg  # noqa: E402
@@ -373,7 +374,8 @@ async def test_a_room_code_is_unique_among_live_rooms_and_reusable_after(db, wor
     this asserts is the rule itself — the database refuses the second live row — because the way
     it actually breaks is a race the application cannot see. `open_session` asks whether a code
     is taken and then inserts, and two people tapping "Together" at the same moment is the
-    ordinary case in a household, not the rare one. The review found it; 0015 is the index.
+    ordinary case in a household, not the rare one. The review found it; the index it lands
+    on is `session_room_code_live` in 0013.
     """
     first = await open_room(db, world)
     second = await open_room(db, world, host_user_id=world["jenny"])
@@ -1775,3 +1777,203 @@ async def test_a_guest_is_ranked_by_the_pools_order_rather_than_a_flat_prior(db,
     host = next(s for s in room["seats"] if s["role"] == "host")
     assert means != snapshot.pool_scores_for(host["id"])
     assert guest["id"] not in {p for s in snapshot.scores.values() for p in s}
+
+async def test_two_seats_finishing_together_do_not_both_write_the_slate(db, world, pg_url):
+    """54e's reveal is simultaneous, so the combine runs on whichever answer finishes the room --
+    and when two people finish at the same moment, that is both of them.
+
+    `_announce` reads `SELECT state FROM session` and then calls `finish` in a separate
+    statement, with no lock between them. `everyone_finished` turns true the instant the last of
+    the two final answers commits, so if the second commits before the first's announce reads,
+    both see `voting` and both combine. `finish` is `DELETE FROM session_result` then re-INSERT,
+    and the loser's DELETE cannot see the winner's uncommitted rows -- so it deletes nothing,
+    inserts rank 1, blocks on the winner's, and is refused by `session_result_rank`.
+
+    Two real connections, because that is the only place this exists: run them in sequence and
+    the second simply rewrites the first's committed slate, which is why the suite was green.
+
+    The database is what keeps the evening intact -- the unique index means there is never a
+    doubled slate. What it costs is a 500 on the last answer of somebody's round, on a room that
+    is by then perfectly fine, which is exactly what `ballot.resolve` was made idempotent to
+    avoid at the other end of the same beat.
+    """
+    room = await finished_session(db, world)
+    session_id = room["session_id"]
+    title_id = await db.fetchval("SELECT id FROM title LIMIT 1")
+
+    winner = await asyncpg.connect(pg_url)
+    try:
+        # The winner's transaction, open and uncommitted: its slate exists and nobody else can
+        # see it. This is the state the loser's DELETE runs against.
+        txn = winner.transaction()
+        await txn.start()
+        # Standing exactly where the winning `finish` stands: holding the session's lock, with
+        # its slate written and not yet visible to anyone else. Referencing the module's own
+        # constant rather than repeating the number, so the two cannot drift apart.
+        await winner.execute(
+            "SELECT pg_advisory_xact_lock($1, $2)", play._FINISH_LOCK, session_id
+        )
+        await winner.execute(
+            "INSERT INTO session_result (session_id, title_id, rank, slot, group_score) "
+            "VALUES ($1, $2, 1, 'finalist', 0.5)",
+            session_id, title_id,
+        )
+
+        loser = asyncio.create_task(play.finish(db, session_id, z=Z))
+        await asyncio.sleep(0.3)
+        assert not loser.done(), "the loser has to wait rather than write into the same slate"
+        await txn.commit()
+
+        # It must not raise. Before the fix it came back as an unhandled UniqueViolationError,
+        # which the route has no handler for: a 500 on the last answer of the round.
+        await asyncio.wait_for(loser, timeout=15)
+    finally:
+        await winner.close()
+
+    ranks = [
+        r["rank"]
+        for r in await db.fetch(
+            "SELECT rank FROM session_result WHERE session_id = $1 ORDER BY rank", session_id
+        )
+    ]
+    assert ranks == sorted(set(ranks)), f"one slate, not two: {ranks}"
+
+
+class _FailsOnTheNthSeat:
+    """A connection that writes the room and then loses the next seat.
+
+    The same shape as the two racing proxies above, and here for the same reason: the failure
+    this is about happens BETWEEN two statements, and nothing outside the function can stand
+    there otherwise.
+    """
+
+    def __init__(self, conn, *, fail_on: int):
+        self._conn = conn
+        self._fail_on = fail_on
+        self.seats = 0
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    async def execute(self, query, *args, **kw):
+        if "INSERT INTO session_participant" in query:
+            self.seats += 1
+            if self.seats == self._fail_on:
+                raise asyncpg.PostgresConnectionError("the write went nowhere")
+        return await self._conn.execute(query, *args, **kw)
+
+
+async def test_a_room_that_fails_to_open_does_not_take_the_previous_one_with_it(db, world):
+    """The abandon is destructive, so it may not run before anything that can fail.
+
+    It did. `open_session` abandoned the host's other open rooms first and then did the fallible
+    work: allocate a code, which is refused after twenty collisions, then three inserts, each its
+    own autocommit statement. Any of those failing left the host's live evening abandoned with no
+    room in its place -- a tap on "Together" that answers 409 and takes away the room they were
+    already in.
+
+    Forced by making the allocation fail: every code the generator returns is one that is already
+    taken, so the loop exhausts its attempts and raises. What this test is about is what survives.
+    """
+    live = await open_room(db, world)
+    hers = await open_room(db, world, host_user_id=world["jenny"])
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(rooms, "make_code", lambda _rng: live["room_code"])
+    try:
+        with pytest.raises(rooms.RoomError) as refused:
+            await open_room(db, world)
+    finally:
+        monkey.undo()
+    assert refused.value.reason == "no_code"
+
+    row = await db.fetchrow(
+        "SELECT state, ended_at FROM session WHERE id = $1", live["session_id"]
+    )
+    assert row["state"] == rooms.STATE_OPEN, "the room they were in is still the room they are in"
+    assert row["ended_at"] is None
+    listed = {r["session_id"] for r in await rooms.open_rooms(db, viewer_id=world["patrick"])}
+    assert live["session_id"] in listed
+    assert hers["session_id"] in listed, "and nobody else's room moved either"
+
+
+async def test_opening_a_room_is_one_fact_rather_than_four(db, world):
+    """The session row, its seats and the abandonment land together or not at all.
+
+    Every statement in `open_session` used to stand alone, which was survivable while none of
+    them took anything away. §6.2 step 2 seats guests at open time precisely so the round can
+    refuse a guest's turn early -- a room that kept three of its five seats because the fourth
+    insert was lost silently stops doing that, and there is no later moment that repairs it.
+    """
+    live = await open_room(db, world)
+    before = await db.fetchval("SELECT count(*) FROM session")
+
+    # Fail on the third seat: the session row and the host seat are already written by then.
+    flaky = _FailsOnTheNthSeat(db, fail_on=3)
+    with pytest.raises(asyncpg.PostgresError):
+        await rooms.open_session(
+            flaky, host_user_id=world["patrick"], kind="movie", budget_min=130,
+            include_rewatches=False, bundle_version=BUNDLE, guests=3,
+        )
+    assert flaky.seats == 3, "the failure landed where this test needs it"
+
+    assert await db.fetchval("SELECT count(*) FROM session") == before, "no half-made room"
+    assert await db.fetchval(
+        "SELECT count(*) FROM session_participant WHERE session_id NOT IN "
+        "(SELECT id FROM session)"
+    ) == 0
+    row = await db.fetchrow("SELECT state FROM session WHERE id = $1", live["session_id"])
+    assert row["state"] == rooms.STATE_OPEN, "and the abandon did not land without its room"
+
+
+async def test_each_match_line_branch_says_the_thing_it_is_for(db, world):
+    """§6.2 step 7's three cases, one assertion each. Neither of the two below the pull had one.
+
+    `play._match_lines` sorts a title's carried terms by the participant's tilt and picks a
+    branch: terms pulling toward them, terms working against them, or neither. Mutating the sign
+    comparison that separates the second from the third left 109 tests passing, because every
+    test that reached this code answered `A` on everything and only ever produced pulls. §6.8
+    makes the copy the rule rather than decoration, so a branch nothing reads is a sentence the
+    household could be shown that nobody has checked.
+
+    Driven through the real builder with a hand-made tilt, because the branch is a property of
+    the tilt and the title's terms together and no seeded round reliably produces all three.
+    """
+    room = await running_room(db, world)
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    title_id = next(t for t, terms in snapshot.dna.items() if terms)
+    carried = sorted(snapshot.dna[title_id])
+    assert carried, "the title this test is about has to carry something"
+
+    # The same rows `finish` hands the builder: it reads `name` and `seat` off them, so
+    # `rooms.seats_of`'s narrower shape is not what this seam takes.
+    seats_sql = (
+        "SELECT p.id, p.role, p.tilt, p.seat, u.name FROM session_participant p "
+        "LEFT JOIN app_user u ON u.id = p.user_id WHERE p.session_id = $1 ORDER BY p.seat"
+    )
+    first = (await db.fetch(seats_sql, room["session_id"]))[0]["id"]
+
+    async def line_for(tilt):
+        await db.execute("UPDATE session_participant SET tilt = $1 WHERE id = $2", tilt, first)
+        seats = await db.fetch(seats_sql, room["session_id"])
+        lines = await play._match_lines(db, snapshot=snapshot, seats=seats, title_id=title_id)
+        return lines[str(first)]
+
+    pulled = await line_for({carried[0]: 1.0})
+    assert pulled["sign"] == "pull"
+    assert carried[0] in pulled["line"], "the line names the term that earned it"
+
+    against = await line_for({t: -1.0 for t in carried})
+    assert against["sign"] == "against"
+    assert "works against them" in against["line"], "§6.2 step 7's honest negative"
+    assert against["terms"] and against["terms"][0]["term"] in carried, (
+        "and it names a term the title carries, not one chosen for contrast"
+    )
+
+    # The third case: nothing the title carries moves this person either way. It gets a line of
+    # its own rather than the no-pull line, which needs a term this participant does not have.
+    neutral = await line_for({t: 0.0 for t in carried})
+    assert neutral["sign"] == "neutral"
+    assert neutral["terms"] == [], "no term reached either sign, so none is named"
+    assert "works against them" not in neutral["line"]
+    assert neutral["line"], "a participant is never omitted"

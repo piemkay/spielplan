@@ -99,7 +99,12 @@ async def _open_with_code(
         if taken:
             continue
         try:
-            session_id = await conn.fetchval(insert, code, *args)
+            # A savepoint, not a bare statement: a UniqueViolationError aborts the transaction
+            # it lands in, so a caller that wrapped this loop in one would find the retry itself
+            # refused. `conn.transaction()` is a savepoint when nested and a real transaction
+            # when not, which is the same line for both callers.
+            async with conn.transaction():
+                session_id = await conn.fetchval(insert, code, *args)
         except asyncpg.UniqueViolationError:
             continue
         return int(session_id), code
@@ -126,40 +131,52 @@ async def open_session(
     """
     if guests < 0 or guests > MAX_GUESTS:
         raise RoomError("guest_count", f"between 0 and {MAX_GUESTS} guests")
-    # 0013 admits `abandoned` and only a result ever ended a room, so one opened and drifted
-    # away from stayed live forever: on §6.2 step 2's list for every household device with an
-    # age that only grows, and still holding the host's seat, so every later visit to the
-    # surface restored them into a room nobody was in. A host cannot be hosting two rooms
-    # nobody has started, and the second tap is the one moment that intent is unambiguous — so
-    # it is read here rather than by adding a control the spec does not name. Only `open`
-    # rooms: a round in progress is people answering on their own devices, and 54e's reveal
-    # waits for every seat.
-    await conn.execute(
-        "UPDATE session SET state = $1, ended_at = now() "
-        "WHERE host_user_id = $2 AND state = $3 AND ended_at IS NULL",
-        STATE_ABANDONED, host_user_id, STATE_OPEN,
-    )
-
     rng = rng or random.SystemRandom()
-    session_id, code = await _open_with_code(
-        conn,
-        rng,
-        """
-        INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min,
-                             include_rewatches, bundle_version)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-        """,
-        host_user_id, kind, budget_min, include_rewatches, bundle_version,
-    )
-    await conn.execute(
-        "INSERT INTO session_participant (session_id, user_id, role, seat) VALUES ($1, $2, $3, 1)",
-        session_id, host_user_id, ROLE_HOST,
-    )
-    for i in range(guests):
+
+    # One transaction, because the room, its seats and the abandonment below are one fact. Every
+    # statement here used to stand alone, which was survivable while none of them took anything
+    # away — and stopped being survivable when the abandon arrived.
+    async with conn.transaction():
+        session_id, code = await _open_with_code(
+            conn,
+            rng,
+            """
+            INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min,
+                                 include_rewatches, bundle_version)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+            """,
+            host_user_id, kind, budget_min, include_rewatches, bundle_version,
+        )
         await conn.execute(
             "INSERT INTO session_participant (session_id, user_id, role, seat) "
-            "VALUES ($1, NULL, $2, $3)",
-            session_id, ROLE_GUEST, 2 + i,
+            "VALUES ($1, $2, $3, 1)",
+            session_id, host_user_id, ROLE_HOST,
+        )
+        for i in range(guests):
+            await conn.execute(
+                "INSERT INTO session_participant (session_id, user_id, role, seat) "
+                "VALUES ($1, NULL, $2, $3)",
+                session_id, ROLE_GUEST, 2 + i,
+            )
+
+        # 0013 admits `abandoned` and only a result ever ended a room, so one opened and drifted
+        # away from stayed live forever: on §6.2 step 2's list for every household device with
+        # an age that only grows, and still holding the host's seat, so every later visit to the
+        # surface restored them into a room nobody was in. A host cannot be hosting two rooms
+        # nobody has started, and the second tap is the one moment that intent is unambiguous —
+        # so it is read here rather than by adding a control the spec does not name. Only `open`
+        # rooms: a round in progress is people answering on their own devices, and 54e's reveal
+        # waits for every seat.
+        #
+        # LAST, and not first. Allocating a code can fail after twenty collisions, and every
+        # insert above can fail; done first, any of those left the host's previous evening
+        # abandoned and no new room in its place — a tap on "Together" that answers 409 and
+        # takes the room they were in. `id <> $1` because the room just made is the host's and
+        # is `open`, so it would otherwise abandon itself.
+        await conn.execute(
+            "UPDATE session SET state = $1, ended_at = now() "
+            "WHERE host_user_id = $2 AND state = $3 AND ended_at IS NULL AND id <> $4",
+            STATE_ABANDONED, host_user_id, STATE_OPEN, session_id,
         )
     return {"session_id": session_id, "room_code": code}
 

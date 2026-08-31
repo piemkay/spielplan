@@ -194,6 +194,32 @@ def test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole():
     )
 
 
+def test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole():
+    """54d: the third slot is reserved "for the **highest-scoring** title on the opposite pole".
+
+    The test above asserts the slate contains one of each, which is a weaker claim: it holds for
+    any opposite-pole title, so an implementation reaching for the wrong end of the same list
+    passed every test in this file (checked, by making it `opposite[-1]`).
+
+    This board is built so the reservation has to CHOOSE. Zeroing the mood axis lifts the
+    off-pole title 4 into the leading two, which flips the lead pole to the right, so the
+    opposite-pole candidates are the left-pole 2 (0.90) and 3 (0.85) — both outside the two
+    slots already filled, and one of them better than the other. `opposite[-1]` reserves 3 here.
+    """
+    per = {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.40, 5: 0.20}
+    slate = C.combine(
+        per_participant=scores(p1=per, p2=per),
+        member_ledger={1: [0.7, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
+        tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
+    )
+    assert slate.contested == "mood", "the split has to be surfaced for the reservation to run"
+
+    reserved = [t for t in slate.finalists if t in (2, 3)]
+    assert reserved == [2], (
+        f"the reservation took {reserved}, and 2 outscores 3 on the same pole"
+    )
+
+
 def test_the_reserved_slot_replaces_the_third_rather_than_being_appended():
     """"replacing the third-ranked title, not appended alongside it". Four finalists is a
     different promise from the one §6.2 makes — and appending is the shorter implementation."""

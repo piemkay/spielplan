@@ -588,7 +588,12 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
     # the ones people actually approved — nowhere on the screen at all. The review found it.
     runners_up = sorted(
         (c for c in slate if winner is None or c["title_id"] != winner["title_id"]),
-        key=lambda c: (-c["approvals"], -c["rank"]),
+        # `-c["rank"]` read the tie-break backwards: `rank` is 1-best, so it put the CLOSEST
+        # runner-up last and the wildcard — always rank 4 or worse — at the head. In a
+        # two-seat household the three losing cards routinely tie at zero approvals, so that
+        # was the ordinary case rather than the edge one, and it contradicted the sentence
+        # directly above it.
+        key=lambda c: (-c["approvals"], c["rank"]),
     )
     return {
         "session_id": session_id,
@@ -626,6 +631,17 @@ async def solo(
         round_rules.Answered(
             seq=int(a.get("seq", i + 1)), title_a=int(a["title_a"]), title_b=int(a["title_b"]),
             answer=str(a["answer"]),
+            # RE-DERIVED, never accepted. 54b binds §13's guard to this round too, and the arm
+            # is a function of the seq — so the one field a client must not be able to choose
+            # is also the one field it never has to send. Reconstructing the answer without it
+            # took `Answered`'s default of `adaptive`, which made both the replay's hold-out
+            # filter and solo's own live count dead by construction: every tenth sharpen answer
+            # moved the posterior that selection and stopping read.
+            selection=(
+                round_rules.SELECTION_HOLDOUT
+                if round_rules.is_holdout(int(a.get("seq", i + 1)))
+                else round_rules.SELECTION_ADAPTIVE
+            ),
         )
         for i, a in enumerate(body.answers)
         if str(a.get("answer")) in round_rules.ANSWERS

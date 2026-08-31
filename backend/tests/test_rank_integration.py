@@ -522,13 +522,27 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
         "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
         "api/rank.py": "skips the incremental refit after a held-out answer, so the evaluation "
                        "stream cannot move the freshness clock the selector reads",
-        # M4. 54b binds §13's guard to Tonight's round as well, so the stream has two more
-        # deliberate readers — one that excludes it and one that admits only it, which is the
+        # M4. 54b binds §13's guard to Tonight's round as well, so the stream has FOUR more
+        # deliberate readers — one that admits only it and three that exclude it, which is the
         # same pairing `ledger/observations.py` and `rank/evaluation.py` already make.
         "tonight/round.py": "names the arm, and excludes those answers from the posterior that "
                             "selection and stopping read (54b)",
         "tonight/evaluation.py": "admits only those rows (54b's one evaluation read path for "
                                  "the round)",
+        # 54b says "neither selection nor stopping", and the TILT is a third thing that reads
+        # the same stream: it feeds the tonight score the shortlist is built from, so a
+        # held-out answer that moved it would steer the shortlist by the back door. Excluded
+        # on the write path and again on the undo path, which recomputes from the survivors.
+        "tonight/play.py": "excludes those answers from the tilt, on both the answer and the "
+                           "undo path (54b, via the tonight score the shortlist reads)",
+        "tonight/solo.py": "excludes them from the count the provenance line reports, so solo "
+                           "never claims a tilt a held-out answer did not give it",
+        # Solo mints no session row, so its answers come back over HTTP — and the arm is the one
+        # field a client must never be able to choose. The route re-derives it from the seq,
+        # which is the same reason `api/rank.py` is on this list: the HTTP seam is where a
+        # client would otherwise get to name its own place in §13's sample.
+        "api/tonight.py": "re-derives the arm from the seq on solo's stateless round, rather "
+                          "than trusting what the client sends back (54b)",
     }
     offenders = [
         rel for rel in _files_naming_the_held_out_stream(PACKAGE) if rel not in allowed
@@ -542,7 +556,13 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
 # Every spelling of the value. `ARM_HOLDOUT` is the name the rest of the package imports it
 # under and is NOT a superstring of `HELD_OUT`, so the first version of this guard missed the
 # one spelling a new reader would actually use — found by the M3 review.
-_HELD_OUT_NAMES = ("uniform_holdout", "HELD_OUT", "ARM_HOLDOUT")
+#
+# `SELECTION_HOLDOUT` is M4's, and the same trap sprung a second time: it is a superstring of
+# none of the three above, so this guard read every Tonight module and saw nothing, while
+# `tonight/play.py` and `tonight/solo.py` had been reading the stream since the milestone
+# shipped. A guard that cannot see the spelling its own milestone introduced reads as coverage
+# and provides none — which is the sentence docs/TESTING.md already wrote about this file.
+_HELD_OUT_NAMES = ("uniform_holdout", "HELD_OUT", "ARM_HOLDOUT", "SELECTION_HOLDOUT")
 
 
 def _files_naming_the_held_out_stream(root: Path) -> list[str]:
@@ -571,6 +591,27 @@ def test_the_held_out_guard_catches_a_new_reader(tmp_path):
     (package / "innocent.py").write_text("x = 1\n", encoding="utf-8")
 
     assert _files_naming_the_held_out_stream(package) == ["scoring/foldin.py"]
+
+
+def test_the_held_out_guard_sees_every_spelling_a_reader_could_use(tmp_path):
+    """Fed one file per spelling, because the guard has now been blind twice.
+
+    M3 found it could not see `ARM_HOLDOUT`, the name the package imports the value under. M4
+    walked into the same trap from the other side: `SELECTION_HOLDOUT` is the name the Tonight
+    package imports it under, is a superstring of none of the earlier three, and two modules
+    read the stream through it for a whole milestone while this guard reported clean. A guard
+    that knows only the spellings its author happened to think of is the failure it exists to
+    prevent, so this asserts every one of them rather than the one most recently added.
+    """
+    package = tmp_path / "spielplan"
+    package.mkdir(parents=True)
+    for i, name in enumerate(_HELD_OUT_NAMES):
+        (package / f"reader{i}.py").write_text(f"x = {name!r}" + chr(10), encoding="utf-8")
+    (package / "innocent.py").write_text("x = 1" + chr(10), encoding="utf-8")
+
+    seen = _files_naming_the_held_out_stream(package)
+    assert seen == [f"reader{i}.py" for i in range(len(_HELD_OUT_NAMES))]
+    assert "innocent.py" not in seen
 
 
 # --- §6.7: the log line names the arm that drew the pair ----------------------------------

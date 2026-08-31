@@ -795,3 +795,51 @@ async def test_the_wildcard_card_carries_the_label_it_is_honest_about(app, db, l
     assert body["wildcard"]["label"] == combine_rules.WILDCARD_LABEL
     for finalist in body["finalists"]:
         assert finalist["label"] is None, "a finalist is not a step outside anybody's usual"
+
+
+async def test_solos_held_out_pair_is_still_held_out_when_it_comes_back(app, db, library):
+    """54b: a hold-out pair is "used for neither selection nor stopping". Solo's sharpen round is
+    the same round, so the same rule binds it.
+
+    Solo mints no session row (§6.2 step 8), so its answers travel with the request -- and the
+    route rebuilt each one as `round_rules.Answered(seq, title_a, title_b, answer)` with no
+    `selection`, whose dataclass default is `adaptive`. Every tenth sharpen pair is drawn by the
+    hold-out arm and stamped as such on the way out, and arrived back stamped adaptive: both
+    `replay`'s filter and solo's own live-count filter were dead by construction, and the answer
+    moved the posterior that selection and stopping read.
+
+    The seq is the one thing the server does not have to trust the client for -- `is_holdout` is
+    a function of it -- so the arm is re-derived here rather than accepted.
+    """
+    host, host_id = await admin_client(app)
+    await score(db, host_id, library)
+
+    body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True, "offset": 0}
+    first = (await host.post("/api/tonight/solo", json={**body, "answers": []})).json()
+    if first.get("pair") is None:
+        pytest.skip("this pool serves no sharpen pair")
+
+    # Walk to the hold-out slot, answering whatever is served.
+    answers = []
+    seen_holdout = None
+    for seq in range(1, rnd.HOLDOUT_EVERY + 1):
+        out = (await host.post("/api/tonight/solo", json={**body, "answers": answers})).json()
+        pair = out.get("pair")
+        if pair is None:
+            pytest.skip("this pool converged before the hold-out slot")
+        if pair["selection"] == rnd.SELECTION_HOLDOUT:
+            seen_holdout = seq
+        answers.append(
+            {"seq": seq, "title_a": pair["a"]["title_id"], "title_b": pair["b"]["title_id"],
+             "answer": rnd.A}
+        )
+    assert seen_holdout == rnd.HOLDOUT_EVERY, "the arm fires on the seq this test is about"
+
+    # The provenance line counts the answers that actually tilted the picks. The hold-out is not
+    # one of them, so it reports one fewer than were sent -- which is the whole claim, visible.
+    after = (await host.post("/api/tonight/solo", json={**body, "answers": answers})).json()
+    assert "tilted by your" in after["provenance"]
+    counted = int(after["provenance"].split("tilted by your ")[1].split()[0])
+    assert counted == len(answers) - 1, (
+        f"{len(answers)} answers sent, one of them held out, provenance claims {counted}"
+    )
