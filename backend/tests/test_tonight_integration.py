@@ -1300,3 +1300,207 @@ async def test_the_report_carries_the_rate_at_which_each_ending_fired(db, world)
         "§13 evaluates the round; a report that can name a candidate invites a surface to draw "
         "it, which is how a held-out stream stops being held out"
     )
+
+
+# --- §6.2 step 8: solo -----------------------------------------------------------------------
+
+
+from spielplan.tonight import solo  # noqa: E402
+
+
+async def solo_picks(db, world, **kw):
+    params = dict(
+        user_id=world["patrick"], kind="movie", budget_min=200,
+        include_rewatches=True, bundle_version=BUNDLE,
+    )
+    params.update(kw)
+    return await solo.picks(db, **params)
+
+
+async def test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first(db, world):
+    """54f: "lands **directly on three picks and a wildcard** ranked by the personal Ledger with
+    no tilt — the fastest path to a film must not be slower than browsing Home." The prototype
+    forced the question round before showing any pick, which §6.2 never asked for."""
+    out = await solo_picks(db, world)
+
+    assert len(out["picks"]) == solo.PICKS
+    assert out["wildcard"] is not None
+    assert out["wildcard"]["title_id"] not in {p["title_id"] for p in out["picks"]}
+    assert out["sharpened"] is False
+    assert out["answered"] == 0
+
+
+async def test_the_picks_are_the_persons_own_ledger_order_with_no_tilt(db, world):
+    """"ranked by the personal Ledger with **no tilt**". Patrick's and Jenny's orders differ in
+    the fixture, so a solo run that returned the household average would be visible."""
+    mine = await solo_picks(db, world, user_id=world["patrick"])
+    theirs = await solo_picks(db, world, user_id=world["jenny"])
+
+    assert [p["title_id"] for p in mine["picks"]] != [p["title_id"] for p in theirs["picks"]]
+
+
+async def test_every_pick_carries_a_why_and_a_budget_fit_line(db, world):
+    """§6.8 makes the one-line why mandatory for every recommendation, and §6.2 step 8 fixes
+    both branches of the fit line. Solo is the surface a person reaches when they want a film
+    in one tap, so an unexplained pick fails the register at its cheapest point."""
+    out = await solo_picks(db, world, budget_min=130)
+
+    for card in [*out["picks"], out["wildcard"]]:
+        assert card["why"], "a pick with no why is a pick with no reason"
+        assert card["fit_line"], "the soft budget is only honest if the label is there"
+        runtime = card["runtime_min"]
+        if runtime is not None and runtime > 130:
+            assert card["fit_line"] == f"runs {runtime - 130} min over"
+            assert runtime <= 130 + 40, "nothing past the +40 admission bound"
+        elif runtime is not None:
+            assert card["fit_line"] == "fits your 130 min"
+
+
+async def test_the_wildcard_says_it_is_a_stretch_and_the_picks_do_not(db, world):
+    """§6.2 step 8 gives the two forms: "pulls you with {terms}" / "a stretch — outside your
+    usual". §6.4 makes the wildcard's label the honest half of a measured cost."""
+    out = await solo_picks(db, world)
+
+    assert out["wildcard"]["why"] == solo.STRETCH_WHY
+    for card in out["picks"]:
+        assert card["why"] != solo.STRETCH_WHY
+
+
+async def test_a_why_line_only_names_terms_the_pick_carries(db, world):
+    """The §6.0 invariant again: a card shown under a reason it does not satisfy. The tilt may
+    order the terms; it may never admit one."""
+    out = await solo_picks(db, world)
+    named = 0
+    for card in out["picks"]:
+        carried = {
+            r["term"] for r in await db.fetch(
+                "SELECT term FROM dna_tagged WHERE title_id = $1 AND version = $2",
+                card["title_id"], VOCAB,
+            )
+        }
+        for term in card["terms"]:
+            named += 1
+            assert term["term"] in carried
+    assert named, "the fixture carries no DNA, so this assertion is vacuous"
+
+
+async def test_the_provenance_line_reports_the_budget_and_the_filter(db, world):
+    """54f fixes both forms and says the tilted one replaces the other rather than joining it —
+    the prototype concatenated them, so the line claimed a tilt on a round nobody had run."""
+    plain = await solo_picks(db, world, budget_min=130, include_rewatches=False)
+    assert plain["provenance"] == "130 min budget · unseen first"
+
+
+async def test_sharpening_re_ranks_in_place_and_changes_the_provenance_line(db, world):
+    """54f: "A **sharpen this** control runs the same adaptive round against the same pool and
+    re-ranks in place; the provenance line then reads 'tilted by your N answers' instead of
+    'unseen first'.""" ""
+    # Rewatches included so the pool is larger than the shortlist: three candidates ARE the
+    # shortlist, so a round over them has nothing to ask and converges before serving a pair.
+    first = await solo_picks(db, world, budget_min=130, include_rewatches=True)
+    assert first["pair"] is not None, "the sharpen round has to have something to ask"
+
+    answered = [
+        rnd.Answered(seq=1, title_a=first["pair"]["a"]["title_id"],
+                     title_b=first["pair"]["b"]["title_id"], answer=rnd.A)
+    ]
+    after = await solo_picks(
+        db, world, budget_min=130, include_rewatches=True, answers=answered
+    )
+
+    assert after["provenance"] == "130 min budget · tilted by your 1 answers"
+    assert "unseen first" not in after["provenance"], "54f says instead of, not as well as"
+    assert after["sharpened"] is True
+    assert len(after["picks"]) == solo.PICKS, "re-ranked in place, not replaced by a queue"
+
+
+async def test_reshuffle_walks_the_ranking_rather_than_redrawing(db, world):
+    """§6.2 step 8 names the control; a random re-draw from a ranked list either returns the
+    same top titles or silently degrades the picks."""
+    first = await solo_picks(db, world)
+    second = await solo_picks(db, world, offset=1)
+
+    assert [p["title_id"] for p in first["picks"]] != [p["title_id"] for p in second["picks"]]
+
+
+async def test_solo_leaves_no_session_row_and_publishes_no_room(db, world):
+    """§6.2 step 8: "no session row". A solo evening that minted one would make itself joinable
+    by every household device and would pollute §13's approval-share population with
+    one-participant rows, where approval share is not a measurement at all."""
+    before = {
+        table: await db.fetchval(f"SELECT count(*) FROM {table}")
+        for table in ("session", "session_participant", "session_answer",
+                      "session_result", "session_outcome", "session_ballot")
+    }
+    out = await solo_picks(db, world)
+    await solo_picks(db, world, offset=2)
+    if out["pair"] is not None:
+        await solo_picks(db, world, answers=[
+            rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
+                         title_b=out["pair"]["b"]["title_id"], answer=rnd.A)
+        ])
+
+    after = {
+        table: await db.fetchval(f"SELECT count(*) FROM {table}")
+        for table in before
+    }
+    assert after == before
+    assert await rooms.open_rooms(db, viewer_id=world["jenny"]) == []
+
+
+async def test_solo_writes_no_observation_of_any_kind(db, world):
+    """"A **reshuffle** control walks further down the ranking" — a browse gesture, not an
+    observation. A control that quietly taught the Ledger "you rejected these three" would put
+    a navigation action on §5.2's one write-path for taste."""
+    before = {
+        table: await db.fetchval(f"SELECT count(*) FROM {table}")
+        for table in ("verdict", "duel", "tier_edit", "user_title")
+    }
+    out = await solo_picks(db, world)
+    await solo_picks(db, world, offset=1)
+    if out["pair"] is not None:
+        await solo_picks(db, world, answers=[
+            rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
+                         title_b=out["pair"]["b"]["title_id"], answer=rnd.NEITHER)
+        ])
+    after = {table: await db.fetchval(f"SELECT count(*) FROM {table}") for table in before}
+    assert after == before
+
+
+async def test_solo_uses_the_same_pool_as_a_group_session_would(db, world):
+    """"from the same pool" is what makes solo a mode of Tonight rather than a second
+    recommender: owned only, one kind, the soft budget, the rewatch setting."""
+    out = await solo_picks(db, world, budget_min=130, include_rewatches=False)
+    shown = {p["title_id"] for p in out["picks"]}
+    if out["wildcard"]:
+        shown.add(out["wildcard"]["title_id"])
+
+    assert 8 not in shown, "not owned"
+    assert 7 not in shown, "a series in a film session"
+    assert 4 not in shown, "200 minutes is past 130 + 40"
+
+
+async def test_an_empty_pool_says_what_to_change(db, world):
+    """§6.2 gives the happy path only. "You have seen everything that fits" is a real state on
+    a household library, and the honest answer names the two controls that would change it."""
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) "
+        "SELECT $1, id, 'seen' FROM title WHERE kind = 'movie' "
+        "ON CONFLICT (user_id, title_id) DO UPDATE SET state = 'seen'",
+        world["patrick"],
+    )
+    out = await solo_picks(db, world, budget_min=200, include_rewatches=False)
+
+    assert out["picks"] == [] and out["wildcard"] is None
+    assert "widen the budget" in out["empty"] and "include rewatches" in out["empty"]
+
+
+async def test_the_sharpen_pair_carries_no_score(db, world):
+    """§6.2 step 3: the pool is "internal — never shown as a step". A sharpen card that shipped
+    the candidate's own score would put the ranking on the screen it is kept off."""
+    out = await solo_picks(db, world)
+    if out["pair"] is None:
+        pytest.skip("this pool converged before serving a pair")
+    for side in ("a", "b"):
+        assert "scores" not in out["pair"][side]
+        assert "group_score" not in out["pair"][side]

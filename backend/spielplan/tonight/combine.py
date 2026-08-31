@@ -211,7 +211,7 @@ def zeroed(scores: Mapping[int, float], *, facet: str, dna, axes) -> dict[int, f
 # --- the slate -------------------------------------------------------------------------------
 
 
-def _wildcard(
+def wildcard_from(
     order: Sequence[tuple[int, float]], chosen: Sequence[int], dna: Mapping[int, Mapping[str, float]]
 ) -> int | None:
     """§6.4's exploratory slot: "regions of DNA space near the user's liked regions but
@@ -297,7 +297,7 @@ def combine(
         if contested:
             conflict = copy_rules.conflict(contested, d=d, phrasing=phrasing)
 
-    wildcard = _wildcard(order, finalists, dna)
+    wildcard = wildcard_from(order, finalists, dna)
     rows = []
     for rank, (title_id, score) in enumerate(order, start=1):
         if title_id in finalists:
@@ -330,5 +330,6 @@ __all__ = [
     "divergent_answers",
     "group_scores",
     "ranked",
+    "wildcard_from",
     "zeroed",
 ]

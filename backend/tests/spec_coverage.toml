@@ -1571,7 +1571,14 @@ milestone = "M4"
 kind = "backend"
 what = "Each solo pick carries a non-empty one-line why in the pull form naming vocabulary terms that pick actually carries, the wildcard carries the stretch form instead, and every pick and the wildcard carry a budget-fit line: at or under the budget the fits form naming the budget, over it the over form whose minute count is runtime minus budget exactly, and no pick exceeds budget + 40. Solo's candidate set is the step-3 pool built for that one participant, so changing any pool input moves the picks the way it moves a one-member group pool."
 why = "§6.8 makes the one-line why mandatory for every recommendation and solo is the fastest path to a film, so an unexplained pick fails the register at its cheapest point; the budget is soft by construction, which makes the label the only thing keeping it honest."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first",
+    "backend/tests/test_tonight_integration.py::test_every_pick_carries_a_why_and_a_budget_fit_line",
+    "backend/tests/test_tonight_integration.py::test_the_wildcard_says_it_is_a_stretch_and_the_picks_do_not",
+    "backend/tests/test_tonight_integration.py::test_a_why_line_only_names_terms_the_pick_carries",
+    "backend/tests/test_tonight_integration.py::test_solo_uses_the_same_pool_as_a_group_session_would",
+    "backend/tests/test_tonight_integration.py::test_an_empty_pool_says_what_to_change",
+]
 
 [[requirement]]
 id = "tonight-rank-solo-writes-no-session-row"
@@ -1580,7 +1587,11 @@ milestone = "M4"
 kind = "integration"
 what = "A solo evening — including its optional sharpen votes and any reshuffle — leaves session, session_participant, session_result and session_outcome at their prior row counts and the open-rooms list empty, and a reshuffle writes no verdict, duel, tier_edit or tilt."
 why = "A solo evening that mints a session row makes itself joinable by every household device and pollutes §13's approval-share population with one-participant rows, where approval share is not a measurement at all; and a browse gesture that quietly taught the Ledger 'you rejected these three' would put a navigation action on the one write-path for taste."
-tests = []
+tests = [
+    "backend/tests/test_tonight_integration.py::test_solo_leaves_no_session_row_and_publishes_no_room",
+    "backend/tests/test_tonight_integration.py::test_solo_writes_no_observation_of_any_kind",
+    "backend/tests/test_tonight_integration.py::test_reshuffle_walks_the_ranking_rather_than_redrawing",
+]
 
 [[requirement]]
 id = "tonight-rank-tv-kiosk-route"
