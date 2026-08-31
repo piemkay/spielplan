@@ -1187,6 +1187,8 @@ tests = [
     "backend/tests/test_tonight_round.py::test_a_tie_on_information_breaks_toward_the_widest_dna_axis",
     "backend/tests/test_tonight_round.py::test_selection_never_serves_a_pair_the_participant_has_already_answered",
     "backend/tests/test_tonight_round.py::test_a_pair_never_names_one_title_twice",
+    "backend/tests/test_tonight_round.py::test_the_selection_weighting_is_a_distribution_over_the_four_answers",
+    "backend/tests/test_tonight_round.py::test_a_foregone_pair_is_passed_over_for_one_the_round_is_unsure_about",
 ]
 
 [[requirement]]
@@ -1441,6 +1443,8 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_a_room_code_is_readable_across_a_room",
     "backend/tests/test_tonight_integration.py::test_joining_a_started_room_is_refused_rather_than_silently_ignored",
     "backend/tests/test_schema_contracts.py::test_one_member_cannot_hold_two_seats_in_one_session",
+    "backend/tests/test_tonight_integration.py::test_joining_twice_at_once_returns_the_one_seat_rather_than_a_500",
+    "backend/tests/test_tonight_integration.py::test_two_members_racing_for_the_same_seat_number_both_sit_down",
 ]
 
 [[requirement]]

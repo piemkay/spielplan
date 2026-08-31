@@ -190,30 +190,43 @@ async def join(conn: asyncpg.Connection, *, session_id: int, user_id: int) -> di
     if row is None or row["ended_at"] is not None:
         raise RoomError("no_room", "that session has ended")
 
-    existing = await conn.fetchrow(
-        "SELECT id, seat, role FROM session_participant WHERE session_id = $1 AND user_id = $2",
-        session_id, user_id,
-    )
-    if existing is not None:
-        return {"participant_id": existing["id"], "seat": existing["seat"],
-                "role": existing["role"], "created": False}
+    # Read, decide, insert — and everything between those is another device doing the same
+    # thing. The code, the banner and the open-rooms row are "all equivalent", and two of them
+    # are one tap apart on the same screen, so arriving twice AT ONCE is as ordinary as arriving
+    # twice in a row. 0013's two indexes are what actually keep one member to one seat and one
+    # seat to one member; losing the race made them do it by raising into the route, and the
+    # person was told the join had failed on a room they were by then in. Re-read and try again.
+    for _ in range(5):
+        existing = await conn.fetchrow(
+            "SELECT id, seat, role FROM session_participant "
+            "WHERE session_id = $1 AND user_id = $2",
+            session_id, user_id,
+        )
+        if existing is not None:
+            return {"participant_id": existing["id"], "seat": existing["seat"],
+                    "role": existing["role"], "created": False}
 
-    if row["state"] != STATE_OPEN:
-        # §6.2 says nothing about when joining closes, so the smallest rule that keeps a round
-        # coherent: once the pairs are being served, the participant set the pool was built for
-        # is fixed. A late arrival joins the next session.
-        raise RoomError("started", "that room has already started")
+        if row["state"] != STATE_OPEN:
+            # §6.2 says nothing about when joining closes, so the smallest rule that keeps a
+            # round coherent: once the pairs are being served, the participant set the pool was
+            # built for is fixed. A late arrival joins the next session.
+            raise RoomError("started", "that room has already started")
 
-    seat = await conn.fetchval(
-        "SELECT coalesce(max(seat), 0) + 1 FROM session_participant WHERE session_id = $1",
-        session_id,
-    )
-    participant_id = await conn.fetchval(
-        "INSERT INTO session_participant (session_id, user_id, role, seat) "
-        "VALUES ($1, $2, $3, $4) RETURNING id",
-        session_id, user_id, ROLE_MEMBER, seat,
-    )
-    return {"participant_id": participant_id, "seat": seat, "role": ROLE_MEMBER, "created": True}
+        seat = await conn.fetchval(
+            "SELECT coalesce(max(seat), 0) + 1 FROM session_participant WHERE session_id = $1",
+            session_id,
+        )
+        try:
+            participant_id = await conn.fetchval(
+                "INSERT INTO session_participant (session_id, user_id, role, seat) "
+                "VALUES ($1, $2, $3, $4) RETURNING id",
+                session_id, user_id, ROLE_MEMBER, seat,
+            )
+        except asyncpg.UniqueViolationError:
+            continue
+        return {"participant_id": participant_id, "seat": seat, "role": ROLE_MEMBER,
+                "created": True}
+    raise RoomError("seat_race", "too many devices sat down at once — try again")
 
 
 async def seats_of(conn: asyncpg.Connection, session_id: int) -> list[Seat]:

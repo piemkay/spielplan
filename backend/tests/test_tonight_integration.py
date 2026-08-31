@@ -539,6 +539,83 @@ async def test_joining_a_started_room_is_refused_rather_than_silently_ignored(db
     assert started.value.reason == "started"
 
 
+class _SeatsSomeoneMidRace:
+    """A connection that seats somebody in the window between the seat read and the insert.
+
+    The window two devices open by themselves: `join` reads whether the caller is already
+    seated, works out the next free seat number, and inserts. Everything between those is
+    another device doing the same thing — the banner and the open-rooms row are two channels to
+    one control, and §6.2 step 2 says they are "all equivalent", which is a promise about
+    arriving twice at once as much as about arriving twice in a row.
+    """
+
+    def __init__(self, conn, *, session_id, user_id, role="member", seat=None):
+        self._conn = conn
+        self._session_id = session_id
+        self._user_id = user_id
+        self._role = role
+        self._seat = seat
+        self.armed = True
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    async def fetchval(self, query, *args):
+        value = await self._conn.fetchval(query, *args)
+        if self.armed and "max(seat)" in query:
+            self.armed = False
+            await self._conn.execute(
+                "INSERT INTO session_participant (session_id, user_id, role, seat) "
+                "VALUES ($1, $2, $3, $4)",
+                self._session_id, self._user_id, self._role,
+                self._seat if self._seat is not None else value,
+            )
+        return value
+
+
+async def test_joining_twice_at_once_returns_the_one_seat_rather_than_a_500(db, world):
+    """§6.2 step 2: the room code, the banner and the open-rooms row are "all equivalent", and
+    `join` is idempotent for exactly that reason — a second seat changes the participant count
+    every average and §13's approval share are computed over.
+
+    It was idempotent in sequence and a 500 at once. Two of those channels are one tap apart on
+    the same screen, and the index that stops the second seat did its job by raising into the
+    route. What the person saw was a join that failed on a room they were, by then, in.
+    """
+    room = await open_room(db, world)
+    racing = _SeatsSomeoneMidRace(
+        db, session_id=room["session_id"], user_id=world["jenny"], seat=2
+    )
+
+    joined = await rooms.join(racing, session_id=room["session_id"], user_id=world["jenny"])
+
+    assert joined["created"] is False, "the seat that already existed is the seat they get"
+    assert joined["seat"] == 2
+    seats = await db.fetch(
+        "SELECT user_id FROM session_participant WHERE session_id = $1 AND user_id = $2",
+        room["session_id"], world["jenny"],
+    )
+    assert len(seats) == 1, "one member, one seat"
+
+
+async def test_two_members_racing_for_the_same_seat_number_both_sit_down(db, world):
+    """The other half of the same window, and the one a household actually hits: two people
+    tapping the same open-rooms row read `max(seat) + 1` and both got the same number. One of
+    them was told the room had failed."""
+    room = await open_room(db, world)
+    racing = _SeatsSomeoneMidRace(db, session_id=room["session_id"], user_id=None, role="guest")
+
+    joined = await rooms.join(racing, session_id=room["session_id"], user_id=world["jenny"])
+
+    assert joined["created"] is True
+    assert joined["seat"] == 3, "the seat the other device took is not offered twice"
+    seats = await db.fetch(
+        "SELECT seat FROM session_participant WHERE session_id = $1 ORDER BY seat",
+        room["session_id"],
+    )
+    assert [r["seat"] for r in seats] == [1, 2, 3]
+
+
 async def test_the_lobby_carries_no_candidate_and_no_ranking(db, world):
     """§6.2 step 3: the pool is "internal — **never shown as a step**", and the lobby is the
     screen most likely to leak it."""

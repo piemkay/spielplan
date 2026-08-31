@@ -24,6 +24,7 @@ Four things here are the milestone, and each has a way of going quietly wrong.
 
 from __future__ import annotations
 
+import math
 import random
 
 import pytest
@@ -529,3 +530,81 @@ def test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool():
                 f"seed {seed}: ended as `cap` at {played.answered} pairs with "
                 f"{len(distinct)} of {possible} distinct pairs asked"
             )
+
+
+def test_the_selection_weighting_is_a_distribution_over_the_four_answers():
+    """The weighting the selection rule multiplies by, on its own.
+
+    `test_the_pair_served_is_the_one_that_resolves_the_most_straddlers` compares the served pair
+    against alternatives using `expected_straddlers` — the same function the selector minimises.
+    That catches a selector that does not call it and nothing else: a wrong weighting picks a
+    different pair and the comparison follows it there. `expected_straddlers` is already a
+    direct simulation (it applies the real update for each answer and counts), so the weighting
+    is the one part of the rule with no independent check, and it is the part 54c's "would most
+    reduce" leans on — "a pair whose answer is a foregone conclusion reduces nothing however
+    dramatic the hypothetical would be".
+    """
+    even = rnd._answer_probabilities(rnd.Belief(1.0, 0.05), rnd.Belief(1.0, 0.05), anchor=1.0)
+    assert sum(even.values()) == pytest.approx(1.0)
+    assert set(even) == set(rnd.ANSWERS)
+    assert even[A] == pytest.approx(even[B]), "a tied pair leans neither way"
+
+    # A pair the model is sure about draws its answer with near-certainty, which is what makes
+    # it a bad question: there is almost no mass on the outcome that would change anything.
+    sure = rnd._answer_probabilities(rnd.Belief(3.0, 0.01), rnd.Belief(-3.0, 0.01), anchor=0.0)
+    unsure = rnd._answer_probabilities(rnd.Belief(0.02, 0.01), rnd.Belief(0.0, 0.01), anchor=0.0)
+    assert sure[A] > 0.99
+    assert unsure[A] < 0.6, "a coin flip is a coin flip"
+    assert max(unsure.values()) < max(sure.values())
+
+    # Decision 154's level split: the same pair, moved across the anchor, swaps which of the
+    # two level answers the model expects. An implementation that ignored `neither` would rate
+    # a pair of weak candidates as uninformative, when it is the pair one answer eliminates.
+    high = rnd._answer_probabilities(rnd.Belief(1.0, 0.25), rnd.Belief(1.0, 0.25), anchor=0.0)
+    low = rnd._answer_probabilities(rnd.Belief(-1.0, 0.25), rnd.Belief(-1.0, 0.25), anchor=0.0)
+    assert high[EITHER] > high[NEITHER]
+    assert low[NEITHER] > low[EITHER]
+    assert high[EITHER] == pytest.approx(low[NEITHER]), "symmetric about the anchor"
+
+
+def test_a_foregone_pair_is_passed_over_for_one_the_round_is_unsure_about():
+    """54c's weighting where it bites: "a pair whose answer is a foregone conclusion reduces
+    nothing however dramatic the hypothetical would be."
+
+    Four straddlers, alike in variance and all sitting on the boundary, so nothing about the
+    board separates them except how predictable each pair's answer is. Predictability is
+    measured here as the entropy of the answer distribution — computed in this test, not by the
+    function the selector minimises, which is the whole point: the selection test above compares
+    the served pair against alternatives using `expected_straddlers` itself, so a wrong
+    weighting picks a different pair and the comparison follows it there.
+
+    The tied pair is the foregone one, which is not the obvious way round. Two candidates the
+    round cannot order draw a level answer almost surely (decision 154: `either` lifts both,
+    `neither` lowers both) — and a level answer says nothing about which side of the cut they
+    fall on. The informative question is the one where all four answers are live.
+    """
+    state = {
+        1: rnd.Belief(3.0, 0.0001), 2: rnd.Belief(2.9, 0.0001), 3: rnd.Belief(2.0, 0.0001),
+        10: rnd.Belief(1.90, 0.25), 11: rnd.Belief(1.89, 0.25),
+        12: rnd.Belief(1.95, 0.25), 13: rnd.Belief(1.55, 0.25),
+        20: rnd.Belief(-1.0, 0.0001),
+    }
+    assert rnd.straddlers(state, z=1.0) == {10, 11, 12, 13}, "the board this test is about"
+    anchor = rnd.anchor_of(state)
+
+    def entropy(a: int, b: int) -> float:
+        probs = rnd._answer_probabilities(state[a], state[b], anchor)
+        return -sum(p * math.log(p) for p in probs.values() if p > 0)
+
+    pairs = [(10, 11), (10, 12), (10, 13), (11, 12), (11, 13), (12, 13)]
+    foregone = min(pairs, key=lambda ab: entropy(*ab))
+    assert foregone == (10, 11), "the board is built wrong"
+
+    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0)
+
+    assert {pair.title_a, pair.title_b} != set(foregone), (
+        "the round asked the question whose answer it could already name"
+    )
+    assert entropy(*sorted((pair.title_a, pair.title_b))) == pytest.approx(
+        max(entropy(*ab) for ab in pairs)
+    ), "and it asked the one it was least able to predict"
