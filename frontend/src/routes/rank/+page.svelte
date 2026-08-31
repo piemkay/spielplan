@@ -377,19 +377,6 @@
     opacity: 0.55;
   }
 
-  /* §6 preamble: "48 px targets". `design.css` sets this globally for `button`/`select`, but a
-   * scoped rule outranks it — RateCorrections, RateUndo and ShelfRow each re-declare it inside
-   * their own coarse-pointer block for exactly this reason, and this page has to as well. */
-  @media (pointer: coarse) {
-    .controls button,
-    .controls select,
-    .controls input,
-    .moving button,
-    .empty button,
-    .queue-head button {
-      min-height: var(--touch);
-    }
-  }
   .moving {
     display: flex;
     align-items: center;
@@ -573,5 +560,23 @@
   .pair .tie {
     color: var(--ink-3);
     font-size: 12px;
+  }
+
+  /* §6 preamble: "48 px targets". `design.css` sets this globally for `button`/`select`, but a
+   * scoped rule outranks it, so this page has to re-declare it — the way RateCorrections,
+   * RateUndo and ShelfRow each do. LAST in the sheet on purpose: these selectors tie on
+   * specificity with the base rules above, so source order is what decides, and an override
+   * placed earlier loses to the 32 px it is meant to beat. The e2e touch-floor test on the
+   * phone project is what caught that. */
+  @media (pointer: coarse) {
+    .controls button,
+    .controls select,
+    .controls input,
+    .moving button,
+    .empty button,
+    .queue-head button,
+    .pair button {
+      min-height: var(--touch);
+    }
   }
 </style>

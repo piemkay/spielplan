@@ -305,10 +305,10 @@ test.describe('rank', () => {
     for (const id of ['rank-genre', 'rank-decade', 'rank-runtime', 'rank-seen', 'rank-dna']) {
       await expect(page.getByTestId(id)).toBeVisible();
     }
-    await expect(board(page).locator('[data-kind="movie"]')).toHaveAttribute(
-      'aria-pressed',
-      /true|false/
-    );
+    // The kind pills live in the header, not inside the board — §6.3 lists `kind` among the
+    // six but it is the partition, not a filter control, so it is a different element.
+    await expect(page.locator('[data-kind="movie"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-kind="series"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('every control on the board meets the 48 px touch floor', async ({}, testInfo) => {

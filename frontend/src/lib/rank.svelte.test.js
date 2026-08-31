@@ -360,7 +360,7 @@ describe('overlapping requests', () => {
   it('drops a slow earlier response in favour of the newer one', async () => {
     // The bug `routes/+page.svelte` already carries a guard and a comment for: tap Series, tap
     // Films, and the Series board lands second under a Films tab.
-    let releaseFirst;
+    let releaseFirst = () => {};
     fetchMock.mockReturnValueOnce(
       new Promise((r) => {
         releaseFirst = () =>
@@ -396,7 +396,7 @@ describe('reset', () => {
   });
 
   it('makes an in-flight response land nowhere', async () => {
-    let release;
+    let release = () => {};
     fetchMock.mockReturnValueOnce(
       new Promise((r) => {
         release = () =>
@@ -430,7 +430,7 @@ describe('the queue answer keeps its §6.7 line', () => {
 
 describe('a drop', () => {
   it('refuses to start a second one while the first is in flight', async () => {
-    let release;
+    let release = () => {};
     fetchMock.mockReturnValueOnce(
       new Promise((r) => {
         release = () =>
