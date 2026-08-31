@@ -286,6 +286,10 @@ async def test_a_guest_seat_neither_scores_nor_filters(db, world):
 # --- §6.2 step 2: the room, its seats, and "join channels, all equivalent" ----------------
 
 
+import random  # noqa: E402
+
+import asyncpg  # noqa: E402
+
 from spielplan.tonight import rooms  # noqa: E402
 
 
@@ -362,17 +366,132 @@ async def test_a_code_matching_no_live_room_is_refused(db, world):
 
 async def test_a_room_code_is_unique_among_live_rooms_and_reusable_after(db, world):
     """Two live rooms sharing a code walks a household member into the wrong evening. After a
-    room ends the code is a free handle again — it names a room, not a permanent thing."""
+    room ends the code is a free handle again — it names a room, not a permanent thing.
+
+    Comparing two drawn codes is close to no test at all: the space is thousands wide, so an
+    implementation with no uniqueness rule whatsoever passes that assertion nearly always. What
+    this asserts is the rule itself — the database refuses the second live row — because the way
+    it actually breaks is a race the application cannot see. `open_session` asks whether a code
+    is taken and then inserts, and two people tapping "Together" at the same moment is the
+    ordinary case in a household, not the rare one. The review found it; 0015 is the index.
+    """
     first = await open_room(db, world)
     second = await open_room(db, world, host_user_id=world["jenny"])
     assert first["room_code"] != second["room_code"]
 
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await db.execute(
+            "INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min, "
+            "bundle_version) VALUES ($1, $2, 'movie', 130, $3)",
+            first["room_code"], world["jenny"], BUNDLE,
+        )
     await rooms.set_state(db, first["session_id"], rooms.STATE_RESOLVED)
     await db.execute(
         "INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min, bundle_version) "
         "VALUES ($1, $2, 'movie', 130, $3)",
         first["room_code"], world["patrick"], BUNDLE,
     )
+
+
+class _TakesTheCodeMidRace:
+    """A connection that lets a check pass and then takes the code before the insert lands.
+
+    The window this opens by hand is the one two devices open by themselves: `open_session`
+    asks whether a code is free and then inserts under it, and two people tapping "Together"
+    at the same moment is the ordinary event in a household. Everything else is delegated, so
+    the code under test is the real one.
+    """
+
+    def __init__(self, conn, *, host_user_id, bundle_version):
+        self._conn = conn
+        self._host = host_user_id
+        self._bundle = bundle_version
+        self.armed = True
+        self.stolen: str | None = None
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    async def fetchval(self, query, *args):
+        free = await self._conn.fetchval(query, *args)
+        if self.armed and "SELECT 1 FROM session" in query:
+            self.armed = False
+            self.stolen = args[0]
+            await self._conn.execute(
+                "INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min, "
+                "bundle_version) VALUES ($1, $2, 'movie', 130, $3)",
+                self.stolen, self._host, self._bundle,
+            )
+        return free
+
+
+async def test_a_code_taken_between_the_check_and_the_insert_is_retried(db, world):
+    """0013's partial unique index is what actually keeps two live rooms from sharing a code;
+    the check before the insert only keeps the common case off it. Lose that race and the index
+    does its job as an unhandled `UniqueViolationError` — a 500 on the main control of the
+    surface, for two taps that arrived together.
+
+    Deterministic rather than waited for: the connection takes the code in the window itself.
+    """
+    racing = _TakesTheCodeMidRace(db, host_user_id=world["jenny"], bundle_version=BUNDLE)
+    opened = await rooms.open_session(
+        racing, host_user_id=world["patrick"], kind="movie", budget_min=130,
+        include_rewatches=False, bundle_version=BUNDLE, rng=random.Random(7),
+    )
+
+    assert racing.stolen and opened["room_code"] != racing.stolen, "it drew again after losing"
+    assert await rooms.resolve_code(db, opened["room_code"]) == opened["session_id"]
+    seats = await db.fetch(
+        "SELECT seat FROM session_participant WHERE session_id = $1", opened["session_id"]
+    )
+    assert [r["seat"] for r in seats] == [1], "and the retry seated the host exactly once"
+
+
+async def test_opening_a_second_room_abandons_the_first_one_nobody_started(db, world):
+    """0013 admits `abandoned` and nothing ever wrote it, so a room ended exactly one way: by
+    reaching a result. A household that opens a room and drifts off to do something else leaves
+    it live forever — on §6.2 step 2's open-rooms list for every device, with an age that only
+    grows, and holding the host's seat, so every later visit to the surface restores them into
+    a room nobody is in.
+
+    A host cannot be hosting two rooms nobody has started. The second tap says the first is
+    over, which is the one moment the intent is unambiguous and needs no new control to read.
+    """
+    first = await open_room(db, world)
+    second = await open_room(db, world)
+
+    row = await db.fetchrow(
+        "SELECT state, ended_at FROM session WHERE id = $1", first["session_id"]
+    )
+    assert row["state"] == rooms.STATE_ABANDONED
+    assert row["ended_at"] is not None, "0013's CHECK ties the two together"
+    listed = [r["session_id"] for r in await rooms.open_rooms(db, viewer_id=world["patrick"])]
+    assert listed == [second["session_id"]]
+    assert first["room_code"] != second["room_code"]
+
+
+async def test_a_started_room_is_not_abandoned_by_a_second_one(db, world):
+    """The claim is about a room nobody started, and only that. A round in progress is people
+    answering on their own devices, and 54e's reveal waits for every seat — ending it because
+    somebody opened a second room somewhere else would take the evening away from them."""
+    running = await running_room(db, world)
+    await open_room(db, world)
+
+    row = await db.fetchrow(
+        "SELECT state, ended_at FROM session WHERE id = $1", running["session_id"]
+    )
+    assert row["state"] == rooms.STATE_VOTING and row["ended_at"] is None
+
+
+async def test_one_hosts_second_room_leaves_another_hosts_alone(db, world):
+    """Two rooms in one household is a supported evening — §6.2 step 2's list is plural, and
+    `to_session` exists to keep one room's frames out of the other. Only the host's own."""
+    hers = await open_room(db, world, host_user_id=world["jenny"])
+    await open_room(db, world, host_user_id=world["patrick"])
+    await open_room(db, world, host_user_id=world["patrick"])
+
+    row = await db.fetchrow("SELECT state FROM session WHERE id = $1", hers["session_id"])
+    assert row["state"] == rooms.STATE_OPEN
 
 
 async def test_the_open_rooms_list_is_visible_to_every_member_not_only_the_host(db, world):
@@ -474,8 +593,6 @@ async def test_guest_seats_are_not_members_for_the_pools_purposes(db, world):
 
 # --- §6.2 steps 4-6: the round, the combine and the blind ballot --------------------------
 
-
-import random  # noqa: E402
 
 from spielplan.tonight import ballot, combine, play  # noqa: E402
 from spielplan.tonight import round as rnd  # noqa: E402
@@ -894,14 +1011,28 @@ async def test_the_slate_is_persisted_rather_than_recomputed_on_read(db, world):
 
 async def test_a_quiet_session_stores_no_conflict_at_all(db, world):
     """§6.2 step 5: "below that, decide silently". A conflict object written on every session
-    turns §6.8's repair register into background noise."""
-    room = await finished_session(db, world)
+    turns §6.8's repair register into background noise.
+
+    The whole assertion used to sit under `if slate.conflict is None`, which is the shape of a
+    test that cannot fail: an implementation that wrote a conflict on every session took the
+    other branch and passed. So the session here is made quiet rather than hoped to be — both
+    seats answer `EITHER` to every pair, which by decision 154 lifts both candidates and pulls
+    the two of them in no opposing direction at all — and the assertion is unconditional.
+    """
+    room = await running_room(db, world)
+    for seat in room["seats"]:
+        if seat["role"] == "guest":
+            continue
+        await run_to_the_end(db, seat["id"], answer=rnd.EITHER)
+
     slate = await play.finish(db, room["session_id"], z=Z)
-    if slate.conflict is None:
-        stored = await db.fetch(
-            "SELECT conflict FROM session_result WHERE session_id = $1", room["session_id"]
-        )
-        assert all(r["conflict"] is None for r in stored)
+
+    assert slate.conflict is None, "nobody pulled against anybody"
+    stored = await db.fetch(
+        "SELECT conflict FROM session_result WHERE session_id = $1", room["session_id"]
+    )
+    assert stored, "a finished session has rows, or the assertion below is about nothing"
+    assert all(r["conflict"] is None for r in stored)
 
 
 async def test_every_participant_gets_a_match_line_naming_terms_the_title_carries(db, world):

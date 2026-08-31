@@ -371,5 +371,15 @@ def test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack
 def test_the_wildcard_carries_its_honest_label():
     """§6.2 step 5: "one exploratory pick **honestly labelled**" — §6.4 gives the words ("a step
     outside your usual, honestly labelled") and the cost it is honest about (≈ −1 pp top-hit
-    rate). An unlabelled wildcard is just a worse recommendation."""
-    assert C.WILDCARD_LABEL == "a step outside your usual"
+    rate). An unlabelled wildcard is just a worse recommendation.
+
+    Asserting the constant against its own value was a tautology over dead code: the label the
+    household actually read was spelled a second time in the client, and nothing anywhere read
+    this one. The route now serves it, and `test_the_wildcard_card_carries_the_label_it_is
+    _honest_about` is where that is asserted. What is left here is the two properties the words
+    themselves have to have.
+    """
+    assert C.WILDCARD_LABEL, "an unlabelled wildcard is just a worse recommendation"
+    # §6.8's register: it names the cost to the person, in their words, and does not hedge.
+    assert "usual" in C.WILDCARD_LABEL
+    assert not any(w in C.WILDCARD_LABEL.lower() for w in ("explor", "epsilon", "random"))

@@ -16,6 +16,8 @@ Two rules, and both are about what a frame can carry rather than what a screen d
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from spielplan.tonight import channel
@@ -183,3 +185,70 @@ def test_wiring_leaves_everything_else_alone():
     frame = {"kind": "progress", "session_id": 7, "n": 3, "ok": True, "name": "patrick",
              "seats": [{"answered": 6, "ended_by": None}]}
     assert channel.wire(frame) == frame
+
+
+class Stalls:
+    """A socket that accepts the frame and never finishes writing it.
+
+    Not the same failure as `Recorder(fails=True)`, and the difference is the point: a phone
+    that has gone away raises, and a phone on a bad connection or a laptop that suspended
+    mid-write does neither. It is the ordinary failure of a household WebSocket.
+    """
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    async def send_json(self, data) -> None:
+        self.entered.set()
+        await asyncio.Event().wait()
+
+
+async def test_one_socket_that_never_finishes_writing_does_not_hold_the_others(monkeypatch):
+    """§6.2 step 2's lobby is live for the household, not for whoever the hub reaches first.
+
+    `_deliver` awaited each socket in turn, so one device that stopped draining held every
+    frame behind it: the other phones' lobbies stopped updating and the reveal beat 54e times
+    across the household never arrived. The module said the opposite in a comment above a queue
+    field nothing ever read.
+    """
+    monkeypatch.setattr(channel, "SEND_TIMEOUT", 0.05)
+    hub = channel.Hub()
+    stalled, alive = Stalls(), Recorder()
+    hub.subscribe(stalled, user_id=1, session_id=7)
+    hub.subscribe(alive, user_id=2, session_id=7)
+
+    sent = await asyncio.wait_for(hub.to_session(7, channel.progress_frame(7, [])), timeout=2.0)
+
+    assert sent == 1
+    assert alive.frames, "the device that was answering got the frame"
+    assert stalled.entered.is_set(), "and the stalled one was not skipped, it was given up on"
+    assert hub.size == 1, "a socket that cannot take a frame is dropped, like one that raises"
+
+
+async def test_a_slow_socket_costs_the_others_nothing():
+    """The stall above is the extreme; the everyday case is one device simply slower than the
+    rest. Delivery is concurrent, so the frame costs the household the slowest single socket
+    rather than the sum of all of them."""
+    delay = 0.05
+
+    class Slow:
+        def __init__(self) -> None:
+            self.frames: list[dict] = []
+
+        async def send_json(self, data) -> None:
+            await asyncio.sleep(delay)
+            self.frames.append(data)
+
+    hub = channel.Hub()
+    sockets = [Slow() for _ in range(6)]
+    for i, socket in enumerate(sockets):
+        hub.subscribe(socket, user_id=i, session_id=7)
+
+    started = asyncio.get_running_loop().time()
+    sent = await hub.to_session(7, channel.progress_frame(7, []))
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert sent == 6 and all(s.frames for s in sockets)
+    assert elapsed < delay * len(sockets) / 2, (
+        f"{elapsed:.3f}s for six devices at {delay}s each - delivery is serialised"
+    )

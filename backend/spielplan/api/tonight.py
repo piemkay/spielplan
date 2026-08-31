@@ -49,6 +49,7 @@ from spielplan.home import rail
 from spielplan.ledger import hyperparams
 from spielplan.tonight import ballot as ballot_rules
 from spielplan.tonight import channel as channel_rules
+from spielplan.tonight import combine as combine_rules
 from spielplan.tonight import evaluation as evaluation_rules
 from spielplan.tonight import play, rooms
 from spielplan.tonight import round as round_rules
@@ -560,6 +561,14 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
             "approvals": approvals.get(row["title_id"], 0),
             "match_lines": list((row["per_user_match"] or {}).values()),
             "conflict": row["conflict"],
+            # §6.4's "honestly labelled", from the one place that holds the words. The client
+            # spelled them itself, which left `combine.WILDCARD_LABEL` with no reader and the
+            # two free to drift — and §6.4 is a claim about what the person is told, so the
+            # copy is the rule rather than decoration around it.
+            "label": (
+                combine_rules.WILDCARD_LABEL
+                if row["slot"] == combine_rules.SLOT_WILDCARD else None
+            ),
             "fit_line": pool_rules.fit_line(
                 runtime_min=row["runtime_min"], budget_min=budget or 130
             ),

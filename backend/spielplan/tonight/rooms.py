@@ -76,16 +76,33 @@ def make_code(rng: random.Random) -> str:
     return f"{letters}-{digits}"
 
 
-async def _unique_code(conn: asyncpg.Connection, rng: random.Random) -> str:
-    """A code no live room holds. Bounded retries, then a plain failure: an unbounded loop on a
-    32^2 * 8^4 space that is somehow exhausted is a hang rather than an error."""
+async def _open_with_code(
+    conn: asyncpg.Connection, rng: random.Random, insert: str, *args: Any
+) -> tuple[int, str]:
+    """Insert the session under a code no live room holds, and return both.
+
+    The check and the insert are one loop rather than two steps. 0013's partial unique index is
+    what actually keeps two live rooms from sharing a code — the check only keeps the common
+    case off it — and between a check that passed and an insert that follows, another device can
+    take the code. Two people tapping "Together" at the same moment is the ordinary event in a
+    household, not the rare one, and the cost of not catching it here is a 500 on the main
+    control of the surface. The retry is the same answer `sync/playback.py` gives a lost race.
+
+    Bounded, then a plain failure: an unbounded loop on a 32^2 * 8^4 space that is somehow
+    exhausted is a hang rather than an error.
+    """
     for _ in range(20):
         code = make_code(rng)
         taken = await conn.fetchval(
-            "SELECT 1 FROM session WHERE room_code = $1 AND ended_at IS NULL", code
+            "SELECT 1 FROM session WHERE upper(room_code) = upper($1) AND ended_at IS NULL", code
         )
-        if not taken:
-            return code
+        if taken:
+            continue
+        try:
+            session_id = await conn.fetchval(insert, code, *args)
+        except asyncpg.UniqueViolationError:
+            continue
+        return int(session_id), code
     raise RoomError("no_code", "could not allocate a room code")
 
 
@@ -109,15 +126,30 @@ async def open_session(
     """
     if guests < 0 or guests > MAX_GUESTS:
         raise RoomError("guest_count", f"between 0 and {MAX_GUESTS} guests")
+    # 0013 admits `abandoned` and only a result ever ended a room, so one opened and drifted
+    # away from stayed live forever: on §6.2 step 2's list for every household device with an
+    # age that only grows, and still holding the host's seat, so every later visit to the
+    # surface restored them into a room nobody was in. A host cannot be hosting two rooms
+    # nobody has started, and the second tap is the one moment that intent is unambiguous — so
+    # it is read here rather than by adding a control the spec does not name. Only `open`
+    # rooms: a round in progress is people answering on their own devices, and 54e's reveal
+    # waits for every seat.
+    await conn.execute(
+        "UPDATE session SET state = $1, ended_at = now() "
+        "WHERE host_user_id = $2 AND state = $3 AND ended_at IS NULL",
+        STATE_ABANDONED, host_user_id, STATE_OPEN,
+    )
+
     rng = rng or random.SystemRandom()
-    code = await _unique_code(conn, rng)
-    session_id = await conn.fetchval(
+    session_id, code = await _open_with_code(
+        conn,
+        rng,
         """
         INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min,
                              include_rewatches, bundle_version)
         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
         """,
-        code, host_user_id, kind, budget_min, include_rewatches, bundle_version,
+        host_user_id, kind, budget_min, include_rewatches, bundle_version,
     )
     await conn.execute(
         "INSERT INTO session_participant (session_id, user_id, role, seat) VALUES ($1, $2, $3, 1)",

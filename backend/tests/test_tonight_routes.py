@@ -28,6 +28,7 @@ import httpx
 import pytest
 
 from spielplan.push import keys, send
+from spielplan.tonight import combine as combine_rules
 from spielplan.tonight import round as rnd
 
 BUNDLE = "test-v1"
@@ -765,3 +766,32 @@ async def test_a_failed_finish_prompt_leaves_the_banner_path_intact(db, secrets_
     assert [p["title_id"] for p in pending] == [1], (
         "the queued prompt is what §7.3 promises when the push does not arrive"
     )
+
+
+async def test_the_wildcard_card_carries_the_label_it_is_honest_about(app, db, library):
+    """§6.4: the exploratory pick is "honestly labelled", and §6.8 makes those words part of the
+    rule rather than decoration around it.
+
+    They were spelled in the client. `combine.WILDCARD_LABEL` held the same sentence and had no
+    reader anywhere, so the copy the household actually read and the copy the tests asserted
+    were two different strings that nothing kept together. The route serves it now, and only on
+    the card the honesty is about.
+    """
+    host, host_id = await admin_client(app)
+    await score(db, host_id, library)
+    room = await open_room(host)
+    sid = room["session_id"]
+    await host.post(f"/api/tonight/sessions/{sid}/start")
+    seat = room["lobby"]["seats"][0]["participant_id"]
+    await _play_out(host, seat)
+
+    card = (await host.get(f"/api/tonight/sessions/{sid}/ballot")).json()
+    await host.post(
+        f"/api/tonight/seats/{seat}/ballot", json={"approved": [card["slate"][0]["title_id"]]}
+    )
+    body = (await host.get(f"/api/tonight/sessions/{sid}/result")).json()
+
+    assert body["wildcard"] is not None, "or every assertion below is about nothing"
+    assert body["wildcard"]["label"] == combine_rules.WILDCARD_LABEL
+    for finalist in body["finalists"]:
+        assert finalist["label"] is None, "a finalist is not a step outside anybody's usual"

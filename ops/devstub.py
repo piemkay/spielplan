@@ -3066,6 +3066,8 @@ def tonight_result(
                 for s in room["seats"]
             ],
             "conflict": slate.conflict if slot == "finalist" else None,
+            # §6.4's "honestly labelled", served rather than spelled in the client.
+            "label": tonight_combine.WILDCARD_LABEL if slot == "wildcard" else None,
             "play_url": None,
         }
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
 
@@ -39,9 +39,11 @@ LOBBY = "lobby"
 PROGRESS = "progress"
 REVEAL = "reveal"
 
-# One household, one process, a handful of devices: a per-socket queue this deep is a slow
-# client, and a slow client is dropped rather than allowed to stall the hub.
-QUEUE_DEPTH = 32
+# How long one device gets to take one frame. A household WebSocket fails two ways: the phone
+# has gone away, which raises, and the phone is on a bad connection or the laptop suspended
+# mid-write, which does neither. Only the first ends by itself. Five seconds is far longer than
+# a small JSON frame needs and far shorter than a lobby can go without being live.
+SEND_TIMEOUT = 5.0
 
 
 def wire(value: Any) -> Any:
@@ -85,7 +87,6 @@ class Subscriber:
     socket: Socket
     user_id: int
     session_id: int | None = None
-    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=QUEUE_DEPTH))
 
 
 class Hub:
@@ -110,17 +111,30 @@ class Hub:
         return len(self._subscribers)
 
     async def _deliver(self, targets: Iterable[Subscriber], frame: dict[str, Any]) -> int:
-        sent = 0
-        for sub in list(targets):
+        """One frame to many devices, concurrently, and each on its own clock.
+
+        Awaiting the sockets in turn put every device behind the slowest one, and behind a
+        device that had stopped draining it put them behind nothing at all: the household's
+        lobbies quietly stopped being live while one phone was suspended. A raise is not the
+        only way a socket fails, so the timeout is what makes "dropped rather than allowed to
+        stall the hub" true — the comment above the queue field that nothing ever read.
+        """
+        subscribers = list(targets)
+        payload = wire(frame)
+
+        async def deliver(sub: Subscriber) -> bool:
             try:
-                await sub.socket.send_json(wire(frame))
-                sent += 1
+                await asyncio.wait_for(sub.socket.send_json(payload), timeout=SEND_TIMEOUT)
             except Exception:
                 # A device that has gone away must not stop the frame reaching the others: the
                 # lobby is the screen a household is looking at while somebody's phone locks.
                 log.debug("dropping a session subscriber that stopped answering")
                 self.unsubscribe(sub)
-        return sent
+                return False
+            return True
+
+        results = await asyncio.gather(*(deliver(s) for s in subscribers))
+        return sum(results)
 
     async def to_household(self, frame: dict[str, Any]) -> int:
         """Every signed-in device. Used for "a room opened" — §6.2 step 2's open-rooms list is
@@ -171,7 +185,7 @@ __all__ = [
     "Hub",
     "LOBBY",
     "PROGRESS",
-    "QUEUE_DEPTH",
+    "SEND_TIMEOUT",
     "REVEAL",
     "ROOMS_CHANGED",
     "Socket",

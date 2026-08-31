@@ -446,7 +446,8 @@
         <div class="wildcard" data-testid="tonight-wildcard">
           <p class="data label">WILDCARD</p>
           <p>{tonight.result.wildcard.name}</p>
-          <p class="why">a step outside your usual, honestly labelled</p>
+          <!-- §6.4's "honestly labelled". Served, not spelled here: the words are the rule. -->
+          <p class="why">{tonight.result.wildcard.label}, honestly labelled</p>
         </div>
       {/if}
     </div>
