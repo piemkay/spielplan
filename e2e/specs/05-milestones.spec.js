@@ -13,7 +13,6 @@ import { signedIn } from '../helpers.js';
  */
 
 const PENDING = [
-  { path: '/tonight', surface: 'Tonight', milestone: 'M4' },
   { path: '/map', surface: 'Map', milestone: 'M6' },
   { path: '/taste', surface: 'Taste', milestone: 'M6' }
 ];
@@ -33,9 +32,10 @@ for (const { path, surface, milestone } of PENDING) {
 
 test('a placeholder still describes what the surface will do', async ({ page }) => {
   // An honest placeholder is not a blank page: it carries the spec's own description, so the
-  // shape of the finished app is legible from day one.
-  await page.goto('/tonight');
-  await expect(page.getByText(/roughly ten candidate votes|adaptive|blind/i)).toBeVisible();
+  // shape of the finished app is legible from day one. Moved from /tonight to /map when M4
+  // shipped — the routine below.
+  await page.goto('/map');
+  await expect(page.getByText(/axis scatter|explore|wander|connections/i)).toBeVisible();
   await expect(page.locator('main li')).not.toHaveCount(0);
 });
 
@@ -60,6 +60,21 @@ test('Rank is built — M3 landed, so it is no longer a placeholder', async ({ p
   await expect(page.getByTestId('rank-board')).toBeVisible();
   await expect(page.getByTestId('rank-sharpen')).toBeVisible();
 });
+
+test('Tonight is built — M4 landed, so it is no longer a placeholder', async ({ page }) => {
+  // The routine again, one milestone on. The `/tonight` placeholder assertion above failed the
+  // day the surface shipped, and that failure was the reminder to write this. 14-tonight,
+  // 15-tonight-group and 16-tonight-tv are the real tests; this one only asserts the surface
+  // stopped naming a milestone it no longer owes, and that §6.2 step 1's controls and both of
+  // its doors are actually on the page.
+  await page.goto('/tonight');
+  await expect(page.getByTestId('tonight-surface')).toBeVisible();
+  await expect(page.getByText(/Not built yet/)).toHaveCount(0);
+  await expect(page.getByTestId('tonight-controls')).toBeVisible();
+  await expect(page.getByTestId('tonight-open')).toBeVisible();
+  await expect(page.getByTestId('tonight-solo-door')).toBeVisible();
+});
+
 
 test('Account is built — M1 landed, so it is no longer a placeholder', async ({ page }) => {
   // This test replaces the placeholder assertion Account carried at M0. The routine in

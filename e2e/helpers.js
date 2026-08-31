@@ -164,3 +164,90 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
   await expect(panel.getByRole('heading', { name })).toBeVisible();
   return panel;
 }
+
+/**
+ * Create a household member and sign this page in as them. Spec v2.1 §3.1.
+ *
+ * Lifted out of `13-rank.spec.js`, which had it first: §4.2's observations are append-only, so
+ * a shared account cannot be rewound between runs and every spec that needs a ledger of its own
+ * needs an account of its own. The sequence is §3.1's: a one-time password, a forced change,
+ * then the member is usable.
+ */
+export async function createMember(page, label) {
+  const name = `${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const res = await page.request.post('/api/setup/members', { data: { name, role: 'member' } });
+  expect(res.status(), 'the admin adds a household member (§3.1)').toBe(201);
+  return { name, otp: (await res.json()).one_time_password, password: `${label}-e2e-password` };
+}
+
+export async function signInAsMember(page, member) {
+  await page.request.post('/api/auth/logout');
+  const login = await page.request.post('/api/auth/login', {
+    data: { name: member.name, password: member.otp }
+  });
+  expect(login.ok(), 'the one-time password signs the new member in').toBeTruthy();
+  const changed = await page.request.post('/api/auth/password', {
+    data: { current_password: member.otp, new_password: member.password }
+  });
+  expect(changed.ok(), 'setting a password unlocks the rest of the app').toBeTruthy();
+}
+
+/** Sign an already-created member in on a second context, by password. */
+export async function loginAsMember(page, member) {
+  await page.goto('/login');
+  await page.locator('input[type=text]').first().fill(member.name);
+  await page.locator('input[type=password]').fill(member.password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByTestId('home-greeting')).toBeVisible();
+}
+
+/**
+ * Give this session's member a ledger, through §6.1's own routes.
+ *
+ * Films, not series: §6.2's pool for a film session is what Tonight needs, and it needs more
+ * than three candidates or the round has no shortlist boundary to resolve (three titles ARE the
+ * shortlist). `include_rewatches` then keeps the rated titles in the pool, since a verdict
+ * implies `seen`.
+ */
+export async function seedFilmLedger(page, rounds = 8) {
+  await page.request.post('/api/rate/session', {
+    data: { mode: 'sweep', kinds: ['movie'], restart: true }
+  });
+  for (let i = 0; i < rounds; i++) {
+    const { card } = await (await page.request.get('/api/rate')).json();
+    if (!card || card.type !== 'sweep') break;
+    const answered = await page.request.post('/api/rate/verdict', {
+      data: { card_token: card.token, value: i % 3 },
+      failOnStatusCode: false
+    });
+    if (!answered.ok()) break;
+  }
+  await page.request.delete('/api/rate/session');
+}
+
+/**
+ * Wait until §5.1's per-user scores exist for this member.
+ *
+ * `user_score` is written by the worker's fold-in tick (§5.3, every 60 s), not by the verdict —
+ * so a spec that opened a room the instant it finished rating would meet §6.2's empty pool and
+ * fail for a reason that has nothing to do with what it is testing.
+ */
+export async function waitForPool(page, { budget = 200 } = {}) {
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.post('/api/tonight/solo', {
+          data: { kind: 'movie', runtime_budget_min: budget, include_rewatches: true },
+          failOnStatusCode: false
+        });
+        if (!res.ok()) return 0;
+        return ((await res.json()).picks ?? []).length;
+      },
+      {
+        message: 'the nightly fold-in has not written user_score yet, so the pool is empty',
+        timeout: 150_000,
+        intervals: [2000]
+      }
+    )
+    .toBeGreaterThan(0);
+}
