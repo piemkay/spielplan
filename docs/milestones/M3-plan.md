@@ -317,3 +317,49 @@ the build and were too small to stop on.
     `overflow: hidden`.
 19. **The kind switcher is the house `.pill` with `aria-pressed`,** not a `role="tab"` with no
     tabpanel; the tier rows are `role="group"`, not `role="listbox"` over buttons.
+
+
+---
+
+## Exit-criterion evidence
+
+§12's M3 row: **"stable tier lists both users endorse"**. Measured by
+`ops/m3_exit_criterion.py` against the stack `node e2e/run.mjs` had just built and imported a
+bundle into. Two members were created and rated in deliberately opposed patterns
+(`[2,2,1,0]` and `[0,1,2,2]` cycled over the queue).
+
+```
+  liked-first    6 titles on the board, tiers occupied: [4, 5]
+  disliked-first 6 titles on the board, tiers occupied: [2, 3]
+
+  1. PERSONAL      Spearman rho between the two orderings = -0.657 over 6 shared titles
+  2. STABLE        same request twice, no observations between: 0 titles moved, both people
+  3. SHARPENING    liked-first    first 10 comparisons moved 0 titles; next 10 moved 2
+                   disliked-first first 10 comparisons moved 1 title;  next 10 moved 0
+  4. §13's FIGURE  liked-first    held-out pairs 1, decisive 1, agreement 1.00
+                   disliked-first held-out pairs 3, decisive 3, agreement 1.00
+```
+
+**What this shows.** The board is *per person*: two people rating in opposite orders get
+orderings that anti-correlate at ρ = −0.657, which is the property §5.1's β = 0.8 blend and the
+per-user Ledger exist to produce — a household with one board would read ρ = +1.0. And it is
+*stable* in the narrow sense the word can be tested in: re-reading moves nothing, which is not
+free (a board that re-derived its cutpoints per render, or sorted client-side, would drift).
+
+**What this does not show, and why.** Three things, stated rather than glossed:
+
+1. **The board is six titles.** The synthetic fixture carries eight titles, six of them films —
+   `tests/fixtures/make_bundle.py` reproduces §4.1's landmines, not a library. §6.3's own
+   budgets are "~10–20 comparisons place a new title" and "the first *stable* tier list arrives
+   at ~1,500–3,000 comparisons"; nothing at this scale speaks to either. Row 3's numbers (0
+   then 2, 1 then 0) are noise on a six-row board, not a convergence curve.
+2. **§13's agreement figure reads 1.00 on n = 1 and n = 3.** That is why the script prints the
+   n beside it and why `Agreement.rate` is `None` rather than `0.0` on an empty sample. §0
+   fixes a noise floor of 0.003–0.008 Spearman and calls anything smaller a tie; a rate over
+   three pairs is not a measurement.
+3. **"Endorse" is not measurable here at all.** It is two people looking at their own board and
+   saying it is right. §12's M2 row has the identical limit — "50–100 verdicts each produce
+   visibly personal rankings" is a claim about a household — and M2 shipped the machinery and
+   the test that the loop closes rather than pretending otherwise. This does the same: what is
+   above is the machinery being personal and stable, and the endorsement is the household's to
+   give against a real corpus bundle.
