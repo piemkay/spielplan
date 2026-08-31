@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M3"
+current_milestone = "M4"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -1244,6 +1244,221 @@ milestone = "M4"
 kind = "backend"
 what = "A guest with no grid profile is ranked by the candidate pool's own member-average order, contributes no term to that average, and is excluded from D; no member's Ledger is substituted for theirs."
 why = "The prototype ranked every guest with the host's ledger (`const u = guest ? 'p' : who`) — that is a privacy-shaped bug, not 'contributes no taste term'."
+tests = []
+
+# --- added at M4 open, by reconciling §12's M4 row and §6.2/§4.2/§13 against the map ---------
+# The map is a contract, not a ceiling (docs/TESTING.md). §12's M4 row names eight things and
+# the eighteen rows above cover four of them: the round, the combine, the ballot and solo.
+# Nothing covered the candidate pool the round reads, the lobby, open-rooms discovery, push
+# join, the guest hand-off or the TV route — six clauses of the same sentence. These are those,
+# plus the §4.2 session tables no row named and the two measured levers (§0 rows 3 and 4) that
+# survive the deleted mood round.
+
+[[requirement]]
+id = "tonight-rank-pool-filters-owned-kind-budget-rewatch"
+spec = "§6.2 steps 1 and 3 (session controls; candidate pool) + §4.1 rule 5"
+milestone = "M4"
+kind = "integration"
+what = "The candidate pool is exactly the owned titles of the session's kind that pass the runtime budget and the rewatch setting: an unowned title and a series in a film session never appear in the pool, in any pair served, or among the finalists; the budget is soft — a title is admitted up to budget + 40 min and none past it — and an admitted title over the budget carries 'runs N min over' with N its runtime minus the budget in whole minutes; with the rewatch toggle in its default position a title every seated member has seen is excluded and a title one of two members has not seen is kept."
+why = "§4.1 rule 5 binds every ranking surface and Tonight ends in Play on Jellyfin, so an unowned or wrong-kind title is an evening the household cannot watch; the '+40 with a label' grace and the *every*-participant quantifier are the two places a plausible implementation silently gets it wrong in the direction nobody notices."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-pool-order-plain-average"
+spec = "§6.2 step 3 (plain average) + §0 row 3 + §5.1"
+milestone = "M4"
+kind = "backend"
+what = "The pool's order is the unweighted arithmetic mean of the seated members' §5.1 scores and nothing else — a title where the minimum favours one candidate but the mean favours another places the mean's winner first, every member counts equally regardless of label count, and no mood tilt (this session's or a stored one) enters the pool prior, so two sessions opened over the same filters against the same Ledgers produce the identical order."
+why = "No aggregation rule dominates plain averaging and dominance rules cost −0.012 against a 0.003–0.008 noise floor; the stored mood profile is worth 0.000 for choose-tonight, so a tilt in the prior is measured harm rather than a refinement."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-pool-never-shown-as-a-step"
+spec = "§6.2 step 3 (\"internal — never shown as a step\") + §6.2 v2.1 preamble"
+milestone = "M4"
+kind = "integration"
+what = "No payload a participant can obtain before the reveal — lobby, open-rooms entry, round state, pair, waiting channel — carries the candidate pool, its membership or its group ranking, and no route returns them; a participant replaying every request they are entitled to can reconstruct only the pairs they were served."
+why = "The v2.1 redesign deleted the visible shortlist on purpose: a pool rendered before the votes anchors the votes it exists to collect, which is the same anchoring §6.1 forbids by withholding the prediction until after the tap."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-join-channels-equivalent"
+spec = "§6.2 step 2 (\"Join channels, all equivalent\")"
+milestone = "M4"
+kind = "integration"
+what = "A member's seat is decided by who they are and not by how they arrived: joining by room code, from the open-rooms list, or by following a join link resolves to the same session and the same participant state, and a second arrival by the same member through a different channel re-attaches to the existing seat rather than creating a second one. Every session carries a room code readable from its own API surface; no two concurrently active sessions hold the same code; and a code matching no active session is refused rather than opening a session or attaching the caller to an ended one."
+why = "'All equivalent' is a claim about what a join produces, not a list of affordances — a channel that seats a member twice changes the participant count every average, every tally and §13's approval share are computed over."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-open-rooms-discovery"
+spec = "§6.2 step 2 (open-rooms list, \"with tappable empty seats\")"
+milestone = "M4"
+kind = "e2e"
+what = "An active session is visible to every signed-in household member — not only its host — as a row carrying the facets the spec's own example names (room code, host, age, kind, budget, whether it skips seen titles); an ended session is not listed and an unauthenticated caller is refused and sees no rooms; and a free seat on that row is a tappable control that seats the signed-in user of that device with no code typed and no notification involved."
+why = "§12 scopes 'open-rooms discovery' into M4 and the tap is what makes it a join channel rather than a status board — it is the only channel needing neither a code nor a delivery, which is the whole point on the phone already in someone's hand."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-lobby-live-over-the-session-channel"
+spec = "§6.2 step 2 (\"a live in-app lobby banner over the WebSocket\") + §1 (REST + WebSocket)"
+milestone = "M4"
+kind = "e2e"
+what = "A member with the app already open is shown a newly opened session, and a seated lobby is shown an arriving participant, without a reload and without the client polling for it; following that banner seats the member in the session it names."
+why = "§6's preamble makes push best-effort, so the in-app banner is the channel that has to work on the iPhone that never delivers a notification; a lobby that needs a refresh to show an arrival is one a household talks over instead of using."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-guest-hand-off-sequential-and-blind"
+spec = "§6.2 step 2 (\"Guests use the initiator's phone after the initiator finishes\") + step 4 (blind by construction)"
+milestone = "M4"
+kind = "e2e"
+what = "A guest seat cannot be opened for answering until the initiator's round has ended, and a second guest's round is refused while the first guest's is unfinished — the turns are sequential on the one device. When the phone passes, the incoming round renders none of the previous participant's pairs, answers or progress, and no control on that screen, browser back and in-round history entries included, reaches them."
+why = "On one shared device blindness is not protected by the transport — the previous person's answers have already been delivered to that client — so the hand-off is the only place it can be enforced, or lost."
+tests = []
+
+[[requirement]]
+id = "platform-vapid-keypair-first-boot"
+spec = "§2 Configuration (\"A web-push VAPID keypair is generated at first boot and stored the same way\")"
+milestone = "M4"
+kind = "integration"
+what = "First boot generates exactly one web-push VAPID keypair and stores the private half AEAD-encrypted under the DEK carrying a key_id, like every other secret; a restart reuses the stored pair instead of generating a second, the public half is what /api/push/state hands the browser, and no route returns the private half."
+why = "§2 puts the keypair on the same footing as every other connector secret, and a pair regenerated on restart silently invalidates every subscription registered against the old one — the household stops receiving pushes with nothing failing anywhere."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-push-join-is-best-effort"
+spec = "§6.2 step 2 (push to members' phones) + §6 preamble + §12 M4 (\"push join\") + §7.3"
+milestone = "M4"
+kind = "integration"
+what = "Opening a session sends a web-push invitation to each invited member's own push_subscription rows and to no other member's, and an armed §7.3 finish prompt is delivered the same way; a member with no subscription, or whose send fails, is still reachable by room code, open-rooms list and in-app banner, and no send outcome prevents a session being created, joined or started."
+why = "§7.3 dates the push half of the finish prompt to 'the M4 stack' and §6's preamble makes push best-effort with an in-app equivalent for every prompt — a lobby that blocks on a delivery receipt breaks on exactly the iPhone the constraint was written about."
+tests = []
+
+[[requirement]]
+id = "data-rules-push-subscription-pruned-on-gone"
+spec = "§4.2 push_subscription (\"pruned on 404/410 from the push service\")"
+milestone = "M4"
+kind = "integration"
+what = "A send the push service answers 404 or 410 deletes exactly that push_subscription row and no other device of the same member; any other failure — timeout, 5xx, 429 — leaves the row in place, and a successful send stamps last_seen_ok."
+why = "§4.2 names those two codes because they alone mean the endpoint is permanently gone: pruning on the others deletes a live phone over a transient outage, and pruning on neither leaves dead endpoints retried forever."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-tilt-centred-on-the-pool-mean"
+spec = "§6.2 steps 4–5 (tilt observation) + §0 row 4 (the centring lever) + §4.2 session_participant.tilt"
+milestone = "M4"
+kind = "backend"
+what = "Each separating answer yields a tilt observation of chosen-minus-rejected DNA taken relative to the mean DNA vector of that session's own candidate pool: the identical answer on the identical pair produces a different tilt when the surrounding pool differs, and a tilt computed with no centring — or centred on the library or corpus mean instead of the pool — is a distinguishable, failing result; the accumulated tilt is persisted on that participant's session_participant.tilt."
+why = "§0 row 4 measured that centring on the candidate set matters more than the form of the question (3 shortlist-anchored answers ≈ +0.088 AUC while the stored 8-axis profile is worth 0.000), which is why the centring is the one piece of the deleted mood machinery the redesign kept."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-no-within-evening-reranking"
+spec = "§6.2 step 6 (\"Votes *choose*\") + §0 row 4 (\"within-evening re-ranking is worth 0.000\")"
+milestone = "M4"
+kind = "backend"
+what = "Nothing inside a running session re-ranks candidates by predicted enjoyment: a session's answers trigger no Ledger refit, incremental or full, and no recomputation of the step-3 pool ordering, which is computed once at session open and is identical at the reveal. Every movement between the first pair and the result traces to the participants' own answers — the tallies, the tilt and the split's facet zeroing — and to nothing else."
+why = "Within-evening re-ranking by predicted enjoyment was measured at exactly 0.000, so it is CPU spent inside the one flow that has to feel instant, bought for nothing — and a refit mid-session would also let the evening's answers move the Ledger the evening is being scored against."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-guest-pairs-not-seen-filtered"
+spec = "§6.2 step 4 (\"Guests' pairs are not seen-filtered\")"
+milestone = "M4"
+kind = "backend"
+what = "Drawing a guest's pairs applies no seen-state predicate: a pool title a member has marked seen is as eligible for a guest's pair as any other, and the sequence served to a guest seat is unchanged when the members' seen-state over the pool is flipped."
+why = "A guest's seen-state is genuinely unknown, and filtering their pairs by a member's is the same borrowed-identity substitution that made the prototype rank every guest with the host's Ledger."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-answer-logs-every-vote"
+spec = "§4.2 session_answer + §14 risk 6 (\"log every vote\")"
+milestone = "M4"
+kind = "integration"
+what = "Every answered pair writes exactly one session_answer row carrying the session, the participant, a per-participant seq increasing from that participant's first pair, both title ids, the answer bound so that A names title_a and B names title_b, and latency_ms; no round path updates or deletes such a row, so a finished session's rows replay the round the participant actually answered."
+why = "§14 risk 6 makes the round the one unmeasured piece of the design and forbids tuning it before it is instrumented; session_answer is the only place a vote exists, and an answer stored against the wrong side of its own pair is an instrument that reads backwards."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-result-slate-persisted"
+spec = "§4.2 session_result"
+milestone = "M4"
+kind = "integration"
+what = "Combining writes one session_result row per title in the result slate — winner, runners-up and wildcard — each carrying the rank that orders the slate, the group_score it was ranked by, and per_user_match holding the per-person match lines; re-reading a finished session returns that stored slate rather than recomputing it, and a session in which no split was surfaced stores conflict NULL on every row."
+why = "§4.2 gives the round a durable per-title table distinct from session_outcome's single chosen row, and a slate recomputed on read cannot be compared against the votes that produced it — which is what §14 risk 6 exists to require. 'Below that, decide silently' is the half an implementation drops: a conflict object written on every session turns the repair register into noise."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-guest-slot-is-a-null-user"
+spec = "§4.2 session_participant (\"NULL = guest slot on the host phone\")"
+milestone = "M4"
+kind = "integration"
+what = "A session seating two guests holds two distinct session_participant rows, each with user_id NULL, each separately addressable with its own tilt, answered_count and session_answer rows; the table's key admits both rather than rejecting or collapsing the second, and no guest seat is stored carrying a member's user_id."
+why = "§4.2 spells the NULL out, and a (session_id, user_id) primary key silently seats one guest and drops the second — while the hand-the-phone flow is guests plural on one device by design, so the key has to be decided before the migration is written rather than after."
+tests = []
+
+[[requirement]]
+id = "data-rules-session-no-v11-posterior-columns"
+spec = "§4.2 session_participant comment (\"v1.1 §6's mu/sigma/tolerance/phase columns do NOT survive\"; \"fairness_ledger omitted\") + §0 row 4"
+milestone = "M4"
+kind = "static"
+what = "A guard fails if the session tables grow a column named mu, sigma, tolerance or phase, or if any relation named fairness_ledger appears in the schema; the applied migrations produce none of them, and the guard is exercised against a synthetic violation."
+why = "§0 row 4 measured that no aggregation rule dominates plain averaging and that dominance rules cost −0.012, so the 8-axis posterior and the fairness ledger are deleted rather than merely unbuilt — the same standing 'forgotten' has on user_title, which is guarded the same way."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-solo-picks-carry-why-and-fit"
+spec = "§6.2 step 8 (solo picks; rewritten 54f) + §6.8 (\"quiet reasons\")"
+milestone = "M4"
+kind = "backend"
+what = "Each solo pick carries a non-empty one-line why in the pull form naming vocabulary terms that pick actually carries, the wildcard carries the stretch form instead, and every pick and the wildcard carry a budget-fit line: at or under the budget the fits form naming the budget, over it the over form whose minute count is runtime minus budget exactly, and no pick exceeds budget + 40. Solo's candidate set is the step-3 pool built for that one participant, so changing any pool input moves the picks the way it moves a one-member group pool."
+why = "§6.8 makes the one-line why mandatory for every recommendation and solo is the fastest path to a film, so an unexplained pick fails the register at its cheapest point; the budget is soft by construction, which makes the label the only thing keeping it honest."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-solo-writes-no-session-row"
+spec = "§6.2 step 8 (\"no session row\"; rewritten 54f) + §6.2 step 2 (open-rooms list)"
+milestone = "M4"
+kind = "integration"
+what = "A solo evening — including its optional sharpen votes and any reshuffle — leaves session, session_participant, session_result and session_outcome at their prior row counts and the open-rooms list empty, and a reshuffle writes no verdict, duel, tier_edit or tilt."
+why = "A solo evening that mints a session row makes itself joinable by every household device and pollutes §13's approval-share population with one-participant rows, where approval share is not a measurement at all; and a browse gesture that quietly taught the Ledger 'you rejected these three' would put a navigation action on the one write-path for taste."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-tv-kiosk-route"
+spec = "§6.2 step 8 v2.1 numbering (TV kiosk route) + §12 M4 (\"+ TV route\")"
+milestone = "M4"
+kind = "e2e"
+what = "/tv accepts a room code, attaches to that session, and renders the three states the spec names — lobby, progress, result — advancing as the session advances; before the reveal it shows no participant's answers, votes or approvals and no winner."
+why = "§12's M4 row scopes the TV route into this milestone, and the TV is the one screen everybody in the room can see — so the blind rule has to hold there before it is worth anything on the phones."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-split-threshold-and-silence-below"
+spec = "§6.2 step 5 (\"D ≥ 0.20 (~14.5% of nights; below that, decide silently)\")"
+milestone = "M4"
+kind = "backend"
+what = "The threshold is inclusive and the silence below it is real: a session whose leading candidates draw no divergent answers surfaces the split at D = 0.20 and surfaces nothing at D = 0.199 — no split copy, no zeroed facet, no reserved third slot — and the unsurfaced session still yields three finalists ordered by the plain average; whether the split fired is recorded on the session so the rate behind the ~14.5% figure is recoverable."
+why = "\"Below that, decide silently\" is half the rule and the half an implementation drops: a surfacing that fires on every measurable disagreement turns the repair-explanation register into background noise, and §14 risk 6 needs the fire rate before anyone re-tunes the threshold."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-match-line-terms-are-carried"
+spec = "§6.2 step 7 (per-person match lines; rewritten 54e) + §6.8 (\"quiet reasons\") + §4.1 rules 1 and 2"
+milestone = "M4"
+kind = "integration"
+what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast; and a participant for whom no carried term reaches either sign gets the stated no-pull line instead of an invented term."
+why = "§6.8 makes the one-line why in vocabulary terms normative and §6.0's shelves already enforce it — a card shown under a reason it does not satisfy is the defect `home/why.py` was inverted to make unrepresentable, and the winner card is the one screen the whole round exists to produce."
+tests = []
+
+[[requirement]]
+id = "map-taste-admin-log-narrates-session-answers"
+spec = "§6.7 model log (its own `session_answer(p, pair 4) = A — pool-centred tilt` example) + §6.2 steps 4–5"
+milestone = "M4"
+kind = "integration"
+what = "With the per-user show-the-model toggle on, each answered pair emits exactly one ephemeral model-log line naming the participant, the pair index, the answer with A, B, EITHER and NEITHER all distinguishable, and that the tilt was centred on the candidate-pool mean; nothing is persisted, with the toggle off no line is produced, and during the blind round a participant's line reaches only that participant."
+why = "§6.7 gives the session_answer line as one of its four worked examples and calls the rail the instrument that narrates every model write; the vote round is the largest write path M4 adds and the one place an unscoped rail would break the blind property outright."
 tests = []
 
 [[requirement]]
