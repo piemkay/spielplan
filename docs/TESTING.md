@@ -126,7 +126,7 @@ Two things happen on the way that are easy to miss:
 > M0    33/35 covered (2 waived)
 > M1    10/10 covered
 > M2    25/25 covered
-  M3     9
+> M3    13/13 covered
   M4    18
   M5    10
   M6    12
@@ -155,6 +155,26 @@ gap in the map, that is M2 work; read as prose, it is M4's. It was built, and it
 because the map going 25/25 should not quietly stand in for a scope decision somebody else might
 have made differently. The push *sender* remains M4's: there is no VAPID key, so §7.3's
 "undeliverable" fallback is still the only path that works end to end.
+
+M3 added four, found by reading §6.3 and §12's M3 row clause by clause against the map before
+writing any code. §12 lists "filters" among M3's contents and no row had one; §6.3's
+neighbourhood badge ("A — between Heat and Prisoners") and its "learned cutpoints, **not
+percentile cuts**" had none either; and nothing asserted that a person can reach the comparison
+queue at all, though §6.3 names the control and §12's exit criterion rests on it. Unlike M2's
+two, none of these widened the milestone — they are clauses of sections the map already claimed
+to cover.
+
+Two of M3's rows are worth naming for what they cost rather than for what they assert.
+`tonight-rank-cutpoints-learned-not-percentile` cannot be tested by looking at a healthy board:
+a percentile implementation reproduces the measured F3/D7/C15/B25/A25/A+17/S8 shape on *every*
+board, which looks more right than the truth on a lopsided one, so the two are told apart by
+their invariances instead. And `jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes`
+turned out to have three read paths rather than one — the fit, the *selector's* comparison
+counts, and the evaluation — because §6.3's exploration arm picks the least-compared title, so
+a count that included held-out rows would have made the selector a reader of the evaluation
+stream in a way no test of the selector alone could see. The static test that enforces "only
+these files may read that stream" found two more read paths in `ledger/refit.py` the moment it
+was written.
 
 `pytest backend/tests/test_spec_coverage.py -s` prints the live version.
 

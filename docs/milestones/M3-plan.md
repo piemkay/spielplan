@@ -253,4 +253,67 @@ Four questions went out with the plan; all four came back on the recommendation.
 
 ## Decisions made without you
 
-*(filled in during Phase 2 for choices too small to stop on.)*
+The nine ambiguities above were resolved as proposed. These are the ones that came up during
+the build and were too small to stop on.
+
+1. **A failed boundary draw falls through to exploration, and never into the held-out arm.**
+   A pool with no straddler has nothing to target, so exploration is the honest answer and it
+   reports itself as exploration. The held-out arm receives no fallback in either direction:
+   its *rate* has to be independent of the model's confidence, or §13's stream stops being
+   independent of the thing it audits.
+2. **Badge precedence: tension replaces the straddle chip while it holds** (proposal 71's
+   rule). Eligibility is untouched — that is a property of `straddles()`, not of which string
+   rendered.
+3. **A drop's neighbour duels carry outcomes.** `above` beats the dropped title and it beats
+   `below`. A pair written without a winner stores the geometry and throws the judgement away,
+   which is the only reason §6.3 asks for them.
+4. **One neighbour is one duel.** §6.3 says "between two titles" and is silent about the first
+   and last slot of a tier. Refusing those would make them undroppable; inventing a second duel
+   would put a comparison in the Ledger nobody made.
+5. **`duel.selection` stays at 0005's default for a drop's neighbour duels.** The column's
+   values are statements about *adaptive* selection and a drop is not adaptively selected;
+   `context = 'tier_insert'` is what says where it came from.
+6. **A relabel at the same K keeps the learned boundaries and queues nothing.** Decision 11's
+   re-init exists because "changing K invalidates that user's boundaries"; discarding a fitted
+   board because somebody preferred a different letter would be the rule doing more than it says.
+7. **Tier sets are 2–12 levels, and labels at most 24 characters.** Neither bound is in the
+   spec. Two because a one-level set orders nothing; twelve because every level needs
+   observations before its cutpoint is anything but its prior. The label bound came out of the
+   review — see below. All three are refusals, not clamps.
+8. **The queue pair is sealed, not stored.** `itsdangerous` under `SESSION_SECRET` with its own
+   salt, rather than a row: the client cannot name its own §13 arm, and no table is invented for
+   a value the observations already imply. The review then made it single-use the same way — see
+   below.
+9. **The queue's pool is the whole rated board, unfiltered.** §6.3's filters are a way of
+   looking at the board; a queue restricted to what the person last typed would sharpen one
+   corner of it, and proposal 157's badged-set-is-queue-set identity would hold only there.
+10. **`tests/pglite/apply.mjs` now reports columns and indexes.** It could not see an `ALTER`,
+    so 0010's six columns and 0012's one were invisible to the schema layer — a migration that
+    applied cleanly and added nothing would have passed every assertion in the file.
+11. **`13-rank.spec.js` runs on both e2e projects**, seeding a member per project, because §6.3's
+    tap-to-tier is a phone gesture and its drag-and-drop is a pointer one.
+12. **The drop route carries the board's filters**, so a drop under a filter answers with that
+    board rather than silently clearing it.
+13. **`TIER_THRESHOLD = 30`** for proposal 80's "not yet tiered" copy. Invented (the proposal's
+    own number); the board renders regardless, so it is a nudge toward Rate and not a gate.
+
+### Added by the adversarial review
+
+14. **The board clamps an out-of-range `assigned_tier` once, at the edge.** Decision 11 keeps
+    `tier_edit` rows across a change in K, so a level outside `0..K-1` is guaranteed; the fit
+    clamped it and the board did not, and `_band` indexed off the end of a shrunk cutpoint
+    array. Clamped in one place because the bucket and the badge must not disagree.
+15. **The queue seal is single-use**, via the count of comparisons the person had answered when
+    it was drawn. A replay is §6.1's 409. No column: the observations already carry the number.
+16. **`held_out_agreement` abstains on a model tie and joins both sides on kind.** `s_a == s_b`
+    is the model declining to order the pair, and folding it into "B" is the same unmeasured
+    threshold the module already refuses for the person's tie. Both sides on kind because
+    §10's re-import can flip `title.kind` under a duel that was same-kind when written.
+17. **Proposal 75's footnote is amended rather than quoted.** "each move writes a tier_edit plus
+    two duels" is true only of a drop between two titles; the surface now says "plus a duel
+    against each new neighbour", which is true of every move it can make.
+18. **The board's title chips are `.tile`, not `.poster`.** `design.css`'s global `.poster` is
+    the 2:3 card, and borrowing the name gave every text chip `aspect-ratio: 2/3` and
+    `overflow: hidden`.
+19. **The kind switcher is the house `.pill` with `aria-pressed`,** not a `role="tab"` with no
+    tabpanel; the tier rows are `role="group"`, not `role="listbox"` over buttons.

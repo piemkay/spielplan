@@ -53,7 +53,11 @@ export default defineConfig({
       // than a handful of resize calls.
       name: 'phone',
       use: { ...devices['iPhone 13'] },
-      testMatch: /(shell|library|responsive)\.spec\.js/,
+      // §6.3's tap-to-tier is a phone gesture — "tap a title (it lifts), tap a tier (it
+      // drops)" — so 13-rank runs here as well as on desktop. It seeds a member per
+      // project, because §4.2's observations are append-only and the two runs would
+      // otherwise share a board.
+      testMatch: /(shell|library|responsive|13-rank)\.spec\.js/,
     },
   ],
 });

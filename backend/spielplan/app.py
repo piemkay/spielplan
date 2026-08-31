@@ -24,6 +24,7 @@ from spielplan.api import home as home_api
 from spielplan.api import library as library_api
 from spielplan.api import passkeys as passkeys_api
 from spielplan.api import push as push_api
+from spielplan.api import rank as rank_api
 from spielplan.api import rate as rate_api
 from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(library_api.router)
     app.include_router(state_api.router)
     app.include_router(rate_api.router)
+    app.include_router(rank_api.router)
     app.include_router(home_api.router)
     app.include_router(push_api.router)
     app.include_router(admin_api.router)

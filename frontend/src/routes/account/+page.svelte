@@ -23,6 +23,9 @@
   import Onboarding from '$lib/components/Onboarding.svelte';
 
   let credentials = $state([]);
+  /** Decision 11: the tier set is a per-user preference, so it lives here and not in Admin. */
+  let tiers = $state({ tier_set: [], min: 2, max: 12, warning: '' });
+  let tierDraft = $state('');
   let label = $state('');
   let pin = $state('');
   let busy = $state(false);
@@ -41,6 +44,33 @@
 
   async function load() {
     credentials = (await get('/auth/passkey/credentials').catch(() => [])) ?? [];
+    tiers = (await get('/rank/tiers').catch(() => tiers)) ?? tiers;
+    tierDraft = (tiers.tier_set ?? []).join(' ');
+  }
+
+  /**
+   * Decision 11: "on save, their cutpoints are re-initialised to the equal-mass quantiles of that
+   * user's fitted `s` distribution for the new K … and a Ledger refit is queued for that user
+   * alone". The warning is not decoration — it names what the save discards, which is the
+   * one thing this control does that cannot be undone by saving the old set back.
+   */
+  async function saveTierSet() {
+    error = '';
+    note = '';
+    busy = true;
+    try {
+      const body = { tier_set: tierDraft.split(/[\s,]+/).filter(Boolean) };
+      const result = await api('/rank/tiers', { method: 'PUT', body });
+      tiers = { ...tiers, tier_set: result.tier_set };
+      tierDraft = result.tier_set.join(' ');
+      note = result.k_changed
+        ? `Tier set saved. Cutpoints re-initialised and a refit is queued; ${result.tier_edits_kept} past move${result.tier_edits_kept === 1 ? '' : 's'} kept.`
+        : 'Tier set renamed. Your learned cutpoints are unchanged.';
+    } catch (err) {
+      error = err.message || String(err);
+    } finally {
+      busy = false;
+    }
   }
 
   async function addPasskey() {
@@ -171,6 +201,25 @@
       />
       <button class="btn-primary" onclick={savePin} disabled={pin.length < 4}>Save PIN</button>
     </div>
+  </section>
+
+  <section class="card" data-testid="tier-set">
+    <h2>Tier set</h2>
+    <p class="why">
+      The letters your Rank board uses, worst first. {tiers.warning}
+    </p>
+    <div class="row">
+      <input
+        type="text"
+        bind:value={tierDraft}
+        aria-label="Tier set"
+        data-testid="tier-set-input"
+      />
+      <button class="btn-primary" onclick={saveTierSet} disabled={busy || !tierDraft.trim()}>
+        Save tier set
+      </button>
+    </div>
+    <p class="data" data-testid="tier-set-current">{(tiers.tier_set ?? []).join(' · ')}</p>
   </section>
 
   <section class="card">

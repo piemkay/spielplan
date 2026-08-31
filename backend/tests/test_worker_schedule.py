@@ -40,11 +40,15 @@ def test_a_job_that_has_never_run_is_due_immediately():
 
 def test_only_the_elapsed_jobs_are_due():
     last = {job.name: 0.0 for job in worker.JOBS}
+    # The minute-interval jobs, and only those. `tier-set-refit` joined them at M3: decision 11
+    # adds a second trigger for §5.3's nightly fit, and a person who just changed their tier set
+    # should not spend a day looking at equal-mass quantiles instead of fitted cutpoints.
+    minutely = {"jellyfin-sessions-poll", "fold-in-tick", "tier-set-refit"}
     at_90s = {job.name for job in worker.due(now=90.0, last_run=last)}
-    assert at_90s == {"jellyfin-sessions-poll", "fold-in-tick"}
+    assert at_90s == minutely
 
     at_1000s = {job.name for job in worker.due(now=1000.0, last_run=last)}
-    assert at_1000s == {"jellyfin-sessions-poll", "fold-in-tick", "jellyfin-seen-sync"}
+    assert at_1000s == minutely | {"jellyfin-seen-sync"}
 
 
 def test_a_job_awaiting_its_milestone_is_never_due():

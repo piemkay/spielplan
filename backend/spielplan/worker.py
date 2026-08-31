@@ -184,6 +184,40 @@ async def _fold_in_tick() -> None:
             log.info("fold-in tick: %s", report.as_dict())
 
 
+async def _tier_set_refits() -> None:
+    """Decision 11's "a Ledger refit is queued for that user alone", serviced.
+
+    Not in §5.3's table, and named here rather than smuggled in — §5.3 gives the full MAP refit
+    a nightly cadence, and decision 11 adds a second trigger for it. Waiting for the night
+    would leave the person who just changed their tier set looking at boundaries that are
+    equal-mass quantiles rather than fitted cutpoints, for up to a day, with nothing on screen
+    saying so. A minute is close enough to "immediately" for a preference nobody changes twice.
+
+    The request is cleared per (user, kind) after that fit, so a failure re-runs rather than
+    being swallowed: a queue that forgets what it dropped is worse than one that retries.
+    """
+    from spielplan.ledger import observations, refit
+    from spielplan.ledger.hyperparams import load as load_hp
+    from spielplan.rank import tiers
+    from spielplan.scoring import backbone as bb
+
+    async with pool.acquire() as conn:
+        owed = await tiers.refits_owed(conn)
+        if not owed:
+            return
+        store = await _active_store(conn)
+        hp, _notes = load_hp(store or ArtifactStore.empty())
+        embeddings = (
+            observations.standard_embeddings(conn, bb.load_for(store)) if store else None
+        )
+        for user_id, kind in owed:
+            report = await refit.refit_user(
+                conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings
+            )
+            await tiers.clear_refit_request(conn, user_id=user_id, kind=kind)
+            log.info("tier-set refit: %s", report.as_dict())
+
+
 async def _placement_reconciliation() -> None:
     """§5.3: "any owned title lacking a coordinate gets a feature vector built from DB data per
     the feature contract … and runs §8 stages 9-10 only". Trigger: "bundle import + nightly
@@ -216,6 +250,8 @@ JOBS: tuple[Job, ...] = (
     # sitting*, and every §6.0 shelf orders by a table only the fold-in writes. `foldin.run`
     # documents this tick as the answer to exactly that.
     Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60),
+    # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
+    Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60),
     Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title"),
     Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
         _placement_reconciliation, every=86400, stage=0),

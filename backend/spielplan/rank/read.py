@@ -87,17 +87,23 @@ async def items(
     twelve untouched months, and the badges are a claim about how sure the model is now.
     """
     where, args = rank_filters(kind=kind, user_id=user_id, filters=filters)
+    user = f"${len(args) + 1}"
     rows = await conn.fetch(
         f"""
         SELECT ls.title_id, t.name, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
-               (
-                 SELECT te.tier FROM tier_edit te
-                 WHERE te.user_id = ls.user_id AND te.title_id = ls.title_id
-                 ORDER BY te.created_at DESC, te.id DESC LIMIT 1
-               ) AS assigned_tier
+               te.tier AS assigned_tier
         FROM ledger_state ls
         JOIN title t ON t.id = ls.title_id
-        WHERE ls.user_id = ${len(args) + 1} AND ls.kind = ${len(args) + 2} AND ls.observed
+        -- The person's latest drop per title, in one pass over their own `tier_edit` rows.
+        -- A correlated subquery would re-run per row of a board that can be 839 long, against
+        -- an index keyed (user_id, created_at) that cannot answer "this title's latest".
+        LEFT JOIN (
+            SELECT DISTINCT ON (title_id) title_id, tier
+            FROM tier_edit
+            WHERE user_id = {user}
+            ORDER BY title_id, created_at DESC, id DESC
+        ) te ON te.title_id = ls.title_id
+        WHERE ls.user_id = {user} AND ls.kind = ${len(args) + 2} AND ls.observed
           AND {where}
         ORDER BY ls.s DESC, ls.title_id
         """,
@@ -145,6 +151,35 @@ async def comparison_counts(
         HELD_OUT,
     )
     return {int(r["title_id"]): int(r["n"]) for r in rows}
+
+
+async def answered_comparisons(
+    conn: asyncpg.Connection, *, user_id: int, kind: str
+) -> int:
+    """How many comparison-queue answers this person has given for this kind.
+
+    It is what makes a sealed pair single-use without a table: the count is sealed with the
+    pair and re-read when the answer arrives, so a replayed seal names a count that has moved
+    on. §6.1 reaches the same property through `rate_session.card_token`, which it can because
+    a rating session already has a row; a queue pair has none, and inventing one to hold a
+    nonce would be a table for a number the observations already imply.
+
+    `context = 'tier_queue'` and nothing else: a drag-drop writes `tier_insert` duels, and if
+    those moved the counter, picking a title up mid-queue would silently discard the pair in
+    front of the person.
+    """
+    return int(
+        await conn.fetchval(
+            """
+            SELECT count(*) FROM duel d
+            JOIN title t ON t.id = d.title_a AND t.kind = $2
+            WHERE d.user_id = $1 AND d.context = 'tier_queue'
+            """,
+            user_id,
+            kind,
+        )
+        or 0
+    )
 
 
 async def load(
@@ -215,6 +250,7 @@ def public(tiers: Sequence[board.Tier]) -> list[dict[str, Any]]:
 
 __all__ = [
     "Cutpoints",
+    "answered_comparisons",
     "candidates",
     "comparison_counts",
     "cutpoints_of",

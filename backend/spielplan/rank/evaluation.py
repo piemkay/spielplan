@@ -20,11 +20,13 @@ something narrower and more direct: given a pair the model has never been fitted
 model's ordering agree with the person's answer? That is the tier model's own accuracy, on the
 only sample that can honestly report it.
 
-TIES ARE COUNTED, NOT SCORED. §4.2: "about the same" is first-class data, 22% of random pairs.
-A tie is not a wrong answer and not a right one — scoring it either way needs a threshold on
-|Δs| that nothing has measured, and inventing one here would be a tuning constant with no
-provenance sitting inside the instrument that exists to keep tuning honest. So ties are
-reported and excluded from the rate.
+TIES ARE COUNTED, NOT SCORED — ON BOTH SIDES. §4.2: "about the same" is first-class data, 22%
+of random pairs. A tie is not a wrong answer and not a right one; scoring it either way needs a
+threshold on |Δs| that nothing has measured, and inventing one inside the instrument that
+exists to keep tuning honest is the last place for an unmeasured constant. That argument
+applies to the *model's* tie as well as the person's: `s_a == s_b` is the model declining to
+order the pair, and folding it into a prediction of "B" is the same unmeasured threshold,
+placed at zero and only in one direction. Both are reported and excluded from the rate.
 """
 
 from __future__ import annotations
@@ -43,8 +45,9 @@ class Agreement:
     user_id: int
     kind: str
     pairs: int = 0            # held-out duels with both titles placed
-    decisive: int = 0         # of those, the ones that were not ties
-    ties: int = 0
+    decisive: int = 0         # of those, the ones both the person and the model took a side on
+    ties: int = 0             # the person said "about the same"
+    undecided: int = 0        # the model has no ordering: s_a == s_b
     agreed: int = 0
     unplaced: int = 0         # held-out duels a coordinate is missing for
 
@@ -60,6 +63,7 @@ class Agreement:
             "pairs": self.pairs,
             "decisive": self.decisive,
             "ties": self.ties,
+            "undecided": self.undecided,
             "agreed": self.agreed,
             "unplaced": self.unplaced,
             "rate": self.rate,
@@ -80,7 +84,15 @@ async def held_out_agreement(
         """
         SELECT d.outcome, a.s AS s_a, b.s AS s_b
         FROM duel d
-        JOIN title t ON t.id = d.title_a AND t.kind = $2
+        -- BOTH sides, as `observations.load_observations` joins them and for its reason: a
+        -- filter that only holds because of a check somewhere else is a filter that stops
+        -- holding quietly. `record_duel` refuses a cross-kind write, but §10's re-import
+        -- upserts `title.kind`, so a corpus reclassification retroactively makes an existing
+        -- held-out duel cross-kind — and §4.1 rule 5 says such a pair is evidence about
+        -- neither partition. Joining one side would leave the fit and §13's own figure
+        -- disagreeing about the population, in the one number §13 requires to be honest.
+        JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
+        JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
         LEFT JOIN ledger_state a ON a.user_id = d.user_id AND a.title_id = d.title_a
         LEFT JOIN ledger_state b ON b.user_id = d.user_id AND b.title_id = d.title_b
         WHERE d.user_id = $1
@@ -95,7 +107,7 @@ async def held_out_agreement(
         HELD_OUT,
     )
 
-    pairs = decisive = ties = agreed = unplaced = 0
+    pairs = decisive = ties = undecided = agreed = unplaced = 0
     for row in rows:
         if row["s_a"] is None or row["s_b"] is None:
             unplaced += 1
@@ -104,14 +116,17 @@ async def held_out_agreement(
         if row["outcome"] == "TIE":
             ties += 1
             continue
+        s_a, s_b = float(row["s_a"]), float(row["s_b"])
+        if s_a == s_b:
+            undecided += 1
+            continue
         decisive += 1
-        predicted = "A" if float(row["s_a"]) > float(row["s_b"]) else "B"
-        if predicted == row["outcome"]:
+        if ("A" if s_a > s_b else "B") == row["outcome"]:
             agreed += 1
 
     return Agreement(
         user_id=user_id, kind=kind, pairs=pairs, decisive=decisive, ties=ties,
-        agreed=agreed, unplaced=unplaced,
+        undecided=undecided, agreed=agreed, unplaced=unplaced,
     )
 
 

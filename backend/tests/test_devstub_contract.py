@@ -28,6 +28,14 @@ def apps():
 
     spec = importlib.util.spec_from_file_location("devstub", ROOT / "ops" / "devstub.py")
     module = importlib.util.module_from_spec(spec)
+    # Registered before it is executed, which is what `import` itself does. Without it the
+    # harness's Pydantic models cannot resolve their own annotations: `ops/devstub.py` carries
+    # `from __future__ import annotations`, so every annotation is a string that Pydantic
+    # resolves through `sys.modules[cls.__module__]` when FastAPI builds the schema — and this
+    # module was not there. The symptom is a `class-not-fully-defined` error from `openapi()`
+    # naming whichever model happens to be built first, which says nothing about the real
+    # problem.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return real, module.app
 

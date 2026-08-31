@@ -63,10 +63,25 @@ def by_id(tiers) -> dict[int, board.Entry]:
 
 def test_an_unrated_tier_set_starts_at_the_measured_quantile_shape():
     """§6.3: "initialised from DNA_MODEL §4.5's measured quantile shape F 3 / D 7 / C 15 /
-    B 25 / A 25 / A+ 17 / S 8 %, then learned"."""
+    B 25 / A 25 / A+ 17 / S 8 %, then learned".
+
+    The literal percentages, written out. Comparing `initial_cutpoints` against
+    `MEASURED_TIER_SHARES` proves only that logit and sigmoid round-trip — the M3 review
+    mutation-proved it by swapping S and A+ in the constant and watching all 71 pure tests stay
+    green. The authored shape is a measurement from another project, so the number has to
+    appear on this side of the assertion too.
+    """
+    authored = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
+    assert authored == MEASURED_TIER_SHARES, "§6.3's shape, F first"
+    assert sum(authored) == pytest.approx(1.0)
+
     cuts = model.initial_cutpoints(7)
     implied = np.diff(np.concatenate([[0.0], 1.0 / (1.0 + np.exp(-cuts)), [1.0]]))
-    assert np.allclose(implied, MEASURED_TIER_SHARES, atol=1e-9)
+    assert np.allclose(implied, authored, atol=1e-9)
+    # …and the cutpoints themselves, which is what every downstream tier actually reads.
+    assert np.allclose(
+        cuts, [-3.4761, -2.1972, -1.0986, 0.0, 1.0986, 2.4423], atol=1e-4
+    )
 
 
 def test_the_tier_a_title_shows_comes_from_the_cutpoints_it_was_given():
@@ -250,11 +265,18 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(7)
     pool = items(rng.normal(scale=2.0, size=120), sigma=rng.uniform(0.01, 4.0, size=120))
-    for entry in by_id(board.build(pool, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)).values():
-        assert entry.straddle != entry.tier
-        if entry.straddle_badge is not None:
-            label = TIER_SET[entry.tier]
-            assert entry.straddle_badge != f"{label}/{label}"
+    # Assigned tiers too: the "S/S" family the test is named for is an index taken from the
+    # wrong place, and with every tier model-derived there is no wrong place to take it from.
+    rng2 = np.random.default_rng(8)
+    assigned = {i + 1: int(rng2.integers(0, len(TIER_SET))) for i in range(120)}
+    for board_pool in (pool, items(rng.normal(scale=2.0, size=120), sigma=1.2, assigned=assigned)):
+        entries = by_id(board.build(board_pool, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS))
+        for entry in entries.values():
+            assert entry.straddle != entry.model_tier, "never the tier it was computed against"
+            if entry.straddle_badge is not None:
+                head, _, tail = entry.straddle_badge.partition("/")
+                assert head != tail, f"a badge naming one tier twice: {entry.straddle_badge}"
+                assert head == TIER_SET[entry.tier], "the badge leads with the rendered tier"
 
 
 # --- §6.3: tension, not snapping back ----------------------------------------------------------
@@ -342,3 +364,44 @@ def test_the_tension_threshold_comes_from_the_bundle():
         tiers = board.build(pool, cuts=cuts, tier_set=TIER_SET, hp=hp)
         counts.append(sum(1 for e in by_id(tiers).values() if e.tension is not None))
     assert counts[0] > counts[1] > counts[2]
+
+
+# --- decision 11's leftovers: a tier edit that outlived its tier set ---------------------------
+
+
+def test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing():
+    """Decision 11 keeps `tier_edit` rows across a change in K, so the board is guaranteed to
+    meet a level that no longer exists — and it is the *only* consumer that indexes the
+    cutpoint array directly.
+
+    `ledger.observations.load_observations` already clamps this case and logs that it did, so
+    the fit survives a shrink; the board did not, and `_band(6, cuts)` walked off a two-element
+    array. The whole surface 500ed for that person until they re-dropped every affected title.
+    Found by the M3 review, reproduced here first.
+    """
+    cuts = model.initial_cutpoints(3)
+    tiers = board.build(
+        items([0.1], sigma=0.3, assigned={1: 6}),
+        cuts=cuts, tier_set=("bad", "ok", "good"), hp=DEFAULTS,
+    )
+    entry = by_id(tiers)[1]
+    assert entry.tier == 2, "clamped to the top of the set they now have, as the fit clamps it"
+    assert entry.assigned_tier == 2, (
+        "the clamp is applied once, at the edge — a board whose bucket and whose badge "
+        "disagreed about the assigned tier would be worse than the crash"
+    )
+
+
+@pytest.mark.parametrize("assigned", [-3, -1, 7, 40])
+def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
+    """Every level outside 0..K-1, from both ends. `tier_edit.tier` is a `smallint` with no
+    CHECK against the tier set (§4.2 makes it "an index into the user's configured tier set",
+    and 0005 cannot express that), so the board has to survive anything the column can hold."""
+    cuts = model.initial_cutpoints(7)
+    tiers = board.build(
+        items([0.0], sigma=0.4, assigned={1: assigned}),
+        cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
+    )
+    entry = by_id(tiers)[1]
+    assert 0 <= entry.tier < len(TIER_SET)
+    assert entry.assigned_tier is not None and 0 <= entry.assigned_tier < len(TIER_SET)

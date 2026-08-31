@@ -32,6 +32,9 @@ from tests.fixtures import make_bundle as fx
 pytestmark = pytest.mark.anyio
 
 M2_JOBS = ("ledger-map-refit", "fold-in-user-vectors", "placement-reconciliation")
+# M3 adds one, and it earns the same treatment for the same reason: decision 11's "queued
+# for that user alone" is serviced by a callable nothing else calls.
+M3_JOBS = ("tier-set-refit",)
 
 
 @pytest.fixture
@@ -78,7 +81,7 @@ async def two_members(db):
 # --- the bundle-less household (§3.1) ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", M2_JOBS)
+@pytest.mark.parametrize("name", M2_JOBS + M3_JOBS)
 async def test_a_nightly_job_skips_a_household_with_no_bundle_rather_than_failing(
     name, worker_env, two_members
 ):
@@ -91,7 +94,7 @@ async def test_a_nightly_job_skips_a_household_with_no_bundle_rather_than_failin
     bundle-less household with no tiers.
     """
     job = next(j for j in worker.JOBS if j.name == name)
-    assert job.run is not None, f"§5.3 lists {name} for M2, so M2 owes it an implementation"
+    assert job.run is not None, f"the registry lists {name}, so its milestone owes it code"
     await job.run()
 
 
@@ -279,3 +282,49 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     assert order_before != [r["title_id"] for r in after], (
         "the reversed sitting left the shelf in the same order"
     )
+
+
+# --- M3: decision 11's second trigger for §5.3's nightly fit -----------------------------------
+
+
+async def test_the_tier_set_refit_job_fits_the_person_who_asked_and_clears_the_request(rated, db):
+    """Decision 11: "a Ledger refit is queued for that user alone".
+
+    The save re-initialises the boundaries to equal-mass quantiles immediately, so the board is
+    usable at once; the *fit* is what this job does, and until it runs those boundaries are
+    quantiles of the old `s` rather than cutpoints of the new likelihood. A job that dropped the
+    request without fitting would look identical on the board and be wrong in the model.
+    """
+    from spielplan.rank import tiers
+
+    _store, patrick = rated
+    await (next(j for j in worker.JOBS if j.name == "ledger-map-refit").run())
+    await tiers.save_tier_set(db, user_id=patrick, tier_set=["bad", "ok", "good"])
+    assert await tiers.refits_owed(db), "the save has to queue something for the job to service"
+
+    job = next(j for j in worker.JOBS if j.name == "tier-set-refit")
+    await job.run()
+
+    assert await tiers.refits_owed(db) == [], "a serviced request is cleared, not left to loop"
+    boundaries = await db.fetchval(
+        "SELECT boundaries FROM ledger_cutpoints WHERE user_id = $1 AND kind = 'movie'", patrick
+    )
+    assert len(boundaries) == 2, "§4.2: length = |tier set| - 1"
+    tier = await db.fetchval(
+        "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1", patrick
+    )
+    assert tier is not None and 0 <= tier <= 2, (
+        "the board was re-tiered against the new set, not left indexing the old one"
+    )
+
+
+async def test_the_tier_set_refit_job_is_a_no_op_when_nobody_asked(rated, db):
+    """It runs every minute. A job that did work on an empty queue would be a nightly MAP fit
+    sixty times an hour."""
+    from spielplan.rank import tiers
+
+    _store, patrick = rated
+    assert await tiers.refits_owed(db) == []
+    before = await db.fetchval("SELECT count(*) FROM ledger_state")
+    await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
+    assert await db.fetchval("SELECT count(*) FROM ledger_state") == before

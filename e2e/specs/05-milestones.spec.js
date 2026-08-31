@@ -14,7 +14,6 @@ import { signedIn } from '../helpers.js';
 
 const PENDING = [
   { path: '/tonight', surface: 'Tonight', milestone: 'M4' },
-  { path: '/rank', surface: 'Rank', milestone: 'M3' },
   { path: '/map', surface: 'Map', milestone: 'M6' },
   { path: '/taste', surface: 'Taste', milestone: 'M6' }
 ];
@@ -48,6 +47,18 @@ test('Rate is built — M2 landed, so it is no longer a placeholder', async ({ p
   await expect(page.getByTestId('rate-surface')).toBeVisible();
   await expect(page.getByText(/Not built yet/)).toHaveCount(0);
   await expect(page.getByTestId('rate-counter')).toBeVisible();
+});
+
+test('Rank is built — M3 landed, so it is no longer a placeholder', async ({ page }) => {
+  // The routine again, one milestone on. The `/rank` placeholder assertion above failed the
+  // day the board shipped, and that failure was the reminder to write this. 13-rank.spec.js is
+  // the real test; this one only asserts the surface stopped naming a milestone it no longer
+  // owes — and that §6.3's board and its queue control are both actually on the page.
+  await page.goto('/rank');
+  await expect(page.getByTestId('rank-surface')).toBeVisible();
+  await expect(page.getByText(/Not built yet/)).toHaveCount(0);
+  await expect(page.getByTestId('rank-board')).toBeVisible();
+  await expect(page.getByTestId('rank-sharpen')).toBeVisible();
 });
 
 test('Account is built — M1 landed, so it is no longer a placeholder', async ({ page }) => {

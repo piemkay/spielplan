@@ -40,7 +40,7 @@ property of `straddles()`, not of which string got rendered.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -194,7 +194,23 @@ def build(
     model_tiers: dict[int, int] = {}
     tensions: dict[int, str | None] = {}
 
-    for item in items:
+    for raw in items:
+        # Decision 11 keeps `tier_edit` rows across a change in K, so a level that no longer
+        # exists is a state this board is *guaranteed* to meet — and it is the only consumer
+        # that indexes the cutpoint array by that level. `ledger.observations` clamps the same
+        # rows for the fit and logs that it did; the board did not, and `_band` walked off the
+        # end of a shrunk array, taking the whole surface down with a 500 until the person
+        # re-dropped every affected title.
+        #
+        # Clamped ONCE, here, rather than at each use: the bucket and the badge have to agree
+        # about which tier the person assigned, and two clamps in two places is how they stop
+        # agreeing. Clamping rather than dropping keeps decision 11's promise — the edit is
+        # still an observation, still says "the top tier they had", exactly as the fit reads it.
+        item = (
+            raw
+            if raw.assigned_tier is None
+            else replace(raw, assigned_tier=max(0, min(len(labels) - 1, int(raw.assigned_tier))))
+        )
         model_tier = int(model.tier_of(np.array([item.s]), cuts)[0])
         model_tiers[item.title_id] = model_tier
         tensions[item.title_id] = tension_of(
@@ -203,7 +219,7 @@ def build(
         # §6.3: "stays in the assigned tier" / "neither a badge nor a move". The person's drop
         # decides placement whenever there is one; the model decides it otherwise.
         rendered = model_tier if item.assigned_tier is None else int(item.assigned_tier)
-        buckets[max(0, min(len(labels) - 1, rendered))].append(item)
+        buckets[rendered].append(item)
 
     tiers: list[Tier] = []
     for index in range(len(labels)):

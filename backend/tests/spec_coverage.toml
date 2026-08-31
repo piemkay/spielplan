@@ -832,6 +832,11 @@ tests = [
     "backend/tests/test_ledger_observations.py::test_the_uniform_random_held_out_duels_never_reach_the_fit",
     "backend/tests/test_rank_queue.py::test_the_held_out_arm_never_receives_a_fallback",
     "backend/tests/test_rank_queue.py::test_the_held_out_arm_is_uniform_over_pairs_not_over_strata",
+    "backend/tests/test_rank_routes.py::test_the_answer_route_writes_the_arm_the_server_drew_it_under",
+    "backend/tests/test_rank_routes.py::test_a_held_out_answer_moves_nothing_the_model_reads",
+    "backend/tests/test_rank_integration.py::test_the_evaluation_partitions_by_kind_on_both_sides_of_the_pair",
+    "backend/tests/test_rank_integration.py::test_the_evaluation_abstains_when_the_model_has_no_ordering",
+    "backend/tests/test_rank_queue.py::test_the_held_out_share_does_not_move_with_the_pool",
 ]
 
 [[requirement]]
@@ -901,6 +906,9 @@ tests = [
     "backend/tests/test_rank_integration.py::test_a_drop_is_one_transaction",
     "backend/tests/test_rank_integration.py::test_the_board_renders_the_drop_and_does_not_snap_it_back",
     "backend/tests/test_rank_integration.py::test_tap_to_tier_writes_exactly_what_the_pointer_path_writes",
+    "backend/tests/test_rank_routes.py::test_the_drop_route_answers_with_the_board_under_the_filters_it_was_given",
+    "backend/tests/test_rank_routes.py::test_the_drop_route_refuses_a_tier_outside_the_set_and_writes_nothing",
+    "e2e/specs/13-rank.spec.js::dragging a title onto another writes the edit and two neighbour duels",
 ]
 
 [[requirement]]
@@ -926,7 +934,12 @@ milestone = "M3"
 kind = "e2e"
 what = "On a phone, tapping a title lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes; re-tapping the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
 why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift with an undiscoverable exit is the classic tap-to-move failure."
-tests = []
+tests = [
+    "e2e/specs/13-rank.spec.js::a title lifts on a tap and puts itself down again, writing nothing",
+    "e2e/specs/13-rank.spec.js::tapping a tier drops the lifted title into it, and it stays there",
+    "backend/tests/test_rank_integration.py::test_tap_to_tier_writes_exactly_what_the_pointer_path_writes",
+    "e2e/specs/13-rank.spec.js::every control on the board meets the 48 px touch floor",
+]
 
 [[requirement]]
 id = "tonight-rank-tier-set-per-user-reinit"
@@ -943,6 +956,8 @@ tests = [
     "backend/tests/test_rank_integration.py::test_a_relabel_at_the_same_size_keeps_the_learned_boundaries",
     "backend/tests/test_rank_integration.py::test_one_persons_tier_set_never_touches_anothers",
     "backend/tests/test_rank_integration.py::test_a_tier_set_the_board_could_not_render_is_refused",
+    "e2e/specs/13-rank.spec.js::the tier set is a per-user preference on the account page",
+    "backend/tests/test_rank_routes.py::test_the_tier_set_route_round_trips_and_warns",
 ]
 
 [[requirement]]
@@ -957,6 +972,10 @@ tests = [
     "backend/tests/test_rank_integration.py::test_a_held_out_pair_is_never_narrated_as_boundary_targeted",
     "backend/tests/test_rank_integration.py::test_an_arm_with_no_phrase_fails_loudly_rather_than_borrowing_one",
     "backend/tests/test_rank_queue.py::test_a_held_out_pair_is_never_labelled_boundary_targeted",
+    "backend/tests/test_rank_routes.py::test_the_answer_route_writes_the_arm_the_server_drew_it_under",
+    "backend/tests/test_rank_routes.py::test_a_client_cannot_name_its_own_selection_arm",
+    "backend/tests/test_rank_routes.py::test_a_tampered_or_forged_pair_is_refused_and_writes_nothing",
+    "backend/tests/test_rank_routes.py::test_the_queue_answers_log_line_is_gated_too",
 ]
 
 # Four rows below were added when M3 was opened, by reading §6.3 and §12's M3 row clause by
@@ -981,6 +1000,8 @@ tests = [
     "backend/tests/test_rank_integration.py::test_no_filter_suspends_the_kind_partition",
     "backend/tests/test_rank_integration.py::test_the_queue_pool_is_the_whole_board_and_not_the_filtered_view",
     "backend/tests/test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter",
+    "backend/tests/test_rank_routes.py::test_the_board_route_refuses_an_absent_kind",
+    "e2e/specs/13-rank.spec.js::all six filter dimensions in section 6.3 have a control",
 ]
 
 [[requirement]]
@@ -1013,6 +1034,7 @@ tests = [
     "backend/tests/test_rank_board.py::test_the_board_renders_best_first_and_keeps_empty_tiers",
     "backend/tests/test_ledger_model.py::test_the_initial_cutpoints_carry_the_measured_tier_shape",
     "backend/tests/test_ledger_model.py::test_the_fitted_cutpoints_are_the_displayed_boundaries",
+    "backend/tests/test_rank_board.py::test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing",
 ]
 
 [[requirement]]
@@ -1022,7 +1044,45 @@ milestone = "M3"
 kind = "e2e"
 what = "The Rank board offers \"sharpen my ranking\"; opening it serves a pair, answering the pair writes exactly one duel with context='tier_queue' carrying its selection arm, and the board the person returns to has re-rendered from the updated Ledger."
 why = "§12's M3 row lists the comparison queue among M3's contents and §6.3 names the control by that phrase. The selection policy and the stored arm each have a row; nothing asserted that a person can reach the queue and that answering it moves the board — which is what §12's exit criterion, a tier list both users endorse, is made of."
-tests = []
+tests = [
+    "e2e/specs/13-rank.spec.js::sharpen my ranking serves a pair, and answering it moves the board",
+    "e2e/specs/13-rank.spec.js::the queue answer never lets the client name its own selection arm",
+    "e2e/specs/13-rank.spec.js::the board carries its tiers, a why-line and the standing footnote",
+]
+
+# Added by M3's adversarial review. Both are requirements the map did not name and the code did
+# not meet: three independent lenses reproduced the first as a 500 that the shipped e2e spec
+# walks straight into, and the security lens found the second by comparing this surface's seal
+# against §6.1's `card_token`, which it claimed to be equivalent to and was not.
+
+[[requirement]]
+id = "tonight-rank-board-survives-a-tier-set-change"
+spec = "§6.3 board + decision 11"
+milestone = "M3"
+kind = "integration"
+what = "After a tier set shrinks, every title whose last tier_edit names a level that no longer exists still renders — clamped to the top of the set the person now has, the same clamp the fit applies — and the board, its badges and its tension all read without raising."
+why = "Decision 11 keeps tier_edit rows across a change in K, so a level outside 0..K-1 is a state the board is guaranteed to meet. `ledger.observations` clamps it for the fit and logs that it did; the board indexed the cutpoint array directly and 500ed for that person until they re-dropped every affected title."
+tests = [
+    "backend/tests/test_rank_board.py::test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing",
+    "backend/tests/test_rank_board.py::test_no_out_of_range_assignment_can_take_the_board_down",
+    "backend/tests/test_rank_integration.py::test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count",
+    "e2e/specs/13-rank.spec.js::the tier set is a per-user preference on the account page",
+]
+
+[[requirement]]
+id = "tonight-rank-queue-pair-is-single-use"
+spec = "§13 stream (a) + §6.1 card_token"
+milestone = "M3"
+kind = "integration"
+what = "A comparison-queue pair can be answered exactly once: the sealed pair carries the number of comparisons the person had answered when it was drawn, a second answer under the same seal is refused with §6.1's 409 and writes no duel, and one person's seal is refused for another account."
+why = "§13's agreement figure counts rows, so replaying one uniform-random pair weights a single judgement N-fold in the only data admitted to evaluate the tier model — and §4.2's tables are append-only, so a duplicate comparison cannot be taken back. §6.1 reaches the same property through `rate_session.card_token`; this surface claimed the equivalence without having it."
+tests = [
+    "backend/tests/test_rank_routes.py::test_a_pair_can_only_be_answered_once",
+    "backend/tests/test_rank_routes.py::test_a_drop_does_not_invalidate_a_pair_on_the_table",
+    "backend/tests/test_rank_routes.py::test_one_persons_sealed_pair_cannot_be_answered_by_another",
+    "backend/tests/test_rank_routes.py::test_the_whole_rank_surface_is_behind_a_session",
+    "e2e/specs/13-rank.spec.js::sharpen my ranking serves a pair, and answering it moves the board",
+]
 
 [[requirement]]
 id = "data-rules-session-answer-neither"

@@ -27,6 +27,7 @@ from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response
+from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,9 @@ from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's 
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
 from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
+from spielplan.rank import board as rank_board  # noqa: E402 - the real badges
+from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10 selector
+from spielplan.rank import tiers as rank_tiers  # noqa: E402 - decision 11's real rules
 from spielplan.rate import VERDICT_LABELS, balance, battle, queue  # noqa: E402
 from spielplan.rate import session as rate_session  # noqa: E402
 from tests.fixtures import make_bundle as fx  # noqa: E402
@@ -62,6 +66,9 @@ STATE: dict[str, Any] = {
     "catalog": None,
     "dna": None,
     "scores": {},
+    "tier_sets": {},
+    "tier_edits": {},
+    "rank_comparisons": {},
     "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
                  "linked_users": 0},
 }
@@ -742,6 +749,19 @@ def _catalog() -> list[dict[str, Any]]:
 
 def _title(title_id: int) -> dict[str, Any] | None:
     return next((t for t in _catalog() if t["id"] == title_id), None)
+
+
+def _genres_of(title_id: int) -> list[str]:
+    """The fixture's genres per title, cached. `_catalog` does not select them because §6.0's
+    grid never needed them; §6.3's genre filter does."""
+    cache = STATE.get("genres")
+    if cache is None:
+        with _db() as db:
+            cache = {}
+            for row in db.execute("SELECT title_id, genre FROM title_genre"):
+                cache.setdefault(row["title_id"], []).append(row["genre"])
+        STATE["genres"] = cache
+    return cache.get(title_id, [])
 
 
 def _verdicts(user_id: int) -> dict[int, int]:
@@ -2216,6 +2236,322 @@ def model_log(
     return {"show_model": True, "limit": limit, "kinds": rail.kinds_present(events),
             "events": events}
 
+
+# --- M3: the Rank surface (§6.3, §6.7, §13) ----------------------------------
+#
+# The board, the badges and the 70/20/10 selector are the REAL modules — `spielplan.rank.board`
+# and `spielplan.rank.queue` are pure by contract, so the harness runs them over its own
+# invented `s` values and the front end is built against the shapes the app actually returns.
+# What is faked is only what needs a database: the observations. A tier edit lands in `STATE`
+# and a comparison is counted there, so both loops close.
+#
+# The one thing this harness cannot demonstrate is §6.3's "the model refits (incremental
+# immediately)": there is no Ledger here, so a drop moves the title and does not move `s`.
+# `backend/spielplan/api/rank.py` wins on that, as this file's header says it does on
+# everything.
+
+RANK_PAIR_SALT = "devstub/rank/pair"
+
+
+def _rank_hp() -> Hyperparams:
+    return Hyperparams()
+
+
+def _rank_tier_set(user_id: int) -> tuple[str, ...]:
+    return tuple(STATE["tier_sets"].get(user_id, shelves.DEFAULT_TIER_SET))
+
+
+def _rank_cuts(user_id: int, kind: str) -> Any:
+    """Equal-mass quantiles over the harness's own scores — decision 11's re-initialisation
+    rule, and the closest thing here to a fitted cutpoint vector."""
+    import numpy as np
+
+    tier_set = _rank_tier_set(user_id)
+    values = np.asarray(sorted(_scores(user_id, kind).values()), dtype=float)
+    if values.size < 2:
+        from spielplan.ledger import model as ledger_model
+
+        return ledger_model.initial_cutpoints(len(tier_set))
+    return rank_tiers.equal_mass_quantiles(values * 4.0 - 2.0, len(tier_set))
+
+
+def _rank_items(user_id: int, kind: str) -> list[Any]:
+    """§6.3's "every rated title" — here, every title the fixture person has a verdict on."""
+    verdicts = _verdicts(user_id)
+    scores = _scores(user_id, kind)
+    edits = STATE["tier_edits"].get((user_id, kind), {})
+    out = []
+    for title in _catalog():
+        if title["kind"] != kind or title["id"] not in verdicts:
+            continue
+        # A σ that varies per title, so straddle badges are reachable in the harness. The real
+        # one is §5.2's Laplace diagonal, read from `ledger_state.sigma_eff`.
+        sigma = 0.15 + 0.5 * random.Random(f"sigma:{user_id}:{title['id']}").random()
+        out.append(
+            rank_board.Item(
+                title_id=title["id"],
+                name=title["name"],
+                s=float(scores.get(title["id"], 0.0)) * 4.0 - 2.0,
+                sigma=sigma,
+                assigned_tier=edits.get(title["id"]),
+            )
+        )
+    return out
+
+
+def _rank_matches(item: Any, filters: Any) -> bool:
+    """The harness's filter, over the fixture's own columns. `db.library._filters` is the
+    contract; this only has to agree about which titles survive."""
+    title = _title(item.title_id) or {}
+    if filters.q and filters.q.lower() not in str(title.get("name", "")).lower():
+        return False
+    if filters.runtime_max is not None:
+        runtime = title.get("runtime_min")
+        if runtime is None or runtime > filters.runtime_max:
+            return False
+    if filters.decade is not None:
+        year = title.get("year")
+        if year is None or not (filters.decade <= year < filters.decade + 10):
+            return False
+    if filters.genre and filters.genre not in _genres_of(item.title_id):
+        return False
+    if filters.dna and not _carries(item.title_id, filters.dna.split(".")[-1]):
+        return False
+    return filters.seen == "any" or (
+        (filters.seen == "seen") == (_seen_state(item.title_id) == "seen")
+    )
+
+
+def _rank_filters(q, genre, decade, runtime_max, runtime_min, seen, dna):
+    from spielplan.db.library import RankFilters
+
+    return RankFilters(
+        q=q, genre=genre, decade=decade, runtime_max=runtime_max,
+        runtime_min=runtime_min, seen=seen, dna=dna,
+    )
+
+
+def _rank_board_payload(
+    user: dict[str, Any], kind: str, filters: Any, log_line: str | None = None
+) -> dict[str, Any]:
+    hp = _rank_hp()
+    tier_set = _rank_tier_set(user["id"])
+    cuts = _rank_cuts(user["id"], kind)
+    rows = _rank_items(user["id"], kind)
+    active = filters.active()
+    shown = [r for r in rows if _rank_matches(r, filters)] if active else rows
+    tiers = rank_board.build(shown, cuts=cuts, tier_set=tier_set, hp=hp)
+    payload = {
+        "kind": kind,
+        "tier_set": list(tier_set),
+        "tiers": [
+            {"index": t.index, "label": t.label, "entries": [e.public() for e in t.entries]}
+            for t in tiers
+        ],
+        "rated": len(shown),
+        "rated_total": len(rows),
+        "queue_eligible": len(rank_queue.eligible(rows, cuts=cuts, hp=hp)),
+        "filters": active,
+        "dna_tiers": None,
+        "why": f"{len(rows)} rated · learned cutpoints, refit nightly",
+        "model": {
+            "cutpoints": [float(b) for b in cuts],
+            "hyperparams": hp.source,
+            "straddle_z": hp.straddle_z,
+            "tension_credible_mass": hp.tension_credible_mass,
+            "held_out": {
+                "kind": kind, "pairs": 0, "decisive": 0, "ties": 0, "agreed": 0,
+                "unplaced": 0, "rate": None, "stream": "uniform_holdout",
+            },
+        },
+    }
+    if log_line:
+        _rail_record("tier_edit", log_line, user_id=user["id"])
+        payload["log"] = [log_line]
+    return rail.redact(payload, show_model=_show_model(user))
+
+
+class RankDropBody(BaseModel):
+    title_id: int
+    tier: int = Field(ge=0)
+    above: int | None = None
+    below: int | None = None
+
+
+class RankAnswerBody(BaseModel):
+    pair: str
+    outcome: Literal["A", "B", "TIE"]
+    decisive: bool = False
+
+
+class RankTierSetBody(BaseModel):
+    tier_set: list[str]
+
+
+@app.get("/api/rank")
+def rank_board_route(
+    kind: Literal["movie", "series"] = Query(...),
+    q: str | None = None,
+    genre: str | None = None,
+    decade: int | None = None,
+    runtime_max: int | None = Query(None, ge=1),
+    runtime_min: int | None = Query(None, ge=1),
+    seen: Literal["any", "seen", "unseen"] = "any",
+    dna: str | None = None,
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    return _rank_board_payload(
+        user, kind, _rank_filters(q, genre, decade, runtime_max, runtime_min, seen, dna)
+    )
+
+
+@app.post("/api/rank/drop")
+def rank_drop(
+    body: RankDropBody,
+    kind: Literal["movie", "series"] = Query(...),
+    q: str | None = None,
+    genre: str | None = None,
+    decade: int | None = None,
+    runtime_max: int | None = Query(None, ge=1),
+    runtime_min: int | None = Query(None, ge=1),
+    seen: Literal["any", "seen", "unseen"] = "any",
+    dna: str | None = None,
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    tier_set = _rank_tier_set(user["id"])
+    if not 0 <= body.tier < len(tier_set):
+        raise HTTPException(422, f"tier {body.tier} is outside the configured set")
+    STATE["tier_edits"].setdefault((user["id"], kind), {})[body.title_id] = body.tier
+    neighbours = [t for t in (body.above, body.below) if t is not None]
+    counts = STATE["rank_comparisons"].setdefault((user["id"], kind), {})
+    if neighbours:
+        for title_id in [body.title_id, *neighbours]:
+            counts[title_id] = counts.get(title_id, 0) + 1
+    title = _title(body.title_id) or {"name": f"title {body.title_id}"}
+    line = rail.tier_edit_line(
+        title["name"], tier_set[body.tier], via="drag_drop", neighbour_duels=len(neighbours)
+    )
+    return _rank_board_payload(
+        user, kind, _rank_filters(q, genre, decade, runtime_max, runtime_min, seen, dna),
+        log_line=line,
+    )
+
+
+def _rank_seal(user_id: int, kind: str, pair: Any) -> str:
+    return URLSafeSerializer(RANK_PAIR_SALT).dumps(
+        {"u": user_id, "k": kind, "a": pair.title_a, "b": pair.title_b, "arm": pair.arm}
+    )
+
+
+@app.get("/api/rank/queue")
+def rank_queue_route(
+    kind: Literal["movie", "series"] = Query(...),
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    hp = _rank_hp()
+    pool = rank_queue.candidates(
+        _rank_items(user["id"], kind),
+        cuts=_rank_cuts(user["id"], kind),
+        tier_set=_rank_tier_set(user["id"]),
+        hp=hp,
+        comparisons=STATE["rank_comparisons"].get((user["id"], kind), {}),
+    )
+    pair = rank_queue.draw(pool, rng=random.SystemRandom())
+    if pair is None:
+        return {
+            "kind": kind,
+            "pair": None,
+            "reason": (
+                "There is nothing to compare yet — rate a few more titles and the queue fills up."
+            ),
+        }
+    names = {t["id"]: t["name"] for t in _catalog()}
+    return {
+        "kind": kind,
+        "pair": {
+            **pair.public(),
+            "name_a": names.get(pair.title_a),
+            "name_b": names.get(pair.title_b),
+            "token": _rank_seal(user["id"], kind, pair),
+        },
+        "pool": len(pool),
+    }
+
+
+@app.post("/api/rank/queue/answer")
+def rank_answer(
+    body: RankAnswerBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    try:
+        sealed = URLSafeSerializer(RANK_PAIR_SALT).loads(body.pair)
+    except BadSignature as exc:
+        raise HTTPException(409, {"reason": "stale_pair"}) from exc
+    kind = str(sealed["k"])
+    counts = STATE["rank_comparisons"].setdefault((user["id"], kind), {})
+    for title_id in (int(sealed["a"]), int(sealed["b"])):
+        counts[title_id] = counts.get(title_id, 0) + 1
+    names = {t["id"]: t["name"] for t in _catalog()}
+    line = rail.duel_line(
+        names.get(int(sealed["a"]), str(sealed["a"])),
+        names.get(int(sealed["b"]), str(sealed["b"])),
+        body.outcome,
+        context="tier_queue",
+        selection=str(sealed["arm"]),
+    )
+    _rail_record("duel", line, user_id=user["id"])
+    payload = rank_queue_route(kind=kind, spielplan_session=spielplan_session)
+    payload["log"] = [line]
+    return rail.redact(payload, show_model=_show_model(user))
+
+
+@app.get("/api/rank/tiers")
+def rank_tier_set(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    return {
+        "tier_set": list(_rank_tier_set(user["id"])),
+        "min": rank_tiers.MIN_TIERS,
+        "max": rank_tiers.MAX_TIERS,
+        "warning": (
+            "Changing the number of tiers discards your learned cutpoints and queues a refit. "
+            "Your past moves are kept."
+        ),
+    }
+
+
+@app.put("/api/rank/tiers")
+def rank_save_tier_set(
+    body: RankTierSetBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    previous = _rank_tier_set(user["id"])
+    try:
+        labels = rank_tiers.validate(body.tier_set)
+    except rank_tiers.TierSetRefused as exc:
+        raise HTTPException(422, str(exc)) from exc
+    STATE["tier_sets"][user["id"]] = list(labels)
+    changed = len(labels) != len(previous)
+    if changed:
+        # Decision 11: a change in K invalidates the boundaries, never the observations. The
+        # real clamp lives in `ledger.observations.load_observations`; this mirrors its effect
+        # so the harness's board does not index past its own labels.
+        for key in list(STATE["tier_edits"]):
+            if key[0] == user["id"]:
+                STATE["tier_edits"][key] = {
+                    t: min(v, len(labels) - 1) for t, v in STATE["tier_edits"][key].items()
+                }
+    return {
+        "tier_set": list(labels),
+        "previous": list(previous),
+        "k_changed": changed,
+        "refit_queued": changed,
+        "tier_edits_kept": sum(
+            len(v) for k, v in STATE["tier_edits"].items() if k[0] == user["id"]
+        ),
+    }
 
 if __name__ == "__main__":
     import uvicorn

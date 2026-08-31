@@ -359,6 +359,17 @@ async def test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count(db, bo
     )
     assert 0 <= top <= 2
 
+    # ...and the BOARD survives it too. This test used to stop one call short of the surface,
+    # which is exactly where the M3 review found a 500: the fit clamped the stale level and
+    # said so in a log line, while `board._band` indexed straight into a cutpoint array that
+    # had shrunk underneath it. A person who used decision 11's own control lost `/rank`
+    # permanently. Asserting the fit without asserting the read was the gap.
+    rendered, cuts, _rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    assert [t.label for t in rendered] == ["good", "ok", "bad"]
+    placed = {e.title_id: e for t in rendered for e in t.entries}
+    assert placed[1].tier == len(cuts.tier_set) - 1, "the top tier they had is the top they have"
+    assert placed[1].assigned_tier == placed[1].tier
+
 
 async def test_one_persons_tier_set_never_touches_anothers(db, board_of, world):
     """Decision 11's last sentence, and the half a single-user fixture cannot fail."""
@@ -381,7 +392,16 @@ async def test_one_persons_tier_set_never_touches_anothers(db, board_of, world):
 
 
 async def test_a_tier_set_the_board_could_not_render_is_refused(db, board_of):
-    for bad in ([], ["only"], ["A", "A"], ["A", ""], [f"T{i}" for i in range(20)]):
+    for bad in (
+        [],
+        ["only"],
+        ["A", "A"],
+        ["A", ""],
+        [f"T{i}" for i in range(20)],
+        # Long enough to push §6.7's rail line past its 400-character limit, which `rail.record`
+        # enforces by raising — after the drop's transaction has committed.
+        ["A" * 400, "B", "C"],
+    ):
         with pytest.raises(tiers.TierSetRefused):
             await tiers.save_tier_set(db, user_id=board_of, tier_set=bad)
 
@@ -501,18 +521,47 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
         "rank/queue.py": "names the arm that writes them",
         "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
     }
-    offenders = []
-    for path in sorted(PACKAGE.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if "uniform_holdout" not in text and "HELD_OUT" not in text:
-            continue
-        rel = path.relative_to(PACKAGE).as_posix()
-        if rel not in allowed:
-            offenders.append(rel)
+    offenders = [
+        rel for rel in _files_naming_the_held_out_stream(PACKAGE) if rel not in allowed
+    ]
     assert not offenders, (
         "§13's held-out stream is read somewhere new; every read path has to be deliberate: "
         f"{offenders}"
     )
+
+
+# Every spelling of the value. `ARM_HOLDOUT` is the name the rest of the package imports it
+# under and is NOT a superstring of `HELD_OUT`, so the first version of this guard missed the
+# one spelling a new reader would actually use — found by the M3 review.
+_HELD_OUT_NAMES = ("uniform_holdout", "HELD_OUT", "ARM_HOLDOUT")
+
+
+def _files_naming_the_held_out_stream(root: Path) -> list[str]:
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if any(name in text for name in _HELD_OUT_NAMES):
+            found.append(path.relative_to(root).as_posix())
+    return found
+
+
+def test_the_held_out_guard_catches_a_new_reader(tmp_path):
+    """docs/TESTING.md: "A guard needs a self-test … a guard that cannot fail reads as coverage
+    while providing none."
+
+    Fed the shape a leak would actually take: a module that imports the constant by the name
+    the package uses rather than spelling the string out.
+    """
+    package = tmp_path / "spielplan"
+    (package / "scoring").mkdir(parents=True)
+    leak = [
+        "from spielplan.rank.queue import ARM_HOLDOUT",
+        "SQL = 'SELECT 1 FROM duel WHERE selection = $1'  # bound to ARM_HOLDOUT",
+    ]
+    (package / "scoring" / "foldin.py").write_text("\n".join(leak), encoding="utf-8")
+    (package / "innocent.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert _files_naming_the_held_out_stream(package) == ["scoring/foldin.py"]
 
 
 # --- §6.7: the log line names the arm that drew the pair ----------------------------------
@@ -805,3 +854,49 @@ async def test_the_public_projection_carries_no_ungated_model_number(db, board_o
     for entry in (e for t in payload for e in t["entries"]):
         assert "s" not in entry and "sigma" not in entry
     assert "sigma" not in flat
+
+
+# --- §13's instrument, sharpened by the M3 review ---------------------------------------------
+
+
+async def test_the_evaluation_partitions_by_kind_on_both_sides_of_the_pair(db, board_of):
+    """§4.1 rule 5, at the one seam where `record_duel`'s write-time refusal stops holding.
+
+    A cross-kind duel cannot be written — but `title.kind` is not immutable: §10's re-import
+    upserts it, so a corpus reclassification (miniseries -> series) retroactively makes an
+    existing held-out duel cross-kind. `load_observations` joins BOTH sides for exactly this
+    reason and says so; the evaluation joined one, so the fit and §13's figure would disagree
+    about the population after any re-import that corrected a kind.
+    """
+    await observations.record_duel(
+        db, user_id=board_of, title_a=1, title_b=2, outcome="A",
+        context="tier_queue", selection=queue.ARM_HOLDOUT,
+    )
+    before = await evaluation.held_out_agreement(db, user_id=board_of, kind="movie")
+    assert before.pairs == 1
+
+    await db.execute("UPDATE title SET kind = 'series' WHERE id = 2")
+    after = await evaluation.held_out_agreement(db, user_id=board_of, kind="movie")
+    assert after.pairs == 0, (
+        "a pair with one foot in each partition is not evidence about either (§4.1 rule 5)"
+    )
+
+
+async def test_the_evaluation_abstains_when_the_model_has_no_ordering(db, board_of):
+    """The module refuses to score the PERSON's tie because scoring it needs a threshold on
+    |delta s| that nothing has measured. `s_a == s_b` is the model's tie, and it was being
+    folded into a confident prediction of "B" — the same unmeasured threshold, placed at zero
+    and only in one direction.
+    """
+    await db.execute(
+        "UPDATE ledger_state SET s = 0.5 WHERE user_id = $1 AND title_id IN (1, 2)", board_of
+    )
+    await observations.record_duel(
+        db, user_id=board_of, title_a=1, title_b=2, outcome="A",
+        context="tier_queue", selection=queue.ARM_HOLDOUT,
+    )
+    agreement = await evaluation.held_out_agreement(db, user_id=board_of, kind="movie")
+    assert agreement.pairs == 1
+    assert agreement.undecided == 1
+    assert agreement.decisive == 0 and agreement.agreed == 0
+    assert agreement.rate is None, "no ordering is an abstention, not a coin flip scored as B"

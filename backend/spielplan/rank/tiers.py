@@ -53,6 +53,13 @@ log = logging.getLogger("spielplan.rank.tiers")
 
 MIN_TIERS = 2
 MAX_TIERS = 12
+# A tier label is a letter or a word - F, S, "loved". The bound exists because the label is
+# interpolated into 6.7's rail line, which `rail.record` refuses past 400 characters *after*
+# a drop's transaction has committed: a long enough label turned every drop into that tier
+# into a 500 with the observation already durable, and each retry wrote another. Refused
+# here, with the other refusals, rather than clamped - a silently shortened label is not the
+# one they chose.
+MAX_LABEL = 24
 
 
 class TierSetRefused(ValueError):
@@ -82,6 +89,11 @@ def validate(tier_set: Sequence[str]) -> tuple[str, ...]:
         )
     if any(not label for label in labels):
         raise TierSetRefused("every tier needs a label")
+    if any(len(label) > MAX_LABEL for label in labels):
+        raise TierSetRefused(
+            f"a tier label is at most {MAX_LABEL} characters - it has to fit on a board and "
+            "inside a model-log line"
+        )
     if len(set(labels)) != len(labels):
         raise TierSetRefused("two tiers cannot share a label — the board would be ambiguous")
     return tuple(labels)
@@ -225,6 +237,7 @@ async def clear_refit_request(conn: asyncpg.Connection, *, user_id: int, kind: s
 
 
 __all__ = [
+    "MAX_LABEL",
     "MAX_TIERS",
     "MIN_TIERS",
     "TierSetRefused",

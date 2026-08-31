@@ -52,10 +52,11 @@ def test_a_long_draw_is_seventy_twenty_ten():
     """§6.3: "70% posterior-straddling pairs / 20% exploration / 10% uniform-random held out"."""
     candidates = pool()
     rng = random.Random(17)
-    arms = Counter(queue.draw(candidates, rng=rng).arm for _ in range(20_000))
+    draws = [queue.draw(candidates, rng=rng) for _ in range(20_000)]
+    assert all(d is not None for d in draws), "every draw returns a pair on a healthy board"
+    arms = Counter(d.arm for d in draws)
 
     total = sum(arms.values())
-    assert total == 20_000, "every draw returns a pair on a healthy board"
     assert arms[queue.ARM_BOUNDARY] / total == pytest.approx(0.70, abs=0.015)
     assert arms[queue.ARM_EXPLORATION] / total == pytest.approx(0.20, abs=0.015)
     assert arms[queue.ARM_HOLDOUT] / total == pytest.approx(0.10, abs=0.010)
@@ -108,12 +109,35 @@ def test_the_held_out_arm_is_uniform_over_pairs_not_over_strata():
     assert max(seen.values()) < expected * 1.15
 
 
-def test_the_held_out_arm_never_receives_a_fallback():
-    """The rate of the evaluation stream must not depend on the model's own confidence.
+@pytest.mark.parametrize(
+    ("label", "candidates"),
+    [
+        ("every title straddles", pool(sigma=3.0)),
+        ("no title straddles", pool(sigma=1e-6)),
+        ("two titles", pool(n=2, sigma=0.35)),
+        ("one tier occupied", pool(n=20, sigma=1e-6, seed=5)),
+    ],
+)
+def test_the_held_out_share_does_not_move_with_the_pool(label, candidates):
+    """§13's whole point, as one measurement: the evaluation stream's *rate* must be
+    independent of the model's own confidence.
 
-    A pool with nothing to sharpen returns nothing rather than manufacturing held-out rows:
-    if a failed adaptive draw fell through to the uniform arm, §13's 10% would rise exactly
-    when the model was least sure, and the stream would no longer be independent of it."""
+    The M3 review found the previous version of this test asserting the `len(pool) < 2` arity
+    guard — it passed against a `_boundary(...) or _holdout(...)` fallback AND against a
+    `_holdout(...) or _exploration(...)` one. Neither of those changes the shares on a healthy
+    board; both change them on a degenerate one, which is where a fallback fires. So the pools
+    below are the degenerate ones, and the assertion is that 10% holds across all of them.
+    """
+    rng = random.Random(23)
+    arms = Counter(queue.draw(candidates, rng=rng).arm for _ in range(8_000))
+    share = arms[queue.ARM_HOLDOUT] / 8_000
+    assert share == pytest.approx(0.10, abs=0.015), (
+        f"the held-out rate moved with the pool ({label}): {share:.3f}"
+    )
+
+
+def test_the_held_out_arm_never_receives_a_fallback():
+    """A pool with nothing to sharpen returns nothing rather than manufacturing held-out rows."""
     single = pool(n=1)
     rng = random.Random(1)
     assert queue.draw(single, rng=rng) is None

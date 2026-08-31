@@ -13,6 +13,7 @@
   import { goto } from '$app/navigation';
   import { bootstrap, session, clearUser, landingRoute } from '$lib/session.svelte.js';
   import { post } from '$lib/api.js';
+  import { reset as resetRank } from '$lib/rank.svelte.js';
   import AccountChip from '$lib/components/AccountChip.svelte';
   import NavRail from '$lib/components/NavRail.svelte';
 
@@ -65,6 +66,10 @@
   async function logout() {
     await post('/auth/logout');
     clearUser();
+    // Sign-out is a client-side navigation, so module-level surface state survives it. Rank's
+    // lift is a *pending write naming a bare title id*, and carried into the next person's
+    // session it would post a `tier_edit` into their append-only Ledger on the first tap.
+    resetRank();
     await goto('/login');
   }
 </script>
