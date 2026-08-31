@@ -141,6 +141,13 @@ Before the selection fallback fix (`7c47213`), `cap` also fired at pair 10–14 
 which made this table unreadable: the rate §14 risk 6 asks for was reporting the cap for rounds
 that had six pairs of budget left and two candidates still unplaced.
 
+The fixture library cannot show any of this. `ops/m4_exit_criterion.py` runs over a pool of
+**six** candidates — the eight-title fixture, minus the two neither member owns — so both seats
+answer all fifteen distinct pairs plus one hold-out, sixteen in total, and the round ends by
+exhaustion (§2.2), recorded as `cap`. Convergence has no room to fire and the twenty-pair cap is
+never reached, so neither number in §1.1 is observable against the fixture. It is a claim about
+a real library, and it needs one.
+
 The exit-criterion numbers — wall clock, per-answer latency, approval share, agreement and its
 n — are in the milestone report rather than here, because they are one evening's reading and
 this file is the standing list.
