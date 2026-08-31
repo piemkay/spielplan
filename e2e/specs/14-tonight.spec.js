@@ -210,5 +210,70 @@ test.describe('tonight', () => {
     // the host's own model-log lines are not on it.
     await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
     await expect(page.getByTestId('tonight-rail')).toHaveCount(0);
+
+    // "no control on that screen, browser back and in-round history entries included, reaches
+    // them". Asserting that the host's pairs are not *drawn* is close to vacuous — no template
+    // draws them. What is falsifiable is whether a control on the guest's screen can still
+    // WRITE to the host's round: Undo at the guest's pair 1 has no answer of its own to take
+    // back, and an undo scoped to "the last answer in this session" rather than "your own last
+    // live answer" would silently retract the host's twentieth.
+    const answered = async () => {
+      const seen = await page.evaluate(async () => {
+        const rooms = await (await fetch('/api/tonight/rooms')).json();
+        const id = rooms.rooms.find((r) => r.viewer_seated).session_id;
+        return (await (await fetch(`/api/tonight/sessions/${id}`)).json()).progress;
+      });
+      return seen.find((p) => p.seat === 1).answered;
+    };
+    const hostAnswers = await answered();
+    expect(hostAnswers, 'the host answered, or the assertion below is vacuous').toBeGreaterThan(0);
+    const undo = page.getByTestId('tonight-undo');
+    if (await undo.isVisible().catch(() => false)) await undo.click();
+    await page.waitForTimeout(300);
+    expect(await answered(), "the guest's screen reached the host's answers").toBe(hostAnswers);
+
+    // And browser back does not re-render the round the phone just passed on from.
+    await page.goBack();
+    await page.waitForLoadState('domcontentloaded');
+    if (await page.getByTestId('tonight-round').isVisible().catch(() => false)) {
+      await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
+    }
+  });
+
+  test('sharpen runs the round in place and says so in the provenance line', async () => {
+    // 54f: solo's round is optional and it re-ranks the picks that are already on screen —
+    // "'sharpen this' runs the adaptive round and re-ranks in place, after which the provenance
+    // line reads 'tilted by your N answers' instead of 'unseen first'". The integration layer
+    // owns the re-ranking; what a browser proves is that it happens on the same screen, with no
+    // ballot and no room, and that the line changes.
+    // Rewatches in, because the fixture library is entirely seen and the unseen-only pool is
+    // empty — the provenance line's other form is asserted by the test above. Which filter
+    // clause it starts from does not matter here: what 54f fixes is that the tilt arrives
+    // "instead of" the filter, not appended to it, so this asserts the clause is *gone*.
+    await atTheDoor();
+    const roomsBefore = (await (await page.request.get('/api/tonight/rooms')).json()).rooms.length;
+    await page.getByTestId('tonight-solo-door').click();
+    await expect(page.getByTestId('tonight-picks').locator('li')).toHaveCount(3);
+    await expect(page.getByTestId('tonight-provenance')).toContainText('rewatches included');
+
+    await page.getByTestId('tonight-sharpen').click();
+    await expect(page.getByTestId('tonight-sharpen-pair')).toBeVisible();
+    // All four answers, here as everywhere (decision 154).
+    for (const answer of ['A', 'B', 'EITHER', 'NEITHER']) {
+      await expect(page.getByTestId(`tonight-sharpen-${answer}`)).toBeVisible();
+    }
+
+    await page.getByTestId('tonight-sharpen-A').click();
+    const provenance = page.getByTestId('tonight-provenance');
+    await expect(provenance).toContainText('tilted by your 1 answer');
+    await expect(provenance).not.toContainText('rewatches included');
+    // In place: still the picks screen, still three picks, and no room was opened for it.
+    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await expect(page.getByTestId('tonight-picks').locator('li')).toHaveCount(3);
+    await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
+    // Earlier tests in this file leave live rooms behind, so the claim is that solo added none
+    // — not that the household has none.
+    const rooms = (await (await page.request.get('/api/tonight/rooms')).json()).rooms;
+    expect(rooms.length, '§6.2 step 8: solo publishes no room').toBe(roomsBefore);
   });
 });

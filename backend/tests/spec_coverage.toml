@@ -1261,7 +1261,7 @@ why = "Zeroing removes an influence and cannot by itself produce an alternative;
 tests = [
     "backend/tests/test_tonight_combine.py::test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole",
     "backend/tests/test_tonight_combine.py::test_the_reserved_slot_replaces_the_third_rather_than_being_appended",
-    "backend/tests/test_tonight_combine.py::test_the_contested_axis_is_zeroed_rather_than_averaged",
+    "backend/tests/test_tonight_combine.py::test_the_contested_axis_stops_explaining_the_ranking",
     "backend/tests/test_tonight_combine.py::test_the_contested_facet_needs_two_people_pulling_opposite_ways",
     "backend/tests/test_tonight_combine.py::test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one",
 ]
@@ -1332,7 +1332,7 @@ milestone = "M4"
 kind = "e2e"
 what = "The reveal renders the 'VOTES REVEALED TOGETHER' beat before the winner appears, and the winner card carries the approval share as a data-voice count, one match line per participant — including the honest negative and 'no profile yet' for a profile-less guest — the budget-fit line, runners-up, the wildcard strip, and Play on Jellyfin as the primary CTA."
 why = "The prototype's result screen showed none of the share, match lines, runners-up or wildcard, and this is the terminal screen the whole round exists to produce."
-tests = []
+tests = ["e2e/specs/15-tonight-group.spec.js::the reveal beat precedes the winner, and the card carries its whole inventory", "backend/tests/test_tonight_integration.py::test_the_approval_share_is_approvals_over_participants_and_is_persisted", "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries", "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something"]
 
 [[requirement]]
 id = "tonight-rank-solo-lands-on-picks"
@@ -1341,7 +1341,7 @@ milestone = "M4"
 kind = "e2e"
 what = "Solo opens directly on three picks and a wildcard ranked by the personal Ledger with no tilt, with no pair round and no ballot anywhere in the flow; 'sharpen this' runs the adaptive round and re-ranks in place, after which the provenance line reads 'tilted by your N answers' instead of 'unseen first'."
 why = "The fastest path to a film must not be slower than browsing Home, and with one participant approval share is not a measurement."
-tests = []
+tests = ["e2e/specs/14-tonight.spec.js::solo lands on three picks and a wildcard with no round and no ballot", "e2e/specs/14-tonight.spec.js::every solo pick carries a why and a budget-fit line", "e2e/specs/14-tonight.spec.js::the provenance line names the budget and the filter", "e2e/specs/14-tonight.spec.js::sharpen runs the round in place and says so in the provenance line", "e2e/specs/14-tonight.spec.js::reshuffle walks the ranking and asks nothing", "backend/tests/test_tonight_integration.py::test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first", "backend/tests/test_tonight_integration.py::test_sharpening_re_ranks_in_place_and_changes_the_provenance_line", "backend/tests/test_tonight_integration.py::test_solo_leaves_no_session_row_and_publishes_no_room"]
 
 [[requirement]]
 id = "tonight-rank-guest-not-borrowed-ledger"
@@ -1447,7 +1447,7 @@ milestone = "M4"
 kind = "e2e"
 what = "An active session is visible to every signed-in household member — not only its host — as a row carrying the facets the spec's own example names (room code, host, age, kind, budget, whether it skips seen titles); an ended session is not listed and an unauthenticated caller is refused and sees no rooms; and a free seat on that row is a tappable control that seats the signed-in user of that device with no code typed and no notification involved."
 why = "§12 scopes 'open-rooms discovery' into M4 and the tap is what makes it a join channel rather than a status board — it is the only channel needing neither a code nor a delivery, which is the whole point on the phone already in someone's hand."
-tests = []
+tests = ["e2e/specs/15-tonight-group.spec.js::a room one member opens appears on the other device, live, with a tappable seat", "backend/tests/test_tonight_routes.py::test_the_open_rooms_list_is_the_households_and_not_the_hosts", "backend/tests/test_tonight_routes.py::test_every_tonight_route_refuses_an_unauthenticated_caller", "backend/tests/test_tonight_integration.py::test_the_open_rooms_list_is_visible_to_every_member_not_only_the_host", "backend/tests/test_tonight_integration.py::test_an_ended_room_leaves_the_open_rooms_list", "backend/tests/test_tonight_integration.py::test_a_seat_the_viewer_already_holds_is_not_offered_again"]
 
 [[requirement]]
 id = "tonight-rank-lobby-live-over-the-session-channel"
@@ -1456,7 +1456,7 @@ milestone = "M4"
 kind = "e2e"
 what = "A member with the app already open is shown a newly opened session, and a seated lobby is shown an arriving participant, without a reload and without the client polling for it; following that banner seats the member in the session it names."
 why = "§6's preamble makes push best-effort, so the in-app banner is the channel that has to work on the iPhone that never delivers a notification; a lobby that needs a refresh to show an arrival is one a household talks over instead of using."
-tests = []
+tests = ["e2e/specs/15-tonight-group.spec.js::a room one member opens appears on the other device, live, with a tappable seat", "backend/tests/test_tonight_channel.py::test_a_household_frame_reaches_every_device", "backend/tests/test_tonight_channel.py::test_a_session_frame_reaches_only_the_room_it_is_about", "backend/tests/test_tonight_channel.py::test_a_device_that_stopped_answering_does_not_stop_the_others", "backend/tests/test_tonight_channel.py::test_a_frame_is_encoded_for_the_wire_before_it_is_sent", "backend/tests/test_tonight_channel.py::test_every_frame_the_hub_sends_survives_json_dumps"]
 
 [[requirement]]
 id = "tonight-rank-guest-hand-off-sequential-and-blind"
@@ -1465,7 +1465,7 @@ milestone = "M4"
 kind = "e2e"
 what = "A guest seat cannot be opened for answering until the initiator's round has ended, and a second guest's round is refused while the first guest's is unfinished — the turns are sequential on the one device. When the phone passes, the incoming round renders none of the previous participant's pairs, answers or progress, and no control on that screen, browser back and in-round history entries included, reaches them."
 why = "On one shared device blindness is not protected by the transport — the previous person's answers have already been delivered to that client — so the hand-off is the only place it can be enforced, or lost."
-tests = []
+tests = ["e2e/specs/14-tonight.spec.js::the guest hand-off clears the screen and offers nothing early", "backend/tests/test_tonight_integration.py::test_a_guest_cannot_answer_before_the_initiator_has_finished", "backend/tests/test_tonight_integration.py::test_only_one_guest_turn_is_open_at_a_time", "backend/tests/test_tonight_integration.py::test_undo_reaches_only_your_own_last_live_answer", "backend/tests/test_tonight_routes.py::test_a_host_may_take_a_guests_turn", "backend/tests/test_tonight_routes.py::test_a_member_seat_is_never_writable_by_the_host"]
 
 [[requirement]]
 id = "platform-vapid-keypair-first-boot"
@@ -1656,7 +1656,7 @@ milestone = "M4"
 kind = "e2e"
 what = "/tv accepts a room code, attaches to that session, and renders the three states the spec names — lobby, progress, result — advancing as the session advances; before the reveal it shows no participant's answers, votes or approvals and no winner."
 why = "§12's M4 row scopes the TV route into this milestone, and the TV is the one screen everybody in the room can see — so the blind rule has to hold there before it is worth anything on the phones."
-tests = []
+tests = ["e2e/specs/16-tonight-tv.spec.js::the TV attaches by room code and shows the lobby", "e2e/specs/16-tonight-tv.spec.js::the TV takes the code from the URL, because a television has no keyboard", "e2e/specs/16-tonight-tv.spec.js::the TV shows progress and no answers while the round runs", "e2e/specs/16-tonight-tv.spec.js::the TV shows the winner only once the ballot has closed", "e2e/specs/16-tonight-tv.spec.js::a code that names no live room is refused rather than showing an empty room"]
 
 [[requirement]]
 id = "tonight-rank-split-threshold-and-silence-below"
