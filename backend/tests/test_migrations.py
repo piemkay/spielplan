@@ -127,10 +127,25 @@ def test_user_state_tables_match_the_spec_block(schema):
 
 
 def test_auth_session_does_not_squat_on_the_tonight_session_name(schema):
-    """§4.2 reserves the bare name `session` for a Tonight session."""
+    """§4.2 reserves the bare name `session` for a Tonight session.
+
+    Written at M0 as `"session" not in public`, because the name was reserved and nothing had
+    claimed it. M4 claims it, so the reservation is now *kept* rather than merely respected:
+    both tables exist, they are distinct, and the auth one is still the one carrying the
+    cookie. Inverting this assertion is the same routine `05-milestones.spec.js` runs — the
+    M0 form failed the day 0013 landed, and that failure was the reminder to write this.
+    """
     public = _names(schema, "public")
     assert "auth_session" in public
-    assert "session" not in public
+    assert "session" in public, "0013 creates §4.2's Tonight `session`, and the name was held for it"
+
+    auth = _columns(schema, "auth_session")
+    tonight = _columns(schema, "session")
+    assert "token_hash" in auth or "id" in auth
+    # The distinguishing column, not merely a different row count: a Tonight session has a host
+    # and a room; an auth session has neither and must never acquire them.
+    assert "host_user_id" in tonight and "room_code" in tonight
+    assert "host_user_id" not in auth and "room_code" not in auth
 
 
 def _columns(schema: dict, table: str, table_schema: str = "public") -> dict[str, dict]:
@@ -179,3 +194,103 @@ def test_a_tier_set_change_has_somewhere_to_record_the_refit_it_owes(schema):
     assert any("WHERE" in r["indexdef"].upper() for r in owed), (
         "the index must be partial: the answer is empty almost always"
     )
+
+
+# --- §4.2's Tonight session block (0013) ------------------------------------------------
+
+
+def test_the_tonight_session_tables_match_the_spec_block(schema):
+    """§4.2 names five of these and 54g adds the sixth; the names are part of the contract.
+
+    `session_ballot` is the one §4.2 does not carry — 54g adds it because approval share is
+    §13's headline metric for the whole feature and the ballot is the only place it exists.
+    """
+    public = _names(schema, "public")
+    for table in (
+        "session", "session_participant", "session_answer",
+        "session_ballot", "session_result", "session_outcome",
+    ):
+        assert table in public, f"§4.2/54g names `{table}` and it is not in the schema"
+
+
+def test_a_guest_seat_is_addressable_without_a_user_id(schema):
+    """§4.2: "session_participant(session_id, user_id NULL, …) — NULL = guest slot on the
+    host phone".
+
+    Two guests on one phone is the designed case (§6.2 step 2's hand-the-phone), so the seat
+    cannot be keyed on (session_id, user_id): that key seats one guest and silently drops the
+    second. The seat therefore carries its own id, and the "one seat per member" rule lives in
+    a *partial* unique index that NULLs do not participate in.
+    """
+    columns = _columns(schema, "session_participant")
+    assert columns["user_id"]["is_nullable"] == "YES", "a guest seat has no user_id"
+    assert "id" in columns, "a seat needs an identity of its own, not (session_id, user_id)"
+    for name in ("session_id", "role", "tilt", "answered_count", "joined_at",
+                 "converged_at", "ended_by"):
+        assert name in columns, f"§4.2/54g names session_participant.{name}"
+    assert columns["converged_at"]["is_nullable"] == "YES", (
+        "54g: converged_at is stamped only in the converged case"
+    )
+
+    member_seat = [
+        r for r in schema["indexes"]
+        if r["table_name"] == "session_participant"
+        and "UNIQUE" in r["indexdef"].upper()
+        and "user_id" in r["indexdef"]
+    ]
+    assert member_seat, "one member may hold at most one seat in a session"
+    assert all("WHERE" in r["indexdef"].upper() for r in member_seat), (
+        "the unique seat index must be partial, or it cannot admit two NULL guest seats"
+    )
+
+
+def test_the_session_answer_columns_the_round_writes_exist(schema):
+    """§4.2 + 54g: seq, the two titles, the answer, latency_ms and the `selection`
+    discriminator §13's guard needs. `retracted_at` carries §6's "undo everywhere" as a
+    tombstone rather than a delete, the way `rate_observation.undone_at` does."""
+    columns = _columns(schema, "session_answer")
+    for name in ("session_id", "participant_id", "seq", "title_a", "title_b",
+                 "answer", "latency_ms", "selection", "retracted_at"):
+        assert name in columns, f"§4.2/54g names session_answer.{name}"
+
+
+def test_the_held_out_session_answers_are_addressable(schema):
+    """§13 stream (a) via 54b: the hold-out arm is the only data admissible for evaluating the
+    round, so it has to be selectable without scanning every answer — the same partial index
+    `duel_holdout` gives the tier queue (0005)."""
+    holdout = [
+        r for r in schema["indexes"]
+        if r["table_name"] == "session_answer" and "uniform_holdout" in r["indexdef"]
+    ]
+    assert holdout, "session_answer needs a partial index on the uniform_holdout stream"
+
+
+def test_the_result_slate_and_its_outcome_are_two_tables(schema):
+    """§4.2 gives the round both: `session_result` is per candidate in the slate,
+    `session_outcome` is the one chosen title and the approval share §13 evaluates on."""
+    result = _columns(schema, "session_result")
+    for name in ("session_id", "title_id", "rank", "group_score", "per_user_match", "conflict"):
+        assert name in result, f"§4.2 names session_result.{name}"
+    assert result["conflict"]["is_nullable"] == "YES", (
+        "§6.2 step 5: below D = 0.20 the split is decided silently, so no conflict is stored"
+    )
+    outcome = _columns(schema, "session_outcome")
+    for name in ("session_id", "chosen_title_id", "approval_share", "participants"):
+        assert name in outcome, f"§4.2 names session_outcome.{name}"
+
+
+def test_no_v11_posterior_columns_survive_anywhere_in_the_schema(schema):
+    """§4.2: "v1.1 §6's mu/sigma/tolerance/phase columns do NOT survive (8-axis posterior
+    machinery deleted per §0); fairness_ledger omitted".
+
+    The static guard reads the migration text; this reads the *applied* schema, so a column
+    added by a later ALTER cannot slip past the regex. Both halves are cheap and neither
+    subsumes the other.
+    """
+    public = _names(schema, "public")
+    assert "fairness_ledger" not in public
+    banned = {"mu", "sigma", "tolerance", "phase"}
+    for table in ("session", "session_participant", "session_answer",
+                  "session_ballot", "session_result", "session_outcome"):
+        present = set(_columns(schema, table)) & banned
+        assert not present, f"{table} carries deleted v1.1 machinery: {sorted(present)}"

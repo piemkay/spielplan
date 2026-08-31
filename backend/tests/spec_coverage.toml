@@ -1396,7 +1396,11 @@ milestone = "M4"
 kind = "integration"
 what = "A session seating two guests holds two distinct session_participant rows, each with user_id NULL, each separately addressable with its own tilt, answered_count and session_answer rows; the table's key admits both rather than rejecting or collapsing the second, and no guest seat is stored carrying a member's user_id."
 why = "§4.2 spells the NULL out, and a (session_id, user_id) primary key silently seats one guest and drops the second — while the hand-the-phone flow is guests plural on one device by design, so the key has to be decided before the migration is written rather than after."
-tests = []
+tests = [
+    "backend/tests/test_migrations.py::test_a_guest_seat_is_addressable_without_a_user_id",
+    "backend/tests/test_schema_contracts.py::test_two_guest_seats_coexist_in_one_session",
+    "backend/tests/test_schema_contracts.py::test_one_member_cannot_hold_two_seats_in_one_session",
+]
 
 [[requirement]]
 id = "data-rules-session-no-v11-posterior-columns"
@@ -1405,7 +1409,13 @@ milestone = "M4"
 kind = "static"
 what = "A guard fails if the session tables grow a column named mu, sigma, tolerance or phase, or if any relation named fairness_ledger appears in the schema; the applied migrations produce none of them, and the guard is exercised against a synthetic violation."
 why = "§0 row 4 measured that no aggregation rule dominates plain averaging and that dominance rules cost −0.012, so the 8-axis posterior and the fairness ledger are deleted rather than merely unbuilt — the same standing 'forgotten' has on user_title, which is guarded the same way."
-tests = []
+tests = [
+    "backend/tests/test_landmine_guards.py::test_the_session_tables_carry_no_v11_posterior_machinery",
+    "backend/tests/test_landmine_guards.py::test_the_posterior_guard_catches_a_real_violation",
+    "backend/tests/test_landmine_guards.py::test_the_posterior_guard_catches_a_fairness_ledger",
+    "backend/tests/test_landmine_guards.py::test_the_posterior_guard_does_not_flag_legitimate_usage",
+    "backend/tests/test_migrations.py::test_no_v11_posterior_columns_survive_anywhere_in_the_schema",
+]
 
 [[requirement]]
 id = "tonight-rank-solo-picks-carry-why-and-fit"

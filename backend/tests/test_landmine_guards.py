@@ -204,3 +204,105 @@ def test_user_title_state_has_no_forgotten_value():
     ddl = (MIGRATIONS / "0005_ledger.sql").read_text(encoding="utf-8")
     assert "CHECK (state IN ('unseen', 'seen'))" in ddl
     assert "forgotten" not in ddl.replace("no 'forgotten' state", "")
+
+
+# --- §4.2: the v1.1 machinery that does not survive -------------------------------------
+
+# §4.2's own comment on `session_participant`: "v1.1 §6's mu/sigma/tolerance/phase columns do
+# NOT survive (8-axis posterior machinery deleted per §0); fairness_ledger omitted in v1".
+# §0 row 4 is why: no aggregation rule dominates plain averaging, and dominance rules cost
+# −0.012 against a 0.003–0.008 noise floor. So this is deleted, not merely unbuilt — the same
+# standing `forgotten` has on `user_title`, and it is guarded the same way.
+DELETED_POSTERIOR_COLUMNS = ("mu", "tolerance", "phase")
+SESSION_TABLES = (
+    "session", "session_participant", "session_answer",
+    "session_ballot", "session_result", "session_outcome",
+)
+
+# `mu smallint`, `tolerance real NOT NULL`, `phase text` — a column definition, not the word
+# appearing in a comment or inside a longer identifier like `phase_shift` or `mu_prior`.
+_COLUMN_DEF = r"^\s*(?:{names})\s+(?:smallint|integer|bigint|real|double|numeric|text|jsonb|boolean|float)"
+
+
+def _session_table_bodies(sql: str) -> dict[str, str]:
+    """The text between `CREATE TABLE <name> (` and its closing `);`, per session table."""
+    bodies = {}
+    for table in SESSION_TABLES:
+        m = re.search(rf"create\s+table\s+{table}\s*\((.*?)\n\);", sql, re.IGNORECASE | re.DOTALL)
+        if m:
+            bodies[table] = m.group(1)
+    return bodies
+
+
+def _deleted_posterior_columns(sql: str) -> list[str]:
+    pattern = re.compile(
+        _COLUMN_DEF.format(names="|".join(DELETED_POSTERIOR_COLUMNS)),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    hits = []
+    for table, body in _session_table_bodies(sql).items():
+        for m in pattern.finditer(body):
+            hits.append(f"{table}: {m.group(0).strip()}")
+    # `sigma` is checked separately: `ledger_state.sigma` is legitimate (§5.2's Laplace
+    # diagonal), so the word may not simply be banned from the migrations — only from a
+    # session table, which the per-table bodies above already scope.
+    sigma = re.compile(_COLUMN_DEF.format(names="sigma"), re.IGNORECASE | re.MULTILINE)
+    for table, body in _session_table_bodies(sql).items():
+        for m in sigma.finditer(body):
+            hits.append(f"{table}: {m.group(0).strip()}")
+    return hits
+
+
+def _fairness_ledger(sql: str) -> list[str]:
+    return re.findall(r"create\s+(?:table|view)\s+\S*fairness_ledger\S*", sql, re.IGNORECASE)
+
+
+def test_the_session_tables_carry_no_v11_posterior_machinery():
+    """§4.2 deletes v1.1 §6's mu/sigma/tolerance/phase and omits `fairness_ledger`.
+
+    The schema layer (`test_migrations.py`) reads the *applied* columns and catches a later
+    ALTER; this reads the migration text and catches the intent at review time, when it is
+    cheap to argue about. Neither subsumes the other.
+    """
+    offenders = []
+    for path in sorted(MIGRATIONS.glob("*.sql")):
+        sql = path.read_text(encoding="utf-8")
+        offenders += [f"{path.name} {h}" for h in _deleted_posterior_columns(sql)]
+        offenders += [f"{path.name} {h}" for h in _fairness_ledger(sql)]
+    assert not offenders, (
+        "§0 row 4 measured the 8-axis posterior and the fairness ledger out of the design; "
+        f"these bring them back: {offenders}"
+    )
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "CREATE TABLE session_participant (\n    id bigserial,\n    mu real,\n    x text\n);",
+        "CREATE TABLE session_participant (\n    id bigserial,\n    sigma real NOT NULL\n);",
+        "CREATE TABLE session_participant (\n    id bigserial,\n    tolerance double precision\n);",
+        "CREATE TABLE session_answer (\n    id bigserial,\n    phase text NOT NULL\n);",
+    ],
+)
+def test_the_posterior_guard_catches_a_real_violation(snippet):
+    """A guard that cannot fail reads as coverage while providing none."""
+    assert _deleted_posterior_columns(snippet), f"guard missed: {snippet!r}"
+
+
+def test_the_posterior_guard_catches_a_fairness_ledger():
+    assert _fairness_ledger("CREATE TABLE fairness_ledger (user_id bigint);")
+    assert _fairness_ledger("CREATE VIEW session_fairness_ledger AS SELECT 1;")
+
+
+def test_the_posterior_guard_does_not_flag_legitimate_usage():
+    """`ledger_state.sigma` is §5.2's Laplace diagonal and must survive; so must a session
+    column whose name merely contains one of the banned words, and any prose in a comment."""
+    assert not _deleted_posterior_columns(
+        "CREATE TABLE ledger_state (\n    user_id bigint,\n    sigma real,\n    sigma_eff real\n);"
+    )
+    assert not _deleted_posterior_columns(
+        "CREATE TABLE session_participant (\n    id bigserial,\n"
+        "    -- v1.1's mu/sigma/tolerance/phase columns do NOT survive\n"
+        "    phase_locked boolean,\n    mu_unused text\n);"
+    )
+    assert not _fairness_ledger("-- fairness_ledger omitted in v1 (§4.2)")

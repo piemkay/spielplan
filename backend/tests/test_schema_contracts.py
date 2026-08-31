@@ -228,3 +228,211 @@ async def test_a_connector_secret_cannot_be_stored_without_naming_its_key(db):
             "INSERT INTO connector_config (name, config, secrets_encrypted) "
             "VALUES ('tmdb', '{}', '\\xdeadbeef')"
         )
+
+
+# --- §4.2 + 54g: the Tonight session block ----------------------------------------------
+
+
+async def _session(db, host: int, *, kind: str = "movie", budget: int = 130) -> int:
+    """§10: a session records the basis its pool was built in, so it needs a bundle to exist.
+    That is the point of the NOT NULL — a Tonight session has no pool without §5.1 scores, and
+    §5.1 scores have no meaning without an active bundle."""
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state) VALUES ('test-v1', '{}', 'active') "
+        "ON CONFLICT DO NOTHING"
+    )
+    # A distinct code per call: `session_room_code_live` is unique among live rooms, which is
+    # the constraint under test elsewhere and merely scaffolding here.
+    return await db.fetchval(
+        "INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min, bundle_version) "
+        "VALUES ('MX-' || nextval('session_id_seq')::text, $1, $2, $3, 'test-v1') RETURNING id",
+        host, kind, budget,
+    )
+
+
+async def _seat(db, session_id: int, *, user_id=None, role="guest", seat=1) -> int:
+    return await db.fetchval(
+        "INSERT INTO session_participant (session_id, user_id, role, seat) "
+        "VALUES ($1, $2, $3, $4) RETURNING id",
+        session_id, user_id, role, seat,
+    )
+
+
+async def test_a_session_answer_is_one_of_four_values(db):
+    """Decision 154: `A | B | EITHER | NEITHER`. `EITHER` lifts both, `NEITHER` lowers both —
+    opposite signals, not two names for a shrug. The prototype collected `NO_PULL` and threw
+    it away in `tilt()`; the CHECK is what stops that value ever being stored again."""
+    user = await _user(db)
+    a, b = await _title(db, 1), await _title(db, 2)
+    sid = await _session(db, user)
+    pid = await _seat(db, sid, user_id=user, role="host")
+    for i, answer in enumerate(("A", "B", "EITHER", "NEITHER")):
+        await db.execute(
+            "INSERT INTO session_answer (session_id, participant_id, seq, title_a, title_b, answer) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            sid, pid, i, a, b, answer,
+        )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "INSERT INTO session_answer (session_id, participant_id, seq, title_a, title_b, answer) "
+            "VALUES ($1, $2, 99, $3, $4, 'NO_PULL')",
+            sid, pid, a, b,
+        )
+
+
+async def test_a_session_answer_names_the_stream_it_belongs_to(db):
+    """54b, §13's non-negotiable guard: the hold-out arm must be identifiable end to end, and
+    a client must never be able to file an adaptive pair as held-out or the reverse. The
+    spelling is `uniform_holdout`, the same string `duel.selection` already uses — a second
+    spelling is how an exclusion silently stops matching."""
+    user = await _user(db)
+    a, b = await _title(db, 1), await _title(db, 2)
+    sid = await _session(db, user)
+    pid = await _seat(db, sid, user_id=user, role="host")
+    for i, selection in enumerate(("adaptive", "uniform_holdout")):
+        await db.execute(
+            "INSERT INTO session_answer "
+            "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
+            "VALUES ($1, $2, $3, $4, $5, 'A', $6)",
+            sid, pid, i, a, b, selection,
+        )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "INSERT INTO session_answer "
+            "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
+            "VALUES ($1, $2, 9, $3, $4, 'A', 'boundary')",
+            sid, pid, a, b,
+        )
+
+
+async def test_a_pair_never_names_the_same_title_twice(db):
+    """A "which one tonight?" between a title and itself is not a question."""
+    user = await _user(db)
+    a = await _title(db, 1)
+    sid = await _session(db, user)
+    pid = await _seat(db, sid, user_id=user, role="host")
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "INSERT INTO session_answer (session_id, participant_id, seq, title_a, title_b, answer) "
+            "VALUES ($1, $2, 0, $3, $3, 'A')",
+            sid, pid, a,
+        )
+
+
+async def test_a_participant_round_ends_with_exactly_one_named_reason(db):
+    """54c/54g: `ended_by: converged | cap | escape` — §14 risk 6 wants the rate of each, and
+    a fourth value nobody defined would make that rate unreadable."""
+    user = await _user(db)
+    sid = await _session(db, user)
+    await db.execute(
+        "UPDATE session_participant SET ended_by = 'converged', converged_at = now() WHERE id = $1",
+        await _seat(db, sid, seat=1),
+    )
+    for i, reason in enumerate(("cap", "escape"), start=2):
+        await db.execute(
+            "UPDATE session_participant SET ended_by = $1 WHERE id = $2",
+            reason, await _seat(db, sid, seat=i),
+        )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "UPDATE session_participant SET ended_by = 'timeout' WHERE id = $1",
+            await _seat(db, sid, seat=9),
+        )
+
+
+async def test_converged_at_is_stamped_only_when_the_round_converged(db):
+    """54c: the round ends for a person "when the shortlist boundary is resolved … subject to a
+    hard cap of 20", and from the sixth pair an escape ends it early. Neither of those is a
+    convergence, so neither may carry a convergence timestamp — otherwise §14 risk 6's "how
+    often does the cap fire?" is answered by a column that quietly says "never".
+
+    Both directions, because either alone is satisfiable by an implementation that never
+    stamps the column at all.
+    """
+    user = await _user(db)
+    sid = await _session(db, user)
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "UPDATE session_participant SET ended_by = 'cap', converged_at = now() WHERE id = $1",
+            await _seat(db, sid, seat=1),
+        )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "UPDATE session_participant SET ended_by = 'converged' WHERE id = $1",
+            await _seat(db, sid, seat=2),
+        )
+    # And a seat still answering carries neither.
+    running = await _seat(db, sid, seat=3)
+    row = await db.fetchrow(
+        "SELECT ended_by, converged_at FROM session_participant WHERE id = $1", running
+    )
+    assert row["ended_by"] is None and row["converged_at"] is None
+
+
+async def test_two_guest_seats_coexist_in_one_session(db):
+    """§4.2: "user_id NULL — NULL = guest slot on the host phone", and §6.2 step 2 hands that
+    phone round, so *two* guests is the designed case rather than the edge one. A
+    (session_id, user_id) key would seat the first and drop the second."""
+    user = await _user(db)
+    sid = await _session(db, user)
+    first = await _seat(db, sid, seat=1)
+    second = await _seat(db, sid, seat=2)
+    assert first != second
+    rows = await db.fetch(
+        "SELECT id, user_id FROM session_participant WHERE session_id = $1 AND user_id IS NULL",
+        sid,
+    )
+    assert len(rows) == 2, "both guest seats must survive"
+
+
+async def test_one_member_cannot_hold_two_seats_in_one_session(db):
+    """§6.2 step 2's "join channels, all equivalent" — a member who arrives twice, by code and
+    then from the open-rooms list, must re-attach rather than seat twice. Two seats would
+    change the participant count every average and §13's approval share are computed over."""
+    user = await _user(db)
+    other = await _user(db, name="jenny")
+    sid = await _session(db, user)
+    await _seat(db, sid, user_id=user, role="host", seat=1)
+    await _seat(db, sid, user_id=other, role="member", seat=2)
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await _seat(db, sid, user_id=user, role="member", seat=3)
+
+
+async def test_a_ballot_is_one_row_per_participant_and_title(db):
+    """54e: the approval ballot is a multi-select over the finalists and the wildcard. One
+    participant approving one title twice would inflate the approval share §13 evaluates on."""
+    user = await _user(db)
+    sid = await _session(db, user)
+    pid = await _seat(db, sid, user_id=user, role="host")
+    title = await _title(db, 1)
+    await db.execute(
+        "INSERT INTO session_ballot (session_id, participant_id, title_id, approved) "
+        "VALUES ($1, $2, $3, true)",
+        sid, pid, title,
+    )
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await db.execute(
+            "INSERT INTO session_ballot (session_id, participant_id, title_id, approved) "
+            "VALUES ($1, $2, $3, false)",
+            sid, pid, title,
+        )
+
+
+async def test_an_approval_share_outside_zero_to_one_is_refused(db):
+    """§13's headline metric is a fraction of participants; a value outside [0, 1] is a
+    counting bug that would otherwise be discovered in a chart months later."""
+    user = await _user(db)
+    sid = await _session(db, user)
+    title = await _title(db, 1)
+    await db.execute(
+        "INSERT INTO session_outcome (session_id, chosen_title_id, approval_share, participants) "
+        "VALUES ($1, $2, 0.5, 2)",
+        sid, title,
+    )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "INSERT INTO session_outcome "
+            "(session_id, chosen_title_id, approval_share, participants) "
+            "VALUES ($1, $2, 1.5, 2)",
+            await _session(db, user), title,
+        )
