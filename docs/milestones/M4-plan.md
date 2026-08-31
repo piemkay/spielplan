@@ -654,3 +654,29 @@ What the lenses then found is what the tests could not see, and all of it is fix
     exactly one caller. `notify()` now runs after the prompt is armed and discards its outcome,
     which is what keeps the two independent — the banner still waits on next open whatever the
     network did.
+
+### Added while working the review's survivors
+
+25. **Selection widens in two steps, not one.** 54c restricts the search to the straddlers, and
+    the fallback to the whole pool fired only when there were fewer than two of them. With
+    exactly two and their one pair already answered nothing matched, and `replay` reads a None
+    pair as the exhaustion ending — so a round ended, recorded as `cap`, at pair fourteen. The
+    order is now the sentence's own: between straddlers, then a straddler against anyone, then
+    anything. Widening straight to the whole pool was the smaller diff and the wrong one: with
+    nothing able to reduce the straddler count every pair ties on information, and the argmin
+    falls through to the lowest title ids.
+26. **Stepping out of a room keeps the seat.** The restore that stops a reload stranding a
+    participant left a household with one live room no other door. `leave()` drops the room's
+    state — not only the step, because every channel frame ends in `refresh` — and the
+    open-rooms row for a room you are seated in is a `resume` control.
+27. **A host opening a second room abandons an un-started first.** 0013 admits `abandoned` and
+    nothing wrote it. This is the one moment the intent is unambiguous and needs no control the
+    spec does not name. A *started* room is never abandoned: 54e's reveal waits for every seat.
+28. **A socket gets five seconds to take a frame.** A phone that has gone away raises; one on a
+    bad connection does not, and awaiting them in turn put the household behind the slowest.
+    Delivery is concurrent and each socket is on its own clock.
+29. **A lost code or seat race retries rather than surfacing.** 0013's indexes are what enforce
+    one live room per code and one seat per member; losing the race made them do it by raising
+    into the route, on the two main controls of the surface.
+30. **§6.4's wildcard label is served, not spelled in the client.** §6.8 makes the copy the rule
+    rather than decoration, and two copies of a rule drift.
