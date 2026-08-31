@@ -520,6 +520,8 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
         "rank/read.py": "excludes them from the selector's comparison counts",
         "rank/queue.py": "names the arm that writes them",
         "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
+        "api/rank.py": "skips the incremental refit after a held-out answer, so the evaluation "
+                       "stream cannot move the freshness clock the selector reads",
     }
     offenders = [
         rel for rel in _files_naming_the_held_out_stream(PACKAGE) if rel not in allowed

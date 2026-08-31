@@ -126,7 +126,7 @@ Two things happen on the way that are easy to miss:
 > M0    33/35 covered (2 waived)
 > M1    10/10 covered
 > M2    25/25 covered
-> M3    13/13 covered
+> M3    15/15 covered
   M4    18
   M5    10
   M6    12
@@ -140,7 +140,11 @@ gate closed, which is the rule this section describes rather than an exception t
 The two standing M0 waivers are backup rotation (no backup job exists yet) and the title
 card's no-bundle model line (unreachable until M5, when a locally acquired title can outlive a
 deactivated bundle). M1 closed the third — connector env-seeding, which was an implementation
-gap, not a test gap, and now has both.
+gap, not a test gap, and now has both. M3 re-read both survivors and both still hold, checked
+rather than assumed: `grep -rn "backup\|pg_dump"` over `ops/`, `docker-compose.yml` and the
+worker still finds only the two volume mounts, and `grep -rni "create role\|grant \|revoke "`
+over the migrations is still empty, so nothing can raise `insufficient_privilege`. **M3 adds
+no waiver.**
 
 M1's tenth row was added *during* the milestone, by the review: §3.1's sequence ends "and
 passkey registration is prompted afterwards", and the map — written from the spec at M0 — had
@@ -156,8 +160,8 @@ because the map going 25/25 should not quietly stand in for a scope decision som
 have made differently. The push *sender* remains M4's: there is no VAPID key, so §7.3's
 "undeliverable" fallback is still the only path that works end to end.
 
-M3 added four, found by reading §6.3 and §12's M3 row clause by clause against the map before
-writing any code. §12 lists "filters" among M3's contents and no row had one; §6.3's
+M3 added six — four before any code, two from the review. The first four came from reading
+§6.3 and §12's M3 row clause by clause against the map. §12 lists "filters" among M3's contents and no row had one; §6.3's
 neighbourhood badge ("A — between Heat and Prisoners") and its "learned cutpoints, **not
 percentile cuts**" had none either; and nothing asserted that a person can reach the comparison
 queue at all, though §6.3 names the control and §12's exit criterion rests on it. Unlike M2's
@@ -174,7 +178,29 @@ counts, and the evaluation — because §6.3's exploration arm picks the least-c
 a count that included held-out rows would have made the selector a reader of the evaluation
 stream in a way no test of the selector alone could see. The static test that enforces "only
 these files may read that stream" found two more read paths in `ledger/refit.py` the moment it
-was written.
+was written — and the review then found it blind to `ARM_HOLDOUT`, the name the package
+actually imports the value under.
+
+The review added the last two rows, and they are the ones worth reading twice, because both
+are requirements the map did not name *and* the code did not meet.
+`tonight-rank-board-survives-a-tier-set-change`: decision 11 keeps `tier_edit` rows across a
+change in K, so a level outside `0..K-1` is a state the board is guaranteed to meet — and the
+board indexed the cutpoint array by it, so any person who used decision 11's own control lost
+`/rank` to a 500 until they re-dropped every affected title. The fit already clamps that case
+and logs that it did; `test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count`
+performed exactly that setup and stopped one call short of the read. Three independent review
+lenses reproduced it, and the shipped e2e spec walks straight into it — so the gate was green
+over a surface that was down. `tonight-rank-queue-pair-is-single-use`: the comparison queue's
+sealed pair claimed §6.1's `card_token` property in as many words and did not have it, and
+§13's agreement figure counts rows, so a replay weighted one judgement N-fold in the only
+data admitted to evaluate the tier model.
+
+The lesson M3 leaves for M4 is narrower than "review harder": **a row whose `what` names a
+surface has to be tested through that surface.** Two of M3's worst findings — the crash and
+an entirely uncovered HTTP seam — were rows whose named tests exercised a domain function
+directly and never reached the layer the row is about. `backend/spielplan/api/rank.py` had no
+backend test of any kind until the review said so, and hard-coding `selection="boundary"` in
+it — proposal 120's exact bug — passed the entire suite.
 
 `pytest backend/tests/test_spec_coverage.py -s` prints the live version.
 

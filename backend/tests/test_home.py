@@ -1013,6 +1013,32 @@ async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):
     assert [t.tier for t in again if t.term == "obsession"] == ["projected"]
 
 
+async def _live_row_count(db) -> int:
+    """Rows in every public table, counted exactly.
+
+    This used to read `sum(n_tup_ins) FROM pg_stat_user_tables`, which is a *cumulative* view
+    fed asynchronously by the statistics reporter — so on a long suite run the second read
+    picks up earlier tests' inserts flushing late and the delta is nonzero with nothing having
+    been written in between. A proxy that drifts under load cannot answer "did this call write
+    anything"; `count(*)` over the live tables can, and it is the stronger assertion anyway.
+    """
+    return int(
+        await db.fetchval(
+            """
+            SELECT coalesce(sum(
+                (xpath(
+                    '/row/c/text()',
+                    query_to_xml(format('SELECT count(*) AS c FROM %I.%I', schemaname, tablename),
+                                 false, true, '')
+                ))[1]::text::bigint
+            ), 0)
+            FROM pg_tables WHERE schemaname = 'public'
+            """
+        )
+        or 0
+    )
+
+
 async def test_the_rail_is_ephemeral_and_reaches_no_table(world):
     """§6.7: "an **ephemeral** log (last ~15 events, **never persisted**)".
 
@@ -1025,16 +1051,12 @@ async def test_the_rail_is_ephemeral_and_reaches_no_table(world):
     Two assertions, because "we deleted the migration" is not the property. The property is that
     recording an event writes nothing anywhere and that the buffer does not survive the process.
     """
-    before = await world.db.fetchval(
-        "SELECT sum(n_tup_ins) FROM pg_stat_user_tables WHERE schemaname = 'public'"
-    )
+    before = await _live_row_count(world.db)
     rail.record(
         kind="ledger_refit", user_id=world.patrick,
         line=rail.refit_line("movie", n_titles=900, seconds=0.31, rho=0.42),
     )
-    after = await world.db.fetchval(
-        "SELECT sum(n_tup_ins) FROM pg_stat_user_tables WHERE schemaname = 'public'"
-    )
+    after = await _live_row_count(world.db)
     assert after == before, "recording a rail event inserted a row somewhere"
 
     assert await world.db.fetchval("SELECT to_regclass('public.model_event')") is None, (
