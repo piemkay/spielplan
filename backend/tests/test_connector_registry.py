@@ -94,10 +94,14 @@ async def test_seeding_is_idempotent(db, secrets_key):
     assert await db.fetchval("SELECT count(*) FROM connector_config") == 1
 
 
-async def test_a_secret_without_secrets_key_refuses_rather_than_falls_back(db):
+async def test_a_secret_without_secrets_key_refuses_rather_than_falls_back(db, no_secrets_key):
     """§2: "The app refuses to start secret-dependent connectors without SECRETS_KEY rather
     than falling back to SESSION_SECRET"."""
+    # `no_secrets_key` is what makes this a test rather than a coin flip: the refusal is checked
+    # against the process-wide `settings()`, which reads `.env`, and this constructor's
+    # arguments never reached it. See the fixture.
     cfg = Settings(
+        _env_file=None,
         database_url="postgresql://x/y", session_secret="not-a-secrets-key",
         jellyfin_url="http://jf", jellyfin_api_key="k",
     )

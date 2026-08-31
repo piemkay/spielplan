@@ -216,3 +216,24 @@ def secrets_key(monkeypatch):
     settings.cache_clear()
     yield "test-secrets-key-not-a-real-one"
     settings.cache_clear()
+
+
+@pytest.fixture
+def no_secrets_key(monkeypatch, tmp_path):
+    """The inverse of `secrets_key`, and it needs both halves to be honest.
+
+    §2's refusal is checked against the process-wide `settings()` on purpose (custody is a
+    process fact, not an argument — see `registry.seed_from_env`), and `Settings.model_config`
+    reads `.env` from the working directory. The README tells every developer to create one
+    with a real `SECRETS_KEY` in it, so "no key" was true in CI and false on every machine that
+    followed the setup instructions: the seed succeeded and the test failed for a reason that
+    had nothing to do with the rule. Unsetting the variable is not enough on its own, hence the
+    chdir into an empty directory.
+    """
+    from spielplan.core.config import settings
+
+    monkeypatch.delenv("SECRETS_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    settings.cache_clear()
+    yield
+    settings.cache_clear()
