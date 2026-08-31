@@ -31,6 +31,9 @@ inside M3, so a green local run now means what a green CI run means. Branch `m4`
 
 ## The collision — question 1, and nothing gets built until it is answered
 
+> **Answered: build to the rows.** See "Decisions taken with you" at the end. The argument is
+> kept as written because the reasoning is the record of why M4 builds v2.2's §6.2.
+
 **The 18 M4 rows already in the map are written against v2.2's rewritten §6.2, not against
 v2.1's.** Not incidentally, and not in the `why` field where it would be decoration — in the
 `spec` and `what` fields, which the hard rules say I may not edit to match what I build.
@@ -84,7 +87,7 @@ v2.1 sentences and survive either answer.
 row, §6.2, §4.2, §4.1 and §13 clause by clause against the map found **23 more**, added before
 any code. §12's M4 row names eight things; the existing 18 cover four of them.
 
-**M4 is 41 rows.** That is large — M2 was 25, M3 15 — and it is large because §12's M4 row is
+**M4 is 42 rows.** That is large — M2 was 25, M3 15 — and it is large because §12's M4 row is
 the longest contents list in the build order, and because Tonight is the first surface that is
 multi-user, real-time, push-carrying, guest-bearing and TV-projected all at once.
 
@@ -419,7 +422,7 @@ v2.1 never says joining stops, and asserting either behaviour would invent the r
   `duel` — the fit, the incremental fit, the selector's counts, the evaluation — are the
   checklist, and 54g's column lands in 0013 rather than in a later migration.
 - **M3's lesson, which is the one I am most likely to repeat:** *a row whose `what` names a
-  surface has to be tested through that surface.* Eleven of M4's 41 rows name a surface. Every
+  surface has to be tested through that surface.* Eleven of M4's 42 rows name a surface. Every
   one of them gets a test at the layer the row is about, not a domain-function test wearing its
   name.
 
@@ -503,3 +506,41 @@ own judgement, because each traces to a clause of §12's M4 row or of a section 
 If you want M4 smaller, the cleanest cuts — in the order I would make them — are the TV route
 (question 4), the push sender (question 2), and `tonight-rank-pool-never-shown-as-a-step`. Each
 is a re-milestoning of a row, not a waiver.
+
+---
+
+## Decisions taken with you
+
+Questions 1–5 and 7(a) went out with the plan; all came back on the recommendation.
+
+1. **Build to the rows** — v2.2's rewritten §6.2 (54a–54g) and decision 154. The adaptive
+   round, the hard cap of 20, the escape from pair 6, four answers with `NEITHER` a rejection
+   of both, three finalists plus a wildcard, and the blind approval ballot. No row's `spec` or
+   `what` is edited; where this document quotes "§6.2 step N", the step numbers are the
+   rewritten ones the rows already cite (solo is step 8, the result card step 7).
+2. **The push sender and §2's first-boot VAPID keypair are in scope.** Three rows
+   (`platform-vapid-keypair-first-boot`, `tonight-rank-push-join-is-best-effort`,
+   `data-rules-push-subscription-pruned-on-gone`) stay at M4. No new dependency:
+   `cryptography>=43` supplies P-256 ECDH, HKDF and AES-GCM for RFC 8291 and ES256 for the
+   VAPID JWT; `httpx` does the POST. `api/push.py::vapid_public_key()` stops reading
+   `os.environ` and starts reading the stored pair.
+3. **The session channel is a real WebSocket**, not polling and not SSE — §6.2 step 2's own
+   word and §1's diagram. `uvicorn[standard]` already carries `websockets` and FastAPI routes
+   them natively, so this too costs no dependency.
+4. **The TV route is in scope** and `tonight-rank-tv-kiosk-route` stays at M4.
+5. **D is `mean − min` of the seated members' §5.1 scores, computed per candidate**, guests
+   without a grid profile excluded — the prototype's `spread()`, which is the only formula any
+   artifact in this repo carries. `DNA_MODEL.md` is not vendored here, so proposal 63's
+   recovery is impossible and its own escalation clause fired. The threshold `D ≥ 0.20` and the
+   ~14.5% figure were measured against *some* formula, and the factor-of-two risk is real, so
+   this is filed as a **spec defect for v2.2**: §6.2 must state the formula beside the
+   threshold, and §6.5's Δ must be quoted identically or explicitly distinguished. The formula
+   lives behind one named function so a correction is one edit.
+7. **(a) The round owes an undo, narrowly.** A 42nd row, `tonight-rank-vote-undo`: retract only
+   your own most recent answer, only while your own round is still in progress. **M4 is 42
+   rows.** (b) and (c) — the straddle badge's tier and `tier_edit.via = 'explicit'` — stay open
+   and stay outside M4.
+
+Question 6 (exit-criterion scale) was not answered and is not blocking: unless you say
+otherwise before Phase 3, I will do what M3 did — measure the machinery end to end against the
+8-title fixture, print the numbers, and state plainly what a six-film pool cannot show.

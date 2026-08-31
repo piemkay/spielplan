@@ -1462,6 +1462,15 @@ why = "§6.7 gives the session_answer line as one of its four worked examples an
 tests = []
 
 [[requirement]]
+id = "tonight-rank-vote-undo"
+spec = "§6 preamble (\"undo everywhere\") + §6.2 step 4 (rewritten, 54c)"
+milestone = "M4"
+kind = "integration"
+what = "A participant can retract the answer they have just given while their own round is still in progress: the retracted answer stops contributing to the per-title tally and to that participant's tilt, answered_count returns to its prior value, and the round is served a pair again rather than advancing. The retraction reaches only that participant's own most recent answer — retracting another participant's answer, an answer that is not the most recent, or any answer once that participant's round has ended, is refused and writes nothing."
+why = "§6's preamble puts undo on every surface and the round is the one place a mis-tap is both easy and permanently unrecoverable: a hard cap of 20 pairs, a blind reveal, and no second pass over the same pair. Scoping it to your own last answer is what keeps it an undo rather than a way to edit a round after seeing where it went."
+tests = []
+
+[[requirement]]
 id = "map-taste-admin-cost-estimate-before-enabling"
 spec = "§6.6 Connectors spend guard + §8.4"
 milestone = "M5"
