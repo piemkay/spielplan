@@ -1205,7 +1205,13 @@ milestone = "M4"
 kind = "backend"
 what = "When answers diverge on the leading candidates or D ≥ 0.20, the contested facet is zeroed rather than averaged in scoring, and the third finalist slot holds the highest-scoring title on the opposite pole of that facet — replacing the third-ranked title, not appended alongside it."
 why = "Zeroing removes an influence and cannot by itself produce an alternative; the prototype printed 'one of each' over a plain top-3 that could land wholly on one pole."
-tests = []
+tests = [
+    "backend/tests/test_tonight_combine.py::test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole",
+    "backend/tests/test_tonight_combine.py::test_the_reserved_slot_replaces_the_third_rather_than_being_appended",
+    "backend/tests/test_tonight_combine.py::test_the_contested_axis_is_zeroed_rather_than_averaged",
+    "backend/tests/test_tonight_combine.py::test_the_contested_facet_needs_two_people_pulling_opposite_ways",
+    "backend/tests/test_tonight_combine.py::test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one",
+]
 
 [[requirement]]
 id = "tonight-rank-three-finalists-wildcard"
@@ -1214,7 +1220,13 @@ milestone = "M4"
 kind = "backend"
 what = "The round yields exactly three finalists — the top three by plain average of per-participant tonight scores — plus one wildcard from the exploratory slot, labelled as a step outside the usual and never counted among the three."
 why = "Plain averaging is measured undominated (dominance rules cost −0.012); roughly one exploratory slot in six."
-tests = []
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_slate_is_exactly_three_finalists_and_one_wildcard",
+    "backend/tests/test_tonight_combine.py::test_the_finalists_are_the_top_three_by_the_plain_average",
+    "backend/tests/test_tonight_combine.py::test_the_wildcard_is_a_step_outside_rather_than_the_fourth_best",
+    "backend/tests/test_tonight_combine.py::test_the_wildcard_carries_its_honest_label",
+    "backend/tests/test_tonight_combine.py::test_every_candidate_lands_in_exactly_one_slot",
+]
 
 [[requirement]]
 id = "tonight-rank-conflict-copy-bounds"
@@ -1223,7 +1235,13 @@ milestone = "M4"
 kind = "backend"
 what = "The conflict copy emitted for a surfaced split asserts only that one participant is likely to land below their usual; a candidate phrasing that predicts dislike or hate of the title never reaches the participant, the sanctioned string being emitted in its place."
 why = "D's measured power is AUC 0.610 for 'below your usual' (DNA_MODEL §5.3) — a hate prediction is not supported by the measurement, and this is a hard rule on the conflict-phrasing LLM task."
-tests = []
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_sanctioned_line_says_only_what_d_supports",
+    "backend/tests/test_tonight_combine.py::test_a_phrasing_that_predicts_a_feeling_never_reaches_the_participant",
+    "backend/tests/test_tonight_combine.py::test_a_phrasing_that_stays_within_the_measurement_is_passed_through",
+    "backend/tests/test_tonight_combine.py::test_an_absent_phrasing_falls_back_to_the_sanctioned_string",
+    "backend/tests/test_tonight_combine.py::test_the_headline_is_the_specs_own_sentence_and_never_a_models",
+]
 
 [[requirement]]
 id = "tonight-rank-winner-approval-share"
@@ -1497,7 +1515,13 @@ milestone = "M4"
 kind = "backend"
 what = "The threshold is inclusive and the silence below it is real: a session whose leading candidates draw no divergent answers surfaces the split at D = 0.20 and surfaces nothing at D = 0.199 — no split copy, no zeroed facet, no reserved third slot — and the unsurfaced session still yields three finalists ordered by the plain average; whether the split fired is recorded on the session so the rate behind the ~14.5% figure is recoverable."
 why = "\"Below that, decide silently\" is half the rule and the half an implementation drops: a surfacing that fires on every measurable disagreement turns the repair-explanation register into background noise, and §14 risk 6 needs the fire rate before anyone re-tunes the threshold."
-tests = []
+tests = [
+    "backend/tests/test_tonight_combine.py::test_d_is_the_mean_minus_the_minimum_of_the_seated_members",
+    "backend/tests/test_tonight_combine.py::test_the_threshold_is_inclusive_at_exactly_twenty_hundredths",
+    "backend/tests/test_tonight_combine.py::test_below_the_threshold_the_split_is_decided_silently",
+    "backend/tests/test_tonight_combine.py::test_the_fire_rate_is_recoverable_from_the_slate",
+    "backend/tests/test_tonight_combine.py::test_divergent_answers_surface_a_split_even_when_d_is_zero",
+]
 
 [[requirement]]
 id = "tonight-rank-match-line-terms-are-carried"
