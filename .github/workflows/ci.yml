@@ -27,7 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv pip install --system -r backend/pyproject.toml --extra dev
+      # A venv, not `--system`. The runner's own interpreter is externally managed (PEP 668) so
+      # uv refuses to install into it, and it is not writable by the runner's user anyway — the
+      # two failures arrived in that order. Putting the venv's bin on PATH keeps every command
+      # below unchanged.
+      - run: uv venv
+      - run: uv pip install -r backend/pyproject.toml --extra dev
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - run: ruff check .
       - run: ruff format --check . || true   # formatting is not enforced yet; the check is informational
 
@@ -40,7 +46,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: uv pip install --system -e "backend[dev]"
+      - run: uv venv
+      - run: uv pip install -e "backend[dev]"
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - run: npm --prefix backend/tests/pglite ci || npm --prefix backend/tests/pglite install
       - name: pytest (no database)
         run: python -m pytest backend/tests -q
@@ -63,7 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv pip install --system -e "backend[dev]"
+      - run: uv venv
+      - run: uv pip install -e "backend[dev]"
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: pytest (real Postgres 16)
         env:
           TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5432/spielplan_test
