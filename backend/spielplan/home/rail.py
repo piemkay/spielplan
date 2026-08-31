@@ -62,6 +62,9 @@ EVENT_KINDS: tuple[str, ...] = (
     "verdict",
     "duel",
     "tier_edit",
+    # §6.7's fourth worked example, `session_answer(p, pair 4) = A — pool-centred tilt`. The
+    # renderer below has existed since M2; M4 is the milestone that produces the write.
+    "session_answer",
     "not_seen",
     "undo",
     "ledger_refit",

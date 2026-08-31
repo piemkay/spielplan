@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal
@@ -44,6 +44,12 @@ from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10
 from spielplan.rank import tiers as rank_tiers  # noqa: E402 - decision 11's real rules
 from spielplan.rate import VERDICT_LABELS, balance, battle, queue  # noqa: E402
 from spielplan.rate import session as rate_session  # noqa: E402
+from spielplan.tonight import combine as tonight_combine  # noqa: E402 - the real slate
+from spielplan.tonight import pool as tonight_pool  # noqa: E402 - the real §6.2 step 3 pool
+from spielplan.tonight import rooms as tonight_rooms_mod  # noqa: E402 - the real room code
+from spielplan.tonight import round as tonight_round  # noqa: E402 - the real adaptive round
+from spielplan.tonight import solo as tonight_solo  # noqa: E402 - the real solo copy
+from spielplan.tonight import tilt as tonight_tilt  # noqa: E402 - the real centring lever
 from tests.fixtures import make_bundle as fx  # noqa: E402
 
 BUNDLE = ROOT / "data" / "devstub-bundle"
@@ -67,6 +73,8 @@ STATE: dict[str, Any] = {
     "dna": None,
     "scores": {},
     "tier_sets": {},
+    "tonight": {},
+    "tonight_seq": 0,
     "tier_edits": {},
     "rank_comparisons": {},
     "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
@@ -2552,6 +2560,607 @@ def rank_save_tier_set(
             len(v) for k, v in STATE["tier_edits"].items() if k[0] == user["id"]
         ),
     }
+
+
+# --- M4: the Tonight surface (§6.2 rewritten, §6.7, §13) ---------------------
+#
+# The pool's arithmetic, the round, the tilt, the combine and the ballot are the REAL modules —
+# `spielplan.tonight.{pool,round,tilt,combine,copy,solo,ballot}` are pure by contract, so the
+# harness runs them over its own invented scores and the front end is built against the shapes
+# the app actually returns. What is faked is only what needs a database: the session rows.
+#
+# Two things this harness cannot demonstrate, and `backend/spielplan/api/tonight.py` wins on
+# both, as this file's header says it does on everything: a second device (there is one process
+# and no WebSocket here, so the lobby does not go live), and the push invitation.
+
+TONIGHT_PAIR_SALT = "devstub/tonight/pair"
+
+
+def _tonight_axes() -> dict[str, dict[str, float]]:
+    return {
+        facet: dict(weights) for facet, (_l, _r, weights) in fx.AXES.items()
+    }
+
+
+def _tonight_dna() -> dict[int, dict[str, float]]:
+    """The fixture's two tiers, merged the way `dna.vectors_for` merges them: max, not sum, so
+    a term in both tiers is held once at the louder weight (§4.1 rule 1)."""
+    out: dict[int, dict[str, float]] = {}
+    for title_id, term, _facet, salience, _quote in fx.EXTRACTED:
+        weight = 0.60 + 0.40 * (salience / 3.0)
+        out.setdefault(title_id, {})[term] = max(out.setdefault(title_id, {}).get(term, 0.0), weight)
+    for title_id, term, _facet, weight, _via in fx.PROJECTED:
+        out.setdefault(title_id, {})[term] = max(
+            out.setdefault(title_id, {}).get(term, 0.0), 0.30 * float(weight)
+        )
+    return out
+
+
+def _tonight_candidates(seats: list[Any], kind: str, budget: int, rewatches: bool):
+    """§6.2 step 3's pool, over the harness's invented scores."""
+    catalog = {t["id"]: t for t in _catalog() if t["kind"] == kind}
+    per_seat = {
+        seat.participant_id: _scores(seat.user_id, kind) for seat in seats if seat.is_member
+    }
+    out = []
+    for title_id, title in catalog.items():
+        scores = {p: s[title_id] for p, s in per_seat.items() if title_id in s}
+        if len(scores) < len([s for s in seats if s.is_member]):
+            continue
+        if not rewatches and all(
+            STATE["seen"].get((seat.user_id, title_id)) == "seen"
+            for seat in seats if seat.is_member
+        ):
+            continue
+        out.append(
+            tonight_pool.Candidate(
+                title_id=title_id, kind=kind, name=title["name"], year=title.get("year"),
+                runtime_min=title.get("runtime_min"), poster_path=title.get("poster_path"),
+                scores=scores,
+            )
+        )
+    return tonight_pool.order(tonight_pool.with_budget(out, budget_min=budget))
+
+
+def _tonight_room(session_id: int) -> dict[str, Any]:
+    room = STATE["tonight"].get(session_id)
+    if room is None:
+        raise HTTPException(404, {"reason": "no_room", "message": "no such session"})
+    return room
+
+
+def _tonight_lobby(room: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session_id": room["session_id"],
+        "room_code": room["room_code"],
+        "state": room["state"],
+        "kind": room["kind"],
+        "runtime_budget_min": room["runtime_budget_min"],
+        "include_rewatches": room["include_rewatches"],
+        "started_at": room["started_at"],
+        "host": room["host"],
+        "seats": [dict(s) for s in room["seats"]],
+    }
+
+
+class TonightOpenBody(BaseModel):
+    kind: str = "movie"
+    runtime_budget_min: int = 130
+    include_rewatches: bool = False
+    guests: int = 0
+
+
+class TonightJoinBody(BaseModel):
+    session_id: int | None = None
+    room_code: str | None = None
+
+
+class TonightAnswerBody(BaseModel):
+    card_token: str
+    answer: str
+    latency_ms: int | None = None
+
+
+class TonightBallotBody(BaseModel):
+    approved: list[int] = []
+
+
+class TonightSoloBody(BaseModel):
+    kind: str = "movie"
+    runtime_budget_min: int = 130
+    include_rewatches: bool = False
+    offset: int = 0
+    answers: list[dict[str, Any]] = []
+
+
+@app.get("/api/tonight/rooms")
+def tonight_rooms(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    return {
+        "rooms": [
+            {
+                "session_id": r["session_id"], "room_code": r["room_code"], "state": r["state"],
+                "host": r["host"]["name"], "started_at": r["started_at"], "kind": r["kind"],
+                "runtime_budget_min": r["runtime_budget_min"],
+                "skips_seen": not r["include_rewatches"],
+                "seated": len(r["seats"]),
+                "viewer_seated": any(s["user_id"] == user["id"] for s in r["seats"]),
+                "joinable": r["state"] == "open"
+                and not any(s["user_id"] == user["id"] for s in r["seats"]),
+            }
+            for r in STATE["tonight"].values()
+            if r["ended_at"] is None
+        ]
+    }
+
+
+@app.post("/api/tonight/sessions", status_code=201)
+def tonight_open(
+    body: TonightOpenBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    session_id = STATE["tonight_seq"] = STATE["tonight_seq"] + 1
+    seat_id = session_id * 100
+    room = {
+        "session_id": session_id,
+        "room_code": tonight_rooms_mod.make_code(random.Random(session_id)),
+        "state": "open",
+        "kind": body.kind,
+        "runtime_budget_min": body.runtime_budget_min,
+        "include_rewatches": body.include_rewatches,
+        "started_at": datetime.now(UTC).isoformat(),
+        "ended_at": None,
+        "host": {"user_id": user["id"], "name": user["name"]},
+        "seats": [
+            {"participant_id": seat_id, "seat": 1, "role": "host", "user_id": user["id"],
+             "name": user["name"], "avatar": user.get("avatar"), "answered_count": 0,
+             "ended_by": None}
+        ],
+        "answers": {},
+        "tilts": {},
+        "slate": None,
+        "ballots": {},
+    }
+    for i in range(body.guests):
+        room["seats"].append({
+            "participant_id": seat_id + 1 + i, "seat": 2 + i, "role": "guest", "user_id": None,
+            "name": f"Guest {i + 1}", "avatar": None, "answered_count": 0, "ended_by": None,
+        })
+    STATE["tonight"][session_id] = room
+    return {"session_id": session_id, "room_code": room["room_code"],
+            "lobby": _tonight_lobby(room)}
+
+
+@app.post("/api/tonight/sessions/join")
+def tonight_join(
+    body: TonightJoinBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    room = None
+    if body.session_id is not None:
+        room = _tonight_room(body.session_id)
+    else:
+        for candidate in STATE["tonight"].values():
+            if candidate["room_code"].upper() == (body.room_code or "").upper().strip():
+                room = candidate
+    if room is None:
+        raise HTTPException(404, {"reason": "no_room", "message": "no live room has that code"})
+    existing = next((s for s in room["seats"] if s["user_id"] == user["id"]), None)
+    if existing is None:
+        existing = {
+            "participant_id": room["session_id"] * 100 + len(room["seats"]),
+            "seat": len(room["seats"]) + 1, "role": "member", "user_id": user["id"],
+            "name": user["name"], "avatar": user.get("avatar"), "answered_count": 0,
+            "ended_by": None,
+        }
+        room["seats"].append(existing)
+    return {"session_id": room["session_id"], **existing, "lobby": _tonight_lobby(room)}
+
+
+@app.get("/api/tonight/sessions/{session_id}")
+def tonight_lobby_route(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    room = _tonight_room(session_id)
+    return {
+        **_tonight_lobby(room),
+        "progress": [
+            {"participant_id": s["participant_id"], "seat": s["seat"], "name": s["name"],
+             "answered": s["answered_count"], "expected": tonight_round.CAP_PAIRS,
+             "finished": s["ended_by"] is not None, "ended_by": s["ended_by"]}
+            for s in room["seats"]
+        ],
+        "ballot": {"submitted": len(room["ballots"]), "seated": len(room["seats"]),
+                   "revealed": len(room["ballots"]) >= len(room["seats"])},
+        "me": next((s for s in room["seats"] if s["user_id"] == user["id"]), None),
+    }
+
+
+@app.post("/api/tonight/sessions/{session_id}/start")
+def tonight_start(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = _tonight_room(session_id)
+    seats = [
+        tonight_pool.Seat(participant_id=s["participant_id"], user_id=s["user_id"],
+                          is_member=s["role"] != "guest")
+        for s in room["seats"]
+    ]
+    candidates = _tonight_candidates(
+        seats, room["kind"], room["runtime_budget_min"], room["include_rewatches"]
+    )
+    if len(candidates) < 2:
+        raise HTTPException(409, {"reason": "empty_pool",
+                                  "message": "nothing in the library fits tonight"})
+    room["pool"] = candidates
+    room["state"] = "voting"
+    return {"session_id": session_id, "state": room["state"]}
+
+
+def _tonight_seat(room: dict[str, Any], participant_id: int) -> dict[str, Any]:
+    seat = next((s for s in room["seats"] if s["participant_id"] == participant_id), None)
+    if seat is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    return seat
+
+
+def _tonight_round_for(room: dict[str, Any], seat: dict[str, Any]):
+    pool_scores = (
+        {c.title_id: c.scores[seat["participant_id"]] for c in room["pool"]}
+        if seat["role"] != "guest"
+        else {c.title_id: c.group_score for c in room["pool"]}
+    )
+    answers = room["answers"].get(seat["participant_id"], [])
+    return tonight_round.replay(
+        pool_scores, answers, z=Hyperparams().straddle_z,
+        has_profile=seat["role"] != "guest",
+        axes=tonight_combine.axis_positions(_tonight_dna(), _tonight_axes()),
+        escaped=seat["ended_by"] == tonight_round.ESCAPE,
+    )
+
+
+def _tonight_state(room: dict[str, Any], seat: dict[str, Any]) -> dict[str, Any]:
+    played = _tonight_round_for(room, seat)
+    by_id = {c.title_id: c for c in room["pool"]}
+    pair = None if played.stop_reason else played.next_pair
+    token = None
+    if pair is not None:
+        token = URLSafeSerializer(TONIGHT_PAIR_SALT).dumps(
+            {"p": seat["participant_id"], "a": pair.title_a, "b": pair.title_b,
+             "s": pair.selection, "n": seat["answered_count"] + 1}
+        )
+
+    def side(title_id: int) -> dict[str, Any] | None:
+        c = by_id.get(title_id)
+        if c is None:
+            return None
+        return {"title_id": c.title_id, "name": c.name, "year": c.year,
+                "runtime_min": c.runtime_min, "poster_path": c.poster_path,
+                "fit_line": c.fit_line, "over_budget_min": c.over_budget_min}
+
+    return {
+        "participant_id": seat["participant_id"],
+        "answered": seat["answered_count"],
+        "cap": tonight_round.CAP_PAIRS,
+        "ended_by": seat["ended_by"],
+        "stop_reason": played.stop_reason,
+        "escape_available": tonight_round.escape_available(seat["answered_count"]),
+        "card_token": token,
+        "pair": None if pair is None else {
+            "a": side(pair.title_a), "b": side(pair.title_b),
+            "selection": pair.selection, "reason": pair.reason,
+        },
+    }
+
+
+@app.get("/api/tonight/seats/{participant_id}/round")
+def tonight_round_state(
+    participant_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = next(
+        (r for r in STATE["tonight"].values()
+         if any(s["participant_id"] == participant_id for s in r["seats"])), None
+    )
+    if room is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    return _tonight_state(room, _tonight_seat(room, participant_id))
+
+
+@app.post("/api/tonight/seats/{participant_id}/answer")
+def tonight_answer(
+    participant_id: int, body: TonightAnswerBody,
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    room = next(
+        (r for r in STATE["tonight"].values()
+         if any(s["participant_id"] == participant_id for s in r["seats"])), None
+    )
+    if room is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    seat = _tonight_seat(room, participant_id)
+    try:
+        sealed = URLSafeSerializer(TONIGHT_PAIR_SALT).loads(body.card_token)
+    except BadSignature as exc:
+        raise HTTPException(409, {"reason": "stale_pair"}) from exc
+    if sealed["n"] != seat["answered_count"] + 1:
+        raise HTTPException(409, {"reason": "stale_pair"})
+    answers = room["answers"].setdefault(participant_id, [])
+    answers.append(tonight_round.Answered(
+        seq=sealed["n"], title_a=int(sealed["a"]), title_b=int(sealed["b"]),
+        answer=body.answer, selection=str(sealed["s"]),
+    ))
+    seat["answered_count"] += 1
+    played = _tonight_round_for(room, seat)
+    if played.stop_reason:
+        seat["ended_by"] = played.stop_reason
+    line = rail.session_answer_line(str(participant_id), sealed["n"], body.answer)
+    _rail_record("session_answer", line, user_id=user["id"])
+    payload = {**_tonight_state(room, seat),
+               "wrote": {"seq": sealed["n"], "stop_reason": played.stop_reason},
+               "rail": rail.recent(user_id=user["id"], limit=5)}
+    if all(s["ended_by"] for s in room["seats"]):
+        _tonight_combine(room)
+    return rail.redact(payload, show_model=_show_model(user))
+
+
+@app.post("/api/tonight/seats/{participant_id}/undo")
+def tonight_undo(
+    participant_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = next(
+        (r for r in STATE["tonight"].values()
+         if any(s["participant_id"] == participant_id for s in r["seats"])), None
+    )
+    if room is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    seat = _tonight_seat(room, participant_id)
+    answers = room["answers"].get(participant_id, [])
+    if not answers or seat["ended_by"]:
+        raise HTTPException(409, {"reason": "nothing_to_undo"})
+    gone = answers.pop()
+    seat["answered_count"] -= 1
+    return {**_tonight_state(room, seat), "retracted_seq": gone.seq}
+
+
+@app.post("/api/tonight/seats/{participant_id}/escape")
+def tonight_escape(
+    participant_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = next(
+        (r for r in STATE["tonight"].values()
+         if any(s["participant_id"] == participant_id for s in r["seats"])), None
+    )
+    if room is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    seat = _tonight_seat(room, participant_id)
+    if not tonight_round.escape_available(seat["answered_count"]):
+        raise HTTPException(409, {"reason": "too_early",
+                                  "message": "the escape opens at pair 6"})
+    seat["ended_by"] = tonight_round.ESCAPE
+    if all(s["ended_by"] for s in room["seats"]):
+        _tonight_combine(room)
+    return {**_tonight_state(room, seat), "ended_by": seat["ended_by"]}
+
+
+def _tonight_combine(room: dict[str, Any]) -> None:
+    dna = _tonight_dna()
+    axes = _tonight_axes()
+    frame = tonight_tilt.frame(dna)
+    per_participant: dict[int, dict[int, float]] = {}
+    tilts = []
+    for seat in room["seats"]:
+        played = _tonight_round_for(room, seat)
+        tilt: dict[str, float] = {}
+        for a in room["answers"].get(seat["participant_id"], []):
+            if a.selection == tonight_round.SELECTION_HOLDOUT:
+                continue
+            a_dna, b_dna = dna.get(a.title_a, {}), dna.get(a.title_b, {})
+            if a.answer == tonight_round.A:
+                tilt = tonight_tilt.observe(tilt, chosen=a_dna, rejected=b_dna, frame=frame)
+            elif a.answer == tonight_round.B:
+                tilt = tonight_tilt.observe(tilt, chosen=b_dna, rejected=a_dna, frame=frame)
+            else:
+                tilt = tonight_tilt.observe_level(
+                    tilt, first=a_dna, second=b_dna, frame=frame,
+                    toward=a.answer == tonight_round.EITHER,
+                )
+        if seat["role"] != "guest":
+            tilts.append(tilt)
+        per_participant[seat["participant_id"]] = {
+            t: b.mu + tonight_tilt.adjustment(tilt, dna.get(t, {}), frame)
+            for t, b in played.beliefs.items()
+        }
+    room["slate"] = tonight_combine.combine(
+        per_participant=per_participant,
+        member_ledger={c.title_id: list(c.scores.values()) for c in room["pool"]},
+        tilts=tilts, axes=axes, dna=dna,
+    )
+    room["state"] = "ballot"
+
+
+@app.get("/api/tonight/sessions/{session_id}/ballot")
+def tonight_ballot_card(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = _tonight_room(session_id)
+    slate = room["slate"]
+    by_id = {c.title_id: c for c in room.get("pool", [])}
+    titles = [] if slate is None else slate.ballot_titles
+    return {
+        "session_id": session_id,
+        "slate": [
+            {"title_id": t,
+             "slot": "wildcard" if slate and t == slate.wildcard else "finalist",
+             "name": by_id[t].name, "year": by_id[t].year,
+             "runtime_min": by_id[t].runtime_min, "poster_path": by_id[t].poster_path}
+            for t in titles if t in by_id
+        ],
+        "submitted": len(room["ballots"]),
+        "seated": len(room["seats"]),
+        "revealed": len(room["ballots"]) >= len(room["seats"]),
+    }
+
+
+@app.post("/api/tonight/seats/{participant_id}/ballot")
+def tonight_submit_ballot(
+    participant_id: int, body: TonightBallotBody,
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = next(
+        (r for r in STATE["tonight"].values()
+         if any(s["participant_id"] == participant_id for s in r["seats"])), None
+    )
+    if room is None:
+        raise HTTPException(404, {"reason": "no_seat", "message": "no such seat"})
+    if room["state"] != "ballot":
+        raise HTTPException(409, {"reason": "not_ballot"})
+    room["ballots"][participant_id] = list(body.approved)
+    revealed = len(room["ballots"]) >= len(room["seats"])
+    if revealed:
+        room["state"] = "resolved"
+        room["ended_at"] = datetime.now(UTC).isoformat()
+    return {"submitted": len(room["ballots"]), "seated": len(room["seats"]),
+            "revealed": revealed}
+
+
+@app.get("/api/tonight/sessions/{session_id}/result")
+def tonight_result(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = _tonight_room(session_id)
+    if len(room["ballots"]) < len(room["seats"]):
+        raise HTTPException(409, {"reason": "still_voting",
+                                  "message": "approvals stay hidden until everyone has submitted"})
+    slate = room["slate"]
+    by_id = {c.title_id: c for c in room["pool"]}
+    approvals = {t: 0 for t in slate.ballot_titles}
+    for approved in room["ballots"].values():
+        for title_id in approved:
+            approvals[title_id] = approvals.get(title_id, 0) + 1
+    ordered = sorted(
+        slate.ballot_titles,
+        key=lambda t: (-approvals.get(t, 0), -dict(slate.ranked).get(t, 0.0), t),
+    )
+    winner_id = ordered[0]
+    seated = len(room["seats"])
+
+    def card(title_id: int, slot: str) -> dict[str, Any]:
+        c = by_id[title_id]
+        return {
+            "title_id": title_id, "slot": slot, "name": c.name, "year": c.year,
+            "runtime_min": c.runtime_min, "poster_path": c.poster_path,
+            "approvals": approvals.get(title_id, 0),
+            "fit_line": c.fit_line,
+            "match_lines": [
+                {"name": s["name"], "line": f"pulls {s['name']} with the pool's own terms",
+                 "terms": [], "sign": "pull"}
+                for s in room["seats"]
+            ],
+            "conflict": slate.conflict if slot == "finalist" else None,
+            "play_url": None,
+        }
+
+    return {
+        "session_id": session_id,
+        "beat": "VOTES REVEALED TOGETHER",
+        "winner": card(winner_id, "finalist"),
+        "approval_share": approvals.get(winner_id, 0) / seated if seated else 0.0,
+        "participants": seated,
+        "unanimous": approvals.get(winner_id, 0) == seated,
+        "finalists": [card(t, "finalist") for t in slate.finalists],
+        "wildcard": None if slate.wildcard is None else card(slate.wildcard, "wildcard"),
+        "runners_up": [
+            card(t, "runner_up") for t, _ in slate.ranked
+            if t not in slate.ballot_titles and t in by_id
+        ][:4],
+    }
+
+
+@app.get("/api/tonight/sessions/{session_id}/evaluation")
+def tonight_evaluation(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    _me(spielplan_session)
+    room = _tonight_room(session_id)
+    held = [
+        a for answers in room["answers"].values() for a in answers
+        if a.selection == tonight_round.SELECTION_HOLDOUT
+    ]
+    counted: dict[str, int] = {r: 0 for r in tonight_round.END_REASONS}
+    for seat in room["seats"]:
+        if seat["ended_by"]:
+            counted[seat["ended_by"]] = counted.get(seat["ended_by"], 0) + 1
+    return {
+        "session_id": session_id,
+        "approval_share": None,
+        "participants": len(room["seats"]),
+        "shortlist_agreement": {"pairs": len(held), "decisive": 0, "agreed": 0, "rate": None},
+        "ended_by": counted,
+    }
+
+
+@app.post("/api/tonight/solo")
+def tonight_solo_route(
+    body: TonightSoloBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    seat = tonight_pool.Seat(participant_id=user["id"], user_id=user["id"], is_member=True)
+    candidates = _tonight_candidates(
+        [seat], body.kind, body.runtime_budget_min, body.include_rewatches
+    )
+    provenance = tonight_solo.provenance(
+        budget_min=body.runtime_budget_min, answers=len(body.answers),
+        include_rewatches=body.include_rewatches,
+    )
+    if not candidates:
+        return {"picks": [], "wildcard": None, "provenance": provenance,
+                "empty": f"Nothing in the library fits {body.runtime_budget_min} minutes "
+                         "tonight — widen the budget or include rewatches.",
+                "pair": None, "answered": 0, "sharpened": False}
+    dna = _tonight_dna()
+    order = tonight_combine.ranked({c.title_id: c.group_score for c in candidates})
+    by_id = {c.title_id: c for c in candidates}
+    span = max(len(order) - 1, 1)
+    start = (body.offset * tonight_solo.PICKS) % span if body.offset else 0
+    chosen = [t for t, _ in order[start:start + tonight_solo.PICKS]]
+    if len(chosen) < tonight_solo.PICKS:
+        chosen += [t for t, _ in order if t not in chosen][: tonight_solo.PICKS - len(chosen)]
+    wildcard = tonight_combine.wildcard_from(order, chosen, dna)
+
+    def card(title_id: int, *, stretch: bool) -> dict[str, Any]:
+        c = by_id[title_id]
+        terms = sorted(dna.get(title_id, {}).items(), key=lambda kv: -kv[1])[:2]
+        return {
+            "title_id": title_id, "name": c.name, "year": c.year,
+            "runtime_min": c.runtime_min, "poster_path": c.poster_path,
+            "fit_line": c.fit_line, "over_budget_min": c.over_budget_min,
+            "why": tonight_solo.STRETCH_WHY if stretch
+            else tonight_solo.why_line([t for t, _ in terms]) if terms
+            else "top of your ledger tonight",
+            "terms": [{"term": t, "tier": "extracted"} for t, _ in terms],
+        }
+
+    return {
+        "picks": [card(t, stretch=False) for t in chosen],
+        "wildcard": None if wildcard is None else card(wildcard, stretch=True),
+        "provenance": provenance,
+        "empty": None,
+        "answered": len(body.answers),
+        "sharpened": bool(body.answers),
+        "pair": None,
+        "stop_reason": None,
+        "tilt": {},
+    }
+
 
 if __name__ == "__main__":
     import uvicorn

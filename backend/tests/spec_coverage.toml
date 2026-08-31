@@ -1127,7 +1127,14 @@ milestone = "M4"
 kind = "integration"
 what = "session_ballot rows are unreadable through the API by any participant until every seated participant has submitted; on the last submission all approvals become readable together, and session_outcome.approval_share equals approvals-for-the-winner over participants, with ties on approval count broken by group score."
 why = "the blind approval ballot is the only place approval share exists, and it is the number §13 evaluates Tonight on."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_the_result_is_refused_until_every_seat_has_submitted",
+    "backend/tests/test_tonight_routes.py::test_a_ballot_naming_a_title_off_the_slate_is_refused",
+    "backend/tests/test_tonight_integration.py::test_approvals_stay_hidden_until_every_participant_has_submitted",
+    "backend/tests/test_tonight_integration.py::test_the_winner_is_the_most_approved_with_ties_broken_by_group_score",
+    "backend/tests/test_tonight_integration.py::test_the_approval_share_is_approvals_over_participants_and_is_persisted",
+    "backend/tests/test_schema_contracts.py::test_a_ballot_is_one_row_per_participant_and_title",
+]
 
 [[requirement]]
 id = "data-rules-session-ended-by"
@@ -1188,7 +1195,13 @@ milestone = "M4"
 kind = "integration"
 what = "A participant who has finished receives other participants' answered/expected counts over the session channel and, at every point before the reveal, no title, pair or answer content belonging to them."
 why = "'Blind by construction' means the payload cannot carry the answers, not that the UI declines to draw them."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_the_waiting_payload_carries_counts_and_no_answer",
+    "backend/tests/test_tonight_channel.py::test_the_progress_frame_carries_counts_and_never_an_answer",
+    "backend/tests/test_tonight_channel.py::test_a_session_frame_reaches_only_the_room_it_is_about",
+    "backend/tests/test_tonight_channel.py::test_the_reveal_frame_carries_no_result",
+    "backend/tests/test_tonight_integration.py::test_the_waiting_payload_carries_counts_and_never_an_answer",
+]
 
 [[requirement]]
 id = "tonight-rank-four-answers"
@@ -1305,7 +1318,12 @@ milestone = "M4"
 kind = "integration"
 what = "Each participant's approvals are written to session_ballot on submit, and no other client can read any participant's approvals until the last participant has submitted, at which point all are released together."
 why = "The ballot is the only place approval exists, and simultaneity is the blind round's whole social property."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_the_result_is_refused_until_every_seat_has_submitted",
+    "backend/tests/test_tonight_integration.py::test_approvals_stay_hidden_until_every_participant_has_submitted",
+    "backend/tests/test_tonight_integration.py::test_an_empty_ballot_is_an_answer_rather_than_a_silence",
+    "backend/tests/test_tonight_integration.py::test_resolving_twice_returns_the_same_outcome",
+]
 
 [[requirement]]
 id = "tonight-rank-result-card-inventory"
@@ -1396,7 +1414,12 @@ milestone = "M4"
 kind = "integration"
 what = "No payload a participant can obtain before the reveal — lobby, open-rooms entry, round state, pair, waiting channel — carries the candidate pool, its membership or its group ranking, and no route returns them; a participant replaying every request they are entitled to can reconstruct only the pairs they were served."
 why = "The v2.1 redesign deleted the visible shortlist on purpose: a pool rendered before the votes anchors the votes it exists to collect, which is the same anchoring §6.1 forbids by withholding the prediction until after the tap."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_no_payload_before_the_reveal_carries_the_pool",
+    "backend/tests/test_tonight_routes.py::test_the_waiting_payload_carries_counts_and_no_answer",
+    "backend/tests/test_tonight_integration.py::test_the_lobby_carries_no_candidate_and_no_ranking",
+    "backend/tests/test_tonight_integration.py::test_the_sharpen_pair_carries_no_score",
+]
 
 [[requirement]]
 id = "tonight-rank-join-channels-equivalent"
@@ -1405,7 +1428,17 @@ milestone = "M4"
 kind = "integration"
 what = "A member's seat is decided by who they are and not by how they arrived: joining by room code, from the open-rooms list, or by following a join link resolves to the same session and the same participant state, and a second arrival by the same member through a different channel re-attaches to the existing seat rather than creating a second one. Every session carries a room code readable from its own API surface; no two concurrently active sessions hold the same code; and a code matching no active session is refused rather than opening a session or attaching the caller to an ended one."
 why = "'All equivalent' is a claim about what a join produces, not a list of affordances — a channel that seats a member twice changes the participant count every average, every tally and §13's approval share are computed over."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_joining_by_code_and_by_id_reach_the_same_seat",
+    "backend/tests/test_tonight_routes.py::test_the_room_code_is_readable_from_the_sessions_own_surface",
+    "backend/tests/test_tonight_routes.py::test_a_code_that_names_no_live_room_is_refused",
+    "backend/tests/test_tonight_integration.py::test_every_join_channel_lands_on_the_same_seat",
+    "backend/tests/test_tonight_integration.py::test_a_code_matching_no_live_room_is_refused",
+    "backend/tests/test_tonight_integration.py::test_a_room_code_is_unique_among_live_rooms_and_reusable_after",
+    "backend/tests/test_tonight_integration.py::test_a_room_code_is_readable_across_a_room",
+    "backend/tests/test_tonight_integration.py::test_joining_a_started_room_is_refused_rather_than_silently_ignored",
+    "backend/tests/test_schema_contracts.py::test_one_member_cannot_hold_two_seats_in_one_session",
+]
 
 [[requirement]]
 id = "tonight-rank-open-rooms-discovery"
@@ -1441,7 +1474,14 @@ milestone = "M4"
 kind = "integration"
 what = "First boot generates exactly one web-push VAPID keypair and stores the private half AEAD-encrypted under the DEK carrying a key_id, like every other secret; a restart reuses the stored pair instead of generating a second, the public half is what /api/push/state hands the browser, and no route returns the private half."
 why = "§2 puts the keypair on the same footing as every other connector secret, and a pair regenerated on restart silently invalidates every subscription registered against the old one — the household stops receiving pushes with nothing failing anywhere."
-tests = []
+tests = [
+    "backend/tests/test_push_sender.py::test_first_boot_generates_one_keypair_and_a_restart_reuses_it",
+    "backend/tests/test_push_sender.py::test_the_private_half_is_sealed_under_the_dek_and_carries_its_key_id",
+    "backend/tests/test_push_sender.py::test_the_loaded_pair_signs_for_the_public_half_it_hands_the_browser",
+    "backend/tests/test_push_sender.py::test_a_boot_without_a_secrets_key_stores_no_keypair_and_does_not_raise",
+    "backend/tests/test_push_sender.py::test_no_route_returns_the_private_half",
+    "backend/tests/test_push.py::test_the_state_route_reports_no_application_server_key_until_one_is_configured",
+]
 
 [[requirement]]
 id = "tonight-rank-push-join-is-best-effort"
@@ -1450,7 +1490,17 @@ milestone = "M4"
 kind = "integration"
 what = "Opening a session sends a web-push invitation to each invited member's own push_subscription rows and to no other member's, and an armed §7.3 finish prompt is delivered the same way; a member with no subscription, or whose send fails, is still reachable by room code, open-rooms list and in-app banner, and no send outcome prevents a session being created, joined or started."
 why = "§7.3 dates the push half of the finish prompt to 'the M4 stack' and §6's preamble makes push best-effort with an in-app equivalent for every prompt — a lobby that blocks on a delivery receipt breaks on exactly the iPhone the constraint was written about."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_opening_a_session_invites_the_other_member_and_nobody_else",
+    "backend/tests/test_tonight_routes.py::test_a_session_opens_even_when_every_push_fails",
+    "backend/tests/test_tonight_routes.py::test_a_member_with_no_phone_is_still_reachable",
+    "backend/tests/test_tonight_routes.py::test_an_armed_finish_prompt_is_pushed_to_that_member_alone",
+    "backend/tests/test_tonight_routes.py::test_a_failed_finish_prompt_leaves_the_banner_path_intact",
+    "backend/tests/test_push_sender.py::test_a_failing_send_never_raises_into_the_caller",
+    "backend/tests/test_push_sender.py::test_a_household_with_no_keypair_sends_nothing_and_raises_nothing",
+    "backend/tests/test_push_sender.py::test_only_that_members_devices_are_sent_to_or_pruned",
+    "backend/tests/test_push_sender.py::test_a_member_with_no_device_is_a_silent_no_op",
+]
 
 [[requirement]]
 id = "data-rules-push-subscription-pruned-on-gone"
@@ -1459,7 +1509,13 @@ milestone = "M4"
 kind = "integration"
 what = "A send the push service answers 404 or 410 deletes exactly that push_subscription row and no other device of the same member; any other failure — timeout, 5xx, 429 — leaves the row in place, and a successful send stamps last_seen_ok."
 why = "§4.2 names those two codes because they alone mean the endpoint is permanently gone: pruning on the others deletes a live phone over a transient outage, and pruning on neither leaves dead endpoints retried forever."
-tests = []
+tests = [
+    "backend/tests/test_push_sender.py::test_a_404_prunes_exactly_that_device",
+    "backend/tests/test_push_sender.py::test_a_410_prunes_exactly_that_device",
+    "backend/tests/test_push_sender.py::test_a_500_a_429_and_a_timeout_each_leave_the_subscription_in_place",
+    "backend/tests/test_push_sender.py::test_only_that_members_devices_are_sent_to_or_pruned",
+    "backend/tests/test_push_sender.py::test_a_delivered_push_stamps_last_seen_ok",
+]
 
 [[requirement]]
 id = "tonight-rank-tilt-centred-on-the-pool-mean"
@@ -1636,7 +1692,10 @@ milestone = "M4"
 kind = "integration"
 what = "With the per-user show-the-model toggle on, each answered pair emits exactly one ephemeral model-log line naming the participant, the pair index, the answer with A, B, EITHER and NEITHER all distinguishable, and that the tilt was centred on the candidate-pool mean; nothing is persisted, with the toggle off no line is produced, and during the blind round a participant's line reaches only that participant."
 why = "§6.7 gives the session_answer line as one of its four worked examples and calls the rail the instrument that narrates every model write; the vote round is the largest write path M4 adds and the one place an unscoped rail would break the blind property outright."
-tests = []
+tests = [
+    "backend/tests/test_tonight_routes.py::test_the_model_log_line_is_gated_by_the_per_user_toggle",
+    "backend/tests/test_tonight_routes.py::test_one_participants_rail_never_carries_anothers_answer",
+]
 
 [[requirement]]
 id = "tonight-rank-vote-undo"
