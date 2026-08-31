@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M2"
+current_milestone = "M3"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -893,6 +893,48 @@ milestone = "M3"
 kind = "integration"
 what = "A comparison-queue answer stores its selection arm on the duel row (boundary-targeted / exploration / uniform-random held-out) and the model-log line names that same arm; a held-out pair is never stored or narrated as boundary-targeted."
 why = "The 10% uniform-random stream is the only data allowed to evaluate the tier model, so it must be identifiable end to end; the shipped log line asserts boundary-targeting unconditionally."
+tests = []
+
+# Four rows below were added when M3 was opened, by reading §6.3 and §12's M3 row clause by
+# clause against the map. The map is a contract, not a ceiling: §12 lists "filters" among M3's
+# contents and no row had one, §6.3's neighbourhood badge and its "learned cutpoints, not
+# percentile cuts" had no row either, and nothing asserted that a person can reach the
+# comparison queue at all. Same routine that added M1's tenth row and M2's two.
+
+[[requirement]]
+id = "tonight-rank-board-filters"
+spec = "§6.3 Filters (with §4.1 rules 1, 2, 5)"
+milestone = "M3"
+kind = "integration"
+what = "The Rank board filters on genre, decade, runtime and seen-state, and on a DNA predicate written either bare (`cosy`) or facet-qualified (`mood.cosy`); the predicate matches rows of both DNA tiers and every survivor still reports which tier matched it; no filter applies a threshold to salience, confidence or n_sources; each filter narrows on its own, combining them intersects, and none of them suspends the kind partition."
+why = "§12's M3 row names \"filters\" as M3 contents and §6.3 names six dimensions, two of which (runtime, DNA facet/term) the M0 catalog filter does not have. `dna_tag` stores the bare term, so the qualified form is built at query time; §4.1 rule 2 forbids the confidence cut the obvious implementation reaches for, and rule 1 forbids answering the predicate from a union that has lost the tier."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-neighbourhood-badge"
+spec = "§6.3 badges"
+milestone = "M3"
+kind = "backend"
+what = "A title's badge names its tier and its neighbourhood — the titles immediately above and below it in the same tier, in the ledger order the board renders — and a title alone in its tier, or at either end of it, names only the neighbours that exist rather than inventing one or naming itself."
+why = "§6.3: \"Badge shows tier + neighbourhood (\\\"A — between Heat and Prisoners\\\")\". A neighbourhood computed over an ordering other than the one on screen is unverifiable, and the ends of a tier are exactly where an off-by-one produces a badge that names the title it is attached to."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-cutpoints-learned-not-percentile"
+spec = "§6.3 tiers + §5.2 arm 3"
+milestone = "M3"
+kind = "backend"
+what = "The tier a title displays comes from the user's fitted cutpoints and not from percentile cuts of the current board: at K = 7 with no observations the implied level shares are §6.3's measured shape (F 3 / D 7 / C 15 / B 25 / A 25 / A+ 17 / S 8 %), and after observations that pile the population into two tiers the boundaries stay where the fit put them instead of being re-derived so the shares match the measured shape again."
+why = "§6.3: \"learned cutpoints, not percentile cuts — initialised from DNA_MODEL §4.5's measured quantile shape …, then learned.\" The shape is an initialisation and a prior mean; a board that re-derives it on every render is a percentile cut wearing the spec's words, and the difference is only visible once a real board is lopsided."
+tests = []
+
+[[requirement]]
+id = "tonight-rank-queue-answer-sharpens"
+spec = "§6.3 comparison queue + §12 M3 contents"
+milestone = "M3"
+kind = "e2e"
+what = "The Rank board offers \"sharpen my ranking\"; opening it serves a pair, answering the pair writes exactly one duel with context='tier_queue' carrying its selection arm, and the board the person returns to has re-rendered from the updated Ledger."
+why = "§12's M3 row lists the comparison queue among M3's contents and §6.3 names the control by that phrase. The selection policy and the stored arm each have a row; nothing asserted that a person can reach the queue and that answering it moves the board — which is what §12's exit criterion, a tier list both users endorse, is made of."
 tests = []
 
 [[requirement]]
