@@ -127,7 +127,7 @@ Two things happen on the way that are easy to miss:
 > M1    10/10 covered
 > M2    25/25 covered
 > M3    15/15 covered
-  M4    18
+> M4    42/42 covered
   M5    10
   M6    12
   M7     1
@@ -144,7 +144,10 @@ gap, not a test gap, and now has both. M3 re-read both survivors and both still 
 rather than assumed: `grep -rn "backup\|pg_dump"` over `ops/`, `docker-compose.yml` and the
 worker still finds only the two volume mounts, and `grep -rni "create role\|grant \|revoke "`
 over the migrations is still empty, so nothing can raise `insufficient_privilege`. **M3 adds
-no waiver.**
+no waiver.** M4 re-read both a third time and both still hold — the same two greps, the same
+two answers — and **M4 adds no waiver either**. Everything M4 left open is a decision, a spec
+defect or a named defect, and those live in `docs/milestones/M4-open-points.md` rather than in
+a row that claims to be covered.
 
 M1's tenth row was added *during* the milestone, by the review: §3.1's sequence ends "and
 passkey registration is prompted afterwards", and the map — written from the spec at M0 — had
@@ -195,6 +198,28 @@ over a surface that was down. `tonight-rank-queue-pair-is-single-use`: the compa
 sealed pair claimed §6.1's `card_token` property in as many words and did not have it, and
 §13's agreement figure counts rows, so a replay weighted one judgement N-fold in the only
 data admitted to evaluate the tier model.
+
+M4 inherited 18 rows and closed 42. Twenty-four were added before any code, from reading
+§6.2 clause by clause: the rewritten step 4 alone (54b/54c) makes claims about the hold-out
+stream, the stopping rule, the escape, the guest prior and the four answers that the inherited
+rows named in one line between them. None of them widened the milestone; they are clauses of a
+section the map already claimed.
+
+The collision worth recording is that all 18 inherited rows are written against §6.2 **as
+rewritten by owner decision 2026-08-29** (v2.2 §54a–54g, decision 154) — an adaptive round with
+four answers, three finalists and a blind approval ballot — while v2.1's own §6.2 still
+describes the visible shortlist and the mood question. Fourteen of the eighteen are untestable
+against v2.1, and v2.1's step 6 asks for an approval share it supplies no instrument to
+produce. Built to the rows, on the owner's call, and that is what `docs/milestones/M4-plan.md`
+records.
+
+M4's review found what M3's lesson predicted and one class M3 did not name: **four tests that
+could not fail**. An assertion whose body sat under `if x is None`; a uniqueness test comparing
+two draws from a space thousands wide; a selection test scoring the served pair with the very
+function the selector minimises; a blindness test asserting a screen did not contain a string
+no template draws. Each passed on an implementation with the rule removed. They are listed with
+their rewrites in `M4-open-points.md` §5, because the shape is what to look for — a test that
+reuses the implementation's own answer as its ground truth is a test of nothing.
 
 The lesson M3 leaves for M4 is narrower than "review harder": **a row whose `what` names a
 surface has to be tested through that surface.** Two of M3's worst findings — the crash and
