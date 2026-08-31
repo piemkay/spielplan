@@ -544,3 +544,113 @@ Questions 1–5 and 7(a) went out with the plan; all came back on the recommenda
 Question 6 (exit-criterion scale) was not answered and is not blocking: unless you say
 otherwise before Phase 3, I will do what M3 did — measure the machinery end to end against the
 8-title fixture, print the numbers, and state plainly what a six-film pool cannot show.
+
+## Decisions made without you
+
+The ten ambiguities above were resolved as proposed. These came up during the build and were
+too small to stop on; each is the smallest choice consistent with the spec's register.
+
+1. **The posterior is a Gaussian per candidate, moved by the two-player Gaussian win/loss
+   update.** §6.2 names "a posterior interval" and no distribution. This is the same
+   win/loss/tie family §5.2's Davidson arm already uses, it is closed-form and microseconds
+   (§6 budgets "<1.5 s per battle"), and it produces the *variance* that "still straddles the
+   boundary" is a statement about — a point estimate has no interval to straddle with.
+2. **`either` and `neither` are scored against a virtual anchor at the pool's median.** A purely
+   pairwise model cannot express decision 154: between two candidates, "both good" and "both
+   bad" are the same tie. The anchor makes "lifts both" a term in the same likelihood as A and
+   B rather than an ad-hoc nudge with an invented magnitude, and it is what lets `neither`
+   eliminate two candidates at once.
+3. **The tilt is standardised on the pool, not merely centred.** For a difference, additive
+   centring cancels exactly — `(a − m) − (b − m) = a − b` — so §6.2's wording is a literal no-op
+   on every A/B answer and cannot be the lever §0 row 4 measured at +0.088 AUC. Centring on the
+   pool mean **and scaling by the pool's own spread** is the reading under which every word of
+   §6.2 holds and the coverage row's requirement (the same answer tilts differently in a
+   different pool) is met. Filed as a spec defect.
+4. **A round that runs out of distinct pairs ends, and records `cap`.** §6.2 describes the happy
+   path and never a pool small enough to exhaust its own pairs — but a household library can be,
+   and selection refuses to re-serve an answered pair (M3-open-points §3.1), so the deadlock is
+   reachable. It is the same terminal state as the cap, and 54g fixes `ended_by` at three
+   values, so a fourth was not invented. Filed as a spec defect.
+5. **The pool is snapshot into `session.context` at start.** That is how §6.2 step 6's "nothing
+   re-ranks within the evening" becomes a property of the data rather than a thing to remember:
+   a nightly fit landing mid-evening, or somebody marking a title seen in the other room, moves
+   nothing.
+6. **Joining closes when the host starts.** §6.2 never says when joining stops being possible.
+   The smallest rule that keeps a round coherent is that the participant set the pool was built
+   for is fixed once pairs are being served; a late arrival joins the next session and is told
+   so. It is also what the host's own lobby copy already claims.
+7. **A guest seat is opened only after every earlier seat has ended, and one at a time.** §6.2
+   step 2's "hand-the-phone, sequential turns", made a refusal rather than a convention — the
+   alternative is a guest's first tap landing in the middle of the host's round.
+8. **One cookie may write to its own seat, or to a *guest* seat in a session it hosts, and
+   nothing else.** Hand-the-phone puts several participants behind one session by design; any
+   other pairing is one member casting another's vote, and it would land in §13's approval
+   share.
+9. **D is computed on the leading candidate, from the members' §5.1 scores rather than their
+   tonight scores.** Proposal 63: "D is computed per candidate, not per night — the ~14.5%
+   figure is the share of nights in which the *winning* candidate crosses the threshold." And
+   it is *Ledger* divergence: a D computed from tonight scores would move with the round's own
+   answers and stop being the quantity 0.20 was calibrated on.
+10. **A split with nothing on the other pole is not surfaced at all.** Zeroing an axis cannot
+    produce an alternative, and §0's rule is that "a surfaced split must never ship bare" — a
+    library with no counterweight is a fact about the library, not a reason to promise one.
+11. **The wildcard is drawn by DNA distance from the finalists' centroid, not by rank.** §6.4's
+    exploratory slot is "regions of DNA space … *unvisited*"; a wildcard drawn by rank is the
+    fourth-best film and not a step outside anything.
+12. **Solo's sharpen round is stateless.** §6.2 step 8 forbids the session row, which forbids
+    `session_participant` and therefore `session_answer` — so the client carries its own answers
+    and the server replays them. Nothing the spec asks for is lost (no blindness to protect with
+    one participant, no ballot), but §14 risk 6's "log every vote" cannot reach solo. Filed as a
+    spec defect rather than resolved by inventing the row §6.2 forbids.
+13. **The session channel is one-way.** A client that wants to write uses REST, where the seat
+    check lives; the socket carries no answer, no vote and no result, and every frame is a nudge
+    to re-read — so a dropped frame costs a stale lobby and never a wrong one.
+14. **`/tv` polls rather than subscribing.** A kiosk has no session cookie, so it cannot
+    authenticate the channel; a screen a few seconds stale is a screen, not a bug. It is also
+    read-only: a control on a shared television with nobody signed in at it would be an
+    anonymous write, and §6.2 gives it none.
+15. **`rail.EVENT_KINDS` gains `session_answer`.** §6.7 has given `session_answer(p, pair 4) = A
+    — pool-centred tilt` as one of its four worked examples since M2, and `session_answer_line`
+    has existed that long with nothing able to record under it. The line is filed against the
+    *answering* user, never the seat's owner.
+16. **`Subscriber` hashes by identity.** Two devices can hold indistinguishable field values and
+    are still two subscribers; value equality would collapse them and drop a phone's frames.
+17. **The runtime slider is 60–200 in steps of 5, default 130** — proposal 57's numbers, used
+    because §6.2 gives none and a slider needs bounds. Flagged as proposal-sourced.
+18. **`test_auth_session_does_not_squat_on_the_tonight_session_name` is inverted, not loosened.**
+    Its M0 form asserted `"session" not in public` because the name was reserved and unclaimed;
+    it failed the day 0013 landed — the same routine `05-milestones.spec.js` runs — and now
+    asserts the stronger property: both tables exist and the distinguishing columns are on the
+    right one.
+
+### Added by the adversarial pass on the push sender
+
+The sender was built and then reviewed by two independent lenses before it was committed. One
+verified `_encrypt` against RFC 8291 Appendix A's published test vector — byte-identical, which
+settles the ECDH direction, the `key_info` operand order, both info strings, the header layout
+and the padding delimiter by known-answer rather than by a round-trip through the same code.
+What the lenses then found is what the tests could not see, and all of it is fixed:
+
+19. **Per-message freshness had no guard.** The code was right, but freezing the ephemeral key
+    and the record salt left all nineteen tests green — and hoisting `ec.generate_private_key`
+    out of the per-device loop is a correct-looking optimisation that reuses one AES-GCM
+    (key, nonce) pair forever. That is a two-time pad. Now asserted across two sends and across
+    two devices within one send.
+20. **A payload past the record size was sent anyway.** Past 4079 bytes the record violates
+    RFC 8188 §2, and a push service that does not enforce the limit answers 201 — so the send
+    reported success, stamped `last_seen_ok`, and the phone dropped it silently. Refused before
+    the wire, and the refusal is not a prune.
+21. **`sub` could be a plain-`http:` URI.** RFC 8292 sanctions `mailto:` or `https:`; §2 puts
+    this app behind one plain-HTTP port, and APNs — the service §6's preamble makes push exist
+    for — 403s what it does not accept, invisibly. `vapid_subject` derives a `mailto:` when
+    `PUBLIC_URL` is not https.
+22. **A compressed `p256dh` was accepted** and produced a body the browser cannot read,
+    reachable because `/api/push/subscribe` takes any 256-character string.
+23. **The at-rest assertion could not fail.** `seal` stores base64url *text* and the test looked
+    for the raw scalar, which never appears in that JSON encrypted or not — proven against a
+    no-op cipher. Two more assertions were true by construction (a record-size comparison of
+    `4096 >= 120`, and an expiry window a one-second token would satisfy).
+24. **§7.3's push had no implementation.** `sync/playback.py` armed the prompt and the sender had
+    exactly one caller. `notify()` now runs after the prompt is armed and discards its outcome,
+    which is what keeps the two independent — the banner still waits on next open whatever the
+    network did.
