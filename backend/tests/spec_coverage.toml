@@ -821,7 +821,18 @@ milestone = "M3"
 kind = "integration"
 what = "One comparison in ten is drawn uniformly at random from the eligible pool and stored on the `duel` row with a `uniform_holdout` selection discriminator; those rows are excluded both from the boundary-targeted selector's inputs and from every model-tuning/refit read path, the evaluation read path admits only those rows, and no held-out pair is recorded or narrated as boundary-targeted."
 why = "Adaptively-selected pairs inflate reliability (measured effect); §13 calls the guard non-negotiable and it is the only data admissible for evaluating the tier model."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_a_held_out_pair_is_stored_with_its_own_discriminator",
+    "backend/tests/test_rank_integration.py::test_the_held_out_stream_never_reaches_the_fit",
+    "backend/tests/test_rank_integration.py::test_the_selector_never_counts_a_held_out_comparison",
+    "backend/tests/test_rank_integration.py::test_the_evaluation_read_path_admits_only_held_out_rows",
+    "backend/tests/test_rank_integration.py::test_the_evaluation_reports_nothing_rather_than_zero_when_nothing_is_held_out",
+    "backend/tests/test_rank_integration.py::test_a_tie_is_counted_and_not_scored",
+    "backend/tests/test_rank_integration.py::test_only_the_evaluation_module_reads_the_held_out_stream",
+    "backend/tests/test_ledger_observations.py::test_the_uniform_random_held_out_duels_never_reach_the_fit",
+    "backend/tests/test_rank_queue.py::test_the_held_out_arm_never_receives_a_fallback",
+    "backend/tests/test_rank_queue.py::test_the_held_out_arm_is_uniform_over_pairs_not_over_strata",
+]
 
 [[requirement]]
 id = "data-rules-cutpoints-tier-set-per-user"
@@ -830,7 +841,14 @@ milestone = "M3"
 kind = "integration"
 what = "ledger_cutpoints is keyed (user_id, kind) and enforces length(boundaries) = length(tier_set) − 1; saving a new tier set for one user re-initialises that user's boundaries to the equal-mass quantiles of their own fitted s for the new K, queues a refit for that user alone, and leaves their tier_edit rows and every other user's cutpoints untouched."
 why = "decision 11: the tier set is a per-user preference; a change in K invalidates boundaries but never observations, and the authored F3/D7/C15/B25/A25/A+17/S8 shape is defined only for K=7."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_ledger_cutpoints_is_keyed_by_user_and_kind",
+    "backend/tests/test_rank_integration.py::test_a_boundary_list_that_does_not_match_the_tier_set_is_refused",
+    "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_reinitialises_to_equal_mass_quantiles",
+    "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_queues_a_refit_for_that_user_alone",
+    "backend/tests/test_rank_integration.py::test_one_persons_tier_set_never_touches_anothers",
+    "backend/tests/test_migrations.py::test_a_tier_set_change_has_somewhere_to_record_the_refit_it_owes",
+]
 
 [[requirement]]
 id = "tonight-rank-straddle-equals-eligible"
@@ -875,7 +893,15 @@ milestone = "M3"
 kind = "integration"
 what = "Dropping a title into a tier writes exactly one tier_edit with via='drag_drop'; dropping it between two titles writes that edit plus exactly two duels against the two new neighbours with context='tier_insert' and margin NULL."
 why = "Drag-and-drop is data, not override — the rearrange is an observation into the Ledger, and the two neighbour duels are what carry the placement."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_dropping_into_a_tier_writes_one_tier_edit_and_no_duel",
+    "backend/tests/test_rank_integration.py::test_dropping_between_two_titles_writes_the_edit_and_two_margin_less_duels",
+    "backend/tests/test_rank_integration.py::test_the_neighbour_duels_carry_the_placement_and_not_just_the_geometry",
+    "backend/tests/test_rank_integration.py::test_a_drop_at_the_end_of_a_tier_writes_the_one_duel_that_exists",
+    "backend/tests/test_rank_integration.py::test_a_drop_is_one_transaction",
+    "backend/tests/test_rank_integration.py::test_the_board_renders_the_drop_and_does_not_snap_it_back",
+    "backend/tests/test_rank_integration.py::test_tap_to_tier_writes_exactly_what_the_pointer_path_writes",
+]
 
 [[requirement]]
 id = "tonight-rank-tension-not-snapback"
@@ -909,7 +935,15 @@ milestone = "M3"
 kind = "integration"
 what = "Saving a new tier set for one user discards only that user's ledger_cutpoints boundaries, re-initialises them to equal-mass quantiles of that user's fitted s distribution for the new K, queues a refit for that user alone, leaves their tier_edit rows intact, and leaves every other user's cutpoints unchanged."
 why = "Decision 11: per user. §4.2 fixes length = |tier set| − 1, so a change in K necessarily invalidates the boundaries; the authored F3/D7/C15/B25/A25/A+17/S8 shape is defined only for K = 7."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_reinitialises_to_equal_mass_quantiles",
+    "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_queues_a_refit_for_that_user_alone",
+    "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_leaves_the_tier_edit_rows_intact",
+    "backend/tests/test_rank_integration.py::test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count",
+    "backend/tests/test_rank_integration.py::test_a_relabel_at_the_same_size_keeps_the_learned_boundaries",
+    "backend/tests/test_rank_integration.py::test_one_persons_tier_set_never_touches_anothers",
+    "backend/tests/test_rank_integration.py::test_a_tier_set_the_board_could_not_render_is_refused",
+]
 
 [[requirement]]
 id = "map-taste-admin-log-names-selection-arm"
@@ -918,7 +952,12 @@ milestone = "M3"
 kind = "integration"
 what = "A comparison-queue answer stores its selection arm on the duel row (boundary-targeted / exploration / uniform-random held-out) and the model-log line names that same arm; a held-out pair is never stored or narrated as boundary-targeted."
 why = "The 10% uniform-random stream is the only data allowed to evaluate the tier model, so it must be identifiable end to end; the shipped log line asserts boundary-targeting unconditionally."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_a_queue_answer_stores_its_arm_and_the_log_line_names_the_same_one",
+    "backend/tests/test_rank_integration.py::test_a_held_out_pair_is_never_narrated_as_boundary_targeted",
+    "backend/tests/test_rank_integration.py::test_an_arm_with_no_phrase_fails_loudly_rather_than_borrowing_one",
+    "backend/tests/test_rank_queue.py::test_a_held_out_pair_is_never_labelled_boundary_targeted",
+]
 
 # Four rows below were added when M3 was opened, by reading §6.3 and §12's M3 row clause by
 # clause against the map. The map is a contract, not a ceiling: §12 lists "filters" among M3's
@@ -933,7 +972,16 @@ milestone = "M3"
 kind = "integration"
 what = "The Rank board filters on genre, decade, runtime and seen-state, and on a DNA predicate written either bare (`cosy`) or facet-qualified (`mood.cosy`); the predicate matches rows of both DNA tiers and every survivor still reports which tier matched it; no filter applies a threshold to salience, confidence or n_sources; each filter narrows on its own, combining them intersects, and none of them suspends the kind partition."
 why = "§12's M3 row names \"filters\" as M3 contents and §6.3 names six dimensions, two of which (runtime, DNA facet/term) the M0 catalog filter does not have. `dna_tag` stores the bare term, so the qualified form is built at query time; §4.1 rule 2 forbids the confidence cut the obvious implementation reaches for, and rule 1 forbids answering the predicate from a union that has lost the tier."
-tests = []
+tests = [
+    "backend/tests/test_rank_integration.py::test_each_rank_filter_narrows_the_board_on_its_own",
+    "backend/tests/test_rank_integration.py::test_combining_rank_filters_intersects",
+    "backend/tests/test_rank_integration.py::test_a_dna_predicate_matches_bare_and_facet_qualified_alike",
+    "backend/tests/test_rank_integration.py::test_a_dna_predicate_reaches_both_tiers_and_keeps_them_apart",
+    "backend/tests/test_rank_integration.py::test_no_rank_filter_puts_a_threshold_on_a_weight",
+    "backend/tests/test_rank_integration.py::test_no_filter_suspends_the_kind_partition",
+    "backend/tests/test_rank_integration.py::test_the_queue_pool_is_the_whole_board_and_not_the_filtered_view",
+    "backend/tests/test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter",
+]
 
 [[requirement]]
 id = "tonight-rank-neighbourhood-badge"

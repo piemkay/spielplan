@@ -238,6 +238,30 @@ def tier_edit_line(title_name: str, tier: str, *, via: str, neighbour_duels: int
     return line
 
 
+ARM_PHRASES: dict[str, str] = {
+    "boundary": "boundary-targeted",
+    "exploration": "exploration",
+    "uniform_holdout": "uniform-random, held out",
+    "random": "random",
+}
+
+
+def duel_line(a: str, b: str, outcome: str, *, context: str, selection: str) -> str:
+    """`duel(Heat vs Drive) = A → Davidson arm, tier_queue · boundary-targeted` (§6.7, §6.3).
+
+    The **arm is not a constant in this string**. The prototype's tier-queue handler pushed
+    "boundary-targeted pair (70/20/10 policy)" unconditionally, so on every tenth pair the log
+    asserted boundary-targeting about the one stream §13 forbids selecting adaptively — a log
+    that misreports the evaluation stream defeats the guard it is supposed to make legible
+    (proposal 120, proposal 146). `ARM_PHRASES` is exhaustive over `duel.selection`'s CHECK, so
+    a new arm added to the column without a phrase here fails loudly rather than rendering as
+    whatever the previous branch happened to say.
+    """
+    if selection not in ARM_PHRASES:
+        raise RailError(f"unknown selection arm {selection!r} — add it to ARM_PHRASES")
+    return f"duel({a} vs {b}) = {outcome} → Davidson arm, {context} · {ARM_PHRASES[selection]}"
+
+
 def session_answer_line(participant: str, pair: int, answer: str) -> str:
     """`session_answer(p, pair 4) = A — pool-centred tilt` (§6.7, §6.2 step 5's centring lever)."""
     return f"session_answer({participant}, pair {pair}) = {answer} — pool-centred tilt"

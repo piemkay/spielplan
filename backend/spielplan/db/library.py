@@ -17,6 +17,7 @@ Three rules are enforced here rather than trusted to callers:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import asyncpg
@@ -48,6 +49,9 @@ def _filters(
     seen: SeenFilter = "any",
     person_id: int | None = None,
     owned_only: bool = False,
+    runtime_max: int | None = None,
+    runtime_min: int | None = None,
+    dna: str | None = None,
 ) -> tuple[str, list[Any]]:
     """The catalog's WHERE clause and its arguments, over alias `t`.
 
@@ -81,6 +85,33 @@ def _filters(
         where.append(
             f"EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id AND c.person_id = {arg(person_id)})"
         )
+    # §6.3's two filters the §6.0 catalog does not have. Runtime is a bound on `runtime_min`
+    # (the column is minutes, the parameter is the ceiling the person asked for) and a NULL
+    # runtime is excluded rather than kept: "under 110 minutes" is a claim, and a title whose
+    # length nobody knows cannot make it.
+    if runtime_max is not None:
+        where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min <= {arg(runtime_max)}")
+    if runtime_min is not None:
+        where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min >= {arg(runtime_min)}")
+    if dna:
+        # §6.3: "DNA facet/term predicates ("show only `mood.cosy`")". Two rules meet here.
+        #
+        # Rule 1 — the two tiers are never merged. `dna_tagged` (0004) is the ONE sanctioned
+        # union and exists precisely so the `tier` discriminator cannot be dropped; a predicate
+        # written against `dna_tag` alone would silently answer "no" for the 11,324 projected
+        # titles, and one written against a fresh UNION would lose the tier.
+        #
+        # Rule 2 — no threshold on `confidence`, `salience` or `n_sources`. The obvious
+        # implementation of "only good matches" is a confidence cut, and a 0.5 cut deletes 44%
+        # of the extracted tier. Membership is membership; the weights rank, they never filter.
+        #
+        # The qualified form is built here rather than stored: a `dna_tag` row holds the bare
+        # term and its facet in separate columns, so `mood.cosy` exists only at query time.
+        needle = arg(dna.strip().lower())
+        where.append(
+            "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id AND ("
+            f"lower(dt.term) = {needle} OR lower(dt.facet || '.' || dt.term) = {needle}))"
+        )
     if owned_only:
         where.append("t.is_owned")
     if seen != "any" and user_id is not None:
@@ -98,6 +129,83 @@ def _filters(
                 f"AND ut.user_id = {uid} AND ut.state = 'seen')"
             )
     return " AND ".join(where), args
+
+
+@dataclass(frozen=True)
+class RankFilters:
+    """§6.3's six filter dimensions, minus `kind`, which the board already partitions by.
+
+    A frozen record rather than eight keyword arguments threaded through three call sites: the
+    board, its count and the queue's pool all have to agree about what the person asked for,
+    and the M0 bug this module's `_filters` was extracted to fix was two of those disagreeing.
+    """
+
+    q: str | None = None
+    genre: str | None = None
+    decade: int | None = None
+    runtime_max: int | None = None
+    runtime_min: int | None = None
+    seen: SeenFilter = "any"
+    dna: str | None = None
+
+    def active(self) -> dict[str, Any]:
+        """What is switched on, for the "no match" state to list back (proposal 80)."""
+        return {
+            name: value
+            for name, value in vars(self).items()
+            if value not in (None, "", "any")
+        }
+
+
+def rank_filters(
+    *, kind: str, user_id: int, filters: RankFilters | None = None
+) -> tuple[str, list[Any]]:
+    """§6.3's board predicate, over alias `t`, through the *same* builder the catalog uses.
+
+    One builder, deliberately. §6.0's count line and its listing drifted apart at M0 because
+    each had its own WHERE; a Rank-specific copy would re-open that class of bug against a
+    surface where the number on screen is a tier list rather than a count.
+    """
+    f = filters or RankFilters()
+    return _filters(
+        kinds=[kind],
+        user_id=user_id,
+        q=f.q,
+        genre=f.genre,
+        decade=f.decade,
+        seen=f.seen,
+        runtime_max=f.runtime_max,
+        runtime_min=f.runtime_min,
+        dna=f.dna,
+    )
+
+
+async def dna_tiers_for(
+    conn: asyncpg.Connection, *, title_ids: Sequence[int], dna: str
+) -> dict[int, list[str]]:
+    """Which DNA tier(s) matched each survivor of a `dna` predicate.
+
+    §4.1 rule 1: the two tiers "must stay distinguishable", and a filter that returns a title
+    without saying whether the match was quote-verified or inferred has merged them in the only
+    place it matters — the answer a person reads.
+    """
+    if not title_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT dt.title_id, dt.tier
+        FROM dna_tagged dt
+        WHERE dt.title_id = ANY($1::int[])
+          AND (lower(dt.term) = $2 OR lower(dt.facet || '.' || dt.term) = $2)
+        ORDER BY dt.title_id, dt.tier
+        """,
+        [int(t) for t in title_ids],
+        dna.strip().lower(),
+    )
+    out: dict[int, list[str]] = {}
+    for row in rows:
+        out.setdefault(int(row["title_id"]), []).append(str(row["tier"]))
+    return out
 
 
 async def list_titles(
