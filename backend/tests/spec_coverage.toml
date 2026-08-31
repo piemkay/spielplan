@@ -839,7 +839,13 @@ milestone = "M3"
 kind = "backend"
 what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, and the threshold constant is read from ledger_hyperparams.json rather than hard-coded."
 why = "One predicate doing both jobs; the prototype badged at σ>0.13 and queued at σ>0.09, so a title at σ 0.11 was queue-eligible and unbadged, and an S-tier title rendered 'S/S'."
-tests = []
+tests = [
+    "backend/tests/test_rank_board.py::test_the_badged_set_and_the_queue_pool_are_the_same_set",
+    "backend/tests/test_rank_board.py::test_moving_the_straddle_threshold_moves_both_sets_together",
+    "backend/tests/test_rank_board.py::test_the_top_and_bottom_tiers_never_straddle_into_themselves",
+    "backend/tests/test_rank_board.py::test_a_straddle_badge_never_repeats_the_titles_own_tier",
+    "backend/tests/test_ledger_model.py::test_a_posterior_that_reaches_the_next_tier_is_flagged",
+]
 
 [[requirement]]
 id = "tonight-rank-queue-selection-mix"
@@ -848,7 +854,19 @@ milestone = "M3"
 kind = "backend"
 what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, and the held-out 10% feeds neither the selection rule nor any tier-model quality figure."
 why = "The adaptive-inflation guard: adaptively selected pairs inflate measured reliability, so the evaluation stream cannot be the selection stream."
-tests = []
+tests = [
+    "backend/tests/test_rank_queue.py::test_a_long_draw_is_seventy_twenty_ten",
+    "backend/tests/test_rank_queue.py::test_the_shares_are_the_specs_own_numbers",
+    "backend/tests/test_rank_queue.py::test_a_held_out_pair_is_never_labelled_boundary_targeted",
+    "backend/tests/test_rank_queue.py::test_the_held_out_arm_is_uniform_over_pairs_not_over_strata",
+    "backend/tests/test_rank_queue.py::test_the_held_out_arm_never_receives_a_fallback",
+    "backend/tests/test_rank_queue.py::test_a_pool_with_no_straddler_falls_back_to_exploration_and_says_so",
+    "backend/tests/test_rank_queue.py::test_a_boundary_pair_crosses_the_cutpoint_the_title_straddles",
+    "backend/tests/test_rank_queue.py::test_exploration_reaches_the_least_compared_title",
+    "backend/tests/test_rank_queue.py::test_exploration_rotates_as_comparisons_accrue",
+    "backend/tests/test_rank_queue.py::test_a_pair_is_never_a_title_against_itself",
+    "backend/tests/test_rank_queue.py::test_the_selector_reads_no_held_out_comparison",
+]
 
 [[requirement]]
 id = "tonight-rank-drop-writes-observations"
@@ -866,7 +884,14 @@ milestone = "M3"
 kind = "backend"
 what = "After the incremental refit, a title whose assigned tier falls outside its posterior's 80% credible interval stays in the assigned tier and carries a tension badge naming both tiers; a one-level disagreement inside the interval produces neither a badge nor a move."
 why = "'The user is a data source, not a tyrant, and vice versa' — snapping back is exactly the failure the rule forbids, and the 80% CI is the operational reading of 'disagrees strongly'."
-tests = []
+tests = [
+    "backend/tests/test_rank_board.py::test_a_tier_outside_the_eighty_percent_interval_is_tension",
+    "backend/tests/test_rank_board.py::test_a_one_level_disagreement_inside_the_interval_is_not_tension",
+    "backend/tests/test_rank_board.py::test_a_tension_badge_names_both_tiers",
+    "backend/tests/test_rank_board.py::test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in",
+    "backend/tests/test_rank_board.py::test_an_untouched_title_is_placed_by_the_model",
+    "backend/tests/test_rank_board.py::test_the_tension_threshold_comes_from_the_bundle",
+]
 
 [[requirement]]
 id = "tonight-rank-tap-to-tier-and-cancel"
@@ -917,7 +942,14 @@ milestone = "M3"
 kind = "backend"
 what = "A title's badge names its tier and its neighbourhood — the titles immediately above and below it in the same tier, in the ledger order the board renders — and a title alone in its tier, or at either end of it, names only the neighbours that exist rather than inventing one or naming itself."
 why = "§6.3: \"Badge shows tier + neighbourhood (\\\"A — between Heat and Prisoners\\\")\". A neighbourhood computed over an ordering other than the one on screen is unverifiable, and the ends of a tier are exactly where an off-by-one produces a badge that names the title it is attached to."
-tests = []
+tests = [
+    "backend/tests/test_rank_board.py::test_the_badge_names_the_two_neighbours_inside_its_own_tier",
+    "backend/tests/test_rank_board.py::test_the_ends_of_a_tier_name_only_the_neighbour_that_exists",
+    "backend/tests/test_rank_board.py::test_a_title_alone_in_its_tier_claims_no_neighbours",
+    "backend/tests/test_rank_board.py::test_the_badge_never_names_the_title_it_is_attached_to",
+    "backend/tests/test_rank_board.py::test_a_neighbour_is_never_borrowed_from_another_tier",
+    "backend/tests/test_rank_board.py::test_within_a_tier_the_board_is_ordered_by_the_ledger",
+]
 
 [[requirement]]
 id = "tonight-rank-cutpoints-learned-not-percentile"
@@ -926,7 +958,14 @@ milestone = "M3"
 kind = "backend"
 what = "The tier a title displays comes from the user's fitted cutpoints and not from percentile cuts of the current board: at K = 7 with no observations the implied level shares are §6.3's measured shape (F 3 / D 7 / C 15 / B 25 / A 25 / A+ 17 / S 8 %), and after observations that pile the population into two tiers the boundaries stay where the fit put them instead of being re-derived so the shares match the measured shape again."
 why = "§6.3: \"learned cutpoints, not percentile cuts — initialised from DNA_MODEL §4.5's measured quantile shape …, then learned.\" The shape is an initialisation and a prior mean; a board that re-derives it on every render is a percentile cut wearing the spec's words, and the difference is only visible once a real board is lopsided."
-tests = []
+tests = [
+    "backend/tests/test_rank_board.py::test_an_unrated_tier_set_starts_at_the_measured_quantile_shape",
+    "backend/tests/test_rank_board.py::test_the_tier_a_title_shows_comes_from_the_cutpoints_it_was_given",
+    "backend/tests/test_rank_board.py::test_a_lopsided_board_keeps_its_learned_boundaries",
+    "backend/tests/test_rank_board.py::test_the_board_renders_best_first_and_keeps_empty_tiers",
+    "backend/tests/test_ledger_model.py::test_the_initial_cutpoints_carry_the_measured_tier_shape",
+    "backend/tests/test_ledger_model.py::test_the_fitted_cutpoints_are_the_displayed_boundaries",
+]
 
 [[requirement]]
 id = "tonight-rank-queue-answer-sharpens"
