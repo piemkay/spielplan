@@ -608,3 +608,24 @@ def test_a_foregone_pair_is_passed_over_for_one_the_round_is_unsure_about():
     assert entropy(*sorted((pair.title_a, pair.title_b))) == pytest.approx(
         max(entropy(*ab) for ab in pairs)
     ), "and it asked the one it was least able to predict"
+
+
+def test_a_non_positive_straddle_threshold_would_end_every_round_before_it_started():
+    """§4.3's `straddle_z` is a §6.3 constant that §6.2's round now also reads, so the bundle
+    validator's refusal of a non-positive one (rule: `break_straddle_z`, refused at import) is
+    what keeps Tonight from a failure with no error anywhere.
+
+    At z = 0 no posterior reaches the boundary, so nothing straddles, so `stop_reason` converges
+    on the empty set: every participant's round ends at pair zero, `ended_by` reads `converged`
+    for a shortlist nobody was asked about, and the evening looks like it worked. M4 adds no new
+    rule a *bundle* can violate — the pool is built from ownership, kind and scores, all of them
+    already covered — but it does give this one a second way to hurt, which is why it is pinned
+    here rather than left to `test_bundle_validation.py` alone.
+    """
+    board = beliefs(1.0, 0.9, 0.8, 0.7, 0.6, var=0.25)
+    assert rnd.straddlers(board, z=1.0), "at a real threshold the round has something to ask"
+
+    assert rnd.straddlers(board, z=0.0) == set()
+    assert rnd.stop_reason(board, answered=0, z=0.0) == rnd.CONVERGED
+    played = rnd.replay({i: 1.0 - 0.1 * i for i in range(5)}, [], z=0.0)
+    assert played.next_pair is None and played.answered == 0

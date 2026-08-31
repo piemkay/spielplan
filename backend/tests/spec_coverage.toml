@@ -1254,6 +1254,7 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_two_participants_may_stop_at_different_pair_counts",
     "backend/tests/test_tonight_round.py::test_selection_falls_back_to_the_pool_when_the_straddlers_own_pair_is_spent",
     "backend/tests/test_tonight_round.py::test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool",
+    "backend/tests/test_tonight_round.py::test_a_non_positive_straddle_threshold_would_end_every_round_before_it_started",
 ]
 
 [[requirement]]
