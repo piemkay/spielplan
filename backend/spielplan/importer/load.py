@@ -16,7 +16,7 @@ Rules enforced during the load rather than after:
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -39,6 +39,10 @@ class TableMap:
     bool_defaults: dict[str, bool | None] = field(default_factory=dict)
     # SQLite has no date type either; these pg columns are `timestamptz` and arrive as strings.
     timestamp_columns: tuple[str, ...] = ()
+    # pg column -> converter, for the handful of places the corpus records a fact in a different
+    # type than this app stores it: an award outcome as text where the app keeps a boolean, a
+    # rating scale as two numeric bounds where the app keeps one label.
+    transforms: dict[str, Callable[[object], object]] = field(default_factory=dict)
     required: bool = False
 
     @property
@@ -46,20 +50,57 @@ class TableMap:
         return list(self.columns)
 
 
+def _award_won(value: object) -> bool | None:
+    """The corpus records an outcome as text; this app keeps a boolean.
+
+    `won` is the only true value: §4.3's award block counts wins and nominations separately, and
+    an unknown outcome is a nomination on the record rather than a win — the same reading
+    `features.py`'s `won IS NOT TRUE` already takes.
+    """
+    if value is None:
+        return None
+    return str(value).strip().lower() == "won"
+
+
+def _primary_role(value: object) -> str:
+    """`is_primary` (0/1) becomes the role this app keys a language row by."""
+    return "primary" if value else ""
+
+
+def _scale_label(value: object) -> str | None:
+    """`scale_hi` becomes the app's one-line scale label. The lower bound is almost always 0
+    or 1 and the upper is what distinguishes a 0-10 source from a 0-100 one."""
+    if value is None:
+        return None
+    number = float(value)
+    return f"{number:g}"
+
+
 # The load order is FK order. `credit` follows `person`; everything follows `title`.
+#
+# Every `source` column below is a column the corpus actually exports. Until M4.5 this table was
+# identity pairs against an imagined schema — `"name": "name"` where the bundle ships
+# `primary_title` — so essentially every table would have loaded empty or failed. The names are
+# now taken from `tests/fixtures/real_bundle_shapes.json`, and `test_bundle_shapes.py` fails if
+# the fixture and a real bundle drift apart.
 MAPPINGS: tuple[TableMap, ...] = (
     TableMap(
         target="title",
         source="title",
         columns={
-            "id": "id", "kind": "kind", "name": "name", "original_name": "original_name",
+            "id": "id", "kind": "kind",
+            # The corpus's names for the two title columns. `title.name` is this app's column;
+            # `primary_title` is the bundle's, and the two were assumed identical.
+            "name": "primary_title", "original_name": "original_title",
             "year": "year", "runtime_min": "runtime_min", "imdb_id": "imdb_id",
             "tmdb_id": "tmdb_id", "tvdb_id": "tvdb_id", "trakt_id": "trakt_id",
-            "trakt_slug": "trakt_slug", "letterboxd_slug": "letterboxd_slug",
+            "letterboxd_slug": "letterboxd_slug",
             "rt_slug": "rt_slug", "metacritic_slug": "metacritic_slug",
-            "jellyfin_id": "jellyfin_id", "is_owned": "is_owned", "overview": "overview",
-            "tagline": "tagline", "poster_path": "poster_path",
-            "backdrop_path": "backdrop_path", "trailer_key": "trailer_key",
+            "jellyfin_id": "jellyfin_id", "is_owned": "is_owned",
+            # overview / tagline / poster_path / backdrop_path / trailer_key are NOT here: the
+            # corpus does not export them on `title` at all. They are resolved per field from
+            # `title_meta` and `title_video` after the load — §4.1's "one block = one droppable
+            # source" — by `resolve_title_fields`.
         },
         # `title.is_owned` is NOT NULL; §7.2 re-derives it from Jellyfin anyway, so a bundle
         # that omits it starts at false rather than failing the import.
@@ -70,8 +111,9 @@ MAPPINGS: tuple[TableMap, ...] = (
     TableMap(
         target="title_alias",
         source="title_alias",
+        # The bundle has no `kind` on an alias; it has `source`, which is the droppable unit.
         columns={"title_id": "title_id", "alias": "alias", "region": "region",
-                 "language": "language", "kind": "kind"},
+                 "language": "language", "kind": "source"},
         coalesce_empty=("region", "language", "kind"),   # rule 6
     ),
     TableMap(
@@ -86,24 +128,23 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_language", source="title_language",
-        columns={"title_id": "title_id", "language": "language", "role": "role"},
+        # This app keys a language row by (title_id, language, role) and the corpus by
+        # (title_id, source, language). `is_primary` is the only per-row distinction the corpus
+        # draws, so it becomes the role and the rows collapse across sources rather than
+        # multiplying — which is what the app's own primary key already asked for.
+        columns={"title_id": "title_id", "language": "language", "role": "is_primary"},
         coalesce_empty=("role",),
+        transforms={"role": _primary_role},
     ),
     TableMap(
         target="title_country", source="title_country",
         columns={"title_id": "title_id", "country": "country"},
     ),
     TableMap(
-        target="title_company", source="title_company",
-        columns={"title_id": "title_id", "company": "company", "role": "role"},
-        coalesce_empty=("role",),
-    ),
-    TableMap(
         target="title_video", source="title_video",
-        columns={"title_id": "title_id", "site": "site", "key": "key", "type": "type",
-                 "official": "official"},
+        # No `official` upstream; it stays NULL rather than being invented as true.
+        columns={"title_id": "title_id", "site": "site", "key": "key", "type": "type"},
         coalesce_empty=("site", "type"),
-        bool_columns=("official",),
     ),
     TableMap(
         target="person", source="person",
@@ -112,22 +153,30 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="credit", source="credit",
+        # `billing_order` and `role_class` are the corpus's names. `role_class` is what the
+        # feature contract's `p:<role_class>:<name>` grammar is built from (§4.3), so losing it
+        # is losing the credit block.
         columns={"title_id": "title_id", "person_id": "person_id",
                  "department": "department", "job": "job", "character": "character",
-                 "ord": "ord", "source": "source"},
+                 "billing_order": "billing_order", "source": "source",
+                 "role_class": "role_class"},
         coalesce_empty=("department", "job", "source"),
     ),
     TableMap(
         target="award", source="award",
-        columns={"title_id": "title_id", "body": "body", "category": "category",
-                 "year": "year", "won": "won", "person_id": "person_id"},
+        # The corpus records the outcome as text (`won` | `nominated`); this app stores a
+        # boolean. `_award_won` casts it, rather than leaving a NULL `won` on every award.
+        columns={"title_id": "title_id", "body": "award", "category": "category",
+                 "year": "year", "won": "result"},
         coalesce_empty=("category",),
-        bool_columns=("won",),
+        transforms={"won": _award_won},
     ),
     TableMap(
         target="rating_source", source="rating_source",
-        columns={"id": "id", "name": "name", "scale": "scale"},
+        # §4.1 rule 4's frozen ids. The corpus records the scale as two bounds, not one string.
+        columns={"id": "id", "name": "name", "scale": "scale_hi"},
         coalesce_empty=("scale",),
+        transforms={"scale": _scale_label},
         required=True,
     ),
     TableMap(
@@ -150,12 +199,22 @@ MAPPINGS: tuple[TableMap, ...] = (
     # rule 3 — the display-only schema. Nothing else in this tuple targets it.
     TableMap(
         target="display.platform_rating", source="platform_rating",
-        columns={"title_id": "title_id", "platform": "platform", "score": "score",
+        columns={"title_id": "title_id", "platform": "source", "score": "value",
                  "votes": "votes"},
     ),
+    # The corpus's `seed_list` is a 238-row list REGISTRY, not §4.3's 100-title onboarding list.
+    # They collided on the name until M4.5, and mapping one onto the other COPYs 238 all-NULL
+    # rows into a NOT NULL primary key. The onboarding list is loaded from `seed_list.json`.
     TableMap(
-        target="seed_list", source="seed_list",
-        columns={"position": "position", "title_id": "title_id", "decade": "decade"},
+        target="title_list", source="seed_list",
+        columns={"id": "id", "slug": "slug", "name": "name", "source": "source",
+                 "kind": "kind", "category": "category", "weight": "weight",
+                 "item_count": "item_count", "notes": "notes"},
+        coalesce_empty=("name", "source"),
+    ),
+    TableMap(
+        target="title_list_membership", source="title_list_membership",
+        columns={"list_id": "list_id", "title_id": "title_id", "rank": "rank"},
     ),
     TableMap(
         target="watchlist", source="watchlist",
@@ -164,6 +223,43 @@ MAPPINGS: tuple[TableMap, ...] = (
         timestamp_columns=("added_at",),
     ),
 )
+
+# Bundle tables this app deliberately does not load through MAPPINGS, with the reason. An
+# unmapped table used to be invisible — `ImportReport` tracked unmapped *columns within mapped
+# tables* — so `title_meta` (46,318 rows), `title_list_membership` and `imdb_ratings` vanished
+# without a line anywhere. Every table the bundle ships is now either mapped above, loaded by a
+# bespoke path, or named here, and `unaccounted_tables` reports anything that is none of the
+# three rather than dropping it in silence.
+BESPOKE_TABLES: dict[str, str] = {
+    "title_meta": "loaded per source into title_meta.payload, then resolved per field onto title",
+    "dna_tag": "loaded with its evidence by importer.dna.load_tags (§4.1 rule 1)",
+    "dna_evidence": "loaded with dna_tag; keyed (title_id, term) upstream",
+    "dna_projected": "loaded by importer.dna.load_projected — a separate statement, never a union",
+}
+
+SKIPPED_TABLES: dict[str, str] = {
+    "imdb_ratings": "pre-selection signal for the corpus's own crawl; the app shows IMDb's "
+                    "number from platform_rating, which §4.1 rule 3 keeps display-only",
+    "dna_annotation": "curator working notes; no app surface reads one",
+    "dna_term_signal": "vocabulary-building telemetry, superseded by the shipped vocabulary",
+    "dna_exclusion": "the corpus's own extraction exclusions, applied before export",
+    "dna_projection_run": "provenance of the corpus's wholesale projection runs",
+    "sqlite_sequence": "SQLite bookkeeping, not data",
+}
+
+
+def unaccounted_tables(db: sqlite3.Connection) -> list[str]:
+    """Tables the bundle ships that nothing above claims.
+
+    §10 requires a migration report with "counts per table". A table nobody maps produced no
+    line at all, which is how three shipped tables were dropped without anyone noticing for
+    five milestones.
+    """
+    shipped = {
+        r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    claimed = {m.source for m in MAPPINGS} | set(BESPOKE_TABLES) | set(SKIPPED_TABLES)
+    return sorted(t for t in shipped - claimed if not t.startswith("sqlite_"))
 
 
 def _sqlite_columns(db: sqlite3.Connection, table: str) -> list[str]:
@@ -187,10 +283,16 @@ def _rows(db: sqlite3.Connection, tmap: TableMap, available: list[str]) -> Itera
     bool_idx = {i: tmap.bool_defaults.get(c) for i, c in enumerate(tmap.pg_columns)
                 if c in tmap.bool_columns}
     ts_idx = {i for i, c in enumerate(tmap.pg_columns) if c in tmap.timestamp_columns}
+    fn_idx = {i: tmap.transforms[c] for i, c in enumerate(tmap.pg_columns)
+              if c in tmap.transforms}
 
     for row in db.execute(f'SELECT {select} FROM "{tmap.source}"'):
-        if coalesce_idx or bool_idx or ts_idx:
+        if coalesce_idx or bool_idx or ts_idx or fn_idx:
             out = list(row)
+            # Transforms run first: they turn the corpus's representation into this app's, and
+            # the coercions below are about this app's types.
+            for i, fn in fn_idx.items():
+                out[i] = fn(out[i])
             for i in coalesce_idx:
                 if out[i] is None:
                     out[i] = ""

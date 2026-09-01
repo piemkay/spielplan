@@ -188,7 +188,7 @@ async def _dna_x(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
     """
     rows = await conn.fetch(
         """
-        SELECT title_id, facet || '.' || term AS key, max(salience)::float8 AS value
+        SELECT title_id, 'dna:' || term AS key, max(salience)::float8 AS value
           FROM dna_tag
          WHERE title_id = ANY($1::int[]) AND version = $2
          GROUP BY title_id, facet, term
@@ -202,7 +202,7 @@ async def _dna_p(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
     """The projected tier — a separate table, a separate statement, never a union (rule 1)."""
     rows = await conn.fetch(
         """
-        SELECT title_id, facet || '.' || term AS key, coalesce(weight, 0.0)::float8 AS value
+        SELECT title_id, 'dna:' || term AS key, coalesce(weight, 0.0)::float8 AS value
           FROM dna_projected
          WHERE title_id = ANY($1::int[]) AND version = $2
         """,
@@ -216,7 +216,7 @@ async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
     by construction — which is exactly why §4.3 zero-imputes this block and no other."""
     rows = await conn.fetch(
         """
-        SELECT l.title_id, g.tag AS key, s.relevance::float8 AS value
+        SELECT l.title_id, 'g:' || g.tag AS key, s.relevance::float8 AS value
           FROM ml_link l
           JOIN ml_genome_score s ON s.ml_movie_id = l.ml_movie_id
           JOIN ml_genome_tag g ON g.tag_id = s.tag_id
@@ -229,7 +229,7 @@ async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
 
 async def _genre(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
     rows = await conn.fetch(
-        "SELECT DISTINCT title_id, genre AS key, 1.0::float8 AS value"
+        "SELECT DISTINCT title_id, 'genre:' || lower(genre) AS key, 1.0::float8 AS value"
         " FROM title_genre WHERE title_id = ANY($1::int[])",
         list(ids),
     )
@@ -238,7 +238,7 @@ async def _genre(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[s
 
 async def _keyword(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
     rows = await conn.fetch(
-        "SELECT DISTINCT title_id, keyword AS key, 1.0::float8 AS value"
+        "SELECT DISTINCT title_id, 'kw:' || keyword AS key, 1.0::float8 AS value"
         " FROM title_keyword WHERE title_id = ANY($1::int[])",
         list(ids),
     )
@@ -247,11 +247,23 @@ async def _keyword(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict
 
 async def _credit(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
     """§4.1: "credit (dedupe at read time, never at import)" — hence DISTINCT here and no
-    unique constraint there. The column key is the person id, which is what survives a name
-    correction from `corrections_v1.tsv`."""
+    unique constraint there.
+
+    The key is `p:<role_class>:<name>`, which is what the shipped contract declares. It used to
+    be `person_id::text`, on the reasoning that an id survives a name correction — true, and
+    beside the point: the tower was trained on a name-keyed vocabulary, so an id-keyed builder
+    misses all 244 columns and the block contributes nothing while reporting itself present.
+    `corrections_v1.tsv` is applied at derive time (§8 stage 3), which is what actually keeps
+    the name right.
+
+    `role_class` is the corpus's own normalisation (director|writer|dp|composer|cast|…), not a
+    re-derivation from `job` strings: re-deriving it here would drift from the vocabulary the
+    contract was built against, one job title at a time."""
     rows = await conn.fetch(
-        "SELECT DISTINCT title_id, person_id::text AS key, 1.0::float8 AS value"
-        " FROM credit WHERE title_id = ANY($1::int[])",
+        "SELECT DISTINCT c.title_id, 'p:' || c.role_class || ':' || p.name AS key,"
+        " 1.0::float8 AS value"
+        "  FROM credit c JOIN person p ON p.id = c.person_id"
+        " WHERE c.title_id = ANY($1::int[]) AND c.role_class IS NOT NULL AND p.name <> ''",
         list(ids),
     )
     return _group(rows)
@@ -259,7 +271,7 @@ async def _credit(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
 
 async def _country(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
     rows = await conn.fetch(
-        "SELECT title_id, country AS key, 1.0::float8 AS value"
+        "SELECT title_id, 'country:' || country AS key, 1.0::float8 AS value"
         " FROM title_country WHERE title_id = ANY($1::int[])",
         list(ids),
     )
@@ -273,8 +285,8 @@ async def _award(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[s
     rows = await conn.fetch(
         """
         SELECT title_id,
-               count(*) FILTER (WHERE won IS NOT TRUE)::float8 AS award_nominations,
-               count(*) FILTER (WHERE won)::float8            AS award_wins
+               count(*) FILTER (WHERE won IS NOT TRUE)::float8 AS nominated,
+               count(*) FILTER (WHERE won)::float8            AS won
           FROM award
          WHERE title_id = ANY($1::int[])
          GROUP BY title_id
@@ -283,8 +295,8 @@ async def _award(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[s
     )
     return {
         int(r["title_id"]): {
-            "award_nominations": float(r["award_nominations"]),
-            "award_wins": float(r["award_wins"]),
+            "award:nominated": float(r["nominated"]),
+            "award:won": float(r["won"]),
         }
         for r in rows
     }
@@ -322,6 +334,23 @@ _COUNT_KEYS = (
 )
 
 
+# The corpus's own binning (`mdc/ratings/features.py:89`), boundaries included: `< 80`,
+# `< 105`, `< 130`, `< 160`, else `>160`. Copied rather than re-derived because the tower was
+# trained on these columns -- a runtime of exactly 160 belongs in `>160`, and an off-by-one
+# moves every three-hour film into a column it was never trained in.
+_RUNTIME_EDGES = ((80, "<80"), (105, "80-105"), (130, "105-130"), (160, "130-160"))
+
+
+def _runtime_bucket(minutes: Any) -> str | None:
+    if minutes is None:
+        return None
+    value = int(minutes)
+    for edge, label in _RUNTIME_EDGES:
+        if value < edge:
+            return label
+    return ">160"
+
+
 async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
     """The one block produced by code rather than read from a vocabulary.
 
@@ -347,6 +376,9 @@ async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, 
         values: dict[str, float] = {f"kind:{r['kind']}": 1.0}
         if r["year"] is not None:
             values[f"decade:{(int(r['year']) // 10) * 10}"] = 1.0
+        bucket = _runtime_bucket(r["runtime_min"])
+        if bucket is not None:
+            values[f"runtime:{bucket}"] = 1.0
         for code in by_title.get(title_id, ()):
             values[f"lang:{code}"] = 1.0
         for flag in ("overview", "tagline", "trailer", "poster", "imdb_id"):

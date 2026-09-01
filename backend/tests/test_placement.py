@@ -39,19 +39,29 @@ from tests.fixtures import make_bundle as fx
 # The real keys the fixture's content spine (plus `_seed_extra_titles`) actually contains, per
 # block. Each is padded out to the contract's declared width, so the widths — and therefore the
 # tower's input_dim — are untouched.
+# The real keys the fixture's content spine (plus `_seed_extra_titles`) actually contains, per
+# block, **in the grammar the shipped contract declares**. Until M4.5 this table encoded the
+# bare keys the builders happened to emit — `"Crime"`, `"heist"`, `"1"` — which is precisely how
+# a builder that missed all 244 credit columns passed: the fixture's contract was written to
+# agree with it. Each list is padded out to the contract's declared width, so the widths — and
+# therefore the tower's input_dim — are untouched.
 REAL_KEYS: dict[str, list[str]] = {
-    "dna_x": ["themes.obsession", "character.morally-grey", "mood.dread", "sensibility.bleak",
-              "mood.cosy", "visual.neon", "themes.surveillance", "pacing.relentless",
-              "register.deadpan"],
-    "dna_p": ["themes.obsession", "mood.dread", "mood.cosy", "era.period", "structure.procedural",
-              "visual.neon", "pacing.patient", "place.domestic"],
-    "genome": ["heist", "dread", "cooking"],
-    "genre": ["Crime", "Thriller", "Family", "Romance", "Sci-Fi", "Drama", "Comedy"],
-    "keyword": ["heist", "investigation", "family", "cooking"],
-    "credit": ["1", "2", "3", "4", "5"],
-    "country": ["US", "HK", "JP"],
-    "award": ["award_nominations", "award_wins"],
-    "meta": ["kind:movie", "kind:series", "year_norm", "runtime_norm", "n_credits_log"],
+    "dna_x": ["dna:themes.obsession", "dna:characters.morally_grey", "dna:mood.dread",
+              "dna:sensibility.bleak", "dna:mood.cosy", "dna:visual.neon",
+              "dna:themes.surveillance", "dna:pacing.relentless", "dna:register.deadpan"],
+    "dna_p": ["dna:themes.obsession", "dna:mood.dread", "dna:mood.cosy", "dna:era.period",
+              "dna:structure.procedural", "dna:visual.neon", "dna:pacing.patient",
+              "dna:place.domestic"],
+    "genome": ["g:heist", "g:dread", "g:cooking"],
+    "genre": ["genre:crime", "genre:thriller", "genre:family", "genre:romance", "genre:sci-fi",
+              "genre:drama", "genre:comedy"],
+    "keyword": ["kw:heist", "kw:investigation", "kw:family", "kw:cooking"],
+    "credit": ["p:director:Michael Mann", "p:director:Denis Villeneuve",
+               "p:director:Wong Kar-wai", "p:cast:Al Pacino", "p:writer:Ada Cross-Kind",
+               "p:composer:Kunihiko Murai"],
+    "country": ["country:United States of America", "country:Hong Kong", "country:Japan"],
+    "award": ["award:nominated", "award:won"],
+    "meta": ["kind:movie", "kind:series", "decade:1990", "runtime:>160", "lang:en"],
 }
 
 THIN_TITLE = 9        # no keywords, no DNA row, no genre, no credit, no reviews — only `meta`
@@ -61,55 +71,77 @@ FULL_TITLE = 10       # every one of the nine blocks, plus a review-text row
 # --- helpers ---------------------------------------------------------------------------------
 
 
+# Meta is a closed grammar (`contract.META_PRODUCTIONS`), so its padding has to be grammatical
+# too: a `__pad_0` in the meta block is a column no production can fill, which
+# `unproducible_meta_names` correctly reports — and which would make every test here read that
+# report as noise instead of as the signal it is.
+_META_PADDING = [f"decade:{d}" for d in range(1900, 2030, 10)] + [
+    f"lang:{c}" for c in ("ja", "yue", "fr", "de", "it", "ko", "es", "zh")
+] + [f"runtime:{b}" for b in ("<80", "80-105", "105-130", "130-160", ">160")]
+
+
 def _names(block: str, size: int) -> list[str]:
     real = REAL_KEYS.get(block, [])[:size]
+    if block == "meta":
+        pool = [n for n in _META_PADDING if n not in real]
+        return real + pool[: size - len(real)]
     return real + [f"__pad_{i}" for i in range(size - len(real))]
 
 
-def _contract_doc(*, sizes: dict[str, int] | None = None, text_scale: float = 0.031_25,
+def _contract_doc(*, sizes: dict[str, int] | None = None, text_scale: float = 2.0,
                   names: dict[str, list[str]] | None = None) -> dict:
-    """A contract document in the shape the bundle ships, with real feature names."""
+    """A contract document in the shape the corpus ships: `content_blocks` as a list of
+    {name, size}, ONE flat `feature_names` list sliced by those sizes, and `text_scale` inside
+    `text_block`. The old shape — `blocks` as an object, `feature_names` as a dict keyed by
+    block, `text_scale` at the top level — is a file the corpus has never produced."""
     blocks = dict(sizes or {"dna_x": 12, "dna_p": 10, "genome": 8, "genre": 9, "keyword": 11,
                             "credit": 6, "country": 4, "award": 2, "meta": 5})
-    feature_names = {b: _names(b, n) for b, n in blocks.items()}
+    per_block = {b: _names(b, n) for b, n in blocks.items()}
     for block, override in (names or {}).items():
-        feature_names[block] = override
+        per_block[block] = override
     return {
-        "blocks": blocks,
-        "block_order": list(blocks),
-        "feature_names": feature_names,
-        "review_text": {"svd_dims": 256, "used": 64, "order": "singular-value"},
-        "text_scale": text_scale,
-        "genome_imputation": "zero",
-        "absent_blocks": "dropped",
+        "content_blocks": [{"name": b, "size": n} for b, n in blocks.items()],
+        "content_dim": sum(blocks.values()),
+        "feature_names": [n for b in blocks for n in per_block[b]],
+        "input_dim": sum(blocks.values()) + 64,
+        "model_file": "cold_tower.pt",
+        "preprocessing": {
+            "genome": "zero-imputed for titles without MovieLens genome",
+            "absent_blocks": "dropped to zeros; the tower's dropout training anticipates them",
+        },
+        "text_block": {
+            "source": "review_text_emb.npz:emb", "columns": "0..63", "dim": 64,
+            "order": "singular-value (descending)", "text_scale": text_scale,
+        },
     }
 
 
 def _realistic_contract(artifacts: Path, **kwargs) -> None:
     """Rewrite the bundle's contract column *names* without touching a single declared size."""
     shipped = json.loads((artifacts / "feature_contract.json").read_text(encoding="utf-8"))
-    doc = _contract_doc(sizes=shipped["blocks"], text_scale=shipped["text_scale"], **kwargs)
+    sizes = {b["name"]: b["size"] for b in shipped["content_blocks"]}
+    doc = _contract_doc(sizes=sizes, text_scale=shipped["text_block"]["text_scale"], **kwargs)
     (artifacts / "feature_contract.json").write_text(json.dumps(doc, indent=1), encoding="utf-8")
 
 
 def _extend_text_embeddings(artifacts: Path, extra: list[int]) -> None:
     """Give `extra` titles a review-text row, so the ninth block can be *present* somewhere."""
     npz = np.load(artifacts / "review_text_emb.npz", allow_pickle=False)
-    ids = np.concatenate([npz["title_id"], np.array(extra, dtype=np.int32)])
+    ids = np.concatenate([npz["title_ids"], np.array(extra, dtype=np.int32)])
     rng = np.random.default_rng(7)
     emb = np.concatenate([
         npz["emb"], rng.normal(size=(len(extra), npz["emb"].shape[1])).astype(np.float32)
     ])
     order = np.argsort(ids)
-    np.savez(artifacts / "review_text_emb.npz", title_id=ids[order], emb=emb[order],
-             components=npz["components"])
+    np.savez(artifacts / "review_text_emb.npz", title_ids=ids[order], emb=emb[order],
+             covered=np.ones(ids.size, dtype=bool), singular=npz["singular"])
 
 
 def _shrink_backbone(artifacts: Path, drop: int) -> None:
     """A different Backbone: one title's row is gone, so its coverage shrank (§10)."""
     npz = np.load(artifacts / "backbone.npz", allow_pickle=False)
-    keep = npz["title_id"] != drop
-    np.savez(artifacts / "backbone.npz", title_id=npz["title_id"][keep], E=npz["E"][keep],
+    keep = npz["title_ids"] != drop
+    np.savez(artifacts / "backbone.npz", title_ids=npz["title_ids"][keep], E=npz["E"][keep],
              E_full=npz["E_full"][keep], b_i=npz["b_i"][keep], mu=npz["mu"],
              item_n=npz["item_n"][keep])
 
@@ -142,8 +174,9 @@ async def _seed_extra_titles(db) -> None:
     await db.execute(
         "INSERT INTO title_keyword (title_id, keyword, source) VALUES (10, 'cooking', 'x')"
     )
-    await db.execute("INSERT INTO credit (title_id, person_id, job) VALUES (10, 3, 'Director')")
-    await db.execute("INSERT INTO title_country (title_id, country) VALUES (10, 'JP')")
+    await db.execute("INSERT INTO credit (title_id, person_id, job, role_class)"
+        " VALUES (10, 3, 'Director', 'director')")
+    await db.execute("INSERT INTO title_country (title_id, country) VALUES (10, 'Japan')")
     await db.execute(
         "INSERT INTO award (title_id, body, category, year, won)"
         " VALUES (10, 'Academy Awards', 'Best Picture', 1986, false),"
@@ -158,11 +191,11 @@ async def _seed_extra_titles(db) -> None:
     )
     await db.execute(
         "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, provider)"
-        " VALUES (10, 'v1', 'deadpan', 'register', 2, 0.6, 'gemini')"
+        " VALUES (10, 'v1', 'register.deadpan', 'register', 2, 0.6, 'gemini')"
     )
     await db.execute(
         "INSERT INTO dna_projected (title_id, version, term, facet, weight, via)"
-        " VALUES (10, 'v1', 'domestic', 'place', 0.3, 'keyword:cooking')"
+        " VALUES (10, 'v1', 'place.domestic', 'place', 0.3, 'keyword:cooking')"
     )
 
 
@@ -269,7 +302,7 @@ def test_a_contract_that_ships_no_text_scale_is_refused_rather_than_defaulted():
     """A default text_scale would silently move every coordinate ever computed, and the move
     would be invisible: the vectors stay finite and the ranking stays plausible."""
     doc = _contract_doc()
-    doc.pop("text_scale")
+    doc["text_block"].pop("text_scale")
     with pytest.raises(ContractError, match="text_scale"):
         FeatureContract.load(doc)
 
@@ -344,8 +377,8 @@ def test_the_forward_pass_is_the_checkpoints_own_arithmetic(bundle_root):
     contract = FeatureContract.from_store(store)
     cold = tower.load_tower(store, contract)
 
-    state = torch.load(store.path("cold_tower.pt"), map_location="cpu",
-                       weights_only=True)["state_dict"]
+    # A bare state_dict, the way the corpus's exporter writes it — no wrapper to index into.
+    state = torch.load(store.path("cold_tower.pt"), map_location="cpu", weights_only=True)
     w = {k: v.numpy() for k, v in state.items()}
 
     rng = np.random.default_rng(11)
@@ -353,8 +386,8 @@ def test_the_forward_pass_is_the_checkpoints_own_arithmetic(bundle_root):
     h = x
     for i in sorted(int(k.split(".")[1]) for k in w if k.startswith("trunk.") and "weight" in k):
         h = np.maximum(h @ w[f"trunk.{i}.weight"].T + w[f"trunk.{i}.bias"], 0.0)
-    expect_e = h @ w["embed.weight"].T + w["embed.bias"]
-    expect_b = (h @ w["prior.weight"].T + w["prior.bias"]).reshape(-1)
+    expect_e = h @ w["head_e.weight"].T + w["head_e.bias"]
+    expect_b = (h @ w["head_b.weight"].T + w["head_b.bias"]).reshape(-1)
 
     e_hat, b_hat = cold.place(x)
     assert e_hat.shape == (3, 64) and b_hat.shape == (3,)

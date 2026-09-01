@@ -47,6 +47,14 @@ ARCHITECTURES = ("cold_tower_v2",)
 EMBED_DIM = 64
 
 
+# The tensor names the corpus's exporter writes. `torch.save(model.state_dict())` carries no
+# metadata, so these names ARE the architecture contract — the app looked for `embed`/`prior`
+# and no shipped checkpoint has them.
+TRUNK_FIRST = "trunk.0.weight"
+EMBED_HEAD = "head_e"
+PRIOR_HEAD = "head_b"
+
+
 class TowerError(RuntimeError):
     """The checkpoint cannot be used as §8 stage 9's placer."""
 
@@ -133,27 +141,52 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
     # tensors and plain data — the bundle is the operator's own artifact, but a model file that
     # can execute code on load is not a property worth having.
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(checkpoint, dict) or "state_dict" not in checkpoint:
+    if not isinstance(checkpoint, dict) or not checkpoint:
         raise TowerError(
-            f"{path.name} is not a v2 Cold Tower checkpoint (no `state_dict`); §4.3 says the "
-            "exporter must ship v2"
+            f"{path.name} is not a Cold Tower checkpoint (loaded a "
+            f"{type(checkpoint).__name__}); §8 stage 9 has nothing to place with"
         )
-    version = int(checkpoint.get("version", 0))
+
+    # The corpus ships `torch.save(model.state_dict())` — a bare mapping of tensor names to
+    # tensors, with no wrapper carrying `version`, `arch` or `input_dim`. This app required the
+    # wrapper, so the real bundle's tower could not be constructed at all, which is the stage
+    # §12's M5 exit criterion runs through.
+    #
+    # The architecture is read out of the tensor shapes instead, which is unambiguous:
+    # `trunk.0.weight` is (hidden, input_dim) and `head_e.weight` is (embed_dim, hidden). A
+    # wrapped checkpoint is still honoured, and its declared dims are cross-checked against the
+    # shapes rather than trusted — two statements of one fact, so disagreement is an error.
+    wrapped = "state_dict" in checkpoint
+    state = dict(checkpoint["state_dict"] if wrapped else checkpoint)
+    if not all(hasattr(v, "shape") for v in state.values()):
+        raise TowerError(
+            f"{path.name} holds values that are not tensors; §4.3 ships the fitted model here"
+        )
+
+    shape_input, shape_embed = _dims_from_state(state, path.name)
+    input_dim = int(checkpoint.get("input_dim", 0)) if wrapped else shape_input
+    embed_dim = int(checkpoint.get("embed_dim", 0)) if wrapped else shape_embed
+    input_dim = input_dim or shape_input
+    embed_dim = embed_dim or shape_embed
+    if (input_dim, embed_dim) != (shape_input, shape_embed):
+        raise TowerError(
+            f"{path.name} declares input_dim={input_dim}/embed_dim={embed_dim} and its weights "
+            f"are shaped for {shape_input}/{shape_embed}; the file states one fact twice"
+        )
+
+    version = int(checkpoint.get("version", 2)) if wrapped else 2
     if version not in SUPPORTED_VERSIONS:
         raise TowerError(
             f"{path.name} declares version {version}; §4.3: 'the earlier cold_tower run is "
             f"superseded — the exporter must ship v2' (supported: {list(SUPPORTED_VERSIONS)})"
         )
-    arch = str(checkpoint.get("arch") or "")
+    arch = str(checkpoint.get("arch") or "") if wrapped else "cold_tower_v2"
     if arch not in ARCHITECTURES:
         raise TowerError(
             f"{path.name} declares architecture {arch!r}, which this app cannot reconstruct "
             f"(known: {list(ARCHITECTURES)})"
         )
 
-    state = dict(checkpoint["state_dict"])
-    input_dim = int(checkpoint.get("input_dim", 0))
-    embed_dim = int(checkpoint.get("embed_dim", EMBED_DIM))
     module = _cold_tower_v2(state, input_dim, embed_dim)
 
     if input_dim != contract.input_dim:
@@ -174,6 +207,23 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
         input_dim=input_dim, embed_dim=embed_dim, arch=arch, version=version,
         sha256=sha, module=module,
     )
+
+
+def _dims_from_state(state: dict, name: str) -> tuple[int, int]:
+    """(input_dim, embed_dim), read out of the weight shapes.
+
+    The corpus ships a bare state_dict, so the architecture has to come from the tensors. Both
+    reads are refused loudly rather than defaulted: a guessed width produces a plausible vector,
+    a plausible coordinate, and silently wrong placements forever (§8 stage 9).
+    """
+    first = state.get(TRUNK_FIRST)
+    head = state.get(f"{EMBED_HEAD}.weight")
+    if first is None or head is None:
+        raise TowerError(
+            f"{name} has no `{TRUNK_FIRST}`/`{EMBED_HEAD}.weight`; this app reconstructs the v2 "
+            f"tower from those names and found {sorted(state)[:6]}"
+        )
+    return int(first.shape[1]), int(head.shape[0])
 
 
 def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any:
@@ -199,9 +249,14 @@ def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any
     )
     if not trunk_indices:
         raise TowerError("checkpoint has no `trunk.*.weight` layers")
-    for head in ("embed", "prior"):
+    # `head_e` / `head_b` are the corpus's own names for the two heads — ê(t) and b̂(t). The
+    # app looked for `embed` / `prior`, which no shipped checkpoint has.
+    for head in (EMBED_HEAD, PRIOR_HEAD):
         if f"{head}.weight" not in state:
-            raise TowerError(f"checkpoint has no `{head}` head; §5.1 needs both ê(t) and b̂(t)")
+            raise TowerError(
+                f"checkpoint has no `{head}` head; §5.1 needs both ê(t) and b̂(t), and the "
+                f"exporter names them {EMBED_HEAD}/{PRIOR_HEAD}"
+            )
 
     first = state[f"trunk.{trunk_indices[0]}.weight"]
     if int(first.shape[1]) != input_dim:
@@ -209,10 +264,10 @@ def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any
             f"checkpoint says input_dim={input_dim} but its first layer takes "
             f"{int(first.shape[1])} columns — the checkpoint disagrees with itself"
         )
-    if int(state["embed.weight"].shape[0]) != embed_dim:
+    if int(state[f"{EMBED_HEAD}.weight"].shape[0]) != embed_dim:
         raise TowerError(
-            f"checkpoint says embed_dim={embed_dim} but its embed head emits "
-            f"{int(state['embed.weight'].shape[0])}"
+            f"checkpoint says embed_dim={embed_dim} but its embedding head emits "
+            f"{int(state[f'{EMBED_HEAD}.weight'].shape[0])}"
         )
 
     class ColdTowerV2(nn.Module):
@@ -225,22 +280,23 @@ def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any
                 )
                 for i in trunk_indices
             )
-            self.embed = nn.Linear(
-                int(state["embed.weight"].shape[1]), int(state["embed.weight"].shape[0])
+            self.head_e = nn.Linear(
+                int(state[f"{EMBED_HEAD}.weight"].shape[1]),
+                int(state[f"{EMBED_HEAD}.weight"].shape[0]),
             )
-            self.prior = nn.Linear(int(state["prior.weight"].shape[1]), 1)
+            self.head_b = nn.Linear(int(state[f"{PRIOR_HEAD}.weight"].shape[1]), 1)
 
         def forward(self, x):
             for layer in self.trunk:
                 x = torch.relu(layer(x))
-            return self.embed(x), self.prior(x).squeeze(-1)
+            return self.head_e(x), self.head_b(x).squeeze(-1)
 
     module = ColdTowerV2()
     with torch.no_grad():
         for slot, i in enumerate(trunk_indices):
             module.trunk[slot].weight.copy_(state[f"trunk.{i}.weight"])
             module.trunk[slot].bias.copy_(state[f"trunk.{i}.bias"])
-        for head in ("embed", "prior"):
+        for head in (EMBED_HEAD, PRIOR_HEAD):
             getattr(module, head).weight.copy_(state[f"{head}.weight"])
             getattr(module, head).bias.copy_(state[f"{head}.bias"])
     module.eval()

@@ -89,6 +89,10 @@ ZERO_IMPUTED = ("genome",)
 META_PRODUCTIONS: tuple[str, ...] = (
     r"kind:(movie|series)",
     r"decade:\d{3}0",
+    # The corpus's runtime bins, verbatim -- `mdc/ratings/features.py:89`. Declared here as a
+    # closed alternation rather than a pattern so a bin the app cannot produce is reported
+    # rather than silently left at zero.
+    r"runtime:(<80|80-105|105-130|130-160|>160)",
     r"lang:[a-z]{2,3}",
     r"has:(overview|tagline|trailer|poster|imdb_id|genome|award|review|keyword|credit)",
     r"year_norm",
@@ -200,25 +204,31 @@ class FeatureContract:
     @classmethod
     def load(cls, raw: Mapping[str, Any], *, sha256: str = "") -> FeatureContract:
         """Parse a contract document. Every width and every offset comes from `raw`."""
-        blocks_raw = raw.get("blocks")
+        blocks_raw = raw.get("content_blocks")
         if not blocks_raw:
-            raise ContractError("feature_contract.json declares no `blocks`")
+            raise ContractError(
+                "feature_contract.json declares no `content_blocks` — §4.3 makes this file the "
+                "exhaustive definition of the tower's input, and the block list is the whole of it"
+            )
 
         notes: list[str] = []
         declared = _declared_blocks(raw, blocks_raw)
 
-        # §4.3: "genome zero-imputation" is contract-recorded preprocessing, so it is read from
-        # the file. Anything other than zero-imputation is a contract this app cannot honour.
-        imputation = str(raw.get("genome_imputation", "zero"))
-        if imputation != "zero":
+        # §4.3 records placement-time preprocessing in the contract, and the corpus writes it as
+        # prose rather than as an enum. The guard is on the substance — zero-imputation for
+        # genome, dropped-not-defaulted for absent blocks — because those are the two rules the
+        # app implements and cannot silently diverge from.
+        pre = raw.get("preprocessing") or {}
+        imputation = str(pre.get("genome", ""))
+        if "zero-imput" not in imputation:
             raise ContractError(
-                f"contract says genome_imputation={imputation!r}; §4.3 records it as "
+                f"contract records genome preprocessing as {imputation!r}; §4.3 records it as "
                 "zero-imputation and the app implements no other"
             )
-        absent = str(raw.get("absent_blocks", "dropped"))
-        if absent != "dropped":
+        absent = str(pre.get("absent_blocks", ""))
+        if "dropped" not in absent:
             raise ContractError(
-                f"contract says absent_blocks={absent!r}; §5.3 drops them — 'the tower's "
+                f"contract records absent_blocks as {absent!r}; §5.3 drops them — 'the tower's "
                 "dropout training anticipates this' — and defaulting them is what it forbids"
             )
 
@@ -257,26 +267,44 @@ class FeatureContract:
             offset += size
 
         content_width = offset
-        text = raw.get("review_text") or {}
+        # §4.3's tenth block, out of a different file. The corpus writes it as `text_block`, and
+        # puts `text_scale` INSIDE it — reading the top level found nothing and every real
+        # contract was refused for shipping no scale.
+        text = raw.get("text_block") or {}
+        if not text:
+            raise ContractError(
+                "contract declares no `text_block`; §4.3 appends the review-text columns after "
+                "the nine content blocks and the app cannot guess their width or their scale"
+            )
+        # `columns` is a closed range like "0..63". It and `dim` are two statements of the same
+        # fact, so disagreement between them is a contract error rather than a preference.
+        span = _column_span(text.get("columns"))
+        text_used = int(text.get("dim", span or 0)) or span
+        if span and text_used != span:
+            raise ContractError(
+                f"text_block says dim={text_used} and columns={text.get('columns')!r}, which "
+                f"spans {span}; §4.3's truncation is one fact and the file states it twice"
+            )
+        # §4.3: "columns 0..63 of the 256-d SVD embedding". The full width lives with the
+        # embedding, not here, so it is recorded rather than re-derived.
         text_dims = int(text.get("svd_dims", 256))
-        text_used = int(text.get("used", 64))
         if not 0 < text_used <= text_dims:
             raise ContractError(
-                f"review_text uses {text_used} of {text_dims} SVD columns — §4.3 takes "
+                f"text_block uses {text_used} of {text_dims} SVD columns — §4.3 takes "
                 "columns 0..63 of the 256-d embedding"
             )
         order = str(text.get("order", "singular-value"))
-        if order != "singular-value":
+        if not order.startswith("singular-value"):
             raise ContractError(
-                f"review_text order is {order!r}; §4.3 takes the first columns in "
+                f"text_block order is {order!r}; §4.3 takes the first columns in "
                 "singular-value order, which is only a truncation if the order holds"
             )
-        if "text_scale" not in raw:
+        if "text_scale" not in text:
             raise ContractError(
-                "contract ships no `text_scale`; §4.3 freezes it at export time so placements "
+                "text_block ships no `text_scale`; §4.3 freezes it at export time so placements "
                 "stay comparable across runs, and a default would silently move every coordinate"
             )
-        text_scale = float(raw["text_scale"])
+        text_scale = float(text["text_scale"])
 
         omitted = [n for n in BLOCK_NAMES if n not in {b.name for b in blocks}]
         if omitted:
@@ -322,53 +350,81 @@ class FeatureContract:
         return cls.load_path(store.path("feature_contract.json"))
 
 
+def _column_span(columns: Any) -> int:
+    """`"0..63"` -> 64. Zero when the contract states no range."""
+    if not isinstance(columns, str) or ".." not in columns:
+        return 0
+    lo, _, hi = columns.partition("..")
+    try:
+        return int(hi) - int(lo) + 1
+    except ValueError as exc:
+        raise ContractError(f"text_block columns {columns!r} is not a range") from exc
+
+
 def _declared_blocks(
     raw: Mapping[str, Any], blocks_raw: Any
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Both shapes the exporter can ship, reduced to (name, spec) pairs **in declared order**.
+    """`content_blocks` reduced to (name, spec) pairs **in declared order**.
 
-    The bundle in hand ships the flat shape — `blocks: {name: size}` with a separate
-    `block_order` and `feature_names` — and the §4.3 sentence reads as a list of block objects.
-    Order is load-bearing either way ("the nine content blocks *in order*"), so it is taken from
-    the list, or from `block_order`, or from the JSON object's own key order, in that priority.
+    The corpus ships one flat `feature_names` list of every column in the whole contract, and
+    `content_blocks` as `[{name, size}, ...]`. The names belong to the blocks by POSITION: the
+    first `size` names are the first block's, and so on. Order is therefore load-bearing twice
+    over -- §4.3's "nine content blocks *in order*" fixes the offsets, and the same order slices
+    the names -- so a size that does not add up is a contract error rather than a short block.
     """
-    if isinstance(blocks_raw, list):
-        out = []
-        for spec in blocks_raw:
-            name = str(spec.get("name") or "")
-            if not name:
-                raise ContractError("a block in `blocks` has no `name`")
-            out.append((name, dict(spec)))
-        return out
+    if not isinstance(blocks_raw, list):
+        raise ContractError(
+            f"`content_blocks` is a {type(blocks_raw).__name__}, not a list"
+        )
 
-    if not isinstance(blocks_raw, dict):
-        raise ContractError(f"`blocks` is a {type(blocks_raw).__name__}, not a list or an object")
+    flat = raw.get("feature_names")
+    if not isinstance(flat, list):
+        raise ContractError(
+            "`feature_names` is not a flat list of column names; §4.3 makes the per-column "
+            "names part of the exhaustive definition and the app slices them by block size"
+        )
 
-    order = [str(n) for n in (raw.get("block_order") or blocks_raw.keys())]
-    unknown = [n for n in order if n not in blocks_raw]
-    if unknown:
-        raise ContractError(f"block_order names blocks that have no size: {unknown}")
-    missing = [n for n in blocks_raw if n not in order]
-    if missing:
-        raise ContractError(f"blocks {missing} have a size but no place in block_order")
-
-    names = raw.get("feature_names") or {}
     encodings = raw.get("encodings") or {}
     normalisers = raw.get("normalise") or {}
     transforms = raw.get("transforms") or {}
-    return [
-        (
+
+    out: list[tuple[str, dict[str, Any]]] = []
+    cursor = 0
+    for spec in blocks_raw:
+        name = str(spec.get("name") or "")
+        if not name:
+            raise ContractError("a block in `content_blocks` has no `name`")
+        size = spec.get("size")
+        if not isinstance(size, int) or size < 0:
+            raise ContractError(f"block {name!r} has no usable `size` ({size!r})")
+        if cursor + size > len(flat):
+            raise ContractError(
+                f"block {name!r} runs past the end of feature_names: it needs columns "
+                f"{cursor}..{cursor + size - 1} of {len(flat)}"
+            )
+        out.append((
             name,
             {
-                "size": blocks_raw[name],
-                "feature_names": names.get(name),
-                "encoding": encodings.get(name),
-                "normalise": normalisers.get(name),
-                "transform": transforms.get(name),
+                "size": size,
+                "feature_names": [str(n) for n in flat[cursor:cursor + size]],
+                "encoding": spec.get("encoding", encodings.get(name)),
+                "normalise": spec.get("normalise", normalisers.get(name)),
+                "transform": spec.get("transform", transforms.get(name)),
             },
+        ))
+        cursor += size
+
+    if cursor != len(flat):
+        raise ContractError(
+            f"content_blocks account for {cursor} columns but feature_names has {len(flat)}; "
+            "§4.3's definition is exhaustive, so the remainder is a column nothing declares"
         )
-        for name in order
-    ]
+    declared_dim = raw.get("content_dim")
+    if isinstance(declared_dim, int) and declared_dim != cursor:
+        raise ContractError(
+            f"contract says content_dim={declared_dim} and its blocks sum to {cursor}"
+        )
+    return out
 
 
 def unproducible_meta_names(contract: FeatureContract) -> list[str]:

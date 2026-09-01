@@ -142,6 +142,14 @@ def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped,
     assert not mismatched, f"npz array names differ from the shipped bundle: {mismatched}"
 
 
+# §6.4 makes the per-facet axis TSVs "a shipped, authored artifact … shipped in `dna_vocab/v1/`",
+# and the corpus does not ship them — proposal 140 asks for them to be added to §4.3's and §10's
+# manifests, and the exporter has not done it. The fixture therefore carries them under the name
+# the app reads, and the gap is DECLARED here rather than hidden by a looser assertion. The test
+# below also asserts the exception is still needed, so it cannot rot into a permanent excuse.
+SPEC_REQUIRED_NOT_YET_SHIPPED = ("artifacts/dna_vocab/v1/axes/",)
+
+
 def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, built):
     """`importer/dna.py` reads `terms.tsv`, `aliases.tsv` and `adjudications.tsv`; the corpus
     ships `vocab_<facet>_v1.tsv`, `alias_map_v1.tsv` and a per-*title* `adjudications_v1.tsv`.
@@ -150,9 +158,17 @@ def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, bu
     theirs = {f for f in shipped["files"] if f.startswith("artifacts/dna_vocab/")}
     ours = {f for f in built["files"] if f.startswith("artifacts/dna_vocab/")}
     assert theirs, "manifest is stale; the shipped bundle has no dna_vocab directory"
-    assert ours <= theirs, (
-        f"the fixture invents vocabulary files the corpus does not ship: {sorted(ours - theirs)}. "
-        f"Shipped: {sorted(theirs)}."
+
+    declared = {f for f in ours if f.startswith(SPEC_REQUIRED_NOT_YET_SHIPPED)}
+    # The exception has to still be an exception. If the corpus starts shipping axis TSVs, this
+    # fails and the allowlist goes away rather than quietly covering a real drift.
+    assert not (declared & theirs), (
+        f"the corpus now ships {sorted(declared & theirs)} — delete the "
+        "SPEC_REQUIRED_NOT_YET_SHIPPED entry and compare them like everything else."
+    )
+    assert (ours - declared) <= theirs, (
+        f"the fixture invents vocabulary files the corpus does not ship: "
+        f"{sorted((ours - declared) - theirs)}. Shipped: {sorted(theirs)}."
     )
 
 
