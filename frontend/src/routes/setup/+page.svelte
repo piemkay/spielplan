@@ -266,7 +266,9 @@
     gap: 8px;
   }
   .otp {
-    padding: 12px 14px;
+    /* One per member added: the wizard's repeated-row idiom, and `.rows li` in steps 1
+       and 4 is the same box playing the same role. */
+    padding: var(--card-pad-tight);
     display: flex;
     flex-direction: column;
     gap: 5px;

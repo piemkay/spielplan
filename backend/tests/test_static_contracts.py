@@ -86,6 +86,230 @@ def test_the_touch_target_rule_applies_beyond_the_nav():
         assert primitive in body, f"{primitive} is not covered by the touch-target rule"
 
 
+# --- §6.8: a primitive ships its whole box, or every consumer finishes it differently ----
+
+# The three sizes the surfaces converged on once the accidents were told apart from the
+# decisions. A fourth is not forbidden — it is a design decision, made in design.css where the
+# next reader can see it, rather than a number chosen inside one component's scoped block.
+CARD_PAD_TOKENS = ("--card-pad", "--card-pad-tight", "--card-pad-roomy")
+
+# The primitives whose box model design.css owns. Both are checked for shipping one; only
+# `card` has its consumers checked against a scale, because only `card` has a scale. `.pill` has
+# a single size and one deliberate, commented widening (Tonight's Play CTA, for §6's touch
+# floor) — a second one would be the moment to give pills a scale of their own too.
+GUARDED_PRIMITIVES = ("card", "pill")
+SCALED_PRIMITIVES = ("card",)
+
+# Every way to spell "this element's box": the shorthand and the longhands. `padding-inline`
+# alone is enough to move a card off the scale.
+_PADDING = re.compile(r"\bpadding(?:-(?:inline|block|top|right|bottom|left))?[a-z-]*\s*:\s*([^;}]+)")
+
+
+def _style_blocks(source: str) -> str:
+    """Every `<style>` in a component, comments stripped.
+
+    `<style>` with no attributes is not the only spelling — `lang=` and a second block both
+    exist in the wild, and a guard that captured the first bare one would drop whole files
+    silently. The comments go because a rule preceded by one carries it into the selector
+    capture below, which is how the first draft of this guard stopped seeing `Onboarding.svelte`.
+    """
+    blocks = re.findall(r"<style[^>]*>(.*?)</style>", source, re.S)
+    return re.sub(r"/\*.*?\*/", "", "\n".join(blocks), flags=re.S)
+
+
+def _classes(attrs: str) -> set[str]:
+    """The class tokens on an element, compared whole.
+
+    `card-wrap` and `wildcard` both contain the word `card`, and a hyphen is a word boundary —
+    so `\\bcard\\b` calls `PosterCard.svelte` a card surface when it holds no card at all, and
+    then excuses its button reset as if it were a card's padding.
+    """
+    static = re.search(r'class="([^"]*)"', attrs)
+    names = set(static.group(1).split()) if static else set()
+    # `class:card={expr}` is the same claim written as a directive.
+    names |= set(re.findall(r"class:([A-Za-z0-9_-]+)", attrs))
+    return names
+
+
+def _selectors_that_style(source: str, primitive: str) -> set[str]:
+    """Every selector in this file that can reach an element carrying `primitive`.
+
+    Not a search for `.card {`. Two of the fourteen consumers never write that: the sign-in card
+    is a `<form class="card">` styled by the bare `form` selector, and `Onboarding.svelte` styles
+    its `<section class="card">` as `section`. Svelte scopes both — `form.s-xyz`, `section.s-xyz`
+    — so both outrank design.css, and a guard that looked only for the class would have passed
+    the two files most able to drift without anyone seeing it.
+    """
+    selectors: set[str] = set()
+    for tag, attrs in re.findall(r"<([A-Za-z][A-Za-z0-9]*)((?:[^<>\"]|\"[^\"]*\")*)>", source):
+        names = _classes(attrs)
+        if primitive not in names:
+            continue
+        selectors.add(tag)
+        selectors |= {"." + name for name in names if name != primitive}
+    return selectors
+
+
+def _invented_paddings(root: Path) -> list[str]:
+    """Every rule that gives a guarded primitive a box the scale does not name."""
+    offenders = []
+    for path in sorted(root.rglob("*.svelte")):
+        source = path.read_text(encoding="utf-8")
+        style = _style_blocks(source)
+        for primitive in SCALED_PRIMITIVES:
+            reachable = _selectors_that_style(source, primitive)
+            if not reachable:
+                continue
+            reachable.add("." + primitive)
+            for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style):
+                # The whole selector part, not its last word: `.rooms li` styles a row INSIDE a
+                # card, and Tonight's solo picks are `<li class="card">`, so matching on `li`
+                # alone would call every list row a card.
+                if not ({part.strip() for part in selector.split(",")} & reachable):
+                    continue
+                for value in _PADDING.findall(body):
+                    if any(token in value for token in CARD_PAD_TOKENS):
+                        continue
+                    offenders.append(
+                        f"{path.name}: {selector.strip()} {{ padding: {value.strip()} }}"
+                    )
+    return offenders
+
+
+def _unsigned_exceptions(root: Path) -> list[str]:
+    """Uses of a non-default size with no comment saying why.
+
+    The scale stops the vocabulary growing; it does not stop a dense card being quietly promoted
+    to the roomy size, which is the same drift one indirection later. An exception has to be
+    signed, and the signature is a comment on the line above — the same thing every other
+    deliberate deviation in this repository carries.
+    """
+    unsigned = []
+    for path in sorted(root.rglob("*.svelte")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if not any(t in line for t in ("--card-pad-tight", "--card-pad-roomy")):
+                continue
+            above = lines[i - 1].strip() if i else ""
+            if not (above.startswith("/*") or above.startswith("*") or above.endswith("*/")):
+                unsigned.append(f"{path.name}:{i + 1}: {line.strip()}")
+    return unsigned
+
+
+def test_the_card_primitive_ships_its_whole_box_model():
+    """§6.8 is a claim about one surface reading like the next, and a primitive that hands out
+    half of itself cannot keep it.
+
+    `.card` shipped background, border and radius and no padding. Fourteen surfaces finished it
+    seven ways — 30, 26, 18/20, 16/18, 14, 12/14, 12/13 — and the fifteenth finished it not at
+    all, drawing its text on its own border for a whole milestone before anybody looked. `.pill`
+    is the control group in the same stylesheet: it ships its padding and is redefined nowhere.
+    """
+    css = _css()
+    for primitive in GUARDED_PRIMITIVES:
+        rule = re.search(r"\." + primitive + r" \{(.*?)\}", css, re.S)
+        assert rule, f"no `.{primitive}` rule in design.css"
+        assert "padding" in rule.group(1), (
+            f"`.{primitive}` hands out a skin with no box model, so every consumer has to finish it"
+        )
+    for token in CARD_PAD_TOKENS:
+        assert f"{token}:" in css, f"the card scale is missing {token}"
+
+
+def test_no_surface_invents_its_own_card_padding():
+    """A surface may still give a card a different box — a sign-in form that IS the screen wants
+    more room than one of five stacked rows. What it may not do is invent the number.
+
+    This is the failure mode `e2e/specs/13-rank.spec.js` was written for, one property over: nine
+    controls shipped at 32-36 px because a scoped rule outranks design.css's coarse-pointer
+    floor, invisible to a suite that never measured one. Scoped CSS means the local rule wins
+    silently — no conflict, no warning — so nothing but a reader ever notices.
+    """
+    offenders = _invented_paddings(REPO / "frontend" / "src")
+    assert not offenders, (
+        "a card's padding is a decision with three names, not a number to pick:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nUse var(--card-pad), var(--card-pad-tight) or var(--card-pad-roomy). A size none of"
+        " them fits is a change to the scale in design.css, where the next reader can see it."
+    )
+
+
+def test_every_card_size_that_is_not_the_default_says_why():
+    """The scale keeps the vocabulary three wide; this keeps it honest.
+
+    Nothing stops a dense card being quietly promoted to the roomy size, which is the same drift
+    the scale exists to end, one indirection later. So a deviation is signed.
+    """
+    unsigned = _unsigned_exceptions(REPO / "frontend" / "src")
+    assert not unsigned, (
+        "a card that is not the default size says why, in a comment above the line:\n  "
+        + "\n  ".join(unsigned)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "markup", "rule"),
+    [
+        ("by its class", '<div class="card">x</div>', ".card { padding: 19px; }"),
+        ("by its tag", '<form class="card">x</form>', "form { padding: 21px; }"),
+        ("by a companion class", '<div class="drained card">x</div>', ".drained { padding: 23px; }"),
+        ("with no trailing semicolon", '<div class="card">x</div>', ".card { padding: 19px }"),
+        ("by a longhand", '<div class="card">x</div>', ".card { padding-inline: 26px; }"),
+        ("padded to nothing", '<div class="card">x</div>', ".card { padding: 0; }"),
+    ],
+)
+def test_the_card_padding_guard_catches_a_real_violation(tmp_path, name, markup, rule):
+    """docs/TESTING.md: "A guard needs a self-test … a guard that cannot fail reads as coverage
+    while providing none."
+
+    Seven shapes, and five of them are ones an earlier draft of this guard passed. `padding: 0`
+    is in the list because a card padded to nothing is not an exemption, it is the original bug:
+    Tonight shipped a whole milestone drawing its text on its own border.
+    """
+    (tmp_path / "Surface.svelte").write_text(
+        markup + "\n<style>\n  " + rule + "\n</style>\n", encoding="utf-8"
+    )
+    assert _invented_paddings(tmp_path), f"a card padded {name} went unnoticed"
+
+
+def test_the_card_padding_guard_leaves_innocent_files_alone(tmp_path):
+    """The other half of a guard's self-test: what it must NOT say.
+
+    `card-wrap` and `wildcard` both contain the word, and a hyphen is a word boundary — so a
+    guard matching `\\bcard\\b` calls `PosterCard.svelte` a card surface when it holds no card,
+    and then reads its button reset as a card's padding.
+    """
+    (tmp_path / "Wrap.svelte").write_text(
+        '<button class="card-wrap">x</button>\n<style>\n  .card-wrap { padding: 0; }\n</style>\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Rows.svelte").write_text(
+        '<ul><li class="card">x</li></ul>\n<style>\n  .card { padding: var(--card-pad); }\n'
+        "  .rooms li { padding: 8px 0; }\n</style>\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "Attributed.svelte").write_text(
+        '<div class="card">x</div>\n<style lang="css">\n  .card { padding: var(--card-pad-roomy); }\n'
+        "</style>\n",
+        encoding="utf-8",
+    )
+    assert _invented_paddings(tmp_path) == []
+
+
+def test_the_signed_exception_guard_catches_an_unsigned_one(tmp_path):
+    """And the signature guard needs its own violation, for the same reason."""
+    (tmp_path / "Unsigned.svelte").write_text(
+        "<style>\n  .drained { padding: var(--card-pad-roomy); }\n</style>\n", encoding="utf-8"
+    )
+    (tmp_path / "Signed.svelte").write_text(
+        "<style>\n  .drained {\n    /* An empty state: it gets room. */\n"
+        "    padding: var(--card-pad-roomy);\n  }\n</style>\n",
+        encoding="utf-8",
+    )
+    caught = _unsigned_exceptions(tmp_path)
+    assert len(caught) == 1 and "Unsigned.svelte" in caught[0], caught
+
+
 # --- §1, §2: the stack -----------------------------------------------------------------
 
 

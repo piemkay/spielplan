@@ -278,7 +278,9 @@
     gap: 12px;
   }
   .drained {
-    padding: 26px;
+    /* Proposal 37's drained state: it replaces the stage rather than joining a stack,
+       and it is the same terminal-empty object as Home's and ShelfList's. */
+    padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;
     gap: 10px;

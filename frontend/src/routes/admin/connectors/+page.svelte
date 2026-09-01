@@ -303,7 +303,6 @@
     font-weight: 600;
   }
   .card {
-    padding: 16px 18px;
     margin-bottom: 16px;
     display: flex;
     flex-direction: column;

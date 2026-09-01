@@ -28,6 +28,18 @@
   --line-2: rgba(255, 255, 255, 0.13);
   --line-3: rgba(255, 255, 255, 0.14);
 
+  /* The card's box model, as three named sizes rather than a number each surface picks.
+     `.card` used to ship only a skin — background, border, radius — so every consumer had to
+     finish it, and fourteen of them finished it seven ways (30, 26, 18/20, 16/18, 14, 12/14,
+     12/13) while one finished it not at all and drew its text on its own border. `.pill`, which
+     ships its padding, is used in six files and redefined in none.
+
+     A surface may still want a different box; what it may not do is invent the number. Naming
+     one of these keeps the vocabulary three wide and every exception greppable. */
+  --card-pad: 16px 18px;
+  --card-pad-tight: 12px 14px;  /* a dense informational block: a rail panel, a status strip */
+  --card-pad-roomy: 26px;       /* a card that IS the screen: a sign-in form, an empty state */
+
   /* The single accent. Spent on selection and primary actions — nothing else. */
   --ember: #c8613a;
   --ember-lift: #e0865e;
@@ -97,6 +109,7 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
+  padding: var(--card-pad);
 }
 
 /* Poster-forward 2:3 cards. */

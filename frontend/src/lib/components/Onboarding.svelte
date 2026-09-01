@@ -300,10 +300,7 @@
 </section>
 
 <style>
-  /* `.card` in design.css is only the surface (background + border); the box model is the
-     host page's, and this component is not scoped by it. */
   section {
-    padding: 16px 18px;
     display: flex;
     flex-direction: column;
     gap: 10px;

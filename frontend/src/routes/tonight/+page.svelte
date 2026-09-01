@@ -534,10 +534,6 @@
   .why { color: var(--ink-3); font-size: 12.5px; line-height: 1.55; }
   .data { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  /* design.css's `.card` is a skin — background, border, radius — and every surface that uses
-     it pads it itself (account 16/18, home 18/20, login 26). This one did not, so every card on
-     the surface rendered with its content flush against its own border. */
-  .card { padding: 16px 18px; }
   /* design.css gives every input `width: 100%` except checkbox, radio, range and file. A number
      stepper in a row is the case that list does not cover: at full width it pushed the hint onto
      a line of its own and made a one-line control three lines tall.

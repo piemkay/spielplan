@@ -87,7 +87,9 @@
   }
   form {
     width: min(400px, 100%);
-    padding: 26px;
+    /* The same focal form as /login at min(400px, 100%), and §3.1 hands straight from
+       one to the other at first sign-in — seen back to back, so they take one box. */
+    padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;
     gap: 14px;

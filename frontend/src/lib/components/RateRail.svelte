@@ -98,7 +98,10 @@
     display: flex;
     flex-direction: column;
     gap: 7px;
-    padding: 12px 13px;
+    /* Three panels stacked in proposal 43's rail column beside the queue. The rail is
+       dense by construction; a content-card box would make these the roomiest thing in
+       the narrowest column. */
+    padding: var(--card-pad-tight);
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: var(--r-md);

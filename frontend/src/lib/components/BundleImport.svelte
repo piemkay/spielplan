@@ -154,7 +154,9 @@
     gap: 8px;
   }
   .report {
-    padding: 14px;
+    /* A validation strip nested under the file input, never alone on screen: on
+       /admin/data it renders directly beneath `.bundle-active`, which is this size. */
+    padding: var(--card-pad-tight);
     display: flex;
     flex-direction: column;
     gap: 6px;

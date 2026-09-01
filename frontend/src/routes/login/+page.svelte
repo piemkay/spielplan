@@ -99,7 +99,9 @@
   }
   form {
     width: min(380px, 100%);
-    padding: 26px;
+    /* This card IS the screen: centred in an empty grid at min(380px, 100%) with
+       nothing stacked beside it. */
+    padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;
     gap: 14px;

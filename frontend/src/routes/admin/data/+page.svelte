@@ -120,7 +120,8 @@
     font-weight: 600;
   }
   .bundle-active {
-    padding: 12px 14px;
+    /* A one-line status band above the import controls, not a card the eye rests in. */
+    padding: var(--card-pad-tight);
     margin-bottom: 14px;
   }
   .warn {

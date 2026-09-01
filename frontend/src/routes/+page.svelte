@@ -488,7 +488,6 @@
     letter-spacing: 0.04em;
   }
   .degraded {
-    padding: 18px 20px;
     margin-bottom: 18px;
     display: flex;
     flex-direction: column;
@@ -513,7 +512,9 @@
     padding: 22px 0;
   }
   .empty {
-    padding: 30px;
+    /* A centred message with one CTA, not a row in a stack — and it shares this slot
+       with ShelfList's own empty state, so the two are one box or they are a bug. */
+    padding: var(--card-pad-roomy);
     text-align: center;
     display: flex;
     flex-direction: column;

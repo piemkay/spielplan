@@ -80,11 +80,8 @@
     border-color: var(--ember-edge);
   }
   .poster {
-    aspect-ratio: 2 / 3;
-    border-radius: 10px;
-    border: 1px solid var(--line);
-    position: relative;
-    overflow: hidden;
+    /* design.css's `.poster` already sets the frame — aspect ratio, radius, border,
+       positioning and clipping. Only what is this component's own belongs here. */
     transition: border-color 0.12s ease;
   }
   .badge,

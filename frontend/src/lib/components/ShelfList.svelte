@@ -46,7 +46,9 @@
     flex-direction: column;
   }
   .empty {
-    padding: 26px;
+    /* The empty state Home renders into the same slot as its own, and it must not
+       differ from it. */
+    padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;
     gap: 10px;
