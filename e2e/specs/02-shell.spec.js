@@ -43,9 +43,13 @@ test('show the model is off by default, toggles, and persists', async ({ page })
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
 
-  // It is a preference on the account, not a page-local flag: the server has it.
-  const me = await (await page.request.get('/api/auth/me')).json();
-  expect(me.show_model).toBe(true);
+  // It is a preference on the account, not a page-local flag: the server has it. Read with a
+  // retry, as the way back down already is: `aria-checked` flips on the click and the PATCH
+  // lands after it, so a bare read here is a race that fails about one run in twenty.
+  await expect(async () => {
+    const me = await (await page.request.get('/api/auth/me')).json();
+    expect(me.show_model).toBe(true);
+  }).toPass();
 
   // …and it survives a reload.
   await page.reload();
