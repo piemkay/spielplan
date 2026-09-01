@@ -71,10 +71,13 @@ def test_the_fixture_contract_declares_the_keys_the_shipped_contract_declares(sh
     different top level is not a scale model of that file; it is a different file."""
     ours = set(built["json"]["artifacts/feature_contract.json"]["keys"])
     theirs = set(shipped["json"]["artifacts/feature_contract.json"]["keys"])
-    assert theirs <= ours, (
-        "the shipped contract declares keys the fixture does not: "
-        f"{sorted(theirs - ours)}. The parser reads the fixture's vocabulary, so the real "
-        "artifact is rejected -- contract.py raises ContractError('declares no `blocks`')."
+    # Equality, not `theirs <= ours`. A subset check passes the moment the fixture *adds* the
+    # shipped keys while keeping its own `blocks`/`block_order` — and `contract.py` reads
+    # `blocks`, so the real artifact would still be rejected with the test green. That is the
+    # M4 pattern (a test that cannot fail) reintroduced in the test written to prevent it.
+    assert ours == theirs, (
+        f"fixture contract keys {sorted(ours)} != shipped {sorted(theirs)}. "
+        "Extra fixture keys are as bad as missing ones: they are what the parser reads."
     )
 
 
@@ -91,20 +94,65 @@ def test_the_fixture_lists_feature_names_the_way_the_shipped_contract_does(shipp
     )
 
 
-def test_the_fixture_credit_columns_use_the_shipped_grammar(shipped, built):
-    """The defect this whole milestone starts from. The shipped contract names its 244 credit
-    columns `p:<role>:<name>`; the builder emitted `person_id::text`, so every key missed and
-    the block was zero in every coordinate the app has ever computed. The fixture declared
-    `credit:3`, which the parser reduces to the key `"3"` -- a person id -- so the test that
-    should have caught it asserted the implementation's own convention back at it."""
+def test_the_fixture_uses_the_shipped_column_grammar_in_every_block(shipped, built):
+    """Every block, not just credit -- and checking only credit is how the scale of the defect
+    was missed the first time.
+
+    The shipped contract prefixes every column with its block tag: `kw:`, `dna:`, `g:`, `p:`,
+    `genre:`, `country:`, `lang:`, `decade:`, `runtime:`, `award:`, `kind:`. The builders in
+    `placement/features.py` emit bare keys for most of them and `person_id::text` for credit,
+    so all nine content blocks miss, not one. The fixture declared `<block>:<n>` throughout,
+    which the parser reduces to the bare key the builder happens to produce -- so the fixture
+    agreed with the implementation about a grammar neither shares with the corpus.
+
+    Direction is `ours <= theirs`: a scale model may use fewer grammars, never a grammar the
+    shipped contract does not contain.
+    """
     theirs = set(shipped["json"]["artifacts/feature_contract.json"]["feature_names.item_patterns"])
     ours = set(built["json"]["artifacts/feature_contract.json"].get("feature_names.item_patterns", []))
-    credit = {p for p in theirs if p.startswith("p:")}
-    assert credit == {"p:<s>:<s>"}, f"manifest is stale; shipped credit grammar is {credit}"
-    assert credit <= ours, (
-        f"the fixture declares no credit column shaped like {sorted(credit)}; it declares "
-        f"{sorted(p for p in ours if p.startswith(('p:', 'credit')))}. A fixture that names the "
-        "column the way the builder keys it cannot fail when the builder is wrong."
+    assert "p:<s>:<s>" in theirs, f"manifest is stale; shipped patterns are {sorted(theirs)}"
+    # Without this the assertion below passes vacuously: the fixture's `feature_names` is a
+    # dict rather than a flat list, so the extractor records no patterns at all and the empty
+    # set is a subset of everything. An emptiness that satisfies the check is the same failure
+    # this file exists to catch, one level further in.
+    assert ours, (
+        "the fixture's contract yields no column patterns at all -- `feature_names` is not a "
+        "flat list of names, so this comparison would pass without comparing anything."
+    )
+    assert ours <= theirs, (
+        f"the fixture declares column grammars the shipped contract does not have: "
+        f"{sorted(ours - theirs)}. Shipped: {sorted(theirs)}. A fixture that names columns the "
+        "way the builder keys them cannot fail when the builder is wrong."
+    )
+
+
+def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped, built):
+    """`backbone.npz` ships `title_ids`; `backbone.py:84` requires `title_id`, and so do
+    `reconcile.py:110` and the validator. `review_text_emb.npz` ships `title_ids` and
+    `features.py:166` reads `title_id`. One character, and §8 stage 9 cannot find a coordinate.
+
+    Only files present in both are compared: a scale model may omit an artifact, but an
+    artifact it does ship must be named the way the corpus names it.
+    """
+    theirs = shipped["npz"]
+    ours = built["npz"]
+    shared = sorted(set(ours) & set(theirs))
+    assert shared, "the fixture ships no npz the corpus ships -- the comparison is vacuous"
+    mismatched = {f: {"fixture": ours[f], "shipped": theirs[f]} for f in shared if ours[f] != theirs[f]}
+    assert not mismatched, f"npz array names differ from the shipped bundle: {mismatched}"
+
+
+def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, built):
+    """`importer/dna.py` reads `terms.tsv`, `aliases.tsv` and `adjudications.tsv`; the corpus
+    ships `vocab_<facet>_v1.tsv`, `alias_map_v1.tsv` and a per-*title* `adjudications_v1.tsv`.
+    The whole naming layer is written against files that do not exist, and `dna_tag` /
+    `dna_projected` both FK to `dna_vocabulary(version)`, so no DNA row can load at all."""
+    theirs = {f for f in shipped["files"] if f.startswith("artifacts/dna_vocab/")}
+    ours = {f for f in built["files"] if f.startswith("artifacts/dna_vocab/")}
+    assert theirs, "manifest is stale; the shipped bundle has no dna_vocab directory"
+    assert ours <= theirs, (
+        f"the fixture invents vocabulary files the corpus does not ship: {sorted(ours - theirs)}. "
+        f"Shipped: {sorted(theirs)}."
     )
 
 

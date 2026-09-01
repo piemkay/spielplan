@@ -1762,12 +1762,12 @@ why = "§5.3 makes thinness a badged, parked condition. The credit block missed 
 tests = []
 
 [[requirement]]
-id = "data-rules-credit-block-keyed-as-the-contract-names-it"
+id = "data-rules-feature-blocks-keyed-as-the-contract-names-them"
 spec = "§4.3 feature_contract.json + §8 stage 9"
 milestone = "M4.5"
 kind = "backend"
-what = "The credit block is keyed by the column names the shipped contract declares — `p:<role>:<name>` — and a title's director, composer and cast land in those columns. Against the shipped contract's 244 credit columns, a title whose crew the contract names produces a non-zero credit block."
-why = "§4.3 calls feature_contract.json 'the exhaustive definition of the tower's input' and §8 stage 9 builds vectors 'from this file and nothing else'. The builder emitted person_id::text, so all 244 columns were zero in every coordinate the app has ever computed."
+what = "Every one of the nine content blocks is keyed by the column names the shipped contract declares — kw:, dna:, g:, p:<role>:<name>, genre:, country:, lang:, decade:, runtime:, award:, kind: — and not by bare database values or by row ids. A title whose keywords, genres, DNA terms, genome tags, countries, crew and awards the contract names produces a non-zero column in each of those blocks, and an import-time check reports any block whose declared columns the builder's keys never hit."
+why = "§4.3 calls feature_contract.json the exhaustive definition of the tower's input and §8 stage 9 builds vectors from this file and nothing else. Measured against the shipped contract every block misses on every key — 0 of 84,876 distinct credit keys, 0 of 97,287 keyword columns, 0 of 1,128 genome tags, 0 of 656 genres — so the tower receives the 64 text columns and a dozen meta columns out of 6,499. Naming only the credit block would leave seven blocks structurally zero."
 tests = []
 
 [[requirement]]
@@ -1847,8 +1847,35 @@ id = "library-rate-title-card-text-and-art-resolve-from-title-meta"
 spec = "§4.1 (title_meta) + §6.0 (title detail card)"
 milestone = "M4.5"
 kind = "integration"
-what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video by a stated per-source precedence, not from columns on `title`: a title with meta rows from two sources renders one coherent card, dropping the preferred source falls back to the next whole block rather than mixing fields across sources, and a title with no meta row at all renders the card without them rather than erroring."
-why = "§4.1 keeps title_meta's per-source rows because 'one block = one droppable source', and the corpus ships plot_short/plot_full/tagline/poster_url/backdrop_url there and the trailer in title_video — while `title` carries none of them. Spielplan read flattened columns the bundle does not export, so every one of these fields has been NULL for every real title; mixing fields across sources would produce one card assembled from two disagreeing descriptions of the film."
+what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video **per field**, by the priority order the corpus itself uses, treating NULL, empty string and zero as absent: a title whose preferred source carries no tagline takes the next source's tagline while keeping the preferred source's plot, and a title with no meta row renders the card without those fields rather than erroring. The order travels with the bundle rather than being hard-coded in the app."
+why = "The corpus already resolves per field: mdc/export.py:34-45 walks SOURCE_PRIORITY (tmdb, omdb, trakt, tvmaze, wikipedia, jellyfin, wikidata, letterboxd, rottentomatoes, metacritic, mpst) with mpst last on purpose because its synopses give the ending away. Per field rather than per block because the sources are complementary, not ranked: tmdb carries tagline and poster and plot, omdb carries poster and no tagline, and wikipedia is the only source carrying plot_short — so a whole-block rule blanks fields another source has. §4.1's 'one block = one droppable source' is a storage invariant, not a rendering rule. Spielplan read flattened columns the bundle does not export, so all five fields have been NULL for every real title."
+tests = []
+
+[[requirement]]
+id = "data-rules-model-artifacts-load-from-the-shipped-bundle"
+spec = "§4.3 + §8 stage 9"
+milestone = "M4.5"
+kind = "integration"
+what = "Every model artifact the app reads loads from a bundle the corpus actually produced: cold_tower.pt in the form the exporter writes it, backbone.npz and review_text_emb.npz by the array names they ship, the frozen text_scale read from where the contract puts it, and the bundle and vocabulary versions read from where the bundle records them. A bundle missing any of these fails validation naming the artifact and the field, rather than loading a tower that cannot be constructed or reporting a version as 'unknown'."
+why = "Run against the shipped bundle the artifact validator fails six times and tower.py refuses the checkpoint outright: cold_tower.pt is a bare state_dict, not the dict carrying state_dict/version/arch/input_dim that tower.py:136 requires; backbone.npz and review_text_emb.npz ship title_ids where the loaders demand title_id; text_scale is inside text_block, not at the top level. §8 stage 9 — the stage M5's exit criterion runs through — cannot place a single title."
+tests = []
+
+[[requirement]]
+id = "data-rules-vocabulary-layer-loads-the-files-the-corpus-ships"
+spec = "§4.3 dna_vocab/v1 + §4.1 rule 1 + §10 manifest"
+milestone = "M4.5"
+kind = "integration"
+what = "The vocabulary loader reads the files the corpus ships — the per-facet vocab TSVs, the alias map, and adjudications in their real per-title shape — rather than file names the bundle does not contain, and a per-title adjudication is stored per title rather than collapsed onto one row per term. Every DNA table §10's manifest names — tag, projected, evidence, annotation, term_signal, exclusion — is loaded or reported as skipped with a reason."
+why = "dna_tag and dna_projected both reference dna_vocabulary(version), so a vocabulary that does not load takes the whole naming layer with it and §4.1 rule 1's two tiers are empty rather than separate. The shipped adjudications ledger is keyed by scope and title_id as well as term, and an upsert keyed on term alone would collapse 817 per-title verdicts onto one row per term — silently, and in the direction that loses data."
+tests = []
+
+[[requirement]]
+id = "data-rules-validation-reports-rather-than-raises"
+spec = "§10 (migration report) + §6.6 Data"
+milestone = "M4.5"
+kind = "integration"
+what = "Validating a bundle whose schema the app does not expect produces a report naming the table and column, never an unhandled exception: the validator run over a real bundle yields a failure list an operator can read, and no query inside the validator references a column without the bundle having been checked for it first."
+why = "§10 promises a migration report with 'validation failures'. Against the shipped bundle the content validator raises OperationalError: no such column: e.dna_tag_id, so the operator gets a stack trace instead of the report, and every genuine schema failure after that point is never reached — a validator that dies on the first surprise cannot enumerate the rest."
 tests = []
 
 [[requirement]]
