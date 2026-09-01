@@ -1778,6 +1778,69 @@ Everything else in this document is free copy, a constant to pin, or a state to 
 
 ---
 
+## Decisions taken (owner, 2026-09-01)
+
+Two, and they change the relationship between this app and the corpus project rather than any
+one surface. They are numbered because `CLAUDE.md` requires work to cite `decision N`, and
+because three coverage rows were citing "owner decision 2026-09-01" with nothing to point at.
+
+| # | Question | Decision |
+|---|---|---|
+| 162 | Is the corpus project a standing upstream, or a one-time seed? | **A one-time seed for content, a standing upstream for models.** The corpus supplies the trained artifacts; movie data is exported once by a compatible exporter and imported once; every later title is acquired by Spielplan itself (§7.2, §8); **Spielplan owns all ids** from the seed onwards. This supersedes §4.1's reading of `title.id` as "carried over verbatim" from a recurring bundle and narrows §10's re-import to models. |
+| 163 | What happens when the DNA vocabulary changes? | **Deferred, and refused in the meantime.** A vocabulary change is a fundamental data migration, not a bundle swap, and it gets its own migration plan when it is needed. Until that plan exists the importer **refuses** a bundle whose vocabulary version differs from the active one, naming the missing migration — rather than activating it and leaving both DNA tiers stranded at the old version. |
+
+### 162. The corpus supplies models; content seeds once; Spielplan owns the ids
+
+**What the spec says.** §4.1: "canonical key: **`title.id` integer** — carried over verbatim".
+§10: "Bundle re-import (new vocabulary, retrained backbone) is a planned admin event with a
+diff report", with `content.sqlite` listed as part of the bundle.
+
+**Why it changes.** Under the standing-upstream reading, a title the household acquires from
+Jellyfin and a title a later bundle brings are two rows for one film, and §10 says nothing about
+reconciling them. Worse, the corpus's `title.id` is `INTEGER PRIMARY KEY AUTOINCREMENT` whose
+`sqlite_sequence` currently reads 21442 — so an app minting "above the imported maximum" starts
+at exactly the id the corpus will mint next, and the model bundle still carries content ids in
+`backbone.npz`, `review_text_emb.npz`, `seed_list.json` and `corrections_v1.tsv`. Two minters in
+one namespace, with no detector.
+
+**The decision.** Content arrives once. Spielplan mints from a range disjoint from the corpus's,
+below 2^31 because every id column is `integer` and `ledger_fit.title_ids` is `int32`. The
+importer refuses a bundle whose ids reach into Spielplan's range, and the model bundle carries
+an identity column row-aligned to its title ids so a corpus-side re-identification is caught
+rather than trusted. Corpus ids are adopted verbatim at the seed: four read paths are id-keyed,
+and `content_X.npz` and `item_priors.npz` carry no id vector at all, so a permutation of them
+could not be checked by anything.
+
+**Cost.** Milestone M4.5, which is not in §12. `rating_source.id` stays frozen and is explicitly
+**not** Spielplan's (§4.1 rule 4), and neither are the MovieLens ids in `ml_link` /
+`ml_genome_tag`.
+
+### 163. A vocabulary change is a migration, not an import
+
+**What the spec says.** §14 risk 7: "Vocabulary evolution across the project boundary —
+vocabulary changes happen in the corpus project and arrive as bundle re-imports with migration
+reports." §10 lists "new vocabulary" as a re-import trigger.
+
+**Why it changes.** Under decision 162 a re-import carries models, not content. A models-only
+bundle shipping `dna_vocab/v2` would leave `dna_tag` and `dna_projected` at v1 while the feature
+builder filters on the active version — so **both DNA blocks go empty for every title**, which
+is a silent catastrophe rather than an error. The projected tier the app could re-derive itself
+(§8 stage 8, the alias map); the extracted tier could not, because re-extraction is paid LLM
+work that does not exist before M5, and 2,016 titles carry quote-verified tags that no
+re-projection reproduces.
+
+**The decision.** The migration is real work and gets a real plan, later. Until then the
+importer refuses a vocabulary version change and says why. A refusal an operator can read beats
+a swap that empties the naming layer, and the refusal is what keeps the deferral honest: the
+problem stays visible instead of arriving as "why is every DNA card blank".
+
+**Cost.** One validation and one coverage row now; a migration plan when a v2 vocabulary
+actually exists.
+
+
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

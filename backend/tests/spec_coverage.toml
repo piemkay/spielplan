@@ -1790,7 +1790,7 @@ tests = []
 
 [[requirement]]
 id = "platform-app-minted-ids-are-partitioned-from-the-corpus"
-spec = "§4.1 (canonical key) + §8 stage 1 + §10"
+spec = "§4.1 (canonical key) + §8 stage 1 + §10 (decision 162)"
 milestone = "M4.5"
 kind = "integration"
 what = "Spielplan mints title and person ids from a range disjoint from the corpus's, and the importer refuses any bundle whose title or person ids — or whose backbone.npz, review_text_emb.npz, seed_list.json or corrections_v1.tsv title ids — fall inside Spielplan's minted range, naming the offending id. The sequence is positioned by the seed import rather than by the migration, so a fresh install that has not seeded cannot mint an id the corpus already used."
@@ -1799,7 +1799,7 @@ tests = []
 
 [[requirement]]
 id = "platform-model-bundle-identity-is-checked-not-trusted"
-spec = "§10 + §4.3 backbone.npz"
+spec = "§10 + §4.3 backbone.npz (decision 162)"
 milestone = "M4.5"
 kind = "integration"
 what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. An identity vector that is absent is itself a validation failure rather than a skipped check."
@@ -1808,7 +1808,7 @@ tests = []
 
 [[requirement]]
 id = "platform-content-seeds-once-models-reimport"
-spec = "§10 (swap sequence) + §12"
+spec = "§10 (swap sequence) + §12 (decision 162)"
 milestone = "M4.5"
 kind = "integration"
 what = "A models-only bundle imports and hot-swaps without content present, running §10's rebuild set; a content seed is accepted exactly once and a second content import is refused with that reason rather than upserting; and the two are distinguishable in artifact_bundle so the admin board can say which kind of import produced a version."
@@ -1817,7 +1817,7 @@ tests = []
 
 [[requirement]]
 id = "platform-movie-data-backup-and-restore"
-spec = "§2 Backups + §10 (owner decision 2026-09-01)"
+spec = "§2 Backups + §10 (decision 162)"
 milestone = "M4.5"
 kind = "integration"
 what = "An admin-triggered movie-data backup writes a restorable archive of the content spine, the DNA layer and the review store, and of nothing user-specific: no verdict, duel, tier_edit, ledger, session, passkey, push subscription or connector secret appears in it. Restoring it into an empty install reproduces the same title, person and DNA rows; carries the title and person sequence positions forward, so the first acquisition after a restore mints an id that collides with nothing; and preserves title.origin, so §10's rebuild set still names the app-acquired titles."
@@ -1876,6 +1876,15 @@ milestone = "M4.5"
 kind = "integration"
 what = "Validating a bundle whose schema the app does not expect produces a report naming the table and column, never an unhandled exception: the validator run over a real bundle yields a failure list an operator can read, and no query inside the validator references a column without the bundle having been checked for it first."
 why = "§10 promises a migration report with 'validation failures'. Against the shipped bundle the content validator raises OperationalError: no such column: e.dna_tag_id, so the operator gets a stack trace instead of the report, and every genuine schema failure after that point is never reached — a validator that dies on the first surprise cannot enumerate the rest."
+tests = []
+
+[[requirement]]
+id = "platform-vocabulary-change-is-refused-not-degraded"
+spec = "§14 risk 7 + §10 (decision 163)"
+milestone = "M4.5"
+kind = "integration"
+what = "A bundle whose vocabulary version differs from the active one is refused at validation with a reason naming the missing migration, and nothing is staged, flipped or written; the active vocabulary, both DNA tiers and every title's DNA card are exactly as they were before the attempt. A bundle carrying the same vocabulary version imports normally, so the refusal is specific to the change rather than to the check."
+why = "Decision 163 defers vocabulary migration as a data problem in its own right. Under decision 162 a re-import carries models and not content, so a bundle shipping a new vocabulary would leave dna_tag and dna_projected at the old version while the feature builder filters on the active one -- both DNA blocks empty for every title, and empty is not an error anywhere in the read path. A refusal an operator can read is what keeps the deferral honest; a swap that silently empties the naming layer would surface as 'why is every DNA card blank' months later."
 tests = []
 
 [[requirement]]
