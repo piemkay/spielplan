@@ -63,7 +63,6 @@ kind = "integration"
 what = "The nightly job writes a pg_dump into /data/backups and prunes to the newest 14; the resulting dump contains no plaintext connector secret (searching it for a known secret value finds nothing) and restoring it without SECRETS_KEY leaves connector config undecryptable rather than usable."
 why = "§2: \"Dumps contain ciphertext only — back up the env file (SECRETS_KEY) alongside them\"; rotation 14 is the stated retention."
 tests = []
-waived = "The nightly dump job does not exist yet: docker-compose.yml declares only db, backend and worker (the /data/backups volume is mounted but nothing writes to it), and ops/ holds only backend.Dockerfile, compose.dev.yml and devstub.py, so there is no rotation code to assert against. The restore half additionally needs a pg_dump binary and a restore-into-a-second-database harness that conftest.py's single-connection `db` fixture does not provide."
 
 [[requirement]]
 id = "platform-key-rotation-semantics"
@@ -1814,6 +1813,24 @@ milestone = "M4.5"
 kind = "integration"
 what = "A models-only bundle imports and hot-swaps without content present, running §10's rebuild set; a content seed is accepted exactly once and a second content import is refused with that reason rather than upserting; and the two are distinguishable in artifact_bundle so the admin board can say which kind of import produced a version."
 why = "The owner's direction: the corpus supplies trained models, movie data is seeded once, every later title is acquired by Spielplan. The importer requires content.sqlite (bundle.py:190) and would reject a models-only bundle outright, while §10's rebuild set — the reason bundle_version is stamped on placements, priors and scores — is exactly what a model update still needs."
+tests = []
+
+[[requirement]]
+id = "platform-movie-data-backup-and-restore"
+spec = "§2 Backups + §10 (owner decision 2026-09-01)"
+milestone = "M4.5"
+kind = "integration"
+what = "An admin-triggered movie-data backup writes a restorable archive of the content spine, the DNA layer and the review store, and of nothing user-specific: no verdict, duel, tier_edit, ledger, session, passkey, push subscription or connector secret appears in it. Restoring it into an empty install reproduces the same title, person and DNA rows; carries the title and person sequence positions forward, so the first acquisition after a restore mints an id that collides with nothing; and preserves title.origin, so §10's rebuild set still names the app-acquired titles."
+why = "Owner decision 2026-09-01: the corpus supplies trained models and the movie data is Spielplan's to keep. Two failure modes make this testable rather than obvious. The id sequence is positioned by the seed import, an event that by definition never runs again, so a restore that does not carry setval mints id 1 and the app cannot acquire a single title. And title.origin defaults to 'bundle' (0008_placement.sql:47), so a restore that drops the column silently re-labels every acquired title and reconcile.py stops re-placing them."
+tests = []
+
+[[requirement]]
+id = "platform-backup-restore-ordering-is-explicit"
+spec = "§10 swap sequence + §2 Backups"
+milestone = "M4.5"
+kind = "integration"
+what = "Restoring movie data and loading a model bundle have one correct order, and the wrong one is refused with its reason rather than half-applied: a model bundle loaded into an install with no content is refused before it writes anything, and the refusal names content as the missing prerequisite. After a correct restore-then-load, every owned title has a coordinate — §12's M2 exit criterion reads the same number it read before the backup."
+why = "§12's M2 criterion is a count of owned titles with no coordinate, which reads zero both when everything is placed and when there is nothing to place. A restore that silently produced an empty catalog would satisfy it for the wrong reason, so the ordering has to fail loudly instead of arriving at a number that looks right."
 tests = []
 
 [[requirement]]
