@@ -123,7 +123,7 @@
            are in is a `resume` control. Without this the restore that keeps a reload from
            stranding somebody becomes a trap of its own — one live room and the surface has no
            other door. -->
-      <button class="pill back" onclick={toDoor} data-testid="tonight-back">Tonight</button>
+      <button class="pill back" onclick={toDoor} data-testid="tonight-back">Back</button>
     {/if}
     {#if tonight.error}
       <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
@@ -227,7 +227,7 @@
 
     <!-- §6.2 step 2: "active sessions are visible to every household device … with tappable
          empty seats". -->
-    <div class="rooms" data-testid="tonight-rooms">
+    <div class="rooms card" data-testid="tonight-rooms">
       <p class="data label">OPEN ROOMS</p>
       {#if tonight.rooms.length === 0}
         <p class="why" data-testid="tonight-no-rooms">No room is open right now.</p>
@@ -430,7 +430,7 @@
         {/if}
       </div>
 
-      <div data-testid="tonight-runners-up">
+      <div class="runners-up card" data-testid="tonight-runners-up">
         <p class="data label">RUNNERS-UP</p>
         <ul>
           {#each tonight.result.runners_up ?? [] as card (card.title_id)}
@@ -443,7 +443,7 @@
       </div>
 
       {#if tonight.result.wildcard}
-        <div class="wildcard" data-testid="tonight-wildcard">
+        <div class="wildcard card" data-testid="tonight-wildcard">
           <p class="data label">WILDCARD</p>
           <p>{tonight.result.wildcard.name}</p>
           <!-- §6.4's "honestly labelled". Served, not spelled here: the words are the rule. -->
@@ -534,6 +534,20 @@
   .why { color: var(--ink-3); font-size: 12.5px; line-height: 1.55; }
   .data { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* design.css's `.card` is a skin — background, border, radius — and every surface that uses
+     it pads it itself (account 16/18, home 18/20, login 26). This one did not, so every card on
+     the surface rendered with its content flush against its own border. */
+  .card { padding: 16px 18px; }
+  /* design.css gives every input `width: 100%` except checkbox, radio, range and file. A number
+     stepper in a row is the case that list does not cover: at full width it pushed the hint onto
+     a line of its own and made a one-line control three lines tall.
+     `flex-basis` rather than `width`, because that rule's four `:not()`s make it specificity
+     0-4-1 and no reasonable selector here outranks it — but the row is a flex container, so the
+     basis decides the main size and `width` never gets a say. */
+  .controls input[type='number'] { flex: 0 0 4.5rem; }
+  /* The one range control in the app. Left to the user agent it draws in the platform's blue,
+     which is the one colour §6.8's surface does not otherwise contain. */
+  .controls input[type='range'] { accent-color: var(--ember); }
   .quiet { opacity: 0.85; }
   .controls { display: flex; flex-direction: column; gap: 10px; }
   .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -547,7 +561,12 @@
   .big { font-size: 16px; font-weight: 600; }
   .join form { display: flex; gap: 8px; }
   .join input { min-height: var(--touch); flex: 1; }
-  .rooms ul, .seats, .slate, .picks, .matches { list-style: none; margin: 0; padding: 0; }
+  /* Every list on this surface is reset, and the runners-up list was the one that was not:
+     it rendered with the user agent's bullets and indent beside three sibling blocks that had
+     neither. */
+  .rooms ul, .seats, .slate, .picks, .matches, .reveal ul {
+    list-style: none; margin: 0; padding: 0;
+  }
   .rooms li, .seats li {
     display: flex; justify-content: space-between; align-items: center; gap: 10px;
     padding: 8px 0; border-bottom: 1px solid var(--line);
@@ -564,8 +583,21 @@
   .poster:hover, .poster:focus-visible { border-color: var(--ember-edge); }
   .beat { letter-spacing: 0.2em; color: var(--ember); }
   .winner { border-color: var(--ember-edge); }
-  .picks li, .slate li { padding: 6px 0; }
-  .picks li { display: flex; flex-direction: column; gap: 4px; }
+  /* `.slate` rows are plain list items; `.picks` rows are cards, so they take the card's own
+     padding rather than a bare vertical rhythm. Sharing one rule left them with no horizontal
+     padding at all, text starting on the border. */
+  .slate li { padding: 6px 0; }
+  /* The pick cards and the wildcard beside them are the same object and lay out the same way.
+     Only the list items had the column rule, so the wildcard's three spans ran together on one
+     line: "Tampopo a stretch - outside your usual fits your 130 min". */
+  .picks li, .solo > .card { display: flex; flex-direction: column; gap: 4px; }
+  /* Cards in a stack need a gap or their borders meet and read as one box with rules across it. */
+  .picks { display: flex; flex-direction: column; gap: 10px; }
+  /* Every step wrapper is a column of blocks and none of them said so, so each one's children
+     sat flush against each other in normal flow while `section`'s own gap spaced the steps. */
+  .solo, .reveal, .round, .rooms { display: flex; flex-direction: column; gap: 12px; }
+  .wildcard, .runners-up { display: flex; flex-direction: column; gap: 6px; }
+  .wildcard p, .runners-up p { margin: 0; }
   .error { color: var(--ember-lift); font-size: 12.5px; }
   header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .back { min-height: var(--touch); }

@@ -64,8 +64,15 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-surface')).toBeVisible();
     await expect(page.getByTestId('tonight-booting')).toHaveCount(0);
     const back = page.getByTestId('tonight-back');
-    if (await back.isVisible().catch(() => false)) await back.click();
-    await expect(page.getByTestId('tonight-controls')).toBeVisible();
+    const controls = page.getByTestId('tonight-controls');
+    // Settle on ONE of the two before reading either. `isVisible()` is a point-in-time read, and
+    // the surface has a moment where neither is drawn — the step has moved into a room but that
+    // room's payload has not arrived, so the door is gone and its replacement is not there yet.
+    // Reading `back` inside that window answers "not visible", the click is skipped, and the
+    // room paints a beat later over an assertion that is already waiting for the door.
+    await expect(back.or(controls).first()).toBeVisible();
+    if (await back.isVisible()) await back.click();
+    await expect(controls).toBeVisible();
     if (rewatches) await page.getByTestId('tonight-rewatches').check();
     if (guests) await page.getByTestId('tonight-guests').fill(String(guests));
   }
