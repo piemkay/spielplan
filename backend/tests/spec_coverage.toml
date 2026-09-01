@@ -1834,6 +1834,24 @@ why = "§12's M2 criterion is a count of owned titles with no coordinate, which 
 tests = []
 
 [[requirement]]
+id = "data-rules-importer-maps-the-shipped-content-schema"
+spec = "§10 (the bundle) + §4.1"
+milestone = "M4.5"
+kind = "integration"
+what = "Every column the importer's table mapping names exists in the schema the corpus ships, and the mapping reads the shipped names (title.primary_title, title.original_title, credit.billing_order, title_alias.source, dna_projected.n_sources, platform_rating.metric/value, rating_source.scale_lo/scale_hi) rather than names the corpus does not export. A mapping that names a column the bundle lacks fails the import with that table and column named, instead of loading a column of NULLs."
+why = "The mapping was written as identity pairs against an imagined schema — 'name': 'name' where the corpus ships primary_title — so essentially every table would load empty or fail. A missing source column currently produces NULLs rather than a report line, which is the same silence that hid three unloaded tables."
+tests = []
+
+[[requirement]]
+id = "library-rate-title-card-text-and-art-resolve-from-title-meta"
+spec = "§4.1 (title_meta) + §6.0 (title detail card)"
+milestone = "M4.5"
+kind = "integration"
+what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video by a stated per-source precedence, not from columns on `title`: a title with meta rows from two sources renders one coherent card, dropping the preferred source falls back to the next whole block rather than mixing fields across sources, and a title with no meta row at all renders the card without them rather than erroring."
+why = "§4.1 keeps title_meta's per-source rows because 'one block = one droppable source', and the corpus ships plot_short/plot_full/tagline/poster_url/backdrop_url there and the trailer in title_video — while `title` carries none of them. Spielplan read flattened columns the bundle does not export, so every one of these fields has been NULL for every real title; mixing fields across sources would produce one card assembled from two disagreeing descriptions of the film."
+tests = []
+
+[[requirement]]
 id = "map-taste-admin-cost-estimate-before-enabling"
 spec = "§6.6 Connectors spend guard + §8.4"
 milestone = "M5"
