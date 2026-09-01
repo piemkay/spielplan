@@ -24,7 +24,11 @@ TESTS = Path(__file__).resolve().parent
 REPO = TESTS.parents[1]
 MAP = TESTS / "spec_coverage.toml"
 
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7"]
+# M4.5 is not in §12. It exists because §12's M0 importer was verified against a fixture
+# that did not resemble the artifact it stands in for, and M5's pipeline cannot be built
+# on a placement path that has never met the real feature contract. See
+# docs/milestones/M4.5-plan.md.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 

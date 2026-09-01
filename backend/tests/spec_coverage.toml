@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4"
+current_milestone = "M4.5"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -1725,6 +1725,96 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_undo_reaches_only_your_own_last_live_answer",
     "backend/tests/test_tonight_integration.py::test_a_finished_round_cannot_be_edited",
 ]
+
+[[requirement]]
+id = "data-rules-fixture-matches-the-shipped-artifact"
+spec = "§10 (the bundle) + §4.3"
+milestone = "M4.5"
+kind = "backend"
+what = "A committed shape manifest, derived from a real corpus bundle, pins every structural fact the importer relies on: feature_contract.json's top-level keys and the type of feature_names, the header of corrections_v1.tsv, the column list of every content.sqlite table the importer maps, and the artifact file set. The test fixture is asserted against that manifest, so a fixture whose shapes were invented to match the importer fails. When CORPUS_BUNDLE_DIR points at a real bundle the same manifest is additionally checked against it."
+why = "The fixture reproduced every measured landmine and invented every shape around them, so the whole import layer was verified against the implementation's own reading. test_the_vector_is_built_from_the_database_through_the_contracts_own_columns asserts contract.block('credit').column('3') — the person id the builder emits — and passes, while the shipped contract names that column p:director:Adam Arkin."
+tests = []
+
+[[requirement]]
+id = "data-rules-import-reports-every-shipped-table"
+spec = "§10 (migration report) + §6.6 Data"
+milestone = "M4.5"
+kind = "integration"
+what = "The import report accounts for every table the bundle ships: each one is either loaded with a row count, or named as skipped with a reason. A table present in the bundle and absent from the importer's mapping produces a report line, never silence — asserted by importing a bundle carrying a table the mapping does not know."
+why = "§10 requires 'counts per table'. ImportReport only tracked unmapped columns *within* mapped tables, so three shipped tables — title_meta (46,318 rows), title_list_membership (35,295) and imdb_ratings (14,858) — were dropped with no line anywhere, and nothing in the app could notice."
+tests = []
+
+[[requirement]]
+id = "data-rules-title-meta-multi-source-rows-kept"
+spec = "§4.1 (title_meta) + §10"
+milestone = "M4.5"
+kind = "integration"
+what = "title_meta is loaded, with its per-source rows kept rather than collapsed — a title carrying meta rows from two sources keeps both after import — and it is readable through the content spine. 'One block = one droppable source' survives the round trip."
+why = "§4.1 names title_meta in the content spine with that exact rule. It has a table (0003_content.sql:72) and 46,318 rows in the bundle, and appeared in no file under backend/spielplan/ — created, shipped, and never loaded or read."
+tests = []
+
+[[requirement]]
+id = "data-rules-a-feature-block-that-never-hits-is-not-present"
+spec = "§4.3 feature_contract.json + §5.3 (thin-title badge)"
+milestone = "M4.5"
+kind = "backend"
+what = "A content block whose database keys match none of the columns the contract declares is reported as degraded rather than present: the miss count is persisted with the placement, is_thin sees it, and the title is badged and parked like any other thin title. A block that is present and populated, one that is legitimately absent, and one whose keys all miss are three distinguishable states."
+why = "§5.3 makes thinness a badged, parked condition. The credit block missed on every key in every placement ever computed and was still marked present, because features.py counted the misses into `unmapped` and reconcile.py's upsert never persisted them — so a block contributing nothing was indistinguishable from one contributing everything."
+tests = []
+
+[[requirement]]
+id = "data-rules-credit-block-keyed-as-the-contract-names-it"
+spec = "§4.3 feature_contract.json + §8 stage 9"
+milestone = "M4.5"
+kind = "backend"
+what = "The credit block is keyed by the column names the shipped contract declares — `p:<role>:<name>` — and a title's director, composer and cast land in those columns. Against the shipped contract's 244 credit columns, a title whose crew the contract names produces a non-zero credit block."
+why = "§4.3 calls feature_contract.json 'the exhaustive definition of the tower's input' and §8 stage 9 builds vectors 'from this file and nothing else'. The builder emitted person_id::text, so all 244 columns were zero in every coordinate the app has ever computed."
+tests = []
+
+[[requirement]]
+id = "data-rules-corrections-ledger-parsed-at-its-real-header"
+spec = "§4.3 corrections_v1.tsv + §8 stage 3"
+milestone = "M4.5"
+kind = "backend"
+what = "corrections_v1.tsv is parsed at the header the corpus actually ships (kind, title_id, value, evidence, note), and a file whose header the parser does not recognise fails the import report naming the missing column — never raises, and never silently loads zero corrections."
+why = "§8 stage 3 re-applies this ledger at every derive and §14.5 is the scar for what happens when it is not applied. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
+tests = []
+
+[[requirement]]
+id = "data-rules-seed-registry-and-onboarding-list-are-distinct"
+spec = "§4.3 seed_list.json + §10 manifest"
+milestone = "M4.5"
+kind = "integration"
+what = "The corpus's seed_list — a list registry (id, slug, name, source, kind, category, weight, item_count, fetched_at, notes) — and Spielplan's 100-title decade-stratified onboarding list are distinct tables with distinct names; importing a bundle carrying the registry writes no row into the onboarding list, and the onboarding list is populated only from seed_list.json."
+why = "§4.3's seed_list.json is the onboarding list; §10's manifest also ships 'seed_list tables' meaning the registry. Two different artifacts share one name, and load.py mapped the registry onto the onboarding table — which COPYs 238 all-NULL rows into a NOT NULL primary key."
+tests = []
+
+[[requirement]]
+id = "platform-app-minted-ids-are-partitioned-from-the-corpus"
+spec = "§4.1 (canonical key) + §8 stage 1 + §10"
+milestone = "M4.5"
+kind = "integration"
+what = "Spielplan mints title and person ids from a range disjoint from the corpus's, and the importer refuses any bundle whose title or person ids — or whose backbone.npz, review_text_emb.npz, seed_list.json or corrections_v1.tsv title ids — fall inside Spielplan's minted range, naming the offending id. The sequence is positioned by the seed import rather than by the migration, so a fresh install that has not seeded cannot mint an id the corpus already used."
+why = "The corpus's own sqlite_sequence reads title=21442, so its next minted id is 21443 — exactly where 'mint above the imported maximum' would start Spielplan. Two minters in one namespace, and the model bundle still carries content ids, so a single newly crawled film would make a later bundle assert things about a title the household acquired. Nothing would trip: the only check is that ids ascend."
+tests = []
+
+[[requirement]]
+id = "platform-model-bundle-identity-is-checked-not-trusted"
+spec = "§10 + §4.3 backbone.npz"
+milestone = "M4.5"
+kind = "integration"
+what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. An identity vector that is absent is itself a validation failure rather than a skipped check."
+why = "Range partitioning stops two minters colliding; it cannot detect the corpus *merging* two titles, which changes what an existing id means without changing the id. backbone.py:31 already records that a wrong index 'produces plausible numbers for the wrong films', and the ascending-ids check cannot see it."
+tests = []
+
+[[requirement]]
+id = "platform-content-seeds-once-models-reimport"
+spec = "§10 (swap sequence) + §12"
+milestone = "M4.5"
+kind = "integration"
+what = "A models-only bundle imports and hot-swaps without content present, running §10's rebuild set; a content seed is accepted exactly once and a second content import is refused with that reason rather than upserting; and the two are distinguishable in artifact_bundle so the admin board can say which kind of import produced a version."
+why = "The owner's direction: the corpus supplies trained models, movie data is seeded once, every later title is acquired by Spielplan. The importer requires content.sqlite (bundle.py:190) and would reject a models-only bundle outright, while §10's rebuild set — the reason bundle_version is stamped on placements, priors and scores — is exactly what a model update still needs."
+tests = []
 
 [[requirement]]
 id = "map-taste-admin-cost-estimate-before-enabling"
