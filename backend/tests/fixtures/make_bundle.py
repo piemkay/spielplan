@@ -655,8 +655,8 @@ def _write_cold_tower(root: Path, input_dim: int) -> None:
 
     §1 is CPU-only, and this is built and saved on the CPU with no device in the state dict.
     """
-    import torch                                                          # noqa: PLC0415
-    from torch import nn                                                  # noqa: PLC0415
+    import torch  # noqa: PLC0415
+    from torch import nn  # noqa: PLC0415
 
     torch.manual_seed(20260830)
 
