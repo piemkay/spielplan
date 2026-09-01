@@ -799,3 +799,94 @@ def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["tension_credible_mass"] = value
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+
+
+def break_corrections_header(root: Path) -> None:
+    """§4.3 / §8 stage 3 — a corrections ledger whose header the parser does not recognise.
+
+    The real file is `kind, title_id, value, evidence, note`; the app read a `field` column that
+    no shipped ledger has, so the ledger raised KeyError instead of failing the report.
+    """
+    (root / "artifacts" / "corrections_v1.tsv").write_text(
+        "title_id\tperson_name\tfield\told_value\tnew_value\tnote\n"
+        "1\tMichael Mann\tjob\tWriter\tDirector\tan invented shape\n",
+        encoding="utf-8",
+    )
+
+
+def break_backbone_id_array(root: Path) -> None:
+    """§4.3 — a Backbone with no id vector at all.
+
+    §4.3 names E, E_full, b_i, mu and item_n and no mapping, so the mapping is exactly what a
+    bundle can omit while looking complete. Without it a row of E cannot be attached to a title
+    and every coordinate is plausible and wrong.
+    """
+    path = root / "artifacts" / "backbone.npz"
+    z = dict(np.load(path, allow_pickle=False))
+    z.pop("title_ids", None)
+    np.savez(path, **z)
+
+
+def break_backbone_ids_unsorted(root: Path) -> None:
+    """§4.3 — an id vector that is not strictly increasing.
+
+    Duplicate or unsorted ids make the row lookup ambiguous rather than wrong-and-detectable.
+    """
+    path = root / "artifacts" / "backbone.npz"
+    z = dict(np.load(path, allow_pickle=False))
+    ids = z["title_ids"]
+    z["title_ids"] = np.concatenate([ids[1:2], ids[:1], ids[2:]])
+    np.savez(path, **z)
+
+
+def break_cold_tower_heads(root: Path) -> None:
+    """§4.3 / §8 stage 9 — a checkpoint whose heads this app cannot find.
+
+    The corpus names them `head_e` / `head_b`. A checkpoint naming them anything else cannot be
+    reconstructed, and §5.1 needs both halves of the cold branch.
+    """
+    import torch  # noqa: PLC0415
+
+    path = root / "artifacts" / "cold_tower.pt"
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    renamed = {k.replace("head_e", "embed").replace("head_b", "prior"): v
+               for k, v in state.items()}
+    torch.save(renamed, path)
+
+
+def break_unknown_table(root: Path) -> None:
+    """§10 — a bundle table nothing accounts for.
+
+    Not a denylisted `%_bak%` table: a plausible new table the exporter started shipping. §10
+    requires "counts per table", and a table nobody maps used to produce no line at all.
+    """
+    db = sqlite3.connect(root / "content.sqlite")
+    db.execute("CREATE TABLE title_sentiment (title_id INTEGER, score REAL)")
+    db.commit()
+    db.close()
+
+
+def break_identity_mismatch(root: Path) -> None:
+    """decision 162 — a model bundle whose identity column disagrees with the title it names.
+
+    Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
+    titles, which changes what an existing id means without changing the id. The identity
+    vector is the only thing that can.
+    """
+    db = sqlite3.connect(root / "content.sqlite")
+    db.execute("UPDATE title SET imdb_id = 'tt0000001' WHERE id = 1")
+    db.commit()
+    db.close()
+
+
+def break_title_meta_only_source(root: Path) -> None:
+    """§4.1 — every per-source meta row dropped.
+
+    The card must render without overview, tagline, poster and trailer rather than erroring:
+    §4.1 keeps the rows because "one block = one droppable source", and dropping the last one is
+    the limit of that rule.
+    """
+    db = sqlite3.connect(root / "content.sqlite")
+    db.execute("DELETE FROM title_meta")
+    db.commit()
+    db.close()
