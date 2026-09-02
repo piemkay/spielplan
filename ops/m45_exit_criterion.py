@@ -53,7 +53,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import asyncpg  # noqa: E402
 import numpy as np  # noqa: E402
-from spielplan.db import migrate  # noqa: E402
+from spielplan.db import migrate, pool  # noqa: E402
 from spielplan.importer import bundle as bundle_import  # noqa: E402
 from spielplan.models.artifacts import ArtifactStore  # noqa: E402
 from spielplan.placement import features  # noqa: E402
@@ -110,6 +110,11 @@ async def main() -> int:
         await admin.close()
 
     conn = await asyncpg.connect(dsn.rsplit("/", 1)[0] + f"/{scratch}")
+    # The app's own connection setup, not a bare connect: `db/pool.py` registers the json/jsonb
+    # codec every caller depends on, and a harness that skips it measures a database the app
+    # never talks to. Without it `title_meta.payload` fails with "expected str, got dict" --
+    # which this script found, and which was a defect in the script rather than in the importer.
+    await pool._init_connection(conn)
     try:
         await migrate.apply_all(conn)
 
@@ -171,10 +176,18 @@ async def main() -> int:
         print("\n5. Stage 9's input (§4.3; §8 stage 9)")
         store = ArtifactStore.open(artifacts_root / rep.bundle_version, rep.bundle_version)
         contract = FeatureContract.from_store(store)
+        # The sample MUST include titles from the extracted tier: only 2,016 of 19,071 carry a
+        # `dna_tag`, so a sample chosen by credit or keyword volume contains none of them and
+        # reports dna_x as an empty block -- a harness artefact that reads exactly like the
+        # defect this milestone exists to fix.
         sample = [int(r["id"]) for r in await conn.fetch(
-            "SELECT t.id FROM title t JOIN credit c ON c.title_id = t.id"
-            " JOIN title_keyword k ON k.title_id = t.id GROUP BY t.id ORDER BY count(*) DESC LIMIT 5"
+            "SELECT t.id FROM title t"
+            "  JOIN dna_tag d ON d.title_id = t.id"
+            "  JOIN credit c ON c.title_id = t.id"
+            "  JOIN title_keyword k ON k.title_id = t.id"
+            " GROUP BY t.id ORDER BY count(*) DESC LIMIT 5"
         )]
+        check(bool(sample), f"sampled {len(sample)} titles that carry every block's inputs")
         built = await features.build_vectors(conn, store, contract, sample, vocab_version="v1")
         per_block: dict[str, int] = {}
         for bv in built:
@@ -205,12 +218,12 @@ async def main() -> int:
 
         # --- 6. content seeds once ------------------------------------------------------
         print("\n6. Seed once, models re-import (decision 162)")
-        second = bundle_import.validate(b, conn=conn) if _takes_conn() else None
-        if second is not None:
-            refused = any(f.rule == "seed-once" for f in second.findings if f.severity == "fail")
-            check(refused, "a second content import is refused at validation, before it writes")
-        else:
-            check(False, "validate() takes no connection, so the refusal only fires at import")
+        # §10 makes validation step 1 and the admin Data tab's decision point, so the refusal has
+        # to fire there and not only at import -- after the operator has committed.
+        second = await bundle_import.validate_for_install(conn, b)
+        refused = any(f.rule == "seed-once" for f in second.findings if f.severity == "fail")
+        check(refused, "a second content import is refused at validation, before it writes",
+              next((f.message[:160] for f in second.findings if f.rule == "seed-once"), ""))
 
         placed = await conn.fetchval(
             "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
@@ -227,11 +240,6 @@ async def main() -> int:
     passed = sum(1 for ok, _ in results if ok)
     print(f"\n{passed}/{len(results)} checks passed")
     return 0 if passed == len(results) else 1
-
-
-def _takes_conn() -> bool:
-    import inspect
-    return "conn" in inspect.signature(bundle_import.validate).parameters
 
 
 if __name__ == "__main__":
