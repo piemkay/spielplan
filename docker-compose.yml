@@ -30,6 +30,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-spielplan}
     volumes:
       - ./data/pg:/var/lib/postgresql/data
+      # §2's dumps are WRITTEN by the worker, which carries its own pinned pg_dump
+      # (ops/backend.Dockerfile explains why it is not driven through this service). This mount
+      # is the read side: it puts the same host directory where `pg_restore` can reach it, so a
+      # restore is `docker compose exec db pg_restore -d ... /backups/<dump>` with nothing to
+      # copy first — the one moment an operator is under pressure.
       - ./data/backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spielplan} -d ${POSTGRES_DB:-spielplan}"]

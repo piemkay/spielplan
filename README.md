@@ -151,8 +151,25 @@ the push **sender** was M4's and shipped there, so §2's VAPID keypair is genera
 boot and §7.3's prompt is carried as a real web push, with the in-app banner still the
 guaranteed fallback.
 
-The corpus bundle does not exist in this repo, so the importer is verified against a synthetic
-fixture reproducing the landmines — both DNA tiers with overlapping pairs, the frozen
-`rating_source` ids, duplicate `tmdb_id`, NULL alias PK components, CJK/emoji/ZWSP — plus six
-deliberately broken bundles, one per rule. `mdc export-bundle` is still a corpus-project
-deliverable (§10).
+**M4.5** is not in §12. It exists because the sentence that used to stand here — "the corpus
+bundle does not exist in this repo" — was false, and the importer had been written accordingly:
+against a schema nobody had opened, and verified against a fixture that reproduced every measured
+landmine and invented every structure around them. A bundle built by `mdc export-bundle` on
+2026-08-28 could not be imported at all, and all nine Cold Tower feature blocks missed every
+column they declared, silently, because the fixture's contract named them the way the builder
+keyed them.
+
+The bundle is still not vendored — it is ~1.15 GB — but it is now the authority. The fixture
+reproduces the landmines at eight-title scale **in the corpus's own schema**, and
+`tests/fixtures/real_bundle_shapes.json` is a committed, data-free manifest of a real bundle's
+shapes that the fixture is held to on every run; point `CORPUS_BUNDLE_DIR` at a real bundle and
+the same manifest is checked against it, so a corpus-side format change fails this repo's suite
+instead of surfacing as a mystery at import time. A column reaches the manifest as `p:<s>:<s>`,
+never as anyone's name.
+
+Two owner decisions (2026-09-01/02) changed what this project is to that one. **162:** the corpus
+supplies trained models; movie data is seeded **once**; every later title is acquired by this app
+(§7.2, §8); Spielplan owns all ids, minted from a range disjoint from the corpus's, because the
+corpus's own `sqlite_sequence` reads 21442 and "mint above the imported maximum" would have
+started this app at exactly the id the corpus mints next. **163:** a DNA vocabulary change is a
+data migration, not an import, and is refused until that migration exists.

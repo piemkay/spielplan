@@ -74,6 +74,10 @@ class PlacementReport:
     build_ms_p50: int = 0
     place_ms_p50: int = 0
     elapsed_ms: int = 0
+    # Blocks that produced database rows for at least one title in this run and hit a declared
+    # column for none of them. Per title that is a fact about the title; across the whole run it
+    # is a fact about the *key grammar*, and §8 stage 2 enrichment cannot touch a grammar.
+    blocks_never_hit: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -82,7 +86,7 @@ class PlacementReport:
             "demoted": self.demoted, "placed": self.placed, "parked_thin": self.parked_thin,
             "failed": self.failed, "build_ms_p50": self.build_ms_p50,
             "place_ms_p50": self.place_ms_p50, "elapsed_ms": self.elapsed_ms,
-            "notes": list(self.notes),
+            "blocks_never_hit": list(self.blocks_never_hit), "notes": list(self.notes),
         }
 
 
@@ -100,19 +104,19 @@ def warm_title_ids(store: Any) -> list[int]:
 
     §4.3 lists `backbone.npz` as "E, E_full, b_i, μ, plus the per-title support counts `item_n`"
     and names no title-id array — but E is a matrix of rows with no stated correspondence to
-    `title.id`, so it is unusable as specified. The bundle in hand ships `title_id`; without it
-    this function cannot tell which row is which title and says so rather than guessing at row
-    order, which would place the whole library against the wrong coordinates.
+    `title.id`, so it is unusable as specified. The bundle in hand ships `title_ids`, plural;
+    without it this function cannot tell which row is which title and says so rather than
+    guessing at row order, which would place the whole library against the wrong coordinates.
     """
     if getattr(store, "is_empty", True) or not store.present.get("backbone.npz"):
         return []
     npz = store.npz("backbone.npz")
-    if "title_id" not in npz.files:
+    if "title_ids" not in npz.files:
         raise ValueError(
-            "backbone.npz ships no `title_id` array, so its rows cannot be matched to titles; "
+            "backbone.npz ships no `title_ids` array, so its rows cannot be matched to titles; "
             "§4.3 does not name one and the exporter must add it"
         )
-    ids = np.asarray(npz["title_id"]).astype(np.int64)
+    ids = np.asarray(npz["title_ids"]).astype(np.int64)
     if "item_n" in npz.files:
         support = np.asarray(npz["item_n"]).astype(np.int64)
         ids = ids[support >= WARM_SUPPORT]
@@ -204,16 +208,22 @@ async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str
 # --- placing ----------------------------------------------------------------------------------
 
 
+# `blocks_empty` and `blocks_unmapped` (0015_seed) are written here for the reason the columns
+# exist: the builder already counted the keys the contract does not declare, and this statement
+# used to throw the count away — so a block that filled every column it had and a block that hit
+# none of them produced identical rows, and §5.3's badge had nothing to read.
 _UPSERT = """
 INSERT INTO title_placement (
     title_id, bundle_version, e_hat, b_hat, contract_sha256, tower_sha256, input_dim,
-    blocks_present, blocks_dropped, blocks_imputed, nnz, build_ms, place_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    blocks_present, blocks_dropped, blocks_imputed, blocks_empty, blocks_unmapped,
+    nnz, build_ms, place_ms
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (title_id, bundle_version) DO UPDATE SET
     e_hat = EXCLUDED.e_hat, b_hat = EXCLUDED.b_hat,
     contract_sha256 = EXCLUDED.contract_sha256, tower_sha256 = EXCLUDED.tower_sha256,
     input_dim = EXCLUDED.input_dim, blocks_present = EXCLUDED.blocks_present,
     blocks_dropped = EXCLUDED.blocks_dropped, blocks_imputed = EXCLUDED.blocks_imputed,
+    blocks_empty = EXCLUDED.blocks_empty, blocks_unmapped = EXCLUDED.blocks_unmapped,
     nnz = EXCLUDED.nnz, build_ms = EXCLUDED.build_ms, place_ms = EXCLUDED.place_ms,
     created_at = now()
 """
@@ -239,6 +249,12 @@ async def place_titles(
     """§8 stages 9 and 10 for a list of titles, in chunks of one forward pass each."""
     builds: list[int] = []
     places: list[int] = []
+    # The two halves of the import-time contract check, accumulated across chunks: a block that
+    # landed a declared column for *some* title, and a block that produced rows for some title
+    # and landed nothing. A block in the second set and not the first is one the builder and the
+    # contract disagree about at the level of the key grammar.
+    hit_somewhere: set[str] = set()
+    hit_nowhere: set[str] = set()
     for start in range(0, len(title_ids), CHUNK):
         chunk = list(title_ids[start:start + CHUNK])
         built = await features.build_vectors(
@@ -252,6 +268,8 @@ async def place_titles(
         rows = []
         parked = []
         for i, b in enumerate(built):
+            hit_somewhere.update(b.blocks_present)
+            hit_nowhere.update(b.blocks_empty)
             if not np.isfinite(e_hat[i]).all() or not np.isfinite(b_hat[i]):
                 report.failed += 1
                 report.notes.append(f"title {b.title_id}: tower returned a non-finite placement")
@@ -260,6 +278,7 @@ async def place_titles(
                 b.title_id, bundle_version, e_hat[i].astype(np.float32).tobytes(),
                 float(b_hat[i]), contract.sha256, tower.sha256, contract.input_dim,
                 list(b.blocks_present), list(b.blocks_dropped), list(b.blocks_imputed),
+                list(b.blocks_empty), dict(b.unmapped),
                 b.nnz, b.build_ms, per_title,
             ))
             builds.append(b.build_ms)
@@ -285,6 +304,19 @@ async def place_titles(
     report.build_ms_p50 = _p50(builds)
     report.place_ms_p50 = _p50(places)
 
+    # §5.3 makes bundle import a placement trigger, so this sweep is where a contract the
+    # builder cannot key against gets named. It is reported rather than raised because §10 gives
+    # the operator a report, and because the placements themselves are still the best available:
+    # the tower's dropout training saw missing blocks, and refusing to place would leave §12's
+    # M2 exit criterion unsatisfiable over a naming disagreement.
+    report.blocks_never_hit = sorted(hit_nowhere - hit_somewhere)
+    if report.blocks_never_hit:
+        report.notes.append(
+            "feature block(s) " + ", ".join(report.blocks_never_hit) + " produced database keys "
+            "and hit none of the columns the contract declares — the builder and the contract "
+            "disagree about the key grammar, which no §8 stage 2 enrichment can fix (§4.3)"
+        )
+
 
 async def _park_thin(conn: Any, thin: Sequence[features.BuiltVector], n_blocks: int) -> int:
     """§5.3: "thin ones … are still placed, badged, and parked as acquisition jobs for M5
@@ -297,15 +329,24 @@ async def _park_thin(conn: Any, thin: Sequence[features.BuiltVector], n_blocks: 
     """
     parked = 0
     for b in thin:
-        missing = ", ".join(b.blocks_dropped)
+        # Two ways to be short of a block, and the board has to be able to tell them apart: one
+        # the title has no rows for, one whose rows named nothing the contract declares. Both
+        # feed the tower zeros; only the first reads as "missing" to an operator.
+        why = []
+        if b.blocks_dropped:
+            why.append("missing " + ", ".join(b.blocks_dropped))
+        if b.blocks_empty:
+            why.append("no declared column hit in " + ", ".join(b.blocks_empty))
         reason = (
             f"placed with {len(b.blocks_present)} of {n_blocks + 1} feature blocks — "
-            f"missing {missing}; queued for §8 stage 2 enrichment"
+            f"{'; '.join(why)}; queued for §8 stage 2 enrichment"
         )
         detail = {
             "blocks_present": list(b.blocks_present),
             "blocks_dropped": list(b.blocks_dropped),
             "blocks_imputed": list(b.blocks_imputed),
+            "blocks_empty": list(b.blocks_empty),
+            "blocks_unmapped": dict(b.unmapped),
             "nnz": b.nnz,
         }
         status = await conn.execute(

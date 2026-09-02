@@ -53,7 +53,7 @@ milestone = "M0"
 kind = "integration"
 what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding."
 why = "§10's invariant: everything expressed in the old Backbone's basis is garbage against a new one, so a half-swapped state must be unreachable and a stale in-process bundle must be fatal, not silent."
-tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_imports_over_the_first", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs"]
+tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs"]
 
 [[requirement]]
 id = "platform-backup-rotation-and-ciphertext"
@@ -62,7 +62,15 @@ milestone = "M0"
 kind = "integration"
 what = "The nightly job writes a pg_dump into /data/backups and prunes to the newest 14; the resulting dump contains no plaintext connector secret (searching it for a known secret value finds nothing) and restoring it without SECRETS_KEY leaves connector config undecryptable rather than usable."
 why = "§2: \"Dumps contain ciphertext only — back up the env file (SECRETS_KEY) alongside them\"; rotation 14 is the stated retention."
-tests = []
+tests = [
+    "backend/tests/test_backup.py::test_rotation_keeps_the_newest_fourteen",
+    "backend/tests/test_backup.py::test_rotation_leaves_files_it_did_not_write_alone",
+    "backend/tests/test_backup.py::test_rotation_removes_interrupted_dumps",
+    "backend/tests/test_backup.py::test_the_dump_keeps_the_database_password_off_the_command_line",
+    "backend/tests/test_backup.py::test_the_nightly_job_writes_a_dump_into_the_backups_directory_and_prunes",
+    "backend/tests/test_backup.py::test_the_dump_contains_no_plaintext_connector_secret",
+    "backend/tests/test_backup.py::test_a_dump_restored_without_secrets_key_leaves_connector_config_undecryptable",
+]
 
 [[requirement]]
 id = "platform-key-rotation-semantics"
@@ -325,7 +333,7 @@ milestone = "M0"
 kind = "integration"
 what = "Import produces a retrievable migration report — per-table counts, validation failures grouped by the §4.1 rule that caught them, vocabulary version — and a re-import additionally produces a diff against the active bundle naming the recompute set (fold-in vectors, blend weights, Ledger MAP refit, Cold Tower re-placement) with no map rebuild in it; only the hot-swap step flips artifact_bundle.active, and it requires explicit confirmation."
 why = "§10 mandates both reports and 'never a silent sync', and states the v1 axis-scatter map needs no rebuild; today 'report' is a stage chip with nothing behind it."
-tests = ["backend/tests/test_import_integration.py::test_the_report_counts_every_loaded_table", "backend/tests/test_import_integration.py::test_an_unmapped_bundle_column_is_reported_not_dropped_silently", "backend/tests/test_import_integration.py::test_a_second_import_reports_the_same_counts", "backend/tests/test_bundle_validation.py::test_report_renders_human_readable", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written"]
+tests = ["backend/tests/test_import_integration.py::test_the_report_counts_every_loaded_table", "backend/tests/test_import_integration.py::test_an_unmapped_bundle_column_is_reported_not_dropped_silently", "backend/tests/test_import_integration.py::test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff", "backend/tests/test_bundle_validation.py::test_report_renders_human_readable", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written"]
 
 [[requirement]]
 id = "map-taste-admin-palette-facet-binding-and-accent"
@@ -1732,7 +1740,19 @@ milestone = "M4.5"
 kind = "backend"
 what = "A committed shape manifest, derived from a real corpus bundle, pins every structural fact the importer relies on: feature_contract.json's top-level keys and the type of feature_names, the header of corrections_v1.tsv, the column list of every content.sqlite table the importer maps, and the artifact file set. The test fixture is asserted against that manifest, so a fixture whose shapes were invented to match the importer fails. When CORPUS_BUNDLE_DIR points at a real bundle the same manifest is additionally checked against it."
 why = "The fixture reproduced every measured landmine and invented every shape around them, so the whole import layer was verified against the implementation's own reading. test_the_vector_is_built_from_the_database_through_the_contracts_own_columns asserts contract.block('credit').column('3') — the person id the builder emits — and passes, while the shipped contract names that column p:director:Adam Arkin."
-tests = []
+tests = [
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_contract_declares_the_keys_the_shipped_contract_declares",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_lists_feature_names_the_way_the_shipped_contract_does",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_uses_the_shipped_column_grammar_in_every_block",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_corrections_ledger_has_the_shipped_header",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_invents_no_table_the_corpus_does_not_ship",
+    "backend/tests/test_bundle_shapes.py::test_the_fixture_invents_no_column_the_corpus_does_not_ship",
+    "backend/tests/test_bundle_shapes.py::test_a_real_bundle_still_matches_the_committed_manifest",
+    "backend/tests/test_bundle_shapes.py::test_the_committed_manifest_carries_no_prose",
+    "backend/tests/test_bundle_shapes.py::test_the_manifest_covers_the_artifacts_the_app_reads",
+]
 
 [[requirement]]
 id = "data-rules-import-reports-every-shipped-table"
@@ -1741,7 +1761,12 @@ milestone = "M4.5"
 kind = "integration"
 what = "The import report accounts for every table the bundle ships: each one is either loaded with a row count, or named as skipped with a reason. A table present in the bundle and absent from the importer's mapping produces a report line, never silence — asserted by importing a bundle carrying a table the mapping does not know."
 why = "§10 requires 'counts per table'. ImportReport only tracked unmapped columns *within* mapped tables, so three shipped tables — title_meta (46,318 rows), title_list_membership (35,295) and imdb_ratings (14,858) — were dropped with no line anywhere, and nothing in the app could notice."
-tests = []
+tests = [
+    "backend/tests/test_title_meta.py::test_every_shipped_table_is_loaded_with_a_count_or_skipped_with_a_reason",
+    "backend/tests/test_title_meta.py::test_a_shipped_table_the_mapping_does_not_know_fails_the_import",
+    "backend/tests/test_title_meta.py::test_an_unmapped_bundle_column_is_still_only_a_report_line",
+    "backend/tests/test_dna_import.py::test_every_shipped_dna_table_is_loaded_or_skipped_with_a_reason",
+]
 
 [[requirement]]
 id = "data-rules-title-meta-multi-source-rows-kept"
@@ -1750,7 +1775,12 @@ milestone = "M4.5"
 kind = "integration"
 what = "title_meta is loaded, with its per-source rows kept rather than collapsed — a title carrying meta rows from two sources keeps both after import — and it is readable through the content spine. 'One block = one droppable source' survives the round trip."
 why = "§4.1 names title_meta in the content spine with that exact rule. It has a table (0003_content.sql:72) and 46,318 rows in the bundle, and appeared in no file under backend/spielplan/ — created, shipped, and never loaded or read."
-tests = []
+tests = [
+    "backend/tests/test_title_meta.py::test_title_meta_keeps_one_row_per_source",
+    "backend/tests/test_title_meta.py::test_the_per_source_payload_carries_the_corpus_columns",
+    "backend/tests/test_title_meta.py::test_a_source_can_be_dropped_without_taking_the_others_with_it",
+    "backend/tests/test_title_meta.py::test_a_bundle_with_no_meta_table_still_imports",
+]
 
 [[requirement]]
 id = "data-rules-a-feature-block-that-never-hits-is-not-present"
@@ -1759,7 +1789,13 @@ milestone = "M4.5"
 kind = "backend"
 what = "A content block whose database keys match none of the columns the contract declares is reported as degraded rather than present: the miss count is persisted with the placement, is_thin sees it, and the title is badged and parked like any other thin title. A block that is present and populated, one that is legitimately absent, and one whose keys all miss are three distinguishable states."
 why = "§5.3 makes thinness a badged, parked condition. The credit block missed on every key in every placement ever computed and was still marked present, because features.py counted the misses into `unmapped` and reconcile.py's upsert never persisted them — so a block contributing nothing was indistinguishable from one contributing everything."
-tests = []
+tests = [
+    "backend/tests/test_placement.py::test_is_thin_sees_a_block_whose_keys_all_miss",
+    "backend/tests/test_placement.py::test_a_block_that_hit_nothing_is_persisted_and_parks_the_title",
+    "backend/tests/test_placement.py::test_the_sweep_names_a_block_whose_declared_columns_its_keys_never_hit",
+    "backend/tests/test_placement.py::test_an_uncovered_review_text_row_is_not_a_present_block",
+    "backend/tests/test_placement.py::test_a_key_the_contract_does_not_declare_is_counted_and_never_grows_the_vector",
+]
 
 [[requirement]]
 id = "data-rules-feature-blocks-keyed-as-the-contract-names-them"
@@ -1768,7 +1804,14 @@ milestone = "M4.5"
 kind = "backend"
 what = "Every one of the nine content blocks is keyed by the column names the shipped contract declares — kw:, dna:, g:, p:<role>:<name>, genre:, country:, lang:, decade:, runtime:, award:, kind: — and not by bare database values or by row ids. A title whose keywords, genres, DNA terms, genome tags, countries, crew and awards the contract names produces a non-zero column in each of those blocks, and an import-time check reports any block whose declared columns the builder's keys never hit."
 why = "§4.3 calls feature_contract.json the exhaustive definition of the tower's input and §8 stage 9 builds vectors from this file and nothing else. Measured against the shipped contract every block misses on every key — 0 of 84,876 distinct credit keys, 0 of 97,287 keyword columns, 0 of 1,128 genome tags, 0 of 656 genres — so the tower receives the 64 text columns and a dozen meta columns out of 6,499. Naming only the credit block would leave seven blocks structurally zero."
-tests = []
+tests = [
+    "backend/tests/test_placement.py::test_every_content_block_is_keyed_as_the_contract_names_it",
+    "backend/tests/test_placement.py::test_the_vector_is_built_from_the_database_through_the_contracts_own_columns",
+    "backend/tests/test_placement.py::test_the_genome_block_takes_the_corpus_relevance_cut",
+    "backend/tests/test_placement.py::test_a_mixed_case_keyword_lands_in_the_contracts_lowercase_column",
+    "backend/tests/test_placement.py::test_the_credit_block_takes_only_the_roles_the_corpus_built_its_columns_from",
+    "backend/tests/test_placement.py::test_the_meta_blocks_language_column_is_the_titles_original_language",
+]
 
 [[requirement]]
 id = "data-rules-corrections-ledger-parsed-at-its-real-header"
@@ -1777,7 +1820,13 @@ milestone = "M4.5"
 kind = "backend"
 what = "corrections_v1.tsv is parsed at the header the corpus actually ships (kind, title_id, value, evidence, note), and a file whose header the parser does not recognise fails the import report naming the missing column — never raises, and never silently loads zero corrections."
 why = "§8 stage 3 re-applies this ledger at every derive and §14.5 is the scar for what happens when it is not applied. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
-tests = []
+tests = [
+    "backend/tests/test_dna_import.py::test_corrections_ledger_parses_the_header_the_corpus_ships",
+    "backend/tests/test_dna_import.py::test_an_unrecognised_corrections_header_fails_the_report_naming_the_column",
+    "backend/tests/test_dna_import.py::test_a_ledger_with_no_rows_is_reported_rather_than_loaded_as_zero",
+    "backend/tests/test_dna_import.py::test_a_row_whose_title_id_is_not_a_number_is_reported_not_raised",
+    "backend/tests/test_dna_import.py::test_the_corrections_ledger_is_not_duplicated_by_a_re_import",
+]
 
 [[requirement]]
 id = "data-rules-seed-registry-and-onboarding-list-are-distinct"
@@ -1786,7 +1835,12 @@ milestone = "M4.5"
 kind = "integration"
 what = "The corpus's seed_list — a list registry (id, slug, name, source, kind, category, weight, item_count, fetched_at, notes) — and Spielplan's 100-title decade-stratified onboarding list are distinct tables with distinct names; importing a bundle carrying the registry writes no row into the onboarding list, and the onboarding list is populated only from seed_list.json."
 why = "§4.3's seed_list.json is the onboarding list; §10's manifest also ships 'seed_list tables' meaning the registry. Two different artifacts share one name, and load.py mapped the registry onto the onboarding table — which COPYs 238 all-NULL rows into a NOT NULL primary key."
-tests = []
+tests = [
+    "backend/tests/test_title_meta.py::test_the_registry_lands_in_title_list_and_not_in_the_onboarding_list",
+    "backend/tests/test_title_meta.py::test_the_onboarding_list_is_populated_only_from_seed_list_json",
+    "backend/tests/test_dna_import.py::test_the_onboarding_list_decade_is_derived_from_the_shipped_year",
+    "backend/tests/test_dna_import.py::test_an_onboarding_entry_with_no_year_loads_without_a_decade",
+]
 
 [[requirement]]
 id = "platform-app-minted-ids-are-partitioned-from-the-corpus"
@@ -1795,7 +1849,13 @@ milestone = "M4.5"
 kind = "integration"
 what = "Spielplan mints title and person ids from a range disjoint from the corpus's, and the importer refuses any bundle whose title or person ids — or whose backbone.npz, review_text_emb.npz, seed_list.json or corrections_v1.tsv title ids — fall inside Spielplan's minted range, naming the offending id. The sequence is positioned by the seed import rather than by the migration, so a fresh install that has not seeded cannot mint an id the corpus already used."
 why = "The corpus's own sqlite_sequence reads title=21442, so its next minted id is 21443 — exactly where 'mint above the imported maximum' would start Spielplan. Two minters in one namespace, and the model bundle still carries content ids, so a single newly crawled film would make a later bundle assert things about a title the household acquired. Nothing would trip: the only check is that ids ascend."
-tests = []
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_fresh_install_mints_from_a_range_the_corpus_cannot_reach",
+    "backend/tests/test_bundle_lifecycle.py::test_the_seed_import_positions_the_mint_and_the_migration_does_not",
+    "backend/tests/test_bundle_lifecycle.py::test_the_partition_is_a_constraint_not_a_convention",
+    "backend/tests/test_bundle_lifecycle.py::test_an_id_reaching_into_the_app_range_is_refused_and_named",
+    "backend/tests/test_bundle_lifecycle.py::test_the_id_partition_is_checked_before_anything_else_in_the_bundle",
+]
 
 [[requirement]]
 id = "platform-model-bundle-identity-is-checked-not-trusted"
@@ -1804,7 +1864,15 @@ milestone = "M4.5"
 kind = "integration"
 what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. An identity vector that is absent is itself a validation failure rather than a skipped check."
 why = "Range partitioning stops two minters colliding; it cannot detect the corpus *merging* two titles, which changes what an existing id means without changing the id. backbone.py:31 already records that a wrong index 'produces plausible numbers for the wrong films', and the ascending-ids check cannot see it."
-tests = []
+tests = [
+    "backend/tests/test_bundle_validation.py::test_a_backbone_with_no_identity_vector_fails_validation",
+    "backend/tests/test_bundle_validation.py::test_an_identity_that_disagrees_with_the_spine_names_the_title",
+    "backend/tests/test_bundle_validation.py::test_a_title_with_no_imdb_id_is_identified_by_tmdb_and_kind",
+    "backend/tests/test_bundle_validation.py::test_an_identity_vector_that_is_not_row_aligned_is_refused",
+    "backend/tests/test_bundle_validation.py::test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused",
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_s_identity_is_checked_against_the_installed_spine",
+    "backend/tests/test_bundle_lifecycle.py::test_a_re_identified_backbone_row_is_refused_against_the_installed_spine",
+]
 
 [[requirement]]
 id = "platform-content-seeds-once-models-reimport"
@@ -1813,7 +1881,14 @@ milestone = "M4.5"
 kind = "integration"
 what = "A models-only bundle imports and hot-swaps without content present, running §10's rebuild set; a content seed is accepted exactly once and a second content import is refused with that reason rather than upserting; and the two are distinguishable in artifact_bundle so the admin board can say which kind of import produced a version."
 why = "The owner's direction: the corpus supplies trained models, movie data is seeded once, every later title is acquired by Spielplan. The importer requires content.sqlite (bundle.py:190) and would reject a models-only bundle outright, while §10's rebuild set — the reason bundle_version is stamped on placements, priors and scores — is exactly what a model update still needs."
-tests = []
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_is_a_bundle",
+    "backend/tests/test_bundle_lifecycle.py::test_the_content_seed_is_accepted_exactly_once",
+    "backend/tests/test_bundle_lifecycle.py::test_exactly_one_content_seed_survives_a_developer_with_psql",
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_imports_and_hot_swaps_without_content",
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_cannot_take_over_the_seed_s_row",
+    "backend/tests/test_bundle_lifecycle.py::test_validate_refuses_a_second_content_seed_before_the_operator_commits",
+]
 
 [[requirement]]
 id = "platform-movie-data-backup-and-restore"
@@ -1822,7 +1897,18 @@ milestone = "M4.5"
 kind = "integration"
 what = "An admin-triggered movie-data backup writes a restorable archive of the content spine, the DNA layer and the review store, and of nothing user-specific: no verdict, duel, tier_edit, ledger, session, passkey, push subscription or connector secret appears in it. Restoring it into an empty install reproduces the same title, person and DNA rows; carries the title and person sequence positions forward, so the first acquisition after a restore mints an id that collides with nothing; and preserves title.origin, so §10's rebuild set still names the app-acquired titles."
 why = "Owner decision 2026-09-01: the corpus supplies trained models and the movie data is Spielplan's to keep. Two failure modes make this testable rather than obvious. The id sequence is positioned by the seed import, an event that by definition never runs again, so a restore that does not carry setval mints id 1 and the app cannot acquire a single title. And title.origin defaults to 'bundle' (0008_placement.sql:47), so a restore that drops the column silently re-labels every acquired title and reconcile.py stops re-placing them."
-tests = []
+tests = [
+    "backend/tests/test_backup.py::test_the_archive_carries_the_content_spine_the_dna_layer_and_the_review_store",
+    "backend/tests/test_backup.py::test_the_archive_carries_nothing_user_specific",
+    "backend/tests/test_backup.py::test_every_table_is_either_archived_or_deliberately_left_out",
+    "backend/tests/test_backup.py::test_a_restore_into_an_empty_install_reproduces_the_title_person_and_dna_rows",
+    "backend/tests/test_backup.py::test_a_restore_carries_the_sequence_positions_forward",
+    "backend/tests/test_backup.py::test_a_restore_preserves_title_origin",
+    "backend/tests/test_backup.py::test_a_restore_refuses_an_install_that_already_holds_movie_data",
+    "backend/tests/test_backup.py::test_a_restore_into_an_empty_install_carries_no_placement_basis",
+    "backend/tests/test_backup.py::test_a_restored_install_refuses_a_second_content_seed",
+    "backend/tests/test_backup.py::test_a_restore_refuses_a_sequence_name_the_archive_does_not_own",
+]
 
 [[requirement]]
 id = "platform-backup-restore-ordering-is-explicit"
@@ -1831,7 +1917,12 @@ milestone = "M4.5"
 kind = "integration"
 what = "Restoring movie data and loading a model bundle have one correct order, and the wrong one is refused with its reason rather than half-applied: a model bundle loaded into an install with no content is refused before it writes anything, and the refusal names content as the missing prerequisite. After a correct restore-then-load, every owned title has a coordinate — §12's M2 exit criterion reads the same number it read before the backup."
 why = "§12's M2 criterion is a count of owned titles with no coordinate, which reads zero both when everything is placed and when there is nothing to place. A restore that silently produced an empty catalog would satisfy it for the wrong reason, so the ordering has to fail loudly instead of arriving at a number that looks right."
-tests = []
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_model_bundle_into_an_install_with_no_content_is_refused_before_it_writes",
+    "backend/tests/test_bundle_lifecycle.py::test_the_right_order_leaves_every_owned_title_with_a_coordinate",
+    "backend/tests/test_bundle_lifecycle.py::test_validate_refuses_a_model_bundle_into_an_install_with_no_content",
+    "backend/tests/test_bundle_lifecycle.py::test_the_data_tab_s_validate_route_runs_the_install_state_refusals",
+]
 
 [[requirement]]
 id = "data-rules-importer-maps-the-shipped-content-schema"
@@ -1840,7 +1931,15 @@ milestone = "M4.5"
 kind = "integration"
 what = "Every column the importer's table mapping names exists in the schema the corpus ships, and the mapping reads the shipped names (title.primary_title, title.original_title, credit.billing_order, title_alias.source, dna_projected.n_sources, platform_rating.metric/value, rating_source.scale_lo/scale_hi) rather than names the corpus does not export. A mapping that names a column the bundle lacks fails the import with that table and column named, instead of loading a column of NULLs."
 why = "The mapping was written as identity pairs against an imagined schema — 'name': 'name' where the corpus ships primary_title — so essentially every table would load empty or fail. A missing source column currently produces NULLs rather than a report line, which is the same silence that hid three unloaded tables."
-tests = []
+tests = [
+    "backend/tests/test_title_meta.py::test_every_mapped_column_exists_on_both_sides",
+    "backend/tests/test_title_meta.py::test_the_mapping_reads_the_names_the_corpus_ships",
+    "backend/tests/test_title_meta.py::test_a_mapped_column_the_bundle_lacks_fails_naming_table_and_column",
+    "backend/tests/test_load_mapping.py::test_the_three_per_source_tables_carry_the_corpus_key",
+    "backend/tests/test_load_mapping.py::test_language_role_and_source_are_two_different_facts",
+    "backend/tests/test_load_mapping.py::test_every_per_source_row_survives_the_import",
+    "backend/tests/test_load_mapping.py::test_the_card_shows_one_number_per_platform_and_metric",
+]
 
 [[requirement]]
 id = "library-rate-title-card-text-and-art-resolve-from-title-meta"
@@ -1849,7 +1948,16 @@ milestone = "M4.5"
 kind = "integration"
 what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video **per field**, by the priority order the corpus itself uses, treating NULL, empty string and zero as absent: a title whose preferred source carries no tagline takes the next source's tagline while keeping the preferred source's plot, and a title with no meta row renders the card without those fields rather than erroring. The order travels with the bundle rather than being hard-coded in the app."
 why = "The corpus already resolves per field: mdc/export.py:34-45 walks SOURCE_PRIORITY (tmdb, omdb, trakt, tvmaze, wikipedia, jellyfin, wikidata, letterboxd, rottentomatoes, metacritic, mpst) with mpst last on purpose because its synopses give the ending away. Per field rather than per block because the sources are complementary, not ranked: tmdb carries tagline and poster and plot, omdb carries poster and no tagline, and wikipedia is the only source carrying plot_short — so a whole-block rule blanks fields another source has. §4.1's 'one block = one droppable source' is a storage invariant, not a rendering rule. Spielplan read flattened columns the bundle does not export, so all five fields have been NULL for every real title."
-tests = []
+tests = [
+    "backend/tests/test_title_meta.py::test_the_content_spine_reads_the_resolved_card",
+    "backend/tests/test_title_meta.py::test_the_card_resolves_per_field_not_per_block",
+    "backend/tests/test_title_meta.py::test_null_and_empty_string_are_absent_and_the_walk_continues",
+    "backend/tests/test_title_meta.py::test_zero_is_absent_too",
+    "backend/tests/test_title_meta.py::test_the_overview_falls_back_from_plot_full_to_plot_short",
+    "backend/tests/test_title_meta.py::test_a_title_with_no_meta_row_renders_without_those_fields",
+    "backend/tests/test_title_meta.py::test_the_source_order_travels_with_the_bundle",
+    "backend/tests/test_title_meta.py::test_a_bundle_shipping_no_order_gets_the_corpus_order_and_a_report_line",
+]
 
 [[requirement]]
 id = "data-rules-model-artifacts-load-from-the-shipped-bundle"
@@ -1858,7 +1966,16 @@ milestone = "M4.5"
 kind = "integration"
 what = "Every model artifact the app reads loads from a bundle the corpus actually produced: cold_tower.pt in the form the exporter writes it, backbone.npz and review_text_emb.npz by the array names they ship, the frozen text_scale read from where the contract puts it, and the bundle and vocabulary versions read from where the bundle records them. A bundle missing any of these fails validation naming the artifact and the field, rather than loading a tower that cannot be constructed or reporting a version as 'unknown'."
 why = "Run against the shipped bundle the artifact validator fails six times and tower.py refuses the checkpoint outright: cold_tower.pt is a bare state_dict, not the dict carrying state_dict/version/arch/input_dim that tower.py:136 requires; backbone.npz and review_text_emb.npz ship title_ids where the loaders demand title_id; text_scale is inside text_block, not at the top level. §8 stage 9 — the stage M5's exit criterion runs through — cannot place a single title."
-tests = []
+tests = [
+    "backend/tests/test_bundle_validation.py::test_the_shipped_model_artifacts_load_from_the_bundle_the_corpus_produces",
+    "backend/tests/test_bundle_validation.py::test_a_bundle_that_records_no_version_is_refused_rather_than_named_unknown",
+    "backend/tests/test_bundle_validation.py::test_the_backbone_id_vector_is_read_under_the_name_the_corpus_ships",
+    "backend/tests/test_bundle_validation.py::test_a_backbone_with_no_id_array_is_refused",
+    "backend/tests/test_bundle_validation.py::test_the_review_text_embedding_is_read_under_the_name_the_corpus_ships",
+    "backend/tests/test_bundle_validation.py::test_a_contract_with_no_frozen_text_scale_is_refused",
+    "backend/tests/test_bundle_validation.py::test_a_cold_tower_that_is_not_v2_is_refused",
+    "backend/tests/test_bundle_validation.py::test_a_cold_tower_whose_heads_cannot_be_found_is_refused",
+]
 
 [[requirement]]
 id = "data-rules-vocabulary-layer-loads-the-files-the-corpus-ships"
@@ -1867,7 +1984,20 @@ milestone = "M4.5"
 kind = "integration"
 what = "The vocabulary loader reads the files the corpus ships — the per-facet vocab TSVs, the alias map, and adjudications in their real per-title shape — rather than file names the bundle does not contain, and a per-title adjudication is stored per title rather than collapsed onto one row per term. Every DNA table §10's manifest names — tag, projected, evidence, annotation, term_signal, exclusion — is loaded or reported as skipped with a reason."
 why = "dna_tag and dna_projected both reference dna_vocabulary(version), so a vocabulary that does not load takes the whole naming layer with it and §4.1 rule 1's two tiers are empty rather than separate. The shipped adjudications ledger is keyed by scope and title_id as well as term, and an upsert keyed on term alone would collapse 817 per-title verdicts onto one row per term — silently, and in the direction that loses data."
-tests = []
+tests = [
+    "backend/tests/test_dna_import.py::test_the_vocabulary_loads_from_the_per_facet_files_the_bundle_ships",
+    "backend/tests/test_dna_import.py::test_the_pacing_axes_file_is_not_mistaken_for_a_facet_vocabulary",
+    "backend/tests/test_dna_import.py::test_the_alias_map_loads_under_the_name_the_bundle_uses",
+    "backend/tests/test_dna_import.py::test_an_alias_that_maps_to_nothing_is_skipped_rather_than_crashing",
+    "backend/tests/test_dna_import.py::test_adjudications_load_in_their_real_per_title_shape",
+    "backend/tests/test_dna_import.py::test_one_term_adjudicated_on_many_titles_keeps_one_row_per_title",
+    "backend/tests/test_dna_import.py::test_a_title_scoped_verdict_with_no_title_is_reported_not_stored",
+    "backend/tests/test_dna_import.py::test_the_extracted_tier_loads_with_its_evidence_at_the_upstream_keying",
+    "backend/tests/test_dna_import.py::test_the_projected_tier_keeps_n_sources_as_a_weight",
+    "backend/tests/test_dna_import.py::test_the_shared_pairs_stay_distinguishable_across_the_two_tiers",
+    "backend/tests/test_dna_import.py::test_loading_the_dna_layer_twice_does_not_duplicate_it",
+    "backend/tests/test_bundle_validation.py::test_a_vocabulary_directory_without_the_corpus_term_files_is_refused",
+]
 
 [[requirement]]
 id = "data-rules-validation-reports-rather-than-raises"
@@ -1876,7 +2006,14 @@ milestone = "M4.5"
 kind = "integration"
 what = "Validating a bundle whose schema the app does not expect produces a report naming the table and column, never an unhandled exception: the validator run over a real bundle yields a failure list an operator can read, and no query inside the validator references a column without the bundle having been checked for it first."
 why = "§10 promises a migration report with 'validation failures'. Against the shipped bundle the content validator raises OperationalError: no such column: e.dna_tag_id, so the operator gets a stack trace instead of the report, and every genuine schema failure after that point is never reached — a validator that dies on the first surprise cannot enumerate the rest."
-tests = []
+tests = [
+    "backend/tests/test_bundle_validation.py::test_a_column_the_validator_queries_but_the_bundle_lacks_is_reported_not_raised",
+    "backend/tests/test_bundle_validation.py::test_the_report_names_every_violation_after_the_first_surprise",
+    "backend/tests/test_bundle_validation.py::test_a_content_db_with_none_of_the_dna_layer_reports_every_table_it_wanted",
+    "backend/tests/test_bundle_validation.py::test_an_artifact_json_the_app_cannot_parse_is_reported_not_raised",
+    "backend/tests/test_bundle_validation.py::test_a_contract_field_of_the_wrong_type_is_reported_not_raised",
+    "backend/tests/test_bundle_validation.py::test_the_validator_reports_over_a_real_bundle",
+]
 
 [[requirement]]
 id = "platform-vocabulary-change-is-refused-not-degraded"
@@ -1885,7 +2022,10 @@ milestone = "M4.5"
 kind = "integration"
 what = "A bundle whose vocabulary version differs from the active one is refused at validation with a reason naming the missing migration, and nothing is staged, flipped or written; the active vocabulary, both DNA tiers and every title's DNA card are exactly as they were before the attempt. A bundle carrying the same vocabulary version imports normally, so the refusal is specific to the change rather than to the check."
 why = "Decision 163 defers vocabulary migration as a data problem in its own right. Under decision 162 a re-import carries models and not content, so a bundle shipping a new vocabulary would leave dna_tag and dna_projected at the old version while the feature builder filters on the active one -- both DNA blocks empty for every title, and empty is not an error anywhere in the read path. A refusal an operator can read is what keeps the deferral honest; a swap that silently empties the naming layer would surface as 'why is every DNA card blank' months later."
-tests = []
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_vocabulary_change_is_refused_and_nothing_moves",
+    "backend/tests/test_bundle_lifecycle.py::test_the_refusal_is_specific_to_the_change_not_to_the_check",
+]
 
 [[requirement]]
 id = "map-taste-admin-cost-estimate-before-enabling"

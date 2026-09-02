@@ -73,7 +73,10 @@ async def world(db, backbone):
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}'::jsonb, 'active')",
         BUNDLE,
     )
-    for title_id, kind, name, year, runtime, imdb, tmdb in fx.TITLES:
+    # The fixture's spine is now the corpus's ten-column `title` row (§4.1); this surface only
+    # needs the seven Postgres `title` carries, and `primary_title` is what Spielplan calls
+    # `name`.
+    for title_id, kind, name, _orig, year, runtime, imdb, tmdb, _lang, _country in fx.TITLES:
         await db.execute(
             "INSERT INTO title (id, kind, name, year, runtime_min, imdb_id, tmdb_id, is_owned) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,true)",
@@ -202,7 +205,8 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
         return ArtifactStore.open(root, "broken")
 
     good = {
-        "title_id": np.arange(1, 5, dtype=np.int32),
+        # `title_ids`, plural — the name the corpus ships (M4.5).
+        "title_ids": np.arange(1, 5, dtype=np.int32),
         "E": np.zeros((4, 64), dtype=np.float32),
         "b_i": np.zeros(4, dtype=np.float32),
         "item_n": np.zeros(4, dtype=np.int32),
@@ -215,9 +219,9 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
     with pytest.raises(bb.BackboneError, match="64-d|not \\(N"):
         bb.Backbone.open(write(**{**good, "E": np.zeros((4, 32), dtype=np.float32)}))
     with pytest.raises(bb.BackboneError, match="strictly increasing"):
-        bb.Backbone.open(write(**{**good, "title_id": np.array([3, 1, 2, 4], dtype=np.int32)}))
-    with pytest.raises(bb.BackboneError, match="title_id"):
-        bb.Backbone.open(write(**{k: v for k, v in good.items() if k != "title_id"}))
+        bb.Backbone.open(write(**{**good, "title_ids": np.array([3, 1, 2, 4], dtype=np.int32)}))
+    with pytest.raises(bb.BackboneError, match="title_ids"):
+        bb.Backbone.open(write(**{k: v for k, v in good.items() if k != "title_ids"}))
 
 
 def test_a_title_with_no_backbone_row_scores_entirely_from_the_cold_tower(backbone):

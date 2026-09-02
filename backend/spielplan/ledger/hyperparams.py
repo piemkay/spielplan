@@ -39,6 +39,39 @@ PER_USER_KEY = re.compile(
     r"^(cutpoints?|boundaries|boundary|sensitivities|sensitivity|per_user\w*)$", re.I
 )
 
+# The corpus's own spelling for the constants this app already has a field for. Rule 1 above —
+# "every constant comes from the bundle" — fails *silently* without this map: the shipped
+# `ledger_hyperparams.json` tunes λ_bt to 0.3 and the learning rate to 0.5, and under this
+# app's spellings both arrive as the defaults 1.0 and 0.1 while the fit reports source="bundle".
+# Dotted keys are the corpus's one nested object, flattened by `_flatten` below.
+CORPUS_NAMES: dict[str, str] = {
+    "anchor_ridge_lambda": "lambda_ridge",
+    "bt_weight_lam_bt": "lambda_bt",
+    "learning_rate": "lr",
+    "margin_weight_form": "margin_form",
+    "sigma_inflation.trigger_months": "sigma_inflation_grace_months",
+    "sigma_inflation.rate_c_per_sqrt_month": "sigma_inflation_c",
+    "sigma_inflation.cap": "sigma_inflation_cap",
+}
+
+# The corpus states two of the values as prose where this app states them as an identifier.
+# Mapped exactly, never by prefix: a corpus-side change to a genuinely different margin form
+# must still hit the `MARGIN_FORMS` refusal rather than be read as this one.
+CORPUS_VALUES: dict[str, dict[Any, Any]] = {
+    "margin_form": {"w = margin / mean(margin); 1.0 when disabled": "margin/mean(margin)"},
+    "sigma_inflation_cap": {"prior_sigma": "prior"},
+}
+
+# Constants of the corpus's §5.2 recipe that this app's fit has no term for. They are named
+# here rather than reported as unknown because the two facts are different: "unknown" means a
+# key nobody recognises (a typo, or a knob tuned into a void), while these are recognised and
+# deliberately unused. Naming them keeps rule 1 honest — the gap is declared, finite and
+# reviewable — without inventing dataclass fields that no line of `model.py` reads.
+NOT_IMPLEMENTED: frozenset[str] = frozenset({
+    "logit_clip", "item_prior_shrink", "user_offset_shrink_lam",
+    "sigma_inflation.provisional", "sigma_inflation.note",
+})
+
 
 @dataclass(frozen=True)
 class Hyperparams:
@@ -128,6 +161,23 @@ _POSITIVE = (
 _BOOLEAN = ("margin_weighting",)
 
 
+def _flatten(raw: dict[str, Any]) -> dict[str, Any]:
+    """One level of the corpus's nesting, as dotted keys.
+
+    §5.2's σ-inflation ships as a single object (`trigger_months`, `rate_c_per_sqrt_month`,
+    `cap`) where this app carries three flat fields. Flattening beats a special case because
+    the whole object was otherwise one `unknown hyperparameter 'sigma_inflation'` note hiding
+    three constants — the exact silence rule 1 exists to prevent.
+    """
+    out: dict[str, Any] = {}
+    for key, value in raw.items():
+        if isinstance(value, dict):
+            out.update({f"{key}.{inner}": v for inner, v in value.items()})
+        else:
+            out[key] = value
+    return out
+
+
 def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperparams, list[str]]:
     """Build hyperparameters from a parsed `ledger_hyperparams.json`.
 
@@ -139,16 +189,32 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
     known = {f for f in DEFAULTS.__dataclass_fields__ if f != "source"}
     fields: dict[str, Any] = {}
 
-    for key, value in raw.items():
+    for key, value in _flatten(raw).items():
         if PER_USER_KEY.search(key):
             # §4.3 is explicit that these are fitted in-app. Taking them from a bundle would
             # replace a per-user fit with somebody else's thresholds.
             notes.append(f"ignored per-user key {key!r} — §4.3 fits these in-app")
             continue
-        if key not in known:
+        if key == "source":
+            # The corpus's provenance string, not a constant. `Hyperparams.source` records
+            # where this app read the numbers from, which is a different fact and is set below.
+            notes.append(f"{key!r} is provenance, not a constant: tuned by {value}")
+            continue
+        if key in NOT_IMPLEMENTED:
+            notes.append(f"{key!r} is tuned by the corpus and has no term in this app's fit")
+            continue
+        field = CORPUS_NAMES.get(key, key)
+        if field not in known:
             notes.append(f"unknown hyperparameter {key!r} — not applied")
             continue
-        fields[key] = value
+        if value is None:
+            # JSON null is the corpus saying it has no measurement yet (the shipped bundle's
+            # σ-inflation rate is exactly this). Overwriting the default with None would fail
+            # the positivity check below and refuse a bundle that is merely incomplete.
+            notes.append(f"bundle leaves {key!r} unmeasured; default used")
+            continue
+        spellings = CORPUS_VALUES.get(field, {})
+        fields[field] = spellings.get(value, value) if isinstance(value, str) else value
 
     for key in _POSITIVE:
         if key in fields and not (isinstance(fields[key], int | float) and fields[key] > 0):
@@ -199,4 +265,7 @@ def load(store: Any) -> tuple[Hyperparams, list[str]]:
     return from_mapping(json.loads(path.read_text(encoding="utf-8")), source="bundle")
 
 
-__all__ = ["DEFAULTS", "MARGIN_FORMS", "Hyperparams", "from_mapping", "load"]
+__all__ = [
+    "CORPUS_NAMES", "CORPUS_VALUES", "DEFAULTS", "MARGIN_FORMS", "NOT_IMPLEMENTED",
+    "Hyperparams", "from_mapping", "load",
+]

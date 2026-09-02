@@ -1232,6 +1232,38 @@
       "title_ids"
     ]
   },
+  "pt": {
+    "artifacts/cold_tower.pt": {
+      "head_b.bias": [
+        1
+      ],
+      "head_b.weight": [
+        1,
+        384
+      ],
+      "head_e.bias": [
+        64
+      ],
+      "head_e.weight": [
+        64,
+        384
+      ],
+      "trunk.0.bias": [
+        768
+      ],
+      "trunk.0.weight": [
+        768,
+        6499
+      ],
+      "trunk.3.bias": [
+        384
+      ],
+      "trunk.3.weight": [
+        384,
+        768
+      ]
+    }
+  },
   "sqlite": {
     "content.sqlite": {
       "award": [

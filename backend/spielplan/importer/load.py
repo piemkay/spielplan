@@ -1,9 +1,15 @@
 """Load a validated bundle's content into Postgres. Spec v2.1 §4.1, §10.
 
 The mapping is declarative so the report can say exactly which bundle columns it could not
-place. §4.1's shape note applies: an unmapped column is a *report line*, never a silent drop
-and never a failure — the corpus export is the authority on its own column names and this app
-must survive it gaining one.
+place. §4.1's shape note applies in one direction: a bundle column this app does not map is a
+*report line*, never a silent drop and never a failure — the corpus export is the authority on
+its own column names and this app must survive it gaining one. The inverse is a failure: a
+column the mapping names and the bundle does not have is this app asserting a name upstream
+never had, and loading it as NULLs is how `title.name` read nothing from `primary_title`.
+
+Every table the bundle ships is accounted for before anything is written: mapped, loaded by a
+bespoke path, or named as skipped with a reason. A table none of the three claims fails the
+import (§10's "counts per table").
 
 Rules enforced during the load rather than after:
   * rule 6 — NULLable PK components are coalesced to '' as rows stream past.
@@ -19,9 +25,11 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import asyncpg
 
+from spielplan.importer import meta
 from spielplan.importer.report import ImportReport
 
 
@@ -97,6 +105,11 @@ MAPPINGS: tuple[TableMap, ...] = (
             "letterboxd_slug": "letterboxd_slug",
             "rt_slug": "rt_slug", "metacritic_slug": "metacritic_slug",
             "jellyfin_id": "jellyfin_id", "is_owned": "is_owned",
+            # The tower's meta block carries exactly one `lang:` column per title and the corpus
+            # builds it from this column alone (§4.2's "the same features the model was trained
+            # on"); `title_language` is a different, multi-source fact. Without the column here
+            # the seed leaves it NULL and the block never fires on a real bundle.
+            "original_language": "original_language",
             # overview / tagline / poster_path / backdrop_path / trailer_key are NOT here: the
             # corpus does not export them on `title` at all. They are resolved per field from
             # `title_meta` and `title_video` after the load — §4.1's "one block = one droppable
@@ -128,17 +141,21 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_language", source="title_language",
-        # This app keys a language row by (title_id, language, role) and the corpus by
-        # (title_id, source, language). `is_primary` is the only per-row distinction the corpus
-        # draws, so it becomes the role and the rows collapse across sources rather than
-        # multiplying — which is what the app's own primary key already asked for.
-        columns={"title_id": "title_id", "language": "language", "role": "is_primary"},
-        coalesce_empty=("role",),
+        # Two different facts, and 0015 keys the row by both (owner decision 2026-09-02).
+        # `role` is `is_primary` — whether this is the title's main language; `source` is who
+        # said so. Dropping `source` collapsed the corpus's four language sources onto one row
+        # per (title_id, language, role), which is 17,342 duplicate groups in the shipped
+        # bundle and a unique violation that rolls the whole seed back.
+        columns={"title_id": "title_id", "source": "source", "language": "language",
+                 "role": "is_primary"},
+        coalesce_empty=("source", "role"),   # rule 6
         transforms={"role": _primary_role},
     ),
     TableMap(
         target="title_country", source="title_country",
-        columns={"title_id": "title_id", "country": "country"},
+        # Same key correction, same reason: 19,092 duplicate groups under (title_id, country).
+        columns={"title_id": "title_id", "source": "source", "country": "country"},
+        coalesce_empty=("source",),   # rule 6
     ),
     TableMap(
         target="title_video", source="title_video",
@@ -181,7 +198,9 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="rating_title_map", source="rating_title_map",
-        columns={"source_id": "source_id", "source_key": "source_key", "title_id": "title_id"},
+        # The corpus's name for the key it maps from is `external_id`; `source_key` is this
+        # app's column and was being read from the bundle as well.
+        columns={"source_id": "source_id", "source_key": "external_id", "title_id": "title_id"},
     ),
     TableMap(
         target="ml_genome_tag", source="ml_genome_tag",
@@ -189,18 +208,28 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="ml_link", source="ml_link",
-        columns={"ml_movie_id": "ml_movie_id", "title_id": "title_id",
-                 "imdb_id": "imdb_id", "tmdb_id": "tmdb_id"},
+        # `movie_id` is the MovieLens id under the corpus's name. There is no `title_id` here:
+        # the corpus exports the link table as MovieLens publishes it, keyed by external ids,
+        # and `_resolve_ml_links` below joins it to `title` after the load rather than mapping a
+        # column the bundle does not have and loading NULLs.
+        columns={"ml_movie_id": "movie_id", "imdb_id": "imdb_id", "tmdb_id": "tmdb_id"},
     ),
     TableMap(
         target="ml_genome_score", source="ml_genome_score",
-        columns={"ml_movie_id": "ml_movie_id", "tag_id": "tag_id", "relevance": "relevance"},
+        columns={"ml_movie_id": "movie_id", "tag_id": "tag_id", "relevance": "relevance"},
     ),
     # rule 3 — the display-only schema. Nothing else in this tuple targets it.
     TableMap(
         target="display.platform_rating", source="platform_rating",
-        columns={"title_id": "title_id", "platform": "source", "score": "value",
-                 "votes": "votes"},
+        # The corpus keys this (title_id, source, metric) and records several metrics per
+        # source — user_score beside critic_score, and the unscaled popularity and vote-count
+        # metrics. Keyed on (title_id, platform) alone that is 32,463 duplicate groups, and
+        # whichever row COPY happened to reach last would have been the one on the card.
+        # `scale` travels with the number because §6.0 wants the caption with it: 8.3 means
+        # nothing until the row also says out of 10.
+        columns={"title_id": "title_id", "platform": "source", "metric": "metric",
+                 "score": "value", "scale": "scale", "votes": "votes"},
+        coalesce_empty=("platform", "metric"),   # rule 6
     ),
     # The corpus's `seed_list` is a 238-row list REGISTRY, not §4.3's 100-title onboarding list.
     # They collided on the name until M4.5, and mapping one onto the other COPYs 238 all-NULL
@@ -216,11 +245,12 @@ MAPPINGS: tuple[TableMap, ...] = (
         target="title_list_membership", source="title_list_membership",
         columns={"list_id": "list_id", "title_id": "title_id", "rank": "rank"},
     ),
+    # The corpus builds this table live at export time as `watchlist(rank, title_id, record)`
+    # — there is no `source` and no `added_at` to read. Both are left to their column defaults,
+    # and `rank`/`record` are reported as unmapped bundle columns like any others.
     TableMap(
         target="watchlist", source="watchlist",
-        columns={"title_id": "title_id", "source": "source", "added_at": "added_at"},
-        coalesce_empty=("source",),
-        timestamp_columns=("added_at",),
+        columns={"title_id": "title_id"},
     ),
 )
 
@@ -238,6 +268,13 @@ BESPOKE_TABLES: dict[str, str] = {
 }
 
 SKIPPED_TABLES: dict[str, str] = {
+    # Not "no surface reads one": `features.py` counts company rows into the thin-title signal.
+    # The corpus keys this table (title_id, source, company) and 0003_content.sql keys it
+    # (title_id, company, role), so 8,594 of the shipped rows collide the moment `source` is
+    # dropped. Its two siblings took the other route on 2026-09-02 and adopted the corpus's key;
+    # this one has no such migration yet, so it is named here rather than mapped.
+    "title_company": "the corpus keys it per source and this app does not; loading it needs a "
+                     "cross-source dedupe that does not exist yet",
     "imdb_ratings": "pre-selection signal for the corpus's own crawl; the app shows IMDb's "
                     "number from platform_rating, which §4.1 rule 3 keeps display-only",
     "dna_annotation": "curator working notes; no app surface reads one",
@@ -266,8 +303,12 @@ def _sqlite_columns(db: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in db.execute(f'PRAGMA table_info("{table}")')]
 
 
-def _rows(db: sqlite3.Connection, tmap: TableMap, available: list[str]) -> Iterator[tuple]:
+def _rows(db: sqlite3.Connection, tmap: TableMap) -> Iterator[tuple]:
     """Stream one bundle table as tuples in `pg_columns` order.
+
+    Every mapped column is selected by name. There is no `NULL` substitution for a column the
+    bundle lacks any more: `load_content` refuses that bundle before it gets here, so a
+    fallback would only be a second, silent implementation of a rule this app no longer has.
 
     Two coercions happen here and nowhere else:
 
@@ -277,8 +318,7 @@ def _rows(db: sqlite3.Connection, tmap: TableMap, available: list[str]) -> Itera
       encoder rejects both outright (``TypeError: a boolean is required``). Without these casts
       the very first import dies on `title`, which is the first and required mapping.
     """
-    picks = [tmap.columns[c] for c in tmap.pg_columns]
-    select = ", ".join(f'"{src}"' if src in available else "NULL" for src in picks)
+    select = ", ".join(f'"{tmap.columns[c]}"' for c in tmap.pg_columns)
     coalesce_idx = {i for i, c in enumerate(tmap.pg_columns) if c in tmap.coalesce_empty}
     bool_idx = {i: tmap.bool_defaults.get(c) for i, c in enumerate(tmap.pg_columns)
                 if c in tmap.bool_columns}
@@ -334,18 +374,16 @@ async def _clear(conn: asyncpg.Connection, target: str) -> None:
     await conn.execute(f'DELETE FROM {schema}."{table}"')
 
 
-async def _copy(
-    conn: asyncpg.Connection, tmap: TableMap, db: sqlite3.Connection, available: list[str]
-) -> int:
+async def _copy(conn: asyncpg.Connection, tmap: TableMap, db: sqlite3.Connection) -> int:
     schema, table = _split(tmap.target)
     written = await conn.copy_records_to_table(
-        table, schema_name=schema, columns=tmap.pg_columns, records=_rows(db, tmap, available)
+        table, schema_name=schema, columns=tmap.pg_columns, records=_rows(db, tmap)
     )
     return int(str(written).rsplit(" ", 1)[-1]) if str(written).startswith("COPY") else 0
 
 
 async def _upsert_titles(
-    conn: asyncpg.Connection, tmap: TableMap, db: sqlite3.Connection, available: list[str]
+    conn: asyncpg.Connection, tmap: TableMap, db: sqlite3.Connection
 ) -> int:
     """Load `title` through a temp table so a re-import updates rows instead of deleting them."""
     cols = tmap.pg_columns
@@ -353,9 +391,7 @@ async def _upsert_titles(
     await conn.execute(
         "CREATE TEMP TABLE _import_title (LIKE title INCLUDING DEFAULTS) ON COMMIT DROP"
     )
-    await conn.copy_records_to_table(
-        "_import_title", columns=cols, records=_rows(db, tmap, available)
-    )
+    await conn.copy_records_to_table("_import_title", columns=cols, records=_rows(db, tmap))
     updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in cols if c != "id")
     await conn.execute(
         f"""
@@ -367,18 +403,81 @@ async def _upsert_titles(
     return await conn.fetchval("SELECT count(*) FROM _import_title")
 
 
+async def _resolve_ml_links(conn: asyncpg.Connection, report: ImportReport) -> None:
+    """Join the MovieLens link table to `title` after the load.
+
+    `ml_link.title_id` is this app's column, not the corpus's: the bundle exports the table as
+    MovieLens publishes it. §4.3's genome block reads through this join, so leaving the column
+    NULL would empty a block without emptying anything the read path can notice — the failure
+    M4.5 exists for. `imdb_id` and nothing else: `tmdb_id` is legitimately duplicated across
+    titles (§4.1 rule 6, the movie/series pair), so a tmdb join would attach a genome vector to
+    an arbitrary one of them.
+    """
+    await conn.execute(
+        """
+        UPDATE ml_link l SET title_id = t.id
+          FROM title t
+         WHERE l.title_id IS NULL AND l.imdb_id IS NOT NULL AND t.imdb_id = l.imdb_id
+        """
+    )
+    linked = await conn.fetchval("SELECT count(*) FROM ml_link WHERE title_id IS NOT NULL")
+    total = await conn.fetchval("SELECT count(*) FROM ml_link")
+    if total:
+        report.note(
+            "ml-link",
+            f"{linked} of {total} MovieLens links resolved to a title by imdb_id; the rest "
+            "contribute no genome block",
+            linked=linked, total=total,
+        )
+
+
+def _account_for_shipped_tables(db: sqlite3.Connection, report: ImportReport) -> bool:
+    """§10's "counts per table", for the tables the *bundle* ships rather than the ones mapped.
+
+    Mapped tables get their count as they load and bespoke ones from their own loaders. What is
+    left is the two cases the report could not previously express: a table this app declines,
+    which is named here with its reason, and a table nobody claims, which fails the import.
+    Silence is how `title_meta`'s 46,318 rows went missing for five milestones — a report that
+    cannot say "I did not load this" cannot be audited.
+    """
+    present = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    for table in sorted(present & set(SKIPPED_TABLES)):
+        report.skip_table(table, SKIPPED_TABLES[table])
+    for table in sorted(present & set(BESPOKE_TABLES)):
+        report.note("table-bespoke", f"`{table}`: {BESPOKE_TABLES[table]}", table=table)
+
+    orphans = unaccounted_tables(db)
+    if orphans:
+        report.fail(
+            "load",
+            "bundle ships table(s) this importer accounts for nowhere: " + ", ".join(orphans),
+            tables=orphans,
+        )
+    return not orphans
+
+
 async def load_content(
-    conn: asyncpg.Connection, db: sqlite3.Connection, report: ImportReport
+    conn: asyncpg.Connection,
+    db: sqlite3.Connection,
+    report: ImportReport,
+    *,
+    bundle_root: Path | None = None,
 ) -> ImportReport:
     """Load the bundle's content tables into Postgres inside the caller's transaction.
 
     Idempotent by construction: §10 calls a re-import "a planned admin event with a diff
     report", so a second import of the same or a newer bundle must succeed rather than collide
     on primary keys.
+
+    `bundle_root` is where the per-field source order travels (`BUNDLE.json`); without it the
+    title card resolves by the corpus's own order and the report says so.
     """
     present = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not _account_for_shipped_tables(db, report):
+        return report
+    priority = meta.source_priority(bundle_root, report)
 
-    usable: list[tuple[TableMap, list[str]]] = []
+    usable: list[TableMap] = []
     for tmap in MAPPINGS:
         if tmap.source not in present:
             if tmap.required:
@@ -392,14 +491,22 @@ async def load_content(
         if unmapped:
             report.unmapped_columns[tmap.source] = unmapped
 
+        # The shape note runs one way only. An *unmapped bundle* column is a report line,
+        # because the corpus is the authority on its own column names. A column this app's
+        # mapping names and the bundle does not have is the opposite claim — this app asserting
+        # a name upstream never had — and selecting NULL for it loads a whole column of nothing
+        # under a heading that says it worked. `title.name` did exactly that against
+        # `primary_title` until M4.5.
         absent = sorted(set(tmap.columns.values()) - set(available))
         if absent:
-            report.warn(
+            report.fail(
                 "load",
-                f"`{tmap.source}` has no column(s) {absent} — imported as NULL",
+                f"`{tmap.source}` has no column(s) {absent} — the mapping names a column the "
+                "bundle does not ship",
                 table=tmap.source, columns=absent,
             )
-        usable.append((tmap, available))
+            continue
+        usable.append(tmap)
 
     if not report.ok:
         return report
@@ -408,19 +515,24 @@ async def load_content(
     #   1. clear every derived table, children first,
     #   2. upsert `title` — never delete it, or ON DELETE CASCADE takes the Ledger with it,
     #   3. refill the derived tables in declaration order, parents before children.
-    for tmap, _ in reversed(usable):
+    for tmap in reversed(usable):
         if tmap.target != _TITLE_TARGET:
             await _clear(conn, tmap.target)
 
-    for tmap, available in usable:
+    for tmap in usable:
         if tmap.target == _TITLE_TARGET:
-            report.table_counts[f"loaded:{tmap.target}"] = await _upsert_titles(
-                conn, tmap, db, available
-            )
+            report.table_counts[f"loaded:{tmap.target}"] = await _upsert_titles(conn, tmap, db)
 
-    for tmap, available in usable:
+    for tmap in usable:
         if tmap.target != _TITLE_TARGET:
-            report.table_counts[f"loaded:{tmap.target}"] = await _copy(conn, tmap, db, available)
+            report.table_counts[f"loaded:{tmap.target}"] = await _copy(conn, tmap, db)
+
+    await _resolve_ml_links(conn, report)
+
+    # §4.1's per-source meta rows, then §6.0's card resolved out of them per field. After the
+    # derived tables, because the trailer key is read from `title_video`.
+    await meta.load_title_meta(conn, db, report)
+    await meta.resolve_title_fields(conn, priority, report)
 
     # rule: is_owned is re-derived from Jellyfin, never trusted stale (§7.2). Whatever the
     # bundle claimed, mark it as unverified so the first Jellyfin sync owns the truth.

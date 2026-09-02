@@ -29,9 +29,33 @@ from spielplan.importer.report import ImportReport
 # The signatures of UTF-8 read as cp1252: "Ã©" for é, "â€™" for ’, "Â " for a nbsp.
 _MOJIBAKE_MARKERS = ("Ã", "â€", "Â")
 
-REVIEW_COLUMNS = (
-    "title_id", "source", "author", "url", "rating", "published_at", "is_critic", "body",
-)
+# `review_store.review` column -> the `reviews.sqlite` column it is shipped in. Three of the
+# eight were named after the Postgres side and selected verbatim from SQLite, where they do not
+# exist: `rating`, `published_at` and `is_critic` are one column over. `_rows` selects NULL for
+# an absent column, so all 485,602 rows loaded with no rating, no date and no critic flag under
+# a single warn — §10 promises a report, and it got one, saying nothing was wrong with the data.
+#
+# `rating` takes `rating_norm` and not `rating_raw`: the raw column is the review's own notation
+# ("8/10", "Rotten") and is text, while the target is `double precision`. `rating_norm` is that
+# notation already divided through by `rating_scale`, so it is the only column of the three that
+# is comparable across the seventeen scales the corpus carries.
+REVIEW_SOURCE = {
+    "title_id": "title_id",
+    "source": "source",
+    "author": "author",
+    "url": "url",
+    "rating": "rating_norm",
+    "published_at": "created_date",
+    "is_critic": "author_kind",
+    "body": "body",
+}
+REVIEW_COLUMNS = tuple(REVIEW_SOURCE)
+
+# `author_kind` is a two-value vocabulary upstream (351,706 critic / 133,896 user), and
+# `is_critic` is a nullable boolean. `bool(author_kind)` would map every review to True,
+# including "user" — the failure is invisible because a non-empty string is truthy, so an
+# explicit vocabulary is used and an unrecognised kind stays NULL rather than becoming a critic.
+_AUTHOR_KIND = {"critic": True, "user": False}
 
 
 def repair_mojibake(text: str) -> tuple[str, bool]:
@@ -65,7 +89,9 @@ class _Counter:
 
 
 def _rows(db: sqlite3.Connection, available: set[str], counts: _Counter) -> Iterator[tuple]:
-    select = ", ".join(f'"{c}"' if c in available else "NULL" for c in REVIEW_COLUMNS)
+    select = ", ".join(
+        f'"{src}"' if src in available else "NULL" for src in REVIEW_SOURCE.values()
+    )
     body_at = REVIEW_COLUMNS.index("body")
     critic_at = REVIEW_COLUMNS.index("is_critic")
     published_at = REVIEW_COLUMNS.index("published_at")
@@ -78,8 +104,8 @@ def _rows(db: sqlite3.Connection, available: set[str], counts: _Counter) -> Iter
         if isinstance(out[body_at], str):
             out[body_at], changed = repair_mojibake(out[body_at])
             counts.repaired += changed
-        if out[critic_at] is not None:
-            out[critic_at] = bool(out[critic_at])
+        kind = out[critic_at]
+        out[critic_at] = _AUTHOR_KIND.get(kind.strip().lower()) if isinstance(kind, str) else None
         out[published_at] = _timestamp(out[published_at])
         yield tuple(out)
 
@@ -93,7 +119,10 @@ async def load_reviews(
         return
 
     available = {r[1] for r in db.execute('PRAGMA table_info("review")')}
-    absent = sorted(set(REVIEW_COLUMNS) - available)
+    # Named as `target (source)`: the warn used to print the Postgres names, so an operator
+    # reading "review has no column rating" had no way to tell a corpus-side change from this
+    # app looking in the wrong place — which is what it was doing on every bundle.
+    absent = sorted(f"{dst} ({src})" for dst, src in REVIEW_SOURCE.items() if src not in available)
     if absent:
         report.warn("reviews", f"`review` has no column(s) {absent} — imported as NULL")
 

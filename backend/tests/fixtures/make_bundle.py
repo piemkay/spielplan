@@ -20,6 +20,7 @@ one rule each, so the validator can be tested on the failures it exists to catch
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -208,6 +209,9 @@ def make_bundle(root: Path, *, version: str = "test-v1") -> Path:
     _write_content(root / "content.sqlite")
     _write_reviews(root / "reviews.sqlite")
     _write_artifacts(root / "artifacts", version)
+    # Last, because BUNDLE.json inventories the files: the corpus writes it at the end of the
+    # export for the same reason.
+    _write_identity(root, version)
     return root
 
 
@@ -449,15 +453,31 @@ def _write_artifacts(root: Path, version: str) -> None:
         encoding="utf-8",
     )
     (root / "equating_map.json").write_text(json.dumps({"version": 1, "maps": {}}), encoding="utf-8")
+    # §4.3's "tuned constants of the §5.2 recipe", under the corpus's own names. The fixture
+    # declared `lambda_ridge`, `lambda_bt`, `lr`, `margin_form`, `b_i_tau`, `sigma_inflation_c`
+    # and `sigma_inflation_cap` — the names `ledger/hyperparams.py` reads — and the corpus ships
+    # `anchor_ridge_lambda`, `bt_weight_lam_bt`, `learning_rate`, `margin_weight_form` and a
+    # nested `sigma_inflation` object, plus three constants this app has no field for at all.
+    # Under the old names the fixture agreed with the reader about a spelling neither shares
+    # with the artifact, so `from_mapping` could never report the real bundle's unknown keys.
     (root / "ledger_hyperparams.json").write_text(
         json.dumps(
             {
-                "lambda_ridge": 3.0, "lambda_bt": 1.0, "steps": 200, "lr": 0.1,
-                "margin_weighting": True, "margin_form": "margin/mean(margin)",
-                "tie_prior_delta0": 0.22, "b_i_tau": 1.0,
-                "sigma_inflation_c": 0.05, "sigma_inflation_cap": "prior",
+                "source": "tests/fixtures/make_bundle.py",
+                "anchor_ridge_lambda": 3.0, "bt_weight_lam_bt": 0.3,
+                "steps": 30, "learning_rate": 0.5,
+                "margin_weighting": True,
+                "margin_weight_form": "w = margin / mean(margin); 1.0 when disabled",
+                "logit_clip": 30.0, "tie_prior_delta0": 0.22,
+                "item_prior_shrink": 25.0, "user_offset_shrink_lam": 60.0,
+                "sigma_inflation": {
+                    "trigger_months": 12, "rate_c_per_sqrt_month": None, "cap": "prior_sigma",
+                    "provisional": True, "note": "the trigger and cap are design (spec 5.2)",
+                },
                 # §6.3's two thresholds, shipped rather than defaulted. Proposal 157: "any
-                # threshold that is a bare σ constant belongs in ledger_hyperparams.json".
+                # threshold that is a bare σ constant belongs in ledger_hyperparams.json". The
+                # corpus does not ship them yet, so `test_bundle_shapes.py` carries them as a
+                # declared exception (`PROPOSAL_157_NOT_YET_SHIPPED`) rather than silently.
                 "straddle_z": 1.0, "tension_credible_mass": 0.80,
             },
             indent=1,
@@ -499,8 +519,18 @@ def _write_artifacts(root: Path, version: str) -> None:
         encoding="utf-8",
     )
     _write_model_artifacts(root, content_dim)
+    # The shipped entry keys: kind, pct_dislike, pct_like, pct_ok, raters, title, title_id,
+    # year. There is no `decade` — §4.3's "decade-stratified" is a property of the selection,
+    # not a column, and the importer read `item["decade"]` until M4.5, so the real list loaded
+    # with the one property it exists for NULL on every row.
     (root / "seed_list.json").write_text(
-        json.dumps([{"title_id": t[0], "decade": (t[4] // 10) * 10} for t in TITLES]),
+        json.dumps([
+            {
+                "title_id": t[0], "title": t[2], "year": t[4], "kind": t[1],
+                "raters": 200 + t[0], "pct_dislike": 0.1, "pct_ok": 0.3, "pct_like": 0.6,
+            }
+            for t in TITLES
+        ]),
         encoding="utf-8",
     )
     (root / "audit.json").write_text(json.dumps({"generated_by": "tests.fixtures"}), encoding="utf-8")
@@ -517,11 +547,87 @@ def _write_artifacts(root: Path, version: str) -> None:
         encoding="utf-8",
     )
     _write_vocab(root / "dna_vocab" / "v1")
-    # BUNDLE.json at the bundle root is where the corpus records identity; artifacts/manifest.json
-    # does not carry it, and reading the version from there named every real bundle "unknown".
-    (root.parent / "BUNDLE.json").write_text(
-        json.dumps({"bundle_version": version, "vocabulary_version": "v1",
-                    "title_count": len(TITLES)}, indent=1),
+
+
+# The corpus stamps the export time; a literal keeps `make_bundle` byte-reproducible, for the
+# same reason `_write_model_artifacts` draws from a seeded generator.
+CREATED_AT = "2026-08-28T16:20:19.433025+00:00"
+
+
+def _write_identity(root: Path, version: str) -> None:
+    """`BUNDLE.json` — the corpus's own record of what a bundle is, in the shape it writes it.
+
+    The fixture used to write three keys, two of which (`vocabulary_version`, `title_count`) no
+    bundle has ever carried, and omitted every one that a bundle does: `tables`, `files`,
+    `validations`, `source_provenance`, `filtered_tables`, `display_only_tables`,
+    `nullable_pk_columns`, `frozen_rating_source_ids`. That is the invention this milestone
+    exists to end, one file outside `artifacts/` — and it is load-bearing, because `bundle.py`
+    reads the vocabulary version from here (decision 163's refusal has nothing to compare
+    without it) and against a real bundle resolves it only through the fallback to the
+    `dna_vocab/<version>/` directory name.
+    """
+    files: dict[str, dict[str, object]] = {}
+    total_bytes = 0
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        payload = path.read_bytes()
+        total_bytes += len(payload)
+        files[path.relative_to(root).as_posix()] = {
+            "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    tables: dict[str, int] = {}
+    for db_name in ("content.sqlite", "reviews.sqlite"):
+        db = sqlite3.connect(root / db_name)
+        try:
+            for (name,) in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ):
+                tables[name] = db.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
+        finally:
+            db.close()
+
+    (root / "BUNDLE.json").write_text(
+        json.dumps(
+            {
+                "bundle_version": version,
+                "created_at": CREATED_AT,
+                "spec": "docs/spielplan-spec_v2.1.md §10",
+                "tables": tables,
+                "files": files,
+                "total_bytes": total_bytes,
+                # The corpus ships `imdb_ratings` and `ml_link` filtered to the bundle's titles.
+                # This fixture carries neither table, and naming a table it does not ship would
+                # be the same invention in a smaller font.
+                "filtered_tables": [],
+                # §4.1 rule 5: platform ratings are display-only, never a Ledger input.
+                "display_only_tables": [t for t in ("platform_rating",) if t in tables],
+                "frozen_rating_source_ids": list(RATING_SOURCE_IDS),
+                # rule 6's landmine, declared where the corpus declares it: the fixture's
+                # `title_alias` carries a NULL `region` in a PK component on purpose.
+                "nullable_pk_columns": {
+                    "title_alias": [{"column": "region", "affinity": "TEXT"}],
+                },
+                "nullable_pk_note": "SQLite allows NULL in PK components; the Postgres importer "
+                                    "coalesces TEXT-affinity components to '' (§4.1 rule 6).",
+                "watchlist_note": "built live at export time; this fixture ships no watchlist",
+                # Upstream prep artifacts the export was built from. This fixture has none, and
+                # an invented digest of a file that does not exist is worse than an empty record.
+                "source_provenance": {},
+                "validations": (
+                    [{"check": "deny_list", "ok": True, "detail": "shipped tables clean; bad=[]"}]
+                    + [
+                        {"check": f"rows:{t}", "ok": True, "detail": f"src {n} == dst {n}"}
+                        for t, n in tables.items()
+                    ]
+                ),
+                "with_reviews": True,
+                "with_text_components": True,
+            },
+            indent=1,
+        ),
         encoding="utf-8",
     )
 
@@ -575,6 +681,26 @@ def _write_vocab(vocab: Path) -> None:
         (axes / f"{facet}.tsv").write_text(body, encoding="utf-8")
 
 
+def _identity_tokens(ids: np.ndarray) -> np.ndarray:
+    """decision 162's identity column, row-aligned to `title_ids`.
+
+    Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
+    titles, which changes what an id means without changing the id. The token names the axis it
+    is asserting on — `imdb:<imdb_id>` where the spine has one, else `tmdb:<tmdb_id>:<kind>` —
+    and titles 3 and 5 exercise the fallback, which is the 21% case §4.1 names.
+
+    The corpus does not ship this array yet; the exporter has to add it. The fixture ships it
+    because the row requires the importer to check it, and `test_bundle_shapes.py` declares the
+    gap rather than hiding it.
+    """
+    spine = {t[0]: t for t in TITLES}
+    tokens = []
+    for title_id in ids.tolist():
+        _, kind, _, _, _, _, imdb_id, tmdb_id, _, _ = spine[int(title_id)]
+        tokens.append(f"imdb:{imdb_id}" if imdb_id else f"tmdb:{tmdb_id}:{kind}")
+    return np.array(tokens, dtype="<U64")
+
+
 def _write_model_artifacts(root: Path, content_dim: int) -> None:
     """backbone.npz, cold_tower.pt, review_text_emb.npz, content_X.npz.
 
@@ -590,6 +716,7 @@ def _write_model_artifacts(root: Path, content_dim: int) -> None:
     np.savez(
         root / "backbone.npz",
         title_ids=ids,
+        title_identity=_identity_tokens(ids),
         E=e,
         E_full=e,
         E_hat=e,
@@ -864,6 +991,19 @@ def break_unknown_table(root: Path) -> None:
     db.execute("CREATE TABLE title_sentiment (title_id INTEGER, score REAL)")
     db.commit()
     db.close()
+
+
+def break_identity_missing(root: Path) -> None:
+    """decision 162 — a model bundle carrying no identity column at all.
+
+    This is the state of every bundle the corpus has exported so far, which is exactly why an
+    absent identity vector is a refusal rather than a skipped check: a check that quietly does
+    not run on the only bundles in existence is not a check.
+    """
+    path = root / "artifacts" / "backbone.npz"
+    with np.load(path, allow_pickle=False) as npz:
+        arrays = {k: npz[k] for k in npz.files if k != "title_identity"}
+    np.savez(path, **arrays)
 
 
 def break_identity_mismatch(root: Path) -> None:

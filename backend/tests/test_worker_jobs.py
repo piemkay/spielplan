@@ -26,6 +26,7 @@ from spielplan.db import pool
 from spielplan.importer import bundle as bundle_import
 from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
+from spielplan.ledger.hyperparams import load as load_hp
 from spielplan.models.artifacts import ArtifactStore
 from tests.fixtures import make_bundle as fx
 
@@ -181,7 +182,7 @@ async def test_the_nightly_refit_generalises_to_titles_the_person_never_rated(
 
     So the assertion is that the unrated titles are told APART, which no degenerate fit can do.
     """
-    await _import_bundle(db, worker_env)
+    store = await _import_bundle(db, worker_env)
     patrick = two_members[0]
     await db.execute("UPDATE title SET is_owned = true")
 
@@ -214,7 +215,16 @@ async def test_the_nightly_refit_generalises_to_titles_the_person_never_rated(
 
     # And the vector itself is non-trivial. A zero `v` is exactly what a placement-only basis
     # produces on a Backbone-covered library, and it is invisible in `s` alone.
-    cache = await refit.load_cache(db, user_id=patrick, kind="movie", hp=DEFAULTS, lock=False)
+    # Under the constants the JOB fitted with, which are the bundle's — `_ledger_map_refit`
+    # calls `hyperparams.load(store)` and §4.3 makes those numbers the corpus's to tune. Read
+    # back under `DEFAULTS` this is a cache miss by design (`ledger_fit.hp_digest` is a
+    # precondition, not a hint), and the fixture ships the corpus's own λ_bt, learning rate and
+    # step count rather than this app's fallbacks since M4.5.
+    hp, _notes = load_hp(store)
+    assert hp.source == "bundle" and hp.digest() != DEFAULTS.digest(), (
+        "the fixture bundle must tune something, or this asserts nothing about the digest"
+    )
+    cache = await refit.load_cache(db, user_id=patrick, kind="movie", hp=hp, lock=False)
     assert cache is not None
     assert float(np.linalg.norm(cache.v)) > 1e-6, (
         "the 64-d user vector is zero: §5.2's generalisation arm never ran"

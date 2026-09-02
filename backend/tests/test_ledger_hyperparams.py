@@ -190,3 +190,83 @@ def test_hyperparams_are_frozen():
     """A fit that mutates its own constants half way through is a fit nobody can reproduce."""
     with pytest.raises(dataclasses.FrozenInstanceError):
         Hyperparams().lambda_ridge = 9.0
+
+
+# --- the corpus's own spellings ---------------------------------------------------------------
+#
+# The fixture ships `ledger_hyperparams.json` under the corpus's names (M4.5). Before that, the
+# fixture and this reader agreed on a spelling the artifact has never used, so every assertion
+# below was true of a file no bundle contains.
+
+
+def _shipped(tmp_path):
+    from tests.fixtures import make_bundle as fx
+
+    fx.make_bundle(tmp_path / "b")
+    return json.loads(
+        (tmp_path / "b" / "artifacts" / "ledger_hyperparams.json").read_text(encoding="utf-8")
+    )
+
+
+def test_the_corpus_spellings_reach_the_fields_they_tune(tmp_path):
+    """Rule 1 of the module — "every constant comes from the bundle" — is what fails silently
+    here: under this app's spellings the corpus's tuned λ_bt and learning rate both arrive as
+    the defaults while `source` still reads "bundle"."""
+    hp, _notes = from_mapping(_shipped(tmp_path))
+    assert hp.lambda_ridge == 3.0          # anchor_ridge_lambda
+    assert hp.lambda_bt == 0.3             # bt_weight_lam_bt — the default is 1.0
+    assert hp.lr == 0.5                    # learning_rate — the default is 0.1
+    assert hp.steps == 30                  # same name in both, and the default is 200
+    assert hp.margin_form == "margin/mean(margin)"          # margin_weight_form, as prose
+    assert hp.sigma_inflation_cap == "prior"                # sigma_inflation.cap, "prior_sigma"
+    assert hp.sigma_inflation_grace_months == 12            # sigma_inflation.trigger_months
+
+
+def test_the_prose_form_maps_only_to_itself():
+    """The corpus states the margin form as a sentence. Mapping it by prefix would read any
+    later form as this one, which is the §5.2 recipe changing without the fit noticing."""
+    assert from_mapping({"margin_weight_form": "none"})[0].margin_form == "none"
+    with pytest.raises(ValueError, match="margin_form"):
+        from_mapping({"margin_weight_form": "w = sqrt(margin); 1.0 when disabled"})
+
+
+def test_a_constant_the_corpus_tuned_and_this_app_cannot_use_is_named(tmp_path):
+    """§4.3's gap, declared. `logit_clip`, `item_prior_shrink` and `user_offset_shrink_lam` are
+    tuned upstream and have no term in this app's fit; reporting them as "unknown" would file
+    them with typos, and dropping them is the silence rule 1 exists to prevent."""
+    _hp, notes = from_mapping(_shipped(tmp_path))
+    for key in ("logit_clip", "item_prior_shrink", "user_offset_shrink_lam"):
+        assert any(key in n and "no term in this app" in n for n in notes), key
+    assert not [n for n in notes if "unknown" in n], notes
+
+
+def test_no_shipped_key_disappears_without_a_word(tmp_path):
+    """The property behind all of the above: every key in the file either lands in a field or
+    is accounted for in the notes. A key that does neither is a knob tuned into a void."""
+    raw = _shipped(tmp_path)
+    hp, notes = from_mapping(raw)
+    from spielplan.ledger.hyperparams import CORPUS_NAMES
+
+    for key, value in raw.items():
+        leaves = [key] if not isinstance(value, dict) else [f"{key}.{k}" for k in value]
+        for leaf in leaves:
+            field = CORPUS_NAMES.get(leaf, leaf)
+            landed = field in hp.__dataclass_fields__ and field != "source"
+            assert landed or any(leaf in n for n in notes), leaf
+
+
+def test_an_unmeasured_constant_falls_back_instead_of_refusing_the_bundle():
+    """The shipped σ-inflation rate is JSON null — the corpus saying it has no measurement yet.
+    Passing None through would trip the positivity check and refuse a merely incomplete
+    bundle; §3.1 makes a documented default the answer, and the note says which."""
+    hp, notes = from_mapping({"sigma_inflation": {"rate_c_per_sqrt_month": None}})
+    assert hp.sigma_inflation_c == DEFAULTS.sigma_inflation_c
+    assert any("unmeasured" in n for n in notes)
+
+
+def test_the_provenance_string_is_not_read_as_a_constant(tmp_path):
+    """`source` in the file names the script that tuned the numbers; `Hyperparams.source`
+    records where this app read them from. Two different facts, one word."""
+    hp, notes = from_mapping(_shipped(tmp_path))
+    assert hp.source == "bundle"
+    assert any("'source' is provenance" in n for n in notes)

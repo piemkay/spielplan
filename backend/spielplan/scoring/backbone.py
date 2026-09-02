@@ -31,10 +31,13 @@ one — so a title with a thin crowd row has its bias pulled toward the crowd me
 THE ID MAPPING IS NOT IN THE SPEC. §4.3 lists E, E_full, b_i, μ and item_n and names no
 alignment between a row of E and a row of `title`. Without one no row can be joined to anything,
 and §4.1 forbids `imdb_id` as the join key (NULL on 21% of titles). This loader therefore
-requires a `title_id` array — int32, strictly increasing, aligned row-for-row — which is what
-the fixture bundle ships. If the corpus exporter instead means "rows are in dense title.id
-order", that is a different contract and this loader must be told, not left to guess: a silently
-wrong index produces plausible numbers for the wrong films.
+requires a `title_ids` array — int32, strictly increasing, aligned row-for-row — which is the
+name the corpus's exporter ships (`backbone.npz` carries E, E_full, E_hat, b_hat, b_i,
+cold_mask, item_n, mu and `title_ids`). It read `title_id`, singular, until M4.5: against a real
+bundle that name is absent, so the loader raised on a file that was in fact complete. If the
+exporter ever instead means "rows are in dense title.id order", that is a different contract and
+this loader must be told, not left to guess: a silently wrong index produces plausible numbers
+for the wrong films.
 
 A title with no Backbone row is normal, not exceptional (§8 stage 10: a newly acquired title has
 no crowd data at all), so every lookup here returns None rather than raising.
@@ -81,7 +84,7 @@ WARM_SUPPORT = EVIDENCE_K * WARM_GATE / (1.0 - WARM_GATE)   # 90
 ESource = Literal["backbone", "blended", "cold_tower", "none"]
 
 BACKBONE_FILE = "backbone.npz"
-_REQUIRED = ("title_id", "E", "b_i", "item_n", "mu")
+_REQUIRED = ("title_ids", "E", "b_i", "item_n", "mu")
 
 
 class BackboneError(RuntimeError):
@@ -133,10 +136,10 @@ class Backbone:
         if missing:
             raise BackboneError(
                 f"{BACKBONE_FILE} is missing {missing}; §4.3 names E, E_full, b_i, mu and item_n, "
-                "and `title_id` is what aligns a row of E to a row of `title`"
+                "and `title_ids` is what aligns a row of E to a row of `title`"
             )
 
-        title_ids = np.asarray(z["title_id"]).astype(np.int64, copy=False).reshape(-1)
+        title_ids = np.asarray(z["title_ids"]).astype(np.int64, copy=False).reshape(-1)
         e = np.ascontiguousarray(np.asarray(z["E"]), dtype=np.float32)
         b_i = np.asarray(z["b_i"]).astype(np.float32, copy=False).reshape(-1)
         item_n = np.asarray(z["item_n"]).astype(np.int64, copy=False).reshape(-1)
@@ -149,7 +152,7 @@ class Backbone:
                 "property of the basis, not a shape to accommodate"
             )
         n = e.shape[0]
-        for name, arr in (("title_id", title_ids), ("b_i", b_i), ("item_n", item_n)):
+        for name, arr in (("title_ids", title_ids), ("b_i", b_i), ("item_n", item_n)):
             if arr.size != n:
                 raise BackboneError(
                     f"{name} has {arr.size} entries against E's {n} rows; the arrays are aligned "
@@ -163,7 +166,7 @@ class Backbone:
             )
         if n and not np.all(np.diff(title_ids) > 0):
             raise BackboneError(
-                "title_id is not strictly increasing; duplicate or unsorted ids make the "
+                "title_ids is not strictly increasing; duplicate or unsorted ids make the "
                 "row → title mapping ambiguous, which is a wrong film rather than an error"
             )
 

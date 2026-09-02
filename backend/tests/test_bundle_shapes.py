@@ -126,6 +126,14 @@ def test_the_fixture_uses_the_shipped_column_grammar_in_every_block(shipped, bui
     )
 
 
+# decision 162 requires the model bundle to carry an identity column row-aligned to
+# `title_ids`, and the exporter does not write one yet — so the fixture ships it and the gap is
+# DECLARED here, the same way the axis TSVs above are. `validate.py` refuses a bundle without
+# it, which is the whole point: a check that is skipped on every bundle in existence is not a
+# check. The test below also asserts the exception is still needed, so it cannot rot.
+DECISION_162_NOT_YET_SHIPPED = {"artifacts/backbone.npz": {"title_identity"}}
+
+
 def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped, built):
     """`backbone.npz` ships `title_ids`; `backbone.py:84` requires `title_id`, and so do
     `reconcile.py:110` and the validator. `review_text_emb.npz` ships `title_ids` and
@@ -138,7 +146,16 @@ def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped,
     ours = built["npz"]
     shared = sorted(set(ours) & set(theirs))
     assert shared, "the fixture ships no npz the corpus ships -- the comparison is vacuous"
-    mismatched = {f: {"fixture": ours[f], "shipped": theirs[f]} for f in shared if ours[f] != theirs[f]}
+    already = {f: set(DECISION_162_NOT_YET_SHIPPED.get(f, ())) & set(theirs[f]) for f in shared}
+    assert not any(already.values()), (
+        f"the corpus now ships {already} — delete the DECISION_162_NOT_YET_SHIPPED entry and "
+        "compare those arrays like everything else."
+    )
+    mismatched = {
+        f: {"fixture": ours[f], "shipped": theirs[f]}
+        for f in shared
+        if set(ours[f]) - set(DECISION_162_NOT_YET_SHIPPED.get(f, ())) != set(theirs[f])
+    }
     assert not mismatched, f"npz array names differ from the shipped bundle: {mismatched}"
 
 
@@ -172,6 +189,48 @@ def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, bu
     )
 
 
+# --- the checkpoint: the only place the architecture is written down ---------------------------
+
+
+def test_the_fixture_checkpoint_names_its_tensors_the_way_the_corpus_does(shipped, built):
+    """`cold_tower.pt` is a bare `torch.save(model.state_dict())`, so the tensor names are the
+    whole of §4.3's "the exporter must ship v2" that a bundle actually carries.
+    `placement/tower.py` pins them as `TRUNK_FIRST` / `EMBED_HEAD` / `PRIOR_HEAD` — three
+    constants that were checked against a comment, because the manifest had no `.pt` branch and
+    recorded the checkpoint as a bare filename.
+
+    Shapes are compared by rank, not by value: the fixture's trunk is 128-wide and the shipped
+    one 768-wide, and pinning a hidden width would make the manifest churn on every retrain.
+    The rank is what the loader reads — `head_e.weight` must be 2-d for `nn.Linear` to be
+    rebuilt from it.
+    """
+    from spielplan.placement import tower
+
+    theirs = shipped["pt"]["artifacts/cold_tower.pt"]
+    ours = built["pt"]["artifacts/cold_tower.pt"]
+    for name in (tower.TRUNK_FIRST, f"{tower.EMBED_HEAD}.weight", f"{tower.PRIOR_HEAD}.weight"):
+        assert name in theirs, (
+            f"tower.py reconstructs the module from {name!r} and no shipped checkpoint has it; "
+            f"the corpus writes {sorted(theirs)}"
+        )
+    assert set(ours) == set(theirs), (
+        f"fixture checkpoint tensors {sorted(ours)} != shipped {sorted(theirs)}"
+    )
+    assert {k: len(v) for k, v in ours.items()} == {k: len(v) for k, v in theirs.items()}
+
+
+def test_the_shipped_checkpoint_embeds_at_the_dimension_every_consumer_assumes(shipped):
+    """§5.1's e(t) is 64-d and so is §5.2's user vector, §4.2's `user_vector.vec` and
+    `title_placement.dim CHECK (dim = 64)`. That number is a constant in this repo and a trained
+    weight shape in the corpus; nothing compared the two."""
+    from spielplan.placement.tower import EMBED_DIM
+
+    head = shipped["pt"]["artifacts/cold_tower.pt"]["head_e.weight"]
+    assert head[0] == EMBED_DIM, (
+        f"the shipped tower emits {head[0]}-d embeddings and this app is built for {EMBED_DIM}"
+    )
+
+
 # --- the curated ledgers ---------------------------------------------------------------------
 
 
@@ -183,6 +242,108 @@ def test_the_fixture_corrections_ledger_has_the_shipped_header(shipped, built):
     ours = built["tsv"]["artifacts/corrections_v1.tsv"]
     assert ours == theirs, (
         f"fixture header {ours} != shipped header {theirs}. The importer parses the fixture's."
+    )
+
+
+def test_the_fixture_seed_list_entries_carry_the_shipped_keys(shipped, built):
+    """§4.3's "100-title decade-stratified onboarding list". The shipped entries are keyed
+    `kind, pct_dislike, pct_like, pct_ok, raters, title, title_id, year` — there is no `decade`
+    anywhere, and `dna.py` read `int(item["decade"])`, so every real bundle's onboarding list
+    loaded with a NULL decade and the stratification the list exists for was lost on import.
+
+    This comparison is the one the file was missing: `seed_list.json` was in the manifest and
+    nothing compared it, which is why the fixture could keep declaring a key of its own.
+    """
+    theirs = shipped["json"]["artifacts/seed_list.json"]
+    ours = built["json"]["artifacts/seed_list.json"]
+    assert theirs["type"] == "list" and theirs["entry_type"] == "dict", "manifest is stale"
+    assert ours["type"] == theirs["type"] and ours["entry_type"] == theirs["entry_type"]
+    assert ours["entry_keys"] == theirs["entry_keys"], (
+        f"fixture seed-list entry keys {ours['entry_keys']} != shipped {theirs['entry_keys']}"
+    )
+
+
+# §6.3's two thresholds are proposal 157 ("any threshold that is a bare sigma constant belongs
+# in ledger_hyperparams.json") and the corpus does not ship them yet. The fixture carries them
+# under the name `from_mapping` reads, and the gap is DECLARED here the way the axis TSVs and
+# `title_identity` are — with a guard below that the exception is still an exception.
+PROPOSAL_157_NOT_YET_SHIPPED = frozenset({"straddle_z", "tension_credible_mass"})
+
+
+def test_the_fixture_hyperparameters_are_the_constants_the_corpus_ships(shipped, built):
+    """§4.3: "`ledger_hyperparams.json` — the tuned constants of the §5.2 recipe … re-tunable
+    offline". `ledger_hyperparams.json` was asserted to be IN the manifest and then never
+    compared, and the two files share three key names out of twelve: the corpus ships
+    `anchor_ridge_lambda`, `bt_weight_lam_bt`, `learning_rate`, `margin_weight_form` and a
+    nested `sigma_inflation` object, while `ledger/hyperparams.py` reads `lambda_ridge`,
+    `lambda_bt`, `lr`, `margin_form`, `sigma_inflation_c` and `sigma_inflation_cap`.
+
+    Every unmatched name is a constant the corpus project re-tunes and this app silently
+    replaces with its own default — rule 1 of that module ("every constant comes from the
+    bundle") failing with a note nobody reads rather than a refusal.
+    """
+    theirs = set(shipped["json"]["artifacts/ledger_hyperparams.json"]["keys"])
+    ours = set(built["json"]["artifacts/ledger_hyperparams.json"]["keys"])
+    assert theirs, "manifest is stale; the shipped bundle has no ledger_hyperparams.json"
+    assert not (PROPOSAL_157_NOT_YET_SHIPPED & theirs), (
+        f"the corpus now ships {sorted(PROPOSAL_157_NOT_YET_SHIPPED & theirs)} — delete the "
+        "PROPOSAL_157_NOT_YET_SHIPPED entry and compare those constants like everything else."
+    )
+    assert (ours - PROPOSAL_157_NOT_YET_SHIPPED) == theirs, (
+        f"fixture constants {sorted(ours - PROPOSAL_157_NOT_YET_SHIPPED)} != shipped "
+        f"{sorted(theirs)}. A fixture naming a constant the way the app happens to read it "
+        "cannot fail when the app reads the wrong name."
+    )
+
+
+# --- BUNDLE.json: the corpus's own record of what a bundle is ---------------------------------
+
+
+def test_the_fixture_bundle_json_records_what_the_corpus_records(shipped, built):
+    """The identity file the fixture invented, one directory over from the fixture this
+    milestone exists to correct: it declared `vocabulary_version` and `title_count`, neither of
+    which the corpus writes, and omitted `tables`, `files`, `validations`, `source_provenance`
+    and the rest of what it does.
+
+    `bundle.py` reads `vocabulary_version` from here and decision 163's refusal depends on that
+    read; `ArtifactStore.summary()` wants a title count. Both are answerable from the shipped
+    file — the vocabulary from the `dna_vocab/<version>/` directory, the count from `tables` —
+    and neither is answerable from a key the corpus has never written.
+    """
+    theirs = set(shipped["json"]["BUNDLE.json"]["keys"])
+    ours = set(built["json"]["BUNDLE.json"]["keys"])
+    assert "tables" in theirs and "files" in theirs, "manifest is stale"
+    assert ours == theirs, (
+        f"fixture BUNDLE.json keys {sorted(ours)} != shipped {sorted(theirs)}. Invented: "
+        f"{sorted(ours - theirs)}; missing: {sorted(theirs - ours)}."
+    )
+    # `tables` is a row count per shipped table, and it is where a title count comes from. A
+    # fixture free to name tables of its own would make that read untestable.
+    assert set(built["json"]["BUNDLE.json"]["tables.keys"]) <= set(
+        shipped["json"]["BUNDLE.json"]["tables.keys"]
+    ), "the fixture's BUNDLE.json counts tables the corpus does not ship"
+
+
+# --- reviews.sqlite: the columns the loader actually selects -----------------------------------
+
+
+def test_the_review_loader_reads_columns_the_shipped_table_has(shipped):
+    """§10 ships the review bodies "needed for future re-extraction and text embedding", and
+    `reviews.py` selected `rating`, `published_at` and `is_critic` — the names of the *Postgres*
+    columns it writes. `reviews.sqlite` has none of the three: the data sits in `rating_norm`,
+    `created_date` and `author_kind`. All 485,602 rows therefore loaded with a NULL rating, no
+    date and no critic flag, under a single warn line.
+
+    The mapping is asserted here rather than in a review test because the manifest is what makes
+    the claim checkable: it is the shipped schema, not this repo's reading of it.
+    """
+    from spielplan.importer.reviews import REVIEW_SOURCE
+
+    theirs = set(shipped["sqlite"]["reviews.sqlite"]["review"])
+    ours = set(REVIEW_SOURCE.values())
+    assert ours <= theirs, (
+        f"the loader selects {sorted(ours - theirs)} from `review`, which ships "
+        f"{sorted(theirs)}. A missing column is imported as NULL, so this is silent."
     )
 
 
@@ -227,6 +388,9 @@ def test_a_real_bundle_still_matches_the_committed_manifest(shipped):
     live = shapes_mod.extract(Path(os.environ["CORPUS_BUNDLE_DIR"]))
     assert live["tsv"] == shipped["tsv"], "a shipped TSV header changed"
     assert live["npz"] == shipped["npz"], "a shipped npz array set changed"
+    # Exact shapes here, not ranks: against a real bundle a changed hidden width or input_dim
+    # IS the architecture changing under §8 stage 9, which is the mystery this file prevents.
+    assert live["pt"] == shipped["pt"], "a shipped checkpoint's tensor names or shapes changed"
     assert live["sqlite"] == shipped["sqlite"], "a shipped sqlite schema changed"
     assert live["json"] == shipped["json"], "a shipped JSON shape changed"
 
@@ -282,11 +446,15 @@ def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
     pinning nothing."""
     files = set(shipped["files"])
     for required in (
+        "BUNDLE.json",
         "content.sqlite",
+        "reviews.sqlite",
         "artifacts/feature_contract.json",
         "artifacts/backbone.npz",
+        "artifacts/cold_tower.pt",
         "artifacts/corrections_v1.tsv",
         "artifacts/ledger_hyperparams.json",
+        "artifacts/seed_list.json",
     ):
         assert required in files, f"{required} is absent from the manifest"
 

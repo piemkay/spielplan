@@ -101,6 +101,28 @@ def _npz_keys(path: Path) -> list[str]:
         return sorted(z.files)
 
 
+def _pt_shapes(path: Path) -> dict[str, list[int]]:
+    """Checkpoint tensor name -> shape. Names and shapes; never a weight.
+
+    §4.3 calls `cold_tower.pt` "the live model" and says nothing about its interior, and the
+    corpus ships `torch.save(model.state_dict())` — a bare OrderedDict with no `arch`, no
+    `version` and no `input_dim`. So the tensor NAMES *are* the architecture contract:
+    `placement/tower.py` reconstructs the module from `trunk.0.weight` and `head_e.weight`, and
+    until this branch existed the manifest recorded the file as a bare filename, leaving those
+    three names pinned to a comment rather than to the artifact.
+
+    `weights_only=True` because a checkpoint is data: unpickling a bundle's arbitrary objects
+    to read its key names would be a worse defect than the one this manifest exists to catch.
+    """
+    import torch
+
+    obj = torch.load(path, map_location="cpu", weights_only=True)
+    # A wrapper carrying `state_dict` is the shape this app used to demand; a bare state dict is
+    # the shape the corpus ships. Both are read, so the manifest records what is there.
+    state = obj.get("state_dict", obj) if isinstance(obj, dict) else obj
+    return {name: list(tensor.shape) for name, tensor in state.items()}
+
+
 def extract(root: Path) -> dict[str, Any]:
     """The whole manifest for one bundle directory."""
     shapes: dict[str, Any] = {
@@ -110,6 +132,7 @@ def extract(root: Path) -> dict[str, Any]:
         "json": {},
         "tsv": {},
         "npz": {},
+        "pt": {},
     }
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -125,6 +148,8 @@ def extract(root: Path) -> dict[str, Any]:
                 shapes["tsv"][rel] = _tsv_header(path)
             elif path.suffix == ".npz":
                 shapes["npz"][rel] = _npz_keys(path)
+            elif path.suffix == ".pt":
+                shapes["pt"][rel] = _pt_shapes(path)
         except Exception as exc:                                  # noqa: BLE001
             # A file this script cannot read is recorded as unreadable rather than skipped:
             # silence here would reproduce the exact failure the manifest exists to prevent.

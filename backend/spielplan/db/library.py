@@ -321,13 +321,15 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
     rows = await conn.fetch(
         """
         SELECT c.person_id, p.name, c.department, c.job,
-               min(c.ord)                       AS ord,
+               -- 0015 renamed `ord` to `billing_order` (the corpus's own column name); the
+               -- response key stays `ord` because §6.0's card reads it.
+               min(c.billing_order)             AS ord,
                (array_agg(c.character) FILTER (WHERE c.character IS NOT NULL))[1] AS character,
                array_agg(DISTINCT c.source)     AS sources
           FROM credit c JOIN person p ON p.id = c.person_id
          WHERE c.title_id = $1
          GROUP BY c.person_id, p.name, c.department, c.job
-         ORDER BY (c.department = 'Directing') DESC, min(c.ord) NULLS LAST, p.name
+         ORDER BY (c.department = 'Directing') DESC, min(c.billing_order) NULLS LAST, p.name
         """,
         title_id,
     )
@@ -370,10 +372,24 @@ async def dna_for(conn: asyncpg.Connection, title_id: int) -> dict[str, list[dic
 async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict[str, Any]]:
     """§4.1 rule 3: display-only. This is the ONLY function that reads `display`, and its
     result is labelled all the way to the UI. Aggregate platform scores are a popularity
-    conduit and are banned as model features."""
+    conduit and are banned as model features.
+
+    The row is per (platform, metric) since 0015, because that is how the corpus keys it, and
+    one platform legitimately has two: metacritic ships a critic_score and a user_score on
+    different scales, and collapsing them left whichever one COPY reached last.
+
+    **What the card shows: the metrics that are scores.** The corpus also keeps `popularity`,
+    `critic_review_count`, `audience_rating_count` and trakt's ten `dist_N` histogram buckets
+    in this table — 12 of one measured title's 22 shipped rows. §6.0 requires the caption to
+    travel with the number, and those have no caption they could honestly print: `dist_7 =
+    2197` is not a rating out of anything. The corpus marks the difference itself by recording
+    `scale` for a score and NULL for the rest, so that is the predicate. Nothing is being
+    hidden from a model here — rule 3 already forbids every row in this table from becoming a
+    feature; this is a rendering choice about a display block.
+    """
     rows = await conn.fetch(
-        "SELECT platform, score, votes FROM display.platform_rating "
-        "WHERE title_id = $1 ORDER BY platform",
+        "SELECT platform, metric, score, scale, votes FROM display.platform_rating "
+        "WHERE title_id = $1 AND scale IS NOT NULL ORDER BY platform, metric",
         title_id,
     )
     return [dict(r) for r in rows]

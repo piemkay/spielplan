@@ -15,6 +15,7 @@ Run:  python ops/devstub.py            (serves http://127.0.0.1:8080)
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import sqlite3
 import sys
@@ -382,9 +383,48 @@ def import_bundle() -> dict[str, Any]:
 # --- library -----------------------------------------------------------------
 
 
+# The corpus's `title` row carries `primary_title` / `original_title` and no card text at all:
+# the overview, tagline and artwork live in `title_meta`, one row per source, resolved per
+# field (§4.1). The harness aliases the spine columns to the names the API answers with and
+# resolves the card fields the way `importer/meta.py` does, so the front end sees one contract.
+CARD_SOURCES = ("tmdb", "omdb", "trakt", "tvmaze", "wikipedia")
+
+
 def _titles(kind: str) -> list[sqlite3.Row]:
     with _db() as db:
-        return db.execute("SELECT * FROM title WHERE kind = ? ORDER BY year DESC", (kind,)).fetchall()
+        return db.execute(
+            "SELECT *, primary_title AS name, original_title AS original_name FROM title"
+            " WHERE kind = ? ORDER BY year DESC", (kind,)
+        ).fetchall()
+
+
+def _card(title_id: int) -> dict[str, Any]:
+    """The per-source meta rows resolved per field, in the corpus's own source order."""
+    with _db() as db:
+        rows = {
+            r["source"]: r for r in db.execute(
+                "SELECT * FROM title_meta WHERE title_id = ?", (title_id,)
+            )
+        }
+        video = db.execute(
+            "SELECT key FROM title_video WHERE title_id = ?"
+            " ORDER BY (type = 'trailer') DESC, (site = 'YouTube') DESC LIMIT 1", (title_id,)
+        ).fetchone()
+
+    def best(field: str) -> Any:
+        for source in CARD_SOURCES:
+            row = rows.get(source)
+            if row is not None and row[field] not in (None, "", 0):
+                return row[field]
+        return None
+
+    return {
+        "overview": best("plot_full") or best("plot_short"),
+        "tagline": best("tagline"),
+        "poster_path": best("poster_url"),
+        "backdrop_path": best("backdrop_url"),
+        "trailer_key": video["key"] if video else None,
+    }
 
 
 def _seen_state(title_id: int) -> str:
@@ -443,7 +483,8 @@ def list_titles(
                     continue
             items.append({
                 "id": r["id"], "kind": r["kind"], "name": r["name"], "year": r["year"],
-                "runtime_min": r["runtime_min"], "poster_path": None, "is_owned": True,
+                "runtime_min": r["runtime_min"], "poster_path": _card(r["id"])["poster_path"],
+                "is_owned": True,
                 "placement": _placement(r["id"]),
                 "seen_state": _seen_state(r["id"]),
             })
@@ -473,42 +514,56 @@ def title_detail(title_id: int) -> dict[str, Any]:
              "job": r["job"], "ord": r["ord"], "character": r["character"],
              "sources": sorted({s for s in r["sources"].split(",")})}
             for r in db.execute(
-                "SELECT c.person_id, p.name, c.department, c.job, min(c.ord) AS ord,"
+                "SELECT c.person_id, p.name, c.department, c.job,"
+                " min(c.billing_order) AS ord,"
                 " max(c.character) AS character, group_concat(DISTINCT c.source) AS sources"
                 " FROM credit c JOIN person p ON p.id = c.person_id WHERE c.title_id = ?"
                 " GROUP BY c.person_id, p.name, c.department, c.job", (title_id,)
             ).fetchall()
         ]
+        # Upstream keys evidence by (title_id, term) and ships no `dna_tag.id`; `runs_found`
+        # is the weight the importer stores as `n_sources`, and there is no provider column.
         extracted = []
         for g in db.execute("SELECT * FROM dna_tag WHERE title_id = ?", (title_id,)).fetchall():
             ev = db.execute(
-                "SELECT quote, source FROM dna_evidence WHERE dna_tag_id = ?", (g["id"],)
+                "SELECT quote, src FROM dna_evidence WHERE title_id = ? AND term = ?",
+                (title_id, g["term"]),
             ).fetchall()
             extracted.append({
                 "term": g["term"], "facet": g["facet"], "salience": g["salience"],
-                "confidence": g["confidence"], "n_sources": g["n_sources"],
-                "provider": g["provider"],
-                "evidence": [{"quote": e["quote"], "source": e["source"]} for e in ev],
+                "confidence": g["confidence"], "n_sources": g["runs_found"],
+                "provider": None,
+                "evidence": [{"quote": e["quote"], "source": e["src"]} for e in ev],
             })
         projected = [
-            {"term": r["term"], "facet": r["facet"], "weight": r["weight"], "via": r["via"]}
+            {"term": r["term"], "facet": r["facet"], "weight": r["n_sources"],
+             "via": ",".join(json.loads(r["sources"]))}
             for r in db.execute(
                 "SELECT * FROM dna_projected WHERE title_id = ?", (title_id,)
             ).fetchall()
         ]
+        # The disagreement this comment used to record is settled: 0015 keys the app's table
+        # (title_id, platform, metric) the way the corpus keys its own. `scale IS NOT NULL` is
+        # `db/library.platform_ratings`'s predicate, not the harness's — the corpus keeps
+        # popularity and vote counts in this table too, and §6.0's caption cannot be printed
+        # for a number that is on no scale.
         ratings = [
-            {"platform": r["platform"], "score": r["score"], "votes": r["votes"]}
+            {"platform": r["source"], "metric": r["metric"], "score": r["value"],
+             "scale": r["scale"], "votes": r["votes"]}
             for r in db.execute(
-                "SELECT * FROM platform_rating WHERE title_id = ?", (title_id,)
+                "SELECT * FROM platform_rating WHERE title_id = ? AND scale IS NOT NULL"
+                " ORDER BY source, metric", (title_id,)
             ).fetchall()
         ]
 
+    card = _card(title_id)
     return {
         "title": {
-            "id": t["id"], "kind": t["kind"], "name": t["name"],
-            "original_name": t["original_name"], "year": t["year"],
-            "runtime_min": t["runtime_min"], "overview": t["overview"], "tagline": None,
-            "poster_path": None, "backdrop_path": None, "trailer_key": None,
+            "id": t["id"], "kind": t["kind"], "name": t["primary_title"],
+            "original_name": t["original_title"], "year": t["year"],
+            "runtime_min": t["runtime_min"], "overview": card["overview"],
+            "tagline": card["tagline"], "poster_path": card["poster_path"],
+            "backdrop_path": card["backdrop_path"], "trailer_key": card["trailer_key"],
             "is_owned": True, "placement": _placement(t["id"]),
             "seen_state": _seen_state(t["id"]),
             "imdb_id": t["imdb_id"], "tmdb_id": t["tmdb_id"],
@@ -555,7 +610,8 @@ def person(person_id: int) -> dict[str, Any]:
             raise HTTPException(404, "no such person")
         films = [
             dict(r) for r in db.execute(
-                "SELECT t.id, t.kind, t.name, t.year FROM credit c JOIN title t ON t.id = c.title_id"
+                "SELECT t.id, t.kind, t.primary_title AS name, t.year"
+                " FROM credit c JOIN title t ON t.id = c.title_id"
                 " WHERE c.person_id = ? GROUP BY t.id", (person_id,)
             )
         ]
@@ -748,9 +804,13 @@ def _catalog() -> list[dict[str, Any]]:
         with _db() as db:
             cached = [
                 dict(r) for r in db.execute(
-                    "SELECT id, kind, name, year, runtime_min, overview FROM title ORDER BY id"
+                    "SELECT id, kind, primary_title AS name, year, runtime_min"
+                    " FROM title ORDER BY id"
                 )
             ]
+        for row in cached:
+            # §6.2's recall aid reads the overview, which is a resolved title_meta field.
+            row["overview"] = _card(row["id"])["overview"]
         STATE["catalog"] = cached
     return cached
 
@@ -811,8 +871,9 @@ def _dna() -> dict[int, list[tuple[WhyTerm, float]]]:
         for r in db.execute("SELECT title_id, term, facet, salience FROM dna_tag"):
             offer(r["title_id"], r["term"], r["facet"], "extracted",
                   0.60 + 0.40 * ((r["salience"] or 1.0) / 3.0))
-        for r in db.execute("SELECT title_id, term, facet, weight FROM dna_projected"):
-            offer(r["title_id"], r["term"], r["facet"], "projected", 0.30 * (r["weight"] or 0.5))
+        for r in db.execute("SELECT title_id, term, facet, n_sources FROM dna_projected"):
+            offer(r["title_id"], r["term"], r["facet"], "projected",
+                  0.30 * (r["n_sources"] or 0.5))
 
     cached = {
         title_id: sorted(slot.values(), key=lambda pair: (-pair[1], pair[0].term))

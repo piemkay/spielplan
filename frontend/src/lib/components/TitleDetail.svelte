@@ -32,6 +32,13 @@
   // primary actions only, so a stray tag must not borrow it.
   const facetColour = (f) => (FACETS.has(f) ? `var(--facet-${f})` : 'var(--ink-4)');
 
+  // The corpus stores a platform score at full float precision — trakt's is 9.167481422424316 —
+  // and a card that prints sixteen digits is claiming a precision nobody has. One decimal,
+  // trailing zero dropped, so a 100-point score reads `89` and a 10-point one `9.2`.
+  const round1 = (n) => (n === null || n === undefined ? '' : Number(Number(n).toFixed(1)));
+  // `user_score` / `critic_score` / `audience_rating_count` are the corpus's own metric names.
+  const metricLabel = (m) => String(m ?? '').replace(/_/g, ' ');
+
   // Re-fetch whenever the panel is pointed at a different title. On mount alone, tapping a
   // second poster while the panel is open left the first title's card on screen.
   $effect(() => {
@@ -187,10 +194,15 @@
       <section>
         <div class="data heading">PLATFORM SCORES</div>
         <div class="scores">
-          {#each data.platform_ratings.items as p (p.platform)}
+          <!-- Keyed by platform AND metric: since 0015 the row is per (platform, metric), and
+               metacritic ships a critic score and a user score on different scales — one key
+               per platform silently dropped the second and made Svelte's keyed each throw. -->
+          {#each data.platform_ratings.items as p (p.platform + ':' + p.metric)}
             <div class="score">
-              <span class="value">{p.score}</span>
-              <span class="data">{p.platform}</span>
+              <!-- §6.0: the caption travels with the number. 89 is not a score until the line
+                   also says out of 100, and this block mixes 10-point and 100-point scales. -->
+              <span class="value">{round1(p.score)}<span class="of">/{round1(p.scale)}</span></span>
+              <span class="data">{p.platform} · {metricLabel(p.metric)}</span>
             </div>
           {/each}
         </div>
@@ -359,9 +371,12 @@
     font-size: 12.5px;
     flex: 1;
   }
+  /* A title with every source resolved carries ten scored rows, not the two the single-metric
+     key used to produce, so the row wraps rather than overflowing the 420px panel. */
   .scores {
     display: flex;
-    gap: 18px;
+    flex-wrap: wrap;
+    gap: 10px 18px;
   }
   .score {
     display: flex;
@@ -370,6 +385,11 @@
   .value {
     font-family: var(--mono);
     font-size: 17px;
+  }
+  /* The scale is part of the number, not a second fact: same line, quieter. */
+  .of {
+    font-size: 12px;
+    color: var(--ink-4);
   }
   .tag {
     border-left: 2px solid var(--ink-4);

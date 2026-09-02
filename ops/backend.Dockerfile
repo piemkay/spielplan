@@ -18,8 +18,26 @@ ENV PYTHONUNBUFFERED=1 \
     UV_SYSTEM_PYTHON=1 \
     SPIELPLAN_STATIC_DIR=/app/static
 
+# §2: "nightly pg_dump to /data/backups, rotation 14". The worker runs the binary itself rather
+# than driving the `db` service, which would need the Docker socket inside a container whose
+# stored connector secret is already admin-equivalent (§14.3) — and would have nothing to drive
+# on an install whose DATABASE_URL points at a Postgres outside this compose file.
+#
+# Pinned to 16, from PGDG, because §1 pins the server to 16 and Debian trixie ships 17 in main:
+# pg_dump refuses to dump a server newer than itself, and a dump taken by a newer client is one
+# the household's own Postgres may not be able to read back. A client that is one major off in
+# either direction is not a degraded backup, it is no backup.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libpq5 curl \
+ && apt-get install -y --no-install-recommends libpq5 curl ca-certificates gnupg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+ && . /etc/os-release \
+ && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg]" \
+         "https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && apt-get purge -y --auto-remove gnupg \
  && rm -rf /var/lib/apt/lists/*
 
 RUN pip install uv

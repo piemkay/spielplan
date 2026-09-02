@@ -201,10 +201,14 @@ async def test_one_user_changing_their_tier_set_leaves_another_alone(db):
 
 async def test_only_one_bundle_can_be_active(db):
     """§10's invariant, enforced by a partial unique index rather than by discipline."""
-    for version in ("v1", "v2"):
+    # One seed, then a model bundle: decision 162's two kinds, because 0015's
+    # `artifact_bundle_one_seed` index makes a second `kind = 'seed'` row impossible and the
+    # rule under test here is the ACTIVE one.
+    for version, kind in (("v1", "seed"), ("v2", "model")):
         await db.execute(
-            "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}', 'staged')",
-            version,
+            "INSERT INTO artifact_bundle (version, manifest, state, kind)"
+            " VALUES ($1, '{}', 'staged', $2)",
+            version, kind,
         )
     await db.execute("UPDATE artifact_bundle SET state = 'active' WHERE version = 'v1'")
     with pytest.raises(asyncpg.UniqueViolationError):

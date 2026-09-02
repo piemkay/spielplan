@@ -16,8 +16,10 @@ Those two sentences fix both halves of this module:
 
       rule 1 — `dna_tag` and `dna_projected` are two functions and two statements. There is no
                code path in this module that reads them from one query.
-      rule 2 — salience, confidence and the projected tier's per-term strength appear in SELECT
-               lists and never in a predicate: they are weights, never filters.
+      rule 2 — salience, confidence, `n_sources` and the projected tier's per-term strength
+               appear in no predicate here: they are weights, never filters. They are not in
+               the cells either — the corpus's exporter wrote both DNA tiers as presence, and
+               §4.3 makes its column set the exhaustive definition of the tower's input.
       rule 3 — nothing here names the display-only schema. Aggregate platform scores are a
                popularity conduit and are banned as model features.
 
@@ -52,6 +54,7 @@ class BuiltVector:
     blocks_present: tuple[str, ...]
     blocks_dropped: tuple[str, ...]       # §5.3 "absent blocks dropped … rather than defaulted"
     blocks_imputed: tuple[str, ...]       # §4.3 "genome zero-imputation"
+    blocks_empty: tuple[str, ...] = ()    # rows arrived; none of their keys is a declared column
     unmapped: dict[str, int] = field(default_factory=dict, repr=False)
     nnz: int = 0
     build_ms: int = 0
@@ -61,12 +64,18 @@ class BuiltVector:
         """§5.3: "thin ones (2 lack keywords, 3 lack any DNA row) are still placed, badged, and
         parked as acquisition jobs for M5 enrichment."
 
-        Thin = at least one block dropped. A zero-imputed genome does **not** make a title thin:
-        §8 stage 9 says the genome is "unavailable for new titles by construction", so no amount
-        of §8 stage-2 enrichment would fill it and parking a job for it would be a job that can
-        never finish.
+        Thin = at least one block dropped, or one that hit none of its declared columns. The
+        second half is not a second rule: §4.3 makes the contract "the **exhaustive** definition
+        of the tower's input", so a block whose keys are all outside it feeds the tower exactly
+        the zeros a dropped block does. A title whose keywords are real but name nothing the
+        exported vocabulary carries is as thin as one with no keywords at all, and §8 stage 2's
+        re-fetch is the same remedy for both.
+
+        A zero-imputed genome does **not** make a title thin: §8 stage 9 says the genome is
+        "unavailable for new titles by construction", so no amount of §8 stage-2 enrichment
+        would fill it and parking a job for it would be a job that can never finish.
         """
-        return bool(self.blocks_dropped)
+        return bool(self.blocks_dropped or self.blocks_empty)
 
 
 def build_vector(
@@ -88,6 +97,7 @@ def build_vector(
     present: list[str] = []
     dropped: list[str] = []
     imputed: list[str] = []
+    empty: list[str] = []
     unmapped: dict[str, int] = {}
 
     for block in contract.blocks:
@@ -96,16 +106,23 @@ def build_vector(
             # Absent. Zeros either way; which of the two facts it is, is recorded.
             (imputed if block.impute == "zero" else dropped).append(block.name)
             continue
-        present.append(block.name)
+        hits = 0
         misses = 0
         for key, value in pairs.items():
             column = block.column(key)
             if column is None:
                 misses += 1        # a key this contract does not declare — counted, never grown
                 continue
+            hits += 1
             vec[column] = 1.0 if block.encoding == "multi_hot" else float(value)
         if misses:
             unmapped[block.name] = misses
+        # §4.3 makes the contract the exhaustive definition of the tower's input, so "present"
+        # can only mean "hit a column that definition declares". A block that produced rows and
+        # landed none of them writes the same zeros a dropped block writes, and marking it
+        # present asserts the tower was fed something it was not — which is how a credit block
+        # keyed `person_id::text` against `p:<role>:<name>` columns stayed invisible.
+        (present if hits else empty).append(block.name)
         _normalise(vec, block)
 
     # §4.3: "then the review-text block = columns 0..63 of the 256-d SVD embedding
@@ -129,6 +146,7 @@ def build_vector(
         blocks_present=tuple(present),
         blocks_dropped=tuple(dropped),
         blocks_imputed=tuple(imputed),
+        blocks_empty=tuple(empty),
         unmapped=unmapped,
         nnz=int(np.count_nonzero(vec)),
         build_ms=int(round((time.perf_counter() - started) * 1000)),
@@ -159,15 +177,32 @@ def text_embeddings(store: Any, title_ids: Sequence[int]) -> dict[int, np.ndarra
     the truncation is a decision this app makes *from the contract* rather than a shape it is
     handed. A title with no row is a title whose review-text block drops — the common case for
     a §8-acquired title before its reviews accrue (§8 stage 4).
+
+    A row whose `covered` flag is False is no row either. The shipped contract records the rule
+    itself — `preprocessing.missing_review_text: "zeros when covered=False"` — and the bundle
+    sets it False on 6,010 of 14,397 rows, whose `emb` is float noise around 1e-16 rather than
+    text. Returning them made the tenth block *present* for 42% of titles while the tower got
+    64 zeros: §5.3's badge stayed off, `is_thin` stayed False, and §8 stage 2 never parked the
+    acquisition job that is the only thing which can fill it.
     """
     if getattr(store, "is_empty", True) or not store.present.get("review_text_emb.npz"):
         return {}
     npz = store.npz("review_text_emb.npz")
-    ids = np.asarray(npz["title_id"]).astype(np.int64)
+    # `title_ids`, plural: the name the corpus's exporter writes. Reading `title_id` raised a
+    # KeyError on every bundle it has ever produced, so no block below this line was reachable
+    # (row data-rules-model-artifacts-load-from-the-shipped-bundle).
+    ids = np.asarray(npz["title_ids"]).astype(np.int64)
     emb = npz["emb"]
+    # A bundle that ships no `covered` array has told this app nothing about coverage, and
+    # inventing it from the embedding's magnitude would be a threshold nothing states. Every
+    # bundle the corpus has produced carries it, and `validate.py` refuses one that does not —
+    # so this branch is the read of a store that was never validated, not of an import.
+    covered = npz["covered"] if "covered" in npz.files else None
     wanted = {int(t) for t in title_ids}
     return {
-        int(t): np.asarray(emb[i]) for i, t in enumerate(ids) if int(t) in wanted
+        int(t): np.asarray(emb[i])
+        for i, t in enumerate(ids)
+        if int(t) in wanted and (covered is None or bool(covered[i]))
     }
 
 
@@ -180,18 +215,21 @@ def text_embeddings(store: Any, title_ids: Sequence[int]) -> dict[int, np.ndarra
 
 
 async def _dna_x(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
-    """The extracted tier (§4.1 rule 1). Salience is the SELECT list; it is never a predicate.
+    """The extracted tier (§4.1 rule 1), as presence.
 
-    `max` over providers rather than a sum: §6.6's parallel mode writes one row per provider and
-    salience is the strength of the reading, not its agreement — agreement lives in `confidence`
-    and `n_sources`, which this block does not encode.
+    The cell is 1.0 and not salience: the corpus built this block's 433 columns with
+    `build("dna_x", "SELECT title_id, 'dna:'||term FROM dna_tag")` and no `weighted=True`
+    (`scripts/build_content.py`), so the checkpoint has never seen a 2 or a 3 here — see
+    `contract.DEFAULT_ENCODING`. §4.1 rule 2 is still honoured: salience appears in no predicate.
+
+    DISTINCT rather than a GROUP BY: §6.6's parallel mode writes one row per provider, and the
+    corpus's `dna_tag` is PRIMARY KEY (title_id, term) — one row per term, whatever read it.
     """
     rows = await conn.fetch(
         """
-        SELECT title_id, 'dna:' || term AS key, max(salience)::float8 AS value
+        SELECT DISTINCT title_id, 'dna:' || term AS key, 1.0::float8 AS value
           FROM dna_tag
          WHERE title_id = ANY($1::int[]) AND version = $2
-         GROUP BY title_id, facet, term
         """,
         list(ids), vocab_version,
     )
@@ -199,16 +237,29 @@ async def _dna_x(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
 
 
 async def _dna_p(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
-    """The projected tier — a separate table, a separate statement, never a union (rule 1)."""
+    """The projected tier — a separate table, a separate statement, never a union (rule 1).
+
+    Presence again, for the same reason and from the same builder line: the projected weight is
+    a weight the corpus's exporter did not carry into the tower's input.
+    """
     rows = await conn.fetch(
         """
-        SELECT title_id, 'dna:' || term AS key, coalesce(weight, 0.0)::float8 AS value
+        SELECT DISTINCT title_id, 'dna:' || term AS key, 1.0::float8 AS value
           FROM dna_projected
          WHERE title_id = ANY($1::int[]) AND version = $2
         """,
         list(ids), vocab_version,
     )
     return _group(rows)
+
+
+# The corpus's own genome cut, verbatim: `build("genome", "... WHERE g.relevance >= 0.5",
+# weighted=True)` in `scripts/build_content.py`. It is not a filter on a *weight* in §4.1 rule
+# 2's sense — it is the definition of which rows the 983 columns were counted from, and the
+# shipped `content_X.npz` proves it: the genome block's minimum nonzero is exactly 0.5. Reading
+# every row instead feeds 587,502 of the bundle's 888,023 scores into columns the tower was
+# trained to see as zero.
+_GENOME_MIN_RELEVANCE = 0.5
 
 
 async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
@@ -220,26 +271,41 @@ async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
           FROM ml_link l
           JOIN ml_genome_score s ON s.ml_movie_id = l.ml_movie_id
           JOIN ml_genome_tag g ON g.tag_id = s.tag_id
-         WHERE l.title_id = ANY($1::int[])
+         WHERE l.title_id = ANY($1::int[]) AND s.relevance >= $2
         """,
-        list(ids),
+        list(ids), _GENOME_MIN_RELEVANCE,
     )
     return _group(rows)
 
 
 async def _genre(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
+    """The cell is a COUNT of the source rows that said it, not a presence bit.
+
+    Measured in the shipped `content_X.npz` — the corpus's own tower input — the four
+    source-multiplied blocks carry values above 1.0 in a large minority of their nonzeros:
+    genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5), country 66.2% (max 3).
+    The exporter's `build(...)` sums duplicate (title, feature) pairs and every one of these
+    tables carries a `source` column, so a genre four sources agreed on is a 4.0. `SELECT
+    DISTINCT ... 1.0` fed the checkpoint a presence bit where it was trained on a count.
+    """
     rows = await conn.fetch(
-        "SELECT DISTINCT title_id, 'genre:' || lower(genre) AS key, 1.0::float8 AS value"
-        " FROM title_genre WHERE title_id = ANY($1::int[])",
+        "SELECT title_id, 'genre:' || lower(genre) AS key, count(*)::float8 AS value"
+        " FROM title_genre WHERE title_id = ANY($1::int[])"
+        " GROUP BY title_id, lower(genre)",
         list(ids),
     )
     return _group(rows)
 
 
 async def _keyword(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
+    """`lower(trim(...))` because that is the expression the 3,884 columns were named from —
+    `build("keyword", "SELECT title_id, 'kw:'||lower(trim(keyword)) FROM title_keyword")` in
+    `scripts/build_content.py`. 15,096 of the shipped bundle's 764,732 keyword rows are not
+    already lower-cased, and each of those missed its column outright."""
     rows = await conn.fetch(
-        "SELECT DISTINCT title_id, 'kw:' || keyword AS key, 1.0::float8 AS value"
-        " FROM title_keyword WHERE title_id = ANY($1::int[])",
+        "SELECT title_id, 'kw:' || lower(trim(keyword)) AS key, count(*)::float8 AS value"
+        " FROM title_keyword WHERE title_id = ANY($1::int[])"
+        " GROUP BY title_id, lower(trim(keyword))",
         list(ids),
     )
     return _group(rows)
@@ -258,21 +324,41 @@ async def _credit(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
 
     `role_class` is the corpus's own normalisation (director|writer|dp|composer|cast|…), not a
     re-derivation from `job` strings: re-deriving it here would drift from the vocabulary the
-    contract was built against, one job title at a time."""
+    contract was built against, one job title at a time.
+
+    The role predicate is the corpus's, verbatim (`scripts/build_content.py`): the four
+    above-the-line crafts, plus cast only down to third billing. It is not an optimisation — it
+    is which rows the 244 columns exist for. Every one of the shipped bundle's 281,655 credit
+    rows carries a `role_class`, so "any non-NULL role_class" lit 52,421 rows the corpus left
+    dark: an editor, a production designer and a tenth-billed actor all entering columns whose
+    training distribution has them at zero."""
     rows = await conn.fetch(
-        "SELECT DISTINCT c.title_id, 'p:' || c.role_class || ':' || p.name AS key,"
-        " 1.0::float8 AS value"
+        "SELECT c.title_id, 'p:' || c.role_class || ':' || p.name AS key,"
+        " count(*)::float8 AS value"
         "  FROM credit c JOIN person p ON p.id = c.person_id"
-        " WHERE c.title_id = ANY($1::int[]) AND c.role_class IS NOT NULL AND p.name <> ''",
+        " WHERE c.title_id = ANY($1::int[]) AND p.name <> ''"
+        "   AND (c.role_class IN ('director', 'writer', 'composer', 'dp')"
+        "        OR (c.role_class = 'cast' AND c.billing_order <= 3))"
+        " GROUP BY c.title_id, c.role_class, p.name",
         list(ids),
     )
     return _group(rows)
 
 
 async def _country(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
+    """The cell is a COUNT of the source rows that said it, not a presence bit.
+
+    Measured in the shipped `content_X.npz` — the corpus's own tower input — the four
+    source-multiplied blocks carry values above 1.0 in a large minority of their nonzeros:
+    genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5), country 66.2% (max 3).
+    The exporter's `build(...)` sums duplicate (title, feature) pairs and every one of these
+    tables carries a `source` column, so a genre four sources agreed on is a 4.0. `SELECT
+    DISTINCT ... 1.0` fed the checkpoint a presence bit where it was trained on a count.
+    """
     rows = await conn.fetch(
-        "SELECT title_id, 'country:' || country AS key, 1.0::float8 AS value"
-        " FROM title_country WHERE title_id = ANY($1::int[])",
+        "SELECT title_id, 'country:' || country AS key, count(*)::float8 AS value"
+        " FROM title_country WHERE title_id = ANY($1::int[])"
+        " GROUP BY title_id, country",
         list(ids),
     )
     return _group(rows)
@@ -303,7 +389,7 @@ async def _award(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[s
 
 
 _META_SQL = """
-SELECT t.id, t.kind, t.year, t.runtime_min,
+SELECT t.id, t.kind, t.year, t.runtime_min, t.original_language,
        (t.overview    IS NOT NULL AND t.overview <> '') AS has_overview,
        (t.tagline     IS NOT NULL AND t.tagline  <> '') AS has_tagline,
        (t.trailer_key IS NOT NULL)                      AS has_trailer,
@@ -358,16 +444,17 @@ async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, 
     come from the closed grammar in `contract.META_PRODUCTIONS` and a declared name outside it
     is reported rather than silently left at zero. Every title row produces this block, so a
     title with no keywords, no DNA and no reviews still has one block present and is placeable.
+
+    One `lang:` column per title, from `title.original_language`. That is the corpus's own
+    production — `for tid, kind, year, runtime, lang in q("SELECT id, kind, year, runtime_min,
+    original_language FROM title") … if lang: meta.append((tid, f"lang:{lang}"))`
+    (`scripts/build_content.py`) — and it is a different fact from `title_language`, which is a
+    multi-source list of the languages *spoken* in a title and averages 2.98 distinct entries
+    per title across the shipped bundle. Reading it here set two extra language columns on a
+    typical film, in a block whose training distribution has exactly one. The code is verbatim
+    to the corpus down to the absent `lower()`: the corpus wrote whatever the column held.
     """
     rows = await conn.fetch(_META_SQL, list(ids), vocab_version)
-    languages = await conn.fetch(
-        "SELECT DISTINCT title_id, lower(language) AS language"
-        " FROM title_language WHERE title_id = ANY($1::int[])",
-        list(ids),
-    )
-    by_title: dict[int, list[str]] = {}
-    for row in languages:
-        by_title.setdefault(int(row["title_id"]), []).append(str(row["language"]))
 
     out: dict[int, dict[str, float]] = {}
     for r in rows:
@@ -379,8 +466,8 @@ async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, 
         bucket = _runtime_bucket(r["runtime_min"])
         if bucket is not None:
             values[f"runtime:{bucket}"] = 1.0
-        for code in by_title.get(title_id, ()):
-            values[f"lang:{code}"] = 1.0
+        if r["original_language"]:
+            values[f"lang:{r['original_language']}"] = 1.0
         for flag in ("overview", "tagline", "trailer", "poster", "imdb_id"):
             if r[f"has_{flag}"]:
                 values[f"has:{flag}"] = 1.0

@@ -63,13 +63,27 @@ NORMALISERS = ("none", "l2", "sum1", "max1")
 # once, here, per block, and a contract may override it per block. `multi_hot` writes 1.0 for a
 # key that is present; `weighted` and `scalar` write the value the database gave.
 DEFAULT_ENCODING: dict[str, str] = {
-    "dna_x": "weighted",      # salience 1..3 — §4.1 rule 2: a weight, never a filter
-    "dna_p": "weighted",      # the projected tier's per-term strength
-    "genome": "weighted",     # MovieLens relevance ∈ [0, 1]
-    "genre": "multi_hot",
-    "keyword": "multi_hot",
-    "credit": "multi_hot",
-    "country": "multi_hot",
+    # Both DNA tiers are PRESENCE, not strength. §4.3 makes the corpus's export the exhaustive
+    # definition of the tower's input, and the exporter (`scripts/build_content.py`) builds both
+    # tiers with `build("dna_x", ...)` / `build("dna_p", ...)` and no `weighted=True`, so every
+    # cell it wrote is 1.0; its `dna_tag` / `dna_projected` are keyed PRIMARY KEY (title_id,
+    # term), so nothing sums past it either. Measured in the shipped `content_X.npz`: 29,749 +
+    # 216,212 nonzeros, min 1.0 and max 1.0 in both blocks. §4.1 rule 2 keeps salience and the
+    # projected weight out of the *predicate*; it does not put them in the cell, and writing
+    # them here fed the checkpoint a 1..3 scale it was never trained on.
+    "dna_x": "multi_hot",
+    "dna_p": "multi_hot",
+    "genome": "weighted",     # MovieLens relevance, in [0.5, 1] after the corpus's own cut
+    # These four are COUNTS, not presence. Measured in the shipped `content_X.npz`, the share of
+    # nonzeros above 1.0 is genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5),
+    # country 66.2% (max 3): the exporter sums duplicate (title, feature) pairs and all four
+    # tables carry a `source`, so a genre four sources agreed on is a 4.0. Encoding them
+    # multi_hot fed the checkpoint a distribution it was never trained on in 4,404 of 6,435
+    # columns — the keys hit and the values were still wrong.
+    "genre": "weighted",
+    "keyword": "weighted",
+    "credit": "weighted",
+    "country": "weighted",
     "award": "scalar",        # two count columns
     "meta": "scalar",         # flags and normalised scalars, produced by the grammar below
 }

@@ -138,12 +138,21 @@ def _extend_text_embeddings(artifacts: Path, extra: list[int]) -> None:
 
 
 def _shrink_backbone(artifacts: Path, drop: int) -> None:
-    """A different Backbone: one title's row is gone, so its coverage shrank (§10)."""
-    npz = np.load(artifacts / "backbone.npz", allow_pickle=False)
-    keep = npz["title_ids"] != drop
-    np.savez(artifacts / "backbone.npz", title_ids=npz["title_ids"][keep], E=npz["E"][keep],
-             E_full=npz["E_full"][keep], b_i=npz["b_i"][keep], mu=npz["mu"],
-             item_n=npz["item_n"][keep])
+    """A different Backbone: one title's row is gone, so its coverage shrank (§10).
+
+    Every row-aligned array is filtered by the same mask rather than a named few: decision 162
+    added `title_identity` beside the ids, and a helper that rebuilt the file from a list of
+    arrays it remembered would silently drop it — which the validator would then refuse, and
+    for the right reason.
+    """
+    with np.load(artifacts / "backbone.npz", allow_pickle=False) as npz:
+        arrays = {k: npz[k] for k in npz.files}
+    keep = arrays["title_ids"] != drop
+    rows = arrays["title_ids"].shape[0]
+    np.savez(artifacts / "backbone.npz", **{
+        k: (v[keep] if getattr(v, "shape", ()) and v.shape[0] == rows else v)
+        for k, v in arrays.items()
+    })
 
 
 def _make_bundle(root: Path, *, version: str = "test-v1", **contract_kwargs) -> Path:
@@ -262,12 +271,13 @@ def test_editing_a_block_size_moves_every_later_column():
     for name in ("credit", "country", "award", "meta"):
         assert narrow.block(name).offset == wide.block(name).offset - 1   # after it
 
-    rows = {"country": {"JP": 1.0}, "award": {"award_wins": 2.0}}
+    rows = {"country": {"country:Japan": 1.0}, "award": {"award:won": 2.0}}
     assert np.nonzero(features.build_vector(wide, 1, rows, None).vec)[0].tolist() == [
-        wide.block("country").column("JP"), wide.block("award").column("award_wins")
+        wide.block("country").column("country:Japan"), wide.block("award").column("award:won")
     ]
     assert np.nonzero(features.build_vector(narrow, 1, rows, None).vec)[0].tolist() == [
-        wide.block("country").column("JP") - 1, wide.block("award").column("award_wins") - 1
+        wide.block("country").column("country:Japan") - 1,
+        wide.block("award").column("award:won") - 1,
     ]
 
 
@@ -281,7 +291,7 @@ def test_text_scale_is_frozen_in_the_contract_and_scales_only_the_last_64_column
     """
     contract = FeatureContract.load(_contract_doc(text_scale=0.031_25))
     emb = np.arange(256, dtype=np.float32) + 1.0
-    rows = {"genre": {"Crime": 1.0}}
+    rows = {"genre": {"genre:crime": 1.0}}
     built = features.build_vector(contract, 1, rows, emb)
 
     tail = built.vec[contract.text_offset:]
@@ -339,7 +349,7 @@ def test_a_key_the_contract_does_not_declare_is_counted_and_never_grows_the_vect
     column out from under the tower."""
     contract = FeatureContract.load(_contract_doc())
     built = features.build_vector(
-        contract, 1, {"genre": {"Crime": 1.0, "Cyberpunk": 1.0}}, None
+        contract, 1, {"genre": {"genre:crime": 1.0, "genre:cyberpunk": 1.0}}, None
     )
     assert built.unmapped == {"genre": 1}
     assert built.vec.size == contract.input_dim
@@ -470,7 +480,10 @@ async def test_a_title_with_no_keywords_and_no_dna_row_still_gets_a_coordinate(d
     assert set(row["blocks_dropped"]) == {
         "dna_x", "dna_p", "genre", "keyword", "credit", "country", "award", "review_text"
     }
-    assert row["input_dim"] == 131
+    # 57 content columns + 64 review-text: the width the fixture's own contract declares. The
+    # M4.5 rewrite moved it from 131, and a literal that no longer traces to the artifact is the
+    # hardcoded offset table this file's docstring warns about.
+    assert row["input_dim"] == 121
     assert await db.fetchval("SELECT placement FROM title WHERE id = $1", THIN_TITLE) == "cold_tower"
 
 
@@ -592,9 +605,15 @@ async def test_the_vector_is_built_from_the_database_through_the_contracts_own_c
     """§5.3: "a feature vector built from **DB data** per the feature contract".
 
     Every value below is traceable to one row of the content spine and lands in the column the
-    contract names for it — salience 2 in the extracted tier's column, the projected tier's
-    strength in *its* column (§4.1 rule 1: two tiers, never merged), genome relevance, the
-    award counts, and the meta grammar's two continuous productions.
+    contract names for it — the extracted term in the extracted tier's column and the projected
+    one in *its* column (§4.1 rule 1: two tiers, never merged), genome relevance, the award
+    counts, and the meta block's one-hots.
+
+    Every column name below used to be the bare database value the builder happened to emit —
+    `"Comedy"`, `"cooking"`, `"3"` — against a fixture contract written to agree with it. The
+    shipped contract names them `genre:comedy`, `kw:cooking`, `p:director:Wong Kar-wai`, so this
+    test asserted only that the code agrees with itself (§4.3: the contract is the *exhaustive*
+    definition of the tower's input, and it is the corpus that writes it).
     """
     store, _report = placed
     contract = FeatureContract.from_store(store)
@@ -603,27 +622,26 @@ async def test_the_vector_is_built_from_the_database_through_the_contracts_own_c
     ))[0]
     vec = built.vec
 
-    assert vec[contract.block("dna_x").column("register.deadpan")] == pytest.approx(2.0)
-    assert vec[contract.block("dna_p").column("place.domestic")] == pytest.approx(0.3)
-    assert vec[contract.block("genome").column("cooking")] == pytest.approx(0.8, abs=1e-6)
-    assert vec[contract.block("genre").column("Comedy")] == 1.0
-    assert vec[contract.block("keyword").column("cooking")] == 1.0
-    assert vec[contract.block("credit").column("3")] == 1.0
-    assert vec[contract.block("country").column("JP")] == 1.0
-    assert vec[contract.block("award").column("award_nominations")] == pytest.approx(1.0)
-    assert vec[contract.block("award").column("award_wins")] == pytest.approx(1.0)
-    # meta: year_norm = (1985 - 1900)/125, one credit -> log1p(1)/5.
-    assert vec[contract.block("meta").column("year_norm")] == pytest.approx(85 / 125, abs=1e-6)
-    assert vec[contract.block("meta").column("n_credits_log")] == pytest.approx(
-        float(np.log1p(1) / 5), abs=1e-6
-    )
+    # 1.0 and not the row's salience 2 / weight 0.3: the corpus built both DNA blocks as
+    # presence (`contract.DEFAULT_ENCODING`), so those are the only values the tower has seen.
+    assert vec[contract.block("dna_x").column("dna:register.deadpan")] == pytest.approx(1.0)
+    assert vec[contract.block("dna_p").column("dna:place.domestic")] == pytest.approx(1.0)
+    assert vec[contract.block("genome").column("g:cooking")] == pytest.approx(0.8, abs=1e-6)
+    assert vec[contract.block("genre").column("genre:comedy")] == 1.0
+    assert vec[contract.block("keyword").column("kw:cooking")] == 1.0
+    assert vec[contract.block("credit").column("p:director:Wong Kar-wai")] == 1.0
+    assert vec[contract.block("country").column("country:Japan")] == 1.0
+    assert vec[contract.block("award").column("award:nominated")] == pytest.approx(1.0)
+    assert vec[contract.block("award").column("award:won")] == pytest.approx(1.0)
     assert vec[contract.block("meta").column("kind:movie")] == 1.0
     assert vec[contract.block("meta").column("kind:series")] == 0.0
+    assert vec[contract.block("meta").column("decade:1980")] == 1.0
 
-    # Every DB key the contract declares landed. The one block with leftovers is `meta`: this
-    # fixture is a scale model that declares 5 of the corpus contract's 57 meta columns, so the
-    # grammar's other productions have no column to go to. They are *counted* rather than
-    # silently discarded, and no key anywhere widened the vector.
+    # Every DB key the contract declares landed. The one block with leftovers is `meta`: the
+    # shipped contract's 57 meta columns are one-hots only (`kind:`, `decade:`, `runtime:`,
+    # `lang:` — `real_bundle_shapes.json` lists no other pattern), so `META_PRODUCTIONS`'
+    # continuous productions and `has:` flags have no column to go to. They are *counted*
+    # rather than silently discarded, and no key anywhere widened the vector.
     assert set(built.unmapped) == {"meta"}
     assert built.unmapped["meta"] > 0
     assert built.vec.size == contract.input_dim
@@ -654,6 +672,402 @@ async def test_a_bundle_with_no_backbone_row_for_a_title_never_calls_it_warm(db,
     assert await db.fetchval(
         "SELECT count(*) FROM title_placement WHERE title_id = 8"
     ) == 1
+
+
+# --- the nine blocks' key grammar, and the block that hits none of its columns -----------------
+#     (data-rules-feature-blocks-keyed-as-the-contract-names-them,
+#      data-rules-a-feature-block-that-never-hits-is-not-present)
+
+
+# One column per block, in the grammar the shipped contract declares, with the value the
+# fixture's own content spine puts there. Every entry is traceable to one INSERT in
+# `_seed_extra_titles`, which is what makes this a test of the builder rather than of a table
+# written to agree with it.
+CONTRACT_COLUMNS: dict[str, tuple[str, float]] = {
+    # Both DNA tiers are presence: the row's salience (2) and weight (0.3) are values the
+    # corpus's exporter never put in a cell, so neither is what the checkpoint reads.
+    "dna_x": ("dna:register.deadpan", 1.0),          # the extracted tier
+    "dna_p": ("dna:place.domestic", 1.0),            # the projected tier
+    "genome": ("g:cooking", 0.8),                    # MovieLens relevance, above the 0.5 cut
+    "genre": ("genre:comedy", 1.0),                  # 'Comedy', lowercased by the contract
+    "keyword": ("kw:cooking", 1.0),
+    "credit": ("p:director:Wong Kar-wai", 1.0),      # person 3, by name and not by id
+    "country": ("country:Japan", 1.0),
+    "award": ("award:won", 1.0),
+    "meta": ("kind:movie", 1.0),
+}
+
+
+@pytest.fixture
+def grammar_bundle(tmp_path) -> Path:
+    """The same bundle with its credit columns keyed `credit:<n>` (`break_contract_block_grammar`).
+
+    That is the shape this repo's fixture used to declare, and it is the one a `person_id::text`
+    builder agrees with perfectly — which is why the miss was invisible for as long as it was.
+    """
+    root = _make_bundle(tmp_path / "grammar")
+    fx.break_contract_block_grammar(root)
+    return root
+
+
+@pytest.fixture
+async def spine(db):
+    """The rows §8 stage 9 reads, inserted directly rather than through `import_bundle`.
+
+    `placed` above reaches the same state through the importer, and these tests deliberately do
+    not: what they assert is a property of the feature builder and the contract, and a defect
+    anywhere else in the import path must not get to decide whether it is asserted at all.
+    """
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state)"
+        " VALUES ('test-v1', '{}'::jsonb, 'active')"
+    )
+    await db.execute(
+        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 11, 14)"
+    )
+    await db.execute("INSERT INTO person (id, name) VALUES (3, 'Wong Kar-wai')")
+    await _seed_extra_titles(db)
+
+
+async def _sweep(db, root: Path):
+    """§5.3's sweep against the bundle at `root`. Returns (store, report)."""
+    store = ArtifactStore.open(root / "artifacts", "test-v1")
+    return store, await reconcile.reconcile(db, store, scope="owned_missing")
+
+
+def test_present_absent_and_all_keys_missing_are_three_distinguishable_states():
+    """The row's own sentence: "A block that is present and populated, one that is legitimately
+    absent, and one whose keys all miss are three distinguishable states."
+
+    All three are the same bytes in the vector, so the difference can only be bookkeeping. §4.3
+    makes `feature_contract.json` "the **exhaustive** definition of the tower's input", which
+    fixes what `present` is allowed to mean: a block that hit a column that definition declares.
+    A block marked present because its query returned rows claims the tower was fed something it
+    was not.
+    """
+    contract = FeatureContract.load(_contract_doc())
+    built = features.build_vector(
+        contract,
+        1,
+        {
+            "genre": {"genre:crime": 1.0},         # populated: a column the contract declares
+            "keyword": {"3": 1.0, "8829": 1.0},    # every key misses: row ids, not `kw:` names
+            # `credit` is not in `rows` at all: legitimately absent.
+        },
+        None,
+    )
+
+    assert built.blocks_present == ("genre",)
+    assert built.blocks_empty == ("keyword",)
+    assert "keyword" not in built.blocks_dropped, "an all-miss block is not an absent one"
+    assert "credit" in built.blocks_dropped
+    assert built.unmapped == {"keyword": 2}
+
+    # The four names partition the contract's blocks: no block is in two of them, and none is
+    # in nothing. That is what "distinguishable" has to mean if the badge is to read them.
+    named = [set(built.blocks_present), set(built.blocks_dropped),
+             set(built.blocks_imputed), set(built.blocks_empty)]
+    assert sum(len(s) for s in named) == len(set().union(*named))
+    assert set().union(*named) == {*contract.block_names, "review_text"}
+
+    # …and the vector cannot tell them apart, which is the whole reason they are recorded.
+    kw = contract.block("keyword")
+    assert not built.vec[kw.offset:kw.stop].any()
+    assert built.nnz == 1
+
+
+def test_is_thin_sees_a_block_whose_keys_all_miss():
+    """§5.3: "thin ones … are still placed, badged, and parked as acquisition jobs".
+
+    The falsifiable half: a title with every block populated is not thin, and the same title
+    with one block's keys rewritten into a grammar the contract does not declare is — even
+    though nothing about it is absent and `blocks_dropped` stays empty.
+    """
+    contract = FeatureContract.load(_contract_doc())
+    text = np.zeros(contract.text_dims, dtype=np.float32)
+    complete = {b.name: {b.names[0]: 1.0} for b in contract.blocks}
+    assert not features.build_vector(contract, 1, complete, text).is_thin
+
+    built = features.build_vector(contract, 1, {**complete, "credit": {"3": 1.0}}, text)
+    assert built.blocks_dropped == (), "nothing about this title is absent"
+    assert built.blocks_empty == ("credit",)
+    assert built.is_thin
+
+
+async def test_every_content_block_is_keyed_as_the_contract_names_it(db, spine, bundle_root):
+    """§4.3: "§8 stage 9 builds vectors from this file and nothing else."
+
+    The row names the grammar: `kw:`, `dna:`, `g:`, `p:<role>:<name>`, `genre:`, `country:`,
+    `lang:`, `decade:`, `runtime:`, `award:`, `kind:` — "and not by bare database values or by
+    row ids". So the builders' raw keys are asserted first, before the contract is consulted.
+    A test that only read the *vector* would be scoring the builder against a contract written
+    from the same reading that produced the key, which is how `credit:3` survived.
+
+    `FULL_TITLE` is the title whose keywords, genres, DNA terms, genome tags, countries, crew
+    and awards the contract names, so each of the nine blocks owes a non-zero column.
+    """
+    store, report = await _sweep(db, bundle_root)
+    contract = FeatureContract.from_store(store)
+
+    keys = (await features.fetch_blocks(
+        db, [FULL_TITLE], contract, vocab_version="v1"
+    ))[FULL_TITLE]
+    assert keys["credit"] == {"p:director:Wong Kar-wai": 1.0}, "the crew is keyed by name"
+    assert set(keys["genre"]) == {"genre:comedy"}
+    assert set(keys["keyword"]) == {"kw:cooking"}
+    assert set(keys["country"]) == {"country:Japan"}
+    assert set(keys["genome"]) == {"g:cooking"}
+    assert set(keys["dna_x"]) == {"dna:register.deadpan"}
+    assert set(keys["dna_p"]) == {"dna:place.domestic"}
+    assert set(keys["award"]) == {"award:nominated", "award:won"}
+    assert {"kind:movie", "decade:1980", "runtime:105-130"} <= set(keys["meta"])
+
+    built = (await features.build_vectors(
+        db, store, contract, [FULL_TITLE], vocab_version="v1"
+    ))[0]
+    for block, (column, value) in CONTRACT_COLUMNS.items():
+        offset = contract.block(block).column(column)
+        assert offset is not None, f"the contract declares no {column!r} in block {block}"
+        assert built.vec[offset] == pytest.approx(value, abs=1e-6), f"block {block} is zero"
+    meta = contract.block("meta")
+    assert built.vec[meta.column("decade:1980")] == 1.0
+    assert built.vec[meta.column("kind:series")] == 0.0
+    assert built.vec[contract.block("award").column("award:nominated")] == pytest.approx(1.0)
+
+    # `meta` is the only block with leftovers, and only because the shipped contract's 57 meta
+    # columns are one-hots (`real_bundle_shapes.json` lists `kind:`, `decade:`, `runtime:`,
+    # `lang:` and no other pattern) while `META_PRODUCTIONS` also produces `has:` flags and
+    # continuous columns. Every other block's keys are the contract's own column names.
+    assert set(built.unmapped) == {"meta"}
+
+    # Nine blocks present, none of them degraded — and the import-time check does not fire on a
+    # contract the builder agrees with, which is what makes its firing in the next test a signal.
+    assert built.blocks_empty == ()
+    assert set(built.blocks_present) == {*contract.block_names, "review_text"}
+    assert report.blocks_never_hit == []
+
+
+async def test_a_block_that_hit_nothing_is_persisted_and_parks_the_title(db, spine, grammar_bundle):
+    """The row: "the miss count is persisted with the placement, is_thin sees it, and the title
+    is badged and parked like any other thin title."
+
+    `FULL_TITLE` carries a row for every one of the nine blocks, so nothing about it is absent.
+    Without the persisted counts its placement is byte-identical to one where all 244 credit
+    columns landed — which is exactly the state every placement this app computed was in.
+    """
+    _store, report = await _sweep(db, grammar_bundle)
+    assert report.failed == 0
+
+    full = await db.fetchrow(
+        "SELECT blocks_present, blocks_dropped, blocks_empty, blocks_unmapped"
+        "  FROM title_placement WHERE title_id = $1 AND bundle_version = 'test-v1'",
+        FULL_TITLE,
+    )
+    assert full is not None, "a degraded block must not stop the title being placed"
+    assert full["blocks_dropped"] == []
+    assert full["blocks_empty"] == ["credit"]
+    assert "credit" not in full["blocks_present"]
+    assert full["blocks_unmapped"]["credit"] == 1
+
+    # The legitimately-absent case, in the same table, from the same sweep: `blocks_dropped`
+    # carries it and `blocks_empty` stays empty, so the two are readable apart in SQL.
+    thin = await db.fetchrow(
+        "SELECT blocks_dropped, blocks_empty FROM title_placement WHERE title_id = $1",
+        THIN_TITLE,
+    )
+    assert "keyword" in thin["blocks_dropped"] and thin["blocks_empty"] == []
+
+    # Badged and parked like any other thin title (§5.3), and the job says which block and why.
+    assert await db.fetchval(
+        "SELECT placement FROM title WHERE id = $1", FULL_TITLE
+    ) == "cold_tower"
+    job = await db.fetchrow("SELECT * FROM acquisition_job WHERE title_id = $1", FULL_TITLE)
+    assert job is not None and job["stage"] == 2 and job["status"] == "parked"
+    assert "credit" in job["reason"]
+    assert job["detail"]["blocks_empty"] == ["credit"]
+    assert job["detail"]["blocks_unmapped"]["credit"] == 1
+
+
+async def test_the_sweep_names_a_block_whose_declared_columns_its_keys_never_hit(
+    db, spine, grammar_bundle
+):
+    """The row's last clause: "an import-time check reports any block whose declared columns the
+    builder's keys never hit."
+
+    §5.3 makes bundle import a placement trigger, so the sweep the import runs *is* the
+    import-time check, and it draws the distinction a per-title verdict cannot. One title whose
+    crew the contract happens not to name is a fact about the title, and §8 stage 2 enrichment
+    can change it. The same block hitting nothing on every title is a fact about the key
+    grammar, which no enrichment can reach — so it is reported as its own line rather than left
+    to be inferred from a parking backlog.
+    """
+    _store, report = await _sweep(db, grammar_bundle)
+    assert report.blocks_never_hit == ["credit"]
+    assert any("credit" in note for note in report.notes), report.notes
+
+
+# --- the values, not just the columns ---------------------------------------------------------
+#     (data-rules-feature-blocks-keyed-as-the-contract-names-them)
+#
+# Hitting the right column is half of §8 stage 9. The other half is writing the number the
+# checkpoint was trained on, and the authority for that is the same file the columns came from:
+# the corpus's exporter, `scripts/build_content.py`. Each test below names the builder line it
+# is holding this app to, and each fails against a builder that hits every column and fills it
+# from a distribution of its own.
+
+
+def test_both_dna_tiers_enter_the_vector_as_presence_not_as_strength():
+    """`build("dna_x", ...)` and `build("dna_p", ...)` are called without `weighted=True`, so
+    every cell the corpus wrote in these 989 columns is 1.0 — measured over all 245,961 of the
+    shipped `content_X.npz`'s nonzeros in the two blocks.
+
+    Salience runs 1..3 and the projected weight is a fraction, so a builder that wrote either
+    put the tower's two largest content blocks on a scale it had never seen. §4.1 rule 2 keeps
+    those numbers out of the *predicate*; it does not license putting them in the cell.
+    """
+    contract = FeatureContract.load(_contract_doc())
+    built = features.build_vector(
+        contract,
+        1,
+        {"dna_x": {"dna:mood.dread": 3.0}, "dna_p": {"dna:mood.cosy": 0.25}},
+        None,
+    )
+    assert built.vec[contract.block("dna_x").column("dna:mood.dread")] == 1.0
+    assert built.vec[contract.block("dna_p").column("dna:mood.cosy")] == 1.0
+    assert set(built.blocks_present) == {"dna_x", "dna_p"}
+
+
+def test_an_uncovered_review_text_row_is_not_a_present_block(bundle_root):
+    """§4.3's contract records the rule in its own preprocessing map:
+    `missing_review_text: "zeros when covered=False"`.
+
+    The shipped bundle sets `covered` False on 6,010 of its 14,397 rows and leaves their `emb`
+    as float noise near 1e-16. Reading those rows anyway fed the tower a block of zeros while
+    reporting it present — so §5.3's badge stayed off and §8 stage 2 parked nothing for 42% of
+    the corpus. An uncovered row is not a row; the block drops, and the title is thin.
+    """
+    artifacts = bundle_root / "artifacts"
+    with np.load(artifacts / "review_text_emb.npz", allow_pickle=False) as npz:
+        arrays = {k: npz[k] for k in npz.files}
+    covered = arrays["covered"].copy()
+    covered[arrays["title_ids"] == FULL_TITLE] = False
+    np.savez(artifacts / "review_text_emb.npz", **{**arrays, "covered": covered})
+
+    store = ArtifactStore.open(artifacts, "test-v1")
+    contract = FeatureContract.from_store(store)
+    emb = features.text_embeddings(store, [FULL_TITLE, 1])
+    assert FULL_TITLE not in emb, "an uncovered row is not review text"
+    assert 1 in emb, "…and a covered one still is"
+
+    built = features.build_vector(
+        contract, FULL_TITLE, {"meta": {"kind:movie": 1.0}}, emb.get(FULL_TITLE)
+    )
+    assert "review_text" in built.blocks_dropped
+    assert "review_text" not in built.blocks_present
+    assert not built.vec[contract.text_offset:].any()
+    assert built.is_thin
+
+
+async def test_the_genome_block_takes_the_corpus_relevance_cut(db, spine, bundle_root):
+    """`build("genome", "… WHERE g.relevance >= 0.5", weighted=True)`.
+
+    The cut is not a filter on a weight in §4.1 rule 2's sense — it is which rows the 983
+    columns were counted from, and `content_X.npz` proves it: the block's smallest nonzero is
+    exactly 0.5. Below it the tower was trained to see zero, and the shipped bundle has 587,502
+    of its 888,023 genome scores down there.
+    """
+    await db.execute(
+        "INSERT INTO ml_genome_score (ml_movie_id, tag_id, relevance)"
+        " VALUES (110, 1, 0.49), (110, 2, 0.5)"
+    )
+    store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
+    contract = FeatureContract.from_store(store)
+    keys = (await features.fetch_blocks(
+        db, [FULL_TITLE], contract, vocab_version="v1"
+    ))[FULL_TITLE]
+
+    # `g:heist` at 0.49 is below the cut; `g:dread` at exactly 0.5 is not — the corpus's
+    # predicate is `>=`, and an off-by-one here moves a whole tag's column out of the block.
+    assert set(keys["genome"]) == {"g:cooking", "g:dread"}
+    assert keys["genome"]["g:dread"] == pytest.approx(0.5)
+
+
+async def test_a_mixed_case_keyword_lands_in_the_contracts_lowercase_column(
+    db, spine, bundle_root
+):
+    """`build("keyword", "SELECT title_id, 'kw:'||lower(trim(keyword)) …")`.
+
+    15,096 of the bundle's 764,732 keyword rows are not already lower-cased, and every one of
+    them missed its column outright — silently, because a miss is only ever counted.
+    """
+    await db.execute(
+        "INSERT INTO title_keyword (title_id, keyword, source) VALUES ($1, ' Cooking ', 'imdb')",
+        FULL_TITLE,
+    )
+    store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
+    contract = FeatureContract.from_store(store)
+    keys = (await features.fetch_blocks(
+        db, [FULL_TITLE], contract, vocab_version="v1"
+    ))[FULL_TITLE]
+    assert set(keys["keyword"]) == {"kw:cooking"}
+
+
+async def test_the_credit_block_takes_only_the_roles_the_corpus_built_its_columns_from(
+    db, spine, bundle_root
+):
+    """The corpus's predicate, verbatim: the four above-the-line crafts, plus cast down to
+    third billing and no further.
+
+    Every one of the shipped bundle's 281,655 credit rows carries a `role_class`, so "any
+    non-NULL role_class" is not a near-miss — it lights 52,421 rows the corpus left dark. The
+    contract declares a `p:cast:Al Pacino` column and no `p:editor:` column at all, which is
+    the same fact stated from the other side.
+    """
+    await db.execute(
+        "INSERT INTO person (id, name) VALUES"
+        " (11, 'Al Pacino'), (12, 'Thelma Schoonmaker'), (13, 'Bit Player'),"
+        " (14, 'Unbilled Extra')"
+    )
+    await db.execute(
+        "INSERT INTO credit (title_id, person_id, job, role_class, billing_order) VALUES"
+        " ($1, 11, 'Actor',  'cast',   1),"      # top-billed: the corpus keeps it
+        " ($1, 13, 'Actor',  'cast',   9),"      # ninth-billed: it does not
+        " ($1, 14, 'Actor',  'cast',   NULL),"   # unbilled: `<= 3` is NULL, so neither does this
+        " ($1, 12, 'Editor', 'editor', NULL)",   # a craft the 244 columns have no name for
+        FULL_TITLE,
+    )
+    store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
+    contract = FeatureContract.from_store(store)
+    keys = (await features.fetch_blocks(
+        db, [FULL_TITLE], contract, vocab_version="v1"
+    ))[FULL_TITLE]
+    assert set(keys["credit"]) == {"p:director:Wong Kar-wai", "p:cast:Al Pacino"}
+
+
+async def test_the_meta_blocks_language_column_is_the_titles_original_language(
+    db, spine, bundle_root
+):
+    """The corpus reads one column: `SELECT id, kind, year, runtime_min, original_language FROM
+    title`, and writes `lang:{lang}` once.
+
+    `title_language` is a different fact — the multi-source list of languages spoken in a title,
+    averaging 2.98 distinct entries per title across the shipped bundle. Reading it here set
+    three `lang:` columns on a typical film in a block whose training distribution has one.
+    """
+    await db.execute(
+        "UPDATE title SET original_language = 'ja' WHERE id = $1", FULL_TITLE
+    )
+    await db.execute(
+        "INSERT INTO title_language (title_id, language, source) VALUES"
+        " ($1, 'en', 'tmdb'), ($1, 'fr', 'tmdb'), ($1, 'de', 'imdb')",
+        FULL_TITLE,
+    )
+    store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
+    contract = FeatureContract.from_store(store)
+    keys = (await features.fetch_blocks(
+        db, [FULL_TITLE], contract, vocab_version="v1"
+    ))[FULL_TITLE]
+    assert {k for k in keys["meta"] if k.startswith("lang:")} == {"lang:ja"}
 
 
 # --- §5.3's budget (jellyfin-acquisition-eval-cpu-job-budgets) --------------------------------
@@ -705,18 +1119,27 @@ async def reimported(db, placed, tmp_path):
     """A second bundle with a different Backbone and a changed column set, imported and staged.
 
     §10: "Bundle re-import (new vocabulary, retrained backbone) is a planned admin event." The
-    new Backbone has lost title 7 (coverage shrank) and the new contract renames the `Comedy`
-    genre column, so a title whose content did not change still gets a different vector — which
-    is what "feature vectors rebuilt from the staged bundle's feature contract, whose column set
-    may change" means in practice.
+    new Backbone has lost title 7 (coverage shrank) and the new contract renames the
+    `genre:comedy` column, so a title whose content did not change still gets a different
+    vector — which is what "feature vectors rebuilt from the staged bundle's feature contract,
+    whose column set may change" means in practice.
     """
     await _seed_observations(db)
     second = _make_bundle(
         tmp_path / "bundle2", version="test-v2",
-        names={"genre": ["Crime", "Thriller", "Family", "Romance", "Sci-Fi", "Drama",
-                         "Comedy Drama"] + ["__pad_0", "__pad_1"]},
+        # The shipped grammar, with one column renamed: seven names for a seven-wide block,
+        # `genre:comedy` becoming `genre:comedy-drama`. Bare `Crime`/`Comedy Drama` names were
+        # the fixture agreeing with the builder about a grammar neither shares with the corpus.
+        names={"genre": ["genre:crime", "genre:thriller", "genre:family", "genre:romance",
+                         "genre:sci-fi", "genre:drama", "genre:comedy-drama"]},
     )
     _shrink_backbone(second / "artifacts", drop=7)
+    # decision 162: content seeds once and the corpus re-ships models. §10's "bundle re-import
+    # (new vocabulary, retrained backbone)" is therefore a MODELS-ONLY bundle — which is exactly
+    # what this test needs, because everything it asserts is about the new basis and the new
+    # contract, not about content arriving a second time.
+    (second / "content.sqlite").unlink()
+    (second / "reviews.sqlite").unlink()
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(second), tmp_path / "artifacts"
     )

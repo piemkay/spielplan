@@ -42,9 +42,16 @@ BUNDLE_FILES: dict[str, bool] = {
     "corrections_v1.tsv": False,
 }
 
-# §4.3: `dna_vocab/<version>/` — vocabulary TSVs, alias map, S matrix, adjudications, and
-# (§6.4) the authored axis definitions, one TSV per facet.
-VOCAB_FILES = ("terms.tsv", "aliases.tsv", "adjudications.tsv")
+# §4.3: `dna_vocab/<version>/` — "vocabulary TSVs, alias map, S matrix, adjudications". Named
+# here as the corpus ships them, which is not what this tuple said until M4.5: `terms.tsv`,
+# `aliases.tsv` and `adjudications.tsv` are three files no exported bundle has ever contained,
+# so every reader of this constant was addressing a vocabulary directory that does not exist.
+#
+# The version is inside the filename as well as in the directory name — `dna_vocab/v1/` holds
+# `vocab_v1_all.tsv` — so this tuple is v1's file set rather than a template. Decision 163
+# refuses a bundle whose vocabulary version differs from the active one, so there is exactly
+# one version's file set to name until that migration is planned.
+VOCAB_FILES = ("vocab_v1_all.tsv", "alias_map_v1.tsv", "s_matrix_v1.tsv", "adjudications_v1.tsv")
 
 
 @dataclass
@@ -54,6 +61,11 @@ class ArtifactStore:
     manifest: dict[str, Any] = field(default_factory=dict)
     present: dict[str, bool] = field(default_factory=dict)
     vocab_version: str | None = None
+    # BUNDLE.json — the bundle's own identity record, as `artifact_bundle.manifest` holds it.
+    # It cannot be read from `root`: §10 stages only the bundle's `artifacts/` subtree, and
+    # BUNDLE.json sits one level above it at the bundle root. So it arrives from the database
+    # or not at all, and an empty dict is the honest value when nobody supplied it.
+    identity: dict[str, Any] = field(default_factory=dict)
 
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -66,7 +78,7 @@ class ArtifactStore:
         return cls()
 
     @classmethod
-    def open(cls, root: Path, version: str) -> ArtifactStore:
+    def open(cls, root: Path, version: str, identity: dict[str, Any] | None = None) -> ArtifactStore:
         manifest_path = root / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
         present = {name: (root / name).exists() for name in BUNDLE_FILES}
@@ -75,13 +87,13 @@ class ArtifactStore:
             vocab_dirs = sorted((root / "dna_vocab").glob("*")) if (root / "dna_vocab").is_dir() else []
             vocab_version = vocab_dirs[-1].name if vocab_dirs else None
         return cls(version=version, root=root, manifest=manifest, present=present,
-                   vocab_version=vocab_version)
+                   vocab_version=vocab_version, identity=dict(identity or {}))
 
     @classmethod
     async def load_active(cls, conn: asyncpg.Connection, artifacts_dir: Path) -> ArtifactStore:
         """Load whatever `artifact_bundle` says is active. Missing => the empty store."""
         row = await conn.fetchrow(
-            "SELECT version FROM artifact_bundle WHERE state = 'active' LIMIT 1"
+            "SELECT version, manifest FROM artifact_bundle WHERE state = 'active' LIMIT 1"
         )
         if row is None:
             return cls.empty()
@@ -95,7 +107,7 @@ class ArtifactStore:
                 row["version"], root,
             )
             return cls.empty()
-        return cls.open(root, row["version"])
+        return cls.open(root, row["version"], identity=_as_mapping(row["manifest"]))
 
     def assert_matches(self, active_version: str | None) -> None:
         """§10: refuse to score or refit against a bundle other than the active one."""
@@ -133,6 +145,23 @@ class ArtifactStore:
             "vocabulary_version": self.vocab_version,
             "present": self.present,
             "missing_required": self.missing_required(),
-            "titles": self.manifest.get("title_count"),
-            "owned": self.manifest.get("owned_count"),
+            # The Data tab's "N titles". It used to read `title_count` out of
+            # `artifacts/manifest.json`, which §4.3 defines as the fitted 3-class cut-points and
+            # which has never carried such a key — so the panel has always rendered nothing.
+            # BUNDLE.json's `tables` is a row count per shipped table and is where the corpus
+            # states it. `owned` is gone rather than relocated: §7.2 makes ownership a Jellyfin
+            # fact re-derived per install, so no bundle can know it.
+            "titles": self.identity.get("tables", {}).get("title"),
         }
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """`artifact_bundle.manifest` is jsonb. The app's pool registers a json codec so it arrives
+    decoded, but a connection without one hands back the raw text — and a store that then
+    reported nothing would be indistinguishable from a bundle that shipped nothing."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return value if isinstance(value, dict) else {}

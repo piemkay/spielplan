@@ -221,6 +221,21 @@ async def _tier_set_refits() -> None:
             log.info("tier-set refit: %s", report.as_dict())
 
 
+async def _nightly_backup() -> None:
+    """§2: "nightly `pg_dump` to `/data/backups`, rotation 14".
+
+    Not in §5.3's table — §2 is where it is written down, and it is a job in every other sense,
+    so it is registered here rather than left to a host cron the compose file never mentions.
+    Nothing else in this loop touches the filesystem outside `/data/artifacts`, and nothing else
+    deletes; the rotation is the reason `backup/nightly.py` will only ever unlink a file its own
+    naming produced.
+    """
+    from spielplan.backup import nightly
+
+    report = await nightly.run()
+    log.info("backup: %s", report.as_dict())
+
+
 async def _placement_reconciliation() -> None:
     """§5.3: "any owned title lacking a coordinate gets a feature vector built from DB data per
     the feature contract … and runs §8 stages 9-10 only". Trigger: "bundle import + nightly
@@ -262,6 +277,9 @@ JOBS: tuple[Job, ...] = (
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60),
     Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
+    # §2's backup, not §5.3's table — see `_nightly_backup`. Budget from the corpus-scale
+    # measurement §10 sizes: ~1.15 GB uncompressed, minutes of `pg_dump` on the reference box.
+    Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400),
 )
 
 # The loop wakes far more often than any job runs; `due` decides what actually fires. A single

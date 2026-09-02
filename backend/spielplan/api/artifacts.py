@@ -67,10 +67,17 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
 
 
 @router.post("/validate")
-async def validate_bundle(body: BundleRef, _: AdminUser) -> dict[str, Any]:
-    """Step 1 of the §10 swap sequence. Writes nothing."""
+async def validate_bundle(body: BundleRef, conn: DB, _: AdminUser) -> dict[str, Any]:
+    """Step 1 of the §10 swap sequence. Writes nothing.
+
+    Takes the connection because §10 makes this step the decision point and three of the
+    importer's refusals — a second content seed, a model bundle with no content under it, a
+    vocabulary change (decisions 162 and 163) — are facts about *this install* rather than about
+    the bundle. Validated without them, the Data tab reported "ok" for an import that was then
+    refused at the flip, which is after the operator has committed.
+    """
     b = bundle_import.Bundle.open(_resolve(body.path))
-    report = bundle_import.validate(b)
+    report = await bundle_import.validate_for_install(conn, b)
     return {"bundle_version": b.version, "report": report.as_dict(), "text": report.render()}
 
 

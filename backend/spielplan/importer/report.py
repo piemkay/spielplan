@@ -43,6 +43,10 @@ class ImportReport:
     findings: list[Finding] = field(default_factory=list)
     table_counts: dict[str, int] = field(default_factory=dict)
     unmapped_columns: dict[str, list[str]] = field(default_factory=dict)
+    # §10 wants "counts per table" for the *bundle's* tables, not for the ones this app happens
+    # to map. `unmapped_columns` covered columns inside a mapped table, so a shipped table
+    # nothing mapped had no line anywhere and three of them were dropped for five milestones.
+    skipped_tables: dict[str, str] = field(default_factory=dict)
 
     def fail(self, rule: str, message: str, **detail: Any) -> None:
         self.findings.append(Finding("fail", rule, message, detail))
@@ -52,6 +56,15 @@ class ImportReport:
 
     def note(self, rule: str, message: str, **detail: Any) -> None:
         self.findings.append(Finding("note", rule, message, detail))
+
+    def skip_table(self, table: str, reason: str) -> None:
+        """Record a shipped table this app deliberately does not load, and why.
+
+        A note as well as a dict entry: `render()` is what the wizard and the Data tab show,
+        and a decision the operator cannot read is indistinguishable from an oversight.
+        """
+        self.skipped_tables[table] = reason
+        self.note("table-skipped", f"`{table}` not loaded: {reason}", table=table)
 
     @property
     def failures(self) -> list[Finding]:
@@ -68,6 +81,7 @@ class ImportReport:
             "ok": self.ok,
             "counts": self.table_counts,
             "unmapped_columns": self.unmapped_columns,
+            "skipped_tables": self.skipped_tables,
             "findings": [f.as_dict() for f in self.findings],
         }
 

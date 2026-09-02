@@ -69,7 +69,15 @@ async def test_the_report_is_stored_as_json_not_as_a_string(db, bundle, tmp_path
     assert report["ok"] is True
     manifest = await db.fetchval("SELECT manifest FROM artifact_bundle WHERE version = 'test-v1'")
     assert isinstance(manifest, dict)
-    assert manifest["vocabulary_version"] == "v1"
+    # `artifact_bundle.manifest` is BUNDLE.json, the corpus's own identity record — not
+    # `artifacts/manifest.json`, which §4.3 defines as the fitted cut-points and which this row
+    # held until M4.5. `vocabulary_version` was asserted here and no bundle has ever written it;
+    # the version travels in its own column, off the `dna_vocab/<version>/` directory.
+    assert {"bundle_version", "tables", "files"} <= set(manifest)
+    assert manifest["bundle_version"] == "test-v1"
+    assert await db.fetchval(
+        "SELECT vocabulary_version FROM artifact_bundle WHERE version = 'test-v1'"
+    ) == "v1"
 
 
 # --- §4.1 rules, verified against the real schema --------------------------------------
@@ -134,33 +142,88 @@ async def test_rule3_platform_ratings_land_in_the_display_schema_only(db, bundle
 
 
 async def test_reimporting_the_same_bundle_is_refused_while_it_is_active(db, bundle, tmp_path):
+    """§10: a bundle already flipped active is not re-staged over itself.
+
+    Reaching that rule now takes a second version. Decision 162 gave the *seed's* version string
+    a more specific refusal — a models-only bundle exported under it would rewrite the one
+    `artifact_bundle` row recording that content was ever seeded — and `refuse_on_install_state`
+    runs before anything is staged, so at that version the operator gets that line instead. Both
+    are asserted, in the order they fire: without the first the version rule looks reachable at
+    the seed's version when it is not, and without the second it is not exercised at all.
+    """
     await _import(db, bundle, tmp_path / "artifacts")
-    again = await bundle_import.import_bundle(db, bundle, tmp_path / "artifacts")
+    (bundle.root / "content.sqlite").unlink()
+    (bundle.root / "reviews.sqlite").unlink()
+
+    at_the_seeds_version = await bundle_import.import_bundle(
+        db, bundle_import.Bundle.open(bundle.root), tmp_path / "artifacts"
+    )
+    assert not at_the_seeds_version.ok
+    assert any(f.rule == "seed-once" for f in at_the_seeds_version.failures)
+    assert any(
+        "under its own version string" in f.message for f in at_the_seeds_version.failures
+    )
+
+    # And the version rule itself, at the only version that can still reach it: a model bundle
+    # of this install's own, imported once and then offered again while it is the active row.
+    fx.make_bundle(tmp_path / "bundle2", version="test-v2")
+    (tmp_path / "bundle2" / "content.sqlite").unlink()
+    (tmp_path / "bundle2" / "reviews.sqlite").unlink()
+    await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
+
+    again = await bundle_import.import_bundle(
+        db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts"
+    )
     assert not again.ok
     assert any("already the active bundle" in f.message for f in again.failures)
 
 
-async def test_a_second_bundle_version_imports_over_the_first(db, bundle, tmp_path):
-    """The content tables are replaced and `title` is upserted — no primary-key collision."""
+async def test_a_second_bundle_version_swaps_the_models_over_the_seeded_content(db, bundle, tmp_path):
+    """§10's re-import at a second version, in decision 162's shape: models re-ship, content
+    does not.
+
+    This asserted "the content tables are replaced and `title` is upserted — no primary-key
+    collision" while the second bundle carried a second copy of the corpus's spine. Under
+    decision 162 that import is refused outright, and the collision it was defending against is
+    gone by construction rather than survived: no content loader runs, so no row is rewritten.
+    What is left to assert is that the seeded spine comes through the swap *untouched* — a
+    models-only import that quietly rewrote a title would be the same defect one level down.
+    """
     await _import(db, bundle, tmp_path / "artifacts")
+    spine = [dict(r) for r in await db.fetch("SELECT id, name, kind FROM title ORDER BY id")]
 
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
+    (tmp_path / "bundle2" / "content.sqlite").unlink()
+    (tmp_path / "bundle2" / "reviews.sqlite").unlink()
     second = bundle_import.Bundle.open(tmp_path / "bundle2")
     report = await _import(db, second, tmp_path / "artifacts")
 
-    assert report.table_counts["loaded:title"] == len(fx.TITLES)
+    # Not `== 0`: a count of zero is a claim about what the bundle shipped, and this bundle
+    # ships no spine at all. The report says so in words instead (see the counts test below).
+    assert "loaded:title" not in report.table_counts
     assert await db.fetchval("SELECT count(*) FROM title") == len(fx.TITLES)
-    rows = await db.fetch("SELECT version, state FROM artifact_bundle")
+    assert [
+        dict(r) for r in await db.fetch("SELECT id, name, kind FROM title ORDER BY id")
+    ] == spine
+
+    rows = await db.fetch("SELECT version, state, kind FROM artifact_bundle")
     assert {r["version"]: r["state"] for r in rows} == {
         "test-v1": "superseded",
         "test-v2": "active",
     }
+    assert {r["version"]: r["kind"] for r in rows} == {"test-v1": "seed", "test-v2": "model"}
+    assert [f.rule for f in report.findings if f.rule == "swap"], "§10's flip went unreported"
 
 
 async def test_ledger_observations_survive_a_reimport(db, bundle, tmp_path):
-    """§10: 'Ledger observations always survive re-import.' `verdict` references
-    `title(id) ON DELETE CASCADE`, so a re-import that DELETEs titles would take the user's
-    entire rating history with it. This is the test that catches that."""
+    """§10: 'Ledger observations always survive re-import.'
+
+    `verdict` references `title(id) ON DELETE CASCADE`, so a re-import that DELETEd titles would
+    take the user's entire rating history with it. Under decision 162 a re-import carries no
+    content at all, so that particular path is closed by construction and what this now guards
+    is the other cascade on the same claim: 0015 makes `user_vector.bundle_version` SET NULL
+    rather than CASCADE, and a re-import that pruned a bundle row used to take the fold-in with
+    it."""
     await _import(db, bundle, tmp_path / "artifacts")
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('patrick', 'member') RETURNING id"
@@ -172,7 +235,11 @@ async def test_ledger_observations_survive_a_reimport(db, bundle, tmp_path):
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1, 'seen')", user_id
     )
 
+    # decision 162's re-import shape: the corpus re-ships models, never content. The claim is
+    # unchanged — the observations reference `title.id`, and a re-import must not disturb them.
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
+    (tmp_path / "bundle2" / "content.sqlite").unlink()
+    (tmp_path / "bundle2" / "reviews.sqlite").unlink()
     await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
 
     assert await db.fetchval("SELECT count(*) FROM verdict") == 1
@@ -259,12 +326,15 @@ async def test_title_card_payload_is_complete(db, bundle, tmp_path):
     assert await db.fetchval("SELECT count(*) FROM credit WHERE title_id = 1") == 3
 
     dna = await library.dna_for(db, 1)
-    assert {t["term"] for t in dna["extracted"]} == {"obsession", "morally-grey"}
-    assert {t["term"] for t in dna["projected"]} == {"obsession", "period"}
+    # The corpus's term ids are `<facet>.<term>`, dotted and facet-prefixed — `obsession` and
+    # `morally-grey` were this repo's own spelling, and the feature contract's `dna:` columns
+    # are keyed by the shipped id.
+    assert {t["term"] for t in dna["extracted"]} == {"themes.obsession", "characters.morally_grey"}
+    assert {t["term"] for t in dna["projected"]} == {"themes.obsession", "era.period"}
 
     # The json-codec bug: evidence must be a list of dicts, not a JSON string that the UI
     # would iterate one character at a time.
-    obsession = next(t for t in dna["extracted"] if t["term"] == "obsession")
+    obsession = next(t for t in dna["extracted"] if t["term"] == "themes.obsession")
     assert isinstance(obsession["evidence"], list)
     assert obsession["evidence"][0]["quote"] == "the work eats the man and he lets it"
     assert obsession["evidence"][0]["source"] == "trakt:comment"
@@ -401,13 +471,46 @@ async def test_an_unmapped_bundle_column_is_reported_not_dropped_silently(db, bu
     assert "some_new_corpus_column" in report.unmapped_columns.get("title", [])
 
 
-async def test_a_second_import_reports_the_same_counts(db, bundle, tmp_path):
-    """The diff a re-import is judged on only means something if the counts are comparable."""
+async def test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff(db, bundle, tmp_path):
+    """§10: "a diff report — never a silent sync". The diff only means something if the counts
+    are comparable, and under decision 162 the two sides of it are no longer two imports of the
+    same tables.
+
+    The re-import ships no content, so it states no content counts — and the seed's counts are
+    what the install is still described by. That makes two things load-bearing: the seed's
+    report has to survive the swap (it is one half of the diff), and it has to remain *true*
+    after it. A models-only import that reported `loaded:title: 0`, or one that left the spine
+    at a different size than the seed counted, would both make the two reports read as a
+    library that emptied itself.
+    """
     first = await _import(db, bundle, tmp_path / "artifacts")
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
+    (tmp_path / "bundle2" / "content.sqlite").unlink()
+    (tmp_path / "bundle2" / "reviews.sqlite").unlink()
     second = await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
-    assert first.table_counts["loaded:title"] == second.table_counts["loaded:title"]
-    assert first.table_counts["loaded:dna_tag"] == second.table_counts["loaded:dna_tag"]
+
+    # The two counts the old comparison named, now compared against the install they describe.
+    assert first.table_counts["loaded:title"] == await db.fetchval("SELECT count(*) FROM title")
+    assert first.table_counts["loaded:dna_tag"] == await db.fetchval(
+        "SELECT count(*) FROM dna_tag"
+    )
+    for table in ("loaded:title", "loaded:dna_tag"):
+        assert table not in second.table_counts, f"{table} counted by a bundle carrying no content"
+
+    # Absence with a reason attached, which is the difference between a diff and a silence.
+    assert any(
+        f.rule == "bundle" and "models-only" in f.message for f in second.findings
+    ), "the report does not say why it counts no content"
+    assert first.vocabulary_version == second.vocabulary_version == "v1"
+
+    # Both halves are readable side by side afterwards: §10's diff is between stored reports,
+    # and the flip must not overwrite the one the new bundle is being diffed against.
+    stored = {
+        r["version"]: r["report"]
+        for r in await db.fetch("SELECT version, report FROM artifact_bundle")
+    }
+    assert stored["test-v1"]["counts"]["loaded:title"] == first.table_counts["loaded:title"]
+    assert "loaded:title" not in stored["test-v2"]["counts"]
 
 
 async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle, tmp_path):
@@ -434,8 +537,11 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
     for title_id, value in ((1, 2), (2, 1), (3, 0), (4, 2), (5, 1)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
 
-    # Re-import the same content as a second version, which is the case §10 is actually about.
+    # A models-only re-import at a second version, which is the case §10 is actually about
+    # once decision 162 has settled that content arrives once and models re-ship.
     fx.make_bundle(tmp_path / "b2", version="test-v2")
+    (tmp_path / "b2" / "content.sqlite").unlink()
+    (tmp_path / "b2" / "reviews.sqlite").unlink()
     second = bundle_import.Bundle.open(tmp_path / "b2")
     report2 = await _import(db, second, tmp_path / "artifacts")
     assert report2.ok, report2.render()

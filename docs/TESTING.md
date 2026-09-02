@@ -123,15 +123,51 @@ Two things happen on the way that are easy to miss:
 ### Current state
 
 ```
-> M0    33/35 covered (2 waived)
+> M0    34/35 covered (1 waived)
 > M1    10/10 covered
 > M2    25/25 covered
 > M3    15/15 covered
 > M4    42/42 covered
+> M4.5  18/18 covered
   M5    10
   M6    12
   M7     1
 ```
+
+**M4.5 is not in §12.** It exists because the row above it was a lie of a particular kind: the
+importer was written against a schema nobody had opened, and verified against a fixture that
+reproduced every measured landmine and invented every structure around them. The real corpus
+bundle — built 2026-08-28, sitting on the same disk the whole time — could not be imported at
+all, and `README.md` said it did not exist. Nine of nine Cold Tower feature blocks missed every
+column they declared, silently, because the fixture's contract named them the way the builder
+keyed them. `test_placement.py` asserted `contract.block("credit").column("3")`; the shipped
+contract calls that column `p:director:Michael Mann`.
+
+That is M4's lesson one level up. §5 of `M4-open-points.md` lists five shapes of a test that
+cannot fail; a *fixture* written from the same reading as the code is the sixth, and it fails
+everything above it at once. The instrument that ends it is
+`tests/fixtures/real_bundle_shapes.json` — a committed, data-free manifest of the real bundle's
+shapes, extracted by `ops/bundle_shapes.py`, which `test_bundle_shapes.py` holds the fixture to
+on every run and holds a real bundle to whenever `CORPUS_BUNDLE_DIR` is set. A column reaches
+it as `p:<s>:<s>`, never as anyone's name.
+
+M4.5 also **discharges** the older of the two standing M0 waivers. `platform-backup-rotation-and-
+ciphertext` was waived because "the nightly dump job does not exist yet"; it exists now, so the
+waiver is removed rather than narrowed and the row owes real tests. One waiver stands: the
+feature-builder DB role, re-read again and still true — `grep -rni "create role|grant |revoke "`
+over `backend/migrations/` is still empty.
+
+Two owner decisions were taken during it and are numbered in `docs/spec-v2.2-proposals.md`:
+**162** (the corpus supplies models; movie data seeds once; Spielplan owns all ids, minted from a
+range disjoint from the corpus's) and **163** (a DNA vocabulary change is a data migration, not
+an import, and is refused until that migration exists — because a models-only bundle carrying a
+new vocabulary would leave both DNA tiers stranded at the old version, and empty is not an error
+anywhere in the read path).
+
+Decision 162 rewrote two shipped-M0 rows rather than being weakened to fit them. Both said a
+second *content* bundle imports over the first; under 162 a re-import carries models, so the
+swap sequence, the diff report and the rebuild set all survive and only the content half goes.
+The rows were changed with the owner's approval, never to match what was built.
 
 M2's gate was red for most of the milestone, on purpose: that is what an in-progress milestone
 looks like here, and the open rows were the plan. The work landed on `m2` and merged when the

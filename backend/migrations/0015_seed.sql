@@ -30,7 +30,9 @@ ALTER TABLE person ALTER COLUMN id SET DEFAULT nextval('person_id_seq');
 -- The sequences are OWNED BY the columns so a DROP TABLE takes them with it, but they are
 -- deliberately NOT positioned here: a fresh install has an empty `title`, so `setval(max(id))`
 -- would yield 1 and the first acquired title would collide with corpus title 1. Positioning is
--- the seed importer's job, and the CHECK below is what makes a missed positioning loud.
+-- the seed importer's job, and the MINVALUE above is what makes a missed positioning loud: a
+-- `setval` below 1e9 is rejected by the sequence itself rather than quietly minting into the
+-- corpus's half of the namespace.
 ALTER SEQUENCE title_id_seq  OWNED BY title.id;
 ALTER SEQUENCE person_id_seq OWNED BY person.id;
 
@@ -103,6 +105,16 @@ ALTER TABLE title_placement
 ALTER TABLE artifact_bundle ADD COLUMN kind text NOT NULL DEFAULT 'seed'
     CHECK (kind IN ('seed', 'model'));
 
+-- Backfill BEFORE the unique index, or this migration cannot apply to any install that has
+-- already run §10's re-import: `ADD COLUMN ... DEFAULT 'seed'` stamps every existing row, and
+-- an install with two bundle rows then fails the index with a duplicate key — at boot, inside
+-- `db/migrate.py`, with no way forward because 0015 is checksummed the moment it lands.
+--
+-- The oldest bundle is the seed by construction: it is the one that brought content into an
+-- empty install. Every later row was a re-import, which under decision 162 carries models.
+UPDATE artifact_bundle SET kind = 'model'
+ WHERE version <> (SELECT version FROM artifact_bundle ORDER BY imported_at, version LIMIT 1);
+
 -- Exactly one content seed, ever. A partial unique index rather than application logic: the
 -- rule is about the whole table's history, and "already seeded" must survive a restart, a
 -- concurrent import and a developer with psql.
@@ -129,3 +141,80 @@ ALTER TABLE artifact_bundle ADD COLUMN vocabulary_version text;
 ALTER TABLE user_vector DROP CONSTRAINT user_vector_bundle_version_fkey;
 ALTER TABLE user_vector ADD CONSTRAINT user_vector_bundle_version_fkey
     FOREIGN KEY (bundle_version) REFERENCES artifact_bundle(version) ON DELETE SET NULL;
+
+-- ---------------------------------------------------------------------------
+-- 7. The adjudication ledger is keyed per title.
+-- ---------------------------------------------------------------------------
+-- `adjudications_v1.tsv` ships (scope, title_id, term, action, target, quote, source, note) and
+-- most of its verdicts are scoped to a single title. `dna_adjudication`'s PRIMARY KEY
+-- (version, term) cannot hold them: the importer's ON CONFLICT (version, term) DO UPDATE keeps
+-- the last verdict for a term and discards every other title's — silently, with no count, and
+-- in the direction that loses data.
+--
+-- The ledger's identity is the row. It is an authored list re-applied at every derive (§8
+-- stage 3), and §6.6's editor writes the same TSV back, so every shipped column has to survive
+-- the round trip and no unique constraint may invent a key the file does not have. `title_id`
+-- carries no FK for the same reason `credit_correction.title_id` does not: a curated verdict is
+-- authored upstream against a corpus id and must outlive a title this install has not acquired.
+ALTER TABLE dna_adjudication DROP CONSTRAINT dna_adjudication_pkey;
+ALTER TABLE dna_adjudication ADD COLUMN id bigserial PRIMARY KEY;
+ALTER TABLE dna_adjudication ADD COLUMN scope text NOT NULL DEFAULT 'global';
+ALTER TABLE dna_adjudication ADD COLUMN title_id integer;
+ALTER TABLE dna_adjudication ADD COLUMN quote text;
+ALTER TABLE dna_adjudication ADD COLUMN source text;
+CREATE INDEX dna_adjudication_term ON dna_adjudication (version, term);
+CREATE INDEX dna_adjudication_title ON dna_adjudication (title_id) WHERE title_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- 8. A credit correction keeps the link that makes it checkable.
+-- ---------------------------------------------------------------------------
+-- `corrections_v1.tsv` is (kind, title_id, value, evidence, note). Four of those map onto the
+-- columns already here — kind is the credit field, value the asserted truth — and `evidence`
+-- has nowhere to go. §6.6 has the app writing this same file back, so dropping the column on
+-- import would mean exporting a ledger whose claims can no longer be checked; §4.1 rule 1 makes
+-- the same argument one table over ("a tag without its quote is unfalsifiable").
+ALTER TABLE credit_correction ADD COLUMN evidence text;
+
+
+-- ---------------------------------------------------------------------------
+-- 9. Three tables the app keyed more coarsely than the corpus does.
+-- ---------------------------------------------------------------------------
+-- Owner decision, 2026-09-02. §4.1 opens "tables mirror the corpus export" and says of
+-- `title_meta`: "multi-source, per-source rows kept — one block = one droppable source". That
+-- rule was applied to `title_meta` and silently not to its three siblings, which this app keyed
+-- without `source`. Measured against the shipped bundle, that is not a style difference:
+--
+--     title_language    47,302 rows   17,342 duplicate groups under (title_id, language)
+--     title_country     50,037 rows   19,092 duplicate groups under (title_id, country)
+--     platform_rating  165,678 rows   32,463 duplicate groups under (title_id, source)
+--
+-- so COPY dies on a unique violation and the seed import rolls back. The milestone's headline —
+-- "make the real bundle importable" — is false until these three carry the corpus's own key.
+--
+-- `role` on title_language survives beside `source`: it is this app's is_primary flag, a
+-- different fact from which source said so.
+ALTER TABLE title_language DROP CONSTRAINT title_language_pkey;
+ALTER TABLE title_language ADD COLUMN source text NOT NULL DEFAULT '';
+ALTER TABLE title_language ADD PRIMARY KEY (title_id, source, language, role);
+
+ALTER TABLE title_country DROP CONSTRAINT title_country_pkey;
+ALTER TABLE title_country ADD COLUMN source text NOT NULL DEFAULT '';
+ALTER TABLE title_country ADD PRIMARY KEY (title_id, source, country);
+
+-- `metric` as well as `source`: the corpus records user_score, critic_score and popularity
+-- separately per source, and collapsing them keeps whichever COPY happened to arrive last.
+-- Still the display-only schema (§4.1 rule 3) — nothing here becomes a model feature.
+ALTER TABLE display.platform_rating DROP CONSTRAINT platform_rating_pkey;
+ALTER TABLE display.platform_rating ADD COLUMN metric text NOT NULL DEFAULT 'user_score';
+ALTER TABLE display.platform_rating ADD COLUMN scale real;
+ALTER TABLE display.platform_rating ADD PRIMARY KEY (title_id, platform, metric);
+
+-- ---------------------------------------------------------------------------
+-- 10. The one column the meta block's `lang:` production is built from.
+-- ---------------------------------------------------------------------------
+-- §4.3's meta block carries one `lang:` column per title, and the corpus builds it from
+-- `title.original_language` — a single value — not from `title_language`, which holds every
+-- language every source reported. This app had no such column at all, so the meta block set one
+-- `lang:` bit per language row and lit several columns where the checkpoint was trained to see
+-- one. 13,766 of the shipped bundle's 19,071 titles carry a value.
+ALTER TABLE title ADD COLUMN original_language text;
