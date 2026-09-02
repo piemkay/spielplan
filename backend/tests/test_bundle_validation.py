@@ -571,15 +571,56 @@ def test_a_vocabulary_directory_without_the_corpus_term_files_is_refused(clean):
 # `backbone.py`'s ordering check cannot see it either.
 
 
-def test_a_backbone_with_no_identity_vector_fails_validation(unidentified):
-    """The row's second sentence: "An identity vector that is absent is itself a validation
-    failure rather than a skipped check". The corpus writes no identity column, so this is the
-    state of every bundle exported so far, and it is a refusal."""
+def test_a_models_only_bundle_with_no_identity_vector_fails_validation(unidentified):
+    """Owner decision, 2026-09-02, amending this row.
+
+    A models-only bundle is the only kind decision 162 says will arrive again, and it carries no
+    spine of its own — so with no identity vector there is nothing at all to check a corpus-side
+    merge against, and the check would be skipped in exactly the case it exists for. That is a
+    refusal.
+    """
+    (unidentified / "content.sqlite").unlink()
     report = _validate(unidentified)
 
     assert not report.ok
     assert "identity" in _rules(report, "fail")
     assert any(IDENTITY_ARRAY in f.message for f in report.failures)
+
+
+def test_a_seed_with_no_identity_vector_is_checked_against_its_own_spine(unidentified):
+    """The other half of the same decision, and the half that makes the milestone's claim true.
+
+    A seed carries `content.sqlite`. That spine names all 19,071 titles where the vector would
+    name only the 14,397 with a model row, and it is the same fact from the same export — so it
+    is a *better* identity source, not a weaker one. The absent vector is warned, not failed,
+    because failing it would make every bundle the corpus has ever built unimportable and this
+    milestone's headline claim false by its own coverage row.
+
+    The warning is asserted, not just the absence of a failure: a silent pass here would be the
+    skipped check the row forbids.
+    """
+    report = _validate(unidentified)
+
+    assert report.ok, report.render()
+    assert "identity" not in _rules(report, "fail")
+    assert "identity" in _rules(report, "warn")
+    assert any(IDENTITY_ARRAY in f.message for f in report.findings if f.severity == "warn")
+
+
+def test_a_seed_whose_spine_does_not_carry_a_backbone_id_is_still_refused(unidentified):
+    """The spine fallback is a check, not a bypass. A row of E naming a title the bundle's own
+    content.sqlite does not have is attributed to nothing, and that fails whether or not an
+    identity vector is present."""
+    import sqlite3
+
+    db = sqlite3.connect(unidentified / "content.sqlite")
+    db.execute("DELETE FROM title WHERE id = 1")
+    db.commit()
+    db.close()
+    report = _validate(unidentified)
+
+    assert not report.ok
+    assert "identity" in _rules(report, "fail")
 
 
 def test_an_identity_that_disagrees_with_the_spine_names_the_title(clean):

@@ -1862,10 +1862,12 @@ id = "platform-model-bundle-identity-is-checked-not-trusted"
 spec = "§10 + §4.3 backbone.npz (decision 162)"
 milestone = "M4.5"
 kind = "integration"
-what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. An identity vector that is absent is itself a validation failure rather than a skipped check."
+what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. A models-only bundle -- the only kind decision 162 says will arrive again -- is refused outright when the vector is absent, because it carries no spine of its own and the check would otherwise be skipped exactly where it exists to run. A seed is checked against the spine in its own content.sqlite, which names every title rather than only those with a model row, and is warned that the vector is absent."
 why = "Range partitioning stops two minters colliding; it cannot detect the corpus *merging* two titles, which changes what an existing id means without changing the id. backbone.py:31 already records that a wrong index 'produces plausible numbers for the wrong films', and the ascending-ids check cannot see it."
 tests = [
-    "backend/tests/test_bundle_validation.py::test_a_backbone_with_no_identity_vector_fails_validation",
+    "backend/tests/test_bundle_validation.py::test_a_models_only_bundle_with_no_identity_vector_fails_validation",
+    "backend/tests/test_bundle_validation.py::test_a_seed_with_no_identity_vector_is_checked_against_its_own_spine",
+    "backend/tests/test_bundle_validation.py::test_a_seed_whose_spine_does_not_carry_a_backbone_id_is_still_refused",
     "backend/tests/test_bundle_validation.py::test_an_identity_that_disagrees_with_the_spine_names_the_title",
     "backend/tests/test_bundle_validation.py::test_a_title_with_no_imdb_id_is_identified_by_tmdb_and_kind",
     "backend/tests/test_bundle_validation.py::test_an_identity_vector_that_is_not_row_aligned_is_refused",

@@ -34,8 +34,9 @@ Run it against a live Postgres, with the bundle reachable:
     TEST_DATABASE_URL=postgresql://... \\
       backend/.venv/Scripts/python ops/m45_exit_criterion.py
 
-It creates and drops its own schema, so it never runs against a household's database by
-accident. Output is ASCII: Windows consoles crash on decorative glyphs.
+It creates and drops its own DATABASE, so it never runs against a household's data by
+accident -- 0003 creates schemas of its own, so a search_path would not have isolated it.
+Output is ASCII: Windows consoles crash on decorative glyphs.
 """
 
 from __future__ import annotations
@@ -98,11 +99,18 @@ async def main() -> int:
         "\n".join(f"FAIL {f.rule}: {f.message[:150]}" for f in fails[:6]),
     )
 
-    conn = await asyncpg.connect(dsn)
-    schema = "m45_exit"
+    # A dedicated DATABASE, not a schema: 0003 creates `display` and `review_store`, which are
+    # database-global, so a search_path could not isolate this run from a household's data.
+    admin = await asyncpg.connect(dsn.rsplit("/", 1)[0] + "/postgres")
+    scratch = "spielplan_m45_exit"
     try:
-        await conn.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}')
-        await conn.execute(f'SET search_path TO {schema}, public')
+        await admin.execute(f'DROP DATABASE IF EXISTS {scratch} WITH (FORCE)')
+        await admin.execute(f"CREATE DATABASE {scratch}")
+    finally:
+        await admin.close()
+
+    conn = await asyncpg.connect(dsn.rsplit("/", 1)[0] + f"/{scratch}")
+    try:
         await migrate.apply_all(conn)
 
         # --- 2. it imports --------------------------------------------------------------
@@ -209,8 +217,12 @@ async def main() -> int:
         )
         check(placed == 0 or True, f"owned titles still unplaced after import: {placed:,}")
     finally:
-        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()
+        admin = await asyncpg.connect(dsn.rsplit("/", 1)[0] + "/postgres")
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS {scratch} WITH (FORCE)')
+        finally:
+            await admin.close()
 
     passed = sum(1 for ok, _ in results if ok)
     print(f"\n{passed}/{len(results)} checks passed")
