@@ -2279,3 +2279,11 @@ what = "The fast pair evaluator returns the same expected-straddler value as the
 why = "§6 budgets 1.5 s per battle; the real owned pool is 696 titles and the shipped search costs 36 s for a member and 126 s for a guest seat. Every pool in the suite is 4-6 titles, so nothing in CI could see it — and an optimisation that changes which pair 54c's rule picks is a rule change, so equivalence is asserted first and speed second. Decision 168 rules out the K-nearest-straddler bound and names the guest prior and the fallback arm as the boards the guard must use."
 tests = ["backend/tests/test_tonight_round.py::test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly", "backend/tests/test_tonight_round.py::test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing", "backend/tests/test_tonight_round.py::test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves", "backend/tests/test_tonight_round.py::test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget", "backend/tests/test_tonight_round.py::test_the_costlier_fallback_arm_is_inside_the_budget_too"]
 
+[[requirement]]
+id = "data-rules-the-printed-beta-optimum-is-this-apps-own-coordinate"
+spec = "§5.1 (the blend); §6.0 row 2's why-line; decision 167"
+milestone = "M4.13"
+kind = "integration"
+what = "The `beta_optimum` a \"Top of your ledger\" section prints is 0.2 — §5.1's measured optimum converted into this app's coordinates, where β weighs the personal half — and the caption a never-fitted profile carries names that same 0.20 rather than its complement. A profile the fold-in has fitted carries no caption at all: it is told its own β and measured against no constant."
+why = "The corpus publishes β as the CROWD weight (`blend beta (1.0 = crowd only)`) and the app stores it as the personal weight, so §5.1's 0.8 is 0.2 here. The cross-validation searches and serves in one orientation, so no stored value or ranking was ever wrong; the inversion reached exactly one place, the constant a member reads on Home. Measured through the app's own fit_user over 150 real raters, held-out Spearman peaks at β_app 0.20 (+0.4324 against +0.4082 at 0.80) and the median fitted β_app is 0.20."
+tests = ["backend/tests/test_home.py::test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss"]

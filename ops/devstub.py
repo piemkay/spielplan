@@ -959,10 +959,10 @@ def _tier_index(cdf: float, tier_set: Sequence[str]) -> int:
 
 
 def _beta(user_id: int, kind: str) -> tuple[float, bool]:
-    """(β, fitted?). §5.1's optimum is 0.8, but a profile the fold-in has never touched was
-    ranked by the crowd prior alone, i.e. at β 0 — printing 0.80 there is the decorative
-    why-line §6.0 forbids. The harness has no nightly job, so five labels of the kind stand in
-    for "the fold-in has run"."""
+    """(β, fitted?). §5.1's optimum is β 0.2 in this app's coordinates (decision 167), but a
+    profile the fold-in has never touched was ranked by the crowd prior alone, i.e. at β 0 —
+    printing the optimum there is the decorative why-line §6.0 forbids. The harness has no
+    nightly job, so five labels of the kind stand in for "the fold-in has run"."""
     if sum(_label_counts(user_id, [kind])) >= 5:
         return shelves.DEFAULT_BETA, True
     return 0.0, False

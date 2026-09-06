@@ -411,6 +411,39 @@ async def test_the_ledger_shelf_names_the_beta_its_own_ranking_used(world):
         assert "rewatches included" in section["why"]   # proposal 25's stated exception
 
 
+async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss(world):
+    """Decision 167. §5.1 quotes the corpus's 0.8, but the corpus's table is headed `blend beta
+    (1.0 = crowd only)`: that number weighs the CROWD, and β here weighs the personal half. So
+    the optimum in these coordinates is 1 − 0.8 = **0.2**, which is also where this app's own
+    held-out Spearman peaks over 150 real raters and where the median fitted β already sits.
+
+    The consequence is copy, not ranking — the cross-validation searches and serves in one
+    orientation, so every stored number was always right. What was wrong is what a person reads:
+    `beta_optimum` travels on every "Top of your ledger" section, and a member fitted at the
+    optimum was being measured against a constant that is the complement of it.
+    """
+    payload = await world.home()
+    for kind in ("movie", "series"):
+        section = world.section(payload, "top_of_ledger", kind)
+        assert section is not None
+        assert section["why_numbers"]["beta_optimum"] == pytest.approx(0.2, abs=1e-9)
+        # A profile the fold-in HAS fitted is measured against nothing: it is told its own
+        # number and no optimum at all. Pinned because the caption below is what carries the
+        # constant to a reader, and ungating it would put "not there yet" on a fitted board.
+        assert section["caption"] is None, section["caption"]
+
+    # The one surface that renders the constant. `ShelfRow.svelte` prints `section.caption`, and
+    # `shelves.top_of_ledger` emits it only for a profile the nightly fold-in has never fitted —
+    # which is every member on the first evening of a household, before the first nightly run.
+    await world.db.execute(
+        "DELETE FROM user_vector WHERE user_id = $1 AND purpose = 'foldin'", world.patrick
+    )
+    payload = await world.home()
+    for kind in ("movie", "series"):
+        section = world.section(payload, "top_of_ledger", kind)
+        assert section["caption"] == "§5.1's measured optimum is β 0.20; this profile is not there yet"
+
+
 async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
     """Proposal 27: "Under the Series partition this shelf restates itself as 'Episodes under 45
     minutes' … the thresholds (110 min film, 45 min episode) are constants, not copy."

@@ -87,10 +87,23 @@ FRONTIER_MIN_SEEN = 10
 # to mean anything while still admitting a shelf-sized set.
 SWEET_SPOT_MIN_CDF = 0.70
 
-# §5.1's measured optimum, used only as the *fallback* for a user the nightly fold-in has never
-# fitted. A fitted β is always preferred and always printed: §6.0's why-line names the number,
-# and printing 0.8 while the fitted β is 0.62 is exactly the decorative why-line §6.0 forbids.
-DEFAULT_BETA = 0.8
+# §5.1's measured optimum IN THIS APP'S COORDINATES, printed as `beta_optimum` and named in the
+# caption a never-fitted profile carries. A fitted β is always preferred and always printed:
+# §6.0's why-line names the number, and printing a constant the ordering did not use is exactly
+# the decorative why-line §6.0 forbids.
+#
+# 0.2, not 0.8. Decision 167: β is the weight on the PERSONAL half here, and the corpus publishes
+# its complement — its table is headed `blend beta (1.0 = crowd only)`, so the corpus optimum of
+# 0.8 crowd is β = 0.2 in these coordinates (β_app = 1 − β_corpus). That is also where this app's
+# own held-out Spearman peaks when `fit_user` is run over 150 real raters (+0.4324 at 0.20,
+# against +0.4082 at 0.80), and the median fitted β is exactly 0.20. Nothing stored moves: the
+# per-user cross-validation searches and serves in the same orientation, so every fitted number
+# and every ranking was already right and only the printed constant was inverted.
+#
+# §5.1 and §6.0's two example strings still read `β 0.8` — that amendment is decision 167's and
+# lands with M4.16's single pass over the spec file (decision 177), so the quotations elsewhere in
+# this package match the file as published and this constant does not.
+DEFAULT_BETA = 0.2
 
 # §4.2's default tier set, used when `ledger_cutpoints` has no row for this (user, kind) yet.
 DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
@@ -318,10 +331,11 @@ async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> t
 async def beta_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[float, bool]:
     """(β, fitted?) — the blend weight the scores were ACTUALLY computed with, not the ideal one.
 
-    §5.1's optimum is 0.8, and `DEFAULT_BETA` records it, but a profile the nightly fold-in has
-    never fitted was ranked by the crowd prior alone, i.e. at β 0. Printing 0.80 there would be
-    the decorative why-line §6.0 forbids: the shelf would name a number that had no part in the
-    ordering the person is looking at. So the fallback is 0.0 and the copy says why.
+    §5.1's optimum is β 0.2 in this app's coordinates (decision 167), and `DEFAULT_BETA` records
+    it — but a profile the nightly fold-in has never fitted was ranked by the crowd prior alone,
+    i.e. at β 0. Printing the optimum there would be the decorative why-line §6.0 forbids: the
+    shelf would name a number that had no part in the ordering the person is looking at. So the
+    fallback is 0.0 and the copy says why.
     """
     fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
     if fit and fit["blend_beta"] is not None:

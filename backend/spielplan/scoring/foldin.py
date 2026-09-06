@@ -3,20 +3,28 @@
 §5.3's row: "Fold-in user vectors, blend weights per label count — nightly — seconds."
 §5.1's arithmetic:
 
-    score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩,  blended with the crowd prior at β = 0.8
-                 (measured optimum; also exactly where per-user top-10s stop being the global
-                 chart: 12 → 263 distinct titles)
+    score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩,  blended with the crowd prior at β
+                 (also exactly where per-user top-10s stop being the global chart:
+                 12 → 263 distinct titles)
 
 READ AS. The two sentences are one expression. `w_cf` **is** β, the crowd prior carries (1−β),
 and both halves are standardised over the same population so β is a genuine convex weight:
 
     score_u(t) = μ_u + (1−β_u)·(b(t) − prior_mean)/prior_sd + β_u·⟨v_u, e(t)⟩
 
-with `v_u` scaled at fit time so ⟨v_u, e⟩ has unit sd over that population. β sits on the
-PERSONAL side because the same sentence's evidence — per-user top-10s ceasing to be the global
-chart — describes a blend that has become personal, which 0.8 on the crowd prior cannot produce.
-The direction is genuinely ambiguous in §5.1; if the corpus project settles it the other way it
-is one constant and one string here, not a re-architecture.
+with `v_u` scaled at fit time so ⟨v_u, e⟩ has unit sd over that population.
+
+WHICH HALF β WEIGHS IS SETTLED, AND IT IS THIS ONE. Decision 167: **β is the weight on the
+PERSONAL half**, and it stays there. The 0.8 §5.1 quotes is the CORPUS's number in the corpus's
+coordinates — its table is headed `blend beta (1.0 = crowd only)` — so the corpus optimum of 0.8
+crowd is **β = 0.2 here**, and whenever that number is cited it must be converted:
+**β_app = 1 − β_corpus**. This is not a ranking bug and never was: `_cross_validate` searches the
+full grid and picks per (user, kind) by held-out Spearman using the IDENTICAL orientation as
+serving, so the fit absorbs the naming entirely. Re-measured through this app's own `fit_user`
+over 150 real raters from the corpus's reviews.sqlite, the population held-out curve peaks at
+β_app 0.20 (+0.4324, against +0.4082 at 0.80) and the median fitted β_app is exactly 0.20 — the
+corpus's optimum, reproduced in the complementary coordinate by a different pipeline. §5.1's
+sentence gains that conversion in M4.16's spec pass (decision 177); nothing here flips.
 
 BLEND, NEVER ROUTE. §5.1: "a learned router was measured to capture 2–3% of the oracle gap and
 lose to the flat blend." β is ONE scalar per (user, kind), refit per label count — never a
@@ -32,10 +40,16 @@ still answer — honestly, and labelled `personalised: false` with `label_count:
 `user_vector` row IS still written, because "fitted to zero labels" and "never fitted" are
 different states and §6.0's zero-verdict fallback has to tell them apart.
 
-THE CEILING IS A CONSTRAINT, NOT A CONVENTION. The β grid searches up to 1.0 and the result is
-clamped to §5.1's 0.8; `0009_scoring.sql` enforces the same ceiling with a CHECK. A fit that
-wanted more is recorded (`beta_clamped`) and logged, because a silent clamp is a measurement
-nobody ever sees.
+THE CEILING IS A CONSTRAINT, NOT A CONVENTION — AND NOT THE OPTIMUM EITHER. The β grid searches
+up to 1.0 and the result is clamped to 0.8; `0009_scoring.sql` enforces the same ceiling with a
+CHECK. 0.8 is NOT "§5.1's measured optimum" — that is 0.2 here (decision 167) — it is a floor of
+one fifth on the crowd prior: the household never sees a ranking that is more than 80% its own
+labels. The corpus-faithful reading would put the ceiling at 0.2 instead, and that was measured
+and is worse: clamping there costs 22 of 150 real raters more than §0's noise floor while
+helping 30, a net +0.0070 for the shipped ceiling and inside §0's 0.008 tie band. The 19 fits
+that reach 0.8 earn it (+0.065 held-out ρ over β 0.2, 12 of the 19 beyond the noise floor). A fit
+that wanted more is recorded (`beta_clamped`) and logged, because a silent clamp is a
+measurement nobody ever sees.
 """
 
 from __future__ import annotations
@@ -56,15 +70,19 @@ from spielplan.scoring.backbone import EMBED_DIM, Backbone, Coordinate, pack_vec
 
 log = logging.getLogger("spielplan.scoring.foldin")
 
-# §5.1: "Blend with the crowd prior at β = 0.8 (measured optimum)".
+# The floor on the crowd prior, not the optimum: β is the personal weight (decision 167), so
+# clamping it at 0.8 is the statement that the crowd keeps at least a fifth of every blend.
+# §5.1's own optimum, converted into these coordinates, is 0.2 — see the header.
 BETA_MAX = 0.8
 BETA_GRID: tuple[float, ...] = tuple(i / 10 for i in range(11))
 
 # §5.1's ceiling is storable as itself. It was not always: 0009's CHECK compared a `real`
 # column against the numeric literal 0.8, which Postgres resolves through float8 where
 # float4(0.8) is 0.800000011920929 — so `SELECT 0.8::real <= 0.8` was FALSE and a fit clamped
-# to the measured optimum failed its INSERT inside a nightly job. The migration now casts the
-# literal, and the write below stores β unmodified.
+# to the ceiling failed its INSERT inside a nightly job. The migration now casts the literal,
+# and the write below stores β unmodified. (0009's own comment still calls 0.8 the measured
+# optimum; it is applied and sha256-checksummed, so decision 167 rules that correction into the
+# amended §5.1 and a comment on the next migration that touches `user_vector` — never an edit.)
 
 # Not shipped. §4.3's `ledger_hyperparams.json` carries the LEDGER's anchor λ (3.0), which is a
 # different quantity in a different objective, so borrowing it would be a coincidence dressed as
@@ -389,7 +407,8 @@ async def refit_user(
     fit = fit_user(labels, coords, reference, seed=seed)
     if fit.beta_clamped:
         log.warning(
-            "user %s/%s: cross-validation wanted β above §5.1's measured optimum; clamped to %.2f",
+            "user %s/%s: cross-validation wanted β above the ceiling; clamped to %.2f "
+            "(the ceiling is a floor on the crowd prior, not §5.1's optimum — decision 167)",
             user_id, kind, BETA_MAX,
         )
     if fit.dropped:
