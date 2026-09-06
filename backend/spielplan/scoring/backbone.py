@@ -86,10 +86,69 @@ ESource = Literal["backbone", "blended", "cold_tower", "none"]
 BACKBONE_FILE = "backbone.npz"
 _REQUIRED = ("title_ids", "E", "b_i", "item_n", "mu")
 
+# A ROW OF E THAT IS NOT A COORDINATE. §4.3 lists the arrays this file ships and does not say
+# that some of E's rows are placeholders — but the export does exactly that: on v20260828
+# `cold_mask` is true on 2,879 of 14,397 rows, E is written as zeros for every one of them
+# (max ||E|| = 9.4e-14) and their real coordinate is kept in `E_hat`/`b_hat`, two arrays §4.3
+# never names. Read as a coordinate, a zero row is worse than an absent one: ⟨v_u, e(t)⟩ is
+# exactly 0 for every user for ever, `item_n` is often large so the gate rounds to 1.0 and
+# `e_source` says 'backbone', and §12's M2 criterion — which counts a title as coordinated
+# whenever e_source is not 'none' — passes it. 1,918 of these carry item_n >= WARM_SUPPORT, so
+# `placement.warm_title_ids` also excused them from the sweep that exists to place them.
+#
+# So a flagged row is treated as ABSENT, which is §5.1's gate → 0 limit and already written:
+# "a title with no Backbone row has n_t = 0, so gate is exactly 0 and both terms collapse onto
+# the Cold Tower's". Nothing substitutes the bundle's own `E_hat` into `E` — its scale is three
+# orders off the Backbone's (median ||E_hat|| 27.05 against ||E|| 0.184), which is a separate
+# finding about the blend and not this one.
+#
+# WHAT THIS COSTS, SAID OUT LOUD. Excluding the row makes `support()` report 0 and `coordinate()`
+# report gate 0 with `e_source = 'cold_tower'` for a title the crowd may have rated two hundred
+# thousand times. Internally that is coherent — the gate weights a coordinate, and there is no
+# coordinate to weight — but §8 stage 10's badge reads `e_source == 'cold_tower'` as "no crowd
+# data yet", and after the sweep stamps them these titles wear it: 182 of the reference library's
+# 839 owned titles, on top of the 130 `cs-62-sweep-badges-130-titles-cold` already counts. That
+# finding owns the repair and needs the schema change `title.placement` is missing (it admits
+# only unplaced|cold_tower|warm while `ESource` already carries 'blended'), so it is named here
+# rather than pre-empted: a title served at e(t) = 0 and called warm was the worse of the two,
+# and it was invisible.
+COLD_MASK_ARRAY = "cold_mask"
+
+# The fallback when no mask ships. Measured on v20260828: the largest flagged row's norm is
+# 9.4e-14 and the smallest unflagged one's is 6.3e-5 — nine orders apart, so any epsilon inside
+# that gap separates them and no real coordinate is anywhere near it.
+COLD_ROW_NORM = 1e-9
+
 
 class BackboneError(RuntimeError):
     """The basis is present but unusable. §3.1 makes an *absent* bundle legal; a corrupt one is
     not the same thing, and the caller decides whether to degrade or refuse."""
+
+
+def cold_row_mask(source: Any, n: int, e: np.ndarray | None = None) -> np.ndarray:
+    """`bool[n]`: which rows of `backbone.npz` carry no coordinate at all.
+
+    `source` is the opened `backbone.npz` — an `NpzFile`, which is what both callers hold and
+    the only thing whose `.files` this consults. `e` lets a caller that already has E pass it in
+    rather than have the 3.7 MB member re-parsed: `NpzFile` re-reads on every subscript.
+
+    The shipped mask is the authority; the norm is the fallback for a bundle that predates it,
+    and a bundle with neither has no cold rows to find.
+    """
+    files = set(getattr(source, "files", ()) or ())
+    if COLD_MASK_ARRAY in files:
+        mask = np.asarray(source[COLD_MASK_ARRAY]).reshape(-1)
+        if mask.size != n:
+            raise BackboneError(
+                f"{COLD_MASK_ARRAY} has {mask.size} entries against E's {n} rows; a mask that "
+                "does not align row-for-row names the wrong films as uncoordinated"
+            )
+        return mask.astype(bool, copy=False)
+    if e is None:
+        if "E" not in files:
+            return np.zeros(n, dtype=bool)
+        e = source["E"]
+    return np.linalg.norm(np.asarray(e, dtype=np.float64), axis=1) < COLD_ROW_NORM
 
 
 @dataclass(frozen=True, eq=False)
@@ -184,6 +243,18 @@ class Backbone:
                     "is used for scoring and E_full is unread provenance"
                 )
 
+        # The flagged rows are excluded from the index rather than from the arrays: `row()`
+        # returning None is the one statement every reader here already handles (§8 stage 10),
+        # and it is what makes `coordinate()` take the pure Cold Tower limit for them.
+        cold = cold_row_mask(z, n, e=e)
+        n_cold = int(cold.sum())
+        if n_cold:
+            # ASCII: a note is logged, and a Windows cp1252 console dies on a section sign.
+            notes.append(
+                f"{n_cold} of {n} rows carry no coordinate and are excluded from the basis; "
+                "they take the gate-0 limit of e(t) and are left to the Cold Tower sweep"
+            )
+
         backbone = cls(
             version=store.version,
             title_ids=title_ids,
@@ -191,7 +262,7 @@ class Backbone:
             b_i=b_i,
             item_n=item_n,
             mu=float(mu_arr.reshape(-1)[0]),
-            row_of={int(t): i for i, t in enumerate(title_ids)},
+            row_of={int(t): i for i, t in enumerate(title_ids) if not cold[i]},
             e_full_shape=e_full_shape,
             notes=tuple(notes),
         )

@@ -46,7 +46,7 @@ import numpy as np
 from spielplan.placement import features
 from spielplan.placement.contract import FeatureContract, unproducible_meta_names
 from spielplan.placement.tower import Tower, load_tower
-from spielplan.scoring.backbone import WARM_SUPPORT
+from spielplan.scoring.backbone import WARM_SUPPORT, cold_row_mask
 
 log = logging.getLogger("spielplan.placement")
 
@@ -102,6 +102,12 @@ def warm_title_ids(store: Any) -> list[int]:
     that title never gets one and the line never fires. `scoring.backbone.WARM_SUPPORT` carries
     the threshold and the reasoning; here it decides who is excused from the sweep.
 
+    Support is not the only test. A row the export flags in `cold_mask` carries no coordinate at
+    all — E is written as zeros — and 1,918 of those ship with `item_n >= WARM_SUPPORT`, so on
+    support alone they were stamped warm, never given a `title_placement` row, and served at
+    `e(t) = 0` for ever. `scoring.backbone.cold_row_mask` is the one definition of that, so the
+    loader and this function cannot drift into two.
+
     §4.3 lists `backbone.npz` as "E, E_full, b_i, μ, plus the per-title support counts `item_n`"
     and names no title-id array — but E is a matrix of rows with no stated correspondence to
     `title.id`, so it is unusable as specified. The bundle in hand ships `title_ids`, plural;
@@ -117,10 +123,11 @@ def warm_title_ids(store: Any) -> list[int]:
             "§4.3 does not name one and the exporter must add it"
         )
     ids = np.asarray(npz["title_ids"]).astype(np.int64)
+    keep = np.ones(ids.size, dtype=bool)
     if "item_n" in npz.files:
-        support = np.asarray(npz["item_n"]).astype(np.int64)
-        ids = ids[support >= WARM_SUPPORT]
-    return [int(t) for t in ids]
+        keep &= np.asarray(npz["item_n"]).astype(np.int64).reshape(-1) >= WARM_SUPPORT
+    keep &= ~cold_row_mask(npz, ids.size)
+    return [int(t) for t in ids[keep]]
 
 
 async def classify_warm(conn: Any, store: Any, *, bundle_version: str) -> tuple[int, int]:
@@ -128,7 +135,8 @@ async def classify_warm(conn: Any, store: Any, *, bundle_version: str) -> tuple[
 
     A covered title with support below `WARM_SUPPORT` is deliberately NOT stamped, so the sweep
     picks it up and gives it a Cold Tower coordinate to be blended with — that is the whole of
-    §5.1's middle line.
+    §5.1's middle line. Nor is a title whose Backbone row is a zero placeholder: it has no warm
+    half to blend, so what the sweep gives it is the whole of its coordinate.
 
     The second half is not symmetry for its own sake: Backbone coverage can *shrink* under a new
     bundle, and a title left at 'warm' from the previous basis is a title claiming a coordinate

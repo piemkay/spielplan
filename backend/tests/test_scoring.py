@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from spielplan.models.artifacts import ArtifactStore
+from spielplan.placement import reconcile
 from spielplan.scoring import backbone as bb
 from spielplan.scoring import foldin, serve
 from tests.fixtures import make_bundle as fx
@@ -207,11 +208,15 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
     good = {
         # `title_ids`, plural — the name the corpus ships (M4.5).
         "title_ids": np.arange(1, 5, dtype=np.int32),
-        "E": np.zeros((4, 64), dtype=np.float32),
+        # A real E, not zeros: a zero row is a row with no coordinate (see
+        # `test_a_zeroed_backbone_row_is_not_a_warm_title`), so an all-zero fixture would load
+        # a Backbone that indexes nothing while this test claims four rows.
+        "E": np.random.default_rng(4).standard_normal((4, 64)).astype(np.float32),
         "b_i": np.zeros(4, dtype=np.float32),
         "item_n": np.zeros(4, dtype=np.int32),
         "mu": np.float32(0.1),
     }
+    assert len(bb.Backbone.open(write(**good)).row_of) == 4
     assert bb.Backbone.open(write(**good)).n_rows == 4
 
     with pytest.raises(bb.BackboneError, match="aligned"):
@@ -222,6 +227,70 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
         bb.Backbone.open(write(**{**good, "title_ids": np.array([3, 1, 2, 4], dtype=np.int32)}))
     with pytest.raises(bb.BackboneError, match="title_ids"):
         bb.Backbone.open(write(**{k: v for k, v in good.items() if k != "title_ids"}))
+
+
+def test_a_zeroed_backbone_row_is_not_a_warm_title(tmp_path):
+    """cs-01. §5.1's e(t) branch, §4.3's backbone.npz, §12's M2 exit criterion.
+
+    §4.3 lists the arrays the file ships and never says that some rows of E are placeholders.
+    v20260828 does exactly that: `cold_mask` is true on 2,879 of 14,397 rows, E is written as
+    zeros for all of them, and the coordinate the corpus actually has for them lives in
+    `E_hat`/`b_hat`. Read as coordinates those rows are worse than absent ones — the personal
+    term is exactly zero for every user for ever, 1,918 of them carry `item_n >= WARM_SUPPORT`
+    so the sweep is told to skip them, and §12's M2 criterion counts them as coordinated
+    because `e_source` is not 'none'.
+
+    Two shapes, because the mask is a courtesy and not a contract: with it and without it.
+    """
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    e = np.random.default_rng(20260906).standard_normal((4, 64)).astype(np.float32)
+    e[1] = 0.0
+    e[2] = 0.0
+    arrays = {
+        "title_ids": np.arange(1, 5, dtype=np.int32),
+        "E": e,
+        "b_i": np.array([0.4, 0.5, 0.6, 0.7], dtype=np.float32),
+        # Rows 2 and 3 are zeroed; row 2 also has the crowd support that made `warm_title_ids`
+        # excuse it from the very sweep that would have given it a coordinate.
+        "item_n": np.array([500, 900, 4, 200], dtype=np.int32),
+        "mu": np.float32(0.1),
+        "cold_mask": np.array([False, True, True, False]),
+    }
+    np.savez(root / "backbone.npz", **arrays)
+
+    store = ArtifactStore.open(root, "cold-v1")
+    back = bb.Backbone.open(store)
+    assert back.row(2) is None and back.row(3) is None
+    assert back.row(1) == 0 and back.row(4) == 3
+    assert back.support(2) == 0 and back.embedding(2) is None and back.raw_prior(2) is None
+    # The count is reported rather than swallowed: an operator reading the load notes can see
+    # how much of the basis the corpus did not place.
+    assert any("2 of 4 rows carry no coordinate" in note for note in back.notes)
+
+    # No Cold Tower placement: the title has no coordinate, and says so. That is the state
+    # §12's M2 criterion has to be able to count.
+    assert bb.coordinate(2, back) is None
+
+    # With one, the coordinate is the pure cold limit — gate exactly 0, nothing blended in.
+    e_hat = cold_vector(2)
+    c = bb.coordinate(2, back, (e_hat, 0.33))
+    assert c.e_source == "cold_tower"
+    assert c.gate == 0.0 and c.item_n == 0
+    assert np.array_equal(c.e, e_hat) and c.b == pytest.approx(0.33)
+
+    # And it is not excused from the sweep. Row 2 clears WARM_SUPPORT and would have been
+    # stamped warm on support alone; row 3 is thin as well as cold.
+    assert reconcile.warm_title_ids(store) == [1, 4]
+
+    # No mask shipped: the norm decides, and it decides the same way. The largest flagged row
+    # in the real bundle has norm 9.4e-14 and the smallest unflagged one 6.3e-5.
+    del arrays["cold_mask"]
+    np.savez(root / "backbone.npz", **arrays)
+    bare = bb.Backbone.open(ArtifactStore.open(root, "cold-v2"))
+    assert bare.row(2) is None and bare.row(3) is None
+    assert bare.row(1) == 0 and bare.row(4) == 3
+    assert reconcile.warm_title_ids(ArtifactStore.open(root, "cold-v2")) == [1, 4]
 
 
 def test_a_title_with_no_backbone_row_scores_entirely_from_the_cold_tower(backbone):

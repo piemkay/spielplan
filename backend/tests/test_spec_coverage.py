@@ -38,7 +38,7 @@ MAP = TESTS / "spec_coverage.toml"
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
 # "M4.5". M4.6 through M4.8, M4.10, M4.11 and M4.14 through M4.16 are not in the list yet —
 # each is added by the milestone that opens it, in one commit with its first row.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.9", "M5", "M6", "M7"]
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.9", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 

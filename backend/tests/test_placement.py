@@ -460,6 +460,67 @@ def test_nothing_in_the_placer_reaches_for_a_gpu(bundle_root):
 # --- §5.3's reconciliation, against the real schema -------------------------------------------
 
 
+async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(db, tmp_path):
+    """cs-01, the half a loader test cannot show: what the sweep is handed.
+
+    `classify_warm` stamps exactly `warm_title_ids`, and the shipped bundle carries 1,918 rows
+    that clear `WARM_SUPPORT` while carrying no coordinate at all — E written as zeros, the real
+    one kept in `E_hat`. On support alone they were stamped warm, which is the flag
+    `titles_needing_placement` reads to decide who is already covered, so the sweep that exists
+    to give them a coordinate skipped exactly them. A title already carrying the old stamp has to
+    be demoted, not merely left out of the new list: §10's "everything expressed in the old
+    Backbone's basis is garbage against a new one" is the same argument.
+
+    The npz is written here rather than taken from `make_bundle.py`: the corpus-shaped fixture
+    (a title with `cold_mask` set, a zeroed `E` row and a non-zero `E_hat`) is M4.8's, and the
+    M4.13 plan says outright that it must not be duplicated in a second fixture.
+    """
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    e = np.random.default_rng(20260906).standard_normal((3, 64)).astype(np.float32)
+    e[1] = 0.0
+    np.savez(
+        root / "backbone.npz",
+        title_ids=np.array([1, 2, 3], dtype=np.int32),
+        E=e,
+        b_i=np.array([0.4, 0.5, 0.6], dtype=np.float32),
+        # Title 2 is the defect: zeroed, and well above WARM_SUPPORT. Title 3 is thin and warm-less
+        # for the ordinary reason, so the two exclusions stay distinguishable.
+        item_n=np.array([500, 900, 4], dtype=np.int32),
+        mu=np.float32(0.1),
+        cold_mask=np.array([False, True, False]),
+    )
+    store = ArtifactStore.open(root, "cold-v1")
+
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state)"
+        " VALUES ('cold-v1', '{}'::jsonb, 'active')"
+    )
+    for title_id in (1, 2, 3):
+        await db.execute(
+            "INSERT INTO title (id, kind, name, is_owned, placement) "
+            "VALUES ($1, 'movie', $2, true, 'warm')",
+            title_id, f"title {title_id}",
+        )
+
+    warm, demoted = await reconcile.classify_warm(db, store, bundle_version="cold-v1")
+    assert warm == 1, "only the covered, supported, non-zero row is warm"
+    assert demoted == 2, "the zeroed row and the thin one lose a stamp they should never have had"
+
+    stamped = {
+        int(r["id"]): r["placement"]
+        for r in await db.fetch("SELECT id, placement FROM title ORDER BY id")
+    }
+    assert stamped == {1: "warm", 2: "unplaced", 3: "unplaced"}
+
+    # And the sweep now sees it. Before the fix title 2 was stamped warm, so `_MISSING_SQL`'s
+    # `placement <> 'warm'` filtered it out and it never got a title_placement row.
+    needing = await reconcile.titles_needing_placement(
+        db, bundle_version="cold-v1", scope="owned_missing"
+    )
+    assert needing == [2, 3]
+
+
 async def test_a_title_with_no_keywords_and_no_dna_row_still_gets_a_coordinate(db, placed):
     """The coverage requirement's own sentence: "A title with no keywords and no DNA row still
     yields a vector and a coordinate."

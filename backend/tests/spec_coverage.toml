@@ -2261,3 +2261,12 @@ what = "A person credited with one job under two department spellings comes back
 why = "TMDB records leads under both `Acting` and `Actor`: 7,918 (title, person, job) triples span more than one department across 1,216 of 19,071 titles, 816 of them inside the twelve credits the card renders, and Svelte 5's keyed each throws on a duplicate key in the production branch too."
 tests = ["backend/tests/test_import_integration.py::test_a_credit_is_one_row_per_person_and_job_across_department_spellings"]
 
+[[requirement]]
+id = "data-rules-a-zeroed-backbone-row-is-not-a-warm-title"
+spec = "§5.1 (the e(t) branch); §4.3 backbone.npz; §12 M2 exit criterion"
+milestone = "M4.13"
+kind = "backend"
+what = "A backbone.npz row flagged by cold_mask — or numerically zero where no cold_mask ships — is treated as absent: it is excluded from row_of, never stamped warm, never excused from the Cold Tower sweep, and its coordinate is the pure cold limit with e_source 'cold_tower'. The count is reported in the load notes. No owned title is served with e(t) = 0 while being reported warm."
+why = "The bundle ships E = 0 for all 2,879 cold_mask rows and their real coordinate in E_hat/b_hat; the app reads neither, so 1,918 titles (182 owned) got a Backbone row of zeros, no placement, e_source 'backbone' and gate ~1.0 — a personal term of exactly zero for every user for ever, counted as coordinated by M2's criterion."
+tests = ["backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title", "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm"]
+
