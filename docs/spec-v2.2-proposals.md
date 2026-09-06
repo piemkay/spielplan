@@ -63,7 +63,7 @@ Two owner decisions post-date the prototype and are **not** re-litigated here: t
 
 **What the spec says.** §3.2: "**Shared devices:** the account chip switches between member profiles, **gated by the per-user PIN** (the chip reads \"member · passkey + PIN\")." The gate is normative; the interaction is undrawn.
 
-**Proposed amendment.** Extend the §3.2 bullet: "Picking another profile opens a 4-digit PIN sheet; the switch commits only on a correct PIN, and a member with no PIN set falls back to password. Committing closes the chip menu and returns to Home — the new identity never inherits the previous identity's surface, and never an admin surface. Persistent guests with a grid profile appear in the switch list; ephemeral guests do not."
+**Proposed amendment.** Extend the §3.2 bullet: "Picking another profile opens a 4-digit PIN sheet; the switch commits only on a correct PIN, and a member with no PIN set falls back to password. Committing closes the chip menu and returns to Home — the new identity never inherits the previous identity's surface, and never an admin surface. Only `member` and `admin` accounts appear in the switch list; a Tonight guest seat is not an identity and never appears (decision 166)."
 
 **Cost.** Free copy; the PIN sheet is one component in M1's auth work.
 
@@ -145,7 +145,15 @@ Two owner decisions post-date the prototype and are **not** re-litigated here: t
 
 **Proposed amendment.** Add to §3.1: "Two guest kinds, one role. An **ephemeral guest** is a session seat only — no account row, no credential, no Ledger; it exists for the length of one Tonight session (§6.2). A **persistent guest** is an account created in §6.6 with a display name and no password and no passkey: it cannot sign in, it is selectable as a Tonight participant and as a §6.5 comparison profile, and it owns exactly one artefact — the 60-title grid profile (§12 M7). Only `member` and `admin` accounts carry a one-time password and a first-login change; issuing one for a guest creates a login that the role is defined not to have."
 
-**Cost.** Free copy, but it removes a role pill from the §6.6 create form and pins what §6.5's "any two profiles — members and persistent guests" is allowed to select.
+**Superseded by decision 166 (owner, 2026-09-03).** The owner's answer is narrower than this
+amendment: there is **one** guest kind, the session seat, and no guest account of any sort. What
+survives here is the diagnosis — the create form's third role pill is a login the role is defined
+not to have, and the roster row `guest · grid profile, 11 picks` asserts a finished artefact no
+path produces. Both are now resolved by deletion rather than by definition: the `guest` pill goes,
+`app_user`'s role CHECK narrows to two values, and the roster row's grid-profile status is replaced
+by the row editor of decision 166.
+
+**Cost.** Free copy, but it removes a role pill from the §6.6 create form and pins what §6.5's "any two profiles — members and persistent guests" is allowed to select. Under decision 166 the cost is no longer free copy: it is one migration and a milestone (§12 M4.6).
 
 ---
 
@@ -703,7 +711,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the spec says.** §6.2 step 6: "winner card — approval share, per-person match lines in DNA terms including the honest negative (\"nothing here is their pull — *bleak* works against them\"), and **Play on Jellyfin** as the primary CTA — plus runners-up and one **wildcard**."
 
-**Proposed amendment.** Expand step 6 into a layout: "The winner card, in order: the reveal beat (proposal 60); the winner poster with `{year} · {runtime} · {three DNA terms}` as its why-line; the approval share in the data voice (\"3 of 4 approved\"), and \"Unanimous.\" when it is; one **per-person match line** per participant, in DNA terms, including the honest negative — a guest with no grid profile reads \"{name} — no profile yet\", never nothing; the budget-fit line (\"fits your 130 min\" / \"runs 21 min over\"); **Play on Jellyfin** as the primary CTA; then runners-up as a compact row and one wildcard strip captioned \"a step outside your usual, honestly labelled\"."
+**Proposed amendment.** Expand step 6 into a layout: "The winner card, in order: the reveal beat (proposal 60); the winner poster with `{year} · {runtime} · {three DNA terms}` as its why-line; the approval share in the data voice (\"3 of 4 approved\"), and \"Unanimous.\" when it is; one **per-person match line** per participant, in DNA terms, including the honest negative — a guest reads \"{name} — no profile\", never nothing; the budget-fit line (\"fits your 130 min\" / \"runs 21 min over\"); **Play on Jellyfin** as the primary CTA; then runners-up as a compact row and one wildcard strip captioned \"a step outside your usual, honestly labelled\"."
 
 **Cost.** Free copy for work M4 owns regardless — but today M4 has no design at all for its own terminal screen. This is the single largest Tonight gap.
 
@@ -713,7 +721,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the spec says.** §6.2 step 1: "picks participants: members and/or N guests"; step 2: "**Guests use the initiator's phone after the initiator finishes**"; step 3: "Guests contribute no taste term unless they have a grid profile."
 
-**Proposed amendment.** Add to step 1: "Guest count is set in the lobby, capped at 6, and guests always take their turns last on the initiator's phone." Add to step 3: "A guest with no grid profile is ranked by the **candidate pool's own order** (member average), never by a borrowed member's Ledger — the prototype silently substitutes the host's, which is not 'no taste term'."
+**Proposed amendment.** Add to step 1: "Guest count is set in the lobby, capped at 6, and guests always take their turns last on the initiator's phone." Add to step 3: "A guest is ranked by the **candidate pool's own order** (member average), never by a borrowed member's Ledger — the prototype silently substitutes the host's, which is not 'no taste term'."
 
 **Cost.** Free copy; the substitution rule is a one-line fix that otherwise ships as a privacy-shaped bug.
 
@@ -753,7 +761,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the spec says.** §6.2 step 5: "Ledger divergence **D ≥ 0.20** (~14.5% of nights; below that, decide silently)" and the sanctioned copy. §6.5: "**Divisive-title list:** where the two Ledgers disagree most" — no formula, no symbol. Neither section defines its quantity, and nothing says whether they are the same one.
 
-**Proposed amendment.** Add: "D is computed **per candidate**, not per night — the ~14.5% figure is the share of nights in which the winning candidate crosses the threshold. Guests without a grid profile are excluded from D. D's formula is **recovered from `DNA_MODEL` §5.3**, which produced both the 0.20 threshold and the ~14.5% figure, and restated in §6.2 step 5 alongside them; **§6.5's Δ is the same quantity under the same name and formula**, quoted identically in both sections." This is a recovery, not a preference: the threshold and the frequency are measured figures, so the formula that produced them is a fact in the corpus project, and inviting a choice here risks exactly the failure the entry warns about — a threshold calibrated on one formula shipped against another, off by a factor of two for a couple. Escalate to the owner only if `DNA_MODEL` turns out not to fix the formula.
+**Proposed amendment.** Add: "D is computed **per candidate**, not per night — the ~14.5% figure is the share of nights in which the winning candidate crosses the threshold. Guests are excluded from D. D's formula is **recovered from `DNA_MODEL` §5.3**, which produced both the 0.20 threshold and the ~14.5% figure, and restated in §6.2 step 5 alongside them; **§6.5's Δ is the same quantity under the same name and formula**, quoted identically in both sections." This is a recovery, not a preference: the threshold and the frequency are measured figures, so the formula that produced them is a fact in the corpus project, and inviting a choice here risks exactly the failure the entry warns about — a threshold calibrated on one formula shipped against another, off by a factor of two for a couple. Escalate to the owner only if `DNA_MODEL` turns out not to fix the formula.
 
 **Cost.** Free copy, but the recovery must happen before M4 writes the conflict-surfacing rule and before §6.5's Divisive tab picks a sort key: two surfaces currently claim to measure the same disagreement and disagree about it.
 
@@ -803,7 +811,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the spec says.** §6.2 step 6 quotes the negative string verbatim and places the lines on the winner card.
 
-**Proposed amendment.** Covered by proposal 58's layout; add only: "Match lines appear on the winner card and each runner-up, and every participant gets a line — a guest without a grid profile reads \"{name} — no profile yet\" rather than being silently omitted."
+**Proposed amendment.** Covered by proposal 58's layout; add only: "Match lines appear on the winner card and each runner-up, and every participant gets a line — a guest reads \"{name} — no profile\" rather than being silently omitted."
 
 **Cost.** Cosmetic; free.
 
@@ -1345,7 +1353,7 @@ Under the adaptive round (§6.2 rewritten, 54c) `neither` earns its keep twice: 
 
 **What the spec says.** §6.6: "**Users:** create/edit, roles, passkey management, Jellyfin links, guest profiles."
 
-**Proposed amendment.** Add: "Each row shows role · passkey count · Jellyfin link (or, for a guest, grid-profile status) and opens an editor: role, passkey list with revoke, Jellyfin re-link, PIN reset, OTP reissue (proposal 1), and delete. The `PUBLIC_URL` warning belongs on this list as well as in the wizard, because revocation is felt here."
+**Proposed amendment.** Add: "Each row shows role · passkey count · Jellyfin link and opens an editor: role, passkey list with revoke, Jellyfin re-link, PIN reset, OTP reissue (proposal 1), and delete. The `PUBLIC_URL` warning belongs on this list as well as in the wizard, because revocation is felt here."
 
 **Cost.** Free copy; M5 (or M1, wherever passkey management lands).
 
@@ -1746,7 +1754,7 @@ Things spec v2.1 **requires** and the prototype has no design for. Implementatio
 17. **The queue-reason line** (§6.1). `curWhy` is computed (2796) with the spec's exact phrasing and rendered nowhere. → proposal 39.
 18. **Tier-set configuration** (§6.3, §5.2). Hardcoded array; no control anywhere, including Admin. → proposals 11, 82.
 19. **The Rank filter set** (§6.3). Genre, decade, runtime, seen-state and facet-qualified predicates are specified and absent from the board. → proposal 72.
-20. **The TV kiosk route** (§6.2 step 8) and **persistent guest grids** (§6.2, §12 M7). Both correctly deferred, both undrawn. The TV route needs no new design — it re-renders the lobby, progress and result states — but the guest grid has no pattern at all.
+20. ~~**The TV kiosk route** (§6.2 step 8) and **persistent guest grids** (§6.2, §12 M7).~~ **Both out of scope.** Decision 165 deletes the TV route outright — nothing about a session renders anywhere but a phone — and decision 166 retires the persistent guest grid with the guest profile itself. Neither needs a pattern, because neither will be drawn. What replaces the second is the §6.6 Users roster and row editor (decision 166), whose pattern proposal 157 already describes.
 21. **The offline / degraded shell state** (§6 preamble). Service-worker shell cache is required; nothing indicates when the app is running from it. → proposal 15.
 22. **Play on Jellyfin** (§6.0, §7.1). §6.0 gives the title card "two actions — **Play on Jellyfin** and **Show on map**"; the card has **one** (`showOnMap`, 1167 desktop / 1275 phone) and no Play control at all. The string appears twice — on a solo pick (443) and on the Tonight winner (619) — and both are inert `div`s with no handler. No deep-link shape, no launch target, no failure state is demonstrated anywhere, so §7.1's client deep link is invention. → proposal 69.
 
@@ -1837,7 +1845,146 @@ problem stays visible instead of arriving as "why is every DNA card blank".
 **Cost.** One validation and one coverage row now; a migration plan when a v2 vocabulary
 actually exists.
 
+---
 
+## Decisions taken (owner, 2026-09-03)
+
+Three, taken while the pre-release review was being written, and unlike the last two they change
+surfaces rather than the relationship to the corpus project. Each retires published spec text: the
+first two delete scope, the third replaces a role with a surface. They are numbered because
+`CLAUDE.md` requires work to cite `decision N`, and because all three contradict sentences that
+shipped code and shipped coverage rows are currently written against.
+
+| # | Question | Decision |
+|---|---|---|
+| 164 | Who creates and manages accounts — the first-boot wizard or the admin? | **The admin, in §6.6 Users.** The wizard creates the first admin and stops; every other account is created, edited, reset and removed from the Users tab. Narrows §3.1's "User creation (wizard or §6.6)" to §6.6 alone and takes member creation out of the §3.1 first-boot sequence. |
+| 165 | Does anything about a Tonight session render on the TV? | **No. Everything is on the phone, results included.** The projector has no access to the app; it plays the film. Deletes §6.2 step 8's `/tv` kiosk route and the "TV route" join channel in step 2, and retires every TV-shaped clause elsewhere (§3.2's shared/TV PIN rationale, §12 M4's "+ TV route"). |
+| 166 | Is a guest an account, and does a guest have a profile? | **Neither.** A guest is a Tonight **session seat** on the initiator's phone — no account row, no credential, no profile, no Ledger, no carry-over — and the `guest` role leaves the account table, which keeps **two roles and no others**. In exchange the app gets **full user management as every platform has it**: an admin creates, renames, re-roles, disables, deletes and **resets the password of** any account, and **at least one active admin always exists**. Retires the "persistent guest" from §0 row 8, §3.1, §6.2, §6.5, §6.6 and §12 M7, and supersedes proposal 148's amendment. |
+
+### 164. Accounts are the admin's job, not the wizard's
+
+**What the spec says.** §3.1: "User creation (wizard or §6.6)", and the first-boot sequence ends
+"→ member-account creation (needed before M2, whose exit criterion requires both members'
+verdicts)". §6.6's Users bullet lists "create/edit, roles".
+
+**Why it changes.** Only the wizard half was ever built, and it is unreachable: the shell redirects
+`/setup` to `/` whenever `setup.required` is false, and the backend defines `required = not
+has_admin`, so creating the admin evicts the admin from the wizard at step 1. The §6.6 Users card
+is parked at a milestone by a tooltip. The household therefore has no in-app path to a second
+account, and every member in every test was created by posting to the API directly.
+
+**The decision.** The wizard creates the first admin and stops. §6.6 Users is the only place an
+account is created or changed, reached from the account menu. The wizard's member step is deleted
+rather than made reachable.
+
+**Cost.** §12 gains M4.6. The wizard loses a step; `POST /api/setup/members` moves to
+`POST /api/admin/users` or stays as the implementation of the new screen — an implementation
+choice, not a spec one.
+
+### 165. Nothing renders on the TV
+
+**What the spec says.** §6.2 step 8: "Optional **TV kiosk route** (`/tv`, room code): lobby,
+progress, result. Carried from v1.1, nice-to-have." §12's M4 row ends "+ TV route", §6.2 step 2
+lists the TV among the equivalent join channels, and §1's diagram draws a "TV kiosk route".
+
+**Why it changes.** The household's screen is a projector with no access to the app. The shipped
+route also could not honour its own design: it reads two `ActiveUser` endpoints and sits in
+neither the shell's public nor its chrome-free list, so the shared screen carried a 90-day session
+cookie plus the account chip, the nav rail, "Admin view" and "Setup wizard" — while its own comment
+claimed "a kiosk has no session cookie of its own".
+
+**The decision.** There is no TV client. Every Tonight surface, the reveal and the result included,
+is a phone surface. `/tv` and its spec is deleted, not deferred.
+
+**Cost.** A deletion: one route, one browser spec (which is currently failing), one coverage row
+and its five named tests. It also cancels the kiosk-credential design the review proposed. §7.1's
+"Play on Jellyfin" deep-link becomes the only path from a winner to playback, and it opens the
+Jellyfin web player on the phone — how the film reaches the projector is outside the app.
+
+### 166. A guest is a seat, and user management is a real surface
+
+**What the spec says.** §3.1 admits three roles and calls "persistent guests" first-class; §6.2's
+end gives a persistent guest a 60-title grid profile; §6.5 compares "members and persistent
+guests"; §6.6 lists "guest profiles" among the Users card's duties; §12's M7 row opens with "Guest
+grid profiles"; and proposal 148's amendment defines a persistent guest as an account.
+
+**Why it changes.** The guest that exists in the product is the person handed the initiator's phone
+for one evening (§6.2 step 2), and the schema already says exactly that: `session_participant`
+admits a guest seat only as `user_id NULL`. The guest *account* was reachable only through one
+regex and gave a full sign-in with every member surface. Meanwhile the thing a household actually
+needs — an admin who can reset a forgotten password — did not exist at all: no code path writes
+`role`, `is_active` or a replacement password.
+
+**The decision.** Two roles, `admin` and `member`, and no others. A guest is a session seat with no
+account, no credential and no profile. Admins fully manage accounts from §6.6 Users, including
+password reset and role assignment, and at least one active admin always exists — the last one
+cannot be demoted, disabled or deleted.
+
+**Cost.** One regex, one migration narrowing the role CHECK, the M4.6 surface and its routes, and
+the spec amendments above. The last-admin floor is a security requirement rather than polish:
+`POST /api/setup/admin` takes no auth dependency and is gated only on there being no admin, so an
+install that reaches zero admins lets an anonymous caller mint one.
+
+---
+
+---
+
+## Decisions taken (owner, 2026-09-04)
+
+Twelve, taken together after the pre-release review, and every one of them settles a question a
+milestone was otherwise going to answer by default in a diff. Each was adjudicated against the code
+rather than argued from the spec alone: nine overturned the recommendation the review's planning pass
+had carried, which is the reason they are written down here rather than left in a plan.
+
+| # | Question | Decision |
+|---|---|---|
+| 167 | Is §5.1's β the crowd weight the corpus measured, or the personal weight the code fits? | **The number is the corpus's, the orientation is the code's.** β stays the personal weight; §5.1 gains the complement rule β_app = 1 − β_corpus and states the optimum in the app's own coordinates as **0.2**. No migration, no value flip, no refit: the per-user cross-validation already fits β in the app's orientation, and its measured optimum is 0.2. What was wrong was the printed copy. |
+| 168 | Does the K-nearest-straddler bound ship with the vectorised Tonight selector? | **No — the vectorised rewrite alone.** It reproduces `expected_straddlers` bit for bit and brings the worst realistic board to ~300 ms against §6's 1.5 s. The K-bound is a rule change wearing an optimisation's clothes, and its safety depends on a score spread that moves as verdicts accrue. |
+| 169 | Does a host-only end-room control ship? | **Yes**, in the same diff as `play.settle`. A room that reaches `voting` and loses a seat is live for ever today: `open_session`'s abandon is scoped to `state = 'open'`, one test asserts that on purpose, and no worker job touches `session`. |
+| 170 | May a PIN session manage push, and may the PIN be set without the password? | **Neither.** Push subscribe/unsubscribe move behind `credentialed_user`, and `SetPinRequest` requires the current password. The rule: a PIN session reaches the product surfaces and nothing that changes how the account is reached later. |
+| 171 | Does a models-only re-import load the curated ledgers? | **Yes** — corrections, seed list, adjudications and axes load on every import, from one function outside the content branch; the vocabulary tier stays seed-only. Three guards are part of the decision: the seed list deletes then skips unknown ids, an empty adjudications file never replaces a populated table, and the write uses the install's active vocabulary version. |
+| 172 | What may the Jellyfin sweep overwrite? | **Four answers.** Adoption stays. The sweep may not touch a title whose finish prompt is open — and "no, I did not finish it" becomes an explicit `unseen`, so declining is state rather than silence. An `unseen` on a series is never pushed to Jellyfin. A computed `Series.Played` may mark but never un-mark. |
+| 173 | Where do the DNA axes come from, and does 54d's split ship? | **It does not ship, and the spec says so.** The corpus has axes for one facet of eleven, in a shape the loader cannot read, at a path the exporter cannot reach. This is an upstream authoring project of ~582 term weights, not an export run. §6.2 records that the split cannot fire on release data; the loader's invented `axes/` subdirectory is corrected regardless. |
+| 174 | Is undo a hard delete or a tombstone? | **A hard delete**, and §4.2 is amended to say so rather than leaving a shipped write path resting on a proposal. Separately: a block's last observation is currently un-undoable the moment it lands, and the commit point moves one observation later — which is what decision 35 already says. |
+| 175 | What does "straddling" mean, when every title on a real board straddles? | **Keep the ±z·σ predicate; fix the constant and stop sharing it.** `straddle_z` is retuned 1.0 → 0.15 and stays §6.3's badge constant; Tonight gets its own `BOUNDARY_Z` beside `CAP_PAIRS`. The posterior-mass redefinition is a no-op at the σ the model produces, and narrowing `prior_var` moves nothing — both measured. |
+| 176 | Nine shipped coverage rows cite unadopted proposals as their authority. | **Adopt four, re-cite five.** Five already have a normative home and only need pointing at it. The four that pin a constant no section states become this decision's answer table. Then it is made mechanical: `test_spec_coverage.py` fails any row at or before `current_milestone` whose `spec` cites a proposal. |
+| 177 | Is the normative document v2.1, or a cut v2.2? | **No cut.** `spielplan-spec_v2.1.md` stays the one normative file and is amended in place, recording amendment waves as dated point releases. The proposals file becomes two declared things: 1–161 are provenance, 162 onward are owner decisions, normative from the day they are taken until the amendment lands. The week-one deliverable is one paragraph in `CLAUDE.md`. |
+| 178 | The genome slice, the review bodies, attribution, and posters. | **Split the two datasets.** Stop importing the MovieLens genome — no title the app will ever place uses it. Keep the review bodies: content seeds once, so dropping them is one-way and forfeits an option §10 reserves. Add one Data-sources surface carrying the notices. Keep §6.8's posters and adopt proposal 13 with four corrections, serving same-origin from a cache. |
+
+### 167. β is the personal weight, and the printed optimum was the wrong number
+
+**What the spec says.** §5.1: "Blend with the crowd prior at **β = 0.8** (measured optimum; also
+exactly where per-user top-10s stop being the global chart: 12 → 263 distinct titles)."
+
+**Why it changes.** The corpus project measured that 0.8 on the *crowd* side —
+`wnver_browsable.py:121` blends `(1−b)·personal + b·crowd` and evaluates its optimum as
+`0.2·personal + 0.8·crowd`, and the "12 → 263" figures §5.1 quotes come from a table headed "blend
+beta (1.0 = crowd only)". `scoring/foldin.py` puts β on the personal side. But the app does not
+*apply* a constant: `_cross_validate` searches the whole grid per (user, kind) with the same
+orientation it serves with, so the fit is self-consistent whatever the constant is called. Re-run
+over 150 real raters against the shipped Backbone, the app's own code peaks at β_app = 0.20 — the
+corpus's optimum, reached independently through a different pipeline. The stored numbers and every
+ranking a household sees are already right. What is wrong is that `home/shelves.py` prints 0.80 as
+"§5.1's measured optimum" and tells a member fitted at the true optimum that their profile "is not
+there yet".
+
+**The decision.** β is the personal weight in this codebase and stays so. §5.1 states the optimum in
+the app's coordinates (0.2), names the corpus's complement, and keeps `BETA_MAX = 0.8` — re-justified
+as a floor under the crowd prior rather than as the measured optimum, because the fits that reach it
+earn it on held-out accuracy. No migration, no flip, no forced refit.
+
+**Cost.** Three lines and two spec sentences. Flipping the orientation instead would rewrite three
+call sites, invert two defaults, force a refit of every `user_score` row, and risk a silently
+inverted ranking that nobody in a two-person household would notice — and it is the flip, not the
+status quo, that would need a new migration to widen an applied `CHECK`.
+
+### 168–178
+
+The remaining eleven are recorded in the same form in
+[`docs/milestones/ROADMAP-to-M5.md`](milestones/ROADMAP-to-M5.md), which carries each ruling's
+evidence, its consequences for the code and the schema, and the exact spec amendment it mandates.
+They are numbered here because `CLAUDE.md` requires work to cite `decision N`, and because the
+milestone plans reference them by number.
 
 ---
 
@@ -1937,8 +2084,8 @@ and the escape control fire."
 > *Guests.* A guest has no profile, so their votes are the only thing known about them. Their
 > pairs are selected to learn **them** — maximising information about the guest's own tilt rather
 > than about a pool the members already discriminate — which naturally makes a guest's round a
-> little longer. A persistent guest with a grid profile (§6.2, end) starts from it and converges
-> like a member.
+> little longer. There is no other kind of guest: a guest never has a stored profile to start from
+> (decision 166).
 
 **Cost.** This is the substance of M4 and it is more work than v2.1's fixed ten: a per-candidate
 posterior, a selection rule, a stopping rule and a waiting state. It also replaces "partial

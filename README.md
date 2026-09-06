@@ -114,7 +114,8 @@ acquired title.
 `M0` compose, schema, wizard, auth, bundle importer, Library · `M1` Jellyfin + seen-state sync +
 passkeys · `M2` Rate + the Personal Ledger + Home shelves — **the gate**, and the first real test
 of whether any of the corpus measurements transfer to two actual people · `M3` Rank · `M4`
-Tonight · `M5` acquisition + LLM layer · `M6` Map + Taste · `M7` guest profiles, HA hooks.
+Tonight · `M4.6` user management (§6.6 Users) · `M5` acquisition + LLM layer · `M6` Map + Taste ·
+`M7` HA hooks.
 
 Full table with exit criteria: spec §12.
 
@@ -173,3 +174,20 @@ supplies trained models; movie data is seeded **once**; every later title is acq
 corpus's own `sqlite_sequence` reads 21442 and "mint above the imported maximum" would have
 started this app at exactly the id the corpus mints next. **163:** a DNA vocabulary change is a
 data migration, not an import, and is refused until that migration exists.
+
+### Before the release: M4.6 – M4.16
+
+A full pre-release review of `m45` (2026-09-03/04) produced 439 findings, of which 389 are grouped
+into eleven milestones that all land before M5, and 50 are deferred with reasons.
+**[`docs/milestones/ROADMAP-to-M5.md`](docs/milestones/ROADMAP-to-M5.md) is the entry point** — it
+carries the milestone table, the pre-allocated migration ledger, the twelve decisions taken on
+2026-09-04 (**167–178**), the deferred buckets and the sequencing. Each milestone has its own plan
+beside it, written to be handed to one implementation agent.
+
+Three further owner decisions (2026-09-03) changed scope and are already amended into the spec.
+**164:** accounts are created and managed in §6.6 Users, not the first-boot wizard. **165:** nothing
+about a Tonight session renders on the TV — the phone is the only surface, results included; the
+`/tv` route is deleted rather than deferred. **166:** a guest is a Tonight session seat with no
+account and no profile, the account table keeps **two roles**, at least one active admin always
+exists, and the app gains real user management including password reset (that last part is
+**M4.6**, a milestone §12 did not have).

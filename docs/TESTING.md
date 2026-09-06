@@ -129,10 +129,19 @@ Two things happen on the way that are easy to miss:
 > M3    15/15 covered
 > M4    42/42 covered
 > M4.5  18/18 covered
+  M4.6   0/N   (not yet opened — see below)
   M5    10
   M6    12
   M7     1
 ```
+
+**M4.6 is not in §12 either, and is not open yet.** Owner decisions 164 and 166 (2026-09-03) put
+the household's whole user management in §6.6 Users and cut the account table to two roles. It is
+its own milestone because §6.6 sketched user management in one line and §12 scheduled it nowhere,
+while the first-boot wizard — the only path that creates an account today — is unreachable the
+moment an admin exists. Nothing writes `role` or `is_active` in the shipped code, so a forgotten
+password has no in-app cure. Its rows are written when the milestone opens, by the routine above;
+`current_milestone` stays at `M4.5` until then, because raising it arms every M4.6 row at once.
 
 **M4.5 is not in §12.** It exists because the row above it was a lie of a particular kind: the
 importer was written against a schema nobody had opened, and verified against a fixture that
