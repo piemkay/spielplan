@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
+import numpy as np
 import pytest
 
 from spielplan.tonight import round as rnd
@@ -629,3 +631,239 @@ def test_a_non_positive_straddle_threshold_would_end_every_round_before_it_start
     assert rnd.stop_reason(board, answered=0, z=0.0) == rnd.CONVERGED
     played = rnd.replay({i: 1.0 - 0.1 * i for i in range(5)}, [], z=0.0)
     assert played.next_pair is None and played.answered == 0
+
+
+# --- perf-01: the fast search is the same search -------------------------------------------
+#
+# 54c's rule is `expected_straddlers` above it; `select` evaluates it through `_Board`, which
+# does the same arithmetic for every pair at once. Decision 168 ships that rewrite and rules
+# out the K-nearest-straddler bound, so the thing to assert is that nothing about the rule
+# moved — equality, not a tolerance — and then that the result arrives inside §6's budget.
+#
+# Every pool in the rest of this file is four to eight titles. The defect these two guards
+# exist for is only visible at the real one: 696 owned titles at the default 130-minute budget,
+# a measured `user_score` sd of 0.504, and `prior_var` 1.0 for a member or 4.0 for a guest.
+
+
+def _scalar_select(beliefs_, *, z, axes=None, asked=None):
+    """54c's selection written the slow way: `expected_straddlers` for every pair of the same
+    three searches, argmin over the same key. This is the reference `select` must reproduce —
+    the value equality below is necessary and not sufficient, because a rule change can hide in
+    the argmin rather than in the expectation."""
+    pool = sorted(beliefs_)
+    already = set(asked or ())
+    anchor = rnd.anchor_of(beliefs_)
+    unresolved = sorted(rnd.straddlers(beliefs_, z=z))
+
+    def best(pairs):
+        out = None
+        for a, b in pairs:
+            if frozenset({a, b}) in already:
+                continue
+            expected = rnd.expected_straddlers(
+                beliefs_, title_a=a, title_b=b, anchor=anchor, z=z
+            )
+            key = (round(expected, 9), -rnd._axis_span(axes, a, b), a, b)
+            if out is None or key < out:
+                out = key
+        return out
+
+    def within(xs):
+        return ((xs[i], xs[j]) for i in range(len(xs)) for j in range(i + 1, len(xs)))
+
+    def touching(xs):
+        return ((min(x, o), max(x, o)) for x in xs for o in pool if o != x)
+
+    found = best(within(unresolved)) if len(unresolved) >= 2 else None
+    if found is None and unresolved:
+        found = best(touching(unresolved))
+    if found is None:
+        found = best(within(pool))
+    return None if found is None else (found[2], found[3])
+
+
+def _random_board(n, seed, *, sd=0.504, var=1.0, quantise=None, mixed_var=False, answers=0):
+    """A board the shape a real one has: §5.1 scores standardised to roughly unit variance, at
+    the sd perf-01 measured over the shipped 696-title owned pool.
+
+    `answers` replays that many pairs through `update`, which is the only way to get the mixed
+    variances every board past the first answer actually has; `mixed_var` gets there directly.
+    """
+    rng = random.Random(seed)
+    mus = [rng.gauss(0.0, sd) for _ in range(n)]
+    if quantise:                      # coarse means, so the boundary lands ON a candidate
+        mus = [round(m * quantise) / quantise for m in mus]
+    board = {
+        i + 1: rnd.Belief(mu=m, var=var * (rng.uniform(0.25, 4.0) if mixed_var else 1.0))
+        for i, m in enumerate(mus)
+    }
+    for k in range(answers):
+        a, b = rng.sample(sorted(board), 2)
+        board = rnd.update(
+            board, title_a=a, title_b=b,
+            answer=rnd.ANSWERS[k % len(rnd.ANSWERS)], anchor=rnd.anchor_of(board),
+        )
+    return board
+
+
+# The board the pre-release review's adversarial pass used to break the first cut of the fast
+# evaluator: title 5's `mu - z*sigma` is bit-for-bit the cut the board takes once title 5 moves
+# out of the top four. The evaluator counted the whole board through the interval rewrite and
+# then removed the two moved titles with `straddles()`' exact expression, so on this board the
+# two disagreed by a whole straddler and `select` served (5, 6) where 54c's rule serves (7, 8).
+_ENDPOINT_IS_THE_CUT = {
+    1: rnd.Belief(mu=1.5619113767768298, var=1.0),
+    2: rnd.Belief(mu=1.5525702385052618, var=1.0),
+    3: rnd.Belief(mu=-1.1996394974254523, var=1.0),
+    4: rnd.Belief(mu=-1.2725001850735600, var=1.0),
+    5: rnd.Belief(mu=-0.5060783124024407, var=0.5328876321884761),
+    6: rnd.Belief(mu=-1.3144645816104796, var=1.0),
+    7: rnd.Belief(mu=-1.3742132546834656, var=1.0),
+    8: rnd.Belief(mu=-1.4838865572118705, var=1.0),
+}
+
+
+def test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing():
+    """The regression the adversarial pass found, kept as a board rather than as an argument.
+
+    `_Board` counts the whole board through the interval rewrite `mu - d < cut < mu + d`, which
+    means the two titles an answer moves are in that total under their OLD intervals. They have
+    to come out the same way they went in; taking them out with `straddles()`' `|mu - cut| < d`
+    instead is a different expression, and on this board it costs a whole straddler on five of
+    the twenty-eight pairs and changes which pair the round serves.
+    """
+    board = _ENDPOINT_IS_THE_CUT
+    pool = sorted(board)
+    anchor = rnd.anchor_of(board)
+    assert (board[5].mu - math.sqrt(board[5].var)) == (board[3].mu + board[4].mu) / 2.0
+
+    fast = rnd._Board.of(board, pool, anchor=anchor, z=1.0)
+    for i in range(len(pool)):
+        for j in range(i + 1, len(pool)):
+            got = float(fast.expected(
+                np.asarray([i], dtype=np.int64), np.asarray([j], dtype=np.int64)
+            )[0])
+            want = rnd.expected_straddlers(
+                board, title_a=pool[i], title_b=pool[j], anchor=anchor, z=1.0
+            )
+            assert got == want, (pool[i], pool[j], got, want)
+
+    assert _pair_of(rnd.select(board, seq=1, rng=random.Random(0), z=1.0)) == \
+        _scalar_select(board, z=1.0)
+
+
+def test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly():
+    """Not `approx`. The fast evaluator maintains the count locally instead of rescanning, so
+    its only licence is that it computes the same number — and decision 168 measured that it
+    does, over twelve pools and two hundred pairs each, at max |difference| 0.0. The awkward
+    shapes are here on purpose: four candidates is the smallest board with a boundary at all,
+    quantised means put the cut exactly on a candidate, zero variance makes every interval a
+    point, and a non-positive z is the one case `straddles` answers False for everything."""
+    shapes = [dict(n=n, seed=s) for n in (4, 5, 7, 12, 40, 100) for s in range(4)]
+    shapes += [dict(n=60, seed=s, var=4.0) for s in range(3)]           # a guest seat
+    shapes += [dict(n=60, seed=s, sd=0.05) for s in range(3)]           # a tight board
+    shapes += [dict(n=60, seed=s, quantise=4) for s in range(3)]        # ties on the cut
+    shapes += [dict(n=30, seed=s, var=0.0) for s in range(3)]           # no reach at all
+    # Every board after the first answer has two variances the rest do not, which a board built
+    # from one prior cannot express — so some are built by replaying answers, and some are given
+    # a spread of variances outright.
+    shapes += [dict(n=40, seed=s, answers=k) for s in range(3) for k in (1, 3, 8)]
+    shapes += [dict(n=40, seed=s, mixed_var=True) for s in range(3)]
+
+    for shape in shapes:
+        for z in (1.0, 0.6, 0.0, -1.0):
+            board_beliefs = _random_board(**shape)
+            pool = sorted(board_beliefs)
+            anchor = rnd.anchor_of(board_beliefs)
+            board = rnd._Board.of(board_beliefs, pool, anchor=anchor, z=z)
+            rng = random.Random(shape["seed"] * 31 + 7)
+            picks = {
+                (min(i, j), max(i, j))
+                for i, j in ((rng.randrange(len(pool)), rng.randrange(len(pool)))
+                             for _ in range(60))
+                if i != j
+            }
+            picks = sorted(picks)
+            fast = board.expected(
+                np.asarray([i for i, _ in picks], dtype=np.int64),
+                np.asarray([j for _, j in picks], dtype=np.int64),
+            )
+            for (i, j), got in zip(picks, fast, strict=True):
+                want = rnd.expected_straddlers(
+                    board_beliefs, title_a=pool[i], title_b=pool[j], anchor=anchor, z=z
+                )
+                assert float(got) == want, (shape, z, pool[i], pool[j], float(got), want)
+
+
+def test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves():
+    """The whole of `select`, not one expectation: all three searches, the `asked` filter and
+    54c's tie-break toward the widest DNA axis. `_axis_span` is 0.0 on release data (decision
+    173 ships without axes), so the axes half is exercised with an authored set here or the
+    tie-break would go untested in exactly the arm that decides ties."""
+    axes = {i + 1: {"pace": (i % 5) / 4.0, "warmth": (i % 3) / 2.0} for i in range(60)}
+    for n in (4, 6, 9, 20, 45):
+        for seed in range(4):
+            for z in (1.0, 0.6, 0.15):
+                board = _random_board(n, seed)
+                got = rnd.select(board, seq=1, rng=random.Random(0), z=z)
+                assert _pair_of(got) == _scalar_select(board, z=z), (n, seed, z)
+                got = rnd.select(board, seq=1, rng=random.Random(0), z=z, axes=axes)
+                assert _pair_of(got) == _scalar_select(board, z=z, axes=axes), (n, seed, z)
+
+    # The second and third searches: every pair BETWEEN straddlers already answered, so the
+    # round falls through to a straddler against anyone.
+    for n in (6, 9, 20):
+        for seed in range(3):
+            board = _random_board(n, seed)
+            unresolved = sorted(rnd.straddlers(board, z=1.0))
+            asked = {
+                frozenset({unresolved[i], unresolved[j]})
+                for i in range(len(unresolved))
+                for j in range(i + 1, len(unresolved))
+            }
+            got = rnd.select(board, seq=1, rng=random.Random(0), z=1.0, asked=asked)
+            assert _pair_of(got) == _scalar_select(board, z=1.0, asked=asked), (n, seed)
+
+
+def _pair_of(pair):
+    return None if pair is None else (pair.title_a, pair.title_b)
+
+
+def test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget():
+    """§6 preamble: "<1.5 s per battle". The board is the worst realistic one — a guest of a
+    fresh household at the 200-minute budget, 716 candidates with `GUEST_VAR_FACTOR` applied
+    and no answers behind them, which is where 574-591 of them straddle. The shipped scalar
+    search takes over a minute on it; the budget asserted here is a third of §6's, because a
+    GET of the round replays it and a POST replays it twice."""
+    board = _random_board(716, 11, var=1.0 * rnd.GUEST_VAR_FACTOR)
+    assert len(rnd.straddlers(board, z=1.0)) > 500, "the guard is only a guard on a wide board"
+    started = time.perf_counter()
+    pair = rnd.select(board, seq=1, rng=random.Random(0), z=1.0)
+    elapsed = time.perf_counter() - started
+    assert pair is not None
+    assert elapsed < 0.5, f"first pair took {elapsed:.2f} s on a 716-candidate guest board"
+
+
+def test_the_costlier_fallback_arm_is_inside_the_budget_too():
+    """The second search: a straddler against ANYONE, once every pair between straddlers has
+    been answered. Decision 168 names it as the arm the guard must exercise, on the ground that
+    its m x n = 398,930 pairs cost more than the 164,451 of the search it falls back from.
+
+    Measured, that premise is wrong and the guard is still worth having. Reaching this arm
+    requires every within-pair to be blocked, and blocking them removes them from this arm too,
+    so what it actually evaluates is the m(n-m) cross pairs — 70,028 on this board, and at most
+    n^2/4 = 121,104 for any m. The arm is therefore cheaper than the first search, not dearer.
+    What the guard covers is that the fallback is reached at all and returns inside the budget;
+    the ceiling on the whole selector is the guard above it."""
+    board = _random_board(696, 11, var=1.0 * rnd.GUEST_VAR_FACTOR)
+    unresolved = sorted(rnd.straddlers(board, z=1.0))
+    asked = {
+        frozenset({unresolved[i], unresolved[j]})
+        for i in range(len(unresolved))
+        for j in range(i + 1, len(unresolved))
+    }
+    started = time.perf_counter()
+    pair = rnd.select(board, seq=1, rng=random.Random(0), z=1.0, asked=asked)
+    elapsed = time.perf_counter() - started
+    assert pair is not None and frozenset({pair.title_a, pair.title_b}) not in asked
+    assert elapsed < 0.5, f"the fallback arm took {elapsed:.2f} s"

@@ -57,6 +57,12 @@ import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+# `tonight/` had no numpy until perf-01. CLAUDE.md's numpy-only contract is about
+# `ledger/model.py` and points the other way: numpy is a declared dependency, imported by
+# sixteen other modules under `backend/spielplan/`, and it is what makes 54c's search affordable
+# at real pool size without changing the rule.
+import numpy as np
+
 # --- decision 154's four answers ----------------------------------------------------------
 
 A = "A"
@@ -443,6 +449,298 @@ def _holdout(pool: Sequence[int], rng: random.Random) -> Pair | None:
         reason="uniform-random, held out — this pair never tunes tonight's shortlist",
     )
 
+# --- selection: 54c's expectation, evaluated for every pair at once -------------------------
+#
+# perf-01. `expected_straddlers` above is the rule written out, and it is unaffordable at real
+# pool size: `update` copies the whole belief dict and `straddlers` rescans and re-sorts it,
+# four times per pair, and `select` calls it for every unordered pair of the straddling set. On
+# the shipped 696-title owned pool — 344 straddlers at `prior_var = 1.0` and a measured
+# `user_score` sd of 0.504 — that is 59k pairs and 36 s; a guest seat's 660 straddlers cost
+# 126 s. The §6 preamble budgets 1.5 s per battle.
+#
+# 54c's SENTENCE IS UNTOUCHED. The pair this returns is the pair the scalar returns, and the
+# equivalence is asserted rather than argued
+# (`test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly` and
+# `test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves`). Nothing here bounds the
+# search to the K straddlers nearest the cut: that changes which pair the rule picks, and
+# decision 168 rules it out on measurement — at a tighter score spread K = 24 diverges on a
+# quarter of fresh boards, and its safety is a property of a distribution that moves as a
+# household accumulates verdicts.
+#
+# THE IDENTITY IT RESTS ON is `update`'s own last paragraph: "Titles the answer did not name are
+# untouched". After any of the four answers the belief set differs in exactly two entries, so
+# both quantities the count needs are local:
+#
+#   * the cut is the midpoint of the 3rd and 4th largest mu, and the only mus that can enter or
+#     leave the top four are the two that moved — so the top six of the unchanged board, minus
+#     the two moved rows, plus the two new mus, always contains it;
+#   * `straddlers` counts `|mu - cut| < z*sigma`, which is `mu - d < cut < mu + d` for the reach
+#     `d = z*sigma` — two `searchsorted` probes into the sorted `mu - d` and `mu + d` arrays,
+#     with the two moved titles corrected by hand using the scalar predicate itself.
+#
+# `either` and `neither` move each named title against the anchor and against nothing else, so
+# those two answers are precomputed once per title rather than twice per pair; `A` and `B` share
+# one `c` and one `t = (mu_a - mu_b)/c`, and `_answer_probabilities`' own `p_a` is `Phi(t)`, the
+# same value `_v_w` needs. That leaves three `erf` and three `exp` per pair.
+#
+# WHERE THE TWO CAN DISAGREE, named rather than hidden. The bulk probe rewrites `|mu - cut| < d`
+# as `mu - d < cut < mu + d`, the same inequality in exact arithmetic but not in float64, so an
+# UNMOVED title whose interval endpoint lands within an ulp of the cut can be counted differently
+# by the two. That residue is bounded at one title per such row and can never go negative,
+# because every row is in exactly one of three sets and each contributes 0 or 1:
+#
+#   * `can` — `mu - d` sorts strictly below `mu + d`, so the two searchsorted probes give
+#     `[lo < cut] - [hi <= cut]`, which is 0 or 1 and is 0 whenever the interval is wholly below
+#     the cut. This is the set the residue lives in, and it is reachable only when `d` is within
+#     an ulp of `mu`'s own scale: at `mu` 1.0 and `d` between 2^-54 and 2^-53 the cut can sit ON
+#     the mean with `fl(mu + d)` still rounding back to it. That is a variance around 1e-32, and
+#     `initial`/`update` cannot produce one — `_duel` shrinks the variance like 0.25/k and the
+#     prior starts at 1.0 — so the corner is named here rather than guarded against;
+#   * `pin` — `d` is positive but under half an ulp of `mu`, so both endpoints round to `mu` and
+#     the rewrite would subtract one for a row `straddles()` counts. Those are held separately
+#     and matched by equality against the cut, which is exactly when `|mu - cut| < d` holds;
+#   * the rest — `d` is not positive, `|mu - cut| < d` is false for every cut, and they appear
+#     in no array. That is also why a non-positive `z` needs no special case.
+#
+# THE TWO MOVED TITLES ARE TAKEN OUT THE WAY THEY WERE PUT IN. `base` counts the whole board
+# under the rewrite, including `a` and `b` under their OLD intervals, so `_count` removes them
+# under the rewrite too and re-adds them under their new beliefs with `straddles()`' own
+# expression. Using the exact predicate for the removal was a real defect and not a rounding
+# nicety: on a board of eight where one title's `mu - z*sigma` is bit-for-bit the moved cut, five
+# of twenty-eight pairs diverged by up to 0.22 straddlers and `select` served a different pair.
+# Measured over random pools the surviving residue does not appear at all (max difference 0.0
+# over 12 pools x 200 pairs, decision 168; 0 over the shapes the equivalence test sweeps), which
+# is why that test asserts equality and not a tolerance.
+
+_ERF = np.frompyfunc(math.erf, 1, 1)
+_SQRT2 = math.sqrt(2.0)
+_SQRT2PI = math.sqrt(2.0 * math.pi)
+
+# Pairs are evaluated in blocks, so peak memory is a property of this number and not of the
+# pool: a guest board of 716 candidates is 174k pairs, and the per-answer working set (a
+# (pairs x 8) mu array plus some thirty vectors) is tens of megabytes unchunked and grows
+# linearly with a library that grows. §1 specifies a 4 vCPU box. This is NOT the new constant
+# decision 168 forbids — that ruling is about K, a number that would change which pair 54c's
+# rule picks. This one changes nothing a caller can observe, and the equivalence test is what
+# says so rather than this comment.
+_PAIR_BLOCK = 1 << 15
+
+
+def _phi_many(x: np.ndarray) -> np.ndarray:
+    return np.exp(-0.5 * x * x) / _SQRT2PI
+
+
+def _Phi_many(x: np.ndarray) -> np.ndarray:
+    return 0.5 * (1.0 + _ERF(x / _SQRT2).astype(np.float64))
+
+
+def _v_w_many(t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """`_v_w`, elementwise. The tail guard is the same one and for the same reason: at large
+    negative `t` the denominator underflows and the ratio is not a number, and the limit `-t` is
+    the correct answer rather than a NaN that poisons the posterior."""
+    denom = _Phi_many(t)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = _phi_many(t) / denom
+    v = np.where(denom < 1e-12, -t, ratio)
+    w = v * (v + t)
+    return v, np.clip(w, 0.0, 1.0)
+
+
+@dataclass(frozen=True, eq=False)
+class _Board:
+    """One `select` call's beliefs, in the shape the pair search reads them.
+
+    Built once per call. `ids` is the pool in ascending title order, so a row index and a title
+    id sort the same way and the `(a, b)` half of 54c's tie-break needs no remapping.
+    """
+
+    ids: np.ndarray             # int64[n], ascending title ids
+    row: dict[int, int]
+    mu: np.ndarray              # float64[n]
+    var: np.ndarray             # float64[n]
+    reach: np.ndarray           # float64[n] — z*sigma, the scalar's own straddle expression
+    lo_row: np.ndarray          # float64[n] — mu-reach, in row order
+    hi_row: np.ndarray          # float64[n] — mu+reach, in row order
+    can: np.ndarray             # bool[n] — the rows whose interval survives rounding
+    lo: np.ndarray              # sorted lo_row over `can`
+    hi: np.ndarray              # sorted hi_row over `can`
+    pin: np.ndarray             # sorted mu over the rows whose interval collapsed to a point
+    top: np.ndarray             # the (up to six) rows with the largest mu
+    top_mu: np.ndarray
+    either_mu: np.ndarray
+    either_var: np.ndarray
+    neither_mu: np.ndarray
+    neither_var: np.ndarray
+    anchor: float
+    z: float
+    live: bool                  # False when the pool is no larger than the shortlist
+
+    @property
+    def n(self) -> int:
+        return int(self.ids.size)
+
+    @classmethod
+    def of(cls, beliefs: Mapping[int, Belief], pool: Sequence[int], *, anchor: float, z: float) -> _Board:
+        n = len(pool)
+        ids = np.asarray(pool, dtype=np.int64)
+        mu = np.fromiter((beliefs[t].mu for t in pool), dtype=np.float64, count=n)
+        var = np.fromiter((beliefs[t].var for t in pool), dtype=np.float64, count=n)
+        reach = z * np.sqrt(np.maximum(var, 0.0))
+        lo_row, hi_row = mu - reach, mu + reach
+        # Three sets, so that every row contributes 0 or 1 and the rewrite can never subtract.
+        # `can` is where the interval survives rounding; `pin` is a positive reach under half an
+        # ulp of `mu`, where both endpoints round back to `mu` and only equality with the cut can
+        # satisfy `|mu - cut| < reach`; everything else has no reach and never straddles.
+        can = lo_row < hi_row
+        pin = (reach > 0.0) & ~can
+        top = np.argsort(-mu, kind="stable")[: min(n, SHORTLIST_SIZE + 3)]
+
+        # `either`/`neither` against the anchor: the moved belief depends on the title alone.
+        c2 = var + BETA * BETA
+        c = np.sqrt(c2)
+        v_up, w_up = _v_w_many((mu - anchor) / c)
+        v_dn, w_dn = _v_w_many((anchor - mu) / c)
+        return cls(
+            ids=ids,
+            row={int(t): i for i, t in enumerate(pool)},
+            mu=mu,
+            var=var,
+            reach=reach,
+            lo_row=lo_row,
+            hi_row=hi_row,
+            can=can,
+            lo=np.sort(lo_row[can]),
+            hi=np.sort(hi_row[can]),
+            pin=np.sort(mu[pin]),
+            top=top,
+            top_mu=mu[top],
+            either_mu=mu + var / c * v_up,
+            either_var=var * (1.0 - var / c2 * w_up),
+            neither_mu=mu - var / c * v_dn,
+            neither_var=var * (1.0 - var / c2 * w_dn),
+            anchor=anchor,
+            z=z,
+            live=n > SHORTLIST_SIZE,
+        )
+
+    def _cut(self, ia: np.ndarray, ib: np.ndarray, mu_a: np.ndarray, mu_b: np.ndarray) -> np.ndarray:
+        """`boundary()` after the two substitutions: the midpoint of the 3rd and 4th largest mu.
+
+        The candidate set is the top six rows with the two moved ones struck out, plus the two
+        new mus. At most two of the six are struck, so at least four survive, and every one of
+        them is at least as large as anything outside the top six — so the four largest of the
+        moved board are always in here, and rows that are not cannot reach position three.
+        """
+        k = self.top.size
+        cand = np.empty((ia.size, k + 2), dtype=np.float64)
+        struck = (self.top[None, :] == ia[:, None]) | (self.top[None, :] == ib[:, None])
+        cand[:, :k] = np.where(struck, -np.inf, self.top_mu[None, :])
+        cand[:, k] = mu_a
+        cand[:, k + 1] = mu_b
+        cand.sort(axis=1)
+        return (cand[:, k - 1] + cand[:, k - 2]) / 2.0
+
+    def _count(
+        self, ia: np.ndarray, ib: np.ndarray,
+        mu_a: np.ndarray, var_a: np.ndarray, mu_b: np.ndarray, var_b: np.ndarray,
+    ) -> np.ndarray:
+        """`len(straddlers(after))` for one answer, over every pair at once."""
+        cut = self._cut(ia, ib, mu_a, mu_b)
+        # The whole board by interval, `#(lo < cut) - #(hi <= cut)`, plus the pinned rows, which
+        # straddle exactly when the cut IS their mean.
+        base = (
+            np.searchsorted(self.lo, cut, side="left")
+            - np.searchsorted(self.hi, cut, side="right")
+        )
+        if self.pin.size:
+            base = base + (
+                np.searchsorted(self.pin, cut, side="right")
+                - np.searchsorted(self.pin, cut, side="left")
+            )
+        # `a` and `b` are in that total under their OLD intervals, so they come out the way they
+        # went in — the rewrite, not `straddles()`. Removing them with the exact predicate is
+        # what let the two disagree by a whole straddler rather than by a rounding residue.
+        was = self._contributes(ia, cut) + self._contributes(ib, cut)
+        # Re-added under the new beliefs with `straddles()`' own expression, because that is what
+        # `straddlers(after)` will compute for them and there is no precomputed interval to reuse.
+        now = (np.abs(mu_a - cut) < self.z * np.sqrt(np.maximum(var_a, 0.0))).astype(np.int64)
+        now += (np.abs(mu_b - cut) < self.z * np.sqrt(np.maximum(var_b, 0.0))).astype(np.int64)
+        return base - was + now
+
+    def _contributes(self, rows: np.ndarray, cut: np.ndarray) -> np.ndarray:
+        """What `base` counted for these rows, in `base`'s own arithmetic."""
+        can = self.can[rows]
+        interval = can & (self.lo_row[rows] < cut) & (self.hi_row[rows] > cut)
+        pinned = ~can & (self.reach[rows] > 0.0) & (self.mu[rows] == cut)
+        return (interval | pinned).astype(np.int64)
+
+    def _block(self, ia: np.ndarray, ib: np.ndarray) -> np.ndarray:
+        mu, var = self.mu, self.var
+        ma, mb, va, vb = mu[ia], mu[ib], var[ia], var[ib]
+
+        # `_duel`, both ways round. `b.var + a.var` is `a.var + b.var` to the bit, and IEEE
+        # subtraction makes `(mb - ma)` the negation of `(ma - mb)` — exactly, except that both
+        # are `+0.0` when the two means are equal, where `-t` is `-0.0` instead. `_v_w` reads it
+        # only through `exp(-x*x/2)` and `erf(x)`, both of which give the same double for the two
+        # zeros, so one `c` and one `t` serve `A`, `B` and `_answer_probabilities`' `p_a` alike.
+        c2 = va + vb + BETA * BETA
+        c = np.sqrt(c2)
+        t = (ma - mb) / c
+        v_p, w_p = _v_w_many(t)
+        v_m, w_m = _v_w_many(-t)
+
+        # `_answer_probabilities`, verbatim and in its own order.
+        p_a = _Phi_many(t)
+        cg = np.maximum(c, 1e-9)
+        both = np.exp(-np.abs(ma - mb) / cg)
+        level = (ma + mb) / 2.0 - self.anchor
+        phi_level = _Phi_many(level / cg)
+        p_either = both * phi_level
+        p_neither = both * (1.0 - phi_level)
+        p_a_only = (1.0 - both) * p_a
+        p_b_only = (1.0 - both) * (1.0 - p_a)
+        total = p_a_only + p_b_only + p_either + p_neither
+        with np.errstate(divide="ignore", invalid="ignore"):
+            probs = (
+                np.where(total <= 0.0, 0.25, p_a_only / total),
+                np.where(total <= 0.0, 0.25, p_b_only / total),
+                np.where(total <= 0.0, 0.25, p_either / total),
+                np.where(total <= 0.0, 0.25, p_neither / total),
+            )
+
+        moved = (
+            (ma + va / c * v_p, va * (1.0 - va / c2 * w_p),
+             mb - vb / c * v_p, vb * (1.0 - vb / c2 * w_p)),
+            (ma - va / c * v_m, va * (1.0 - va / c2 * w_m),
+             mb + vb / c * v_m, vb * (1.0 - vb / c2 * w_m)),
+            (self.either_mu[ia], self.either_var[ia], self.either_mu[ib], self.either_var[ib]),
+            (self.neither_mu[ia], self.neither_var[ia], self.neither_mu[ib], self.neither_var[ib]),
+        )
+
+        # Summed in `probs`' own order and skipping the same terms, because the scalar's
+        # accumulator is a Python float and float addition is not associative.
+        out = np.zeros(ia.size, dtype=np.float64)
+        for p, (mu_a, var_a, mu_b, var_b) in zip(probs, moved, strict=True):
+            count = self._count(ia, ib, mu_a, var_a, mu_b, var_b)
+            out = out + np.where(p <= 0.0, 0.0, p * count)
+        return out
+
+    def expected(self, ia: np.ndarray, ib: np.ndarray) -> np.ndarray:
+        """54c's expectation for every `(ia, ib)` pair of rows, as `expected_straddlers` gives it.
+
+        A pool no larger than the shortlist has no boundary to resolve, so every pair leaves
+        nothing straddling and the scalar returns 0.0 for all of them.
+        """
+        if not self.live:
+            return np.zeros(ia.size, dtype=np.float64)
+        if ia.size <= _PAIR_BLOCK:
+            return self._block(ia, ib)
+        out = np.empty(ia.size, dtype=np.float64)
+        for start in range(0, ia.size, _PAIR_BLOCK):
+            end = start + _PAIR_BLOCK
+            out[start:end] = self._block(ia[start:end], ib[start:end])
+        return out
+
 
 def select(
     beliefs: Mapping[int, Belief],
@@ -465,6 +763,10 @@ def select(
     pairs forever, and ten repeats of one judgement shrink that pair's posterior by √10 on the
     strength of one answer — the reliability inflation §13 guards against, arriving by a
     different door. The round does not repeat it.
+
+    The search itself is `_Board`'s, not `expected_straddlers`', and the two agree to the bit;
+    the scalar stays above as the reference the equivalence test measures against. Nothing about
+    which pair 54c's rule names changes here — only what it costs to find it.
     """
     pool = sorted(beliefs)
     if len(pool) < 2:
@@ -474,30 +776,70 @@ def select(
 
     already = set(asked or ())
     anchor = anchor_of(beliefs)
-    unresolved = sorted(straddlers(beliefs, z=z))
+    board = _Board.of(beliefs, pool, anchor=anchor, z=z)
+    n = board.n
+    unresolved = np.asarray(
+        [board.row[t] for t in sorted(straddlers(beliefs, z=z))], dtype=np.int64
+    )
+    # A pair the participant has already answered, as the one integer `i*n + j` identifies it.
+    # A stored answer can name a title the pool no longer holds (§10: a re-import moves the
+    # pool under it), and such a pair blocks nothing because it can never be generated.
+    blocked = np.asarray(
+        [
+            board.row[min(p)] * n + board.row[max(p)]
+            for p in already
+            if len(p) == 2 and min(p) in board.row and max(p) in board.row
+        ],
+        dtype=np.int64,
+    )
 
-    def _best(pairs: Iterable[tuple[int, int]]) -> tuple[float, float, int, int] | None:
-        best: tuple[float, float, int, int] | None = None
-        for a, b in pairs:
-            if frozenset({a, b}) in already:
-                continue
-            expected = expected_straddlers(
-                beliefs, title_a=a, title_b=b, anchor=anchor, z=z
+    def _best(pairs: tuple[np.ndarray, np.ndarray]) -> tuple[float, float, int, int] | None:
+        ia, ib = pairs
+        if ia.size and blocked.size:
+            keep = ~np.isin(ia * n + ib, blocked)
+            ia, ib = ia[keep], ib[keep]
+        if not ia.size:
+            return None
+        expected = board.expected(ia, ib)
+        # Rounded before comparison so "as informative as each other" is a real tie the axis
+        # rule can break, rather than a floating-point accident that never occurs. `np.round`
+        # is a multiply-rint-divide and Python's `round` is correctly rounded, so the vectorised
+        # pass only narrows the field — generously — and the tie itself is decided with the
+        # scalar's own `round` over the handful of distinct values that survive.
+        approx = np.round(expected, 9)
+        near = np.flatnonzero(approx <= approx.min() + 1.5e-9)
+        uniq, back = np.unique(expected[near], return_inverse=True)
+        rounded = np.asarray([round(float(v), 9) for v in uniq])[back]
+        best = rounded.min()
+        tie = near[rounded == best]
+        a_ids, b_ids = board.ids[ia[tie]], board.ids[ib[tie]]
+        if axes:
+            k = min(
+                range(tie.size),
+                key=lambda i: (-_axis_span(axes, int(a_ids[i]), int(b_ids[i])),
+                               int(a_ids[i]), int(b_ids[i])),
             )
-            # Rounded before comparison so "as informative as each other" is a real tie the
-            # axis rule can break, rather than a floating-point accident that never occurs.
-            key = (round(expected, 9), -_axis_span(axes, a, b), a, b)
-            if best is None or key < best:
-                best = key
-        return best
+        else:
+            # With no axes the span is 0.0 for every pair, so the key is (expected, a, b) and
+            # the winner is the lexicographically smallest pair — `_axis_span`'s own early
+            # return, without n dictionary lookups to reach it.
+            k = int(np.lexsort((b_ids, a_ids))[0])
+        a, b = int(a_ids[k]), int(b_ids[k])
+        return (float(best), -_axis_span(axes, a, b), a, b)
 
-    def _within(xs: Sequence[int]) -> Iterable[tuple[int, int]]:
-        return ((xs[i], xs[j]) for i in range(len(xs)) for j in range(i + 1, len(xs)))
+    def _within(xs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        i, j = np.triu_indices(xs.size, 1)
+        return xs[i], xs[j]
 
-    def _touching(xs: Sequence[int]) -> Iterable[tuple[int, int]]:
-        return (
-            (min(x, other), max(x, other)) for x in xs for other in pool if other != x
-        )
+    def _touching(xs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        left = np.repeat(xs, n)
+        right = np.tile(np.arange(n, dtype=np.int64), xs.size)
+        keep = left != right
+        left, right = left[keep], right[keep]
+        # Two straddlers name each other twice; the scalar evaluates the repeat and keeps the
+        # same winner, so collapsing it here changes the cost and not the answer.
+        key = np.unique(np.minimum(left, right) * n + np.maximum(left, right))
+        return key // n, key % n
 
     # Three searches, narrowest first, and the order is 54c's sentence: "Among candidates whose
     # posterior interval still straddles the shortlist boundary, the round picks the pair whose
@@ -519,11 +861,11 @@ def select(
     # with nothing able to reduce the straddler count, every pair ties on information and the
     # argmin falls through to the lowest title ids — two well-placed candidates, asked about
     # for no reason, while the two the round exists to separate go unmentioned.
-    best = _best(_within(unresolved)) if len(unresolved) >= 2 else None
-    if best is None and unresolved:
+    best = _best(_within(unresolved)) if unresolved.size >= 2 else None
+    if best is None and unresolved.size:
         best = _best(_touching(unresolved))
     if best is None:
-        best = _best(_within(pool))
+        best = _best(_within(np.arange(n, dtype=np.int64)))
     if best is None:
         return None
     _, _, a, b = best

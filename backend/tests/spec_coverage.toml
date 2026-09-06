@@ -2270,3 +2270,12 @@ what = "A backbone.npz row flagged by cold_mask — or numerically zero where no
 why = "The bundle ships E = 0 for all 2,879 cold_mask rows and their real coordinate in E_hat/b_hat; the app reads neither, so 1,918 titles (182 owned) got a Backbone row of zeros, no placement, e_source 'backbone' and gate ~1.0 — a personal term of exactly zero for every user for ever, counted as coordinated by M2's criterion."
 tests = ["backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title", "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm"]
 
+[[requirement]]
+id = "tonight-rank-selection-is-affordable-at-real-pool-size"
+spec = "§6 preamble (<1.5 s per battle); §6.2 step 4 (rewritten, 54c)"
+milestone = "M4.12"
+kind = "backend"
+what = "The fast pair evaluator returns the same expected-straddler value as the reference scalar implementation — exactly, not within a tolerance, over boards with mixed variances and replayed answers as well as fresh ones — and `select` serves the same pair as the scalar argmin over all three searches, the `asked` filter and the DNA-axis tie-break. A first pair for a guest seat over 716 candidates at the shipped prior, and the straddler-against-anyone fallback over 696 reached with every between-straddler pair already answered, each complete in under 0.5 s."
+why = "§6 budgets 1.5 s per battle; the real owned pool is 696 titles and the shipped search costs 36 s for a member and 126 s for a guest seat. Every pool in the suite is 4-6 titles, so nothing in CI could see it — and an optimisation that changes which pair 54c's rule picks is a rule change, so equivalence is asserted first and speed second. Decision 168 rules out the K-nearest-straddler bound and names the guest prior and the fallback arm as the boards the guard must use."
+tests = ["backend/tests/test_tonight_round.py::test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly", "backend/tests/test_tonight_round.py::test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing", "backend/tests/test_tonight_round.py::test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves", "backend/tests/test_tonight_round.py::test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget", "backend/tests/test_tonight_round.py::test_the_costlier_fallback_arm_is_inside_the_budget_too"]
+
