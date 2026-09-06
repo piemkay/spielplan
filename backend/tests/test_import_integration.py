@@ -311,6 +311,61 @@ async def test_library_search_matches_titles_and_aliases(db, bundle, tmp_path):
     assert 5 in {t["id"] for t in hits}
 
 
+_CROSS_DEPARTMENT = (
+    "INSERT INTO credit (title_id, person_id, department, job, character, billing_order, source)"
+    " VALUES ($1, $2, $3, 'Actor', $4, $5, $6)"
+)
+
+
+async def test_a_credit_is_one_row_per_person_and_job_across_department_spellings(
+    db, bundle, tmp_path
+):
+    """§4.1: "credit (dedupe at read time, never at import)" + §6.0's title card.
+
+    TMDB files one job under two department spellings, and the real export carries 7,918
+    (title, person, job) triples spanning more than one of them across 1,216 of 19,071 titles —
+    816 inside the twelve credits the card renders. Grouping the read on the department handed
+    the card two rows that differ in nothing it shows, and Svelte 5's keyed each throws on the
+    duplicate key in the production branch as well as in dev, so with no `+error.svelte` the
+    panel died mid-render: no platform scores, no DNA tiers, no model line.
+    """
+    await _import(db, bundle, tmp_path / "artifacts")
+
+    # Al Pacino is credited as Acting/Actor by the fixture; a second source files the same job
+    # under `Actor`, with its own spelling of the character and a later billing order.
+    await db.execute(_CROSS_DEPARTMENT, 1, 4, "Actor", "Lt. Hanna", 6, "omdb")
+    assert await db.fetchval(
+        "SELECT count(*) FROM credit WHERE title_id = 1 AND person_id = 4"
+    ) == 2
+
+    credits = await library.credits_for(db, 1)
+    rows = [c for c in credits if c["person_id"] == 4 and c["job"] == "Actor"]
+    assert len(rows) == 1
+    # Both spellings stay visible — §4.1 rule 1 keeps what the sources said — while the single
+    # `department` the card reads resolves to the TMDB canonical one.
+    assert sorted(rows[0]["departments"]) == ["Acting", "Actor"]
+    assert rows[0]["department"] == "Acting"
+    assert sorted(rows[0]["sources"]) == ["omdb", "tmdb"]
+
+    # The client key is total: one `person_id:job` per row, which is what stops the throw.
+    keys = {f"{c['person_id']}:{c['job']}" for c in credits}
+    assert len(keys) == len(credits)
+
+    # The directing-first sort survives losing `c.department` as a grouping column.
+    assert credits[0]["job"] == "Director"
+
+    # The character is the lowest billing order's, not the heap's: 2,300 (title, person) pairs
+    # in the corpus carry more than one distinct character across sources, and an unordered
+    # `array_agg(...)[1]` made which one the card printed a function of COPY order.
+    assert rows[0]["character"] == "Vincent Hanna"
+    await db.execute("DELETE FROM credit WHERE title_id = 1 AND person_id = 4")
+    await db.execute(_CROSS_DEPARTMENT, 1, 4, "Actor", "Lt. Hanna", 6, "omdb")
+    await db.execute(_CROSS_DEPARTMENT, 1, 4, "Acting", "Vincent Hanna", 1, "tmdb")
+    reinserted = await library.credits_for(db, 1)
+    again = next(c for c in reinserted if c["person_id"] == 4 and c["job"] == "Actor")
+    assert again["character"] == "Vincent Hanna"
+
+
 async def test_title_card_payload_is_complete(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
 

@@ -509,16 +509,29 @@ def title_detail(title_id: int) -> dict[str, Any]:
         t = db.execute("SELECT * FROM title WHERE id = ?", (title_id,)).fetchone()
         if not t:
             raise HTTPException(404, "no such title")
+        # One row per (person, job), mirroring db/library.credits_for: the corpus files one job
+        # under two department spellings, and grouping on the department hands the card two rows
+        # under one client key. The character comes from a correlated subquery rather than the
+        # app's `array_agg(... ORDER BY ...)`, which SQLite only understands from 3.44; the
+        # ordering it applies is the same one. The harness follows the app;
+        # `backend/spielplan/api/` wins on any disagreement.
         credits = [
             {"person_id": r["person_id"], "name": r["name"], "department": r["department"],
+             "departments": sorted({d for d in (r["departments"] or "").split(",") if d}),
              "job": r["job"], "ord": r["ord"], "character": r["character"],
-             "sources": sorted({s for s in r["sources"].split(",")})}
+             "sources": sorted({s for s in (r["sources"] or "").split(",") if s})}
             for r in db.execute(
-                "SELECT c.person_id, p.name, c.department, c.job,"
+                "SELECT c.person_id, p.name, min(c.department) AS department,"
+                " group_concat(DISTINCT c.department) AS departments, c.job,"
                 " min(c.billing_order) AS ord,"
-                " max(c.character) AS character, group_concat(DISTINCT c.source) AS sources"
+                " (SELECT c2.character FROM credit c2 WHERE c2.title_id = c.title_id"
+                "    AND c2.person_id = c.person_id AND c2.job = c.job"
+                "    AND c2.character IS NOT NULL"
+                "  ORDER BY c2.billing_order IS NULL, c2.billing_order, c2.source"
+                "  LIMIT 1) AS character,"
+                " group_concat(DISTINCT c.source) AS sources"
                 " FROM credit c JOIN person p ON p.id = c.person_id WHERE c.title_id = ?"
-                " GROUP BY c.person_id, p.name, c.department, c.job", (title_id,)
+                " GROUP BY c.person_id, p.name, c.job", (title_id,)
             ).fetchall()
         ]
         # Upstream keys evidence by (title_id, term) and ships no `dna_tag.id`; `runs_found`

@@ -175,7 +175,13 @@
       <section>
         <div class="data heading">CAST &amp; CREW</div>
         <div class="people">
-          {#each data.credits.slice(0, 12) as c (c.person_id + c.job)}
+          <!-- Keyed by person AND job, delimited: `credits_for` collapses to one row per
+               (person, job), and the delimiter is what stops person 700 + job `1Actor` colliding
+               with person 7001 + job `Actor`. The undelimited key threw on 1,216 real titles
+               where one person held one job under two department spellings, and with no
+               +error.svelte the whole card died mid-render. Keyed, not unkeyed: the key is what
+               keeps `onPerson` attached to the right person. -->
+          {#each data.credits.slice(0, 12) as c (c.person_id + ':' + c.job)}
             <button class="person" onclick={() => onPerson(c)}>
               <span class="dot">{c.name.charAt(0)}</span>
               <span class="pname">{c.name}</span>

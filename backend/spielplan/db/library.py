@@ -315,21 +315,46 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
     """§4.1: 'credit (dedupe at read time, never at import)'.
 
     The same person/job can arrive from several sources; import keeps every row so a source can
-    be dropped later. Here we collapse to one row per (person, department, job), keeping the
-    smallest billing order and listing which sources agreed.
+    be dropped later. Here we collapse to **one row per (person, job)**, keeping the smallest
+    billing order and listing which sources agreed.
+
+    NOT per (person, department, job). TMDB records the same job under two department spellings
+    — `Acting`/`Actor`, `Directing`/`Director`, `Editing`/`Editor` — and the real export carries
+    7,918 (title, person, job) triples spanning more than one of them across 1,216 of 19,071
+    titles. Grouping on the department therefore returned two rows the §6.0 card cannot tell
+    apart, and Svelte 5's keyed each throws on the duplicate key in the production branch too.
+    §4.1's dedupe is a statement about the *person and the job*; the department is how a source
+    files it.
+
+    The departments are aggregated rather than chosen between (`array_agg(DISTINCT …)`, the same
+    shape `sources` already has), because §4.1 rule 1 keeps what the sources said, and nothing
+    here normalises a spelling: eighteen ship. `department` stays a single string for the callers
+    that read it and `min()` is what picks it — an alphabetical accident, not a rule, and the
+    corpus is the proof. Of its 7,918 colliding groups, min() lands on the TMDB canonical
+    spelling for 6,565 (`Actor`/`Acting` → Acting, `Editing`/`Editor` → Editing,
+    `Director`/`Directing` → Directing) and on the other spelling for 1,353
+    (`Writer`/`Writing` → **Writer**, `Sound`/`Music` → Music, `Production Designer`/`Art` →
+    Art). Which is why `departments` is what carries the truth and this key is compatibility.
     """
     rows = await conn.fetch(
         """
-        SELECT c.person_id, p.name, c.department, c.job,
+        SELECT c.person_id, p.name, min(c.department) AS department,
+               array_agg(DISTINCT c.department) AS departments, c.job,
                -- 0015 renamed `ord` to `billing_order` (the corpus's own column name); the
                -- response key stays `ord` because §6.0's card reads it.
                min(c.billing_order)             AS ord,
-               (array_agg(c.character) FILTER (WHERE c.character IS NOT NULL))[1] AS character,
+               -- Ordered, because a bare `[1]` over an unordered array_agg is COPY order: 2,300
+               -- (title, person) pairs carry more than one distinct character across sources, so
+               -- which one the card printed depended on the physical row order of the import.
+               (array_agg(c.character ORDER BY c.billing_order NULLS LAST, c.source)
+                    FILTER (WHERE c.character IS NOT NULL))[1] AS character,
                array_agg(DISTINCT c.source)     AS sources
           FROM credit c JOIN person p ON p.id = c.person_id
          WHERE c.title_id = $1
-         GROUP BY c.person_id, p.name, c.department, c.job
-         ORDER BY (c.department = 'Directing') DESC, min(c.billing_order) NULLS LAST, p.name
+         GROUP BY c.person_id, p.name, c.job
+         -- `c.department` is no longer a grouping column, so the directing-first sort has to be
+         -- an aggregate: Postgres rejects the bare column outright rather than mis-sorting.
+         ORDER BY bool_or(c.department = 'Directing') DESC, min(c.billing_order) NULLS LAST, p.name
         """,
         title_id,
     )

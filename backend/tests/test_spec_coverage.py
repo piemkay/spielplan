@@ -28,7 +28,17 @@ MAP = TESTS / "spec_coverage.toml"
 # that did not resemble the artifact it stands in for, and M5's pipeline cannot be built
 # on a placement path that has never met the real feature contract. See
 # docs/milestones/M4.5-plan.md.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M5", "M6", "M7"]
+#
+# Nor are M4.9, M4.12 and M4.13, and for the same kind of reason: the September 2026
+# pre-release review found three defects that only the real corpus bundle can express — a
+# title card that throws on a keyed each, a fifth of the basis served at e(t) = 0, and a
+# pair search that costs a minute. `docs/milestones/ROADMAP-to-M5.md`'s "Start here" table
+# takes those three out of their milestones and ships them first, so the rows land here
+# ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
+# `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
+# "M4.5". M4.6 through M4.8, M4.10, M4.11 and M4.14 through M4.16 are not in the list yet —
+# each is added by the milestone that opens it, in one commit with its first row.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.9", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 
