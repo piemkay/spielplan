@@ -76,7 +76,7 @@ async def test_seen_state_is_per_person(app, db):
     await client.post("/api/setup/admin", json={"name": "patrick", "password": "an-admin-pass"})
     await db.execute("INSERT INTO title (id, kind, name) VALUES (1, 'movie', 'Heat')")
     otp = (
-        await client.post("/api/setup/members", json={"name": "jenny", "role": "member"})
+        await client.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     ).json()["one_time_password"]
     await client.post("/api/titles/1/state", json={"state": "seen"})
 
@@ -143,7 +143,7 @@ async def test_one_person_cannot_answer_anothers_prompt_over_the_wire(app, db):
     event_id = (await client.get("/api/prompts/finish")).json()[0]["id"]
 
     otp = (
-        await client.post("/api/setup/members", json={"name": "jenny", "role": "member"})
+        await client.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     ).json()["one_time_password"]
     member = app()
     await member.post("/api/auth/login", json={"name": "jenny", "password": otp})

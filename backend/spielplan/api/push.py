@@ -17,6 +17,12 @@ Three properties this module is built around, all of them from §6's preamble an
     push to that device — and `auth` is the message-encryption key. Neither is logged, and
     neither comes back out of the API. Devices are identified to the UI by a hash of the
     endpoint instead.
+  * **The two writes need the account credential, not the PIN** (decision 170). §3.2 makes the
+    PIN a convenience for the household phone, so a PIN session reaches the product surfaces and
+    nothing that changes how the account is reached later. Subscribing rebinds an endpoint to the
+    caller and unsubscribing silences a device: whoever holds a switched-into phone could point
+    another member's notifications at it, which is the same class as minting a passkey. Reading
+    this member's own devices stays `ActiveUser` — it discloses nothing the phone does not hold.
 
 The *sending* half is M4's `spielplan.push` (§12); this is the subscribe/unsubscribe path plus
 the read the onboarding screen needs. `router` is exported for `spielplan.app` to register.
@@ -30,7 +36,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from spielplan.api.deps import DB, ActiveUser
+from spielplan.api.deps import DB, ActiveUser, CredentialedUser
 from spielplan.push import keys
 
 router = APIRouter(prefix="/api/push", tags=["push"])
@@ -130,7 +136,7 @@ async def state(user: ActiveUser, conn: DB) -> dict[str, object]:
 
 
 @router.post("/subscribe", status_code=status.HTTP_201_CREATED)
-async def subscribe(body: SubscriptionIn, user: ActiveUser, conn: DB) -> dict[str, object]:
+async def subscribe(body: SubscriptionIn, user: CredentialedUser, conn: DB) -> dict[str, object]:
     """Store a browser PushSubscription for the signed-in member.
 
     ON CONFLICT on `endpoint` rather than an insert: a phone resubscribes with the same
@@ -176,7 +182,7 @@ async def subscribe(body: SubscriptionIn, user: ActiveUser, conn: DB) -> dict[st
 
 
 @router.delete("/subscription")
-async def unsubscribe(body: EndpointIn, user: ActiveUser, conn: DB) -> dict[str, object]:
+async def unsubscribe(body: EndpointIn, user: CredentialedUser, conn: DB) -> dict[str, object]:
     """Drop one device, scoped to the member who owns it.
 
     The `user_id = $1` in the WHERE clause is the load-bearing half: without it, an endpoint

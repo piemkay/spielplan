@@ -43,7 +43,8 @@ docker compose up
 ```
 
 Then open `PUBLIC_URL` and walk the first-boot wizard: create admin → connectors → import the
-bundle → member accounts → onboard the phones.
+bundle. It ends there (decision 164): everyone else is added from **Admin > Users**, and each
+member's phone is walked through PWA install and push on its own first run.
 
 **A bundle-less app is a legal state** (§3.1). Boot with no artifact bundle and the app runs:
 the wizard and admin routes work, and every artifact-dependent surface renders an explicit

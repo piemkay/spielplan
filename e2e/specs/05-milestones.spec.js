@@ -86,17 +86,31 @@ test('Account is built — M1 landed, so it is no longer a placeholder', async (
   await expect(page.getByText(/Not built yet/)).toHaveCount(0);
 });
 
-test('the admin Data and Connectors tabs are real; the rest name their milestone', async ({
+test('the admin Data, Connectors and Users tabs are real; System names its milestone', async ({
   page,
 }) => {
   // §3.1 scopes the bundle-import page to M0: "that one page is M0 scope". §6.6's Jellyfin
-  // card is M1; its LLM/TMDB half and the Users and System cards are M5.
+  // card is M1. Users was assigned to M5 here and is now M4.6's: §12 gained that row with the
+  // milestone, because §6.6 sketched the household's user management in one line and §12
+  // scheduled it nowhere. The LLM/TMDB half of Connectors and the System card stay M5.
+  //
+  // The routine in docs/TESTING.md, applied to a tab rather than a surface: the loop below used
+  // to accept Users as a bare `<span>`, so unlike the placeholder assertions above it would NOT
+  // have failed on the day Users shipped. Turning it into a link assertion is the deliberate
+  // edit that keeps it from reporting success on a spec whose whole purpose is to notice.
   await page.goto('/admin/data');
   await expect(page.getByRole('heading', { name: 'Artifact bundle' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Connectors' })).toBeVisible();
-  for (const tab of ['Users', 'System']) {
-    await expect(page.getByText(tab, { exact: true })).toBeVisible();
-  }
+  await expect(page.getByRole('link', { name: 'Users' })).toBeVisible();
+  await expect(page.getByText(/Users: Not built yet/)).toHaveCount(0);
+
+  // System, in the PENDING form above: the milestone as visible text and the whole sentence.
+  // Scoped to the tab row because the token is what a pending tab renders instead of an href,
+  // and unscoped `getByText('M5')` would be a strict-mode match against the rest of the page.
+  await expect(page.locator('.tabs').getByText('M5', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('System: Not built yet — this surface arrives with M5.')
+  ).toBeVisible();
 });
 
 test('the re-import rebuild set is stated where the re-import happens', async ({ page }) => {

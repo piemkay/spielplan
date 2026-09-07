@@ -48,11 +48,15 @@ async def _register(db, user_id: int, device: SoftAuthenticator, *, label="phone
 
 
 async def _authenticate(db, device: SoftAuthenticator, *, name=None, **kwargs) -> int:
+    """The user id only. `authenticate` also reports the authenticator's user-verification
+    flag, which is what decides the admin stamp (§3.2); it is asserted where that is the
+    subject rather than in every ceremony here."""
     ceremony = await webauthn.authentication_options(db, name=name)
     challenge = webauthn.base64url_to_bytes(ceremony.options["challenge"])
-    return await webauthn.authenticate(
+    user_id, _user_verified = await webauthn.authenticate(
         db, handle=ceremony.id, credential=device.authenticate(challenge, **kwargs)
     )
+    return user_id
 
 
 # --- §3.2: registration ------------------------------------------------------------------
@@ -182,7 +186,11 @@ async def test_a_challenge_is_single_use(db, device):
     ceremony = await webauthn.authentication_options(db, name=None)
     challenge = webauthn.base64url_to_bytes(ceremony.options["challenge"])
     credential = device.authenticate(challenge)
-    assert await webauthn.authenticate(db, handle=ceremony.id, credential=credential) == user_id
+    # The pair the route splits: who it is, and whether the authenticator verified them (§3.2).
+    assert await webauthn.authenticate(db, handle=ceremony.id, credential=credential) == (
+        user_id,
+        True,
+    )
 
     # The very same, valid, unexpired assertion — refused, because the challenge is gone.
     with pytest.raises(webauthn.PasskeyError, match="expired"):

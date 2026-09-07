@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { ApiError, api, qs } from './api.js';
+import { session } from './session.svelte.js';
 
 describe('qs', () => {
   it('drops empty values so the URL stays readable', () => {
@@ -98,6 +99,49 @@ describe('api', () => {
     const plain = await api('/auth/me').catch((e) => e);
     expect(plain.isUnauthenticated).toBe(true);
     expect(plain.needsAdminReauth).toBe(false);
+  });
+
+  it("raises §3.2's re-prompt flag on the user, so a long-open tab shows the banner", async () => {
+    // sec-05: `needsAdminReauth` was parsed and consumed nowhere. `/auth/me` is read once at
+    // boot, so a tab left open past the 24 hours kept a `session.user` saying the clock was
+    // clear while every admin fetch came back 401 — the shell showed raw errors and no way out.
+    session.user = {
+      id: 1,
+      name: 'admin',
+      role: 'admin',
+      must_change_password: false,
+      admin_reauth_required: false
+    };
+    fetch.mockReturnValue(
+      respond(401, { detail: 'admin re-authentication required' }, false, {
+        'x-spielplan-reauth': 'admin'
+      })
+    );
+    await api('/admin/users').catch(() => {});
+    expect(session.user.admin_reauth_required).toBe(true);
+
+    // An ordinary 401 must not raise it: that is a sign-out, and the banner would offer a
+    // password box for a session that no longer exists.
+    session.user = {
+      id: 1,
+      name: 'admin',
+      role: 'admin',
+      must_change_password: false,
+      admin_reauth_required: false
+    };
+    fetch.mockReturnValue(respond(401, { detail: 'not signed in' }, false));
+    await api('/auth/me').catch(() => {});
+    expect(session.user.admin_reauth_required).toBe(false);
+
+    // And it must survive nobody being signed in at all, which is every anonymous fetch the
+    // login page makes.
+    session.user = null;
+    fetch.mockReturnValue(
+      respond(401, { detail: 'admin re-authentication required' }, false, {
+        'x-spielplan-reauth': 'admin'
+      })
+    );
+    await expect(api('/admin/users')).rejects.toBeInstanceOf(ApiError);
   });
 
   it('flags an unauthenticated error so the shell can redirect', async () => {

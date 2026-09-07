@@ -83,16 +83,29 @@ async def test_a_session_round_trips_and_carries_the_preference(db):
 
 
 async def test_loading_a_session_slides_its_expiry(db):
-    """§3.2: "90-day sliding". A fixed window would sign the household out mid-year."""
+    """§3.2: "90-day sliding". A fixed window would sign the household out mid-year.
+
+    The slide is once a day, not once a request: a day-old `last_seen_at` moves the row and
+    reports it moved, and the load that follows within the same day moves nothing. That flag is
+    the cookie's cue, so a browser used daily keeps a cookie as fresh as the row it names.
+    """
     user_id, _ = await _member(db)
     sid = await auth.create_session(db, user_id, auth_method="password")
     await db.execute(
-        "UPDATE auth_session SET expires_at = now() + interval '10 days' WHERE id = $1", sid
+        "UPDATE auth_session SET expires_at = now() + interval '10 days',"
+        " last_seen_at = now() - interval '2 days' WHERE id = $1",
+        sid,
     )
 
-    assert await auth.load_session(db, sid) is not None
+    user = await auth.load_session(db, sid)
+    assert user is not None
+    assert user.session_slid is True
     expires = await db.fetchval("SELECT expires_at FROM auth_session WHERE id = $1", sid)
     assert expires > datetime.now(UTC) + timedelta(days=80)
+
+    again = await auth.load_session(db, sid)
+    assert again is not None
+    assert again.session_slid is False, "a second load the same day must not rewrite the row"
 
 
 async def test_an_expired_session_does_not_load(db):
@@ -235,3 +248,41 @@ async def test_concurrent_wrong_pins_each_count(db, pg_url):
     )
     assert row["pin_failed_count"] == 5, "every attempt has to be counted, not just the last"
     assert row["pin_locked_until"] is not None
+
+
+@pytest.mark.parametrize("failures", [41, 42, 200])
+async def test_the_pin_lockout_is_bounded_however_far_the_counter_has_run(db, failures):
+    """as-01: the escalation doubles, and nothing but the cap stops it doubling out of range.
+
+    `pin_failed_count` has no ceiling — a script guessing at a 10,000-value keyspace passes 40
+    in seconds — and the exponent is computed inside `power()` before the outer `least()` ever
+    sees it, so Postgres raises `interval out of range` from the 42nd failure on: the route
+    answers 500, and neither the counter nor `pin_locked_until` is written. From that attempt
+    onwards there is no lockout at all, which is precisely the state one is for.
+
+    41 is the last count the uncapped form survives and 42 the first it does not, so the three
+    cases are the boundary, the first casualty, and a counter well past it. All three must
+    answer the same bounded refusal: `least(..., 6)` inside `power()` saturates the 1 h ceiling
+    at 2^6 minutes anyway, so capping the exponent changes no reachable lockout, only the
+    overflow.
+    """
+    user_id, _ = await _member(db)
+    await db.execute(
+        "UPDATE app_user SET pin_hash = $2, pin_failed_count = $3 WHERE id = $1",
+        user_id,
+        auth.hash_pin("1234"),
+        failures,
+    )
+
+    ok, reason = await auth.check_pin(db, user_id, "9999")
+    assert not ok
+    assert "too many attempts" in reason
+
+    row = await db.fetchrow(
+        "SELECT pin_failed_count, pin_locked_until FROM app_user WHERE id = $1", user_id
+    )
+    assert row["pin_failed_count"] == failures + 1, "the attempt has to be counted"
+    remaining = row["pin_locked_until"] - datetime.now(UTC)
+    assert timedelta(minutes=59) < remaining <= auth.PIN_LOCKOUT_MAX, (
+        f"{failures} prior failures produced a lockout of {remaining}, not the 1 h ceiling"
+    )

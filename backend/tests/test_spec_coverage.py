@@ -36,9 +36,18 @@ MAP = TESTS / "spec_coverage.toml"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.6 through M4.8, M4.10, M4.11 and M4.14 through M4.16 are not in the list yet —
+# "M4.5". M4.7, M4.8, M4.10, M4.11 and M4.14 through M4.16 are not in the list yet —
 # each is added by the milestone that opens it, in one commit with its first row.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.9", "M4.12", "M4.13",
+#
+# Nor was M4.6 in §12: its row was added to the table this week, together with the
+# §3.1/§6.2/§6.5/§6.6 amendments that decisions 164 and 166 forced. §6.6 sketched the
+# household's user management in one line and §12 scheduled it nowhere, so the only
+# account-minting UI ever built is the first-boot wizard's member step — which becomes
+# unreachable the moment an admin exists, and which decision 164 removes from §3.1's
+# sequence in favour of §6.6's Users screen. It goes before M4.9 because it is a
+# milestone rather than one of the three pre-release fixes that ship ahead of theirs.
+# See docs/milestones/M4.6-plan.md.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.9", "M4.12", "M4.13",
               "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 

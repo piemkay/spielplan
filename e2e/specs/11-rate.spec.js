@@ -208,7 +208,7 @@ async function tapAnswer(page, { value = 2 } = {}) {
  */
 async function createMember(page) {
   const name = `rate-e2e-${Date.now()}`;
-  const res = await page.request.post('/api/setup/members', { data: { name, role: 'member' } });
+  const res = await page.request.post('/api/admin/users', { data: { name, role: 'member' } });
   expect(res.status(), 'the admin adds a household member (§3.1)').toBe(201);
   return { name, otp: (await res.json()).one_time_password };
 }

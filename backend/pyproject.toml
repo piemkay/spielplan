@@ -5,6 +5,11 @@ description = "Spielplan — household media graph: catalog, taste ledger, tonig
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    # app.py registers an exception handler on Starlette's own HTTPException: the router raises
+    # that class for 404/405, and FastAPI's subclass is not in its MRO, so handling only the
+    # FastAPI one would let those two drop §3.2's slid session cookie. It arrives transitively
+    # with fastapi; naming it here means the import cannot break on someone else's bump.
+    "starlette>=0.40",
     "uvicorn[standard]>=0.34",
     "asyncpg>=0.30",
     "pydantic>=2.9",

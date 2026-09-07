@@ -83,7 +83,7 @@ let sequence = 0;
  */
 async function firstRunMember(admin, browser, contextOptions = {}) {
   const name = `e2e-onboard-${Date.now()}-${sequence++}`;
-  const created = await admin.request.post('/api/setup/members', {
+  const created = await admin.request.post('/api/admin/users', {
     data: { name, role: 'member' }
   });
   expect(created.ok(), 'the admin must be able to create a member').toBeTruthy();

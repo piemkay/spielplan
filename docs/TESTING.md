@@ -125,23 +125,27 @@ Two things happen on the way that are easy to miss:
 ```
 > M0    34/35 covered (1 waived)
 > M1    10/10 covered
-> M2    25/25 covered
+> M2    26/26 covered
 > M3    15/15 covered
 > M4    42/42 covered
 > M4.5  18/18 covered
-  M4.6   0/N   (not yet opened — see below)
+> M4.6  12/12 covered
   M5    10
   M6    12
   M7     1
 ```
 
-**M4.6 is not in §12 either, and is not open yet.** Owner decisions 164 and 166 (2026-09-03) put
-the household's whole user management in §6.6 Users and cut the account table to two roles. It is
-its own milestone because §6.6 sketched user management in one line and §12 scheduled it nowhere,
-while the first-boot wizard — the only path that creates an account today — is unreachable the
-moment an admin exists. Nothing writes `role` or `is_active` in the shipped code, so a forgotten
-password has no in-app cure. Its rows are written when the milestone opens, by the routine above;
-`current_milestone` stays at `M4.5` until then, because raising it arms every M4.6 row at once.
+**M4.6 is not in §12 either, and it is the open milestone.** Owner decisions 164 and 166
+(2026-09-03) put the household's whole user management in §6.6 Users and cut the account table to
+two roles. It is its own milestone because §6.6 sketched user management in one line and §12
+scheduled it nowhere, while the first-boot wizard — the only path that creates an account today —
+is unreachable the moment an admin exists. Nothing writes `role` or `is_active` in the shipped
+code, so a forgotten password has no in-app cure. Its twelve rows were written before its code and
+`current_milestone` was raised to `M4.6` in the same change, which armed all twelve at once: the red
+list that run printed was the test plan (`docs/milestones/M4.6-plan.md`), and it was closed by writing
+the tests — no waiver, and the milestone never lowered. `test_account_security.py` is where the rows
+that are about an account boundary rather than about §6.6's roster landed, and
+`e2e/specs/17-users.spec.js` is the milestone's exit criterion.
 
 **M4.5 is not in §12.** It exists because the row above it was a lie of a particular kind: the
 importer was written against a schema nobody had opened, and verified against a fixture that

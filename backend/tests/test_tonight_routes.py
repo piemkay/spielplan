@@ -49,7 +49,7 @@ async def admin_client(app, name="patrick"):
 async def member_client(app, admin, name="jenny"):
     """A second household member, created the way §3.1 says they are: a one-time password, a
     forced change, then a session of their own."""
-    created = await admin.post("/api/setup/members", json={"name": name, "role": "member"})
+    created = await admin.post("/api/admin/users", json={"name": name, "role": "member"})
     assert created.status_code == 201, created.text
     otp = created.json()["one_time_password"]
     client = app()

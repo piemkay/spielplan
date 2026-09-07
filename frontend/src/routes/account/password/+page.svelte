@@ -8,7 +8,7 @@
   import '$lib/design.css';
   import { goto } from '$app/navigation';
   import { post } from '$lib/api.js';
-  import { refreshUser } from '$lib/session.svelte.js';
+  import { refreshUser, session } from '$lib/session.svelte.js';
   import { supported } from '$lib/passkeys.js';
 
   let current = $state('');
@@ -17,6 +17,10 @@
   let error = $state('');
   let busy = $state(false);
 
+  // as-14: this page is now reached voluntarily as well, from the account page's Password
+  // card, and the copy said "one-time password" to everybody. The first-login lock is the
+  // only state in which the field the server calls `current_password` holds one.
+  const forced = $derived(session.user?.must_change_password !== false);
   const tooShort = $derived(next.length > 0 && next.length < 10);
   const mismatch = $derived(confirm.length > 0 && next !== confirm);
 
@@ -47,12 +51,17 @@
   <form class="card" onsubmit={submit}>
     <h1>Choose a password</h1>
     <p class="why">
-      This account was created with a one-time password. Setting your own unlocks the rest of
-      the app; a passkey can be added afterwards from the account page.
+      {#if forced}
+        This account was created with a one-time password. Setting your own unlocks the rest of
+        the app; a passkey can be added afterwards from the account page.
+      {:else}
+        §3.2 keeps the password available as a fallback on any device. Changing it signs every
+        other session out; this one stays.
+      {/if}
     </p>
 
     <label>
-      <span class="data">ONE-TIME PASSWORD</span>
+      <span class="data">{forced ? 'ONE-TIME PASSWORD' : 'CURRENT PASSWORD'}</span>
       <input type="password" bind:value={current} autocomplete="current-password" required />
     </label>
     <label>

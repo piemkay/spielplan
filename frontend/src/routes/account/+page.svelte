@@ -28,17 +28,37 @@
   let tierDraft = $state('');
   let label = $state('');
   let pin = $state('');
+  let pinPassword = $state('');
   let busy = $state(false);
   let error = $state('');
   let note = $state('');
 
   const canPasskey = $derived(supported());
+  // sec-01: a session minted by `POST /api/auth/switch` carries `auth_method === 'pin'` and
+  // the server refuses every credential-minting route from it (`credentialed_user`). Hiding
+  // the forms is so the refusal is not the first thing the person holding a handed-over phone
+  // hears — the gate is the server's, and this is only its explanation.
+  const pinSession = $derived(session.user?.auth_method === 'pin');
+  const PIN_SESSION =
+    'This profile was switched into with a PIN. Switch back with your password or a passkey ' +
+    'to manage credentials.';
+
   // §3.1's "prompted afterwards": set once by the forced first-login password change, and
   // gone as soon as a passkey exists. A permanent version of this would be a nag on an
   // account that may never want one — §3.2 keeps the password fallback always available.
   const welcome = $derived(
     $page.url.searchParams.get('welcome') === '1' && credentials.length === 0 && canPasskey
   );
+
+  /**
+   * §3.2's PIN is four digits and the server's pattern is `^[0-9]+$`. The DOM node is written
+   * back as well as the state: a one-way `value={pin}` only re-renders when `pin` changes, so
+   * a rejected character stays visible in a box whose state no longer contains it.
+   */
+  function onPinInput(event) {
+    pin = event.currentTarget.value.replace(/\D/g, '');
+    event.currentTarget.value = pin;
+  }
 
   onMount(load);
 
@@ -112,8 +132,11 @@
     error = '';
     note = '';
     try {
-      await post('/auth/pin', { pin });
+      // Decision 170: §3.2 makes the password the account credential and the PIN a
+      // convenience derived from it, so setting the PIN costs the password.
+      await post('/auth/pin', { pin, current_password: pinPassword });
       pin = '';
+      pinPassword = '';
       note = 'PIN saved — this profile can now be switched to from the account chip.';
       await bootstrap();
     } catch (err) {
@@ -170,37 +193,74 @@
                 {#if !c.usable}· registered for a different address — no longer usable{/if}
               </div>
             </div>
-            <button class="btn-ghost" onclick={() => removePasskey(c.id)}>Remove</button>
+            {#if !pinSession}
+              <button class="btn-ghost" onclick={() => removePasskey(c.id)}>Remove</button>
+            {/if}
           </li>
         {/each}
       </ul>
     {/if}
 
+    {#if pinSession}
+      <p class="why" data-pin-session>{PIN_SESSION}</p>
+    {:else}
+      <div class="row">
+        <input type="text" placeholder="Name this device (optional)" bind:value={label} />
+        <button class="btn-primary" onclick={addPasskey} disabled={busy || !canPasskey}>
+          {busy ? 'Waiting for the device…' : 'Add a passkey'}
+        </button>
+      </div>
+    {/if}
+  </section>
+
+  <!-- as-14: the forced first-login change was the only way anybody ever reached
+       /account/password, so an unlocked member had no way to change their password at all
+       while §3.2 keeps it the always-available fallback. -->
+  <section class="card">
+    <h2>Password</h2>
+    <p class="why">
+      The fallback that always works, on any device, with no authenticator to hand. Ten
+      characters or more; changing it signs every other device out.
+    </p>
     <div class="row">
-      <input type="text" placeholder="Name this device (optional)" bind:value={label} />
-      <button class="btn-primary" onclick={addPasskey} disabled={busy || !canPasskey}>
-        {busy ? 'Waiting for the device…' : 'Add a passkey'}
-      </button>
+      <a class="btn-ghost" href="/account/password">Change password</a>
     </div>
   </section>
 
   <section class="card">
     <h2>Switch PIN</h2>
-    <p class="why">
-      Four digits, for handing the TV remote over. It is not a way in — the device has to be
-      signed in already.
-      {#if session.user?.has_pin}<strong> A PIN is set.</strong>{/if}
-    </p>
-    <div class="row">
-      <input
-        type="password"
-        inputmode="numeric"
-        maxlength="12"
-        placeholder="••••"
-        bind:value={pin}
-      />
-      <button class="btn-primary" onclick={savePin} disabled={pin.length < 4}>Save PIN</button>
-    </div>
+    {#if pinSession}
+      <p class="why" data-pin-session>{PIN_SESSION}</p>
+    {:else}
+      <p class="why">
+        Four digits, for handing the TV remote over. It is not a way in — the device has to be
+        signed in already, and your password sets it (decision 170).
+        {#if session.user?.has_pin}<strong> A PIN is set.</strong>{/if}
+      </p>
+      <div class="row">
+        <input
+          type="password"
+          autocomplete="current-password"
+          placeholder="your password"
+          bind:value={pinPassword}
+        />
+        <!-- §3.2 says four digits and the server's pattern is `^[0-9]+$`; `inputmode` is a
+             keyboard hint, not a constraint, so the box used to send letters and read back a
+             bare 422 (feroutes-pin-box). Stripping in the binding is what makes the field
+             unable to hold what the server will refuse. -->
+        <input
+          type="password"
+          inputmode="numeric"
+          maxlength="4"
+          placeholder="••••"
+          value={pin}
+          oninput={onPinInput}
+        />
+        <button class="btn-primary" onclick={savePin} disabled={pin.length !== 4 || !pinPassword}>
+          Save PIN
+        </button>
+      </div>
+    {/if}
   </section>
 
   <section class="card" data-testid="tier-set">

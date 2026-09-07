@@ -670,7 +670,12 @@ async def channel(socket: WebSocket, session_id: int | None = None) -> None:
     if sid:
         async with db_pool.acquire() as conn:
             user = await auth.load_session(conn, sid)
-    if user is None:
+    # `must_change_password` is `deps.active_user` written out: decision 179 moves every
+    # authenticated route behind `ActiveUser`, and a WebSocket cannot take the HTTP dependency —
+    # so the socket would otherwise carry the household's rooms and per-seat progress to an
+    # account §3.1 says cannot be used until its one-time password is exchanged. The auth check
+    # is the only thing this milestone touches in this module; M4.12 owns the rest of it.
+    if user is None or user.must_change_password:
         await socket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

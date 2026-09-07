@@ -34,9 +34,12 @@ class Settings(BaseSettings):
     static_dir: Path | None = Field(default=None, alias="SPIELPLAN_STATIC_DIR")
     role: str = Field(default="backend", alias="SPIELPLAN_ROLE")
 
-    # §3.2: 90-day sliding sessions; admin routes re-prompt after 24 h.
-    session_days: int = 90
-    admin_reauth_hours: int = 24
+    # §3.2: 90-day sliding sessions; admin routes re-prompt after 24 h. Both numbers are fixed
+    # by the spec, so the env vars tune them and cannot turn them off: 0 is not "disabled", it
+    # is a session that has expired by the time the login response arrives, or an admin route
+    # that re-prompts milliseconds after a fresh sign-in — silently, with nothing logged.
+    session_days: int = Field(default=90, gt=0, le=3650)
+    admin_reauth_hours: int = Field(default=24, gt=0)
 
     # §2: "Everything connector-related … is configured in the admin UI and stored in
     # `connector_config` — not env vars … env vars may *seed* connector config on first boot

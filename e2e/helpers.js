@@ -9,6 +9,10 @@ export const ADMIN = { name: 'e2e-admin', password: 'e2e-first-boot-pw' };
  * Every helper takes `page.request`, not the bare `request` fixture: the fixture is a separate
  * API context with no cookies, so it answers 401 for anything authenticated. `page.request`
  * shares the browser context, which is what the app actually sees.
+ *
+ * A caller with no session gets `{required, note}` and nothing else (sec-14: the full payload
+ * fingerprints the install to anyone who can reach the origin), so read `required` rather than
+ * `has_admin` — the same bit, and the only one present before anyone signs in.
  */
 export async function setupState(request) {
   const res = await request.get('/api/setup/state');
@@ -29,7 +33,16 @@ export async function createAdminThroughWizard(page, admin = ADMIN) {
   await page.getByLabel('NAME').or(page.locator('input[type=text]').first()).fill(admin.name);
   await page.locator('input[type=password]').fill(admin.password);
   await page.getByRole('button', { name: 'Create admin' }).click();
-  // The wizard signs the new admin in and lands on Home (§3.1).
+  // The operator now walks the rest of §3.1's sequence instead of being thrown off it. The shell
+  // used to bounce /setup to Home the instant the admin row existed, which made the last two
+  // steps unreachable; the guard now bounces only a caller who is not a signed-in admin, and the
+  // wizard ends at the bundle import (decision 164). Both remaining steps are skippable — a
+  // bundle-less app is a legal state — so this walks them and finishes.
+  await expect(page.getByRole('heading', { name: 'Connectors' })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Import the bundle' })).toBeVisible();
+  await page.getByRole('button', { name: 'Finish' }).click();
+  // The wizard signs the new admin in and its last step lands on Home (§3.1).
   await expect(page.getByTestId('home-greeting')).toBeVisible();
 }
 
@@ -51,7 +64,7 @@ export async function login(page, admin = ADMIN) {
 /** Ensure we are signed in, creating the admin on a first-boot app. */
 export async function signedIn(page, admin = ADMIN) {
   const state = await setupState(page.request);
-  if (!state.has_admin) {
+  if (state.required) {
     await createAdminThroughWizard(page, admin);
   } else {
     await login(page, admin);
@@ -166,17 +179,20 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
 }
 
 /**
- * Create a household member and sign this page in as them. Spec v2.1 §3.1.
+ * Create a household member and sign this page in as them. Spec v2.1 §6.6, §3.1.
  *
  * Lifted out of `13-rank.spec.js`, which had it first: §4.2's observations are append-only, so
  * a shared account cannot be rewound between runs and every spec that needs a ledger of its own
  * needs an account of its own. The sequence is §3.1's: a one-time password, a forced change,
  * then the member is usable.
+ *
+ * The route is §6.6's Users card, not the wizard's fourth step: decision 164 makes that card the
+ * only place accounts are made, so seeding through it is the same path an operator walks.
  */
 export async function createMember(page, label) {
   const name = `${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const res = await page.request.post('/api/setup/members', { data: { name, role: 'member' } });
-  expect(res.status(), 'the admin adds a household member (§3.1)').toBe(201);
+  const res = await page.request.post('/api/admin/users', { data: { name, role: 'member' } });
+  expect(res.status(), 'the admin adds a household member (§6.6)').toBe(201);
   return { name, otp: (await res.json()).one_time_password, password: `${label}-e2e-password` };
 }
 

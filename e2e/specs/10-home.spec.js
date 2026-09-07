@@ -189,7 +189,7 @@ async function setShowModel(page, on) {
  * member rather than a row invented behind the app's back.
  */
 async function secondAccount(page, browser, baseURL) {
-  const created = await page.request.post('/api/setup/members', {
+  const created = await page.request.post('/api/admin/users', {
     data: { name: SECOND.name, role: 'member' },
     failOnStatusCode: false
   });

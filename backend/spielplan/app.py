@@ -13,9 +13,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Response
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
+from starlette.types import Scope
 
 from spielplan.api import admin as admin_api
 from spielplan.api import artifacts as artifacts_api
@@ -29,6 +38,7 @@ from spielplan.api import rate as rate_api
 from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
+from spielplan.api.deps import carry_slid_session_cookie
 from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import migrate, pool
@@ -111,10 +121,26 @@ def create_app() -> FastAPI:
             "public_url": cfg.public_url,
         }
 
+    # §3.2's sliding session cookie is re-issued by `deps.current_user`, which runs before the
+    # route body and writes onto a Response that Starlette throws away the moment anything
+    # raises. The row has already slid by then, so without these three the cookie and the row
+    # disagree for the rest of the day (see `deps.carry_slid_session_cookie`). Each handler is
+    # the framework default with that one header put back.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(request, exc: StarletteHTTPException) -> Response:
+        return carry_slid_session_cookie(request, await http_exception_handler(request, exc))
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request, exc: RequestValidationError) -> Response:
+        handled = await request_validation_exception_handler(request, exc)
+        return carry_slid_session_cookie(request, handled)
+
     @app.exception_handler(asyncpg.PostgresError)
-    async def _pg_error(_request, exc: asyncpg.PostgresError) -> JSONResponse:
+    async def _pg_error(request, exc: asyncpg.PostgresError) -> Response:
         log.exception("database error")
-        return JSONResponse(status_code=500, content={"detail": "database error"})
+        return carry_slid_session_cookie(
+            request, JSONResponse(status_code=500, content={"detail": "database error"})
+        )
 
     # §1: the SvelteKit PWA is a static build served by the backend. Absent in dev.
     static_dir = cfg.static_dir
@@ -122,7 +148,30 @@ def create_app() -> FastAPI:
         root = static_dir.resolve()
         app.mount("/_app", StaticFiles(directory=root / "_app"), name="assets")
 
-        @app.get("/{path:path}")
+        class SpaFallback(APIRoute):
+            """The catch-all, declining the `/api` namespace at match time rather than in the
+            handler.
+
+            Refusing inside the handler was a GET-shaped refusal: the route is registered for
+            GET, so a POST to an unrouted `/api/...` path was a *partial* match — path yes,
+            method no — and Starlette answers a partial match with 405. A route deleted outright
+            (`POST /api/setup/members`, decision 164) was therefore indistinguishable from a
+            method mismatch on a route that exists, and only in the container, where
+            `SPIELPLAN_STATIC_DIR` is set; under pytest, with no static build, the same request
+            is a plain 404. Declining the namespace gives the API the routing it has when this
+            route is absent: 404 where nothing is served, 405 only where a real route refuses
+            the verb. The reason is unchanged — an unknown API path must not be answered with
+            the app shell, because a client that gets HTML where it expected JSON fails in a
+            much less obvious place.
+            """
+
+            def matches(self, scope: Scope) -> tuple[Match, Scope]:
+                match, child = super().matches(scope)
+                path = child.get("path_params", {}).get("path", "")
+                if match is not Match.NONE and (path == "api" or path.startswith("api/")):
+                    return Match.NONE, {}
+                return match, child
+
         async def spa(path: str) -> FileResponse:
             """SPA fallback for client-side routes.
 
@@ -131,10 +180,6 @@ def create_app() -> FastAPI:
             and this route has no auth in front of it. Resolve first, then refuse anything that
             does not land inside the root — the same containment `StaticFiles` does for /_app.
             """
-            if path.startswith("api/"):
-                # Do not answer an unknown API route with the app shell; a client that gets
-                # HTML where it expected JSON fails in a much less obvious place.
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "no such endpoint")
             index = root / "index.html"
             if not path:
                 return FileResponse(index)
@@ -145,6 +190,8 @@ def create_app() -> FastAPI:
             if candidate.is_file() and candidate.is_relative_to(root):
                 return FileResponse(candidate)
             return FileResponse(index)
+
+        app.router.routes.append(SpaFallback("/{path:path}", spa, methods=["GET"]))
 
     return app
 

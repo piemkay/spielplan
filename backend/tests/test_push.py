@@ -75,7 +75,7 @@ async def household(push_router_registered, app, db):
     assert created.status_code == 201
     admin_id = (await admin.get("/api/auth/me")).json()["id"]
 
-    made = await admin.post("/api/setup/members", json={"name": "jenny", "role": "member"})
+    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     otp = made.json()["one_time_password"]
 
     member = app()

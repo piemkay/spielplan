@@ -110,16 +110,24 @@ class SoftAuthenticator:
         origin: str | None = None,
         rp_id: str | None = None,
         advance: bool = True,
+        uv: bool = True,
     ):
         """Produce an assertion.
 
         `advance=False` replays the current counter — a signature that verifies perfectly and
         must still be refused, which is the only reason §4.2 stores `sign_count` at all.
+
+        `uv=False` clears the user-verification flag: a roaming key that was merely *touched*.
+        §3.2's passkey is "Face ID / Touch ID / Android biometrics", so such an assertion is a
+        valid sign-in that must not satisfy the 24 h admin re-prompt — and with the flag
+        hardcoded here, nothing in the suite could produce one. Registration keeps UV set: this
+        models an authenticator that can verify and did not, not one that cannot.
         """
         if advance:
             self.sign_count += 1
         client_data = self._client_data(kind="webauthn.get", challenge=challenge, origin=origin)
-        auth_data = self._auth_data(rp_id=rp_id, flags=FLAG_UP | FLAG_UV, count=self.sign_count)
+        flags = FLAG_UP | (FLAG_UV if uv else 0)
+        auth_data = self._auth_data(rp_id=rp_id, flags=flags, count=self.sign_count)
         signature = self._key.sign(
             auth_data + hashlib.sha256(client_data).digest(), ec.ECDSA(hashes.SHA256())
         )

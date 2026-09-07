@@ -1,8 +1,13 @@
 <script>
   /**
-   * First-boot wizard. Spec v2.1 §3.1 — the sequence is normative:
+   * First-boot wizard. Spec v2.1 §3.1 — the sequence is normative and it ends at the bundle:
    *   create admin -> optional env-seeded connector config -> bundle import (the same importer
-   *   the §6.6 Data tab exposes) -> member-account creation -> member first-run onboarding.
+   *   the §6.6 Data tab exposes).
+   *
+   * Decision 164 took the last two steps away. Member accounts are made at §6.6's Users card,
+   * because this page is the one place they could be made and it stopped being reachable the
+   * moment an admin existed; member first-run onboarding is a per-phone act that happens on the
+   * member's own device, not on the operator's screen during first boot.
    *
    * The ribbon says "a bundle-less app is a legal state" because it is: the bundle step can be
    * skipped and the app still works, showing the no-bundle state on artifact-dependent surfaces.
@@ -17,9 +22,7 @@
   const STEPS = [
     { key: 'admin', title: 'Create the admin account' },
     { key: 'connectors', title: 'Connectors' },
-    { key: 'bundle', title: 'Import the bundle' },
-    { key: 'members', title: 'Member accounts' },
-    { key: 'onboarding', title: 'Onboard the phones' }
+    { key: 'bundle', title: 'Import the bundle' }
   ];
 
   let step = $state(0);
@@ -30,16 +33,18 @@
   let adminName = $state('admin');
   let adminPassword = $state('');
 
-  // step 3
-  let memberName = $state('');
-  let members = $state([]);
-
   const done = $derived(new Set((session.setup?.steps ?? []).filter((s) => s.done).map((s) => s.step)));
-  const hasAdmin = $derived(session.setup?.has_admin ?? false);
+  // sec-14 took `has_admin` off the ANONYMOUS `/setup/state` payload, and this page is reachable
+  // signed out. Read from a flag a stranger is no longer given, the check was `undefined`, so an
+  // installed household app offered a passer-by "Create the admin account" with the fields
+  // enabled (fe-46). `required` is the bit both callers get and §3.1 defines it as exactly "no
+  // admin exists"; a payload not read yet counts as an admin existing, because the failure worth
+  // defaulting against is showing the form to someone who must not see it.
+  const hasAdmin = $derived(!(session.setup?.required ?? false));
 
   onMount(async () => {
     if (!session.setup) await bootstrap();
-    if (session.setup?.has_admin) step = Math.max(step, 1);
+    if (hasAdmin) step = Math.max(step, 1);
   });
 
   async function createAdmin() {
@@ -57,24 +62,10 @@
     }
   }
 
-  async function addMember() {
-    error = '';
-    busy = true;
-    try {
-      const created = await post('/setup/members', { name: memberName, role: 'member' });
-      members = [...members, created];
-      memberName = '';
-      await bootstrap();
-    } catch (err) {
-      error = err.message;
-    } finally {
-      busy = false;
-    }
-  }
-
+  // The wizard no longer records `onboarding` on the operator's behalf: decision 164 leaves the
+  // per-phone act to the member's own device (`push.js`'s `completeOnboarding`), so the last
+  // step has nothing to write and Finish is a navigation.
   async function finish() {
-    await post('/setup/onboarding/complete').catch(() => {});
-    await bootstrap();
     await goto('/');
   }
 </script>
@@ -98,11 +89,20 @@
     <h1>{STEPS[step].title}</h1>
 
     {#if step === 0}
-      <p class="why">One admin, then members. Passkeys can be added afterwards from the profile page.</p>
+      <p class="why">
+        One admin. Everyone else is added afterwards from Admin &gt; Users, which is the only
+        place accounts are made. Passkeys can be added from the profile page.
+      </p>
       <p class="why">
         Passkeys are bound to the public origin. Changing PUBLIC_URL later invalidates every
         registered credential.
       </p>
+      <!-- §14 risk 4's whole mitigation is that this page warns loudly, and it was warning about
+           a value it never showed (cs-33): the operator could not tell which origin they were
+           about to bind every credential to without reading the server's environment. -->
+      <div class="data-lg" data-testid="setup-public-url">
+        <code>{session.publicUrl || 'PUBLIC_URL is not set'}</code>
+      </div>
       {#if hasAdmin}
         <p class="note">An admin account already exists — this step is done.</p>
       {:else}
@@ -122,45 +122,12 @@
         <li><span>LLM providers</span><span class="data">configure in Admin · M5</span></li>
         <li><span>TMDB / OMDb / Trakt</span><span class="data">configure in Admin · M5</span></li>
       </ul>
-    {:else if step === 2}
+    {:else}
       <p class="why">
         The same importer the Data tab exposes. Validation enforces every schema rule before
         anything is written.
       </p>
       <BundleImport onImported={() => bootstrap()} />
-    {:else if step === 3}
-      <p class="why">
-        Needed before the rating milestone, whose exit criterion requires both members’ verdicts.
-      </p>
-      <div class="addrow">
-        <input type="text" bind:value={memberName} placeholder="name" />
-        <button class="btn-primary" onclick={addMember} disabled={busy || !memberName}>Add</button>
-      </div>
-      {#each members as m (m.id)}
-        <div class="otp card">
-          <div><strong>{m.name}</strong> <span class="data">{m.role}</span></div>
-          <div class="data-lg">one-time password · <code>{m.one_time_password}</code></div>
-          <div class="why">{m.note}</div>
-        </div>
-      {/each}
-      {#if session.setup?.member_count}
-        <div class="data">{session.setup.member_count} member account(s) exist</div>
-      {/if}
-    {:else}
-      <p class="why">
-        On iPhone, push only works once the app is on the home screen, and permission must be
-        asked inside a tap. There is no programmatic install prompt, so this step walks each
-        phone through it.
-      </p>
-      <ol class="rows numbered">
-        <li>Share → Add to Home Screen</li>
-        <li>Open from the home screen — standalone mode detected</li>
-        <li>Enable notifications</li>
-      </ol>
-      <p class="why">
-        Push stays best effort. Every prompt it carries also exists as an in-app banner, and
-        sessions additionally as a room code.
-      </p>
     {/if}
 
     {#if error}<div class="err">{error}</div>{/if}
@@ -244,10 +211,6 @@
     flex-direction: column;
     gap: 8px;
   }
-  .rows.numbered {
-    list-style: decimal;
-    padding-left: 20px;
-  }
   .rows li {
     display: flex;
     justify-content: space-between;
@@ -257,21 +220,6 @@
     border-radius: var(--r-sm);
     background: var(--card);
     font-size: 13px;
-  }
-  .rows.numbered li {
-    display: list-item;
-  }
-  .addrow {
-    display: flex;
-    gap: 8px;
-  }
-  .otp {
-    /* One per member added: the wizard's repeated-row idiom, and `.rows li` in steps 1
-       and 4 is the same box playing the same role. */
-    padding: var(--card-pad-tight);
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
   }
   code {
     font-family: var(--mono);

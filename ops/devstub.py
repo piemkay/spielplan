@@ -156,11 +156,6 @@ class AdminInit(BaseModel):
     password: str
 
 
-class MemberInit(BaseModel):
-    name: str
-    role: str = "member"
-
-
 class LoginRequest(BaseModel):
     name: str
     password: str
@@ -177,7 +172,7 @@ def setup_state() -> dict[str, Any]:
             {"step": s, "done": done}
             for s, done in (
                 ("admin", has_admin), ("connectors", False),
-                ("bundle", STATE["imported"]), ("members", members > 0), ("onboarding", False),
+                ("bundle", STATE["imported"]), ("onboarding", False),
             )
         ],
         "has_admin": has_admin,
@@ -204,15 +199,6 @@ def create_admin(body: AdminInit, response: Response) -> dict[str, Any]:
     user = _user(body.name, "admin")
     STATE["next_id"] += 1
     return _sign_in(response, user)
-
-
-@app.post("/api/setup/members", status_code=201)
-def create_member(body: MemberInit) -> dict[str, Any]:
-    user = _user(body.name, body.role, must_change_password=True)
-    STATE["next_id"] += 1
-    STATE["users"][f"pending-{user['id']}"] = user
-    return {**user, "one_time_password": "kq7mrn24tphs",
-            "note": "shown once — the account is locked to a password change at first login"}
 
 
 @app.post("/api/setup/connectors")
@@ -314,6 +300,26 @@ def me(spielplan_session: str | None = Cookie(default=None)) -> dict[str, Any]:
 def logout(response: Response) -> dict[str, bool]:
     response.delete_cookie("spielplan_session", path="/")
     return {"ok": True}
+
+
+class ReauthRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/auth/reauth")
+def reauth(
+    body: ReauthRequest, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """§3.2's 24 h admin re-prompt, answered on the session in hand.
+
+    The harness has no password to check — it has no auth beyond a cookie flag — so this only
+    keeps the account shell's re-auth form from posting into a 404. The real route verifies the
+    password and refuses a PIN session (`backend/spielplan/api/auth.py` wins on any
+    disagreement).
+    """
+    user = _me(spielplan_session)
+    user["admin_reauth_required"] = False
+    return user
 
 
 @app.get("/api/auth/switchable")
@@ -790,6 +796,93 @@ def link_jellyfin(user_id: int, body: LinkRequest) -> dict[str, Any]:
 
 @app.delete("/api/admin/users/{user_id}/jellyfin")
 def unlink_jellyfin(user_id: int) -> dict[str, bool]:
+    return {"ok": True}
+
+
+# --- §6.6 Users: the row editor, as far as a harness can carry it -------------------------
+#
+# These exist because the front end's Users screen calls them and `test_devstub_contract.py`
+# fails the moment the real app answers a path this file does not. They are deliberately dumb:
+# no argon2, no floors, no sessions to revoke. `backend/spielplan/api/admin.py` is the contract
+# — in particular the last-active-admin 409s, which the screen must render and which nothing
+# here will ever produce.
+
+
+class CreateUser(BaseModel):
+    name: str
+    role: str = "member"
+
+
+class EditUser(BaseModel):
+    name: str | None = None
+    role: str | None = None
+
+
+class ActiveRequest(BaseModel):
+    is_active: bool
+
+
+@app.post("/api/admin/users", status_code=201)
+def admin_create_user(body: CreateUser) -> dict[str, Any]:
+    user = _user(body.name, body.role, must_change_password=True)
+    STATE["next_id"] += 1
+    STATE["users"][f"pending-{user['id']}"] = user
+    return {"id": user["id"], "name": user["name"], "role": user["role"],
+            "one_time_password": "kq7mrn24tphs",
+            "note": "shown once — the account is locked to a password change at first login"}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_edit_user(user_id: int, body: EditUser) -> dict[str, Any]:
+    for user in STATE["users"].values():
+        if user["id"] == user_id:
+            user["name"] = body.name or user["name"]
+            user["role"] = body.role or user["role"]
+            return {"id": user_id, "name": user["name"], "role": user["role"],
+                    "is_active": True}
+    raise HTTPException(404, "no such user")
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(user_id: int) -> dict[str, Any]:
+    return {"ok": True, "user_id": user_id, "one_time_password": "kq7mrn24tphs",
+            "sessions_revoked": 0,
+            "note": "shown once — the account is locked to a password change at first login"}
+
+
+@app.post("/api/admin/users/{user_id}/reset-pin")
+def admin_reset_pin(user_id: int) -> dict[str, Any]:
+    return {"ok": True, "user_id": user_id, "has_pin": False}
+
+
+@app.get("/api/admin/users/{user_id}/passkeys")
+def admin_list_passkeys(user_id: int) -> list[dict[str, Any]]:
+    """§6.6's "passkey list", invented like every other number here: two rows, so the revoke
+    below has something to revoke and §14.4's "registered for a different address" branch has
+    something to render. The harness holds no credentials, so nothing removes these."""
+    return [
+        {"id": f"devstub-key-{user_id}-a", "label": "phone", "rp_id": "localhost",
+         "usable": True, "created_at": "2025-01-04T20:11:00+00:00",
+         "last_used_at": "2025-02-18T21:40:00+00:00", "sign_count": 7},
+        {"id": f"devstub-key-{user_id}-b", "label": "old laptop", "rp_id": "spielplan.lan",
+         "usable": False, "created_at": "2024-11-02T18:02:00+00:00",
+         "last_used_at": None, "sign_count": 0},
+    ]
+
+
+@app.delete("/api/admin/users/{user_id}/passkeys/{credential_id:path}")
+def admin_revoke_passkey(user_id: int, credential_id: str) -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{user_id}/active")
+def admin_set_active(user_id: int, body: ActiveRequest) -> dict[str, Any]:
+    return {"ok": True, "user_id": user_id, "is_active": body.is_active, "sessions_revoked": 0}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int) -> dict[str, bool]:
+    STATE["users"] = {sid: u for sid, u in STATE["users"].items() if u["id"] != user_id}
     return {"ok": True}
 
 

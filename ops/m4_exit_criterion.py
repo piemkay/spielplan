@@ -52,7 +52,7 @@ POOL_WAIT_SECONDS = 180
 
 
 def member(admin: httpx.Client, name: str) -> httpx.Client:
-    created = admin.post("/api/setup/members", json={"name": name, "role": "member"})
+    created = admin.post("/api/admin/users", json={"name": name, "role": "member"})
     created.raise_for_status()
     otp = created.json()["one_time_password"]
     client = httpx.Client(base_url=BASE, timeout=60)

@@ -7,8 +7,13 @@ one-time-password alphabet.
 
 from __future__ import annotations
 
+import inspect
+import secrets
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
+
+import pytest
+from pydantic import ValidationError
 
 from spielplan.core import auth
 from spielplan.core.config import Settings
@@ -96,7 +101,25 @@ def test_one_time_password_avoids_ambiguous_glyphs():
 
 
 def test_one_time_passwords_do_not_repeat():
-    assert len({auth.new_one_time_password() for _ in range(500)}) == 500
+    """A static guard, because the property is not observable from the outputs.
+
+    500 draws with no collision is what `random.choice` over a 31-glyph alphabet also produces,
+    and what a generator seeded from the clock produces, and what one seeded from the user id
+    produces. The distinctness this test used to assert was true of every implementation it was
+    meant to rule out, so it could not fail — and an unfalsifiable test in the map reads as
+    coverage of §3.1's one-time password.
+
+    What actually matters is the source of the randomness: the OTP is the only credential the
+    account has until its first login (§3.1), so it is drawn from the CSPRNG. That is a fact
+    about the code, so it is read off the code.
+    """
+    source = inspect.getsource(auth.new_one_time_password)
+    alias = next(name for name, value in vars(auth).items() if value is secrets)
+    assert f"{alias}.choice(" in source, (
+        "new_one_time_password must draw from the `secrets` CSPRNG; "
+        f"its source does not call {alias}.choice"
+    )
+    assert "random." not in source, "the `random` module is seeded and predictable (§3.1)"
 
 
 # --- password hashing -----------------------------------------------------------------
@@ -119,3 +142,32 @@ def test_pin_lockout_constants_are_sane():
     assert auth.PIN_ATTEMPT_LIMIT <= 6
     assert timedelta(seconds=30) <= auth.PIN_LOCKOUT_BASE
     assert auth.PIN_LOCKOUT_MAX >= auth.PIN_LOCKOUT_BASE
+
+
+# --- §2 / §3.2: neither session number has an "off" -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("session_days", 0),
+        ("session_days", -1),
+        ("admin_reauth_hours", 0),
+        ("admin_reauth_hours", -5),
+    ],
+)
+def test_a_session_window_of_zero_is_refused_at_configuration(field, value):
+    """§3.2 fixes both numbers — 90-day sliding sessions, a 24 h admin re-prompt — so 0 is not
+    "disabled", it is a household that cannot stay signed in. At `SESSION_DAYS=0` every login
+    succeeds and the next request is 401 for everyone; at `ADMIN_REAUTH_HOURS=0` every admin
+    route re-prompts milliseconds after a fresh sign-in. Neither is logged anywhere, so the
+    operator would be reading it off the symptom. The bound refuses it at boot instead."""
+    with pytest.raises(ValidationError) as raised:
+        Settings(session_secret="s", secrets_key="k", **{field: value})
+    assert field in str(raised.value), "the refusal must name the variable to change"
+
+
+def test_the_session_defaults_are_the_numbers_the_spec_fixes():
+    """The bound must not have moved the defaults §3.2 states."""
+    cfg = Settings(session_secret="s", secrets_key="k")
+    assert (cfg.session_days, cfg.admin_reauth_hours) == (90, 24)

@@ -29,9 +29,21 @@ test('every nav destination resolves — no dead links', async ({ page }) => {
 });
 
 test('the account chip states the role and the auth method', async ({ page }) => {
-  // §3.2: 'the chip reads "member · passkey + PIN"'.
+  // §3.2: 'the chip reads "member · passkey + PIN"'. That string is an inventory of what the
+  // account holds, not a constant — the chip printed it to everyone until fe-13 derived it from
+  // `/auth/me`, so a member with neither credential was told they had both. The assertion here
+  // used to be a regex admitting 'passkey + PIN' or 'PIN', which the constant satisfied by
+  // construction and which the derived line does not: on the desktop project this runs before
+  // 09-passkeys and 17-users item 8, so the admin holds neither and the chip reads
+  // 'admin · password'; on the phone project, which runs after both, the same account holds
+  // both. Asking the server what it holds is the one assertion that is true in both places and
+  // that a constant cannot pass.
+  const me = await (await page.request.get('/api/auth/me')).json();
+  const method = [me.passkeys > 0 ? 'passkey' : 'password', me.has_pin ? 'PIN' : null]
+    .filter(Boolean)
+    .join(' + ');
   const menu = await openAccountMenu(page);
-  await expect(menu.locator('.data').first()).toContainText(/admin · (passkey \+ PIN|PIN)/);
+  await expect(menu.locator('.data').first()).toHaveText(`${me.role} · ${method}`);
 });
 
 test('show the model is off by default, toggles, and persists', async ({ page }) => {
@@ -75,6 +87,21 @@ test('logging out clears the session and returns to the sign-in page', async ({ 
 
   const me = await page.request.get('/api/auth/me');
   expect(me.status()).toBe(401);
+});
+
+test('a logout the server never answers still ends it on this device', async ({ page }) => {
+  // feroutes-logout. §3.2 makes logout "clears the session cookie only", and on the LAN or
+  // Tailscale origin §2 puts this app on, a request that never lands is the ordinary failure
+  // rather than the exotic one. Unguarded, it rejected out of the click handler and left the
+  // menu open showing the name of a person whose session the server may already have destroyed;
+  // the local half — forget the user, drop Rank's pending lift, go to /login — must happen
+  // either way, which is what the try/catch in the shell is for and what this aborts to prove.
+  await page.route('**/api/auth/logout', (route) => route.abort());
+  const menu = await openAccountMenu(page);
+  await menu.getByRole('button', { name: 'Log out' }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await page.unroute('**/api/auth/logout');
 });
 
 test('a deep link while signed out lands on sign-in, not a broken shell', async ({

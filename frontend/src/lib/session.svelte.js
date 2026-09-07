@@ -38,7 +38,15 @@ export const session = $state({
    * }}
    */
   user: null,
-  /** @type {null | {required:boolean, steps:{step:string,done:boolean}[], has_admin:boolean, member_count:number, bundle:any, note:string}} */
+  // Everything past `required` and `note` is optional because it genuinely is: sec-14 cuts the
+  // payload to those two for an anonymous caller, and a type that promised `has_admin` to every
+  // reader is what let the wizard decide an anonymous visitor's screen from it (fe-46).
+  /**
+   * @type {null | {
+   *   required: boolean, note: string, steps?: {step:string,done:boolean}[],
+   *   has_admin?: boolean, member_count?: number, bundle?: any
+   * }}
+   */
   setup: null,
   hasBundle: false,
   /** @type {any} */
@@ -110,6 +118,22 @@ export async function setShowModel(on) {
 
 export function clearUser() {
   session.user = null;
+}
+
+/**
+ * The credentials this account actually holds, for the account chip's second line (fe-13).
+ *
+ * §3.2's example reads "member · passkey + PIN", and the chip printed that string to everyone
+ * — so a brand-new member with neither was told they had both. `/auth/me` has carried
+ * `passkeys` and `has_pin` since M1; this reads them. The password is named when there is no
+ * passkey rather than omitted, because §3.2 keeps it always available and "no credentials" is
+ * not a state any account is ever in.
+ */
+export function authMethodLine(user) {
+  if (!user) return '';
+  return [user.passkeys > 0 ? 'passkey' : 'password', user.has_pin ? 'PIN' : null]
+    .filter(Boolean)
+    .join(' + ');
 }
 
 /** Where the shell should send someone, given what bootstrap found. */

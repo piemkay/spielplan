@@ -285,7 +285,7 @@ async def test_one_persons_sealed_pair_cannot_be_answered_by_another(db, app, ra
     served = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
 
     otp = (
-        await client.post("/api/setup/members", json={"name": "jenny", "role": "member"})
+        await client.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     ).json()["one_time_password"]
     other = app()
     await other.post("/api/auth/login", json={"name": "jenny", "password": otp})

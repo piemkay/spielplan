@@ -3,7 +3,13 @@
  *
  * Session auth is an HttpOnly cookie (§3.2), so `credentials: 'include'` is the whole story
  * and there is no token to keep anywhere in JS.
+ *
+ * The one thing this module writes is §3.2's admin re-prompt flag. The import of the session
+ * store below is circular — `session.svelte.js` calls `get`/`post` from here — which ESM
+ * resolves because neither module touches the other at evaluation time, only inside a call.
  */
+
+import { session } from './session.svelte.js';
 
 export class ApiError extends Error {
   /** @param {number} status @param {string} message @param {any} [detail] @param {boolean} [reauth] */
@@ -58,12 +64,13 @@ export async function api(path, opts = {}) {
     const detail = payload && typeof payload === 'object' ? payload.detail : payload;
     const message =
       typeof detail === 'string' ? detail : (detail && detail.text) || res.statusText;
-    throw new ApiError(
-      res.status,
-      message,
-      detail,
-      res.headers.get('x-spielplan-reauth') === 'admin'
-    );
+    const reauth = res.headers.get('x-spielplan-reauth') === 'admin';
+    // sec-05: `needsAdminReauth` was parsed here and consumed nowhere, so a tab left open past
+    // §3.2's 24 hours showed raw 401s from every admin fetch while `/auth/me` — read once at
+    // boot — still said the clock was clear. The header is the only place the server says so
+    // outside that one route, and the shell's banner reads this flag.
+    if (reauth && session.user) session.user.admin_reauth_required = true;
+    throw new ApiError(res.status, message, detail, reauth);
   }
   return payload;
 }

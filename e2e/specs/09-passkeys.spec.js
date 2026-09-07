@@ -169,7 +169,7 @@ test.describe('passkeys', () => {
     // first login, and passkey registration is prompted afterwards." The whole sequence, in
     // one go, from the account the admin just created.
     const name = `e2e-member-${Date.now()}`;
-    const created = await page.request.post('/api/setup/members', {
+    const created = await page.request.post('/api/admin/users', {
       data: { name, role: 'member' }
     });
     expect(created.ok()).toBeTruthy();

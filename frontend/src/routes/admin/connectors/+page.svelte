@@ -16,6 +16,7 @@
    */
   import { onMount } from 'svelte';
   import { get, post, api } from '$lib/api.js';
+  import { jellyfinDirectory } from '$lib/jellyfin.js';
   import AdminTabs from '$lib/components/AdminTabs.svelte';
 
   let cfg = $state(null);
@@ -37,12 +38,11 @@
   async function refresh() {
     error = '';
     try {
-      cfg = await get('/admin/connectors/jellyfin');
+      const directory = await jellyfinDirectory();
+      cfg = directory.cfg;
+      jfUsers = directory.users;
       url = cfg.url ?? '';
       appUsers = await get('/admin/users');
-      if (cfg.configured) {
-        jfUsers = (await get('/admin/connectors/jellyfin/users').catch(() => [])) ?? [];
-      }
     } catch (err) {
       error = err.message;
     }

@@ -24,7 +24,9 @@ test.describe('first boot @needs-db', () => {
   test.beforeAll(async ({ browser, baseURL }) => {
     page = await browser.newPage({ baseURL });
     const state = await setupState(page.request);
-    test.skip(state.has_admin, 'needs a fresh database — run node e2e/reset.mjs');
+    // `required`, not `has_admin`: this page holds no session yet, and an anonymous
+    // /api/setup/state carries only that bit and the note (sec-14).
+    test.skip(!state.required, 'needs a fresh database — run node e2e/reset.mjs');
   });
 
   test.afterAll(async () => {
@@ -53,11 +55,50 @@ test.describe('first boot @needs-db', () => {
       page.getByText(/Passkeys are bound to the public origin\.\s+Changing PUBLIC_URL/)
     ).toBeVisible();
     await expect(page.getByText(/invalidates every\s+registered credential/)).toBeVisible();
+
+    // The warning is prose and can only be prose; the VALUE is a fact, and matching prose was
+    // all this test did — cs-33's defect was a page that warned about `PUBLIC_URL` while
+    // printing the literal token, so the operator could not tell which origin they were about
+    // to bind every credential to without reading the server's environment. Compare the
+    // rendered origin against what the server says PUBLIC_URL is, not against a sentence.
+    const config = await page.request.get('/api/config');
+    expect(config.ok()).toBeTruthy();
+    const publicUrl = (await config.json()).public_url;
+    expect(publicUrl, 'the app must know its own origin').toMatch(/^https?:\/\/\S+$/);
+    await expect(page.getByTestId('setup-public-url')).toHaveText(publicUrl);
   });
 
   test('creating the admin signs them in and lands on Home', async () => {
     await createAdminThroughWizard(page);
     await expect(page.locator('.chip')).toContainText(ADMIN.name);
+  });
+
+  test('the wizard asks for no push permission and runs no install walkthrough', async () => {
+    // §6's preamble puts the gesture-bound push prompt and the Add-to-Home-Screen guidance on
+    // each MEMBER's own device, and §12 schedules that onboarding in M2; decision 164 then took
+    // the step out of the wizard rather than building it here. So this is a negative claim
+    // about the operator's screen, and a negative claim needs its own test — the warning test
+    // above would pass just as happily with a permission prompt fired underneath it.
+    await page.addInitScript(() => {
+      window.__pushAsks = 0;
+      if (window.Notification) {
+        window.Notification.requestPermission = () => {
+          window.__pushAsks += 1;
+          return Promise.resolve('denied');
+        };
+      }
+    });
+    await page.goto('/setup');
+
+    // Every step, reached through the progress dots rather than by assuming which one the
+    // wizard opens on: §3.1's sequence is three steps and the clause is about all of them.
+    for (const title of ['Create the admin account', 'Connectors', 'Import the bundle']) {
+      await page.getByRole('button', { name: new RegExp(`^${title}`) }).click();
+      await expect(page.getByRole('heading', { name: title })).toBeVisible();
+      await expect(page.getByTestId('onboarding')).toHaveCount(0);
+      await expect(page.getByText(/Add to Home Screen/i)).toHaveCount(0);
+    }
+    expect(await page.evaluate(() => window.__pushAsks)).toBe(0);
   });
 
   test('an admin cannot be created twice', async ({ playwright, baseURL }) => {

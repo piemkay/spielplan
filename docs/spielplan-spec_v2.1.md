@@ -70,7 +70,7 @@ Local user accounts, **two roles and no others**: `admin` (full product plus the
 
 User creation (§6.6 Users): a **one-time password** is issued, the account is locked to a password change at first login, and passkey registration is prompted afterwards. An admin may reissue that one-time password as a password reset, and never sees, sets or types a member's password.
 
-**First boot is a defined sequence, and a bundle-less app is a legal state:** the app boots with `/data/artifacts` and `artifact_bundle` empty, serving the setup wizard and admin routes; artifact-dependent surfaces render an explicit "no bundle imported" state instead of erroring. The wizard runs: create admin → optional env-seeded connector config (§2) → bundle import as the final step (the same importer the §6.6 Data tab exposes — that one page is M0 scope) → member-account creation (needed before M2, whose exit criterion requires both members' verdicts). Member first-run onboarding then walks each phone through PWA install and push permission (§6 preamble).
+**First boot is a defined sequence, and a bundle-less app is a legal state:** the app boots with `/data/artifacts` and `artifact_bundle` empty, serving the setup wizard and admin routes; artifact-dependent surfaces render an explicit "no bundle imported" state instead of erroring. The wizard runs: create admin → optional env-seeded connector config (§2) → bundle import as the final step (the same importer the §6.6 Data tab exposes — that one page is M0 scope), **and stops there** (decision 164): member accounts are made in §6.6 Users, which is the only place they are made, and which — unlike this wizard — is still reachable on the day the household adds a third member. Member first-run onboarding then walks each phone through PWA install and push permission (§6 preamble).
 
 ### 3.2 Authentication — passkeys first
 
@@ -212,7 +212,7 @@ All surfaces: responsive PWA, phone-first (48 px targets, one-handed, swipe), de
 
 Surface names (prototype, normative): **Home / Rate / Tonight / Rank / Map / Taste** (+ Admin).
 
-**iOS web-push constraint (load-bearing):** on iPhone, Web Push works only for a PWA added to the home screen (iOS 16.4+), and the permission request must run inside a user gesture; iOS has no programmatic install prompt, so member first-run onboarding *guides* Share → Add to Home Screen, detects standalone mode, and nags until push is granted. Push is therefore always **best-effort**: every push-carried prompt also exists as an in-app banner, and sessions additionally as a room code/QR.
+**iOS web-push constraint (load-bearing):** on iPhone, Web Push works only for a PWA added to the home screen (iOS 16.4+), and the permission request must run inside a user gesture; iOS has no programmatic install prompt, so member first-run onboarding *guides* Share → Add to Home Screen, detects standalone mode, and **asks for push permission once**, on that phone, honouring a decline rather than re-asking (decision 180). Push is therefore always **best-effort**: every push-carried prompt also exists as an in-app banner, and sessions additionally as a room code/QR.
 
 ### 6.0 Home & Library
 

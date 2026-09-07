@@ -329,7 +329,7 @@ async def world(app, db):
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
     )
     assert created.status_code == 201, created.text
-    member = await client.post("/api/setup/members", json={"name": "jenny", "role": "member"})
+    member = await client.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     assert member.status_code == 201, member.text
     patrick = await db.fetchval("SELECT id FROM app_user WHERE name = 'patrick'")
     jenny = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")

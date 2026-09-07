@@ -5,7 +5,7 @@
    *    (the chip reads 'member · passkey + PIN'). Logout clears the session cookie only —
    *    passkeys remain registered."
    */
-  import { refreshUser, session, setShowModel } from '$lib/session.svelte.js';
+  import { authMethodLine, refreshUser, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { goto } from '$app/navigation';
@@ -19,13 +19,20 @@
   let error = $state('');
 
   const initial = $derived((session.user?.name ?? '?').charAt(0).toUpperCase());
-  const method = $derived(session.user?.auth_method === 'pin' ? 'PIN' : 'passkey + PIN');
+  // fe-13: this was the constant 'passkey + PIN' for everyone, so a new member with neither
+  // read their own chip as a claim about credentials they did not have. §3.2's own example
+  // string is an inventory; `authMethodLine` reads the inventory `/auth/me` already carries.
+  const method = $derived(authMethodLine(session.user));
+  const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
 
   async function toggle() {
     open = !open;
     error = '';
     switching = null;
-    if (open && switchable.length === 0) {
+    // Re-read on every open, not only when the list is empty: a PIN set on the other person's
+    // phone makes them switchable here, and the guard that skipped the refetch meant the only
+    // way to see it was a page reload (fe-13).
+    if (open) {
       switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
     }
   }
@@ -123,10 +130,10 @@
           </div>
         </div>
 
-        {#if switchable.filter((u) => u.id !== session.user?.id).length}
+        {#if others.length}
           <div class="group bordered">
             <div class="data heading">SWITCH USER</div>
-            {#each switchable.filter((u) => u.id !== session.user?.id) as u (u.id)}
+            {#each others as u (u.id)}
               <button
                 class="switch"
                 onclick={() => {
@@ -140,6 +147,17 @@
                 {u.name}
               </button>
             {/each}
+          </div>
+        {:else}
+          <!-- The state every household starts in had no branch at all, so the section simply
+               was not there and §3.2's switch looked unimplemented. A profile becomes
+               switchable by setting a PIN, and that is on the account page (fe-13). -->
+          <div class="group bordered">
+            <div class="data heading">SWITCH USER</div>
+            <div class="why hint">
+              Nobody else has a switch PIN yet — a profile joins this list once it has one.
+              <a href="/account">Set yours on the account page.</a>
+            </div>
           </div>
         {/if}
       {/if}

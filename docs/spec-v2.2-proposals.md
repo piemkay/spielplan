@@ -1988,6 +1988,85 @@ milestone plans reference them by number.
 
 ---
 
+## Decisions taken (owner, 2026-09-06)
+
+One, taken during M4.6's implementation on the question its plan refused to answer in a diff. It is
+recorded here rather than in the milestone because it is a standing rule about which routes the
+first-login lock may hold shut, not a fact about one screen.
+
+| # | Question | Decision |
+|---|---|---|
+| 179 | May an account locked to §3.1's forced first-login password change still switch profiles? | **Yes.** `POST /api/auth/switch` keeps `CurrentUser`, so the reachable set while the lock stands is **four** routes — `/api/auth/me`, `/api/auth/password`, `/api/auth/logout` and `/api/auth/switch`. Every other authenticated route in the app moves behind `ActiveUser`. |
+
+### 179. The forced first-login change guards the surfaces, not the door out
+
+**What the spec says.** §3.1: "a **one-time password** is issued, the account is locked to a password
+change at first login". The lock's extent is not enumerated, and `core/auth.py`'s docstring read it
+as "refuse every route but the change-password one" while five routes plus `/me` were in fact
+reachable — the deviation this decision exists to end.
+
+**Why it changes.** §3.2's PIN switch is for "a shared/TV device" — a phone handed across a room. The
+account holding it may be one an admin has just reset, which is exactly when it carries the lock, and
+the person now holding the phone is someone else. Refusing the switch would make the forced change of
+*another person's* password the only way back to your own profile, and the alternative the strict
+reading offers — log out, then log back in — throws away the session the household device is meant to
+keep. The lock exists so a one-time password cannot be used as a password; nothing about switching
+away from the account uses it.
+
+**The decision.** `/api/auth/switch` stays on `CurrentUser` alongside `/me`, `/password` and
+`/logout`. Everything else authenticated moves behind `ActiveUser`, including `/api/auth/pin`,
+`/api/auth/preferences` and `/api/auth/switchable`. Code, both docstrings (`api/auth.py`'s
+`change_password` and `pin_switch`, `core/auth.py`'s module header) and coverage row
+`platform-forced-first-login-change` name the same four routes, and the row's test sweeps every other
+authenticated route for the refusal.
+
+**Cost.** Four routes named in three docstrings and one coverage row instead of one, and a member who
+declines their forced change can still reach a profile chip. Nothing widens: switching mints a PIN
+session, which decision 170 already bars from touching credentials.
+
+---
+
+## Decisions taken (owner, 2026-09-07)
+
+One, taken during M4.6's implementation on the second question its plan refused to answer in a diff.
+It amends §6's preamble rather than the code, so it is recorded here with the amendment it mandates.
+
+| # | Question | Decision |
+|---|---|---|
+| 180 | Does member first-run onboarding nag until push permission is granted, as §6's preamble says, or ask once and honour a decline, as the shipped flow does? | **Ask once.** §6's preamble sentence is what is wrong and is amended; `Onboarding.svelte` keeps its behaviour, its "Not now — don't ask again" is honoured, and no snooze column, re-armable banner or shell-level prompt is built. |
+
+### 180. Onboarding asks once, and a decline is an answer
+
+**What the spec says.** §6's preamble, before this amendment: member first-run onboarding "*guides*
+Share → Add to Home Screen, detects standalone mode, and **nags until push is granted**". The very
+next sentence of the same paragraph says push is "always **best-effort**: every push-carried prompt
+also exists as an in-app banner, and sessions additionally as a room code/QR" — so the paragraph
+asks for a standing nag and then explains why nothing depends on the nag succeeding.
+
+**Why it changes.** The code has never nagged. `Onboarding.svelte` is rendered in exactly one place —
+`account/+page.svelte`, a page a member has no reason to revisit — and its `finish()` runs on grant,
+on denial and from a button reading "Not now — don't ask again". The gate noticed before anyone did:
+coverage row `library-rate-member-pwa-install-onboarding` cited this preamble while naming
+`12-onboarding.spec.js::declining stores nothing, finishes the step, and is not asked again` as its
+evidence, so the clause's own test asserted its negation (`cs-24`). One of the two had to move. The
+alternative — a re-armable prompt on Home, re-armed until `permissionState() === 'granted'` and a
+decline turned into a snooze with a `nag_snoozed_until` column — buys a household of two or three
+people a mechanism for pestering each other about a channel the spec already calls best-effort, and
+buys it a column, a shell-level surface and a second place onboarding state lives.
+
+**The decision.** The clause is amended: onboarding asks **once**, on that phone, and honours the
+decline. §6's preamble now says so. Migration 0016 keeps exactly the two things §4 of the M4.6 plan
+lists and gains no `nag_snoozed_until`; `Onboarding.svelte`'s behaviour is untouched. Coverage row
+`library-rate-member-pwa-install-onboarding` is split, so the asks-once tests answer to
+`library-rate-member-onboarding-is-asked-once` — a row whose clause they actually assert — and the
+install-guidance and push-registration clauses keep the row and the tests that prove them.
+
+**Cost.** A member who declines and later wants push has to go to their account page and ask for it;
+nothing in the app will remind them. That is the price §6's own best-effort sentence already agreed
+to pay, and it is paid on a surface (`/account`) the member reaches from the chip in the header.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
