@@ -206,6 +206,19 @@ export async function signInAsMember(page, member) {
     data: { current_password: member.otp, new_password: member.password }
   });
   expect(changed.ok(), 'setting a password unlocks the rest of the app').toBeTruthy();
+  // Sign in again with the password just set. The route answers 200 and sends no Set-Cookie -
+  // `destroy_other_sessions` keeps the caller's own row, and driving the same flow through the
+  // forced-change FORM leaves the browser signed in and on Home. But WebKit's APIRequestContext
+  // and the browser context diverge here: `page.request` stops sending the cookie the browser
+  // still holds, which left 13-rank and 14-tonight unauthenticated from this point on. So this
+  // is the harness, not the app, and it is M4.8's - that milestone owns the instrument. Signing
+  // in again is what a member holding a password can always do (S3.2), and it is enough for
+  // 14-tonight; 13-rank seeds through `page.request` after this and is still refused, which is
+  // recorded there rather than papered over here.
+  const back = await page.request.post('/api/auth/login', {
+    data: { name: member.name, password: member.password }
+  });
+  expect(back.ok(), 'the member signs in with the password they just chose').toBeTruthy();
 }
 
 /** Sign an already-created member in on a second context, by password. */

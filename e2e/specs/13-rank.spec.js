@@ -71,7 +71,8 @@ async function rateSome(page, count = 8) {
   const opened = await page.request.post('/api/rate/session', {
     data: { restart: true, kinds: ['movie'] }
   });
-  expect(opened.ok(), 'seeding needs a rating session').toBeTruthy();
+  expect(opened.ok(), `seeding needs a rating session: ${opened.status()} ${await opened.text()}`)
+    .toBeTruthy();
   const values = [2, 1, 0];
   let rated = 0;
   for (let i = 0; i < count * 4 && rated < count; i++) {

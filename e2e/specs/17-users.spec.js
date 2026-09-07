@@ -128,7 +128,9 @@ test.describe('users, roles and the account surface', () => {
     // §3.1: "the account is locked to a password change at first login", and the lock is the
     // auth layer's — the shell has nowhere else to send them.
     await expect(memberPage.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
-    await expect(memberPage.getByText('ONE-TIME PASSWORD')).toBeVisible();
+    // `exact`: step 18 put an explanatory paragraph on this page that names the one-time
+    // password in a sentence, so the bare substring matches the prose as well as the label.
+    await expect(memberPage.getByText('ONE-TIME PASSWORD', { exact: true })).toBeVisible();
     const fields = memberPage.locator('input[type=password]');
     await fields.nth(0).fill(third.otp);
     await fields.nth(1).fill(third.password);
