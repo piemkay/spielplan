@@ -9,7 +9,7 @@
  *   node e2e/reset.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -58,7 +58,55 @@ docker([...COMPOSE, 'exec', '-T', 'db', 'psql', '-U', user, '-d', 'postgres',
   '-c', `CREATE DATABASE ${db};`]);
 
 console.log('clearing staged artifacts…');
-rmSync(join(ROOT, 'data', 'artifacts'), { recursive: true, force: true });
+// The contents, never the directory. `./data/artifacts` is a bind mount and the app containers run
+// as uid 1000 (§14.3, `USER spielplan` in ops/backend.Dockerfile), so the ownership of the mount
+// source is what decides whether the backend can create `/data/artifacts/<version>` at all.
+// Removing the directory hands that decision to Docker, which recreates a missing mount source as
+// **root** on the next `up` a few lines below — and the `chown -R 1000:1000` that
+// .github/workflows/ci.yml runs before the stack starts has by then already been spent. Phase
+// one's bundle import is the first thing that fails, on every Linux run, with a permission error
+// nothing connects to this line. Emptying keeps the directory the chown established. [M4.7 sec-08]
+const artifacts = join(ROOT, 'data', 'artifacts');
+// Created here rather than left to Docker for the same reason: a directory this script makes
+// belongs to whoever runs it, which README's chown line can then correct; one Docker makes belongs
+// to root, which it cannot.
+mkdirSync(artifacts, { recursive: true });
+for (const entry of readdirSync(artifacts)) {
+  try {
+    rmSync(join(artifacts, entry), { recursive: true, force: true });
+  } catch (err) {
+    // The other side of the same rule: a version staged by the container is owned by uid 1000, and
+    // a host user who is not it cannot unlink it. Say which command clears it while keeping the
+    // directory, rather than leaving an EACCES stack to be read as a broken app.
+    throw new Error(
+      `cannot clear ${artifacts} (${err.code}): it holds files the container wrote as uid 1000. ` +
+        'Run `sudo rm -rf data/artifacts/*` (the contents, not the directory) and try again.'
+    );
+  }
+}
+
+// Keeping the directory is necessary and not sufficient: it also has to be writable by uid 1000,
+// and on a developer's machine nothing has ever made it so. CI is the case this was written for
+// (`.github/workflows/ci.yml` chowns the five mounts before the stack starts, and emptying rather
+// than removing is what stops that chown being spent) — but a checkout that has never run CI has
+// a `data/artifacts` owned by whoever cloned it, and `docker compose up` then hands the backend a
+// directory it cannot create a version in. Measured here, on Docker Desktop: phase 1's import
+// answered 500 with `PermissionError: [Errno 13] Permission denied: '/data/artifacts/test-v1'`,
+// and the spec reported only a missing "artifacts staged to" finding.
+//
+// Done from a root container rather than from the host because that is the one gesture that works
+// everywhere. `chown` on the host needs privileges the script does not have and, under Docker
+// Desktop's Windows file sharing, does not reach the container's view at all — the mode seen
+// inside is the one the VM holds, and only a container can set it. Both are attempted: `chown` is
+// the honest fix where uids mean something, `chmod` the fallback where they do not. Failure is
+// not fatal, because a mount that is already writable needs neither. [M4.7 sec-08]
+try {
+  docker([...COMPOSE, 'run', '--rm', '--user', '0', '--entrypoint', 'sh', 'backend',
+    '-c', 'chown -R 1000:1000 /data/artifacts 2>/dev/null || chmod -R 777 /data/artifacts']);
+} catch (err) {
+  console.log(`  could not adjust ${artifacts} ownership (${err.code ?? 'failed'}) — continuing; ` +
+    'if the bundle import fails with a permission error, this line is why');
+}
 
 console.log('starting app services…');
 // Retried, because `depends_on: db: service_healthy` is evaluated once and a Postgres that is

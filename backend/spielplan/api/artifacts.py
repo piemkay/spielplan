@@ -47,6 +47,15 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
     sequence ends in "restart backend + worker" and between the flip and that restart they
     legitimately disagree. Collapsing them into one field made the page say "no bundle is
     active" immediately after a successful import — which is the opposite of what happened.
+
+    Bundles and nothing else. This payload briefly also carried the worker's `job_run` outcomes,
+    written while owner decision 2 was still open and its option (A) — "Data tab + Connectors card
+    only" — was live. Decision 182 took option (B) instead: §6.6's System card, at
+    `GET /api/admin/system`, is where an operator reads job health and backup status, and this
+    page renders none of it (`frontend/src/routes/admin/data/+page.svelte` reads `bundles`,
+    `active`, `loaded`, `restart_required` and `rebuild_set`). A payload with no reader is a
+    second definition of the 36-hour rule waiting to disagree with the first, on a route the Data
+    tab polls on a timer. [M4.7 ops-11; decision 182]
     """
     rows = await conn.fetch(
         "SELECT version, state, imported_at, activated_at FROM artifact_bundle "

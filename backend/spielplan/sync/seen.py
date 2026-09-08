@@ -39,7 +39,11 @@ import asyncpg
 
 from spielplan.connectors import resolve
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, played_of
-from spielplan.connectors.registry import JellyfinConfig, save_jellyfin
+from spielplan.connectors.registry import (
+    SECRETS_UNREADABLE_REASON,
+    JellyfinConfig,
+    save_jellyfin,
+)
 
 log = logging.getLogger("spielplan.sync.seen")
 
@@ -177,7 +181,15 @@ async def set_state(
     result: dict[str, Any] = {"state": state, "synced": False, "reason": None}
     jellyfin_id = await conn.fetchval("SELECT jellyfin_id FROM title WHERE id = $1", title_id)
     if client is None or not jellyfin_id:
-        result["reason"] = "not on Jellyfin" if client is not None else "Jellyfin not configured"
+        if client is not None:
+            result["reason"] = "not on Jellyfin"
+        elif cfg.secrets_unreadable:
+            # The tap is kept either way — that is §3.3 — but "Jellyfin not configured" would be
+            # a lie an admin cannot act on: the connector *is* configured and its credentials are
+            # sealed under a SECRETS_KEY this process does not have (M4.7 dd03).
+            result["reason"] = SECRETS_UNREADABLE_REASON
+        else:
+            result["reason"] = "Jellyfin not configured"
         return result
 
     users = {u.app_user_id: u for u in await linked_users(conn, cfg)}

@@ -42,27 +42,7 @@ LAPTOP = {
 
 
 @pytest.fixture
-def push_router_registered(monkeypatch):
-    """`api/push.py` exports `router`; including it is `spielplan/app.py`'s job.
-
-    That file is registered by another hand this milestone, so wrap `create_app` rather than
-    edit it. The wrap is idempotent — once the include lands, this does nothing at all.
-    """
-    import spielplan.app as app_module
-
-    original = app_module.create_app
-
-    def create():
-        application = original()
-        if not any(getattr(r, "path", "").startswith("/api/push") for r in application.routes):
-            application.include_router(push.router)
-        return application
-
-    monkeypatch.setattr(app_module, "create_app", create)
-
-
-@pytest.fixture
-async def household(push_router_registered, app, db):
+async def household(app, db):
     """§3.1's household: an admin and a member, each on their own cookie jar.
 
     The member's forced first-login password change is done here, because §3.1 locks the
@@ -214,7 +194,7 @@ async def test_unsubscribing_removes_the_device(household, db):
     assert await _count(db) == 0
 
 
-async def test_the_push_routes_refuse_a_caller_with_no_session(push_router_registered, app):
+async def test_the_push_routes_refuse_a_caller_with_no_session(app):
     """A push endpoint is a bearer capability; an unauthenticated write would let anyone
     register a target that then receives a member's §7.3 prompts."""
     anonymous = app()

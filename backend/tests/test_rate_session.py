@@ -35,7 +35,6 @@ from typing import Any
 import asyncpg
 import pytest
 
-from spielplan.api import rate as rate_api
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.connectors.registry import JellyfinConfig
 from spielplan.ledger.hyperparams import DEFAULTS
@@ -956,16 +955,7 @@ async def test_changing_the_kinds_drops_the_card_and_never_leaves_neither_select
 
 @pytest.fixture
 async def rate_client(app):
-    """The real app plus this router.
-
-    `app.py` is not this lens's file to edit; registering the router here means the route
-    contract is tested now and the test keeps passing unchanged the moment `create_app` picks
-    it up.
-    """
     client = app()
-    application = client._transport.app
-    if not any(getattr(r, "path", "").startswith("/api/rate") for r in application.routes):
-        application.include_router(rate_api.router)
     created = await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
     )
@@ -1054,9 +1044,6 @@ async def test_the_rate_routes_need_a_signed_in_account(app, db):
     """Every other router in `spielplan/api/` sits behind the same dependency; a surface that
     wrote to one person's ledger without a session would be a different kind of bug."""
     client = app()
-    application = client._transport.app
-    if not any(getattr(r, "path", "").startswith("/api/rate") for r in application.routes):
-        application.include_router(rate_api.router)
     assert (await client.get("/api/rate")).status_code == 401
     assert (
         await client.post("/api/rate/verdict", json={"card_token": "x", "value": 1})

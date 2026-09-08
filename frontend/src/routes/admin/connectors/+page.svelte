@@ -152,6 +152,32 @@
     person's own token.
   </p>
 
+  {#if cfg?.secrets_unreadable}
+    <!--
+      Not the same message as "not configured": the connector row is there and its credentials
+      are real, they are sealed under a SECRETS_KEY this install no longer holds — a restored
+      dump without its env file, or a regenerated key (M4.7 dd03). Members keep working (§3.3),
+      so the only person who can act on this is the admin standing in front of this card, and
+      the action is Save, which re-seals under a fresh key.
+
+      The last sentence is the cost of that shortcut, and it is here because this card is the
+      only place the shortcut is offered. Saving retires the DEK it cannot open
+      (`connectors/registry.save_jellyfin`), which is what lets a fresh one be minted — and
+      every *other* secret sealed under the retired key stays unreadable until the original
+      .env comes back. An admin who reads only "paste the key again" repairs Jellyfin and quietly
+      leaves the web-push pair and any other connector behind, with the System card the only
+      surface that still says so.
+    -->
+    <p class="alert" role="alert" data-secrets="unreadable">
+      The stored credentials cannot be decrypted with this install's <code>SECRETS_KEY</code>.
+      Restoring the <code>.env</code> that was current when the backup was taken recovers
+      everything. Pasting the API key again below stores it under a new key and fixes Jellyfin
+      only: the old key is retired, and every other secret sealed under it — web push, any other
+      connector — stays unreadable until that <code>.env</code> returns. To clear those out
+      instead, run <code>spielplan-secrets reset</code> and set each one up again.
+    </p>
+  {/if}
+
   <div class="grid">
     <label>
       <span class="data">SERVER URL</span>
@@ -330,6 +356,15 @@
   }
   .milestone {
     color: var(--ink-4);
+  }
+  .alert {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--ember-lift);
+    border-radius: var(--r-sm);
+    color: var(--ember-lift);
+    font-size: 12.5px;
+    line-height: 1.45;
   }
   table {
     width: 100%;

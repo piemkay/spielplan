@@ -46,7 +46,9 @@ MEMBER_PASSWORD = "a-member-password"
 # which is wanted — re-stating the number by hand is how the two sweeps below become known to
 # be covering every route someone meant to gate. What it still cannot see is a new route that
 # never had `AdminUser` at all: a walk over gated routes has nothing to enumerate it with.
-ADMIN_ROUTE_COUNT = 21
+# 21 until M4.7 added §6.6's System card (`GET /api/admin/system`, decision 182). Re-stated by
+# hand, which is what the paragraph above says this number is for.
+ADMIN_ROUTE_COUNT = 22
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

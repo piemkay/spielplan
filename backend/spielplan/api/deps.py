@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -12,10 +13,57 @@ from spielplan.core import auth
 from spielplan.core.config import settings
 from spielplan.db import pool
 
+log = logging.getLogger("spielplan.api.deps")
+
+# Longer than any request should ever wait for a *connection* (the query itself is unbounded —
+# the importer's COPY and the nightly refit legitimately run for minutes, which is why there is
+# no `command_timeout` on the pool), and short enough that a saturated pool answers rather than
+# hangs. §7.3's playback poll runs every 60 s, so a phone that waits ten seconds and is told the
+# database is unavailable retries on its own; a phone that waits forever holds a socket open until
+# the browser gives up, with nothing in the log to say why. [M4.7 schema-pool-acquire]
+_ACQUIRE_TIMEOUT_S = 10
+
 
 async def db() -> asyncpg.Connection:
-    async with pool.acquire() as conn:
+    """One pooled connection for the whole request, bounded at the acquire.
+
+    Unbounded, this dependency turned "the database is slow" into "every phone hangs": the pool
+    holds ten connections, `api/deps` keeps one for the life of a request, and nothing anywhere
+    passed a timeout — measured, ten in-flight health probes against a blocked database took the
+    pool to idle 0 and an eleventh request to `/api/setup/state` never answered.
+
+    The guard is around the acquire alone rather than around the `yield`, because a `TimeoutError`
+    raised *inside* a route body means something else entirely (it is what `asyncio.TimeoutError`
+    aliases on 3.11+, and asyncpg raises it for a query timeout too) and must keep travelling to
+    `app.py`'s handlers rather than be answered from here. That is what costs the `async with`:
+    the release has to be explicit, and it is the same call asyncpg's own acquire context manager
+    makes on exit. [M4.7 dd-health-probes, schema-pool-acquire]
+
+    "Unavailable" and not "busy", because this bound covers two failures the acquire cannot tell
+    apart: ten peers holding the ten connections, and a pool with nothing to hand out spending the
+    whole ten seconds inside asyncpg's `_get_new_connection` on a TCP connect that never
+    completes. §2 supports "a Postgres outside this compose file", so the second is a VPN dropping
+    mid-session — and it is the case where the class-based handlers in `app.py` would have said
+    "database unreachable" with a traceback had the peer refused one second earlier instead of
+    going silent. The census is in the log rather than in the detail because that is where a
+    reader can act on it: size 0 is a peer that is not there, size 10 idle 0 is a pool in use.
+    [cycle 3 finding 7]
+    """
+    connections = pool.pool()
+    try:
+        conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
+    except TimeoutError:
+        log.warning(
+            "no pooled connection within %ss: pool size %d, idle %d",
+            _ACQUIRE_TIMEOUT_S,
+            connections.get_size(),
+            connections.get_idle_size(),
+        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from None
+    try:
         yield conn
+    finally:
+        await connections.release(conn)
 
 
 DB = Annotated[asyncpg.Connection, Depends(db)]

@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.6"
+current_milestone = "M4.7"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -26,7 +26,24 @@ milestone = "M0"
 kind = "static"
 what = "A guard over docker-compose.yml asserts the app publishes exactly one plain-HTTP internal port and configures no TLS certificate or termination of its own, and that the volume set covers /data/pg, /data/raw, /data/artifacts, /data/cache and /data/backups."
 why = "§2: the operator's existing Traefik+Cloudflare terminates TLS; §1 names four volumes and §2's nightly dump target adds the fifth. (Corrected: /data/import rests only on unsettled proposal 138.)"
-tests = ["backend/tests/test_static_contracts.py::test_the_app_publishes_one_plain_http_port_and_terminates_no_tls", "backend/tests/test_static_contracts.py::test_every_data_volume_the_spec_names_is_mounted"]
+# M4.7 rewrote both guards and gave each the self-test docs/TESTING.md demands. The M0 forms
+# could not see their own violation: the volume guard was `assert path in compose` over the raw
+# text, true of a commented-out mount and of a file of pure comments, and the port guard counted
+# lines matching `${BIND_ADDR}`, so a second published port written any other way left it green.
+# The three self-tests are what make the two guards above worth reading. [M4.7 ddocs-08,
+# tq3-one-published-port]
+#
+# The rewritten port guard then read `- ` items only, so `ports: ["0.0.0.0:5432:5432"]` — the flow
+# sequence an operator adds to reach Postgres with psql, and one keystroke fewer than the block
+# form — contributed no entry and left the count at one. Both spellings are read now, and the
+# self-test carries the flow form as its second case.
+tests = [
+    "backend/tests/test_static_contracts.py::test_the_app_publishes_one_plain_http_port_and_terminates_no_tls",
+    "backend/tests/test_static_contracts.py::test_every_data_volume_the_spec_names_is_mounted",
+    "backend/tests/test_static_contracts.py::test_the_port_guard_sees_a_second_published_port",
+    "backend/tests/test_static_contracts.py::test_the_volume_guard_sees_a_mount_that_was_commented_out",
+    "backend/tests/test_static_contracts.py::test_the_volume_guard_sees_a_compose_file_of_pure_comments",
+]
 
 [[requirement]]
 id = "platform-cpu-only-torch-wheels"
@@ -60,16 +77,23 @@ id = "platform-backup-rotation-and-ciphertext"
 spec = "§2 Backups"
 milestone = "M0"
 kind = "integration"
-what = "The nightly job writes a pg_dump into /data/backups and prunes to the newest 14; the resulting dump contains no plaintext connector secret (searching it for a known secret value finds nothing) and restoring it without SECRETS_KEY leaves connector config undecryptable rather than usable."
-why = "§2: \"Dumps contain ciphertext only — back up the env file (SECRETS_KEY) alongside them\"; rotation 14 is the stated retention."
+what = "The nightly job writes a pg_dump into /data/backups within a bounded time, prunes to the newest 14 and deletes nothing it did not write, leaving no .partial behind on any failure; the resulting dump contains no plaintext connector secret (searching it for a known secret value finds nothing). Restored by the README procedure into a database the stack has already booted, it keeps the connector row, the DEK row and the VAPID public key; restored under a changed SECRETS_KEY the install still boots and still commits a member write; restored with SECRETS_KEY absent, connector config is undecryptable rather than usable."
+why = "§2: \"Dumps contain ciphertext only — back up the env file (SECRETS_KEY) alongside them\"; rotation 14 is the stated retention. (M4.7: the only documented restore command exits 1 with 333 errors against the booted target the compose comment describes, and this row's original proof restored into a database nobody restores into.)"
 tests = [
     "backend/tests/test_backup.py::test_rotation_keeps_the_newest_fourteen",
     "backend/tests/test_backup.py::test_rotation_leaves_files_it_did_not_write_alone",
+    "backend/tests/test_backup.py::test_rotation_leaves_the_operators_own_dated_copy_alone",
+    "backend/tests/test_backup.py::test_rotation_leaves_a_partial_it_did_not_write_alone",
     "backend/tests/test_backup.py::test_rotation_removes_interrupted_dumps",
     "backend/tests/test_backup.py::test_the_dump_keeps_the_database_password_off_the_command_line",
+    "backend/tests/test_backup.py::test_an_ipv6_database_url_keeps_the_brackets_libpq_needs",
+    "backend/tests/test_backup.py::test_a_missing_pg_dump_is_this_modules_own_error_and_leaves_no_debris",
+    "backend/tests/test_backup.py::test_a_pg_dump_that_never_returns_is_killed_and_leaves_no_debris",
     "backend/tests/test_backup.py::test_the_nightly_job_writes_a_dump_into_the_backups_directory_and_prunes",
     "backend/tests/test_backup.py::test_the_dump_contains_no_plaintext_connector_secret",
     "backend/tests/test_backup.py::test_a_dump_restored_without_secrets_key_leaves_connector_config_undecryptable",
+    "backend/tests/test_restore_drill.py::test_the_documented_restore_carries_custody_and_the_app_writes_through_the_route",
+    "backend/tests/test_restore_drill.py::test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_write_commits",
 ]
 
 [[requirement]]
@@ -79,16 +103,58 @@ milestone = "M0"
 kind = "integration"
 what = "Rotating SECRETS_KEY re-wraps the single DEK row and leaves every connector secret decryptable with the stored ciphertexts unchanged; rotating SESSION_SECRET invalidates all existing sessions and leaves stored connector secrets readable."
 why = "§2 states the two rotations have disjoint blast radii — conflating them either loses connector config or forces needless re-auth. (Corrected: SECRETS_KEY rotation re-wraps the DEK, so ciphertext key_ids do not advance.)"
-tests = ["backend/tests/test_secrets.py::test_rotation_rewraps_the_dek_without_touching_secrets", "backend/tests/test_auth_logic.py::test_rotating_session_secret_invalidates_every_cookie"]
+tests = [
+    "backend/tests/test_secrets.py::test_rotation_rewraps_the_dek_without_touching_secrets",
+    "backend/tests/test_auth_logic.py::test_rotating_session_secret_invalidates_every_cookie",
+    "backend/tests/test_secrets_custody.py::test_rewrap_moves_the_wrapping_and_leaves_every_ciphertext_untouched",
+]
 
 [[requirement]]
 id = "platform-required-config-refuses-boot"
 spec = "§2 Configuration"
 milestone = "M0"
 kind = "backend"
-what = "Startup config validation rejects a missing or empty PUBLIC_URL, and secret-dependent connectors refuse to initialise when SECRETS_KEY is absent — never falling back to SESSION_SECRET or a derived key."
+what = "Startup config validation rejects a missing or empty PUBLIC_URL, and secret-dependent connectors refuse to initialise when SECRETS_KEY is absent — never falling back to SESSION_SECRET or a derived key. The template states the URL-safety the one database password now requires, because docker-compose.yml interpolates it into DATABASE_URL — and the .env the e2e job writes is the one .env.example produces, so that interpolation is evaluated by a real stack on every run rather than first on a household's box at first boot. And the suite that asserts all of this runs with the refusals armed rather than under the one flag that lifts them — a flag the shipped stack forwards by no route, so it cannot be switched on by editing .env, and whose off-by-default is read off the field rather than off the value the suite pins into the environment."
 why = "§2: PUBLIC_URL is required because WebAuthn binds credentials to the origin; §2 explicitly forbids the SESSION_SECRET fallback for connector secrets."
-tests = ["backend/tests/test_static_contracts.py::test_the_stack_refuses_to_start_without_its_required_config", "backend/tests/test_secrets.py::test_secrets_key_never_falls_back_to_session_secret"]
+# The last clause is ops-12's other half. Declaring the password once made docker-compose.yml the
+# thing that builds the DSN out of it, so a character with a URL meaning now produces a Postgres
+# that holds the password beside a backend that cannot send it — the same first-boot failure the
+# two-field version produced, through the field the fix made authoritative. Compose cannot encode
+# it and a second field is what step 8 removed, so the note is the mitigation and the guard is
+# what keeps it attached to the value it is about. [M4.7 ops-12]
+#
+# The last clause of the `what` is this row's own instrument. Decision 181 gave §2's refusals one
+# global off-switch and README's "Developing" paragraph hands it to the developer beside the
+# statement that a hand-run backend reads `.env` from its working directory — which is where
+# pytest runs from. With `SPIELPLAN_INSECURE_DEV` set there or exported, eight of the `test_config`
+# tests below cannot fail, and neither can `test_http_seam.py`'s anonymous-schema assertion four
+# files away. `conftest.py` now sets it to "0" at import (the environment outranks `.env`, so a
+# `pop` would not have reached the `.env` route), and the last test named here is what says so.
+#
+# Cycle 3 found the two ends of that same flag unasserted. README tells the operator compose
+# "deliberately does not forward it, so it cannot be switched on in the shipped stack by editing
+# `.env`" — the strongest security claim this milestone makes about that file, and the only compose
+# claim in README with nothing reading compose: the variable appears in eight files here and none
+# of them opened `docker-compose.yml`, so adding it to the env anchor broke the sentence and no
+# test. Measured: with the anchor forwarding it, `test_static_contracts.py` is 93 passed and the
+# one failure is the new guard. And `test_the_flag_is_off_unless_it_is_set` asserted the flag's
+# default against `conftest.py`'s pinned "0" rather than against `Settings` — flipping the field
+# to `default=True` left the whole file green, which is a §2 refusal turned off in every container
+# with nothing red. It now deletes both sources (the environment and `env_file=".env"`) and reads
+# the field. [cycle 3 findings 6, 14]
+tests = ["backend/tests/test_static_contracts.py::test_the_stack_refuses_to_start_without_its_required_config",
+    "backend/tests/test_static_contracts.py::test_env_example_says_the_password_it_asks_for_is_interpolated_into_a_url",
+    "backend/tests/test_static_contracts.py::test_the_password_note_guard_sees_the_note_go_missing",
+    # ops-12's other half again, one level up: declaring the password once only helps if the URL
+    # compose builds out of it is ever built. CI wrote its own DATABASE_URL into the .env it
+    # generates, which short-circuits `${DATABASE_URL:-...}` in every e2e run, so the expression a
+    # household runs on had never been evaluated anywhere in this repository.
+    "backend/tests/test_operator_runbook.py::test_the_e2e_job_runs_on_the_database_url_the_compose_file_builds",
+    "backend/tests/test_operator_runbook.py::test_the_generated_env_guard_sees_the_pinned_url_come_back",
+    "backend/tests/test_secrets.py::test_secrets_key_never_falls_back_to_session_secret", "backend/tests/test_config.py::test_an_empty_public_url_is_refused_by_name", "backend/tests/test_config.py::test_a_bare_hostname_is_refused_because_it_is_not_an_origin", "backend/tests/test_config.py::test_a_non_http_scheme_is_refused", "backend/tests/test_config.py::test_a_real_public_url_still_yields_its_rp_id", "backend/tests/test_config.py::test_a_short_session_secret_is_refused_and_names_the_generator", "backend/tests/test_config.py::test_an_empty_session_secret_is_refused", "backend/tests/test_config.py::test_a_short_secrets_key_is_refused", "backend/tests/test_config.py::test_an_absent_secrets_key_stays_legal", "backend/tests/test_config.py::test_every_problem_is_reported_at_once", "backend/tests/test_config.py::test_the_dev_flag_lifts_the_refusals_and_says_so_loudly", "backend/tests/test_config.py::test_the_flag_is_off_unless_it_is_set", "backend/tests/test_static_contracts.py::test_the_suite_itself_runs_with_the_config_refusals_armed",
+    "backend/tests/test_config.py::test_the_default_guard_sees_a_flag_that_defaults_to_on",
+    "backend/tests/test_static_contracts.py::test_the_shipped_stack_withholds_the_switch_that_turns_the_refusals_off",
+    "backend/tests/test_static_contracts.py::test_the_dev_flag_guard_sees_each_way_the_variable_could_arrive"]
 
 [[requirement]]
 id = "platform-dek-aead-key-id"
@@ -97,7 +163,15 @@ milestone = "M0"
 kind = "integration"
 what = "First boot creates exactly one random 256-bit data-encryption key row wrapped under SECRETS_KEY; every connector_config.secrets_encrypted ciphertext is AEAD and carries a key_id, and the first-boot web-push VAPID keypair is stored under the same wrapping. Flipping one ciphertext byte makes decryption fail rather than return plaintext."
 why = "§2 mandates AEAD under one DEK with a key_id for rotation agility; §14 risk 3 — a leaked Jellyfin key is admin-equivalent on the media server."
-tests = ["backend/tests/test_secrets.py::test_dek_wrap_round_trip", "backend/tests/test_secrets.py::test_dek_unwrap_fails_under_wrong_key", "backend/tests/test_secrets.py::test_seal_round_trip_and_tamper_detection", "backend/tests/test_schema_contracts.py::test_a_connector_secret_cannot_be_stored_without_naming_its_key"]
+tests = [
+    "backend/tests/test_secrets.py::test_dek_wrap_round_trip",
+    "backend/tests/test_secrets.py::test_dek_unwrap_fails_under_wrong_key",
+    "backend/tests/test_secrets.py::test_seal_round_trip_and_tamper_detection",
+    "backend/tests/test_schema_contracts.py::test_a_connector_secret_cannot_be_stored_without_naming_its_key",
+    "backend/tests/test_secrets_custody.py::test_first_boot_creates_exactly_one_active_random_256_bit_key",
+    "backend/tests/test_secrets_custody.py::test_a_second_lifespan_adopts_the_first_boots_key_id",
+    "backend/tests/test_secrets_custody.py::test_a_ciphertext_moved_to_another_row_does_not_open",
+]
 
 [[requirement]]
 id = "platform-connector-config-env-seed-only"
@@ -106,7 +180,12 @@ milestone = "M0"
 kind = "integration"
 what = "Connector settings (Jellyfin, LLM, TMDB, OMDb, Trakt) are read from connector_config, not env: env vars seed a connector row only when none exists at first boot, and a changed env var on a later boot does not overwrite or shadow the stored row."
 why = "§2: the owner wants connector setup in the admin UI; env may only seed for automated installs, so a stale env var must never silently win over a stored row."
-tests = ["backend/tests/test_connector_registry.py::test_no_env_means_no_seed", "backend/tests/test_connector_registry.py::test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable", "backend/tests/test_connector_registry.py::test_the_other_connectors_seed_too", "backend/tests/test_connector_registry.py::test_the_first_boot_seeds_and_records_the_wizard_step", "backend/tests/test_connector_registry.py::test_a_second_boot_leaves_the_admins_edit_alone", "backend/tests/test_connector_registry.py::test_seeding_is_idempotent", "backend/tests/test_connector_registry.py::test_a_secret_without_secrets_key_refuses_rather_than_falls_back", "backend/tests/test_connector_registry.py::test_a_stored_secret_is_ciphertext_carrying_its_key_id", "backend/tests/test_static_contracts.py::test_env_example_names_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_env_example_marks_the_seed_variables_optional"]
+# The ten tests above certified the behaviour for four milestones while not one of the six
+# variables ever reached a container: the compose env anchor named six other names, no service
+# declared `env_file`, and `.dockerignore` keeps `.env` out of the image. None of the ten asked
+# whether the shipped stack delivers them, which is what the compose guard and its self-test are
+# for — the row stops certifying a path this deployment cannot exercise. [M4.7 ds01, dd-compose]
+tests = ["backend/tests/test_connector_registry.py::test_no_env_means_no_seed", "backend/tests/test_connector_registry.py::test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable", "backend/tests/test_connector_registry.py::test_the_other_connectors_seed_too", "backend/tests/test_connector_registry.py::test_the_first_boot_seeds_and_records_the_wizard_step", "backend/tests/test_connector_registry.py::test_a_second_boot_leaves_the_admins_edit_alone", "backend/tests/test_connector_registry.py::test_seeding_is_idempotent", "backend/tests/test_connector_registry.py::test_a_secret_without_secrets_key_refuses_rather_than_falls_back", "backend/tests/test_connector_registry.py::test_a_stored_secret_is_ciphertext_carrying_its_key_id", "backend/tests/test_static_contracts.py::test_env_example_names_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_env_example_marks_the_seed_variables_optional", "backend/tests/test_static_contracts.py::test_compose_forwards_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_the_seed_guard_sees_a_variable_that_stopped_being_forwarded"]
 
 [[requirement]]
 id = "platform-bundleless-boot-is-legal"
@@ -1913,7 +1992,7 @@ id = "platform-movie-data-backup-and-restore"
 spec = "§2 Backups + §10 (decision 162)"
 milestone = "M4.5"
 kind = "integration"
-what = "An admin-triggered movie-data backup writes a restorable archive of the content spine, the DNA layer and the review store, and of nothing user-specific: no verdict, duel, tier_edit, ledger, session, passkey, push subscription or connector secret appears in it. Restoring it into an empty install reproduces the same title, person and DNA rows; carries the title and person sequence positions forward, so the first acquisition after a restore mints an id that collides with nothing; and preserves title.origin, so §10's rebuild set still names the app-acquired titles."
+what = "An operator-triggered (CLI) movie-data backup writes a restorable archive of the content spine, the DNA layer and the review store, and of nothing user-specific: no verdict, duel, tier_edit, ledger, session, passkey, push subscription or connector secret appears in it. Restoring it into an empty install reproduces the same title, person and DNA rows; carries the title and person sequence positions forward, so the first acquisition after a restore mints an id that collides with nothing; and preserves title.origin, so §10's rebuild set still names the app-acquired titles. A destination the command cannot write is a refusal and an exit code, not a traceback."
 why = "Owner decision 2026-09-01: the corpus supplies trained models and the movie data is Spielplan's to keep. Two failure modes make this testable rather than obvious. The id sequence is positioned by the seed import, an event that by definition never runs again, so a restore that does not carry setval mints id 1 and the app cannot acquire a single title. And title.origin defaults to 'bundle' (0008_placement.sql:47), so a restore that drops the column silently re-labels every acquired title and reconcile.py stops re-placing them."
 tests = [
     "backend/tests/test_backup.py::test_the_archive_carries_the_content_spine_the_dna_layer_and_the_review_store",
@@ -1926,6 +2005,17 @@ tests = [
     "backend/tests/test_backup.py::test_a_restore_into_an_empty_install_carries_no_placement_basis",
     "backend/tests/test_backup.py::test_a_restored_install_refuses_a_second_content_seed",
     "backend/tests/test_backup.py::test_a_restore_refuses_a_sequence_name_the_archive_does_not_own",
+    # decision 182 reworded this row to "operator-triggered (CLI)". M4.7 spec-07 is the reason it
+    # could be: until `spielplan-movie-data` existed, every test above called the two functions
+    # directly and the row certified a deliverable no operator could reach.
+    "backend/tests/test_backup.py::test_the_operator_command_writes_an_archive_and_restores_it",
+    # The entry point also has to fail the way the module promises. `_run` caught RestoreRefused
+    # and BadZipFile only, so the destination - the one argument the operator types - came back as
+    # a traceback out of `write_archive`'s `path.parent.mkdir`: uid 1000 against a root-owned
+    # /data in the wrong container, an unmounted stick, a read-only mount, a full disk. The
+    # archive itself is never at risk (it is renamed off `.partial` only when whole), so the
+    # module's one word for a failure it can foresee covers these too.
+    "backend/tests/test_backup.py::test_a_destination_the_command_cannot_write_is_a_refusal_and_not_a_traceback",
 ]
 
 [[requirement]]
@@ -2086,7 +2176,7 @@ milestone = "M4.6"
 kind = "e2e"
 what = "The Admin > Users tab is a link, not a milestone label; the roster shows role, passkey count, PIN set/unset, Jellyfin link and active/disabled per account; creating a member renders its one-time password exactly once and never again on reload; the row editor's reset, disable and delete controls work; it lists that account's registered passkeys and revokes one of them by credential id; it links, re-links and unlinks that account's Jellyfin user without leaving the tab; the last active admin's demote/disable/delete controls are disabled with the reason stated; and the `PUBLIC_URL` value is rendered on the list."
 why = "§6.6 makes Users the only place accounts are made and §14 risk 4 puts the origin warning where revocation is felt; today the tab is a dead `<span>` and the only member-creation UI is a wizard step the shell redirects away from."
-tests = ["e2e/specs/17-users.spec.js::the Users tab is a link and the roster carries every column 6.6 names", "e2e/specs/17-users.spec.js::adding a member shows its one-time password once and nowhere afterwards", "e2e/specs/17-users.spec.js::the member signs in on another browser and exchanges the password for its own", "e2e/specs/17-users.spec.js::a password reset reissues, re-arms the lock and ends the sessions", "e2e/specs/17-users.spec.js::disabling ends the account and deleting removes the row", "e2e/specs/17-users.spec.js::the last active admin cannot be demoted, disabled or deleted", "e2e/specs/17-users.spec.js::the row editor lists a passkey and revokes that one credential", "e2e/specs/17-users.spec.js::the row editor links, re-links and unlinks Jellyfin", "e2e/specs/05-milestones.spec.js::the admin Data, Connectors and Users tabs are real; System names its milestone"]
+tests = ["e2e/specs/17-users.spec.js::the Users tab is a link and the roster carries every column 6.6 names", "e2e/specs/17-users.spec.js::adding a member shows its one-time password once and nowhere afterwards", "e2e/specs/17-users.spec.js::the member signs in on another browser and exchanges the password for its own", "e2e/specs/17-users.spec.js::a password reset reissues, re-arms the lock and ends the sessions", "e2e/specs/17-users.spec.js::disabling ends the account and deleting removes the row", "e2e/specs/17-users.spec.js::the last active admin cannot be demoted, disabled or deleted", "e2e/specs/17-users.spec.js::the row editor lists a passkey and revokes that one credential", "e2e/specs/17-users.spec.js::the row editor links, re-links and unlinks Jellyfin", "e2e/specs/05-milestones.spec.js::the admin Data, Connectors, Users and System tabs are all real"]
 
 [[requirement]]
 id = "platform-pin-session-cannot-mint-credentials"
@@ -2419,3 +2509,454 @@ kind = "integration"
 what = "The `beta_optimum` a \"Top of your ledger\" section prints is 0.2 — §5.1's measured optimum converted into this app's coordinates, where β weighs the personal half — and the caption a never-fitted profile carries names that same 0.20 rather than its complement. A profile the fold-in has fitted carries no caption at all: it is told its own β and measured against no constant."
 why = "The corpus publishes β as the CROWD weight (`blend beta (1.0 = crowd only)`) and the app stores it as the personal weight, so §5.1's 0.8 is 0.2 here. The cross-validation searches and serves in one orientation, so no stored value or ranking was ever wrong; the inversion reached exactly one place, the constant a member reads on Home. Measured through the app's own fit_user over 150 real raters, held-out Spearman peaks at β_app 0.20 (+0.4324 against +0.4082 at 0.80) and the median fitted β_app is 0.20."
 tests = ["backend/tests/test_home.py::test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss"]
+
+
+# --- M4.7: the box (decision 181; docs/milestones/M4.7-plan.md) ------------------------
+
+[[requirement]]
+id = "platform-secrets-unreadable-degrades-never-500s"
+spec = "§2 Configuration; §3.1; §3.3"
+milestone = "M4.7"
+kind = "integration"
+what = "An unreadable DEK — a restored dump under a changed or absent SECRETS_KEY — raises one typed error, and every member-facing write still commits: seen-state, verdict, not-seen and finish-prompt return 200 with synced false and a reason naming SECRETS_KEY, the admin connector GET reports secrets_unreadable, and both routes that write a typed-in credential — the Connectors PUT and the setup wizard's connector POST — succeed by sealing under a fresh DEK, whether or not that connector already held a ciphertext. No route 500s and the container still boots when a DEK row exists without a VAPID row, or when an env seed variable names a connector the database has no row for: the seed is skipped with one ERROR naming SECRETS_KEY, never raised. A save that keeps the origin leaves the unreadable ciphertext where it is, and one that changes the origin drops it — §14.3 binds those credentials to the server that issued them, so the correct .env returning must never hand the old server's key to the newly typed host — and a Jellyfin user re-mapping answers 409 while the per-user tokens cannot be enumerated, because the drop that keeps a token with the identity that issued it cannot see the token it would have to remove."
+why = "§3.3 makes the app-side write independent of Jellyfin, and §3.1 makes a half-configured boot legal; today InvalidTag from core/secrets._unwrap is caught nowhere and closes the only route that could repair custody."
+tests = [
+    "backend/tests/test_secrets_custody.py::test_every_member_write_still_commits_under_a_changed_secrets_key",
+    "backend/tests/test_secrets_custody.py::test_no_admin_connector_route_answers_500_under_a_changed_secrets_key",
+    "backend/tests/test_secrets_custody.py::test_the_put_that_re_enters_the_api_key_succeeds_by_sealing_under_a_fresh_dek",
+    "backend/tests/test_secrets_custody.py::test_the_first_connector_save_under_an_unreadable_dek_is_not_a_500",
+    "backend/tests/test_secrets_custody.py::test_the_setup_wizards_connector_route_seals_under_a_fresh_dek_too",
+    "backend/tests/test_secrets_custody.py::test_a_url_only_save_under_a_wrong_key_does_not_destroy_the_ciphertext",
+    "backend/tests/test_secrets_custody.py::test_moving_the_server_under_a_wrong_key_drops_the_ciphertext_it_cannot_read",
+    "backend/tests/test_secrets_custody.py::test_relinking_under_a_wrong_key_is_refused_rather_than_keeping_a_stale_token",
+    "backend/tests/test_secrets_custody.py::test_a_dek_row_without_a_vapid_row_still_boots_under_a_changed_key",
+    "backend/tests/test_secrets_custody.py::test_a_seeded_connector_does_not_take_the_boot_down_under_an_unreadable_dek",
+]
+
+[[requirement]]
+id = "platform-secrets-key-rotation-has-an-executor"
+spec = "§2 Configuration; §14.3"
+milestone = "M4.7"
+kind = "integration"
+what = "`spielplan-secrets rewrap` re-wraps the single active DEK row under a new key inside one transaction, leaves every ciphertext byte and key_id unchanged, refuses when more than one un-retired row exists, and refuses a --new-key the app would refuse to boot with — the same floor and the same message core/config's validator holds, applied before the UPDATE, while a short --old-key stays legal because that is the install being rescued. `spielplan-secrets reset` asks the same question §6.6's System card asks — every key_id a sealed row names, retired or not, so the Connectors card's own repair cannot make it a no-op — retires the rows it can, clears the connector ciphertexts that named them, removes the web-push keypair rather than half of it, and reports what was lost; after which the System card reports custody intact and the next boot mints the replacement keypair the command promises. The order that executor forces is written where the operator meets it and not only in a test: on the one install the floor strands — a hand-typed SECRETS_KEY under 32 characters, which stops booting on upgrade — the new value goes into .env BEFORE the command, because the CLI constructs the same Settings the app refuses to boot with one statement before it opens a connection, and .env.example's rotation block gives that case its own reversed recipe."
+why = "§2: \"rotating SECRETS_KEY is an explicit admin action that re-wraps the one DEK row\" — promised by the spec, by .env.example and by a green coverage row, with rewrap_dek's only caller a unit test. And the block that promised it gave the steps in the one order that install cannot run: `docker compose exec backend` has no container to attach to, and `docker compose run` dies in pydantic on the value still sitting in .env, with a message that reads as a complaint about the key just typed on the command line."
+tests = [
+    "backend/tests/test_secrets_custody.py::test_rewrap_moves_the_wrapping_and_leaves_every_ciphertext_untouched",
+    "backend/tests/test_secrets_custody.py::test_rewrap_refuses_when_more_than_one_row_is_un_retired",
+    "backend/tests/test_secrets_custody.py::test_rewrap_refuses_a_new_key_the_app_would_refuse_to_boot_with",
+    "backend/tests/test_secrets_custody.py::test_rewrap_still_accepts_a_short_old_key_because_that_is_the_install_it_rescues",
+    "backend/tests/test_secrets_custody.py::test_reset_retires_what_it_cannot_unwrap_and_says_what_was_lost",
+    "backend/tests/test_secrets_custody.py::test_reset_reaches_the_rows_the_connectors_card_repair_retired",
+    "backend/tests/test_secrets_custody.py::test_reset_touches_nothing_when_custody_is_intact",
+    "backend/tests/test_secrets_custody.py::test_a_boot_after_reset_mints_the_replacement_keypair_it_promised",
+    "backend/tests/test_secrets_custody.py::test_a_keypair_row_whose_private_half_is_gone_is_not_offered_and_is_replaced",
+    # The runbook half, guarded where the runbook is: the exemption `_rewrap` carries for a short
+    # --old-key only helps an install that is told which way round to run the two steps.
+    "backend/tests/test_operator_runbook.py::test_the_secrets_key_floor_is_documented_with_the_order_that_gets_out_of_it",
+    "backend/tests/test_operator_runbook.py::test_the_stranded_rotation_guard_sees_the_paragraph_go_missing",
+    "backend/tests/test_operator_runbook.py::test_the_stranded_rotation_guard_sees_the_order_that_cannot_work",
+    "backend/tests/test_operator_runbook.py::test_the_rewrap_command_cannot_run_before_the_new_key_reaches_the_environment",
+]
+
+[[requirement]]
+id = "platform-secrets-are-bound-to-their-row"
+spec = "§2 Configuration; §14 risk 3"
+milestone = "M4.7"
+kind = "integration"
+what = "Connector and app-setting ciphertexts carry AAD naming their table and row, so a blob moved between rows fails to open rather than returning the other secret; a row written before the binding still opens and is re-sealed with it by the first read or boot that opens it — not merely by a save that may never come — so a pre-M4.7 ciphertext stops opening in another row after one ordinary read and the None-AAD fallback is migration-era in fact rather than only in its comment; exactly one active data_encryption_key row survives concurrent first boots, and the losers adopt the winner's key_id."
+why = "§2 says \"the one DEK row\" and §14 risk 3 makes a leaked Jellyfin key admin-equivalent; the DEK wrap already uses AAD while seal/open_sealed pass None, so a ciphertext copied between rows decrypts."
+tests = [
+    "backend/tests/test_secrets_custody.py::test_a_ciphertext_moved_to_another_row_does_not_open",
+    "backend/tests/test_secrets_custody.py::test_a_row_sealed_before_the_binding_still_opens_and_is_bound_by_that_read",
+    "backend/tests/test_secrets_custody.py::test_a_pre_m4_7_row_that_has_been_read_once_no_longer_opens_in_another_row",
+    "backend/tests/test_secrets_custody.py::test_a_vapid_row_sealed_before_the_binding_is_re_sealed_by_the_next_boot",
+    "backend/tests/test_secrets_custody.py::test_concurrent_first_boots_leave_exactly_one_active_dek_row",
+]
+
+[[requirement]]
+id = "platform-restore-drill-boots-and-writes"
+spec = "§2 Backups; §10"
+milestone = "M4.7"
+kind = "integration"
+what = "A dump restored by the README procedure into a database the app has never booted keeps the connector row, the DEK row and the VAPID public key; the app then boots, applies zero migrations, and a member's state write returns 200. The same dump restored under a different SECRETS_KEY also boots and still commits that write, with a reason naming SECRETS_KEY. The command without --clean --if-exists is the control: against the same target it exits non-zero, leaves connector_config empty and keeps the fresh install's push keypair. Every document that gives the procedure states its remaining precondition — that a dump restores only into the image that wrote it."
+why = "§2 makes restore an operator action; the only documented command exits 1 with 333 errors against the target the compose comment describes, and the M0 row proves a restore into a database nobody restores into."
+# The last clause is a static guard because the failure is a document's, not the code's: --clean
+# drops what the archive holds, so a dump taken before 0017 leaves job_run standing and the next
+# boot dies on it — and the procedure shipped in four documents, none of which said so. The
+# upgrade drill's own test is what keeps that sentence a description rather than a prediction.
+# [M4.7 ops-01]
+tests = [
+    "backend/tests/test_restore_drill.py::test_the_documented_restore_carries_custody_and_the_app_writes_through_the_route",
+    "backend/tests/test_restore_drill.py::test_the_command_the_compose_file_used_to_give_loses_custody_and_says_so_in_its_exit",
+    "backend/tests/test_restore_drill.py::test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_write_commits",
+    "backend/tests/test_restore_drill.py::test_reset_then_a_put_with_a_new_api_key_ends_the_drill_on_a_working_connector",
+    "backend/tests/test_operator_runbook.py::test_every_document_that_describes_a_restore_states_what_it_restores_into",
+    "backend/tests/test_operator_runbook.py::test_the_restore_rule_guard_sees_a_document_that_dropped_the_sentence",
+]
+
+[[requirement]]
+id = "platform-upgrade-applies-migrations-over-populated-tables"
+spec = "§10; CLAUDE.md Gotchas"
+milestone = "M4.7"
+kind = "integration"
+what = "Applying all but the newest migrations, seeding representative rows, then applying the rest succeeds and produces the same schema as a fresh apply; a database carrying two un-retired data_encryption_key rows aborts at 0017's unique index rather than silently, and the repair that migration prints applies it; an edited applied file raises from both apply_all and pending; an applied version with no file on disk is reported; a database left behind this build by a restore of an older dump fails naming the object it collides with, not silently; a missing migrations directory raises rather than booting an empty schema; two concurrent apply_all calls both complete and leave one row per migration. And the document the operator of a crash-looping backend actually lands on — README's Upgrade section — names both refusals this milestone can produce on a box that was running yesterday, by the string that appears in the log, and carries the retire-one-row repair for the one the migration itself causes."
+why = "Every layer applies the migrations to an empty database, so a backfill over pre-existing rows has never run — the state every existing install is in on its first upgrade — and `grep checksum backend/tests` is empty."
+# The last three clauses are the migration runner's rather than the drill's, so they are asserted
+# against `db/migrate.py` (plan step 10): the orphan report and the advisory lock next to the drill
+# because both need a real Postgres, the missing-directory refusal in `test_migrations.py` because
+# it must refuse before a connection is used at all and passing `None` for one is the assertion.
+tests = [
+    "backend/tests/test_upgrade_drill.py::test_the_newest_migrations_apply_over_populated_tables_and_land_this_builds_schema",
+    "backend/tests/test_upgrade_drill.py::test_the_backfill_runs_over_the_rows_that_were_already_there",
+    "backend/tests/test_upgrade_drill.py::test_an_edited_applied_migration_stops_the_upgrade_from_both_entry_points",
+    "backend/tests/test_upgrade_drill.py::test_two_active_dek_rows_abort_the_boot_and_the_documented_update_repairs_it",
+    "backend/tests/test_upgrade_drill.py::test_reset_clears_the_way_when_the_racing_rows_are_the_ones_it_can_recognise",
+    "backend/tests/test_upgrade_drill.py::test_reset_declines_the_race_it_was_asked_to_repair_when_both_rows_still_open",
+    "backend/tests/test_upgrade_drill.py::test_a_renamed_applied_migration_is_named_rather_than_dying_on_its_own_ddl",
+    "backend/tests/test_upgrade_drill.py::test_a_dump_from_an_older_release_leaves_ddl_the_next_boot_cannot_apply",
+    "backend/tests/test_upgrade_drill.py::test_two_concurrent_applies_both_complete_and_leave_one_row_per_migration",
+    "backend/tests/test_migrations.py::test_a_missing_migrations_directory_is_refused_before_the_database_is_touched",
+    # The last clause. The drill above executes the repair 0017's own comment prints; that comment
+    # lives inside the image, and the operator reading a duplicate-key error naming an index they
+    # have never heard of is outside it. `spielplan-secrets reset` — the one custody command the
+    # rest of README names — answers "Custody is intact" on this install and is right to, so
+    # without the section below the box has no repair an operator can reach at all.
+    "backend/tests/test_operator_runbook.py::test_the_upgrade_block_names_the_two_refusals_this_milestone_can_produce",
+    "backend/tests/test_operator_runbook.py::test_the_upgrade_refusal_guard_sees_each_half_go_missing",
+]
+
+[[requirement]]
+id = "platform-job-outcomes-are-persisted"
+spec = "§6.6 System; §5.3; §2 Backups"
+milestone = "M4.7"
+kind = "integration"
+what = "Every job the worker fires writes a job_run row carrying start, finish, outcome and detail; a failing nightly backup leaves ok = false with the error text; the table is pruned to a fortnight rather than growing without bound — except each job's newest successful row, which is kept at any age so a fortnight of failed dumps cannot delete the last one that worked — and both of its readers cost one index lookup per registered job rather than a scan of every row ever written; and the System card decision 182 chose (GET /api/admin/system) names the newest successful backup and warns when it is older than 36 h."
+why = "§6.6 names \"job health ... backup status\"; last_run is an in-process dict and BackupReport is logged and dropped, so a month of failed backups is invisible. And the table that answers it appends about 4,300 rows a day with nothing ever deleting from it, while both readers asked \"newest row per job\" as a DISTINCT ON that reads every row ever written — one of them at every worker start. Pruning by age alone then replaced the growth with a wrong answer: on the fifteenth night of failures the card stopped naming the last good dump and asserted that none had ever completed, on a box holding fourteen of them."
+tests = [
+    "backend/tests/test_worker_registry.py::test_every_job_the_worker_fires_writes_a_job_run_row",
+    "backend/tests/test_worker_registry.py::test_a_failing_job_leaves_ok_false_and_the_error_text",
+    "backend/tests/test_worker_registry.py::test_the_row_is_open_while_the_job_runs",
+    "backend/tests/test_worker_registry.py::test_a_real_job_from_the_registry_records_itself",
+    "backend/tests/test_worker_registry.py::test_a_job_still_runs_when_its_bookkeeping_cannot_be_written",
+    "backend/tests/test_worker_registry.py::test_the_job_run_table_has_a_prune_and_it_keeps_a_fortnight",
+    "backend/tests/test_worker_registry.py::test_the_prune_never_takes_a_jobs_last_successful_row",
+    "backend/tests/test_worker_registry.py::test_the_retention_outlasts_the_interval_of_every_job_it_keeps",
+    "backend/tests/test_worker_registry.py::test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading",
+    "backend/tests/test_worker_registry.py::test_the_job_names_the_card_reads_are_the_registry_s",
+    # The surface half of the `what`, asserted where the surface is. Decision 182 put these three
+    # facts on /api/admin/system rather than on the Data tab's payload, which the plan's step 5a
+    # named while owner decision 2 was still open and which no page ever read.
+    "backend/tests/test_admin_system.py::test_the_backup_fact_is_the_newest_successful_dump_not_the_newest_attempt",
+    "backend/tests/test_admin_system.py::test_a_dump_is_stale_once_it_is_older_than_a_night_and_a_half",
+    "backend/tests/test_admin_system.py::test_an_install_that_has_never_completed_a_dump_is_stale",
+    "backend/tests/test_admin_system.py::test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_never",
+    "backend/tests/test_admin_system.py::test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs",
+    "backend/tests/test_admin_system.py::test_the_data_tab_payload_does_not_carry_this_cards_facts",
+]
+
+[[requirement]]
+id = "platform-nightly-is-a-night-not-an-uptime"
+spec = "§2 Backups; §5.3; §2 Configuration (TZ)"
+milestone = "M4.7"
+kind = "backend"
+what = "A nightly job fires once per local calendar date resolved through TZ, not once per 24 h of uptime, and a worker restart neither spends nor skips a night: due() over a seeded last-run does not re-fire the every=86400 jobs, and a second dump on the same night is refused. The dump's own guard reads the same local date the anchor does, so a household far from UTC neither loses a night nor spends two slots on one. A failed job is retried within RETRY_AFTER of the moment it failed — not of the moment the attempt began, and not after its full interval — so an attempt that outlasts RETRY_AFTER still waits it out instead of being re-armed on the next tick. A TZ the process cannot resolve is still taken rather than refused, and is warned about once at boot with the boot line naming the clock actually in use instead of the configured string."
+why = "§2's \"rotation 14\" is a promise about nights; today every worker start spends a retention slot, fourteen restarts inside an hour erase two weeks, and TZ is read only by a log line. And the dump's own no-op guard asked the UTC date while the anchor asked the local one, so a household far from UTC skipped a night with job_run.ok true and nothing reporting it. The retry was stamped from the top of the tick, so the 1800 s dump timeout this milestone added against a 300 s RETRY_AFTER gave a blocked pg_dump 36 back-to-back attempts and no idle second between them."
+tests = [
+    "backend/tests/test_worker_schedule.py::test_every_live_daily_job_is_anchored_to_an_hour_of_the_household_s_day",
+    "backend/tests/test_worker_schedule.py::test_the_nightly_anchors_are_staggered_so_one_night_is_not_one_tick",
+    "backend/tests/test_worker_schedule.py::test_a_nightly_job_fires_once_per_local_calendar_date_at_its_anchor",
+    "backend/tests/test_worker_schedule.py::test_a_nightly_job_is_not_due_before_its_anchor_hour",
+    "backend/tests/test_worker_schedule.py::test_a_spring_forward_night_is_not_skipped",
+    "backend/tests/test_worker_schedule.py::test_a_tz_the_container_cannot_resolve_is_reported_at_boot",
+    "backend/tests/test_worker_schedule.py::test_a_tz_that_does_resolve_is_named_as_itself_and_warns_about_nothing",
+    "backend/tests/test_worker_schedule.py::test_the_loop_still_takes_the_fallback_clock_rather_than_stopping",
+    "backend/tests/test_worker_schedule.py::test_fourteen_restarts_inside_an_hour_do_not_erase_a_fortnight",
+    "backend/tests/test_worker_schedule.py::test_the_night_after_a_seeded_run_still_fires",
+    "backend/tests/test_worker_schedule.py::test_an_interval_job_that_has_never_run_is_due_immediately",
+    "backend/tests/test_worker_registry.py::test_the_schedule_seed_reads_the_newest_successful_run_per_job",
+    "backend/tests/test_worker_registry.py::test_a_failed_interval_job_is_retried_within_retry_after",
+    "backend/tests/test_worker_registry.py::test_the_retry_never_delays_a_job_past_its_own_interval",
+    "backend/tests/test_worker_registry.py::test_a_failed_nightly_job_is_retried_tonight_rather_than_tomorrow",
+    "backend/tests/test_worker_registry.py::test_a_failure_that_outlasts_retry_after_still_waits_the_retry_out",
+    # The same arithmetic one job later in the tick: the wait was measured from `now`, which is
+    # read once before the tick's first job, so the runtime of the jobs ahead of the failing one
+    # was missing from it — and a first boot after 06:00 fires all six anchored jobs in one tick
+    # with the dump last. [cycle 3 finding 9]
+    "backend/tests/test_worker_registry.py::test_a_failure_after_a_slow_sibling_still_waits_the_retry_out",
+    "backend/tests/test_worker_registry.py::test_a_successful_nightly_job_is_not_retried_at_all",
+    "backend/tests/test_backup.py::test_a_second_dump_on_the_same_date_is_refused",
+    "backend/tests/test_backup.py::test_a_dump_from_yesterday_does_not_stop_tonights",
+    "backend/tests/test_backup.py::test_last_local_nights_dump_does_not_refuse_this_ones",
+    "backend/tests/test_backup.py::test_a_dump_from_earlier_in_this_local_night_is_still_this_nights",
+    "backend/tests/test_backup.py::test_a_name_of_the_right_shape_but_an_impossible_date_is_never_tonights",
+    "backend/tests/test_worker_registry.py::test_the_backup_job_hands_the_dump_the_households_own_clock",
+]
+
+[[requirement]]
+id = "platform-backup-rotation-owns-only-its-own-names"
+spec = "§2 Backups"
+milestone = "M4.7"
+kind = "backend"
+what = "Rotation deletes only files matching this job's exact generated name; an operator's spielplan-2026-08-14-before-upgrade.dump among fourteen dated dumps survives a prune. A missing pg_dump binary raises the module's own error and leaves no .partial; an IPv6 DATABASE_URL produces a DSN libpq accepts."
+why = "prune's docstring promises \"only files this job's own naming produced\"; the glob matches the operator's copy, which sorts oldest and is deleted on the day they need it."
+tests = [
+    "backend/tests/test_backup.py::test_rotation_leaves_the_operators_own_dated_copy_alone",
+    "backend/tests/test_backup.py::test_rotation_leaves_a_partial_it_did_not_write_alone",
+    "backend/tests/test_backup.py::test_a_name_this_job_could_not_have_written_is_not_this_jobs",
+    "backend/tests/test_backup.py::test_every_name_the_job_generates_is_one_it_owns",
+    "backend/tests/test_backup.py::test_a_missing_pg_dump_is_this_modules_own_error_and_leaves_no_debris",
+    "backend/tests/test_backup.py::test_an_ipv6_database_url_keeps_the_brackets_libpq_needs",
+    "backend/tests/test_backup.py::test_the_dsn_keeps_a_percent_encoded_username",
+]
+
+[[requirement]]
+id = "platform-health-is-honest-under-a-dead-or-hung-database"
+spec = "§1; §3.1"
+milestone = "M4.7"
+kind = "integration"
+what = "/api/health answers 503 when Postgres is unreachable and within its own bound when Postgres hangs, and concurrent health probes cannot exhaust the pool: a request to another route is still answered while ten health probes are in flight against a blocked database, and a request that meets an already-exhausted pool is answered at the acquire bound rather than held — in words the acquire can stand behind, and with a WARNING naming the pool census, because the timeout cannot tell a saturated pool from a peer that has stopped answering. A health probe holds its pooled connection for two of its own bounds and not one."
+why = "The container HEALTHCHECK, CI's wait loop and e2e/run.mjs all key on the status code, and an unbounded acquire converts \"slow database\" into \"every phone hangs\"."
+# Two clauses from cycle 3. The acquire branch answered "database busy" and logged nothing at
+# all, so an install on §2's supported external Postgres losing its route to it told both phones
+# the database was busy — measured, `pool size 0 idle 0`, ten seconds spent inside asyncpg's
+# connect — while the same peer *refusing* one second earlier reaches app.py's handler and logs
+# "database unreachable" with its traceback. And the release is a third step nothing measured:
+# asyncpg defaults `Pool.release`'s timeout to the acquire's and spends a whole one waiting for
+# the out-of-band cancel, which is the 2x the constant's comment denied. [cycle 3 findings 7, 8]
+tests = [
+    "backend/tests/test_http_seam.py::test_health_answers_200_and_the_body_its_three_consumers_read",
+    "backend/tests/test_http_seam.py::test_health_answers_503_when_the_database_is_unreachable",
+    "backend/tests/test_http_seam.py::test_health_gives_up_on_a_hung_database_within_its_own_bound",
+    "backend/tests/test_http_seam.py::test_a_health_probe_holds_its_connection_for_two_of_its_own_bounds_not_one",
+    "backend/tests/test_http_seam.py::test_ten_health_probes_do_not_lock_another_route_out_of_the_pool",
+    "backend/tests/test_http_seam.py::test_an_exhausted_pool_answers_at_the_acquire_bound_rather_than_holding_the_phone",
+    "backend/tests/test_http_seam.py::test_the_acquire_bound_says_in_the_log_which_of_its_two_failures_this_was",
+]
+
+[[requirement]]
+id = "platform-backend-logs-reach-the-container"
+spec = "§6.6 System; §3.1; §2"
+milestone = "M4.7"
+kind = "backend"
+what = "An INFO record on the `spielplan` logger reaches stderr under uvicorn's own logging configuration, with a timestamp, a level and the logger name; and the boot writes the line the runbook greps for whichever way `apply_all` went — naming every version it applied, and saying none were pending when there were none."
+why = "§3.1 makes a bundle-less boot an explicitly reported state and §6.6 names logs; today the backend emits no INFO at all and a real boot that applied every migration printed none of it. And the line the runbook reads was emitted only when something was applied, so the restore case — the one README's Recovery block and this milestone's exit criterion are written about — printed silence, which is also what a crash-looping backend, a mistyped service name and a logging regression print."
+# The second clause is asserted at the integration layer: what is under test is what `apply_all`
+# makes the *lifespan* say, on a database that is already at this build and on one that is not.
+# The row's kind stays `backend` because the cheapest falsifier is still the stderr probe, which
+# needs no database and must not skip. [M4.7 ops-05, ops-09]
+tests = [
+    "backend/tests/test_boot_logging.py::test_an_info_record_reaches_stderr_with_a_timestamp_a_level_and_a_logger_name",
+    "backend/tests/test_boot_logging.py::test_an_error_record_carries_the_same_shape_rather_than_the_bare_message",
+    "backend/tests/test_boot_logging.py::test_a_boot_with_nothing_pending_still_writes_the_line_the_runbook_greps_for",
+    "backend/tests/test_boot_logging.py::test_a_boot_that_applies_migrations_still_names_every_version",
+]
+
+[[requirement]]
+id = "platform-http-error-seam"
+spec = "§4.1; §2"
+milestone = "M4.7"
+kind = "integration"
+what = "The application-level handler renders a unique violation as 409 naming the constraint, a database connection failure as 503 JSON — refused, unresolvable, timed out, unroutable (EHOSTUNREACH/ENETUNREACH/ENETDOWN/EHOSTDOWN/ENETRESET) or refused by TLS — and any other PostgresError as 500, never a bare traceback; a filesystem OSError is not relabelled a database failure in the answer or in the log."
+why = "The only handler was for PostgresError, so a refused connection at first boot escaped as a traceback; registered on the whole OSError family instead, it called an unwritable /data/artifacts a dead database. Narrowed back to exception classes it lost the other half: Python names a ConnectionError subclass only where the peer answered, so a host or network that cannot be reached at all, and a certificate that stopped verifying, escaped as 500 tracebacks again. The seam has to key on what the failure is, not on which of its shapes happens to have a class name. Later milestones need one place where a uniqueness conflict becomes a conflict status."
+tests = [
+    "backend/tests/test_http_seam.py::test_a_unique_violation_becomes_a_409_naming_the_constraint",
+    "backend/tests/test_http_seam.py::test_the_unique_handler_wins_over_the_general_one",
+    "backend/tests/test_http_seam.py::test_a_refused_connection_becomes_a_503_rather_than_a_traceback",
+    "backend/tests/test_http_seam.py::test_every_shape_of_unreachable_becomes_a_503_not_only_the_three_with_class_names",
+    "backend/tests/test_http_seam.py::test_a_filesystem_failure_is_not_reported_as_a_database_failure",
+    "backend/tests/test_http_seam.py::test_both_new_handlers_carry_the_slid_session_cookie",
+]
+
+[[requirement]]
+id = "platform-single-process-state-is-guarded"
+spec = "§1; §6.7"
+milestone = "M4.7"
+kind = "static"
+what = "A guard asserts the shipped CMD starts exactly one uvicorn worker and no gunicorn wrapper, and the app refuses to boot if a multi-worker setting is detected — because the Tonight hub, the §6.7 rail buffers and the push in-flight set are process-local."
+why = "Scaling the backend for a Friday night silently splits the household into two lobbies and two rails, with no log line and no failing test."
+tests = [
+    "backend/tests/test_worker_registry.py::test_the_app_refuses_to_boot_with_a_multi_worker_setting",
+    "backend/tests/test_worker_registry.py::test_one_worker_still_boots",
+    "backend/tests/test_worker_registry.py::test_a_single_worker_env_setting_is_not_a_refusal",
+    # The static half. The three above are the app's runtime refusal, which cannot see the
+    # shipped CMD — and the CMD is where the constraint would be broken first.
+    "backend/tests/test_static_contracts.py::test_the_image_starts_exactly_one_application_process",
+    "backend/tests/test_static_contracts.py::test_the_single_process_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_the_single_process_guard_leaves_the_shipped_cmd_alone",
+]
+
+[[requirement]]
+id = "platform-image-runs-unprivileged-and-installs-the-project"
+spec = "§1; §2; §14.3"
+milestone = "M4.7"
+kind = "static"
+what = "The stage the image ships declares a non-root USER, hands that user no write access to the tree it installed, pins uv, installs the project so its declared console scripts exist, and the HTTP-serving backend receives no writable mount of the host directory the nightly dumps land in, under any container path and however the mount's option list is spelled. The host side of that USER is guarded too: CI gives the container's uid the bind mounts before the stack can create them as root, the e2e reset empties the artifacts mount rather than removing it however the removal is spelled, the upgrade an existing install follows hands those same mounts to uid 1000 before the rebuild that makes it necessary, the two gestures that chown takes away from the host operator — delivering the bundle into data/import, which has no upload route, and removing a leftover .unpacked- tree — are written down where the chown is required, and no document tells the operator to write the movie-data archive in a container with no writable /data/backups."
+why = "§14.3's threat model is that the stored credential is admin-equivalent; the SPA fallback runs unauthenticated in the same process that today holds every dump as root, and the runbook now names two console scripts."
+# Four clauses, four guards, and a self-test apiece: each guard is handed a synthetic violation
+# it must catch, because two guards in this same file passed on a compose file of pure comments
+# and that is the instrument this milestone is repairing (docs/TESTING.md's own rule).
+#
+# Three of those self-tests then constructed only the spelling their own guard matched, which is
+# the same failure one level up, and the `what` above is worded against all three now. The root
+# guard read the last `USER` anywhere in a file that has been two stages since M0, so a `USER`
+# added to the node build stage covered a runtime stage that had lost its own. The dumps clause
+# filtered on the *container* path, so `- ./data/backups:/backups` — the line the `db` service
+# already carries — and `- ./data:/data` both delivered every dump to the HTTP container with the
+# guard green; it reads the host side now, taken from the worker's own mount. And the reset guard
+# matched one inline `join(ROOT, 'data', '<mount>')`, while the fix it protects had introduced the
+# `const artifacts` that makes `rmSync(artifacts, …)` the natural regression.
+#
+# Two more clauses, from the same review one cycle later. The USER directive was half undone by a
+# `chown -R spielplan:spielplan /app` in the same RUN: ./data is mounted at /data and never under
+# /app, so it reached nothing the comment above it named and instead gave the runtime user the
+# code, the migrations and the static bundle - a write reached through the anonymous SPA fallback
+# would have survived a restart. Nothing read that line at any layer. And the mount half has a
+# documentary consequence nobody had asserted: with ./data/backups off x-backend-volumes,
+# `movie_data.py`'s own docstring still told the operator to write decision 162's only copy of the
+# household's movie data with `docker compose exec backend`, which cannot write it at all.
+tests = [
+    "backend/tests/test_static_contracts.py::test_the_image_does_not_run_its_processes_as_root",
+    "backend/tests/test_static_contracts.py::test_the_root_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_the_root_guard_reads_the_stage_that_ships_rather_than_the_order_within_it",
+    "backend/tests/test_static_contracts.py::test_the_image_pins_the_tool_that_installs_everything_else",
+    "backend/tests/test_static_contracts.py::test_the_uv_pin_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_the_uv_pin_guard_accepts_a_flagged_pin",
+    "backend/tests/test_static_contracts.py::test_the_image_installs_the_project_and_not_only_its_dependencies",
+    "backend/tests/test_static_contracts.py::test_the_project_install_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_the_http_container_does_not_carry_the_nightly_dumps",
+    "backend/tests/test_static_contracts.py::test_the_backups_guard_sees_the_dumps_reach_the_http_container",
+    # One cycle later again, in the half of the mount the rewrite left alone: the mode was read as
+    # a word and compared to "rw", but it is an option list — `:z` is what every SELinux guide has
+    # an operator append when a bind mount answers Permission denied, `:Z` did not even parse, and
+    # `:rw,z` is that advice on a line that already had a mode. All three writable, all three read
+    # as harmless, and the guard's own three self-tests were written bare so none could find it.
+    # This is the only mode comparison in the file that fails open; `_mounts`' identical idiom
+    # fails the assertion instead. The read-only case is asserted from the other side now, because
+    # the rule is about a *writable* copy and `:ro` has to keep satisfying it.
+    "backend/tests/test_static_contracts.py::test_the_backups_guard_leaves_a_read_only_mount_alone",
+    # The half that lands on the host rather than in the image, and the one the image guards
+    # cannot see: Docker recreates a missing bind-mount source as root, so a reset that removed
+    # `data/artifacts` spent CI's chown before phase one's import needed it. Linux-only, which
+    # means CI-only — no developer's box and no other layer of this suite can fail on it.
+    "backend/tests/test_operator_runbook.py::test_the_e2e_reset_empties_the_bind_mount_it_clears_and_removes_none_of_them",
+    "backend/tests/test_operator_runbook.py::test_the_reset_guard_sees_the_directory_being_removed",
+    "backend/tests/test_operator_runbook.py::test_the_e2e_job_chowns_the_bind_mounts_before_the_stack_can_create_them",
+    "backend/tests/test_operator_runbook.py::test_the_chown_ordering_guard_sees_the_step_moved_after_the_stack",
+    "backend/tests/test_operator_runbook.py::test_the_e2e_reset_hands_the_artifacts_mount_to_the_uid_that_writes_it",
+    "backend/tests/test_operator_runbook.py::test_the_mount_ownership_guard_sees_the_step_removed_or_reordered",
+    # And the half that lands on an install which was running yesterday. The chown shipped in the
+    # two places a *fresh* install reads and in neither that an upgrade does, so `git pull &&
+    # docker compose up -d --build` left five root-owned mounts under a uid-1000 image: no dump, no
+    # staged bundle, and no heartbeat file for the worker's own healthcheck to read. The same chown
+    # then takes two gestures away from the operator in `data/import`, which is the directory the
+    # wizard's third step reads and the only one they have to put a file into by hand.
+    "backend/tests/test_operator_runbook.py::test_the_upgrade_block_hands_the_bind_mounts_to_the_uid_the_new_image_runs_as",
+    "backend/tests/test_operator_runbook.py::test_the_upgrade_chown_guard_sees_each_way_the_step_can_be_lost",
+    "backend/tests/test_operator_runbook.py::test_the_document_that_requires_the_chown_says_how_to_reach_the_import_directory",
+    "backend/tests/test_operator_runbook.py::test_the_import_gesture_guard_sees_either_half_go_missing",
+    "backend/tests/test_box_claims.py::test_the_image_does_not_hand_its_own_install_tree_to_the_runtime_user",
+    "backend/tests/test_box_claims.py::test_the_install_tree_guard_catches_a_real_violation",
+    "backend/tests/test_box_claims.py::test_the_install_tree_guard_ignores_a_stage_that_does_not_ship",
+    "backend/tests/test_backup.py::test_every_place_that_names_the_archive_command_names_a_container_that_can_write_it",
+    "backend/tests/test_backup.py::test_the_archive_command_guard_sees_the_container_that_cannot_write_it",
+]
+
+[[requirement]]
+id = "platform-movie-data-archive-is-a-snapshot-and-a-locked-restore"
+spec = "§10; §2 Backups; decision 162"
+milestone = "M4.7"
+kind = "integration"
+what = "The archive is written from one repeatable-read snapshot with its sequence positions read after the rows, so a title minted mid-write is either wholly in or wholly out and the recorded position is never below an archived id, and it is renamed into place only when whole and leaves no debris when the rename itself is what fails; the restore validates its manifest and the entries the manifest names, refuses before writing — including a manifest that does not parse and a schema that carries none of the archived tables — holds the archived tables against concurrent writes, and leaves no title claiming a placement whose basis the archive does not carry."
+why = "Decision 162 makes id collision the failure this module exists to prevent; today the occupancy refusal never fires against a concurrent write and the next mint after such a restore raises a duplicate key."
+# Three from cycle 3, all the same shape as cycle 2's: a failure the docstring promises as a
+# refusal arriving as a traceback, or as debris. The rename was the one step outside the guard
+# that unlinks the partial, so the only failure that happens with the whole archive already
+# written was the only one that left it on disk; the manifest parse sits ahead of every refusal
+# and answers a stray comma with a `JSONDecodeError`; and `_layout`'s `RuntimeError` is what an
+# unmigrated database — README's Recovery order, backend not started yet — gets instead of a
+# sentence. [cycle 3 findings 10, 11]
+tests = [
+    "backend/tests/test_backup.py::test_a_title_minted_during_the_write_is_wholly_out_of_the_archive",
+    "backend/tests/test_backup.py::test_the_recorded_sequence_position_is_never_below_an_archived_id",
+    "backend/tests/test_backup.py::test_the_recorded_position_is_bounded_by_rows_the_sequence_never_minted",
+    "backend/tests/test_backup.py::test_the_restore_holds_the_archived_tables_against_a_concurrent_write",
+    "backend/tests/test_backup.py::test_a_hand_edited_manifest_is_a_refusal_and_not_a_keyerror",
+    "backend/tests/test_backup.py::test_a_manifest_that_is_not_json_is_a_refusal_and_not_a_decoder_traceback",
+    "backend/tests/test_backup.py::test_a_restore_into_a_schema_without_the_archived_tables_is_a_refusal",
+    "backend/tests/test_backup.py::test_an_archive_missing_a_member_is_a_refusal_and_not_a_keyerror",
+    "backend/tests/test_backup.py::test_a_restore_leaves_no_title_claiming_a_placement_it_has_no_basis_for",
+    "backend/tests/test_backup.py::test_an_interrupted_write_leaves_the_previous_archive_where_it_was",
+    "backend/tests/test_backup.py::test_a_rename_that_cannot_land_leaves_no_archive_behind",
+]
+
+[[requirement]]
+id = "platform-every-declared-router-is-mounted"
+spec = "§4.1; CLAUDE.md (api/ decides only HTTP shapes)"
+milestone = "M4.7"
+kind = "static"
+what = "Every module under spielplan/api/ exporting a `router` has its paths present in the application's OpenAPI schema, and no test file mounts a router the application owns."
+why = "Five test scaffolds re-mount their own router unconditionally, so dropping an include_router ships Home and the whole Rate surface as 404 with four CI jobs green."
+tests = [
+    "backend/tests/test_static_contracts.py::test_every_router_under_api_is_mounted_on_the_application",
+    "backend/tests/test_static_contracts.py::test_the_router_mount_guard_notices_a_dropped_include",
+    "backend/tests/test_static_contracts.py::test_no_test_file_mounts_a_router_the_application_owns",
+    "backend/tests/test_static_contracts.py::test_the_scaffold_guard_catches_a_re_mounted_router",
+]
+
+[[requirement]]
+id = "platform-openapi-is-not-served-anonymously"
+spec = "§2; §14 risk 3"
+milestone = "M4.7"
+kind = "backend"
+what = "/api/docs and the OpenAPI schema are not served over HTTP outside an explicit dev flag, while create_app().openapi() still builds for the gating tests."
+why = "The schema enumerates every admin and setup route with its body shapes to anonymous callers — the reconnaissance step for every other finding, and free to close."
+tests = [
+    "backend/tests/test_http_seam.py::test_the_schema_and_both_renderers_are_404_to_an_anonymous_caller",
+    "backend/tests/test_http_seam.py::test_the_schema_still_builds_in_process_for_the_gating_sweeps",
+    "backend/tests/test_http_seam.py::test_the_dev_flag_serves_the_docs_again",
+]
+
+[[requirement]]
+id = "platform-system-card-reports-backups-and-custody"
+spec = "§6.6 System; §2; decision 182"
+milestone = "M4.7"
+kind = "e2e"
+what = "The admin System card reads back three facts and no more: the newest successful backup with its age, the SECRETS_KEY fingerprint with the active key_id, and the newest job_run row per job — and it reports custody as unreadable while any sealed row is, including after the Connectors card's repair has retired the key the rest of them name. Both halves of that repair are rendered: this card warns that a sealed row will not open, and the Connectors card, where the repair is offered, says what pressing Save costs the secrets it is not about."
+why = "Decision 182 keeps the card minimal while §6.6's full contents wait for M5; without a surface, the job_run table this milestone adds has no reader and the operator still cannot answer \"did last night's dump happen\"."
+tests = [
+    "e2e/specs/18-system.spec.js::the System tab is a link to a card of exactly three facts",
+    "e2e/specs/18-system.spec.js::custody is reported as a fingerprint and a key_id, never as the key",
+    "e2e/specs/18-system.spec.js::the backup fact names the newest successful dump, and warns when there is none",
+    "e2e/specs/18-system.spec.js::every job the worker has recorded is listed with its outcome",
+    "e2e/specs/18-system.spec.js::the card is admin-only and the schema is not published to anonymous callers",
+    # The `what`'s last clause, which until now was asserted only on the route's JSON: the only
+    # DOM assertion naming `system-secrets-unreadable` asserted its ABSENCE, so the branch that
+    # renders the warning could be deleted with every test here still green. The e2e stack's
+    # SECRETS_KEY cannot change mid-suite and no product gesture breaks custody, so the seam is
+    # the response — the live payload with the one boolean flipped. [M4.7 ops-11, dd03]
+    "e2e/specs/18-system.spec.js::custody says so when SECRETS_KEY no longer opens every stored secret",
+    # The same hole, one card over, and it survived cycle 1: `{#if cfg?.secrets_unreadable}` on
+    # the Connectors card and the paragraph it guards were asserted by nothing at any layer, so
+    # the branch could be deleted and this suite stayed green — while that paragraph is the only
+    # place the product says Save repairs Jellyfin by retiring the DEK it cannot open, stranding
+    # web push and every other secret sealed under it. Copy nobody asserts drifts from the
+    # behaviour it describes, and cycle 2 changed what `secrets_unreadable` means underneath it.
+    # [M4.7 dd03, §14.3]
+    "e2e/specs/18-system.spec.js::the Connectors card says what its own custody repair costs",
+    "e2e/specs/05-milestones.spec.js::the admin Data, Connectors, Users and System tabs are all real",
+    "backend/tests/test_admin_system.py::test_the_card_reports_exactly_three_facts_and_no_more",
+    "backend/tests/test_admin_system.py::test_the_fingerprint_is_short_stable_and_not_the_key",
+    "backend/tests/test_admin_system.py::test_two_keys_have_two_fingerprints",
+    "backend/tests/test_admin_system.py::test_the_card_never_hands_the_secrets_key_to_the_browser",
+    "backend/tests/test_admin_system.py::test_the_card_reports_the_newest_run_of_each_job",
+    "backend/tests/test_admin_system.py::test_a_job_that_started_and_never_finished_is_reported_as_unfinished",
+    "backend/tests/test_admin_system.py::test_the_backup_fact_is_the_newest_successful_dump_not_the_newest_attempt",
+    "backend/tests/test_admin_system.py::test_a_dump_is_stale_once_it_is_older_than_a_night_and_a_half",
+    "backend/tests/test_admin_system.py::test_an_install_that_has_never_completed_a_dump_is_stale",
+    "backend/tests/test_admin_system.py::test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs",
+    "backend/tests/test_admin_system.py::test_the_data_tab_payload_does_not_carry_this_cards_facts",
+    "backend/tests/test_admin_system.py::test_a_wrong_secrets_key_is_reported_rather_than_raised",
+    "backend/tests/test_admin_system.py::test_the_connectors_repair_does_not_heal_this_card_while_a_secret_is_still_sealed",
+    "backend/tests/test_admin_system.py::test_an_install_with_no_secrets_key_reports_that_rather_than_a_fingerprint",
+    "backend/tests/test_admin_system.py::test_the_card_is_refused_to_a_signed_out_caller_and_to_a_member",
+]

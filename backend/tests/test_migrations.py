@@ -63,6 +63,25 @@ def test_the_real_migrations_are_discovered_in_order():
     assert versions[0].startswith("0001")
 
 
+async def test_a_missing_migrations_directory_is_refused_before_the_database_is_touched(tmp_path):
+    """An absent directory is a packaging error, and `Path.glob` cannot tell you so.
+
+    `glob` on a directory that does not exist yields nothing rather than raising, so both entry
+    points used to read "no migrations to apply" out of it: `apply_all` created
+    `schema_migration`, returned `[]`, and the app came up with exactly one table and 404s
+    everywhere — which is what a Dockerfile that stops copying `backend/migrations` produces,
+    reported as a healthy boot. [M4.7 data-08]
+
+    `None` for the connection is the second half of the assertion: if either function reached
+    the database before checking, this would fail with an AttributeError instead. The refusal
+    has to come first, because the empty schema is the damage.
+    """
+    absent = tmp_path / "migrations-that-were-never-shipped"
+    for call in (migrate.apply_all(None, absent), migrate.pending(None, absent)):
+        with pytest.raises(RuntimeError, match="no migrations directory"):
+            await call
+
+
 def test_bootstrap_stripping_removes_only_the_schema_migration_table():
     """The production runner rewrites 0001 before executing it (the runner creates
     `schema_migration` itself with IF NOT EXISTS). PGlite applies the raw file, so this rewrite
@@ -141,7 +160,17 @@ def test_auth_session_does_not_squat_on_the_tonight_session_name(schema):
 
     auth = _columns(schema, "auth_session")
     tonight = _columns(schema, "session")
-    assert "token_hash" in auth or "id" in auth
+    # Written as `"token_hash" in auth or "id" in auth`, and `auth_session` has never had a
+    # `token_hash` — `0002_users.sql` gives it an opaque text `id` that is signed into the
+    # cookie, and a grep for the name across `backend/` found only that assertion. So the
+    # disjunction rested entirely on the table's primary key, which is to say on nothing: every
+    # table in this schema has an id. What carries the cookie is asserted instead — the four
+    # columns a session needs to *be* one, and the id's type, because a bigserial id would mean
+    # the cookie carries a guessable number. [M4.7 tq2-migrations-token-hash]
+    assert {"id", "user_id", "expires_at", "auth_method"} <= set(auth), sorted(auth)
+    assert auth["id"]["data_type"] == "text", (
+        "§3.2's session id is opaque and signed into the cookie, so it is not a serial"
+    )
     # The distinguishing column, not merely a different row count: a Tonight session has a host
     # and a room; an auth session has neither and must never acquire them.
     assert "host_user_id" in tonight and "room_code" in tonight

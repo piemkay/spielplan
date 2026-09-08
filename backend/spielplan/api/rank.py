@@ -64,7 +64,7 @@ _rng = random.SystemRandom()
 
 
 def _sealer() -> URLSafeSerializer:
-    return URLSafeSerializer(settings().session_secret or "insecure-dev-secret", _PAIR_SALT)
+    return URLSafeSerializer(settings().session_secret, _PAIR_SALT)
 
 
 def _seal(user_id: int, kind: str, pair: queue.Pair, answered: int) -> str:

@@ -192,8 +192,13 @@ def _vocabulary_version(identity: dict[str, Any], artifacts_dir: Path) -> str | 
     return versions[-1] if versions else None
 
 
+# The prefix `_unpack` writes and `_clean_unpacked` deletes. One name, two users: a tree nothing
+# can recognise is a tree nothing can clean, which is how it survived five milestones.
+_UNPACKED = ".unpacked-"
+
+
 def _unpack(archive: Path) -> Path:
-    target = archive.parent / f".unpacked-{archive.stem}"
+    target = archive.parent / f"{_UNPACKED}{archive.stem}"
     if target.is_dir():
         return _single_child(target)
     target.mkdir(parents=True)
@@ -675,7 +680,49 @@ async def import_bundle(
         if db is not None:
             db.close()
 
+    if report.ok:
+        _clean_unpacked(bundle, report)
     return report
+
+
+def _clean_unpacked(bundle: Bundle, report: ImportReport) -> None:
+    """Delete the tree `_unpack` extracted, once the import that needed it has committed.
+
+    `_unpack` was the only writer of `.unpacked-<stem>/` and there was no reader and no cleaner
+    anywhere: every validated archive left a full second copy of itself under `/data/import`,
+    `content.sqlite` and `reviews.sqlite` included — 790 MB of a 1042 MB bundle, and the two
+    files the staged `/data/artifacts/<version>/` copy deliberately does not carry. The same
+    bundle offered as `.tar` and as `.tar.zst` has two different stems and left two trees; the
+    measured total was 3.6 GB for one bundle. `docker-compose.yml` binds `./data/import` from the
+    host, so that is the household's disk, and `POST /validate` — documented as writing nothing —
+    is what spends it.
+
+    Only after a commit, and only for a tree this module extracted. A failed import is exactly
+    when the operator retries, and making them re-extract a gigabyte to do it would be a
+    punishment for a failure that is usually the bundle's. A directory bundle is left alone: it
+    is the operator's own directory, not this module's scratch space. [M4.7 dd10]
+
+    The note follows the outcome, not the call. `ignore_errors=True` stays — housekeeping must
+    never fail an import that has already committed — but it swallows EACCES, EBUSY, ENOTEMPTY
+    and "cannot call rmtree on a symbolic link" alike, so a note written unconditionally after it
+    reported every one of those to the household as a success. The install that meets this is one
+    this milestone created: a `.unpacked-*` tree written by the previous root container, which the
+    uid-1000 image reuses happily (`_unpack` reuses an existing tree) and then cannot unlink out
+    of a root-owned directory. Reporting 790 MB freed while they are still on the host's disk is
+    worse than reporting nothing, because dd10's whole subject is that nobody could see what
+    `/data/import` was holding. [M4.7 dd10; cycle 2 finding 12]
+    """
+    unpacked = bundle.root if bundle.root.name.startswith(_UNPACKED) else bundle.root.parent
+    if not unpacked.name.startswith(_UNPACKED):
+        return
+    shutil.rmtree(unpacked, ignore_errors=True)
+    if unpacked.exists():
+        report.note(
+            "cleanup",
+            f"could not remove the unpacked bundle tree at {unpacked} - delete it by hand",
+        )
+    else:
+        report.note("cleanup", f"removed the unpacked bundle tree at {unpacked}")
 
 
 def _manifest_of(bundle: Bundle) -> dict:

@@ -159,7 +159,13 @@ async def seed_connector(body: ConnectorSeed, _: AdminUser, conn: DB) -> dict[st
     the app refuses rather than falling back."""
     if body.secrets:
         settings().require_secrets_key()
-    await secrets.put_connector_secrets(conn, body.name, body.config, body.secrets)
+    # `retire_unreadable`: the same admin gesture as the Connectors card's PUT, on the same page
+    # of the wizard and behind the same `AdminUser` — an admin typing a credential into an
+    # install whose stored DEK will not open. Without it this route answered a bare 500 from
+    # `ensure_dek` (M4.7 dd03), which is the one thing §3.1's half-configured boot must not do.
+    await secrets.put_connector_secrets(
+        conn, body.name, body.config, body.secrets, retire_unreadable=True
+    )
     await conn.execute(
         "INSERT INTO setup_step (step) VALUES ('connectors') ON CONFLICT (step) DO NOTHING"
     )

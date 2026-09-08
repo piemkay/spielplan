@@ -33,11 +33,18 @@ from typing import Any
 import asyncpg
 
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, NowPlaying
-from spielplan.core.config import settings
 
 log = logging.getLogger("spielplan.sync.playback")
 
 OPEN_STATES = ("armed", "shown")
+
+# §7.3: ">= 90% playback ... arms a per-user prompt". A module constant, not a `Settings` field,
+# because §7.3 states one number and no proposal asks for a knob: this was a `finish_threshold`
+# setting carrying a comment inviting a household to lower it, and the name appeared in neither
+# `.env.example` nor `docker-compose.yml`, so no operator of the stack this repository ships could
+# have reached it anyway. Configurability nobody asked for and nobody can use is the kind
+# CLAUDE.md forbids; the spec is where this number changes. [M4.7 ds07]
+FINISH_THRESHOLD = 0.9
 
 
 @dataclass
@@ -106,7 +113,6 @@ async def observe(
     marks the item played — §7.3 names both the ">= 90%" and the "IsPlayed delta" paths, and a
     viewer who stops at 88% and taps "mark watched" in Jellyfin should still be asked.
     """
-    threshold = settings().finish_threshold
     users = {
         r["jellyfin_user_id"]: r["id"]
         for r in await conn.fetch(
@@ -122,7 +128,7 @@ async def observe(
             # An unlinked Jellyfin user is not an error (§3.3: linking is optional) — there is
             # simply nobody in this app to ask.
             continue
-        if not (playing.played or playing.fraction >= threshold):
+        if not (playing.played or playing.fraction >= FINISH_THRESHOLD):
             continue
         title_id = await conn.fetchval(
             "SELECT id FROM title WHERE jellyfin_id = $1", playing.item_id

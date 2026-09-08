@@ -98,8 +98,22 @@ class Tower:
 
 def tower_threads() -> int:
     """§2's reference box is 4 vCPU, and the box also runs Postgres, the API and the worker.
-    Letting torch claim every core makes the nightly sweep starve the request path."""
-    return max(1, min(4, os.cpu_count() or 1))
+    Letting torch claim every core makes the nightly sweep starve the request path.
+
+    Which is what the body did: `min(4, cpu_count())` is *every* core on the box the docstring
+    above describes, so the sentence argued for a cap the return statement did not apply. Half,
+    capped at two, leaves the request path two cores while the sweep runs — and the sweep runs on
+    the loop thread inside a sequential tick (`worker._tick`), so the cores it does not take are
+    the only ones §7.3's minute poll and a phone's request have. Two rather than "half, uncapped"
+    because §2 fixes the reference box at four and a larger box is not a licence to take more:
+    the work is a nightly sweep with a "seconds" budget, not a throughput job.
+
+    Moving the model jobs off the loop thread is the fuller fix and is deliberately not this
+    milestone's — it collides with making the tick concurrent, and the duration logging
+    `worker._tick` now emits is what gets the real-corpus numbers measured first.
+    [M4.7 ops-14; decision 181]
+    """
+    return max(1, min(2, (os.cpu_count() or 1) // 2))
 
 
 # Per (path, mtime, contract) — §5.3's "<1 s/title" is steady-state work, and module load is

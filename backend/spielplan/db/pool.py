@@ -16,16 +16,24 @@ import asyncpg
 
 from spielplan.core.config import settings
 
-# §4.1 rule 3: the feature builder must not be able to reach `display`. Application
-# connections keep it out of search_path; a future feature-builder role gets no USAGE at all.
+# §4.1 rule 3: the feature builder must not be able to reach `display`. What actually keeps that
+# boundary is the single schema-qualified read in `db/library.py` and the guard that pins it there
+# (`test_landmine_guards.py::test_display_schema_is_read_from_exactly_one_place`); a future
+# feature-builder role gets no USAGE at all. This line is only the belt: it makes an *unqualified*
+# reference to a display table fail rather than resolve, which is worth having and is not the rule.
+#
+# Said plainly because the comment used to claim the enforcement outright while the setting was
+# silently not in force: `SET search_path` inside `init=` is a session-local statement, and asyncpg
+# issues `RESET ALL` when a connection is released back to the pool. `SHOW search_path` read
+# `public` on a fresh connection and `"$user", public` after one release and re-acquire — so every
+# connection after the first had the default. As a *startup* parameter it survives the reset,
+# because `RESET ALL` restores the values the connection was opened with. [M4.7 schema-pool-acquire]
 APP_SEARCH_PATH = "public"
 
 _pool: asyncpg.Pool | None = None
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
-    await conn.execute(f"SET search_path TO {APP_SEARCH_PATH}")
-
     # asyncpg hands back json/jsonb as *text* unless a codec is registered. Every caller then
     # has to remember to parse it, and the one that forgets does not crash — it ships a string
     # where a list was expected, and the UI iterates it character by character. That is exactly
@@ -43,6 +51,7 @@ async def open_pool(dsn: str | None = None, *, min_size: int = 1, max_size: int 
             dsn or settings().database_url,
             min_size=min_size,
             max_size=max_size,
+            server_settings={"search_path": APP_SEARCH_PATH},
             init=_init_connection,
         )
     return _pool

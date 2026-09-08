@@ -16,7 +16,7 @@ env:
   # the browser tests must run against the same one the app was told it has.
   PUBLIC_URL: http://localhost:8080
   SESSION_SECRET: ci-session-secret-not-a-real-one
-  SECRETS_KEY: ci-secrets-key-not-a-real-one
+  SECRETS_KEY: ci-secrets-key-not-a-real-one-at-all
   POSTGRES_USER: spielplan
   POSTGRES_PASSWORD: spielplan
   POSTGRES_DB: spielplan
@@ -98,6 +98,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
+      # The same variables `.env.example` asks an operator to fill, and no more. DATABASE_URL used
+      # to be written here too, which short-circuited the `${DATABASE_URL:-postgresql://...}`
+      # default docker-compose.yml builds out of the three POSTGRES_* values — so the one
+      # expression a household actually runs on was first evaluated on the household's box, by an
+      # operator, at first boot. It is evaluated here now: the backend connects or this job fails.
+      # [M4.7 ops-12]
       - name: write the env the compose stack requires
         run: |
           cat > .env <<EOF
@@ -107,7 +113,6 @@ jobs:
           POSTGRES_USER=$POSTGRES_USER
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
           POSTGRES_DB=$POSTGRES_DB
-          DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/$POSTGRES_DB
           BIND_ADDR=127.0.0.1
           PORT=8080
           TZ=Europe/Berlin
@@ -123,6 +128,21 @@ jobs:
           fx.make_bundle(pathlib.Path('data/import'))
           print('fixture bundle written')
           PY
+
+      # ops/backend.Dockerfile runs its processes as uid 1000 (§14.3), and every ./data path is a
+      # host bind mount: the step above created data/import as this runner's user, and Docker
+      # creates the four that do not exist yet as root. Without this the worker cannot write a
+      # dump and the importer cannot stage the bundle the whole e2e suite is about. README's
+      # "Running it" carries the same two lines for a household box. Not data/pg — that belongs
+      # to the postgres image's own user.
+      #
+      # It runs before the stack because Docker creates a missing mount source as root, and it is
+      # spent once: `e2e/reset.mjs` empties `data/artifacts` rather than removing it, precisely so
+      # that this step still holds after the reset it runs in the middle of. [M4.7 sec-08]
+      - name: give the container's uid the bind mounts it writes
+        run: |
+          mkdir -p data/raw data/artifacts data/cache data/import data/backups
+          sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
 
       # ops/compose.e2e.yml adds the fake Jellyfin §7.3's two-way sync is tested against.
       - run: >

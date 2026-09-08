@@ -29,6 +29,12 @@ log = logging.getLogger("spielplan.connectors")
 
 JELLYFIN = "jellyfin"
 
+# The one sentence every degraded surface says, so the rail line, the seen-state response and
+# §6.6's Connectors card cannot drift apart. It names the environment variable because that is
+# the thing an operator can act on; a member reading it in the rail learns that their tap was
+# kept and that the household's admin has something to fix. [M4.7 dd03]
+SECRETS_UNREADABLE_REASON = "connector secrets unreadable (SECRETS_KEY)"
+
 
 @dataclass(frozen=True)
 class JellyfinConfig:
@@ -41,6 +47,11 @@ class JellyfinConfig:
     # because JSON object keys are strings and round-tripping them as ints invites a silent
     # type mismatch between "3" and 3.
     user_tokens: dict[str, str] = field(default_factory=dict)
+    # Not "unconfigured": the row exists and its credentials are real, they just cannot be
+    # opened with this SECRETS_KEY. Distinguishing the two is the whole point — the first is a
+    # household that has not set up Jellyfin, the second is a household whose admin has to
+    # restore an env file, and only one of them should be told so (§2, §3.3).
+    secrets_unreadable: bool = False
 
     @property
     def configured(self) -> bool:
@@ -106,7 +117,27 @@ async def seed_from_env(conn: asyncpg.Connection, cfg: Settings | None = None) -
             # whose SECRETS_KEY the storage layer never sees, and the guard would pass while
             # the write failed one frame later.
             settings().require_secrets_key()
-        await secrets.put_connector_secrets(conn, name, config, secret or None)
+        try:
+            await secrets.put_connector_secrets(conn, name, config, secret or None)
+        except secrets.SecretsUnreadable as exc:
+            # A custody failure is reported here, never raised. `app.py`'s lifespan calls this
+            # before anything else, so the exception escaped the lifespan and the container never
+            # started — with `restart: unless-stopped` looping it, and the repair the README names
+            # (`docker compose exec backend spielplan-secrets reset`) needing a container that is
+            # up. §3.1 makes a half-configured boot legal and `_report_secret_custody` one frame
+            # later already establishes that this is the shape custody failures take at boot.
+            #
+            # Skipped rather than repaired: retiring the operator's DEK row is an explicit admin
+            # gesture (`ensure_dek`'s `retire_unreadable`), and doing it unattended at every
+            # restart would spend on an env variable the one repair that costs the household
+            # every ciphertext the correct .env would still have opened.
+            #
+            # M4.7 is what made this reachable: before step 8 none of the six seed variables
+            # arrived in a container at all, and `x-app-env` now forwards every one — so an
+            # operator restoring a dump on a box whose .env carries any of them meets it.
+            # [M4.7 dd03, ds01; decision 181]
+            log.error("connector %s not seeded from env: %s", name, exc)
+            continue
         seeded.append(name)
 
     if seeded:
@@ -138,7 +169,31 @@ def make_client(cfg: JellyfinConfig):
 
 
 async def load_jellyfin(conn: asyncpg.Connection) -> JellyfinConfig:
-    config, secret = await secrets.get_connector_secrets(conn, JELLYFIN)
+    """The stored connector, or a truthfully degraded one when its secrets will not open.
+
+    §3.3 makes the app-side write independent of Jellyfin and §3.1 makes a half-configured boot
+    legal, so an unreadable DEK must not be able to take a route down. This function is on the
+    path of six routes (`api/state`, `api/rate` x4, `api/admin`) and until M4.7 the `InvalidTag`
+    under it answered 500 on all of them — including `PUT /api/admin/connectors/jellyfin`, the
+    one route that could have repaired custody, which made the failure unrecoverable from the UI
+    (dd03). Degrading to an unconfigured-looking config with `secrets_unreadable` set keeps the
+    stored URL (the admin needs to see what is configured) and drops the credentials, so
+    `configured` is False, `make_client` returns None and every caller takes the path it already
+    has for "Jellyfin is not set up" — with a different reason attached.
+    """
+    try:
+        config, secret = await secrets.get_connector_secrets(conn, JELLYFIN)
+    except secrets.SecretsUnreadable as exc:
+        # ERROR, and on every read rather than once per process: §6.6 names logs as the
+        # operator's data, this is not transient, and de-duplicating it would need process state
+        # that a second uvicorn worker or the worker container would not share. At household
+        # scale a line per tap is the right volume; `app.py`'s boot probe is what makes the first
+        # one arrive before anybody taps anything.
+        log.error("jellyfin connector secrets are unreadable: %s", exc)
+        stored_url = await conn.fetchval(
+            "SELECT config ->> 'url' FROM connector_config WHERE name = $1", JELLYFIN
+        )
+        return JellyfinConfig(url=str(stored_url or ""), secrets_unreadable=True)
     tokens = secret.get("user_tokens") or {}
     return JellyfinConfig(
         url=str(config.get("url") or ""),
@@ -174,14 +229,26 @@ async def save_jellyfin(
     if moved:
         log.info("jellyfin origin changed — stored credentials dropped, re-entry required (§14.3)")
 
+    # An unreadable current row is the same merge problem as `moved`, one layer down: there is
+    # nothing to carry forward, because nothing could be read. Treating it as "keep what is
+    # stored" would seal an empty api_key over a real one and call it a save.
+    #
+    # A merge fact and nothing more. M4.7 also derived the *custody repair* from it, and that was
+    # wrong in the state where this connector has no ciphertext at all: `load_jellyfin` can only
+    # report `secrets_unreadable` for a row that already holds one, so on an install whose DEK
+    # was minted for the VAPID pair alone the repair never armed and the PUT 500ed. The repair is
+    # `ensure_dek`'s to make, because it belongs to the DEK rather than to one connector's stored
+    # bytes. [M4.7 dd03]
+    lost = current.secrets_unreadable
+
     merged = JellyfinConfig(
         url=next_url,
-        api_key=api_key if api_key else ("" if moved else current.api_key),
+        api_key=api_key if api_key else ("" if moved or lost else current.api_key),
         library_ids=library_ids if library_ids is not None else current.library_ids,
         user_tokens=(
             user_tokens
             if user_tokens is not None
-            else ({} if moved else current.user_tokens)
+            else ({} if moved or lost else current.user_tokens)
         ),
     )
     # A URL on its own is not a secret, and saving one must not demand SECRETS_KEY — the admin
@@ -190,14 +257,34 @@ async def save_jellyfin(
     if merged.api_key or merged.user_tokens:
         settings().require_secrets_key()
         secret = {"api_key": merged.api_key, "user_tokens": merged.user_tokens}
+    stored_config = {"url": merged.url, "library_ids": merged.library_ids}
+    if lost and not moved and secret is None:
+        # Correcting the URL on an install whose DEK will not open. There is no new secret to
+        # seal and the stored one could not be read, so writing NULL over it would destroy a
+        # ciphertext that is unreadable only until the right .env comes back (§2).
+        #
+        # `not moved`, because keeping the ciphertext is only right while it still belongs to the
+        # server it is being kept for. A changed origin is the one save that has to fall through
+        # to the NULL: `moved` means those credentials are dead to this install (§14.3), and
+        # preserving them here would hand the old server's admin-equivalent key and every §7.3
+        # token to whatever host was just typed in, on the day the correct .env came back — while
+        # the log line above had already told the admin they were dropped. [M4.7 dd03]
+        await secrets.put_connector_config(conn, JELLYFIN, stored_config)
+        return merged
+    # `retire_unreadable`: this is the PUT that re-enters the key, and it has to succeed or dd03's
+    # failure has no cure but SQL — `ensure_dek` unwraps the active row before it can seal
+    # anything, so the repair route died of the same error as the routes it exists to fix. An
+    # admin typing a credential is the gesture that authorises retiring a row nothing can open,
+    # whether or not this connector already held a ciphertext (§14.3, §2). [M4.7 dd03]
     await secrets.put_connector_secrets(
-        conn, JELLYFIN, {"url": merged.url, "library_ids": merged.library_ids}, secret
+        conn, JELLYFIN, stored_config, secret, retire_unreadable=True
     )
     return merged
 
 
 __all__ = [
     "JELLYFIN",
+    "SECRETS_UNREADABLE_REASON",
     "JellyfinConfig",
     "env_seeds",
     "make_client",

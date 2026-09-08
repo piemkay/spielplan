@@ -37,7 +37,7 @@ def _serializer() -> URLSafeSerializer:
     # §2: "Rotating SESSION_SECRET invalidates sessions only and never touches stored secrets."
     # That is only true if the secret is actually load-bearing, so the session id travels
     # signed: a cookie signed under the old secret stops verifying the moment it rotates.
-    return URLSafeSerializer(settings().session_secret or "insecure-dev-secret", _COOKIE_SALT)
+    return URLSafeSerializer(settings().session_secret, _COOKIE_SALT)
 
 
 def seal_session_id(sid: str) -> str:

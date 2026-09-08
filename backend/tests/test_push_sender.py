@@ -213,7 +213,11 @@ async def test_the_private_half_is_sealed_under_the_dek_and_carries_its_key_id(d
     assert row["secret_key_id"] == await db.fetchval("SELECT key_id FROM data_encryption_key")
 
     _key_id, dek = await secrets.ensure_dek(db)
-    sealed = secrets.open_sealed(dek, row["secret"])
+    # M4.7 sec-10: the sealed payload is bound to the row that holds it, so opening it names
+    # that row. Without the AAD this fails to decrypt, which is the binding working.
+    sealed = secrets.open_sealed(
+        dek, row["secret"], secrets.aad_for("app_setting", keys.SETTING_KEY)
+    )
     # The BASE64URL TEXT, not the raw scalar. `seal` stores `{"private_key": "<b64url>"}`, and
     # those 32 raw bytes never appear in that JSON whether or not it is encrypted — so the raw
     # form passes against a no-op cipher and asserts nothing. Verified: with `seal` replaced by
@@ -261,7 +265,9 @@ async def test_no_route_returns_the_private_half(secrets_key, app, db):
     assert state.json()["vapid_public_key"] == row["value"]["public_key"]
 
     _key_id, dek = await secrets.ensure_dek(db)
-    private = secrets.open_sealed(dek, row["secret"])["private_key"]
+    private = secrets.open_sealed(
+        dek, row["secret"], secrets.aad_for("app_setting", keys.SETTING_KEY)
+    )["private_key"]
     assert private not in state.text
     assert bytes(row["secret"]).hex() not in state.text
     # A repr lands in tracebacks and log lines, which is the other way a secret escapes.

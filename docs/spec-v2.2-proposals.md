@@ -2065,6 +2065,68 @@ install-guidance and push-registration clauses keep the row and the tests that p
 nothing in the app will remind them. That is the price §6's own best-effort sentence already agreed
 to pay, and it is paid on a surface (`/account`) the member reaches from the chip in the header.
 
+### 181. M4.7 is a milestone, and §12 says so
+
+**What the spec says.** §12's table runs M0-M4, M4.6, M5-M7. §2 promises required configuration,
+secrets custody with rotation, a nightly `pg_dump` to `/data/backups` with rotation 14, and a
+restore; §5.3 lists the jobs and their budgets; §1 pins a CPU-only image on a 4-vCPU box that also
+runs Postgres. None of that is scheduled anywhere in the table.
+
+**Why it changes.** The September 2026 pre-release review found 52 findings in that territory, and
+they are not a backlog of polish. A wrong or lost `SECRETS_KEY` boots green, reports `ok: true`,
+accepts logins - and then 500s every member write including the route that would repair custody. The
+only documented restore command exits 1 with 333 errors against the target the compose comment
+itself describes, leaving zero connector rows and the fresh install's push keypair. `/api/health`
+answers 200 with `ok: false` when Postgres is unreachable, and the container HEALTHCHECK, CI's wait
+loop and `e2e/run.mjs` all key on the status code. "Rotation 14" counts files rather than nights and
+every worker start spends one, so fourteen restarts inside an hour erase two weeks of history. And
+the backend process configures no logging at all: a real boot that applied all fifteen migrations
+printed none of `app.py`'s INFO lines, which is why the upgrade runbook cannot be written before the
+logging is. §12 scheduled the product and left the box it runs in unscheduled.
+
+**The decision.** §12 gains an **M4.7** row between M4.6 and M5, with the same shape M4.6's got and a
+paragraph in the shape of the one at spec line 419 - the argument that a milestone outside the table
+is legitimate when the table scheduled nothing for work the release cannot ship without, which
+`docs/TESTING.md` already establishes and M4.5 already used. It runs second in the release sequence
+despite holding only ranks 8 and 9, because it owns the two seams five later milestones plug into:
+the app-level exception-handler block, where a unique violation becomes a 409 rather than a 500
+"database error" (M4.10 and M4.12), and the worker job registry with a per-job outcome persisted in
+`job_run` (M4.11, M4.13 and M4.14).
+
+**Cost.** One migration (`0017_ops.sql`), one more milestone between the release cut and M5, and a
+spec table that no longer matches the one the corpus project's build order was written against. The
+alternative was to fold the work into M5, where it would compete with the acquisition pipeline for
+the same review attention and would land after the release it exists to make survivable.
+
+### 182. The System card ships as three facts, and the movie-data archive is the operator's
+
+**What the spec says.** §6.6 names a System card carrying "job health, queue depth, last syncs, backup
+status, logs", and §12 places §6.6's admin surfaces at M5; `AdminTabs.svelte` parks System at `M5`
+with `href: null`. Separately, coverage row `platform-movie-data-backup-and-restore` (M4.5) opens
+"An **admin-triggered** movie-data backup writes a restorable archive".
+
+**Why it changes.** M4.7 persists job outcomes to `job_run` and gives secrets custody a readable
+state, so for the first time there is something for that card to render - and no surface renders it.
+The smaller option is the Data tab, which already polls the route; the honest one is the card §6.6
+names, because "the operator cannot see whether last night's dump happened" is the finding, and the
+Data tab is where bundles live. And `spec-07` found the movie-data archive has no caller at all
+outside its own tests: M4.7 gives it `spielplan-movie-data`, a console script run inside the
+container with the worker stopped. Making the row's "admin-triggered" true would mean shipping a
+button nobody asked for, on the surface this same decision is deliberately keeping minimal.
+
+**The decision.** `/admin/system` ships read-only with exactly three facts - the last successful
+backup, the `SECRETS_KEY` fingerprint with the active `key_id`, and the newest `job_run` row per job
+- and `AdminTabs.svelte:15` becomes `href: '/admin/system'`. "Job health, queue depth, last syncs,
+logs" stays M5's. `e2e/specs/05-milestones.spec.js` keeps passing either way: it asserts
+`getByText(tab, {exact: true})`, which a link satisfies as well as a span. And coverage row
+`platform-movie-data-backup-and-restore` is **reworded** from "admin-triggered" to
+"operator-triggered (CLI)" - the row is amended to match the decision, not to match the code.
+
+**Cost.** A surface that will be rewritten at M5 rather than written once, and an M4.5 row whose
+wording changed after it shipped. Both are cheaper than the alternatives: a backup status line
+parked on the Data tab where nobody would look for it, and an admin button that exists so a
+sentence in a coverage map can stay unedited.
+
 ---
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)

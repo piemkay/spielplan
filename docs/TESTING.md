@@ -130,12 +130,51 @@ Two things happen on the way that are easy to miss:
 > M4    42/42 covered
 > M4.5  18/18 covered
 > M4.6  12/12 covered
+> M4.7  17/17 covered
   M5    10
   M6    12
   M7     1
 ```
 
-**M4.6 is not in §12 either, and it is the open milestone.** Owner decisions 164 and 166
+**M4.7 is the open milestone, and §12 gained a row for it.** Decision 181 put that row between
+M4.6 and M5, with the argument at spec line 422: §12 scheduled the product and left the box it runs
+in unscheduled, so every §2 promise about required configuration, secrets custody with rotation, a
+nightly dump with rotation 14 and a restore was documented, coverage-mapped, and either
+unimplemented or implemented in a way that failed on the day it was needed. Seventeen rows were
+written before the code and `current_milestone` was raised in the same change, arming all seventeen
+at once, and all seventeen are closed. The last to close was
+`platform-image-runs-unprivileged-and-installs-the-project`, which stood red the longest because
+its two guards described an image nobody had changed yet: `ops/backend.Dockerfile` ran its
+processes as root, and installed this app's *dependencies* rather than the app, so the three
+console scripts `backend/pyproject.toml` declares did not exist inside the container while
+README's Recovery block was already naming two of them. Its four clauses now have a guard each and
+a self-test each — including the one that reads the declared scripts back and checks each names a
+module that really defines the function it points at, because an entry point that exists and dies
+on import is the same outage with a better error.
+
+Two of its rows are worth naming for what they cost rather than for what they assert, and both are
+drills rather than tests. `platform-restore-drill-boots-and-writes` builds a household through the
+routes, takes a real `pg_dump` of it and restores that into a database the stack has already
+booted — because the M0 row it stands beside proved its property against a database nobody
+restores into, with a bare connection and no route, and shipped both of the live failure modes
+past itself. `platform-upgrade-applies-migrations-over-populated-tables` applies
+all but the newest migrations, seeds a row in every table those newest ones rewrite, and only then
+applies them: the state every existing install is in on its first upgrade, and a path no layer
+here had ever executed, since every other layer applies the migrations to an empty database. It
+ran `0015_seed.sql`'s backfill over pre-existing rows for the first time in this repository's
+history. Five M0 rows were made true rather than narrowed on the way, and M4.7 adds no waiver.
+
+M4.7 also turned this file's own guard rule on the guards that had been exempt from it. Three
+static contracts could not fail: the volume guard passed on a compose file of pure comments, the
+one-published-port guard could not see a second published port, and the dependency guard merged the
+`[dev]` extra into what the image installs, so a production `import cbor2` built a healthy image,
+died on first import, and passed the guard whose docstring names exactly that scenario. Each now
+carries the synthetic violation it has to catch. The same milestone deleted five router-mount
+scaffolds in the test files rather than repairing them: they re-mounted the router the test then
+exercised, so `app.py` dropping an `include_router` shipped Home and the whole Rate surface as 404
+with the pytest layer green.
+
+**M4.6 is not in §12 either.** Owner decisions 164 and 166
 (2026-09-03) put the household's whole user management in §6.6 Users and cut the account table to
 two roles. It is its own milestone because §6.6 sketched user management in one line and §12
 scheduled it nowhere, while the first-boot wizard — the only path that creates an account today —
@@ -278,6 +317,58 @@ backend test of any kind until the review said so, and hard-coding `selection="b
 it — proposal 120's exact bug — passed the entire suite.
 
 `pytest backend/tests/test_spec_coverage.py -s` prints the live version.
+
+## The release checklist
+
+This is not the milestone gate, and the difference is the point of having both. The gate asks
+whether every requirement this repository has written down has a test that can fail; it is
+mechanical, it runs in CI on every push, and `test_spec_coverage.py` is its judge. The checklist
+asks the four questions the suite cannot answer at all, because each one needs something no CI job
+has: a real bundle, a real dump on a real stack, a built image, and a real phone. Run it before a
+release, not before a merge. A failure here is a finding, not a red build.
+
+1. **Real-bundle import smoke.** Point `CORPUS_BUNDLE_DIR` at a real bundle and run the backend
+   suite, so `test_bundle_shapes.py` holds the actual bundle to the committed manifest; then import
+   that bundle through **Admin > Data** on a scratch stack and restart both services. Read the
+   import report's counts rather than its "ok" — M4.5 exists because a fixture and the code agreed
+   with each other and both were wrong about the corpus, and nine of nine Cold Tower feature blocks
+   missed every column they declared while every layer stayed green.
+2. **The restore drill.** README's Recovery procedure, on a scratch stack, against a dump the
+   worker actually wrote — not one taken by hand for the occasion, and one *this* build wrote:
+   a dump restores only into the image that wrote it, and reaching for last month's is how the
+   drill turns into a crash-looping backend rather than a pass. It passes when `pg_restore`
+   exits 0, `docker compose logs --since 2m backend` shows `applied migrations: (none pending)` on
+   the way back up — the line is written either way, so an empty grep is a boot that never reached
+   the runner and not a schema that needed nothing — the Jellyfin connector authenticates against
+   the real server, and `app_setting`'s push public key is the one in the dump. Then do it again
+   with a different `SECRETS_KEY` in `.env`: the container
+   still boots, every member write still returns 200 with a reason naming the key, **Admin >
+   System** names the key and the active `key_id`, and nothing anywhere returns 500.
+   `backend/tests/test_restore_drill.py` asserts those same properties against a real Postgres and
+   is not a substitute for the drill: it drives `pg_restore` directly, and nothing in this suite
+   has ever executed the compose file the operator is following.
+3. **The image, once, on a machine that can build it.** Every assertion about
+   `ops/backend.Dockerfile` in this suite is a grep over its text: four guards in
+   `test_static_contracts.py` say the file *asks* for a pinned `uv`, a non-root `USER`, the project
+   installed rather than only its dependencies, and torch from an `explicit` CPU index, and one in
+   `test_box_claims.py` says it does not hand that installed tree back to the user it runs as — and
+   not one of them has ever built a layer. `docker compose build backend`, then:
+   `docker compose exec backend id` prints uid 1000;
+   `docker compose exec backend python -c "import torch; print(torch.__version__)"` ends in `+cpu`;
+   `docker compose exec backend spielplan-secrets --help` and `spielplan-movie-data --help` both
+   exit 0; `docker compose exec backend touch /app/probe` fails with `Permission denied` while the
+   app keeps serving, which is the only place the read-only install tree can be confirmed rather
+   than argued (`HOME` is `/app`, so a dependency that writes under `$HOME` surfaces here and
+   nowhere else); and the worker writes a dump into the chowned `data/backups` rather than failing
+   on permissions, which is the half of the `USER` change that lands on the host rather than in the
+   image. `uv pip compile --python-platform x86_64-manylinux_2_28 --python-version 3.12
+   --emit-index-annotation --no-cache backend/pyproject.toml` is the cheap standing check for the
+   index half and needs no Docker: exactly one line annotated to `download.pytorch.org`.
+4. **The phone pass.** e2e's `phone` project (iPhone 13, WebKit) is the primary form factor and it
+   runs in CI, but it installs no PWA, receives no real web push, and cannot see a rendering that is
+   merely wrong. Walk one member's own phone through it: install to the home screen, allow
+   notifications, join a Tonight session a second phone is running, and let a finish prompt arrive
+   as a push rather than as the in-app banner that is its guaranteed fallback.
 
 ## Writing a test here
 

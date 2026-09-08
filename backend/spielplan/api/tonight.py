@@ -72,7 +72,7 @@ Kind = Literal["movie", "series"]
 
 
 def _sealer() -> URLSafeSerializer:
-    return URLSafeSerializer(settings().session_secret or "insecure-dev-secret", _PAIR_SALT)
+    return URLSafeSerializer(settings().session_secret, _PAIR_SALT)
 
 
 def _seal(participant_id: int, pair: round_rules.Pair, seq: int) -> str:

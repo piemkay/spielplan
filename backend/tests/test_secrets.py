@@ -17,7 +17,7 @@ from spielplan.core.config import Settings
 
 
 def test_secrets_key_never_falls_back_to_session_secret():
-    s = Settings(session_secret="a-perfectly-good-session-secret", secrets_key=None)
+    s = Settings(session_secret="a-perfectly-good-session-secret!", secrets_key=None)
     with pytest.raises(RuntimeError) as exc:
         s.require_secrets_key()
     assert "SECRETS_KEY" in str(exc.value)
@@ -32,9 +32,19 @@ def test_dek_wrap_round_trip():
 
 
 def test_dek_unwrap_fails_under_wrong_key():
+    """M4.7 dd03: the failure is now typed and says which variable is wrong.
+
+    The bare `InvalidTag` this replaces carried no message at all, which is how a wrong
+    SECRETS_KEY reached a member as "database error" — nothing between the cipher and the HTTP
+    response could name the cause. `SecretsUnreadable` is a `RuntimeError` so that
+    `push/keys.ensure_keypair`'s existing `except RuntimeError` keeps the boot alive.
+    """
     blob = sec._wrap(os.urandom(32), "right")
-    with pytest.raises(InvalidTag):
-        sec._unwrap(blob, "wrong")
+    with pytest.raises(sec.SecretsUnreadable) as exc:
+        sec._unwrap(blob, "wrong", key_id="k7")
+    assert isinstance(exc.value, RuntimeError)
+    assert "SECRETS_KEY" in str(exc.value) and "k7" in str(exc.value)
+    assert exc.value.key_id == "k7"
 
 
 def test_seal_round_trip_and_tamper_detection():

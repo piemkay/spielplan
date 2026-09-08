@@ -1,5 +1,5 @@
-"""Admin routes for the Jellyfin connector and the household's accounts. Spec v2.1 §6.6
-(Connectors, Users), §3.1, §3.3, §7.
+"""Admin routes for the Jellyfin connector, the household's accounts and the System card.
+Spec v2.1 §6.6 (Connectors, Users, System), §3.1, §3.3, §7.
 
 §6.6's Connectors card: "Jellyfin (URL, API key, library pick, user-mapping table, test
 button, sync now, webhook status)". M1 ships all of it but the library pick and the webhook —
@@ -9,6 +9,10 @@ button, sync now, webhook status)". M1 ships all of it but the library pick and 
 are made (decision 166)". The routes under `/api/admin/users` below are that card's row editor:
 create, rename, change role, password reset, PIN reset, the passkey list and its per-credential
 revoke, disable and delete. Jellyfin re-link/unlink are the two routes that already existed here.
+
+§6.6's System card is `GET /system` at the bottom of this file, and it is deliberately three
+facts rather than the five §6.6 lists (decision 182). Read-only: nothing on that surface is a
+control, so there is no second route.
 
 Every route in this module is `AdminUser`, which means three things at once (§3.1, §3.2,
 §6.6): a member gets 403, a signed-out caller gets 401, and an admin whose last password
@@ -22,6 +26,7 @@ and a GET that returns it turns every admin session into a copy of it.
 from __future__ import annotations
 
 import unicodedata
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import asyncpg
@@ -32,7 +37,8 @@ from spielplan.api.deps import DB, AdminUser, write_txn
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError
 from spielplan.connectors.registry import load_jellyfin, save_jellyfin
-from spielplan.core import auth, webauthn
+from spielplan.core import auth, secrets, webauthn
+from spielplan.core.config import settings
 from spielplan.sync import playback, seen
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -114,6 +120,13 @@ async def _client(conn) -> JellyfinClient:
 
 @router.get("/connectors/jellyfin")
 async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
+    """§6.6's Connectors card, plus the one state it could not previously describe.
+
+    `secrets_unreadable` is not the same fact as `configured: false`. A restored dump under a
+    changed or missing SECRETS_KEY leaves a real connector row whose credentials will not open
+    (M4.7 dd03), and the card has to say "re-enter the API key" rather than "set one up" — the
+    PUT below is what repairs it, by sealing under a fresh DEK.
+    """
     cfg = await load_jellyfin(conn)
     return {
         "url": cfg.url,
@@ -121,6 +134,7 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "configured": cfg.configured,
         "library_ids": cfg.library_ids,
         "linked_users": len(cfg.user_tokens),
+        "secrets_unreadable": cfg.secrets_unreadable,
     }
 
 
@@ -439,6 +453,22 @@ async def link_jellyfin(
     if not await conn.fetchval("SELECT 1 FROM app_user WHERE id = $1", user_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
 
+    # §7.3's tokens live in the connector's sealed column, so an unreadable DEK cannot enumerate
+    # them: `load_jellyfin` reports the dict empty and `seen.forget_token` below concludes there
+    # is nothing to drop. The mapping would change while the previous Jellyfin identity's token
+    # stayed sealed, and `seen.linked_users` pairs the stored mapping with `token_for` without
+    # reading `link_state` — so the correct .env returning is what sends one member's credential
+    # under another's id, which is the whole reason `forget_token` exists. Refused rather than
+    # cleared: that ciphertext also holds the admin key and every other member's token, unreadable
+    # only until that .env comes back (§2). The PUT above is the cure and drops the tokens itself.
+    # [M4.7 dd03]
+    if (await load_jellyfin(conn)).secrets_unreadable:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{registry.SECRETS_UNREADABLE_REASON}: re-enter the Jellyfin API key before "
+            "changing this account's mapping",
+        )
+
     token: str | None = None
     if body.jellyfin_username and body.jellyfin_password:
         client = await _client(conn)
@@ -510,3 +540,130 @@ async def poll_now(_: AdminUser, conn: DB) -> dict[str, object]:
     is the same call, so an admin can prove the prompt arrives without waiting for one."""
     cfg = await load_jellyfin(conn)
     return (await playback.poll(conn, registry.make_client(cfg))).as_dict()
+
+
+# --- §6.6 System: three facts, and no controls --------------------------------------------
+
+# The one job §2 makes a promise about ("nightly pg_dump to /data/backups, rotation 14"), so it is
+# the one job this card reports on by name. Spelled here rather than imported from
+# `spielplan.worker`: `api/` decides HTTP shapes (CLAUDE.md) and importing the registry would pull
+# every job's module — torch included — into the web process. `test_worker_registry.py` pins the
+# string to the registry entry, which is the drift this trade risks.
+BACKUP_JOB = "nightly-backup"
+
+# The registry's live job names, in its order, for the same reason and pinned by the same test.
+# They are a *parameter* rather than documentation: the card asks for the newest row of each named
+# job, which the `job_run_name_started` index (0017_ops.sql) answers with one lookup per name.
+# Asked the other way round — "the newest row per distinct name in the table" — Postgres 16 has no
+# way to skip: `DISTINCT ON (name) ... ORDER BY name, started_at DESC` reads every row that has
+# ever been written. Measured on a seeded table: 4,469 rows (one day) 2.1 ms, 402,210 rows (ninety
+# days) 34 ms, 1,631,185 rows (a year) 7.1 s and 770,000 buffers, against 0.7 ms flat for the form
+# below. `job-run-prune` bounds the table; this bounds the read regardless.
+# [M4.7 ops-11; decision 182]
+JOB_NAMES: tuple[str, ...] = (
+    "session-prune",
+    "push-subscription-prune",
+    "webauthn-challenge-prune",
+    "job-run-prune",
+    "ledger-map-refit",
+    "fold-in-user-vectors",
+    "fold-in-tick",
+    "tier-set-refit",
+    "placement-reconciliation",
+    "jellyfin-seen-sync",
+    "jellyfin-sessions-poll",
+    BACKUP_JOB,
+)
+
+# §2 promises one dump a night. 36 hours is a night plus half a day of slack: it cannot fire on a
+# household whose dump ran at last night's anchor hour, and it does fire before a second night has
+# been missed — which is the point, because the failure this exists for is silent and repeats.
+BACKUP_STALE_AFTER = timedelta(hours=36)
+
+
+async def job_health(conn) -> dict[str, object]:
+    """The worker's outcomes, as §6.6's System card reports them.
+
+    Two keys and not one: `jobs` is the newest row per job whatever it says, and `backup` is the
+    newest *successful* dump — which is a different row on precisely the install that needs
+    reporting, the one whose backup has been failing since Tuesday.
+
+    A name the registry no longer has drops off the card rather than lingering: the question this
+    answers is "how are this build's jobs doing", and a row left by a job that was renamed two
+    upgrades ago is history for a chart, not health for an operator. [M4.7 ops-11; decision 182]
+    """
+    jobs = await conn.fetch(
+        "SELECT j.name, r.started_at, r.finished_at, r.ok, r.detail "
+        "  FROM unnest($1::text[]) AS j(name) "
+        "  JOIN LATERAL ("
+        "       SELECT started_at, finished_at, ok, detail FROM job_run "
+        "        WHERE name = j.name ORDER BY started_at DESC LIMIT 1"
+        "  ) r ON true "
+        " ORDER BY j.name",
+        list(JOB_NAMES),
+    )
+    backup = await conn.fetchrow(
+        "SELECT started_at, finished_at, detail FROM job_run "
+        " WHERE name = $1 AND ok ORDER BY started_at DESC LIMIT 1",
+        BACKUP_JOB,
+    )
+    backup_at = backup["finished_at"] if backup else None
+    return {
+        "jobs": [dict(r) for r in jobs],
+        "backup": {
+            "at": backup_at,
+            # `BackupReport.as_dict()`'s own key. Read defensively because a row written by an
+            # older build, or by a job whose report gains a field, must not 500 this page.
+            "bytes": (backup["detail"] or {}).get("bytes") if backup else None,
+            # A household that has never completed a dump is stale by the same rule, and saying so
+            # is the whole point: "no backup yet" and "no backup since Tuesday" are the same
+            # problem to the person who needs one.
+            "stale": backup_at is None or datetime.now(UTC) - backup_at > BACKUP_STALE_AFTER,
+            "stale_after_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
+        },
+    }
+
+
+@router.get("/system")
+async def system_card(_: AdminUser, conn: DB) -> dict[str, object]:
+    """§6.6's System card, at exactly the size decision 182 gives it.
+
+    Three facts and no more: the newest successful backup with its age, the SECRETS_KEY
+    fingerprint with the active `key_id`, and the newest `job_run` row per job. §6.6 names "job
+    health, queue depth, last syncs, backup status, logs" and §12 puts §6.6's admin surfaces at
+    M5; queue depth, last syncs and logs stay there. What pulled this much of it forward is that
+    M4.7 gives `job_run` and secrets custody a readable state and no surface reads either — and
+    "did last night's dump happen" is a question an operator has to be able to answer without
+    psql, which is the finding (ops-11) rather than a nice-to-have.
+
+    Read-only by construction. Rotation and repair are `spielplan-secrets`, an operator command
+    (§2: "an explicit admin action"), and §2's dump is the worker's; a card that could start
+    either would be the M5 surface this one is deliberately not.
+
+    `secrets.unreadable` is asked here rather than inferred from the connector card: a household
+    with no Jellyfin row at all still has custody, and the boot probe in `app.py` says this once
+    into a log nobody keeps. `key_id` and `fingerprint` are two halves of one answer — the id
+    names the row the ciphertexts point at, the fingerprint names the env that has to open it.
+    [M4.7 ops-11, dd03; decision 182]
+    """
+    cfg = settings()
+    key_id = await secrets.active_key_id(conn)
+    unreadable = False
+    if cfg.secrets_key:
+        # `core.secrets` owns the question, because `spielplan-secrets reset` is the repair this
+        # card sends the operator to and the two must not be able to disagree — see
+        # `unreadable_key_ids` for the install where they did. Never raised, only reported: §3.1
+        # keeps a half-configured boot legal and this route's whole job is to describe custody,
+        # so of every route in the app this is the one that must not answer 500 with it.
+        unreadable = bool(await secrets.unreadable_key_ids(conn))
+    return {
+        **await job_health(conn),
+        "secrets": {
+            # Absent is a legal state, not a failure: §3.1 lets an install boot before anyone
+            # has configured a connector, and `require_secrets_key` is the refusal that binds.
+            "configured": bool(cfg.secrets_key),
+            "fingerprint": secrets.key_fingerprint(cfg.secrets_key) if cfg.secrets_key else None,
+            "key_id": key_id,
+            "unreadable": unreadable,
+        },
+    }

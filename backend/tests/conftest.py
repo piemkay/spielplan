@@ -26,6 +26,33 @@ if _env_test.is_file() and "TEST_DATABASE_URL" not in os.environ:
             os.environ["TEST_DATABASE_URL"] = value.strip()
 
 
+# M4.7 (decision 181) made §2's required config a refusal in `Settings` rather than a compose-only
+# `${VAR:?}`, which means the suite now has to supply what an install supplies. Until then the
+# `or "insecure-dev-secret"` fallback in `core/auth`, `api/rank` and `api/tonight` is what let
+# 1100+ tests construct `Settings` out of a blank environment; deleting it without this makes every
+# one of them a ValidationError. Set at import rather than in a fixture on purpose: `settings()` is
+# `lru_cache`d and modules construct `Settings` during collection, before any fixture has run.
+# `setdefault`, so CI's own values (`.github/workflows/ci.yml:17-19`) and a developer's exported
+# ones still win, and the value is a plausible-length secret because the refusal has a floor.
+os.environ.setdefault("SESSION_SECRET", "pytest-session-secret-not-a-real-one")
+os.environ.setdefault("PUBLIC_URL", "http://localhost:8080")
+
+# And one variable taken away, for the same reason the two above are supplied: an install does not
+# have it. `SPIELPLAN_INSECURE_DEV` is decision 181's single off-switch for every §2 refusal, and
+# README's "Developing" paragraph hands it to the developer two lines after saying a hand-run
+# backend reads `.env` from its own working directory — which is the directory pytest runs from.
+# Left alone, a flag set there or exported disarms `test_config.py`'s eight refusal tests, the
+# anonymous-schema assertion in `test_http_seam.py` four files away, and this suite's own leak
+# detector in `test_devstub_contract.py`, all of which then pass by being unable to fail.
+# Not `pop`: `Settings.model_config` is `SettingsConfigDict(env_file=".env", ...)`, so a `.env`
+# line survives being removed from `os.environ` (the `no_secrets_key` fixture below records the
+# same discovery about SECRETS_KEY). The environment is the higher-precedence source, so an
+# explicit "0" is the one spelling that closes both routes in — and it is the spelling
+# `ops/devstub.py:44` already documents for a developer who wants the refusals back. A test that
+# wants the flag sets it itself, with `monkeypatch.setenv`. [M4.7 spec-04; decision 181]
+os.environ["SPIELPLAN_INSECURE_DEV"] = "0"
+
+
 def test_database_url() -> str | None:
     return os.environ.get("TEST_DATABASE_URL")
 
@@ -212,9 +239,9 @@ def secrets_key(monkeypatch):
     secret therefore need one; tests that assert the refusal deliberately do not take this."""
     from spielplan.core.config import settings
 
-    monkeypatch.setenv("SECRETS_KEY", "test-secrets-key-not-a-real-one")
+    monkeypatch.setenv("SECRETS_KEY", "test-secrets-key-not-a-real-one-at-all")
     settings.cache_clear()
-    yield "test-secrets-key-not-a-real-one"
+    yield "test-secrets-key-not-a-real-one-at-all"
     settings.cache_clear()
 
 

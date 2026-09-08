@@ -18,7 +18,11 @@
     { key: 'data', label: 'Data', href: '/admin/data', milestone: 'M0' },
     // §12 gained the M4.6 row with this milestone; §6.6's Users card is what it builds.
     { key: 'users', label: 'Users', href: '/admin/users', milestone: 'M4.6' },
-    { key: 'system', label: 'System', href: null, milestone: 'M5' }
+    // Decision 182: the card ships read-only with three facts — the last successful backup,
+    // the SECRETS_KEY fingerprint with its key_id, and the newest job_run row per job. §6.6
+    // also names queue depth, last syncs and logs, and those stay M5's; a tab that is a link
+    // to three true facts is worth more than a tab that is a label saying wait.
+    { key: 'system', label: 'System', href: '/admin/system', milestone: 'M4.7' }
   ];
 
   const pending = TABS.filter((tab) => !tab.href);

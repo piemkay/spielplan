@@ -43,6 +43,35 @@ dev = [
 
 [project.scripts]
 spielplan-migrate = "spielplan.db.migrate:main"
+# §2 makes rotating SECRETS_KEY an explicit admin action, and both of its gestures need the key
+# that is being replaced — which no running process holds, so this is a command and not a route.
+# .env.example's rotation paragraph and README's Recovery block name it. [M4.7 spec-08]
+spielplan-secrets = "spielplan.core.secrets_cli:main"
+# decision 162 makes the household's movie data the only copy there is, and M4.5 shipped the
+# archive with no caller: `write_archive`/`restore_archive` existed and nothing outside their
+# own tests could reach them. README's Recovery block names this command. [M4.7 spec-07]
+spielplan-movie-data = "spielplan.backup.movie_data:main"
+
+# §1: "Torch CPU wheels only. The image must build and run on a GPU-less VM." That used to be kept
+# by an index strategy in `ops/backend.Dockerfile` that takes the highest version across PyPI and
+# the CPU index — so the build was CPU-only only because `2.14.0+cpu` happens to sort above
+# `2.14.0`, and the first PyPI release ahead of the CPU index would have flipped it to the GPU
+# wheel and a couple of gigabytes of driver packages, with the CPU index URL still in the file.
+# Declared here instead, because a dependency spec is what every consumer reads: the image, CI's
+# three jobs and a developer's `-e ".[dev]"` all resolve the same wheel.
+#
+# `explicit = true` is the load-bearing half: without it this index competes with PyPI for every
+# package it carries, and the CPU index carries a 2022 `certifi`. With it, the index is used only
+# for what `[tool.uv.sources]` names. Verified with `uv pip compile --emit-index-annotation`:
+# 47 packages, exactly one of them annotated to download.pytorch.org, and no driver packages at
+# all. [M4.7 dd28]
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [build-system]
 requires = ["hatchling"]

@@ -30,7 +30,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from spielplan.api import home as home_api
 from spielplan.home import rail, shelves
 from spielplan.home import why as why_mod
 
@@ -306,25 +305,9 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
         )
 
 
-def register_home(client) -> None:
-    """Mount `spielplan.api.home.router` on the app the `app` fixture built.
-
-    THIS IS A STAND-IN FOR ONE LINE IN `spielplan/app.py`:
-    `app.include_router(home_api.router)`, next to the existing `library_api` registration.
-    That file belongs to another agent this milestone, so the router is mounted here instead —
-    on the REAL application object, behind the REAL auth dependencies and the real lifespan, so
-    every assertion below is still made against the app rather than against a stub. Delete this
-    helper the moment app.py registers the router.
-    """
-    application = client._transport.app
-    if not any(getattr(route, "path", None) == "/api/home" for route in application.routes):
-        application.include_router(home_api.router)
-
-
 @pytest.fixture
 async def world(app, db):
     client = app()
-    register_home(client)
     created = await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
     )
@@ -679,13 +662,6 @@ async def test_following_the_banners_own_link_serves_the_first_named_title(world
     between them — `GET /api/rate` takes `head` as a repeated integer parameter, and a
     comma-joined `head=1,2` would come back 422 here rather than silently ignored.
     """
-    from spielplan.api import rate as rate_api
-
-    register_home(world.client)
-    application = world.client._transport.app
-    if not any(getattr(r, "path", None) == "/api/rate" for r in application.routes):
-        application.include_router(rate_api.router)
-
     banner = (await world.home())["banner"]
     served = await world.client.get(banner["cta"]["api"])
     assert served.status_code == 200, served.text
@@ -1007,7 +983,6 @@ async def test_a_bundle_less_app_says_so_instead_of_erroring(app, db):
     """§3.1: a bundle-less app is a legal state and "artifact-dependent surfaces render an
     explicit 'no bundle imported' state instead of erroring"."""
     client = app()
-    register_home(client)
     await client.post("/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"})
     response = await client.get("/api/home", params=[("kind", "movie"), ("kind", "series")])
     assert response.status_code == 200

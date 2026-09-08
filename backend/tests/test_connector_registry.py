@@ -28,7 +28,7 @@ from spielplan.core.config import Settings
 def _settings(**overrides) -> Settings:
     """Env values to seed *from*. Custody comes from the process-wide `settings()`, which the
     `secrets_key` fixture provides — see `seed_from_env`'s note on why those are separate."""
-    base = {"secrets_key": "test-secrets-key", "database_url": "postgresql://x/y"}
+    base = {"secrets_key": "test-secrets-key-not-a-real-one-at-all", "database_url": "postgresql://x/y"}
     return Settings(**{**base, **overrides})
 
 
@@ -102,7 +102,7 @@ async def test_a_secret_without_secrets_key_refuses_rather_than_falls_back(db, n
     # arguments never reached it. See the fixture.
     cfg = Settings(
         _env_file=None,
-        database_url="postgresql://x/y", session_secret="not-a-secrets-key",
+        database_url="postgresql://x/y", session_secret="not-a-secrets-key-and-not-a-real-one",
         jellyfin_url="http://jf", jellyfin_api_key="k",
     )
     with pytest.raises(RuntimeError, match="SECRETS_KEY"):

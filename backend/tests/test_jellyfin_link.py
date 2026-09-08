@@ -61,8 +61,10 @@ async def _users(client) -> dict[str, dict]:
 async def test_the_connector_starts_unconfigured_and_says_so(admin):
     client, _module = admin
     body = (await client.get("/api/admin/connectors/jellyfin")).json()
+    # M4.7 dd03: "nothing configured" and "configured but the credentials will not decrypt" are
+    # two different things the card has to say differently, so the payload carries both.
     assert body == {"url": "", "has_api_key": False, "configured": False,
-                    "library_ids": [], "linked_users": 0}
+                    "library_ids": [], "linked_users": 0, "secrets_unreadable": False}
 
 
 async def test_the_api_key_never_comes_back_out(admin):

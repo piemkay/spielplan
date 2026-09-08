@@ -47,8 +47,15 @@ MAP = TESTS / "spec_coverage.toml"
 # sequence in favour of §6.6's Users screen. It goes before M4.9 because it is a
 # milestone rather than one of the three pre-release fixes that ship ahead of theirs.
 # See docs/milestones/M4.6-plan.md.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.9", "M4.12", "M4.13",
-              "M5", "M6", "M7"]
+#
+# Nor is M4.7, which follows it and is the same shape: §2 promises required config,
+# secrets custody with rotation, a nightly dump with rotation 14 and a restore, §5.3
+# lists the jobs and §1 pins the image, and §12 scheduled none of it. Decision 181 adds
+# the row. It sits between M4.6 and M4.9 because it ships before the release cut and
+# because M4.9 through M4.13 consume two seams it owns — the app-level 409 handler and
+# the `job_run` table. See docs/milestones/M4.7-plan.md.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.9", "M4.12",
+              "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 

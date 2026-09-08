@@ -277,10 +277,13 @@ async def test_the_queue_is_per_person(db, world):
 
 def test_the_threshold_is_the_one_the_spec_names():
     """§7.3 says ">= 90% playback". Bracketing it with 0.5 and 0.95 would leave every value in
-    between passing, which is the same as not testing the number at all."""
-    from spielplan.core.config import settings
+    between passing, which is the same as not testing the number at all.
 
-    assert settings().finish_threshold == 0.9
+    Read off the module rather than `Settings`: M4.7 deleted the `finish_threshold` field,
+    because a knob the shipped compose file cannot deliver is configurability nobody asked for
+    and nobody can use. The number is still asserted; only its home moved. [M4.7 ds07]
+    """
+    assert playback.FINISH_THRESHOLD == 0.9
 
 
 async def test_the_boundary_is_inclusive(db, world):

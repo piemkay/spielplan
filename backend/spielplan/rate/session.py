@@ -33,7 +33,7 @@ from typing import Any, Literal
 import asyncpg
 
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError
-from spielplan.connectors.registry import JellyfinConfig
+from spielplan.connectors.registry import SECRETS_UNREADABLE_REASON, JellyfinConfig
 from spielplan.db.library import normalise_kinds
 from spielplan.home import rail
 from spielplan.ledger import observations, refit
@@ -617,6 +617,11 @@ async def _push_state(
     still on screen. With no connector the debt simply stands.
     """
     if jf is None or jf.client is None:
+        # §6.7's rail prints this reason verbatim, so an unreadable DEK must not read there as
+        # "not configured" — the connector is configured and its credentials will not open
+        # (M4.7 dd03). `seen.set_state` draws the same distinction for the same string.
+        if jf is not None and jf.cfg.secrets_unreadable:
+            return False, SECRETS_UNREADABLE_REASON
         return False, "Jellyfin not configured"
     result = await seen.set_state(
         conn, jf.client, jf.cfg, user_id=user_id, title_id=title_id, state=state

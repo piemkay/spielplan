@@ -18,9 +18,17 @@ from pydantic import ValidationError
 from spielplan.core import auth
 from spielplan.core.config import Settings
 
+# Long enough to satisfy M4.7's 32-character floor on SESSION_SECRET and SECRETS_KEY
+# (sec-03): these bound tests are about SESSION_DAYS and ADMIN_REAUTH_HOURS, so the rest of
+# the configuration has to be valid or the refusal under test is not the one that fires.
+_SECRET = "a-perfectly-good-secret-not-a-real-one"
 
-def _settings(secret: str = "session-secret-one") -> Settings:
-    return Settings(session_secret=secret, secrets_key="k")
+
+def _settings(secret: str = "session-secret-one-not-a-real-one") -> Settings:
+    # M4.7 sec-03 gave SESSION_SECRET and SECRETS_KEY a 32-character floor, so every secret in
+    # this file is long enough to construct; the rotation test below still only cares that two
+    # different values do not verify each other's cookies.
+    return Settings(session_secret=secret, secrets_key="secrets-key-one-not-a-real-one-either")
 
 
 def _user(**kw) -> auth.SessionUser:
@@ -44,9 +52,9 @@ def test_session_cookie_round_trips_under_the_same_secret():
 def test_rotating_session_secret_invalidates_every_cookie():
     """This is the whole reason the id is signed. Before signing, SESSION_SECRET was unused and
     rotating it did nothing at all — §2 says it must invalidate sessions."""
-    with patch("spielplan.core.auth.settings", return_value=_settings("old")):
+    with patch("spielplan.core.auth.settings", return_value=_settings("session-secret-old-not-a-real-one")):
         cookie = auth.seal_session_id("abc123")
-    with patch("spielplan.core.auth.settings", return_value=_settings("new")):
+    with patch("spielplan.core.auth.settings", return_value=_settings("session-secret-new-not-a-real-one")):
         assert auth.open_session_cookie(cookie) is None
 
 
@@ -163,11 +171,11 @@ def test_a_session_window_of_zero_is_refused_at_configuration(field, value):
     route re-prompts milliseconds after a fresh sign-in. Neither is logged anywhere, so the
     operator would be reading it off the symptom. The bound refuses it at boot instead."""
     with pytest.raises(ValidationError) as raised:
-        Settings(session_secret="s", secrets_key="k", **{field: value})
+        Settings(session_secret=_SECRET, secrets_key=_SECRET, **{field: value})
     assert field in str(raised.value), "the refusal must name the variable to change"
 
 
 def test_the_session_defaults_are_the_numbers_the_spec_fixes():
     """The bound must not have moved the defaults §3.2 states."""
-    cfg = Settings(session_secret="s", secrets_key="k")
+    cfg = Settings(session_secret=_SECRET, secrets_key=_SECRET)
     assert (cfg.session_days, cfg.admin_reauth_hours) == (90, 24)

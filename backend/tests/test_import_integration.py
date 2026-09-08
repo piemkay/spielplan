@@ -10,6 +10,7 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -649,3 +650,106 @@ async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db,
     assert len(rebuild) == 4
     assert "fold-in" in rebuild[0] and "Cold Tower" in rebuild[3]
     assert patrick
+
+
+# --- M4.7: the unpacked tree is scratch space, not a second copy of the bundle -----------------
+
+
+def _tarred(root: Path, target: Path) -> Path:
+    """The shape an operator drops into `/data/import`: one `.tar` holding the bundle directory.
+
+    Every import test above hands `Bundle.open` a directory, which is the one shape that never
+    unpacks — so the tree `_unpack` writes existed in the suite nowhere at all, and neither did
+    the fact that nothing ever removed it.
+    """
+    with tarfile.open(target, "w") as tar:
+        tar.add(root, arcname=root.name)
+    return target
+
+
+async def test_a_committed_import_removes_the_tree_it_unpacked(db, tmp_path):
+    """`_unpack` was the only writer of `.unpacked-<stem>/` and there was no cleaner anywhere.
+
+    The unpack is a full second copy of the bundle, `content.sqlite` and `reviews.sqlite`
+    included — 790 MB of a 1042 MB bundle, and the two files the staged
+    `/data/artifacts/<version>/` copy deliberately does not carry. The same bundle offered as
+    `.tar` and as `.tar.zst` has two stems and left two trees; the measured total was 3.6 GB for
+    one bundle. `docker-compose.yml` binds `./data/import` from the host, so that is the
+    household's own disk, and `POST /validate` — documented as writing nothing — is what spends
+    it. [M4.7 dd10]
+    """
+    fx.make_bundle(tmp_path / "bundle")
+    archive = _tarred(tmp_path / "bundle", tmp_path / "spielplan-bundle.tar")
+    bundle = bundle_import.Bundle.open(archive)
+
+    unpacked = tmp_path / ".unpacked-spielplan-bundle"
+    assert unpacked.is_dir() and (unpacked / "bundle" / "content.sqlite").is_file()
+
+    report = await _import(db, bundle, tmp_path / "artifacts")
+
+    assert not unpacked.exists()
+    assert [f.message for f in report.findings if f.rule == "cleanup"] == [
+        f"removed the unpacked bundle tree at {unpacked}"
+    ]
+    # What survives is what §10 says survives: the staged artifacts, and the archive itself.
+    assert (tmp_path / "artifacts" / "test-v1").is_dir()
+    assert archive.is_file()
+
+
+async def test_a_failed_import_keeps_its_unpacked_tree_for_the_retry(db, tmp_path):
+    """The other half, and the reason the cleanup is not in a `finally`.
+
+    A models-only bundle into an install with no content is refused before it writes anything,
+    and a refusal is exactly when the operator tries again — with the same file, usually after
+    doing the thing the report told them to. Making them re-extract a gigabyte to do it would be
+    a punishment for a failure that is not theirs. [M4.7 dd10]
+    """
+    fx.make_bundle(tmp_path / "models", version="test-v2")
+    (tmp_path / "models" / "content.sqlite").unlink()
+    (tmp_path / "models" / "reviews.sqlite").unlink()
+    archive = _tarred(tmp_path / "models", tmp_path / "models-only.tar")
+    bundle = bundle_import.Bundle.open(archive)
+
+    unpacked = tmp_path / ".unpacked-models-only"
+    assert unpacked.is_dir()
+
+    report = await bundle_import.import_bundle(db, bundle, tmp_path / "artifacts")
+
+    assert not report.ok, report.render()
+    assert unpacked.is_dir(), "the retry would have to unpack the whole bundle again"
+
+
+async def test_a_cleanup_that_could_not_remove_the_tree_says_so_rather_than_claiming_it_did(
+    db, tmp_path, monkeypatch
+):
+    """The note followed the call, not the outcome.
+
+    `_clean_unpacked` removes the tree with `ignore_errors=True` — correctly, because a committed
+    import must not be failed by its own housekeeping — and then added the "removed" note
+    unconditionally. `ignore_errors` swallows EACCES, EBUSY, ENOTEMPTY and "cannot call rmtree on
+    a symbolic link" alike, so every one of those was reported to the household as a success.
+    The install that meets it is this milestone's own: a `.unpacked-*` tree written by the
+    previous root container, which the uid-1000 image can read and reuse but cannot unlink out of
+    a root-owned 0755 directory. The Data tab then says 790 MB were freed while they are still on
+    the host disk — and dd10 exists precisely to report that fact.
+
+    `rmtree` is replaced rather than a real EACCES provoked: POSIX chmod does not stop root and
+    Windows needs an ACL, so a genuine failure is not portable, and a no-op is exactly what
+    `ignore_errors=True` degenerates to when the unlink fails. The patch is on the module
+    attribute, so it covers `import_bundle`'s other `rmtree` too — the one that clears a staged
+    `/data/artifacts/<version>` before re-copying it — which is not reached here because this
+    version has never been staged into `tmp_path`. [M4.7 cycle 2 finding 12]
+    """
+    fx.make_bundle(tmp_path / "bundle")
+    archive = _tarred(tmp_path / "bundle", tmp_path / "spielplan-bundle.tar")
+    bundle = bundle_import.Bundle.open(archive)
+    unpacked = tmp_path / ".unpacked-spielplan-bundle"
+    monkeypatch.setattr(bundle_import.shutil, "rmtree", lambda *a, **k: None)
+
+    report = await _import(db, bundle, tmp_path / "artifacts")
+
+    assert unpacked.is_dir(), "this test proves nothing if the tree is gone"
+    notes = [f.message for f in report.findings if f.rule == "cleanup"]
+    assert notes == [
+        f"could not remove the unpacked bundle tree at {unpacked} - delete it by hand"
+    ], "a cleanup that removed nothing reported a removal"

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import sqlite3
 import sys
@@ -33,6 +34,14 @@ from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
+
+# M4.7 (decision 181) made §2's required config a refusal in `Settings`: an empty
+# SESSION_SECRET or a scheme-less PUBLIC_URL now stops the process rather than falling back
+# to a constant published in this repository. This harness has no operator, no database and
+# no passkeys to bind, and its whole point is running on a laptop with nothing configured —
+# so it takes the one documented way past, which announces itself at WARNING. `setdefault`,
+# so a developer who has a real `.env` and wants the refusals can export it as 0.
+os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from spielplan.core.config import settings  # noqa: E402
@@ -56,6 +65,14 @@ from tests.fixtures import make_bundle as fx  # noqa: E402
 BUNDLE = ROOT / "data" / "devstub-bundle"
 STATE: dict[str, Any] = {
     "imported": False,
+    # §10's swap sequence ends "restart backend + worker", and `restart_required: true` is what
+    # the real import route answers with — no process may score with a loaded bundle version
+    # different from the active row. This harness flipped `imported` and reported a live bundle
+    # in the same request, so the UI was developed against a one-step import the app does not
+    # have, and `01-first-boot.spec.js` asserts the two-step state the harness contradicted.
+    # `POST /_dev/restart` is the gesture `docker compose restart backend worker` stands in for.
+    # [M4.7 test-14]
+    "restarted": False,
     "users": {},
     "next_id": 1,
     "seen": {},
@@ -129,9 +146,31 @@ def _me(sid: str | None) -> dict[str, Any]:
 # --- health / config ---------------------------------------------------------
 
 
+def _bundle_live() -> bool:
+    """Whether a bundle is *loaded in this process*, which is not the same as imported.
+
+    `/api/admin/bundle/state` still reports the row as active the moment the import returns —
+    that is the database's answer and it is true. These two answer for the process, and the
+    process has not restarted. See STATE["restarted"]. [M4.7 test-14]
+    """
+    return STATE["imported"] and STATE["restarted"]
+
+
+@app.post("/_dev/restart", include_in_schema=False)
+def dev_restart() -> dict[str, bool]:
+    """`docker compose restart backend worker`, for a harness that has no containers.
+
+    Out of the schema on purpose: the real app owns no such path, and `test_devstub_contract.py`
+    fails the harness for answering one it does not. This is a knob on the harness itself, in
+    the same category as the `Run:` line at the top of this file — the front end never calls it.
+    """
+    STATE["restarted"] = True
+    return {"ok": True, "bundle_loaded": _bundle_live()}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "role": "devstub", "bundle": "test-v1" if STATE["imported"] else None,
+    return {"ok": True, "role": "devstub", "bundle": "test-v1" if _bundle_live() else None,
             "public_url": "http://127.0.0.1:8080"}
 
 
@@ -139,11 +178,11 @@ def health() -> dict[str, Any]:
 def config() -> dict[str, Any]:
     return {
         "public_url": "http://127.0.0.1:8080",
-        "has_bundle": STATE["imported"],
+        "has_bundle": _bundle_live(),
         "bundle": (
             {"version": "test-v1", "vocabulary_version": "v1", "titles": len(fx.TITLES),
              "owned": len(fx.TITLES), "present": {}, "missing_required": []}
-            if STATE["imported"] else None
+            if _bundle_live() else None
         ),
     }
 
@@ -323,8 +362,78 @@ def reauth(
 
 
 @app.get("/api/auth/switchable")
-def switchable() -> list[dict[str, Any]]:
-    return []
+def switchable(spielplan_session: str | None = Cookie(default=None)) -> list[dict[str, Any]]:
+    """The chip's switch list. The real route offers only accounts that have set a PIN —
+    otherwise the chip offers a door with no lock on it — so this one does too, off the flag
+    `/api/auth/pin` below sets. An empty list here is what left `/api/auth/switch` unreachable
+    from the UI even once the path existed."""
+    me = _me(spielplan_session)
+    return [
+        {"id": u["id"], "name": u["name"], "role": u["role"], "colour": None, "avatar": None}
+        for u in STATE["users"].values()
+        if u["has_pin"] and u["id"] != me["id"]
+    ]
+
+
+# --- §3.1's forced change, §3.2's PIN, §3.2's switch --------------------------
+#
+# Three routes four shipped components call — `routes/account/password/+page.svelte`,
+# `routes/account/+page.svelte` and `lib/components/AccountChip.svelte` — and the harness
+# answered 404 for all three, under a contract-test exemption reading "paths the front end
+# never calls in M0 scope". So §3.1's forced first-login change, the one screen every member
+# meets before any other, had no local harness at all. Dumb like everything else here: no
+# argon2, no lockout counters, no sessions to revoke. The request models carry the real field
+# constraints, because a 422 boundary is part of the contract the front end is built against.
+# `backend/spielplan/api/auth.py` wins on any disagreement. [M4.7 test-14]
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10)
+
+
+class SetPinRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=12, pattern=r"^[0-9]+$")
+    current_password: str
+
+
+class PinSwitchRequest(BaseModel):
+    user_id: int
+    pin: str = Field(min_length=4, max_length=12, pattern=r"^[0-9]+$")
+
+
+@app.post("/api/auth/password")
+def change_password(
+    body: ChangePasswordRequest, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
+    if body.new_password == body.current_password:
+        raise HTTPException(400, "new password must differ")
+    user["must_change_password"] = False
+    return {"ok": True, "sessions_revoked": 0}
+
+
+@app.post("/api/auth/pin")
+def set_pin(
+    body: SetPinRequest, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, bool]:
+    _me(spielplan_session)["has_pin"] = True
+    return {"ok": True}
+
+
+@app.post("/api/auth/switch")
+def pin_switch(
+    body: PinSwitchRequest, response: Response,
+    spielplan_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Switching, not signing in: the real route requires a session already, because a 4-digit
+    PIN accepted from an anonymous caller would be the whole authentication story."""
+    _me(spielplan_session)
+    for user in STATE["users"].values():
+        if user["id"] == body.user_id and user["has_pin"]:
+            _sign_in(response, user)
+            return {"id": user["id"], "name": user["name"], "role": user["role"]}
+    raise HTTPException(401, "wrong PIN")
 
 
 class PreferencesRequest(BaseModel):
@@ -884,6 +993,35 @@ def admin_set_active(user_id: int, body: ActiveRequest) -> dict[str, Any]:
 def admin_delete_user(user_id: int) -> dict[str, bool]:
     STATE["users"] = {sid: u for sid, u in STATE["users"].items() if u["id"] != user_id}
     return {"ok": True}
+
+
+@app.get("/api/admin/system")
+def admin_system() -> dict[str, Any]:
+    """§6.6's System card at decision 182's three facts, invented like every number here.
+
+    The harness runs no worker, so the rows are made up — but they are made up in the two shapes
+    the page has to render differently: a job that failed carries `job_run.detail`'s `error` key
+    and no report, and a successful one carries its report. The backup is deliberately fresh and
+    not stale; the stale branch is what `18-system.spec.js` drives against the real stack, which
+    is the only place a 36-hour clock means anything. [M4.7 ops-11; decision 182]
+    """
+    now = datetime.now(UTC)
+    return {
+        "jobs": [
+            {"name": "fold-in-tick", "started_at": now.isoformat(),
+             "finished_at": now.isoformat(), "ok": True, "detail": {"users": 2}},
+            {"name": "jellyfin-seen-sync", "started_at": now.isoformat(),
+             "finished_at": now.isoformat(), "ok": False,
+             "detail": {"error": "JellyfinError: connection refused"}},
+            {"name": "nightly-backup", "started_at": now.isoformat(),
+             "finished_at": now.isoformat(), "ok": True,
+             "detail": {"bytes": 41_235_968, "kept": 14}},
+        ],
+        "backup": {"at": now.isoformat(), "bytes": 41_235_968, "stale": False,
+                   "stale_after_hours": 36},
+        "secrets": {"configured": True, "fingerprint": "0d1c3f2ba9e4",
+                    "key_id": "devstub-key-id", "unreadable": False},
+    }
 
 
 # --- M2: shared reading of the fixture catalog -------------------------------
