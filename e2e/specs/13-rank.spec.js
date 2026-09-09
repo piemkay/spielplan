@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { signedIn } from '../helpers.js';
+import { createMember, signInAsMember, signedIn } from '../helpers.js';
 
 /**
  * §6.3's Rank surface, driven in a browser.
@@ -17,16 +17,18 @@ import { signedIn } from '../helpers.js';
  * a pure test and the stored arm an integration one; nothing else asserts that a person can
  * reach the queue at all, which is what §12's M3 exit criterion is made of.
  *
- * SELF-CONTAINED SEEDING, for the same reason 11-rate is: §4.2's observations are append-only,
- * so a shared account cannot be rewound between runs. A member per run per project gets an
- * empty board, and the verdicts below are the board.
+ * SEEDED THROUGH THE SHARED HELPERS. §4.2's observations are append-only, so a shared account
+ * cannot be rewound between runs and this file needs an account of its own — one per project,
+ * reused across runs rather than minted anew. What it no longer keeps is a PRIVATE copy of
+ * `createMember`/`signInAsMember`: that copy never received the re-login `helpers.js` grew when
+ * WebKit's `page.request` stopped carrying the session cookie past §3.1's forced password
+ * change, so every seeding write from this file was refused on the phone project while
+ * 14-tonight passed on the same browser off the repaired copy. One seeding path (decision 186).
  *
  * Serial, one page: the board is a session's worth of state and Playwright's default
  * context-per-test would throw away the account it was built on.
  */
 test.describe.configure({ mode: 'serial' });
-
-const MEMBER_PASSWORD = 'rank-e2e-member-password';
 
 /**
  * Proposal 75's standing footnote, amended to be true of every move this surface can make.
@@ -39,25 +41,6 @@ const FOOTNOTE =
 
 const board = (page) => page.getByTestId('rank-board');
 const moving = (page) => page.getByTestId('rank-moving');
-
-async function createMember(page, project) {
-  const name = `rank-e2e-${project}-${Date.now()}`;
-  const res = await page.request.post('/api/admin/users', { data: { name, role: 'member' } });
-  expect(res.status(), 'the admin adds a household member (§3.1)').toBe(201);
-  return { name, otp: (await res.json()).one_time_password };
-}
-
-async function signInAsMember(page, member) {
-  await page.request.post('/api/auth/logout');
-  const login = await page.request.post('/api/auth/login', {
-    data: { name: member.name, password: member.otp }
-  });
-  expect(login.ok(), 'the one-time password signs the new member in').toBeTruthy();
-  const changed = await page.request.post('/api/auth/password', {
-    data: { current_password: member.otp, new_password: MEMBER_PASSWORD }
-  });
-  expect(changed.ok(), 'setting a password unlocks the rest of the app').toBeTruthy();
-}
 
 /**
  * A board to rank. §6.3's board is "every **rated** title", so it does not exist until the
@@ -100,6 +83,13 @@ async function openRank(page) {
   await expect(board(page)).toBeVisible();
 }
 
+/** Every rated title on this account's board — §6.3's board is "every **rated** title". */
+async function boardSize(page) {
+  const res = await page.request.get('/api/rank?kind=movie');
+  expect(res.ok(), `GET /api/rank while seeding: ${res.status()}`).toBeTruthy();
+  return (await res.json()).tiers.flatMap((tier) => tier.entries).length;
+}
+
 /** Every tier_edit this account has, read over HTTP. The absence of one is the assertion. */
 async function tierEditCount(page) {
   const res = await page.request.get('/api/rank?kind=movie');
@@ -118,9 +108,14 @@ test.describe('rank', () => {
     await signedIn(page);
     const config = await (await page.request.get('/api/config')).json();
     test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
-    await signInAsMember(page, await createMember(page, testInfo.project.name));
-    const rated = await rateSome(page);
-    expect(rated, 'the seeded member needs a board to rank').toBeGreaterThanOrEqual(3);
+    const member = await createMember(page, `rank-e2e-${testInfo.project.name}`, { reuse: true });
+    await signInAsMember(page, member);
+    await rateSome(page);
+    // The board, not this run's writes. The account is reused across runs (M4.8, finding 8), so
+    // a re-run against a stack `reset.mjs` never touched finds every film already rated and
+    // legitimately writes nothing above. What this file needs is a board with something on it,
+    // however it got there.
+    expect(await boardSize(page), 'the seeded member needs a board to rank').toBeGreaterThanOrEqual(3);
   });
 
   test.afterAll(async () => {

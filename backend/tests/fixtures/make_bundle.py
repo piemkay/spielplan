@@ -16,6 +16,14 @@ bundle, and `test_bundle_shapes.py` fails if the two drift apart.
 
 `make_bundle(dir)` produces a clean bundle. The `break_*` helpers produce bundles that violate
 one rule each, so the validator can be tested on the failures it exists to catch.
+
+Volume is the one exception, and it is opt-in: `make_bundle(dir, pool_titles=700)` appends
+generated owned movies drawn entirely from the authored vocabulary. Eight titles cannot seed the
+pool the Tonight selector's replay cost is visible over -- the real bundle owns 696 movies at
+§6's default room. The pair search alone is guarded without a bundle, on a synthesized belief
+board (e87deed); what only a fixture can supply is a seeded pool of that size, which is what
+M4.12's exit script measures the round over. A measurement nothing can fail is what M4.8 exists
+to end.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -100,15 +109,42 @@ VOCAB = [
     ("register.deadpan", "register", "funny with an entirely straight face"),
 ]
 
+# The corpus's *extraction* labels, as shipped in `dna_tag.facet` and `dna_projected.facet`.
+# The term ids and every vocabulary file carry the short facet id the term is prefixed with
+# (`mood.dread` -> `mood`); the two DNA tables carry the label the extraction pass ran under,
+# and the three below are the three the review measured on the real bundle. 29,188 of 31,540
+# `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows mismatch there.
+#
+# `0004_dna.sql:73-90` and `:104-116` give neither column a foreign key to `dna_facet` — the one
+# `dna_term:38` and `dna_axis:58` both carry — which is exactly why the mismatch is silent: the
+# claim is about two tables, so it cites both, and the range that shipped covered `dna_tag`
+# alone. `importer/dna.py:295-310` and `:365-380` copy the shipped column
+# verbatim while `load_vocabulary` derives its facet from the prefix, so the join is empty and
+# every facet renders in the neutral colour with nothing raised anywhere. Three measured labels
+# plus the identical remainder IS the shape — a fourth, invented label would be the
+# fixture-invents-a-structure failure M4.5 exists to end. The repair is M4.9's.
+EXTRACTION_LABELS = {
+    "mood": "mood_tone", "themes": "narrative_themes", "characters": "character_dynamics",
+}
+
+
+def shipped_facet(term: str) -> str:
+    """The `facet` column a bundle carries for `term` — the extraction label where one was
+    measured, the term's own prefix everywhere else. The literals below are written out row by
+    row because they are data; this is the rule the generated pool applies."""
+    prefix = term.split(".", 1)[0]
+    return EXTRACTION_LABELS.get(prefix, prefix)
+
+
 # (title_id, term, facet, salience, quote) — the extracted tier, every tag with its quote.
 EXTRACTED = [
-    (1, "themes.obsession", "themes", 3, "the work eats the man and he lets it"),
-    (1, "characters.morally_grey", "characters", 2, "nobody here is owed your sympathy"),
-    (2, "mood.dread", "mood", 3, "a low hum of dread that outlasts the final scene"),
+    (1, "themes.obsession", "narrative_themes", 3, "the work eats the man and he lets it"),
+    (1, "characters.morally_grey", "character_dynamics", 2, "nobody here is owed your sympathy"),
+    (2, "mood.dread", "mood_tone", 3, "a low hum of dread that outlasts the final scene"),
     (2, "sensibility.bleak", "sensibility", 2, "offers no consolation"),
-    (3, "mood.cosy", "mood", 3, "wraps you in a blanket"),
+    (3, "mood.cosy", "mood_tone", 3, "wraps you in a blanket"),
     (4, "visual.neon", "visual", 2, "lit entirely by signage and rain"),
-    (6, "themes.surveillance", "themes", 3, "everyone is being watched"),
+    (6, "themes.surveillance", "narrative_themes", 3, "everyone is being watched"),
     (7, "pacing.relentless", "pacing", 3, "never once lets the audience sit down"),
     (8, "register.deadpan", "register", 2, "funny with an entirely straight face"),
 ]
@@ -117,9 +153,9 @@ EXTRACTED = [
 # "14,181 (title,term) pairs exist in both and must stay distinguishable", in miniature.
 #   (title_id, term, facet, n_sources, sources json)
 PROJECTED = [
-    (1, "themes.obsession", "themes", 2, '["keyword:obsession", "keyword:heist"]'),
-    (2, "mood.dread", "mood", 1, '["keyword:suspense"]'),
-    (3, "mood.cosy", "mood", 1, '["keyword:family"]'),
+    (1, "themes.obsession", "narrative_themes", 2, '["keyword:obsession", "keyword:heist"]'),
+    (2, "mood.dread", "mood_tone", 1, '["keyword:suspense"]'),
+    (3, "mood.cosy", "mood_tone", 1, '["keyword:family"]'),
     (1, "era.period", "era", 1, '["keyword:1990s"]'),
     (2, "structure.procedural", "structure", 2, '["keyword:investigation"]'),
     (5, "visual.neon", "visual", 1, '["keyword:hong-kong"]'),
@@ -135,6 +171,17 @@ CREDITS = [
     # The same credit from two sources — §4.1: "dedupe at read time, never at import".
     (1, 1, "omdb", "Directing", "Director", None, 0, "director"),
     (1, 4, "tmdb", "Acting", "Actor", "Vincent Hanna", 1, "cast"),
+    # The SAME (title, person, job) filed under a second department spelling. TMDB records
+    # leads under both `Acting` and `Actor`, and the real export carries 7,918 such triples
+    # across 1,216 of its 19,071 titles — 816 of them inside the twelve credits §6.0's card
+    # renders. §4.1 says "dedupe at read time, never at import", so the collision is meant to
+    # reach the read layer intact and be collapsed there; until this row the only bundle in the
+    # suite gave every credit a distinct (title, person, department, job), so the shape existed
+    # only where `test_import_integration.py` inserted one by hand. A test that proves the
+    # query while the fixture cannot produce its input is a statement about the fixture. M4.9
+    # owns the render-side repair -- shipped at `ee35d52`, which groups `credits_for` by
+    # (person, job) -- and it is not touched here.
+    (1, 4, "tmdb", "Actor", "Actor", "Vincent Hanna", 1, "cast"),
     (2, 2, "tmdb", "Directing", "Director", None, 0, "director"),
     (4, 3, "tmdb", "Directing", "Director", None, 0, "director"),
     (2, 5, "tmdb", "Writing", "Writer", None, 0, "writer"),      # a film…
@@ -204,18 +251,119 @@ def runtime_bucket(minutes: int | None) -> str | None:
     return ">160"
 
 
-def make_bundle(root: Path, *, version: str = "test-v1") -> Path:
+# --- the pool: the one thing this fixture reproduces by volume rather than by shape -----------
+
+# The generated ids sit far below `importer.bundle.APP_ID_MIN` (1,000,000,000): decision 162
+# partitions the corpus's namespace from the household's, and a pool that reached into the
+# app's half would make `break_title_id_in_app_range` unfalsifiable.
+POOL_ID_BASE = 1_001
+POOL_TMDB_BASE = 900_000
+
+# The one attribute the pool spreads on purpose, and the proportion is measured rather than
+# chosen. §6's default room is 130 minutes; the real bundle yields 696 owned movies inside it
+# against 716 at 200, so 97% of the owned pool fits and only one title in thirty-six does not.
+# A pool spread evenly across the runtime buckets would hand M4.12 a third fewer titles than
+# the room really holds and understate the selector's cost by exactly that much. Everything
+# else a generated title carries is drawn from the authored rows below, which is what keeps the
+# feature contract's width and every block's grammar identical at any pool size.
+POOL_RUNTIMES = (88, 96, 102, 108, 114, 120, 124, 128)
+POOL_LONG_RUNTIME = 165
+POOL_LONG_EVERY = 36
+
+
+class _Rows(NamedTuple):
+    """The rows one bundle is written from.
+
+    Four writers used to read the module-level lists directly, which is why a pool could not
+    exist: the eight authored titles were a global rather than an argument. `_rows(0)` returns
+    those same objects, so the default bundle is the one all 26 call sites already build.
+    """
+
+    titles: list
+    genres: list
+    keywords: list
+    credits: list
+    extracted: list
+    projected: list
+    item_support: dict[int, int]
+    backbone_titles: tuple[int, ...]
+
+
+def _rows(pool_titles: int) -> _Rows:
+    """The authored rows, plus `pool_titles` generated owned movies.
+
+    Every generated attribute is *drawn from* the authored rows — the same genres, keywords,
+    people, terms, years, languages and countries — so `_contract_columns` derives the identical
+    column list at any pool size. That is the property the pool has to have: a wider contract is
+    a different `input_dim`, and the tower a timing test loads would no longer be the tower the
+    rest of the suite loads.
+    """
+    if pool_titles <= 0:
+        return _Rows(TITLES, GENRES, KEYWORDS, CREDITS, EXTRACTED, PROJECTED,
+                     ITEM_SUPPORT, BACKBONE_TITLES)
+
+    titles, genres, keywords = list(TITLES), list(GENRES), list(KEYWORDS)
+    credits, extracted, projected = list(CREDITS), list(EXTRACTED), list(PROJECTED)
+    support, backbone = dict(ITEM_SUPPORT), list(BACKBONE_TITLES)
+
+    # Derived, not restated: a second literal list would be a second vocabulary, free to drift
+    # from the authored one and widen a block without anything noticing.
+    years = sorted({t[4] for t in TITLES})
+    origins = sorted({(t[8], t[9]) for t in TITLES})
+    genre_names = sorted({g for _, _, g in GENRES})
+    keyword_names = sorted({k for _, _, k in KEYWORDS})
+    roles = sorted({(pid, dept, job, role) for _, pid, _, dept, job, _, _, role in CREDITS})
+    x_terms = sorted({t for _, t, _, _, _ in EXTRACTED})
+    p_terms = sorted({t for _, t, _, _, _ in PROJECTED})
+    # The authored support values, in title order — so the pool inherits the warm/cold split
+    # §5.1's gate branches on rather than a flat one: one title in eight has n_t = 0 and no
+    # Backbone row, which is the cold branch §12's M2 criterion is about.
+    supports = [ITEM_SUPPORT[t[0]] for t in TITLES]
+
+    for i in range(pool_titles):
+        title_id = POOL_ID_BASE + i
+        language, country = origins[i % len(origins)]
+        runtime = (POOL_LONG_RUNTIME if i % POOL_LONG_EVERY == POOL_LONG_EVERY - 1
+                   else POOL_RUNTIMES[i % len(POOL_RUNTIMES)])
+        titles.append((title_id, "movie", f"Pool Title {i:04d}", None, years[i % len(years)],
+                       runtime, f"tt9{i:06d}", POOL_TMDB_BASE + i, language, country))
+        genres.append((title_id, "tmdb", genre_names[i % len(genre_names)]))
+        keywords.append((title_id, "tmdb", keyword_names[i % len(keyword_names)]))
+        person_id, department, job, role_class = roles[i % len(roles)]
+        credits.append((title_id, person_id, "tmdb", department, job, None, 0, role_class))
+        term = x_terms[i % len(x_terms)]
+        # salience cycles 1..3 because §8 stage 7's trust boundary is `salience IN (1,2,3)` and
+        # the validator counts every row outside it.
+        extracted.append((title_id, term, shipped_facet(term), 1 + i % 3,
+                          "a synthetic quote, because a tag without one is unfalsifiable"))
+        projected_term = p_terms[i % len(p_terms)]
+        projected.append((title_id, projected_term, shipped_facet(projected_term), 1,
+                          '["keyword:pool"]'))
+        support[title_id] = supports[i % len(supports)]
+        if support[title_id]:
+            backbone.append(title_id)
+
+    return _Rows(titles, genres, keywords, credits, extracted, projected, support,
+                 tuple(backbone))
+
+
+def make_bundle(root: Path, *, version: str = "test-v1", pool_titles: int = 0) -> Path:
+    """A clean bundle. `pool_titles` appends that many generated owned movies to the authored
+    eight, and defaults to 0 because 26 call sites and two browser specs assert the small
+    counts — `test_import_integration.py:258` reads `movie_total == 6` and
+    `e2e/specs/10-home.spec.js` says "the fixture bundle owns six"."""
     root.mkdir(parents=True, exist_ok=True)
-    _write_content(root / "content.sqlite")
+    rows = _rows(pool_titles)
+    _write_content(root / "content.sqlite", rows)
     _write_reviews(root / "reviews.sqlite")
-    _write_artifacts(root / "artifacts", version)
+    _write_artifacts(root / "artifacts", version, rows)
     # Last, because BUNDLE.json inventories the files: the corpus writes it at the end of the
     # export for the same reason.
     _write_identity(root, version)
     return root
 
 
-def _write_content(path: Path) -> None:
+def _write_content(path: Path, rows: _Rows) -> None:
     if path.exists():
         path.unlink()
     db = sqlite3.connect(path)
@@ -298,7 +446,7 @@ def _write_content(path: Path) -> None:
         "INSERT INTO title (id, kind, primary_title, original_title, year, runtime_min,"
         " imdb_id, tmdb_id, original_language, primary_country, is_owned, created_at, updated_at)"
         " VALUES (?,?,?,?,?,?,?,?,?,?,1,0,0)",
-        TITLES,
+        rows.titles,
     )
     db.executemany(
         "INSERT INTO title_meta (title_id, source, tagline, plot_short, plot_full, poster_url,"
@@ -317,21 +465,23 @@ def _write_content(path: Path) -> None:
             (1, "tmdb", "Heat", None, None),
         ],
     )
-    db.executemany("INSERT INTO title_genre (title_id, source, genre) VALUES (?,?,?)", GENRES)
-    db.executemany("INSERT INTO title_keyword (title_id, source, keyword) VALUES (?,?,?)", KEYWORDS)
+    db.executemany("INSERT INTO title_genre (title_id, source, genre) VALUES (?,?,?)", rows.genres)
+    db.executemany(
+        "INSERT INTO title_keyword (title_id, source, keyword) VALUES (?,?,?)", rows.keywords
+    )
     db.executemany(
         "INSERT INTO title_country (title_id, source, country) VALUES (?,?,?)",
-        [(t[0], "tmdb", t[9]) for t in TITLES],
+        [(t[0], "tmdb", t[9]) for t in rows.titles],
     )
     db.executemany(
         "INSERT INTO title_language (title_id, source, language, is_primary) VALUES (?,?,?,1)",
-        [(t[0], "tmdb", t[8]) for t in TITLES],
+        [(t[0], "tmdb", t[8]) for t in rows.titles],
     )
     db.executemany("INSERT INTO person (id, name) VALUES (?,?)", PEOPLE)
     db.executemany(
         "INSERT INTO credit (title_id, person_id, source, department, job, character,"
         " billing_order, role_class) VALUES (?,?,?,?,?,?,?,?)",
-        CREDITS,
+        rows.credits,
     )
     db.executemany(
         "INSERT INTO award (title_id, source, award, category, year, result)"
@@ -352,7 +502,7 @@ def _write_content(path: Path) -> None:
             (3, "imdb", "user_score", 7.8, 10.0, 200000),
         ],
     )
-    for title_id, term, facet, salience, quote in EXTRACTED:
+    for title_id, term, facet, salience, quote in rows.extracted:
         db.execute(
             "INSERT INTO dna_tag (title_id, term, facet, salience, confidence, runs_found)"
             " VALUES (?,?,?,?,?,?)",
@@ -365,7 +515,7 @@ def _write_content(path: Path) -> None:
     db.executemany(
         "INSERT INTO dna_projected (title_id, term, facet, n_sources, sources)"
         " VALUES (?,?,?,?,?)",
-        PROJECTED,
+        rows.projected,
     )
     db.commit()
     db.close()
@@ -399,7 +549,7 @@ def _write_reviews(path: Path) -> None:
 # --- the feature contract, built from the fixture's own rows in the corpus's grammar ----------
 
 
-def _contract_columns() -> tuple[list[tuple[str, list[str]]], dict[str, str]]:
+def _contract_columns(rows: _Rows) -> tuple[list[tuple[str, list[str]]], dict[str, str]]:
     """The nine content blocks, each named the way the shipped contract names them.
 
     This is the whole point of the M4.5 rewrite: `dna:`, `g:`, `genre:`, `kw:`, `p:<role>:`,
@@ -407,15 +557,15 @@ def _contract_columns() -> tuple[list[tuple[str, list[str]]], dict[str, str]]:
     what the fixture used to declare and which reduces to whatever bare key the builder happened
     to emit.
     """
-    extracted_terms = sorted({t for _, t, _, _, _ in EXTRACTED})
-    projected_terms = sorted({t for _, t, _, _, _ in PROJECTED})
-    genres = sorted({g.lower() for _, _, g in GENRES})
-    keywords = sorted({k for _, _, k in KEYWORDS})
+    extracted_terms = sorted({t for _, t, _, _, _ in rows.extracted})
+    projected_terms = sorted({t for _, t, _, _, _ in rows.projected})
+    genres = sorted({g.lower() for _, _, g in rows.genres})
+    keywords = sorted({k for _, _, k in rows.keywords})
     people = {p_id: name for p_id, name in PEOPLE}
-    credits = sorted({f"{role}:{people[pid]}" for _, pid, _, _, _, _, _, role in CREDITS})
-    countries = sorted({t[9] for t in TITLES})
-    languages = sorted({t[8] for t in TITLES})
-    decades = sorted({(t[4] // 10) * 10 for t in TITLES})
+    credits = sorted({f"{role}:{people[pid]}" for _, pid, _, _, _, _, _, role in rows.credits})
+    countries = sorted({t[9] for t in rows.titles})
+    languages = sorted({t[8] for t in rows.titles})
+    decades = sorted({(t[4] // 10) * 10 for t in rows.titles})
 
     meta = (
         [f"kind:{k}" for k in ("movie", "series")]
@@ -439,7 +589,7 @@ def _contract_columns() -> tuple[list[tuple[str, list[str]]], dict[str, str]]:
     return blocks, {}
 
 
-def _write_artifacts(root: Path, version: str) -> None:
+def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "manifest.json").write_text(
         json.dumps(
@@ -485,7 +635,7 @@ def _write_artifacts(root: Path, version: str) -> None:
         encoding="utf-8",
     )
 
-    blocks, _ = _contract_columns()
+    blocks, _ = _contract_columns(rows)
     feature_names = [name for _, names in blocks for name in names]
     content_dim = len(feature_names)
     (root / "feature_contract.json").write_text(
@@ -518,11 +668,15 @@ def _write_artifacts(root: Path, version: str) -> None:
         ),
         encoding="utf-8",
     )
-    _write_model_artifacts(root, content_dim)
+    _write_model_artifacts(root, content_dim, rows)
     # The shipped entry keys: kind, pct_dislike, pct_like, pct_ok, raters, title, title_id,
     # year. There is no `decade` — §4.3's "decade-stratified" is a property of the selection,
     # not a column, and the importer read `item["decade"]` until M4.5, so the real list loaded
     # with the one property it exists for NULL on every row.
+    #
+    # `TITLES`, not `rows.titles`, and deliberately: §4.3's onboarding list is "100-title
+    # decade-stratified" whatever the catalog's size, so it is the one artifact a pool must NOT
+    # grow. A 706-entry seed list would be a shape no export has ever produced.
     (root / "seed_list.json").write_text(
         json.dumps([
             {
@@ -681,7 +835,7 @@ def _write_vocab(vocab: Path) -> None:
         (axes / f"{facet}.tsv").write_text(body, encoding="utf-8")
 
 
-def _identity_tokens(ids: np.ndarray) -> np.ndarray:
+def _identity_tokens(ids: np.ndarray, titles: list) -> np.ndarray:
     """decision 162's identity column, row-aligned to `title_ids`.
 
     Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
@@ -693,7 +847,7 @@ def _identity_tokens(ids: np.ndarray) -> np.ndarray:
     because the row requires the importer to check it, and `test_bundle_shapes.py` declares the
     gap rather than hiding it.
     """
-    spine = {t[0]: t for t in TITLES}
+    spine = {t[0]: t for t in titles}
     tokens = []
     for title_id in ids.tolist():
         _, kind, _, _, _, _, imdb_id, tmdb_id, _, _ = spine[int(title_id)]
@@ -701,7 +855,7 @@ def _identity_tokens(ids: np.ndarray) -> np.ndarray:
     return np.array(tokens, dtype="<U64")
 
 
-def _write_model_artifacts(root: Path, content_dim: int) -> None:
+def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
     """backbone.npz, cold_tower.pt, review_text_emb.npz, content_X.npz.
 
     Deterministic: a seeded generator, so a fit that changes is a code change and never a
@@ -711,12 +865,12 @@ def _write_model_artifacts(root: Path, content_dim: int) -> None:
 
     # `title_ids`, plural — the name the corpus ships. The app demanded `title_id` and would
     # have found nothing in a real bundle.
-    ids = np.array(BACKBONE_TITLES, dtype=np.int32)
+    ids = np.array(rows.backbone_titles, dtype=np.int32)
     e = rng.normal(scale=0.35, size=(ids.size, EMBED_DIM)).astype(np.float32)
     np.savez(
         root / "backbone.npz",
         title_ids=ids,
-        title_identity=_identity_tokens(ids),
+        title_identity=_identity_tokens(ids, rows.titles),
         E=e,
         E_full=e,
         E_hat=e,
@@ -724,7 +878,7 @@ def _write_model_artifacts(root: Path, content_dim: int) -> None:
         b_hat=rng.normal(scale=0.6, size=ids.size).astype(np.float32),
         cold_mask=np.zeros(ids.size, dtype=bool),
         mu=np.float32(0.12),
-        item_n=np.array([ITEM_SUPPORT[i] for i in ids], dtype=np.int32),
+        item_n=np.array([rows.item_support[i] for i in ids], dtype=np.int32),
     )
 
     text_ids = np.array([1, 2, 5], dtype=np.int32)      # the titles _write_reviews gives text
@@ -747,7 +901,7 @@ def _write_model_artifacts(root: Path, content_dim: int) -> None:
     # content_X.npz is a bare scipy CSR upstream — no ids, positional only. It is written the
     # same way here so nothing in this repo can quietly start depending on an id vector that a
     # real bundle does not carry.
-    all_ids = np.array([t[0] for t in TITLES], dtype=np.int32)
+    all_ids = np.array([t[0] for t in rows.titles], dtype=np.int32)
     dense = (rng.random((all_ids.size, content_dim)) < 0.15).astype(np.float32)
     # CSR assembled with numpy rather than scipy: scipy is not a declared dependency and
     # `test_every_third_party_import_is_a_declared_dependency` would fail on one added for a

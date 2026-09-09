@@ -54,16 +54,78 @@ docker compose exec db createdb -U spielplan spielplan_test
 echo 'TEST_DATABASE_URL=postgresql://spielplan:<pw>@127.0.0.1:5432/spielplan_test' > .env.test
 python -m pytest backend/tests -q
 
+# the same command on a machine that has .env.test and does not want a database this time
+python -m pytest backend/tests -q --no-db
+
 # the whole stack, from a cold start — run.mjs brings it up itself, fake Jellyfin included
 node e2e/run.mjs
 ```
 
+**`pytest backend/tests -q` appears twice in that block, and it is the same command both times** —
+which layer it ran depends on a file the repository does not track. `conftest.py` loads `.env.test`
+if it is there, so the one command is a pure-logic run on one machine and an integration run on the
+next: creating and dropping databases, and through `test_backup.py` shelling out to `docker exec`,
+against whatever host that untracked file happens to name. So every run now opens with one line
+saying which it was, and it is the first line of output at `-q`, which is the verbosity this file
+and `ci.yml` both use:
+
+```
+integration layer: ARMED against 127.0.0.1:5432/spielplan_test_p37812 (source: .env.test)
+integration layer: UNARMED (TEST_DATABASE_URL is unset) -- db/app/pg_url tests skip
+integration layer: UNARMED (--no-db) -- db/app/pg_url tests skip
+```
+
+`--no-db` disarms the layer deliberately: a quick run on a machine where `.env.test` exists, which
+before the flag meant either an integration run nobody asked for or unsetting the variable by hand
+at every invocation. It creates no database. **A green UNARMED run
+has not run the integration layer** — every test behind `db`, `app` or `pg_url` skipped, `-q` prints
+each of those as an `s` and counts them in a summary line nobody weighs, and CI runs all of them.
+That was always true; the difference is that the run now says so instead of leaving it to be
+inferred from a count that reads the same either way. The schema layer is silent in
+the same way for its own reason: the PGlite tests skip without `backend/tests/pglite/node_modules`,
+and no line announces that one. (`--no-db` is registered in `backend/tests/conftest.py`, so it needs
+the path argument CLAUDE.md already mandates for a different reason; `pytest --no-db` from the
+repository root reports "unrecognized arguments".)
+
 `e2e/run.mjs` runs in two phases on purpose. §10's swap sequence ends in "restart backend +
 worker", so a bundle imported in phase one is not *loaded* until the services come back. Without
 that restart between the phases, every spec that needs an imported bundle skips — which looks
-like a pass and proves nothing.
+like a pass and proves nothing. As of M4.8 the runner refuses to enter phase 2 at all if the
+restarted backend does not report a loaded bundle in 60 attempts — up to six minutes, since each
+attempt carries its own 5 s request deadline: skipping is what a run with nothing imported used to
+do instead, and it exits 0.
 
-CI runs all of it on every push: `.github/workflows/ci.yml`.
+**CI runs on every branch push** (`.github/workflows/ci.yml`): `push: branches: ['**']`, because
+until M4.8 the trigger was `push: main` and four milestones reached main having never run on Linux,
+so §12's gates were first evaluated on the merge commit. A run on the default branch that is
+already in flight is no longer cancelled by the next push — `cancel-in-progress` is now conditional
+on the ref, since the one commit whose result the gates are read off is exactly the one whose run
+must complete. That is the whole of what it buys: the group is keyed on the ref and carries no
+`queue:` key, so GitHub's default still supersedes a run left *pending* behind it, and a third push
+inside one run's window leaves the middle commit with no completed run at all. Read a gate off a
+completed run rather than off the absence of a red one. Five jobs run there:
+lint, backend, integration, frontend and e2e.
+
+**The corpus check has a workflow of its own**, `.github/workflows/real-bundle.yml`. It is the only
+place `CORPUS_BUNDLE_DIR` is set and therefore the only place the two tests that key off it stop
+skipping; decision 183 puts it on a self-hosted runner with the ~1.15 GB export already on
+disk rather than behind a download URL in a secret, so it carries `workflow_dispatch` and a weekly
+`schedule` and no push path at all. It gates no branch and nothing depends on it, but the waiting
+is not free: until a runner labelled `spielplan-corpus` is registered, GitHub cancels the job once
+it has sat in the queue for 24 hours, and a cancelled job denies its run a success conclusion —
+which is a reason to register it, not a reason for `continue-on-error`. A second file rather than a
+sixth job in `ci.yml`, because `concurrency:` is workflow-level and the group is held until a run's
+*last* job finishes: as one job in `ci.yml` the corpus check answered the same weekly tick as the
+five hosted jobs, on the default branch, and held `ci-refs/heads/main` for that entire day — so
+main's next push was created pending behind the group and the push after it superseded the pending
+one, which is the missing-run symptom `cancel-in-progress` was made conditional to remove, back
+one day a week. A job-level `if:` cannot fix that, because the run holding the group is the one
+where the gate passes. That runner has to be **Linux with Docker**:
+the job uses a `services:` Postgres container, which GitHub only provides on a Linux runner, and
+its two shell steps are `sh`. The corpus lives on the household's Windows workstation, so the
+label belongs on a runner registered inside WSL or a Linux VM there that can see the export, with
+the repository variable `CORPUS_BUNDLE_DIR` set to the path that machine reads it at — a
+Windows-native runner fails during container initialisation, before the first step runs.
 
 ## The coverage map
 
@@ -123,20 +185,74 @@ Two things happen on the way that are easy to miss:
 ### Current state
 
 ```
-> M0    34/35 covered (1 waived)
-> M1    10/10 covered
-> M2    26/26 covered
-> M3    15/15 covered
-> M4    42/42 covered
-> M4.5  18/18 covered
-> M4.6  12/12 covered
-> M4.7  17/17 covered
-  M5    10
-  M6    12
-  M7     1
+> M0   34/35  covered (1 waived)
+> M1   10/10  covered
+> M2   26/26  covered
+> M3   15/15  covered
+> M4   42/42  covered
+> M4.5   18/18  covered
+> M4.6   12/12  covered
+> M4.7   17/17  covered
+> M4.8   10/10  covered
+  M4.9    1/1   covered
+  M4.12    1/1   covered
+  M4.13    2/2   covered
+  M5    0/10  covered
+  M6    0/12  covered
+  M7    0/1   covered
 ```
 
-**M4.7 is the open milestone, and §12 gained a row for it.** Decision 181 put that row between
+**M4.5's other 18/18 is now one check short, and this is the whole of what is known about it.**
+The `18/18` above is a coverage count and is unaffected; the collision is a coincidence worth
+naming, because `docs/milestones/M4.5-plan.md:320` publishes a second **18/18** — the checks
+`ops/m45_exit_criterion.py` printed against `v20260828`. Two of those eighteen had a constant for a
+predicate: §12's M2 criterion was asserted as `placed == 0 or True`, and the count-encoded content
+blocks as a literal `True`. M4.8 makes the first a real check and turns the second into a plain
+print of the numbers it was summarising, so the script now prints one fewer check and one report.
+Nothing was hidden — `placed` is genuinely 0 on `v20260828`, which is why the disjunction went
+unnoticed for a milestone — but "18/18" no longer describes what the script prints, and no corrected
+count is invented here: restating it needs the 1.15 GB bundle, a scratch database and a ten-minute
+import, so **the count is restated at the next real run** (decision 184). The same note is owed by
+hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
+
+**M4.8 is the open milestone, and it is not in §12 — it is about this file's own subject.** The
+eleven milestones between M4.5 and M5 are all failure-driven, and the review that produced them
+found that the instrument reporting on them could not report: `ci.yml` ran on `push: main` alone, so
+four milestones reached main having never run on Linux; the fixture every importer and placement
+test is written against reproduced neither the two-department credit nor the extraction-label facet
+the real corpus carries, so two live defects were unreachable at every layer; the two §4.1 landmine
+guards missed every merge shape but the one they were written from; `e2e/run.mjs` entered phase 2
+with nothing loaded and exited 0 on a suite of skips; and two of the three milestone exit scripts
+could not return a failure at all. Nine rows were written before the code and `current_milestone`
+was raised in the same change, arming all nine at once; the red list that run printed was the test
+plan (`docs/milestones/M4.8-plan.md`), and it was closed by writing the tests. A tenth row arrived
+in review, for the two defects this milestone's own new code committed — `e2e/reset.mjs`'s value
+parser and 14-tonight's stray-write watcher — which is why the block above reads **10/10**. That
+block used to be pasted by hand, and this one was pasted from a run made before the tenth row
+landed: it published `9/9`, a count no run produced, four lines above the paragraph where decision
+184 refuses to invent one. `test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints`
+now reads it back against the report, so the ledger CLAUDE.md sends readers to cannot drift from the
+gate again. No waiver, and the milestone never lowered. Decisions **183–186** are numbered in `docs/spec-v2.2-proposals.md`. It
+writes no migration and amends no normative clause, which is why §12 gained no row for it — M4.5's
+shape rather than M4.6's and M4.7's.
+
+The convention it leaves behind, because the next ad-hoc test database should be a decision rather
+than an accident: **a pytest process owns `<base>_p<pid>`**, `pg_url` creates it at session start
+and drops it in a `finally` — the one frame a terminated session never reaches, which is how 34 of
+them and 4,151 MB came to sit in the same cluster the household's own database and the restore
+drills need free space in. Each session now sweeps first: every `<base>_p<digits>` whose named
+process is gone is dropped before a new one is taken. **Liveness, never connection count** — the
+`db` fixture closes between tests, so an idle database is the normal state of a *running* session
+and reaping on that would destroy the concurrent run the pid scheme exists to protect. On Windows
+the probe is `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, because `os.kill(pid, 0)` there is
+`TerminateProcess` and the POSIX no-op liveness question would kill what it asked about. **A name
+without a pid is left alone on purpose**: `spielplan_test_ledger`, `spielplan_test_scoring`, a
+`_pgr` from `test_backup.py`, an xdist `_gw0` that carries no pid at all — a name a person chose is
+not this convention's to reclaim, and the reaper never raises, because a tidy-up that could not run
+is not a suite that failed. If you need a database that outlives its session, give it a name with no
+`_p<digits>` and it will survive.
+
+**M4.7 shipped before it, and §12 gained a row for that one.** Decision 181 put that row between
 M4.6 and M5, with the argument at spec line 422: §12 scheduled the product and left the box it runs
 in unscheduled, so every §2 promise about required configuration, secrets custody with rotation, a
 nightly dump with rotation 14 and a restore was documented, coverage-mapped, and either
@@ -382,4 +498,8 @@ release, not before a merge. A failure here is a finding, not a red build.
 - **Fixtures reproduce the landmines, not the volume.** `tests/fixtures/make_bundle.py` builds a
   bundle with both DNA tiers overlapping, the frozen `rating_source` ids, duplicate `tmdb_id`s,
   NULL alias PK components, CJK/emoji/ZWSP — plus `break_*` helpers that violate one rule each.
-  Eight titles that carry every trap beat eleven thousand that carry none.
+  Eight titles that carry every trap beat eleven thousand that carry none. Volume is the one
+  exception and it is opt-in: `make_bundle(dir, pool_titles=700)` appends generated owned movies
+  drawn entirely from the authored vocabulary, so the feature contract stays byte-identical while
+  the owned pool reaches the size a cost measurement needs. Default is 0 — eight titles, the bundle
+  all 26 call sites already build.

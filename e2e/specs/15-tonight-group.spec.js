@@ -47,7 +47,9 @@ test.describe('tonight together', () => {
         const config = await (await page.request.get('/api/config')).json();
         test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
       }
-      await signInAsMember(page, await createMember(page, `tonight-${label}`));
+      // One account per seat, reused across runs rather than minted anew — see 14-tonight, and
+      // twice over here because this file seeds two of them. [M4.8, finding 8]
+      await signInAsMember(page, await createMember(page, `tonight-${label}`, { reuse: true }));
       await seedFilmLedger(page);
       await waitForPool(page);
       if (label === 'host') a = page;
@@ -103,8 +105,18 @@ test.describe('tonight together', () => {
     await expect(page.getByTestId('tonight-round')).toBeVisible({ timeout: 20_000 });
     for (let i = 0; i < 24; i++) {
       if (!(await page.getByTestId('tonight-round').isVisible())) break;
-      await page.getByTestId('tonight-pick-A').click();
-      await page.waitForTimeout(120);
+      // The write, not a guess at how long it takes: §6.2's round is one POST per pair. Worse
+      // here than anywhere else in the suite, because two devices are answering against one
+      // session — a 120 ms sleep that runs short leaves this person clicking the pair the
+      // channel has already moved them off. [M4.8, finding 8]
+      await Promise.all([
+        page.waitForResponse(
+          (res) =>
+            res.request().method() === 'POST' && /\/api\/tonight\/seats\/\d+\/answer$/.test(res.url()),
+          { timeout: 15_000 }
+        ),
+        page.getByTestId('tonight-pick-A').click()
+      ]);
     }
   }
 

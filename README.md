@@ -490,6 +490,18 @@ the same manifest is checked against it, so a corpus-side format change fails th
 instead of surfacing as a mystery at import time. A column reaches the manifest as `p:<s>:<s>`,
 never as anyone's name.
 
+M4.8 added the two corpus shapes that eight titles were still missing, because a manifest of shapes
+does not make the fixture *carry* them: the same credit filed under two department spellings (7,918
+such triples across 1,216 real titles), and a `dna_tag.facet` that is the extraction label rather
+than the term's own prefix (29,188 of 31,540 rows). The facet is a live defect M4.9 still repairs;
+the credit collision was one until `ee35d52` grouped `credits_for` by (person, job) and keyed the
+card on the same pair. Neither was reachable *through the importer* until the fixture carried it —
+the credit shape existed only where `test_import_integration.py` inserts one by hand, which proves
+the query and says nothing about the bundle it has to survive. It also added an opt-in
+`make_bundle(dir, pool_titles=N)`, generated entirely from the authored vocabulary so the feature
+contract does not widen by a single column: eight titles still beat eleven thousand for the traps,
+and they cannot measure what a selector costs over the real bundle's 696 owned movies.
+
 Two owner decisions (2026-09-01/02) changed what this project is to that one. **162:** the corpus
 supplies trained models; movie data is seeded **once**; every later title is acquired by this app
 (§7.2, §8); Spielplan owns all ids, minted from a range disjoint from the corpus's, because the

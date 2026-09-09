@@ -15,9 +15,16 @@ import { ADMIN, createAdminThroughWizard, health, setupState } from '../helpers.
  * fresh browser context per test would throw away the session the wizard just established —
  * which is not a thing that happens to a real operator.
  */
-test.describe.configure({ mode: 'serial' });
+// Serial, and never retried. Every step here has a side effect that persists — once "creating
+// the admin" has run, the admin exists — so a retry does not re-run the sequence, it meets an app
+// that is already past first boot and can only take the `beforeAll` skip below. Playwright scores
+// a [failed, then skipped] test as `flaky` and exits 0 for it, and `run.mjs` reads that 0 as
+// phase 1 having imported a bundle: §12's M0 exit criterion ("bundle imports clean") would then
+// be reported green by a run in which the import failed. `retries: 0` here rather than in the
+// config, because 14/15/16 lean on the retry the config grants CI (decision 185).
+test.describe.configure({ mode: 'serial', retries: 0 });
 
-test.describe('first boot @needs-db', () => {
+test.describe('first boot @first-boot', () => {
   /** @type {import('@playwright/test').Page} */
   let page;
 

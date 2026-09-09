@@ -119,7 +119,10 @@ async function seedLedger(request) {
       data: { card_token: card.token, value: i % 3 },
       failOnStatusCode: false
     });
-    if (!answered.ok()) break;
+    // Loud, not silent. A refused verdict used to `break` here, and the seed then failed at the
+    // assertion below saying no shelf shipped — which reads as a Home defect and is a broken
+    // write path. Say which one it was. [M4.8, finding 8]
+    expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
   }
   // §4.2 keeps every row; this closes the live session only, so a later spec opening Rate does
   // not resume a block this file half-filled.

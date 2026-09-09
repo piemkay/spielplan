@@ -2129,6 +2129,164 @@ sentence in a coverage map can stay unedited.
 
 ---
 
+## Decisions taken (owner, 2026-09-08)
+
+Four, taken during M4.8's implementation on the questions its plan refused to answer in a diff. None
+of them amends the spec, and that is the shape of this milestone rather than an oversight: M4.8
+repairs the instrument — the bundle fixture, the pytest layer, the two §4.1 landmine guards, the
+browser harness, CI's trigger and installer, and the three milestone exit scripts — and the spec has
+nothing to say about where a test runs or how a harness seeds an account. For the same reason M4.8
+takes **no §12 row**, unlike M4.6 (decision 166) and M4.7 (decision 181): those two shipped promises
+§12 had scheduled nowhere, while this one ships no surface and no clause. It is M4.5's shape — a
+milestone outside the table — which `docs/TESTING.md` already establishes as legitimate.
+
+Each answers a measurement rather than a preference: `dd28` counted the Linux runs the milestone
+branches actually got, `test-01` and `ti-03` are the two ways the e2e suite reports success while
+having asserted nothing, and `test-10` is the seeding path that exists in three copies. Where a
+decision below argues from a number, that number came from one of those four.
+
+| # | Question | Decision |
+|---|---|---|
+| 183 | The real-bundle CI job needs the ~1.15 GB corpus bundle inside a runner. Self-hosted with it on disk, or a download from an operator-controlled URL in a repository secret? | **Self-hosted.** `runs-on: [self-hosted, spielplan-corpus]`, behind `workflow_dispatch` plus a weekly `schedule` and nothing else. It never runs on a push, never on the hosted pool, and gates no branch. |
+| 184 | Step 3a leaves `ops/m45_exit_criterion.py` with one fewer check, so M4.5's published "18/18" no longer describes what it prints. Re-run against the real bundle, or say in words what changed? | **The sentence**, in `docs/TESTING.md`'s milestone ledger: two of the eighteen were constants, they are now one real check and one plain print, and the count is restated at the next real run. No number is invented. |
+| 185 | The first-boot group can score "flaky" and exit 0. Fix it with Playwright's `failOnFlakyTests`, or with `retries: 0` on the one group whose side effects persist? | **`test.describe.configure({ mode: 'serial', retries: 0 })` on `01-first-boot.spec.js` only.** `failOnFlakyTests` is not adopted and `e2e/package.json`'s `^1.49.0` floor is not raised. |
+| 186 | `13-rank.spec.js:130` has been red since M4.6 on WebKit. Copy `helpers.js`'s re-login into 13-rank's private `signInAsMember`, or delete the private pair and import the shared one? | **Delete the private pair.** 13-rank imports the shared `createMember`/`signInAsMember` — the ones that already carry the re-login and already fixed 14-tonight on the same project. |
+
+### 183. The real-bundle CI job runs on a self-hosted runner, not on a URL in a secret
+
+**What the spec says.** §12 makes the exit criterion the thing a milestone closes on and §13 makes a
+measurement the evidence for a claim; neither says where the measurement runs. §1 pins CPU-only
+wheels on a 4-vCPU box. §10 makes the bundle the artifact the corpus project hands over, and nothing
+in the spec says a copy of it exists anywhere but on the household's own disk.
+
+**Why it changes.** Step 6d wants a CI job that runs `pytest -k real_bundle` and
+`ops/m45_exit_criterion.py` against the real corpus bundle, because the two `CORPUS_BUNDLE_DIR`
+tests are the only mechanical check that the shapes `test_bundle_shapes.py` holds the fixture to are
+still the shapes the export ships. There are two ways to get 1.15 GB into a job, and the plan marks
+the choice OWNER DECISION REQUIRED without recommending either — so the plan's own exit criterion
+decides it. Criterion 2 requires those two tests to report as **run**, not skipped. The bundle is
+published nowhere: it exists read-only at
+`C:/Users/pmk/Workspace/movie_data_curator/data/export_bundle/v20260828`. The URL option therefore
+begins by creating and hosting a copy of the household's corpus somewhere a GitHub runner can reach,
+and then holding the address of that copy in a repository secret — which is exactly the leak the
+plan names as that option's cost. A self-hosted runner is the only option that is true of the
+artifact that exists today.
+
+**The decision.** The job is written now, as `runs-on: [self-hosted, spielplan-corpus]`, triggered by
+`workflow_dispatch` and a weekly `schedule` and by nothing else. It never runs on a push, never on
+the hosted pool, and gates no branch. The closed trigger list is not caution about cost: the runner
+is the household box, so a `pull_request` or `push` trigger would execute repository code — including
+code from a fork's pull request — on the machine that holds the household's data.
+
+**Cost.** The job is dead YAML until the owner registers a runner carrying the `spielplan-corpus`
+label: a `workflow_dispatch` of it queues and waits, and the weekly schedule queues and expires.
+So the stage that writes it must write it as a non-gating job, must not fold it into any
+required-checks assumption, and the CI guards this milestone adds — `dd28`'s repair, which is why
+the workflow is open in this milestone at all — must assert nothing about this job's runner. The last sentence of exit criterion 2 — the two tests reporting as run — is the
+owner's to satisfy after registration, and the milestone's report says so rather than claiming it.
+
+### 184. M4.5's "18/18" is restated in words, in the file this milestone owns
+
+**What the spec says.** §12's exit criteria are the gates a milestone closes on, and this project
+records what each one actually measured: `docs/milestones/M4.5-plan.md:320` publishes a bolded
+**18/18** as the output of `ops/m45_exit_criterion.py` against `v20260828`.
+
+**Why it changes.** Step 3a removes the two checks in that script whose predicate is a constant —
+§12's M2 criterion is passed by `placed == 0 or True`, and the count-encoded content blocks by a
+literal `True` — and both counted toward the eighteen. Once one becomes a real check that can fail
+and the other becomes a plain print, "18/18" no longer describes what the script prints, and nobody
+in this build can say what it does print: a re-run needs the 1.15 GB bundle, a scratch database the
+script creates and drops, and a ~10-minute import, which is work this milestone's implementation is
+explicitly barred from. The plan offers the re-run and the sentence and forbids only the third path,
+in terms: inventing a corrected count without a run is the failure this milestone exists to end.
+
+**The decision.** The sentence. It goes into `docs/TESTING.md`'s milestone ledger, beside the
+coverage counts that file already carries, and it says that two of M4.5's eighteen checks were
+constants, that they are now one real check and one plain print, and that the count will be restated
+at the next run against a real bundle. No number is invented anywhere, and no count in the ledger is
+edited to a value nothing produced.
+
+**Cost.** `docs/milestones/M4.5-plan.md:320` keeps a bolded **18/18** that is now one check short,
+and the milestone workflow forbids editing `docs/milestones/*.md`, so the same one-sentence note is
+owed there by hand — the report names the line. `README.md`'s status section is amended in the same
+stage as the ledger. The restated count arrives whenever the owner next runs
+`CORPUS_BUNDLE_DIR=<real> TEST_DATABASE_URL=... python -u ops/m45_exit_criterion.py`.
+
+### 185. failOnFlakyTests is not adopted, and the ^1.49.0 Playwright floor stands
+
+**What the spec says.** §12's M0 exit criterion is "bundle imports clean; Library list and title card
+render imported titles", and §3.1 fixes the first-boot sequence that gets there.
+`e2e/specs/01-first-boot.spec.js` is where both are asserted. The spec says nothing about Playwright
+retry semantics, which is why this is a decision and not a reading.
+
+**Why it changes.** 01-first-boot's side effects persist across a retry: once the admin exists the
+file's own `beforeAll` skip fires, so a retry can only skip, and at the resolved Playwright a
+`[failed, skipped]` outcome scores **flaky** and the run exits 0. `run.mjs` reads that 0 as success
+and enters phase 2, where 62 of ~125 tests skip — the failure that must not be silenceable is §12's
+M0 exit criterion itself, and `test-01` is that whole path measured end to end. Two ways to make it
+stick. `failOnFlakyTests` in `playwright.config.js`
+turns flaky into failure globally, but the key first appears in 1.52.0 while 1.62.1 accepts an
+unknown config key silently, so on the `^1.49.0` floor a config-based adoption is a no-op that reads
+as a fix; and globally it converts 14/15/16's real intermittents into red builds, which finding
+test-10 says to measure rather than mask. `test.describe.configure({ retries })` works at the floor
+and is scoped to the one group whose failure is unretryable by construction.
+
+**The decision.** `test.describe.configure({ mode: 'serial', retries: 0 })` on
+`01-first-boot.spec.js` only. `failOnFlakyTests` is not adopted, `e2e/package.json`'s `^1.49.0` is
+not raised, and retries stay on in CI for every other file.
+
+**Cost.** Every other spec file can still score flaky and pass, so the guard this milestone adds
+protects one file rather than the suite. If a later milestone does adopt the setting, the right form
+is `--fail-on-flaky-tests` on `run.mjs`'s command line — a hard error on a CLI that lacks the flag,
+rather than a silent no-op in a config file — with the floor moved to `^1.52.0` in the same commit
+and the lock refreshed by `npm install`, never hand-edited. Until then M4.8 touches neither
+`e2e/package.json` nor `e2e/package-lock.json`.
+
+### 186. One seeding path: 13-rank stops carrying a private copy of the member helpers
+
+**What the spec says.** Decision 164 makes §6.6's Users card the only place accounts are made, so a
+harness that seeds a member walks the operator's own path; §3.1 is the forced first-login change that
+follows; §3.2 says a member holding a password can sign in with it, which is what the repair leans
+on.
+
+**Why it changes.** `e2e/specs/13-rank.spec.js:130` has failed since M4.6 on the `phone` (WebKit)
+project. The diagnosis is M4.6's and is recorded in `helpers.js`: after `POST /api/auth/password`,
+`page.request` stops sending the session cookie that the browser context still holds. The server is
+not at fault — it sends no `Set-Cookie` there, and `destroy_other_sessions` correctly keeps the
+caller's own row — so M4.6 split the defect, recording the harness half as M4.8's and the question of
+why WebKit's `APIRequestContext` diverges from the browser context as M4.10's. The workaround, a
+second sign-in with the password just set, landed in `e2e/helpers.js::signInAsMember` and fixed
+14-tonight. 13-rank never saw it: it imports only `signedIn` and carries private copies of
+`createMember` (`:43-48`) and `signInAsMember` (`:50-61`) — a fork of the version `helpers.js` held
+before decision 164 re-pointed the shared one at §6.6's route. That is `test-10` in one file, and
+this milestone's thesis with it: a harness with two copies of a path has one repair and one
+unrepaired trap. Copying the
+workaround into the duplicate would fix the symptom and preserve the cause.
+
+**The decision.** The private `createMember`, the private `signInAsMember` and the `MEMBER_PASSWORD`
+constant (`:29`) are deleted, and 13-rank imports the shared pair from `e2e/helpers.js`. It calls
+`createMember` with `{ reuse: true }` and the label `rank-e2e-<project>`, and under `reuse` the
+helper returns the bare label as the name: **one stable account per (spec, project)**, looked up on
+§6.6's roster and its credential reissued through §6.6's password reset on every run, which is
+finding 8's repair against a roster that grew by one member per run and was never swept. It is not
+helpers' `${label}-${Date.now()}-${rand}` scheme, which the non-`reuse` arm keeps for a caller that
+needs a member with no history. §4.2's append-only observations are
+why the account is this spec's and this project's rather than shared with another file — not a
+reason to mint a new one each run; a re-run therefore finds every film already rated, which is why
+the `beforeAll` assertion reads `boardSize(page)` rather than this run's writes. Its password comes
+from helpers' `${label}-e2e-password`.
+
+**Cost.** `11-rate.spec.js:209-216` keeps a third copy of the pair. It is desktop-only, currently
+green and named by no finding, so it stays, and the report names it as the remaining duplicate. And
+the swap is not promised to clear `:130` on its own: `helpers.js`'s own comment records that 13-rank
+seeds through `page.request` after the re-login and was still refused. If the assertion stays red
+after the swap, the residue is the spec half, it is M4.10's exactly as M4.6 recorded it, and the
+assertion is not deleted — it reports status and body on failure, which is how it was diagnosed.
+Verification is the owner's e2e run; this build may not run the suite.
+
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

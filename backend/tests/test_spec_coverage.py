@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from itertools import zip_longest
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 REPO = TESTS.parents[1]
 MAP = TESTS / "spec_coverage.toml"
+LEDGER = REPO / "docs" / "TESTING.md"
 
 # M4.5 is not in §12. It exists because §12's M0 importer was verified against a fixture
 # that did not resemble the artifact it stands in for, and M5's pipeline cannot be built
@@ -36,8 +38,8 @@ MAP = TESTS / "spec_coverage.toml"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.7, M4.8, M4.10, M4.11 and M4.14 through M4.16 are not in the list yet —
-# each is added by the milestone that opens it, in one commit with its first row.
+# "M4.5". M4.10, M4.11 and M4.14 through M4.16 are not in the list yet — each is added
+# by the milestone that opens it, in one commit with its first row.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
 # §3.1/§6.2/§6.5/§6.6 amendments that decisions 164 and 166 forced. §6.6 sketched the
@@ -54,8 +56,23 @@ MAP = TESTS / "spec_coverage.toml"
 # the row. It sits between M4.6 and M4.9 because it ships before the release cut and
 # because M4.9 through M4.13 consume two seams it owns — the app-level 409 handler and
 # the `job_run` table. See docs/milestones/M4.7-plan.md.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.9", "M4.12",
-              "M4.13", "M5", "M6", "M7"]
+#
+# Nor is M4.8, and it is M4.5's shape rather than M4.6's and M4.7's: it ships no surface
+# and no clause §12 scheduled, so it takes no row in that table and none was added. It is
+# the instrument — the bundle fixture, this file's own layer, the two §4.1 landmine
+# guards, the browser harness, CI's trigger and installer, and the three exit scripts —
+# and it exists because each of those printed as covered while unable to fail: a fixture
+# that cannot express the corpus's awkward shapes, a harness with no failure branch, a CI
+# trigger that never fires on a milestone branch, and three exit scripts of which two
+# cannot report their own failure. It goes after M4.7 and before M4.9 for one reason:
+# M4.9 through M4.16 are measured by exactly these instruments, so a milestone that
+# repairs them after they have been relied on proves nothing about the work that already
+# passed through them. Decision 183 keeps the one job that needs the real corpus on a
+# self-hosted runner and off every branch gate, so this milestone's own evidence stays
+# reproducible rather than becoming a secret nobody can re-run. See
+# docs/milestones/M4.8-plan.md.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9",
+              "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 
@@ -187,13 +204,18 @@ def test_waivers_are_explained():
 # --- the report ------------------------------------------------------------------------
 
 
-def test_report(capsys):
-    """Not an assertion - the map's current state, printed with -s so it is readable."""
+def _report_lines() -> list[str]:
+    """One line per milestone, as the report prints them.
+
+    A function rather than a block inside `test_report` because the ledger guard below reads
+    the same lines back out of `docs/TESTING.md`: a second copy of this formatting would let
+    the document agree with a formatter nothing else uses.
+    """
     by_milestone: dict[str, list[dict]] = {}
     for r in REQUIREMENTS:
         by_milestone.setdefault(r["milestone"], []).append(r)
 
-    lines = [f"\nspec coverage — current milestone {CURRENT}", ""]
+    lines = []
     for milestone in MILESTONES:
         rows = by_milestone.get(milestone, [])
         covered = sum(1 for r in rows if r.get("tests"))
@@ -203,5 +225,40 @@ def test_report(capsys):
         marker = ">" if _at_or_before(milestone) else " "
         note = f" ({waived} waived)" if waived else ""
         lines.append(f"  {marker} {milestone}  {covered:>3}/{len(rows):<3} covered{note}")
+    return lines
+
+
+def test_report(capsys):
+    """Not an assertion - the map's current state, printed with -s so it is readable."""
     with capsys.disabled():
-        print("\n".join(lines))
+        print("\n".join([f"\nspec coverage - current milestone {CURRENT}", "", *_report_lines()]))
+
+
+def test_the_testing_ledger_publishes_the_counts_the_gate_prints():
+    """`docs/TESTING.md`'s "Current state" block is this report, or it is a number nobody ran.
+
+    CLAUDE.md sends readers to that file for milestone status "rather than assuming status", so
+    a count published there is read as measured. M4.8's own block said `M4.8 9/9` while this
+    file printed `10/10`: it was pasted from a run made before review cycle 1 added the tenth
+    row, and nothing compared the two -- so a later milestone auditing that no milestone had
+    lost a test would have reconciled against a baseline one row low, and deleting the tenth
+    row would have made the document true. Decision 184 refuses to invent a number in that
+    ledger; this refuses to leave one there that a run has since overtaken.
+    [M4.8 review cycle 2: m48-rev2-testing-ledger-publishes-a-count-the-instrument-does-not-print]
+    """
+    block = re.search(
+        r"### Current state\s*\n+```\n(.*?)\n```", LEDGER.read_text(encoding="utf-8"), re.S
+    )
+    assert block, "docs/TESTING.md has no `### Current state` block for the ledger to publish"
+    published = block.group(1).splitlines()
+    # The block is the report with the two-space indent stripped, which is how it is pasted.
+    printed = [line.removeprefix("  ") for line in _report_lines()]
+    drift = [
+        f"  line {i + 1}: published {p!r}, printed {q!r}"
+        for i, (p, q) in enumerate(zip_longest(published, printed))
+        if p != q
+    ]
+    assert not drift, (
+        "docs/TESTING.md's ledger no longer matches this file's report. Re-paste the block "
+        "`pytest backend/tests/test_spec_coverage.py -q -s` prints:\n" + "\n".join(drift)
+    )

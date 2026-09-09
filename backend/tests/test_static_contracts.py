@@ -6,7 +6,10 @@ states and nothing enforces. Each of these reads the artifact and fails if the r
 
 from __future__ import annotations
 
+import ast
 import re
+import shutil
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -1550,3 +1553,918 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     )
     caught = _self_mounted_routers(tmp_path)
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
+
+
+# --- §12: the three exit scripts, and the console they print to ---------------------------
+#
+# §12's M2, M3 and M4 rows are measured by hand, by `ops/m*_exit_criterion.py`, and a milestone
+# is closed on what they print and the code they exit with. A verdict that cannot come out `no`
+# is a certificate rather than a measurement, so these read the scripts as source: no `check()`
+# whose answer is settled before the run, no dereference of a result the verdict has not been
+# computed from yet, no `main()` ending in a literal, and nothing printed that a Windows
+# console can crash on.
+
+EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
+COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
+
+
+def _docstrings(tree: ast.AST) -> set[int]:
+    """`id()` of every docstring constant: an `ast.Expr` heading a module/class/function body.
+
+    Excluded from the console guard deliberately. `ops/m3_exit_criterion.py`'s module docstring
+    quotes §5.1 with a beta and a rho in it, and `ops/m4_exit_criterion.py`'s quotes §12's M4
+    row with an en dash; Python never writes a docstring to stdout, so flagging those would
+    make this a rule about source aesthetics rather than about what the console has to render.
+    """
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        first = node.body[0] if node.body else None
+        if not (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)):
+            continue
+        if isinstance(first.value.value, str):
+            out.add(id(first.value))
+    return out
+
+
+def _literals(node: ast.AST, skip: set[int]) -> list[tuple[int, str]]:
+    """Every string literal under `node`, docstrings excluded.
+
+    f-strings need no special case: `ast.JoinedStr` holds its literal halves as `ast.Constant`
+    children, so walking constants collects them, while the interpolated values -- runtime
+    data, not source -- stay correctly out of reach.
+    """
+    return [
+        (sub.lineno, sub.value)
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and id(sub) not in skip
+    ]
+
+
+def _printed_literals(source: str) -> list[tuple[int, str]]:
+    """Only the string literals that reach a `print(...)` call."""
+    tree = ast.parse(source)
+    skip = _docstrings(tree)
+    out: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "print":
+            continue
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            out.extend(_literals(arg, skip))
+    return out
+
+
+def _all_literals(source: str) -> list[tuple[int, str]]:
+    tree = ast.parse(source)
+    return _literals(tree, _docstrings(tree))
+
+
+def _not_encodable(pairs: list[tuple[int, str]], label: str) -> list[str]:
+    """The offenders, named by codepoint so this message survives its own subject."""
+    out: list[str] = []
+    for lineno, value in pairs:
+        try:
+            value.encode("cp850")
+        except UnicodeEncodeError as exc:
+            point = f"U+{ord(value[exc.start]):04X}"
+            shown = value[:70].encode("ascii", "backslashreplace").decode()
+            out.append(f"{label}:{lineno}: {point} in {shown!r}")
+    return out
+
+
+def _non_cp850_console_strings() -> list[str]:
+    """Two arms, and the width of each one is measured rather than assumed.
+
+    For the three exit scripts and the coverage report -- files whose entire output *is* a
+    console report -- the unit is every string literal bar docstrings. Applying that rule to
+    those four files flagged exactly four sites, every one of them printed.
+
+    Widening that same rule to the rest of `ops/` flags thirty-one `ops/devstub.py` strings,
+    and every one is part of an HTTP response -- an `HTTPException` detail, a `why` or `note`
+    field the SPA renders, a shelf suppression reason, an audit-log entry -- travelling to a
+    browser over a UTF-8 wire and reaching no console at all. So for every other `ops/*.py`
+    the unit narrows to the literals that reach a `print(...)`. That arm flags nothing today,
+    which is exactly its job: the next non-ASCII console line anywhere in `ops/` is caught,
+    and a response body is not asked to be ASCII for a reason that does not apply to it.
+    """
+    offenders: list[str] = []
+    report_files = EXIT_SCRIPTS + (COVERAGE_REPORT,)
+    for path in report_files:
+        offenders += _not_encodable(_all_literals(path.read_text(encoding="utf-8")), path.name)
+    for path in sorted((REPO / "ops").glob("*.py")):
+        if path in report_files:
+            continue
+        offenders += _not_encodable(_printed_literals(path.read_text(encoding="utf-8")), path.name)
+    return offenders
+
+
+def test_no_console_output_leaves_the_oem_code_page():
+    """CLAUDE.md: "Keep console/test output ASCII -- Windows cp1252 consoles crash".
+
+    Not a style rule. A `print` of an em dash on a cp850 console raises UnicodeEncodeError from
+    inside the print, so the script dies on the line it was reporting from and the operator
+    gets a traceback where the measurement should have been -- which is how a run of
+    `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
+    """
+    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    offenders = _non_cp850_console_strings()
+    assert not offenders, (
+        "a string a milestone script prints cannot be encoded on a Windows console:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_console_encoding_guard_catches_a_non_ascii_print():
+    """Both halves: the print arm sees the violation, and it does not see a response body.
+
+    The second half is the measurement the two arms exist for. `ops/devstub.py` carries
+    thirty-one non-ASCII strings today and every one travels out over HTTP; a guard that
+    flagged those would have needed a waiver on its first run, and a waived guard is the
+    shape `docs/TESTING.md` calls coverage that provides none.
+    """
+    caught = _not_encodable(_printed_literals('print("a run \u2014 x")\n'), "probe.py")
+    assert len(caught) == 1 and caught[0].startswith("probe.py:1: U+2014 "), caught
+    # And the complaint is readable on the console it is complaining about: the offender is
+    # named by codepoint and its context escaped, so this guard cannot crash on its own
+    # subject the way the code it guards did.
+    assert caught[0].isascii(), caught
+
+    innocent = (
+        '"""A module docstring with \u03b2 and \u03c1 in it."""\n'
+        'raise HTTPException(status_code=404, detail="no bundle \u2014 import one first")\n'
+        'print("plain ASCII, printed")\n'
+    )
+    assert _not_encodable(_printed_literals(innocent), "probe.py") == []
+    # ... and the wide arm would have taken the response body with it, which is the whole
+    # reason the wide arm is not the one pointed at `devstub.py`.
+    assert len(_not_encodable(_all_literals(innocent), "probe.py")) == 1
+
+
+def _fixed_predicate(node: ast.expr) -> str | None:
+    """Why this predicate's answer is settled before the run, or None if it can vary.
+
+    Rejected: a truthy literal, which records a PASS whatever happened, and a boolean
+    expression with an operand that pins the result (`x or True`, `x and False`) -- a predicate
+    that was written to vary and no longer does.
+
+    Allowed: a falsy literal. `ops/m45_exit_criterion.py`'s block loop reports one per block
+    that trains on counts and arrives as a presence bit; the surrounding `if` has already
+    established that failure and the literal is only how it gets recorded. A deliberate FAIL is
+    a report, an unconditional PASS is a certificate, and only the second one is a lie.
+    """
+    if isinstance(node, ast.Constant):
+        return f"the literal {node.value!r}" if node.value else None
+    if isinstance(node, ast.BoolOp):
+        pin = isinstance(node.op, ast.Or)
+        for operand in node.values:
+            if isinstance(operand, ast.Constant) and bool(operand.value) is pin:
+                joiner = "or" if pin else "and"
+                return f"`{joiner} {operand.value!r}` pins the answer to {pin}"
+    return None
+
+
+def _constant_check_predicates(source: str, label: str) -> list[str]:
+    """Read with `ast`, not a regex: a predicate wrapped across three lines is the same defect."""
+    out: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "check" or not node.args:
+            continue
+        fixed = _fixed_predicate(node.args[0])
+        if fixed:
+            out.append(f"{label}:{node.lineno}: check({ast.unparse(node.args[0])}) -- {fixed}")
+    return out
+
+
+def test_no_milestone_exit_check_has_a_constant_predicate():
+    """Two of M4.5's eighteen checks could not fail, and both counted toward its published score.
+
+    One stood in for §12's M2 exit criterion -- the query
+    `backend/migrations/0008_placement.sql:63-64` builds a partial index for -- widened with a
+    literal so it always passed; the other recorded a summary of the loop above it as a pass.
+    The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
+    day it was written; what was lost was the ability to notice the day it stops being 0.
+    """
+    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    offenders = [
+        line
+        for path in EXIT_SCRIPTS
+        for line in _constant_check_predicates(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert not offenders, (
+        "a milestone exit check reports a verdict it settled before the run:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The two shapes that shipped, verbatim.
+        ("a live predicate widened by a literal", "check(placed == 0 or True, 'unplaced')", 1),
+        ("a summary recorded as a pass", "check(True, 'the blocks carry counts')", 1),
+        # The same defect a line-oriented regex would have walked past.
+        ("split across lines", "check(\n    placed == 0 or True,\n    'unplaced',\n)", 1),
+        ("an `and` pinned to false", "check(ok and False, 'never')", 1),
+        # And the two this guard must NOT take: the loop's own deliberate failure, and the
+        # repaired predicate.
+        ("the loop's deliberate failure", "check(False, 'a count arrived as a bit')", 0),
+        ("a predicate that can vary", "check(placed == 0, 'unplaced')", 0),
+    ],
+)
+def test_the_constant_predicate_guard_catches_a_real_violation(name, source, expected):
+    assert len(_constant_check_predicates(source + "\n", "probe.py")) == expected, name
+
+
+def _main(tree: ast.Module) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main":
+            return node
+    raise AssertionError("no main() in this script")
+
+
+def _is_the_winner(node: ast.expr) -> bool:
+    """The two spellings of the value: the local `winner`, and `result['winner']`."""
+    if isinstance(node, ast.Name):
+        return node.id == "winner"
+    return (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "result"
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == "winner"
+    )
+
+
+def _winner_dereferences(fn: ast.AST) -> list[int]:
+    """Linenos that index *into* the winner: `result['winner'][...]`, or `winner[...]`.
+
+    Reading `result['winner']` is not a dereference and is not counted -- that is the test
+    the verdict itself makes. What raises on an unresolved evening is the *second* index.
+    """
+    return sorted(
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Subscript) and _is_the_winner(node.value)
+    )
+
+
+def test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner():
+    """The one failure that script exists to detect used to be a TypeError.
+
+    §12's M4 row is "a real Friday night resolved by the app", so the outcome that matters is
+    the evening that does *not* resolve. The report block printed `result['winner']['name']`
+    while `ok` was computed twenty-eight lines below it, so an unresolved evening raised before
+    "SOMETHING DID NOT RESOLVE" could be reached: the script could say yes, and could crash,
+    and had no way at all to say no.
+    """
+    fn = _main(ast.parse((REPO / "ops" / "m4_exit_criterion.py").read_text(encoding="utf-8")))
+    verdicts = [
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "ok" for t in node.targets)
+    ]
+    assert len(verdicts) == 1, f"main() assigns `ok` {len(verdicts)} times: {verdicts}"
+    dereferences = _winner_dereferences(fn)
+    # Not vacuous: the report still has to print the winner's name, or this guard would pass on
+    # a script that had simply stopped reporting it.
+    assert dereferences, "main() no longer reads the winner at all"
+    assert verdicts[0] < dereferences[0], (
+        f"the verdict is computed at line {verdicts[0]}, after the winner is dereferenced at "
+        f"{dereferences}: an unresolved evening raises TypeError before it can be reported"
+    )
+
+
+def _constant_terminal_return(source: str, label: str) -> str | None:
+    """Why `main()`'s last statement is not a verdict, or None if it is one."""
+    fn = _main(ast.parse(source))
+    last = fn.body[-1]
+    if not isinstance(last, ast.Return) or last.value is None:
+        return f"{label}: main() does not end in a return"
+    if isinstance(last.value, ast.Constant):
+        return f"{label}:{last.lineno}: main() ends in `return {ast.unparse(last.value)}`"
+    assigned = {
+        target.id
+        for node in ast.walk(fn)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+        for target in (getattr(node, "targets", None) or [node.target])
+        if isinstance(target, ast.Name)
+    }
+    read = {n.id for n in ast.walk(last.value) if isinstance(n, ast.Name)}
+    if not assigned & read:
+        return (
+            f"{label}:{last.lineno}: `return {ast.unparse(last.value)}` reads nothing the run "
+            "computed"
+        )
+    return None
+
+
+def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
+    """`return 0` was the last line of the M3 script, so every run of it succeeded.
+
+    Including the runs where nobody was rated: `rate()` ignored every response status, so a
+    stack refusing every verdict produced two empty Ledgers, two empty boards, four sections of
+    numbers printed off empty dicts, and an exit code of 0. It now returns over the
+    preconditions it can actually check -- two boards exist, they differ, a re-read moves
+    nothing, and both people reached VERDICTS_EACH -- while "endorse", which no script can
+    check, stays in the paragraph that says so. Its two siblings already ended in a computed
+    verdict; they are held to the same rule here so that it stays true of all three.
+    """
+    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    offenders = [
+        problem
+        for path in EXIT_SCRIPTS
+        if (problem := _constant_terminal_return(path.read_text(encoding="utf-8"), path.name))
+    ]
+    assert not offenders, (
+        "a milestone exit script's exit code is settled before the run:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+# A heading, not a detail line: `1. PERSONAL`, `3. BLIND`, `2. Import (§10...)`. The number is
+# what makes it one -- a report whose numbering jumps from 1 to 3 is the shape being guarded
+# against, and only a numbered line can produce it.
+#
+# `\S` and not `[A-Z]`, because the letter never was the discriminator: `\d+\.\s+` already
+# excludes a decimal, which has no whitespace after its dot. What the letter did exclude was four
+# of the nineteen numbered headings these three scripts print -- `4. §13's INSTRUMENT` (m3:249),
+# `4. §13's FIGURE` (m4:268, :273) and `5. §14 RISK 6` (m4:276) -- and those four are the §13/§14
+# instrument readings, the sections whose data is optional at runtime and therefore the ones most
+# likely to acquire the `if` with no `else` this guard exists to report. Measured over the
+# directory the guard reads: the widened class matches the same 19 lines and no others, so it
+# reports nothing new today. [M4.8 review cycle 4: M48-C4-EXIT-01]
+_SECTION_HEADING = re.compile(r"^\s*\d+\.\s+\S")
+
+
+def _printed_text(node: ast.expr) -> str:
+    """A print's first argument as text, f-string interpolations dropped."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value
+            for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    return ""
+
+
+def _prints(stmts: list[ast.stmt]) -> list[ast.Call]:
+    return [
+        call
+        for stmt in stmts
+        for call in ast.walk(stmt)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "print"
+    ]
+
+
+def _droppable_sections(source: str, label: str) -> list[str]:
+    """Numbered sections a run can omit without printing a word about the omission."""
+    problems = []
+    for node in ast.walk(_main(ast.parse(source))):
+        if not isinstance(node, ast.If):
+            continue
+        headings = [
+            text.strip()
+            for call in _prints(node.body)
+            if call.args and _SECTION_HEADING.match(text := _printed_text(call.args[0]).lstrip("\n"))
+        ]
+        if headings and not _prints(node.orelse):
+            problems.append(
+                f"{label}:{node.lineno}: section {headings[0].split(':')[0]!r} is printed only "
+                f"when `{ast.unparse(node.test)}` holds, and the branch that fails prints nothing"
+            )
+    return problems
+
+
+def test_the_m3_script_names_the_section_it_could_not_measure():
+    """A section that vanishes leaves a report that reads like a complete run.
+
+    §12's M3 row rests on the personal one, and it was printed under `if len(shared) >= 2`
+    with nothing on the other side: two people who happen to rate disjoint sets produced a
+    report numbered 2, 3, 4, with no line saying that 1 had not been measured -- the same
+    defect as a check whose predicate is a constant, one layer up, because what cannot be
+    read off the output cannot be falsified by it. The rule is stated over all three scripts
+    rather than over the branch that was wrong: the M4 script already answers an unresolved
+    evening with a `1. UNRESOLVED` line, and that is the shape being held.
+    [M4.8 review cycle 3: m48-c3-exit-03]
+    """
+    offenders = [
+        problem
+        for path in EXIT_SCRIPTS
+        for problem in _droppable_sections(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert not offenders, "a milestone exit script can drop a section in silence:\n  " + "\n  ".join(
+        offenders
+    )
+
+    # Shown failing, because a guard over a branch that is there is otherwise indistinguishable
+    # from no guard at all: this is the m3 section with its `else` taken away.
+    dropped = "\n".join(
+        [
+            "def main():",
+            "    if len(shared) >= 2:",
+            '        print(f"\\n  1. PERSONAL: rho = {rho}")',
+            '    print("\\n  2. STABLE UNDER RE-READ: same request twice")',
+            "    return ok",
+        ]
+    )
+    reported = _droppable_sections(dropped, "dropped.py")
+    assert reported and "1. PERSONAL" in reported[0], reported
+
+    # And again in the spelling four of these scripts' own nineteen numbered headings take:
+    # `4. §13's INSTRUMENT` at m3:249, `4. §13's FIGURE` twice at m4:268 and :273, `5. §14 RISK 6`
+    # at m4:276. Those four are exactly the sections whose data is optional at runtime -- m3:252
+    # reads a `model` that can be None and m4:275 subscripts `report['shortlist_agreement']` bare
+    # -- so the obvious next repair to either is an `if` with no `else`, and the heading class
+    # this guard shipped with could not see it. The section sign is written as itself here rather
+    # than as an escape: escaped, this case would pass against the very regex that misses the
+    # real print, which makes it a strawman instead of the shape the scripts take.
+    sectioned = "\n".join(
+        [
+            "def main():",
+            "    if model:",
+            '        print("\\n  4. §13 INSTRUMENT: held-out pairs")',
+            '    print("\\n  5. NEXT SECTION")',
+            "    return ok",
+        ]
+    )
+    reported = _droppable_sections(sectioned, "sectioned.py")
+    assert reported and "§13 INSTRUMENT" in reported[0], reported
+
+
+# --- the same scripts, given a runtime -------------------------------------------------
+#
+# Everything above reads these three as source, because their runtime is a live stack and a
+# real bundle. Three of their defects were invisible to that reading and are answered here by
+# importing the module and calling the helper: a cleanup that silently does not clean up, a
+# `print` that raises on text it did not author, and a seeding loop that counted refusals.
+# [M4.8 review cycle 1: findings m45-rmtree-is-a-no-op-on-windows,
+# m45-prints-non-cp850-strings-it-did-not-author, m4-rate-still-ignores-every-response-status]
+
+
+def _exit_script(name: str):
+    """Import an exit script without running it, under a name of its own."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(f"exit_script_{name}", REPO / "ops" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution, the way `import` itself does it: `test_devstub_contract.py`
+    # records why a module that resolves its own annotations needs to be findable in sys.modules.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_m45_script_removes_a_staging_tree_it_still_holds_open():
+    """`shutil.rmtree(..., ignore_errors=True)` over an open file is a no-op that says nothing.
+
+    The M4.5 script stages the bundle's artifacts into a tempdir and removes it in a `finally`
+    -- but `placement/features.py:190` reads `review_text_emb.npz` through `ArtifactStore.npz`,
+    which caches the NpzFile for the store's lifetime, and section 5 opened `content_X.npz`
+    itself. On Windows the unlink of an open file raises PermissionError, `ignore_errors`
+    swallows it, and 11.4 MB survived every run of the script forever with no message. The
+    tree-removal half of this assertion is only sharp on Windows -- which is the platform that
+    matters, because the only copy of the corpus is on a Windows workstation -- so the cache
+    assertion carries it on POSIX.
+    """
+    import numpy as np
+
+    from spielplan.models.artifacts import ArtifactStore
+
+    m45 = _exit_script("m45_exit_criterion")
+    root = Path(tempfile.mkdtemp(prefix="spielplan-m45-guard-"))
+    store = None
+    try:
+        staged = root / "v1"
+        staged.mkdir()
+        np.savez(staged / "content_X.npz", data=np.arange(4.0), indices=np.arange(4))
+        np.savez(staged / "review_text_emb.npz", ids=np.arange(2), vecs=np.zeros((2, 3)))
+        store = ArtifactStore.open(staged, "v1")
+        store.npz("review_text_emb.npz")
+
+        m45.discard_staged_artifacts(root, store)
+        assert not store._cache, "the store still holds a handle into a tree it just removed"
+        assert not root.exists(), (
+            "the staging tree survived its own cleanup: "
+            f"{sorted(str(p.relative_to(root)) for p in root.rglob('*'))}"
+        )
+    finally:
+        if store is not None:
+            for handle in store._cache.values():
+                closer = getattr(handle, "close", None)
+                if closer is not None:
+                    closer()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_m45_script_prints_a_finding_message_the_console_cannot_encode():
+    """The guard above reads this file's own literals; `check()`'s detail is written elsewhere.
+
+    Three sites -- `:156`, `:200` and `:319` -- pass the importer's own finding messages as
+    `check()`'s `detail`, and 51 `report.fail`/`warn`/`note` literals in
+    `backend/spielplan/importer/` carry an em dash -- most of them inside the 150-character
+    slice. Under cp850 the print raised UnicodeEncodeError, so a bundle that fails validation
+    printed "[FAIL] ... validates clean" and then a traceback where the reason belongs: the
+    failure path of the one script whose job is diagnosis. It is `detail` and not those three
+    linenos that this test stands over; the numbers move whenever the script is edited, and the
+    pair the docstring shipped with (`:106` and `:138`) resolved to a docstring line and an early
+    return in the tree it was written against. [M4.8 review cycle 3: m48-c3-exit-01]
+    """
+    import contextlib
+    import io
+
+    m45 = _exit_script("m45_exit_criterion")
+    # backend/spielplan/importer/validate.py:120's own message, verbatim. The section sign
+    # encodes in cp850 and the em dash does not, which is why the escape has to be selective.
+    message = (
+        "FAIL title-id: `title` has no `id` column — §4.1: the canonical key is title.id"
+    )
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp850", newline="")
+    with contextlib.redirect_stdout(console):
+        m45.check(False, "the bundle the corpus built validates clean (2.1s)", message)
+    console.flush()
+    printed = console.buffer.getvalue().decode("cp850")
+
+    assert "[FAIL] the bundle the corpus built validates clean" in printed, printed
+    assert "title-id" in printed and "§4.1" in printed, printed
+    assert "\\u2014" in printed, (
+        "the em dash was dropped rather than named; backslashreplace keeps the codepoint "
+        f"readable on the console that cannot render it: {printed!r}"
+    )
+
+
+def _unescaped_winner_prints(source: str) -> list[int]:
+    """Linenos where a `print` interpolates the winner without passing it through `console()`.
+
+    The literal guard above cannot reach this by construction: an f-string's interpolated value
+    is runtime data rather than source, so `{winner['name']!r}` is invisible to a rule about
+    literals -- and that name is the corpus's text, not the script's.
+    """
+    fn = _main(ast.parse(source))
+    out: list[int] = []
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "print":
+            continue
+        for value in ast.walk(node):
+            if not isinstance(value, ast.FormattedValue):
+                continue
+            if not any(
+                isinstance(sub, ast.Subscript) and _is_the_winner(sub.value)
+                for sub in ast.walk(value)
+            ):
+                continue
+            if not any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "console"
+                for call in ast.walk(value)
+            ):
+                out.append(value.lineno)
+    return sorted(out)
+
+
+def test_the_m4_script_escapes_the_winner_name_it_did_not_author():
+    """The RESOLVED line prints the corpus's text, and the corpus is not ASCII.
+
+    `api/tonight.py` selects `title.name` into the slate card and the result returns that card
+    as `result['winner']`, so the name on §12's M4 line was written by the export, not by this
+    project. `!r` does not save it -- Python 3's repr leaves a printable codepoint raw -- so
+    under `PYTHONIOENCODING=cp850`, the code page CLAUDE.md's rule is about and the way this
+    script's output is captured, an evening won by a title whose name leaves that code page
+    raised UnicodeEncodeError from inside `print` on the *success* branch: a traceback where
+    "1. RESOLVED" belongs, and sections 2 to 6 and the RESULT line never printed. 104 of
+    v20260828's 19,071 names leave it; none is an owned movie today, which is a fact about this
+    month's library rather than a guard.
+    [M4.8 review cycle 2: m48-rev2-m4-prints-foreign-text-unescaped]
+    """
+    import contextlib
+    import io
+
+    path = REPO / "ops" / "m4_exit_criterion.py"
+    unescaped = _unescaped_winner_prints(path.read_text(encoding="utf-8"))
+    assert not unescaped, (
+        f"{path.name} prints the winner's name straight at the console at line(s) {unescaped}: "
+        "on a console that cannot carry it, the report raises from inside `print` on the one "
+        "branch that says the evening resolved"
+    )
+
+    # Not vacuous, and the same measurement the M4.5 sibling above makes: the escape has to
+    # survive its own subject on the console that cannot render it.
+    m4 = _exit_script("m4_exit_criterion")
+    # Written as an escape, not as the glyph: the household owns this title, and U+014D is one
+    # of the codepoints cp1252 cannot carry either, so a failure report quoting this line would
+    # crash the console it was being read on.
+    name = "Sh\u014dgun"
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp850", newline="")
+    with contextlib.redirect_stdout(console):
+        print(f"  1. RESOLVED     room ABCD -> winner {m4.console(repr(name))}")
+    console.flush()
+    printed = console.buffer.getvalue().decode("cp850")
+    assert "1. RESOLVED" in printed and "\\u014d" in printed, (
+        "the winner's name was dropped rather than named; backslashreplace keeps the codepoint "
+        f"readable on the console that cannot render it: {printed!r}"
+    )
+
+
+def test_the_m4_script_stops_seeding_when_a_write_is_refused():
+    """`rate()` returned its target having written nothing, and the script printed that number.
+
+    Against a stack refusing every verdict it counted 24 refusals as 24 verdicts, printed
+    "seeded 24 and 24 verdicts", then spent three minutes in `wait_for_pool` and aborted
+    naming the pool -- a true exit code with the wrong diagnosis, in the script whose output
+    is the diagnosis. Its sibling `ops/m3_exit_criterion.py` took this repair in the same
+    milestone; this is the same defect one file over.
+    """
+    import httpx
+
+    m4 = _exit_script("m4_exit_criterion")
+    refused: list[str] = []
+
+    def stack(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/rate":
+            return httpx.Response(200, json={"card": {"type": "sweep", "token": "card-token"}})
+        if request.url.path == "/api/rate/verdict":
+            refused.append(request.url.path)
+            return httpx.Response(500, json={"detail": "the fold-in raised"})
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(base_url="http://stack", transport=httpx.MockTransport(stack))
+    with pytest.raises(httpx.HTTPStatusError):
+        m4.rate(client, [2, 2, 1, 0])
+    assert len(refused) == 1, (
+        f"seeding continued past the first refused write: {len(refused)} verdicts posted"
+    )
+
+
+def test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer():
+    """`sharpen()` read the answer's status and not the draw's, so half the loop was silent.
+
+    Section 3 reads tier movement *per ten comparisons*, and the pair has to be drawn before it
+    can be answered. `app.py`'s handlers answer a database fault with `{"detail": ...}`, so a
+    refused `GET /api/rank/queue` parsed, carried no `pair`, and broke the loop on its first
+    iteration -- byte-identical to an exhausted queue: "first 0 comparisons moved 0 titles",
+    no refusal note, and a run that exits 0 having measured nothing. The draw fails
+    independently of the answer, because it runs the candidate read, the draw and the seal that
+    `GET /api/rank` never touches.
+    [M4.8 review cycle 2: m48-rev2-sharpen-counts-only-half-its-refusals]
+    """
+    import httpx
+
+    m3 = _exit_script("m3_exit_criterion")
+    drawn: list[str] = []
+
+    def stack(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/rank/queue":
+            drawn.append(request.url.path)
+            return httpx.Response(500, json={"detail": "the draw raised"})
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(base_url="http://stack", transport=httpx.MockTransport(stack))
+    assert m3.sharpen(client, 10) == (0, 1), (
+        "a refused draw is reported as an exhausted queue: the run prints a board that moved "
+        "nothing over comparisons it never made, with no refusal count"
+    )
+    # And it stops on the refusal rather than spending the loop's whole budget on a stack that
+    # is already answering 500 to every draw.
+    assert len(drawn) == 1, drawn
+
+
+def _statements_between_create_and_drop(source: str) -> list[str]:
+    """Statements running after the scratch database exists and before the block that drops it.
+
+    A statement that can raise there leaves a database nothing will ever name again: the
+    scratch name carries the run's pid (which is what stops two concurrent runs dropping each
+    other's database), so the next run's `DROP DATABASE IF EXISTS` names a different one. The
+    fixed name it replaced used to clean up its predecessor's orphan by accident.
+    """
+    fn = _main(ast.parse(source))
+    creates = [i for i, stmt in enumerate(fn.body) if "CREATE DATABASE" in ast.unparse(stmt)]
+    drops = [
+        i
+        for i, stmt in enumerate(fn.body)
+        if isinstance(stmt, ast.Try)
+        and "DROP DATABASE" in "".join(ast.unparse(node) for node in stmt.finalbody)
+    ]
+    assert len(creates) == 1 and len(drops) == 1, f"creates {creates}, drops {drops}"
+    return [
+        ast.unparse(stmt).splitlines()[0]
+        for stmt in fn.body[creates[0] + 1:drops[0]]
+        # A binding to a literal is the `x = None` the `finally` needs to guard itself with,
+        # and it cannot raise. Anything else in this window can.
+        if not (
+            isinstance(stmt, (ast.Assign, ast.AnnAssign)) and isinstance(stmt.value, ast.Constant)
+        )
+    ]
+
+
+def test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it():
+    """The block that creates the database has to be the block that drops it.
+
+    Three statements sat outside it: the connect, the `pool._init_connection` whose two codec
+    round trips this script has already been bitten by once, and the `tempfile.mkdtemp` M4.8
+    itself moved there from inside the `try`.
+    """
+    stranded = _statements_between_create_and_drop(
+        (REPO / "ops" / "m45_exit_criterion.py").read_text(encoding="utf-8")
+    )
+    assert not stranded, (
+        "these run after CREATE DATABASE and outside the block whose finally drops it, so a "
+        "failure in one orphans a database on the server:\n  " + "\n  ".join(stranded)
+    )
+
+
+def _catches_everything(handler: ast.ExceptHandler) -> bool:
+    """A bare `except`, or one that names `Exception`/`BaseException` and nothing narrower.
+
+    Which exception the handler catches is half the rule and was not read at all: any handler
+    carrying a `check(False, ...)` satisfied the search, so narrowing `except Exception` to
+    `except asyncpg.PostgresError` -- the narrowing a reviewer proposes for an async DB harness,
+    or to `ValueError` for a parse -- left the guard green while the documented failure went back
+    to a bare traceback. That failure is a TypeError (`None < APP_ID_FLOOR` once an import lands
+    no rows), which none of those narrowings names. The sibling guard in this same row already
+    reads `handler.type` (`_unguarded_seeding` below), so this is the one that omitted the check
+    its neighbour makes. Compared on the last dotted segment rather than a suffix test, because
+    `MyImportException` ends in the word and catches nothing broad.
+    [M4.8 review cycle 3: m48-c3-exit-02]
+    """
+    if handler.type is None:
+        return True
+    return ast.unparse(handler.type).split(".")[-1] in {"Exception", "BaseException"}
+
+
+def _propagating_measurement_block(source: str, label: str) -> str | None:
+    """Why the block that measures raises instead of reporting, or None if it reports."""
+    fn = _main(ast.parse(source))
+    blocks = [
+        stmt
+        for stmt in fn.body
+        if isinstance(stmt, ast.Try)
+        and "DROP DATABASE" in "".join(ast.unparse(node) for node in stmt.finalbody)
+    ]
+    if len(blocks) != 1:
+        return f"{label}: {len(blocks)} blocks whose finally drops the scratch database"
+    reports = any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "check"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and call.args[0].value is False
+        for handler in blocks[0].handlers
+        if _catches_everything(handler)
+        for call in ast.walk(handler)
+    )
+    if not reports:
+        return (
+            f"{label}:{blocks[0].lineno}: no handler that catches everything turns an exception "
+            "into a failed check, so a failure the handlers do not name ends the run in a "
+            "traceback instead of a report"
+        )
+    return None
+
+
+def test_the_m45_script_reports_a_failure_inside_its_measurement_block():
+    """An import that lands no rows does not raise, and everything after section 2 needs rows.
+
+    `importer/bundle.py` returns its report when `validate_for_install` fails and catches its
+    own `_Rollback` when the load does, so `[FAIL] title loaded 0 rows` printed and the run
+    walked on into section 3, where `max(id)` over an empty table is None and
+    `None < APP_ID_FLOOR` raises TypeError -- and a guard on that one comparison only moves the
+    traceback three sections down, to `ArtifactStore.open` over a tree the early-returning
+    import never staged and `np.concatenate([])` over an empty sample. The operator got a
+    traceback about a comparison where the sentence naming the cause belonged, and lost the
+    remaining sections and the `passed/total` tally: the failure path of the one script whose
+    job is diagnosis, which is where every other repair in this row was found.
+    [M4.8 review cycle 2: m48-rev2-m45-raises-where-m4-was-taught-to-report]
+    """
+    problem = _propagating_measurement_block(
+        (REPO / "ops" / "m45_exit_criterion.py").read_text(encoding="utf-8"),
+        "m45_exit_criterion.py",
+    )
+    assert problem is None, problem
+    # Not vacuous: the shape that shipped is the same block with no handler at all.
+    assert _propagating_measurement_block(
+        "async def main():\n"
+        "    try:\n"
+        "        check(max_title < FLOOR, 'the ids are ours')\n"
+        "    finally:\n"
+        "        await admin.execute('DROP DATABASE x')\n",
+        "probe.py",
+    )
+    # And the handler kept but narrowed, which is what a review of an async DB harness proposes
+    # and what a search over handler bodies alone could not tell from the one that shipped: the
+    # documented failure here is a TypeError, so this run reverts to the bare traceback while the
+    # `check(False, ...)` sits in a handler it never reaches.
+    assert _propagating_measurement_block(
+        "async def main():\n"
+        "    try:\n"
+        "        check(max_title < FLOOR, 'the ids are ours')\n"
+        "    except asyncpg.PostgresError as exc:\n"
+        "        check(False, 'the measurement block ran', str(exc))\n"
+        "    finally:\n"
+        "        await admin.execute('DROP DATABASE x')\n",
+        "probe.py",
+    )
+
+
+def test_the_scratch_window_guard_sees_a_statement_left_outside_the_block():
+    """The shape that shipped, reduced: a connect between the create and the try that drops."""
+    stranded = _statements_between_create_and_drop(
+        "async def main():\n"
+        "    await admin.execute('CREATE DATABASE x')\n"
+        "    conn = await asyncpg.connect(dsn)\n"
+        "    root = None\n"
+        "    try:\n"
+        "        pass\n"
+        "    finally:\n"
+        "        await admin.execute('DROP DATABASE x')\n"
+    )
+    assert stranded == ["conn = await asyncpg.connect(dsn)"], stranded
+
+
+def _unguarded_seeding(source: str, label: str) -> list[str]:
+    """Calls to `rate()` in `main()` that are not inside a `try` handling `httpx.HTTPError`."""
+    tree = ast.parse(source)
+    if not any(
+        isinstance(node, ast.FunctionDef) and node.name == "rate" for node in ast.walk(tree)
+    ):
+        return []
+    fn = _main(tree)
+    guarded: set[int] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Try):
+            continue
+        if not any(
+            handler.type is not None and "HTTPError" in ast.unparse(handler.type)
+            for handler in node.handlers
+        ):
+            continue
+        guarded.update(
+            call.lineno
+            for stmt in node.body
+            for call in ast.walk(stmt)
+            if isinstance(call, ast.Call)
+        )
+    return [
+        f"{label}:{node.lineno}"
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "rate"
+        and node.lineno not in guarded
+    ]
+
+
+def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
+    """Raising is half the repair; the other half is a sentence instead of a traceback.
+
+    `rate()` now raises on the first refused write in both scripts that have one. Letting that
+    escape would exit non-zero too, but with a stack trace where the name of the failed
+    precondition should be -- and the precondition is what the exit code is for.
+    """
+    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    offenders = [
+        line
+        for path in EXIT_SCRIPTS
+        for line in _unguarded_seeding(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert not offenders, (
+        "a refused write during seeding escapes as a traceback rather than a diagnosis:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_seeding_guard_sees_an_unguarded_call():
+    """Both halves, on the two shapes that actually shipped one file apart."""
+    unguarded = (
+        "def rate(client, pattern):\n"
+        "    return 0\n"
+        "def main():\n"
+        "    print(f'seeded {rate(a, [2])} and {rate(b, [0])} verdicts')\n"
+    )
+    assert len(_unguarded_seeding(unguarded, "probe.py")) == 2
+
+    guarded = (
+        "def rate(client, pattern):\n"
+        "    return 0\n"
+        "def main():\n"
+        "    try:\n"
+        "        seeded = rate(a, [2])\n"
+        "    except httpx.HTTPError as exc:\n"
+        "        print('PRECONDITION FAILED')\n"
+        "        return 1\n"
+    )
+    assert _unguarded_seeding(guarded, "probe.py") == []
+    # And a script with no seeding path is not asked for one: the M4.5 script writes through
+    # the importer, not through §6.1's routes.
+    assert _unguarded_seeding("def main():\n    return 0\n", "probe.py") == []

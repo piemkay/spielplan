@@ -1,0 +1,129 @@
+name: real-bundle
+
+# A workflow of its own, and that is the whole reason this file exists rather than a job in
+# `ci.yml`. `concurrency:` at the top of a workflow is WORKFLOW-level: the group is held until
+# the run's LAST job finishes, and this job does not finish in minutes while no runner carries
+# its label -- it queues, and GitHub cancels it after 24 h. Sitting in `ci.yml` it answered the
+# same workflow-level weekly `schedule` as the five hosted jobs, on the default branch, inside
+# group `ci-refs/heads/main`. So for a day a week main's next push was created PENDING behind
+# that group, and the push after that superseded the pending one -- leaving a commit on the
+# branch the milestone ledger reads Section 12's gates off with no completed run at all, which
+# is the exact symptom `cancel-in-progress` was made conditional to remove. A job-level `if:`
+# cannot fix it, because the run that holds the group is the one where the gate PASSES.
+# [M4.8 review cycle 4, m48-c4-ci-01]
+#
+# Nothing else changes with the split. Decision 183's constraints are unchanged; they are simply
+# written on the trigger below now instead of on an `if:` inside somebody else's workflow.
+
+on:
+  workflow_dispatch:
+  # Weekly (decision 183) -- a corpus-side format change is slow and silent, and a week is soon
+  # enough to meet one before a milestone leans on it. The same tick `ci.yml` carries, on
+  # purpose: one Monday morning's evidence, now in two conclusions instead of one, so a corpus
+  # that has not been checked cannot be mistaken for a main that has not been built.
+  schedule:
+    - cron: '17 5 * * 1'
+
+# No `concurrency:` block here, and its absence is the fix. Two triggers a week apart have
+# nothing worth superseding, and a group is the one thing this job must not be holding.
+
+env:
+  # Test-only values, and the same five `ci.yml` carries: this job inherited them from that
+  # file's workflow-level block until the split, and a move that quietly narrowed the
+  # environment a real corpus is imported under would be the kind of change this milestone
+  # exists to catch rather than to make. The three that matter are Section 2's required config —
+  # a process that reads them and finds nothing is a process that would fall back to whatever
+  # the household machine has exported.
+  PUBLIC_URL: http://localhost:8080
+  SESSION_SECRET: ci-session-secret-not-a-real-one
+  SECRETS_KEY: ci-secrets-key-not-a-real-one-at-all
+  POSTGRES_USER: spielplan
+  POSTGRES_PASSWORD: spielplan
+  POSTGRES_DB: spielplan
+
+jobs:
+  real-bundle:
+    # The only place two registered tests stop skipping. `test_bundle_shapes.py`'s real-bundle
+    # case and `test_bundle_validation.py`'s both key off CORPUS_BUNDLE_DIR, and no other job in
+    # either workflow sets it — so the committed shapes manifest, whose whole job
+    # is to fail here when the corpus changes format, has never been compared against a corpus by
+    # anything but a hand run on the household's box. Both report as skipped, which the summary
+    # prints as green. [M4.8 finding 12]
+    #
+    # Decision 183: the bundle comes from a self-hosted runner that already has it on disk, not
+    # from a download URL in a repository secret — the export is ~1.15 GB, and a secret that
+    # leaks is a corpus that leaks. The consequence is that this job runs on somebody's living
+    # room, so neither this file nor the job carries a `push` or a `pull_request` path. The `if:`
+    # below is now the second reading of that rule rather than the only one: the `on:` block
+    # above already excludes both events, and the gate is what would still keep every branch's
+    # push off that machine on the day somebody widens the trigger here the way `ci.yml`'s was
+    # widened. It gates nothing, blocks no merge, and nothing anywhere depends on it.
+    #
+    # The waiting is not free, though, and saying so is the point of this paragraph: until a
+    # runner labelled `spielplan-corpus` is registered, GitHub cancels this job once it has sat
+    # in the queue for 24 hours, and a cancelled job denies its run a success conclusion. What
+    # that costs is now bounded to this workflow -- a weekly run of this file that ends
+    # cancelled, saying every Monday that the corpus has still never been compared -- rather
+    # than to `ci.yml`'s conclusion and, worse, to the group main's pushes queue in.
+    # `continue-on-error: true` is the fix that is refused here: a job that cannot fail is
+    # exactly what this milestone was written to remove.
+    # [M4.8 review cycle 3, m48-c3-ci-02; review cycle 4, m48-c4-ci-01]
+    #
+    # THE RUNNER THIS LABEL GOES ON MUST BE LINUX WITH DOCKER, and that is not a preference:
+    # the `services:` block below is a GitHub service container, which only exists on a Linux
+    # runner, and both `run:` blocks are sh (`[ ! -d ... ]`, and `.venv/bin` where a Windows
+    # uv venv puts `.venv/Scripts`) on a self-hosted Windows runner whose default shell is
+    # PowerShell. The only copy of the corpus is on the household's Windows workstation, so
+    # registering the label there means registering the runner inside WSL or a Linux VM that
+    # can see the export, with `vars.CORPUS_BUNDLE_DIR` set to the path *that* machine reads
+    # it at. A Windows-native runner fails during container initialisation, before the first
+    # step, and the label is the only thing that decides which box it lands on.
+    # [M4.8 review cycle 1, m48-rev-ci-02]
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: [self-hosted, spielplan-corpus]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: spielplan
+          POSTGRES_PASSWORD: spielplan
+          POSTGRES_DB: spielplan_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U spielplan -d spielplan_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # A repository variable, not a secret: it is a path on that machine's own disk, and the
+      # bundle it names never leaves the machine.
+      CORPUS_BUNDLE_DIR: ${{ vars.CORPUS_BUNDLE_DIR }}
+      TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5432/spielplan_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv
+      - run: uv pip install -e "backend[dev]"
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      # Loud, and first. A job whose entire purpose is to un-skip two tests must not be able to
+      # report green having skipped them, and an unset variable or a moved directory skips them
+      # exactly as silently here as everywhere else.
+      - name: the corpus bundle must actually be on this runner's disk
+        run: |
+          if [ ! -d "${CORPUS_BUNDLE_DIR:-}" ]; then
+            echo "CORPUS_BUNDLE_DIR is unset or is not a directory: '${CORPUS_BUNDLE_DIR:-}'"
+            echo "set the repository variable to the corpus bundle's path on this runner"
+            exit 1
+          fi
+
+      # `-rs` for the same reason: if either of these two skips anyway, the reason is printed
+      # rather than folded into a count.
+      - name: pytest (the two cases that only exist against a real bundle)
+        run: >
+          python -m pytest backend/tests/test_bundle_shapes.py backend/tests/test_bundle_validation.py
+          -k real_bundle -q -rs
+
+      # M4.5's exit criterion, which means nothing against the fixture — it was written to measure
+      # a real import. It creates and drops its own database, so the service above is all it
+      # needs, and it exits non-zero on a failed check (M4.8 step 3).
+      - name: M4.5's exit criterion, against the corpus bundle
+        run: python -u ops/m45_exit_criterion.py

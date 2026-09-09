@@ -332,12 +332,15 @@ async def test_a_credit_is_one_row_per_person_and_job_across_department_spelling
     """
     await _import(db, bundle, tmp_path / "artifacts")
 
-    # Al Pacino is credited as Acting/Actor by the fixture; a second source files the same job
-    # under `Actor`, with its own spelling of the character and a later billing order.
+    # Three rows, not two. The fixture itself now files Al Pacino's one job under both `Acting`
+    # and `Actor` (M4.8, `platform-fixture-carries-the-corpus-awkward-shapes`), so the collision
+    # arrives through the importer the way it arrives from the corpus; this insert stays because
+    # it adds the second SOURCE, its own spelling of the character and a later billing order,
+    # which is what the two assertions below are actually about.
     await db.execute(_CROSS_DEPARTMENT, 1, 4, "Actor", "Lt. Hanna", 6, "omdb")
     assert await db.fetchval(
         "SELECT count(*) FROM credit WHERE title_id = 1 AND person_id = 4"
-    ) == 2
+    ) == 3
 
     credits = await library.credits_for(db, 1)
     rows = [c for c in credits if c["person_id"] == 4 and c["job"] == "Actor"]
@@ -379,7 +382,11 @@ async def test_title_card_payload_is_complete(db, bundle, tmp_path):
     directors = [c for c in credits if c["job"] == "Director"]
     assert len(directors) == 1
     assert sorted(directors[0]["sources"]) == ["omdb", "tmdb"]
-    assert await db.fetchval("SELECT count(*) FROM credit WHERE title_id = 1") == 3
+    # Four stored rows behind three rendered ones: the director twice (tmdb and omdb) and Al
+    # Pacino twice, under the two department spellings TMDB files leads under. The second is
+    # M4.8's fixture row — "dedupe at read time, never at import" is only testable against a
+    # bundle that carries the duplicate.
+    assert await db.fetchval("SELECT count(*) FROM credit WHERE title_id = 1") == 4
 
     dna = await library.dna_for(db, 1)
     # The corpus's term ids are `<facet>.<term>`, dotted and facet-prefixed — `obsession` and

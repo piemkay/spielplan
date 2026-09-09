@@ -1,14 +1,35 @@
 name: ci
 
 on:
+  # Every branch, not one. Eleven runs existed when this was written and all eleven were
+  # `push main`: m3, m4, m45 and m5 each reached main having never run on Linux, so §12's exit
+  # gates were first evaluated against a milestone on the merge commit — after the work, in one
+  # diff, with nowhere to bisect. A gate that only fires after the merge is a report, not a gate.
+  # [M4.8 finding 10]
   push:
-    branches: [main]
+    branches: ['**']
+  # Kept, though `push` now covers this repository's own branches: a pull request from a fork is
+  # not a push to this repository, and its ref (`refs/pull/N/merge`) is its own concurrency group,
+  # so the duplicate run an internal PR now gets does not cancel the branch's.
   pull_request:
   workflow_dispatch:
+  schedule:
+    # A free weekly regression check on main. Nothing in this repository changes between
+    # Mondays, but the runner images, the action versions and PyPI all do, and one tick a week
+    # is how that arrives as a red run rather than as a red milestone. The corpus check this
+    # cron was first written for (decision 183) answers its own copy of it in
+    # `.github/workflows/real-bundle.yml`: a self-hosted job nobody has registered a runner for
+    # queues for 24 hours, and the group below — which the whole run holds until its last job
+    # ends — is where main's next push would spend that day pending.
+    # [M4.8 review cycle 4, m48-c4-ci-01]
+    - cron: '17 5 * * 1'
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding a branch's own in-flight run is what this setting is for. Superseding main's is
+  # not: the M4 merge run was cancelled 71 s in by the next push, which left the one commit whose
+  # result the gates are read off with no completed run at all. [M4.8 finding 10]
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Test-only values. The real ones live in .env, which is not in the repository.
@@ -98,6 +119,22 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
+      # The same three lines the lint, backend and integration jobs carry, and for the same
+      # reason. The bundle-fixture step below used to open with a bare `python -m pip install -e
+      # "backend[dev]"` against the runner image's /usr interpreter — the externally managed
+      # (PEP 668) one uv refused at the M3 merge, which is why those three jobs have a venv. It
+      # worked only because the ubuntu-24.04 image writes /etc/pip.conf with
+      # `break-system-packages = true`, a pip-only setting uv never reads: the one job that proves
+      # what actually ships was a runner-image change away from failing at its first step. It also
+      # resolved torch from PyPI — about 2.8 GB of CUDA wheels to build a four-title fixture,
+      # where §1 requires the CPU build and the pyproject's CPU index delivers 187 MiB. The venv
+      # goes on PATH here, before the fixture step, so that step's `python` is this one.
+      # [M4.8 finding 11]
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv
+      - run: uv pip install -e "backend[dev]"
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
       # The same variables `.env.example` asks an operator to fill, and no more. DATABASE_URL used
       # to be written here too, which short-circuited the `${DATABASE_URL:-postgresql://...}`
       # default docker-compose.yml builds out of the three POSTGRES_* values — so the one
@@ -118,9 +155,11 @@ jobs:
           TZ=Europe/Berlin
           EOF
 
+      # No `pool_titles`: the browser suite counts what this writes (10-home.spec.js:99,258 and
+      # test_import_integration.py assert the small numbers), so the scale mode M4.8 gave
+      # make_bundle stays off here on purpose. [M4.8 step 6c]
       - name: build a bundle fixture into the import directory
         run: |
-          python -m pip install --quiet -e "backend[dev]"
           python - <<'PY'
           import pathlib, sys
           sys.path.insert(0, 'backend')

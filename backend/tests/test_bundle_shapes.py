@@ -55,11 +55,20 @@ def shipped() -> dict:
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory) -> dict:
-    """The shape of the bundle `make_bundle` produces, read the same way."""
+def bundle_root(tmp_path_factory) -> Path:
+    """The bundle itself, built once. `built` below reduces it to shapes; the three tests at
+    the foot of this file read its rows, which is where the corpus's awkward shapes live -- a
+    shape manifest carries no values by design, so it cannot see a facet naming or a duplicate
+    department."""
     root = tmp_path_factory.mktemp("fixture-bundle")
     make_bundle.make_bundle(root)
-    return shapes_mod.extract(root)
+    return root
+
+
+@pytest.fixture(scope="module")
+def built(bundle_root) -> dict:
+    """The shape of the bundle `make_bundle` produces, read the same way."""
+    return shapes_mod.extract(bundle_root)
 
 
 # --- the feature contract: §4.3's "exhaustive definition of the tower's input" ----------------
@@ -469,3 +478,147 @@ def test_sqlite_shapes_are_read_without_row_counts(tmp_path):
     conn.commit()
     conn.close()
     assert shapes_mod._sqlite_shapes(db) == {"t": ["a", "b"]}
+
+
+# --- the shapes the corpus ships and the old fixture could not express -------------------------
+#
+# Everything above compares STRUCTURE, because `real_bundle_shapes.json` is shapes-only by
+# design (its own `_note` says so: a committed manifest may carry no film title and no person's
+# name). That is exactly why the three defects below were invisible to it -- a duplicated
+# department, a facet spelling and a pool size are all *values*. These three read the built
+# bundle's rows instead, and they are the reason `bundle_root` above is a fixture of its own.
+# Milestone M4.8, row `platform-fixture-carries-the-corpus-awkward-shapes`.
+
+
+def _content(root: Path) -> sqlite3.Connection:
+    return sqlite3.connect(root / "content.sqlite")
+
+
+def test_the_fixture_ships_a_credit_recorded_under_two_departments(bundle_root):
+    """§4.1: "credit (dedupe at read time, never at import)" -- so the collision has to survive
+    the import and reach the read layer intact, and a fixture that cannot emit one cannot
+    falsify what the read layer does with it.
+
+    TMDB files one job under two department spellings. The real export carries 7,918
+    (title, person, job) triples spanning more than one department across 1,216 of its 19,071
+    titles, 816 of them inside the twelve credits §6.0's card renders. Until this row the only
+    bundle in the suite gave every credit a distinct (title, person, department, job), so the
+    duplicate existed only where `test_import_integration.py` inserted one by hand -- a test
+    that proves the query, and proves nothing about the input the importer is handed.
+    """
+    db = _content(bundle_root)
+    try:
+        collisions = db.execute(
+            "SELECT title_id, person_id, job, count(DISTINCT department) FROM credit "
+            "GROUP BY title_id, person_id, job HAVING count(DISTINCT department) > 1"
+        ).fetchall()
+    finally:
+        db.close()
+    assert collisions, (
+        "no (title_id, person_id, job) in the fixture is filed under two department spellings, "
+        "so the shape 1,216 real titles carry cannot be produced at all"
+    )
+
+
+def test_the_fixture_ships_both_facet_namings(bundle_root):
+    """The two namings coexist in one bundle, which is the whole of the defect.
+
+    `dna_tag.facet` and `dna_projected.facet` carry the corpus's *extraction* labels
+    (`mood_tone`, `narrative_themes`, `character_dynamics`) while the term ids and every
+    vocabulary file carry the short facet id the term is prefixed with (`mood.dread` ->
+    `mood`). 29,188 of 31,540 real `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows
+    mismatch, and `0004_dna.sql:73-90` and `:104-116` give neither column a foreign key to
+    `dna_facet`, which is precisely why nothing raises: `importer/dna.py:295-310` and `:365-380`
+    copy the shipped column verbatim and `load_vocabulary` derives its facet from the prefix, so
+    the join is empty and every facet renders in the neutral colour.
+
+    Both directions are asserted. A fixture whose facets ALL mismatched would be as useless as
+    one where none did: the app's own read path has to keep working on the rows that agree,
+    which is what makes the failure partial and therefore silent.
+    """
+    # The three labels the review measured on the real bundle, written out here rather than read
+    # from `make_bundle.EXTRACTION_LABELS`, because that dict cannot be its own witness: a fourth
+    # label invented in the fixture would be added there too, and a check that read it would agree
+    # with the invention. Step 4b bolds the prohibition -- "Invent no fourth label: three measured
+    # labels plus the identical remainder IS the shape, and a guessed label would be exactly the
+    # fixture-invents-a-structure failure M4.5 exists to end".
+    # [M4.8 review cycle 3: m48-rev3-fixture-01]
+    measured = {"mood_tone", "narrative_themes", "character_dynamics"}
+    db = _content(bundle_root)
+    try:
+        for table in ("dna_tag", "dna_projected"):
+            rows = db.execute(f"SELECT term, facet FROM {table}").fetchall()  # noqa: S608
+            assert rows, f"{table} is empty; this comparison would pass without comparing anything"
+            mismatched = [(t, f) for t, f in rows if f != t.split(".", 1)[0]]
+            agreeing = [(t, f) for t, f in rows if f == t.split(".", 1)[0]]
+            assert mismatched, (
+                f"every {table} row's facet equals its term's prefix, which is the shape the app "
+                "wishes the corpus wrote; 29,188 of 31,540 real rows do not"
+            )
+            assert agreeing, (
+                f"no {table} row's facet equals its term's prefix, so the fixture ships one "
+                "naming rather than the two that coexist in a real bundle"
+            )
+            # WHICH label, not merely that one differs. `shipped_facet` (make_bundle.py:131-136)
+            # is the rule the milestone wrote for this column and then applied to the generated
+            # pool only -- the authored EXTRACTED/PROJECTED literals are inserted verbatim -- so
+            # a row whose facet was spelled from the line above it rather than from the mapping
+            # passed both assertions above. Measured: `mood.cosy` moved back to `mood` while
+            # `mood.dread` keeps `mood_tone` ships one facet under two extraction labels in one
+            # export, a shape the corpus does not produce, and `visual.neon` filed under
+            # `visual_style` invents the fourth label; both were green.
+            wrong = [(t, f) for t, f in rows if f != make_bundle.shipped_facet(t)]
+            assert wrong == [], (
+                f"{table} rows whose facet is not the one the mapping gives their term: {wrong}; "
+                "the fixture would then ship a naming no export produces and M4.9's repair would "
+                "be verified against it"
+            )
+            assert {f for _, f in mismatched} <= measured, (
+                f"{table} carries an extraction label the review never measured: "
+                f"{sorted({f for _, f in mismatched} - measured)}"
+            )
+    finally:
+        db.close()
+
+
+def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, bundle_root):
+    """The pool is opt-in and costs the contract nothing.
+
+    The real bundle yields 696 owned movies at §6's default 130-minute room, where the Tonight
+    selector's replay cost is measured in tens of seconds against a 1.5 s budget. The pair
+    search itself no longer needs a bundle to be guarded -- e87deed times `select` against a
+    synthesized belief dict at 716 and 696 candidates -- but a belief dict is not a pool: it is
+    ints to floats, and it cannot reach the importer, the database or `GET /seats/{id}/round`.
+    The half M4.12's exit script measures is the seeded round, and at eight titles nothing in
+    this suite can seed it. `pool_titles` supplies one -- and it must supply *only* that: the
+    generated titles reuse the authored genres, keywords, people, terms and axes, so
+    `feature_contract.json` is unchanged and every assertion above still holds against the
+    default bundle. A pool that widened a block would move the tower's `input_dim` and make the
+    timing fixture a different model.
+    """
+    root = make_bundle.make_bundle(tmp_path / "pool", pool_titles=700)
+
+    db = _content(root)
+    try:
+        owned = db.execute(
+            "SELECT count(*) FROM title WHERE kind = 'movie' AND is_owned"
+        ).fetchone()[0]
+    finally:
+        db.close()
+    assert owned >= 700, f"pool_titles=700 produced {owned} owned movies"
+
+    def contract(where: Path) -> dict:
+        return json.loads((where / "artifacts" / "feature_contract.json").read_text("utf-8"))
+
+    default, scaled = contract(bundle_root), contract(root)
+    assert scaled["feature_names"] == default["feature_names"], (
+        "the pool changed the contract's columns: added "
+        f"{sorted(set(scaled['feature_names']) - set(default['feature_names']))}"
+    )
+    assert scaled["input_dim"] == default["input_dim"]
+
+    # §6.4's axis TSVs are the one artifact this fixture ships that the corpus does not
+    # (SPEC_REQUIRED_NOT_YET_SHIPPED above), so nothing else would notice if the pool stopped
+    # writing them -- and an axis with no file is a facet with no coordinate.
+    axes = {p.name for p in (root / "artifacts" / "dna_vocab" / "v1" / "axes").glob("*.tsv")}
+    assert axes == {f"{facet}.tsv" for facet in make_bundle.AXES}

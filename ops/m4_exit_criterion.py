@@ -51,6 +51,26 @@ VERDICTS_EACH = 24
 POOL_WAIT_SECONDS = 180
 
 
+def console(text: str) -> str:
+    """`text` rendered in the encoding stdout actually has, escaping what it cannot carry.
+
+    The winner's name is the corpus's text, not this script's: `api/tonight.py` selects
+    `title.name` into the slate card and the result returns that card as `result['winner']`.
+    Measured against v20260828, 104 of its 19,071 names leave the OEM code page -- none of them
+    an owned *movie* today, which is a fact about this month's library rather than a guard, and
+    §12's M4 row is the one line that prints it. Under `PYTHONIOENCODING=cp850`, which is how
+    this script's output is captured, `print` then raises UnicodeEncodeError from inside itself
+    and sections 2 to 6 and the RESULT line are lost -- a traceback where "the evening
+    resolved" belongs, in the script whose whole output is the diagnosis. The static guard over
+    this file reads its literals, and an interpolated name is not one, so the escape has to
+    happen where the foreign text meets the console, exactly as it does in
+    `ops/m45_exit_criterion.py`. `backslashreplace` names the codepoint rather than dropping
+    it. [M4.8 review cycle 2: m48-rev2-m4-prints-foreign-text-unescaped]
+    """
+    encoding = sys.stdout.encoding or "ascii"
+    return text.encode(encoding, "backslashreplace").decode(encoding)
+
+
 def member(admin: httpx.Client, name: str) -> httpx.Client:
     created = admin.post("/api/admin/users", json={"name": name, "role": "member"})
     created.raise_for_status()
@@ -68,8 +88,18 @@ def rate(client: httpx.Client, pattern: list[int], target: int = VERDICTS_EACH) 
 
     The two patterns are deliberately opposed so the two people are not the same person twice —
     a household that agrees about everything cannot exercise §6.2 step 5's split.
+
+    Every write's status is read, which is the same repair `ops/m3_exit_criterion.py`'s `rate()`
+    took and for the same reason. Without it `done` counted refusals: a stack answering 500 to
+    every verdict returned the full target having written nothing, and this script then printed
+    "seeded 24 and 24 verdicts" -- a false sentence -- before spending three minutes in
+    `wait_for_pool` and aborting with a pool diagnosis for a write-path failure. The one script
+    whose job is diagnosis must not name the wrong precondition.
+    [M4.8 ti-m3-and-m4-exit-scripts-cannot-report-their-own-failures]
     """
-    client.post("/api/rate/session", json={"restart": True, "kinds": ["movie"]})
+    client.post(
+        "/api/rate/session", json={"restart": True, "kinds": ["movie"]}
+    ).raise_for_status()
     done = 0
     for _ in range(target * 4):
         card = client.get("/api/rate").json().get("card")
@@ -79,13 +109,15 @@ def rate(client: httpx.Client, pattern: list[int], target: int = VERDICTS_EACH) 
             client.post(
                 "/api/rate/verdict",
                 json={"card_token": card["token"], "value": pattern[done % len(pattern)]},
-            )
+            ).raise_for_status()
             done += 1
         else:
-            client.post("/api/rate/duel", json={"card_token": card["token"], "outcome": "A"})
+            client.post(
+                "/api/rate/duel", json={"card_token": card["token"], "outcome": "A"}
+            ).raise_for_status()
         if done >= target:
             break
-    client.delete("/api/rate/session")
+    client.delete("/api/rate/session").raise_for_status()
     return done
 
 
@@ -137,7 +169,20 @@ def main() -> int:
     stamp = int(time.time())
     a = member(admin, f"m4-a-{stamp}")
     b = member(admin, f"m4-b-{stamp}")
-    print(f"  seeded    {rate(a, [2, 2, 1, 0])} and {rate(b, [0, 1, 2, 2])} verdicts")
+    # Seeded one member at a time so a refused write is attributed to the member it stopped on.
+    # `rate()` raises on the first refusal now; this is where that becomes a sentence, because
+    # letting the exception escape would exit non-zero too but with a traceback instead of the
+    # name of the precondition that failed -- and the precondition is what the exit code is for.
+    # [M4.8 ti-m3-and-m4-exit-scripts-cannot-report-their-own-failures]
+    seeded: dict[str, int] = {}
+    for who, client, pattern in (("a", a, [2, 2, 1, 0]), ("b", b, [0, 1, 2, 2])):
+        try:
+            seeded[who] = rate(client, pattern)
+        except httpx.HTTPError as exc:
+            print(f"  PRECONDITION FAILED: seeding member {who} stopped on a refused write - "
+                  f"{type(exc).__name__}: {str(exc).splitlines()[0]}")
+            return 1
+    print(f"  seeded    {seeded['a']} and {seeded['b']} verdicts")
     for who, client in (("a", a), ("b", b)):
         if not wait_for_pool(client):
             print(f"  ABORT     member {who} has no pool after {POOL_WAIT_SECONDS}s")
@@ -188,8 +233,27 @@ def main() -> int:
     ).json()
     solo_ms = (time.perf_counter() - solo_started) * 1000
 
+    # The verdict is computed BEFORE the report prints it, because the one outcome this
+    # script exists to detect is the evening that does not resolve -- and the RESOLVED
+    # line read `result['winner']['name']`, which raises TypeError the instant `winner` is
+    # None. That made the diagnosis at the foot of this block, "SOMETHING DID NOT
+    # RESOLVE", unreachable in exactly the run it was written for: the script could say
+    # yes and could crash, and had no way to say no.
+    # [M4.8 ti-m3-and-m4-exit-scripts-cannot-report-their-own-failures]
+    winner = result.get("winner")
+    ok = (
+        winner is not None
+        and blind_held
+        and 0.0 <= result["approval_share"] <= 1.0
+        and len(solo["picks"]) == 3
+        and all(r["ended_by"] for r in rounds.values())
+    )
+
     print()
-    print(f"  1. RESOLVED     room {code} -> winner {result['winner']['name']!r}")
+    if winner is not None:
+        print(f"  1. RESOLVED     room {code} -> winner {console(repr(winner['name']))}")
+    else:
+        print(f"  1. UNRESOLVED   room {code} -> the ballot closed with no winner")
     print(f"                  {len(card['slate'])} on the ballot, {elapsed:.1f}s end to end")
     print(
         f"                  slowest answer {max(r['slowest_ms'] for r in rounds.values()):.0f} ms "
@@ -200,10 +264,14 @@ def main() -> int:
         f"b {rounds['b']['answered']} pairs ({rounds['b']['ended_by']})"
     )
     print(f"  3. BLIND        result refused while one ballot outstanding: {blind_held}")
-    print(
-        f"  4. §13's FIGURE approval share {result['approval_share']:.2f} over "
-        f"{result['participants']} participants (unanimous: {result['unanimous']})"
-    )
+    if winner is not None:
+        print(
+            f"  4. §13's FIGURE approval share {result['approval_share']:.2f} over "
+            f"{result['participants']} participants (unanimous: {result['unanimous']})"
+        )
+    else:
+        print("  4. §13's FIGURE not measurable: approval share is written by the same "
+              "close that names the winner")
     agreement = report["shortlist_agreement"]
     print(
         f"  5. §14 RISK 6   held-out pairs {agreement['pairs']}, decisive {agreement['decisive']}, "
@@ -217,13 +285,6 @@ def main() -> int:
     )
     print(f"                  provenance: {solo['provenance']!r}")
 
-    ok = (
-        result["winner"] is not None
-        and blind_held
-        and 0.0 <= result["approval_share"] <= 1.0
-        and len(solo["picks"]) == 3
-        and all(r["ended_by"] for r in rounds.values())
-    )
     print()
     print("  RESULT          " + ("the evening resolved" if ok else "SOMETHING DID NOT RESOLVE"))
     return 0 if ok else 1

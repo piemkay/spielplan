@@ -37,7 +37,11 @@ test.describe('tonight', () => {
     await signedIn(page);
     const config = await (await page.request.get('/api/config')).json();
     test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
-    await signInAsMember(page, await createMember(page, `tonight-${testInfo.project.name}`));
+    // One account per project, reused across runs rather than minted anew: nothing ever removed
+    // the timestamped ones, and §6.6's roster on a box that has run this suite all week is the
+    // evidence. [M4.8, finding 8]
+    const member = await createMember(page, `tonight-${testInfo.project.name}`, { reuse: true });
+    await signInAsMember(page, member);
     await seedFilmLedger(page);
     // §5.3 writes `user_score` on the fold-in tick, not on the verdict — without this every
     // assertion below would fail on §6.2's empty pool for a reason unrelated to what it tests.
@@ -180,8 +184,18 @@ test.describe('tonight', () => {
     // Leave the room resolved rather than live, so the next test's open-rooms list is its own.
     for (let i = 0; i < 24; i++) {
       if (!(await page.getByTestId('tonight-round').isVisible())) break;
-      await page.getByTestId('tonight-pick-A').click();
-      await page.waitForTimeout(120);
+      // The write, not a guess at how long it takes. §6.2's round is one POST per pair, so the
+      // answer to wait for is the answer itself: the 120 ms sleep this replaces was long enough
+      // on the machine it was written on and a race everywhere slower, and a round that fell
+      // behind it met the next pair with a click meant for the last one. [M4.8, finding 8]
+      await Promise.all([
+        page.waitForResponse(
+          (res) =>
+            res.request().method() === 'POST' && /\/api\/tonight\/seats\/\d+\/answer$/.test(res.url()),
+          { timeout: 15_000 }
+        ),
+        page.getByTestId('tonight-pick-A').click()
+      ]);
     }
   });
 
@@ -201,8 +215,15 @@ test.describe('tonight', () => {
 
     for (let i = 0; i < 24; i++) {
       if (!(await page.getByTestId('tonight-round').isVisible())) break;
-      await page.getByTestId('tonight-pick-A').click();
-      await page.waitForTimeout(120);
+      // Waited on the same way as the round above, and for the same reason.
+      await Promise.all([
+        page.waitForResponse(
+          (res) =>
+            res.request().method() === 'POST' && /\/api\/tonight\/seats\/\d+\/answer$/.test(res.url()),
+          { timeout: 15_000 }
+        ),
+        page.getByTestId('tonight-pick-A').click()
+      ]);
     }
     await expect(page.getByTestId('tonight-waiting')).toBeVisible();
 
@@ -235,8 +256,38 @@ test.describe('tonight', () => {
     const hostAnswers = await answered();
     expect(hostAnswers, 'the host answered, or the assertion below is vacuous').toBeGreaterThan(0);
     const undo = page.getByTestId('tonight-undo');
+    // The host's seat, so the assertion below can name the write it forbids rather than forbid
+    // writes in general — the guest's own seat is allowed to answer and to retract.
+    const hostSeat = await page.evaluate(async () => {
+      const rooms = await (await fetch('/api/tonight/rooms')).json();
+      const id = rooms.rooms.find((r) => r.viewer_seated).session_id;
+      const seats = (await (await fetch(`/api/tonight/sessions/${id}`)).json()).seats;
+      return seats.find((s) => s.seat === 1).participant_id;
+    });
+    // A negative cannot be proven by sleeping: the 300 ms wait this replaces would have passed a
+    // retraction that took 301 ms, and it was the only thing standing between an undo scoped to
+    // "the last answer in this session" and a silent green. Watch for the write instead and let
+    // the TIMEOUT be the proof — a POST to the host's seat RESOLVES this promise, and resolving
+    // is the failure. The window is also longer than the sleep was, so the count re-read below
+    // settles for longer than before, not less. [M4.8, finding 8]
+    //
+    // The handler is attached where the promise is MADE, not after the click, because here the
+    // rejection is the expected outcome rather than a symptom of a run already failing. A click
+    // that out-runs the 2 s window — an actionability retry under load, a re-render — rejects
+    // with nothing listening, and Playwright's worker turns an unhandled rejection into a
+    // failure of whatever test is running and then stops the worker, so the whole file would go
+    // red reporting "Timeout 2000ms exceeded" against no assertion on a run in which nothing was
+    // written to the host's seat at all. That is the inversion this milestone exists to prevent,
+    // committed by its own new code. Same shape as `:191`'s `Promise.all`. [M4.8 review, E2E-2]
+    const strayWrite = expect(
+      page.waitForRequest(
+        (req) => req.method() === 'POST' && req.url().includes(`/api/tonight/seats/${hostSeat}/`),
+        { timeout: 2_000 }
+      ),
+      "the guest's screen wrote to the host's seat"
+    ).rejects.toThrow();
     if (await undo.isVisible().catch(() => false)) await undo.click();
-    await page.waitForTimeout(300);
+    await strayWrite;
     expect(await answered(), "the guest's screen reached the host's answers").toBe(hostAnswers);
 
     // And browser back does not re-render the round the phone just passed on from.

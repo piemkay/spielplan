@@ -9,8 +9,20 @@ import { defineConfig, devices } from '@playwright/test';
  *   - `npm --prefix frontend run dev` + `python ops/devstub.py` on :5173 — faster for iterating
  *     on the UI, but it does not exercise Postgres, so it cannot prove an import
  *
- * Tests carry a `@needs-db` tag when they require the real backend; `npm run test:ui-only`
- * skips them.
+ * The suite runs in TWO PHASES, and `node e2e/run.mjs` is what implements them: phase 1 runs
+ * `specs/01-first-boot.spec.js` alone against an empty database, the services restart so the
+ * bundle it imported is loaded (§10), and phase 2 runs everything else with
+ * `--grep-invert @first-boot`. So `@first-boot` is a statement about which phase owns a file and
+ * nothing else. A test that needs the real backend does not need a tag; it needs the phase 2
+ * the runner gives it.
+ *
+ * Most of the files that need an IMPORTED bundle skip themselves on `config.has_bundle`; the
+ * rest need no bundle and carry no guard, and two of those skip on `browserName`, which is a
+ * different axis. `08-jellyfin.spec.js` is the deliberate exception and has to stay one: it is
+ * the spec that still FAILS on a stack that imported nothing, which is all that stands between
+ * such a run and a suite of skips reported as a green job — so giving it the guard for
+ * consistency is the tidy-up `test_the_jellyfin_spec_is_not_given_a_has_bundle_guard` fails the
+ * build over. [M4.8 review cycle 3: m48-c3-e2e-03]
  */
 // Must be the app's own PUBLIC_URL origin, not merely an address that reaches it. WebAuthn
 // binds credentials to the origin (§2, §14.4), so a passkey registered from

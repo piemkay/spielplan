@@ -188,12 +188,33 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
  *
  * The route is §6.6's Users card, not the wizard's fourth step: decision 164 makes that card the
  * only place accounts are made, so seeding through it is the same path an operator walks.
+ *
+ * `reuse` gives a spec ONE account per (spec, project) instead of a fresh one on every run. The
+ * names carried a timestamp and nothing ever removed the accounts, so a household box that has
+ * run this suite a hundred times has a hundred members in §6.6's roster — and `reset.mjs` is not
+ * always run before it. The account is looked up on the roster and its credential reissued
+ * through §6.6's password reset, which is the only way back to a one-time password an admin may
+ * hand over ("an admin never sees, sets or types a member's password", decision 166); creating
+ * the same name twice is a 409 on `app_user_name_key`, not a second account. A caller that needs
+ * a member with NO history — a first passkey, a first PIN — leaves it off and gets a new one.
+ * [M4.8, finding 8]
  */
-export async function createMember(page, label) {
-  const name = `${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+export async function createMember(page, label, { reuse = false } = {}) {
+  const password = `${label}-e2e-password`;
+  if (reuse) {
+    const roster = await page.request.get('/api/admin/users');
+    expect(roster.ok(), 'the admin reads the household roster (§6.6)').toBeTruthy();
+    const existing = (await roster.json()).find((user) => user.name === label);
+    if (existing) {
+      const reset = await page.request.post(`/api/admin/users/${existing.id}/reset-password`);
+      expect(reset.ok(), 'reissuing a member one-time password (§6.6)').toBeTruthy();
+      return { name: label, otp: (await reset.json()).one_time_password, password };
+    }
+  }
+  const name = reuse ? label : `${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const res = await page.request.post('/api/admin/users', { data: { name, role: 'member' } });
   expect(res.status(), 'the admin adds a household member (§6.6)').toBe(201);
-  return { name, otp: (await res.json()).one_time_password, password: `${label}-e2e-password` };
+  return { name, otp: (await res.json()).one_time_password, password };
 }
 
 export async function signInAsMember(page, member) {
@@ -210,11 +231,16 @@ export async function signInAsMember(page, member) {
   // `destroy_other_sessions` keeps the caller's own row, and driving the same flow through the
   // forced-change FORM leaves the browser signed in and on Home. But WebKit's APIRequestContext
   // and the browser context diverge here: `page.request` stops sending the cookie the browser
-  // still holds, which left 13-rank and 14-tonight unauthenticated from this point on. So this
-  // is the harness, not the app, and it is M4.8's - that milestone owns the instrument. Signing
-  // in again is what a member holding a password can always do (S3.2), and it is enough for
-  // 14-tonight; 13-rank seeds through `page.request` after this and is still refused, which is
-  // recorded there rather than papered over here.
+  // still holds, which left 13-rank and 14-tonight unauthenticated from this point on. Signing
+  // in again is what a member holding a password can always do (S3.2), and it is what makes the
+  // seeding that follows reach the app at all. 13-rank kept a PRIVATE copy of this pair that
+  // never got the re-login and was refused from here on; decision 186 deletes that copy, so the
+  // specs that import this file seed through one path. NOT the whole suite: `11-rate.spec.js`
+  // declares a third copy of the pair at :209-230 and decision 186's Cost paragraph keeps it
+  // deliberately — desktop-only, green, named by no finding — so a repair made here does not
+  // reach it, and this milestone's own `reuse` is the standing example of one that did not.
+  // [M4.8 review cycle 3: m48-c3-one-path-overclaim] Why the two contexts diverge at all is the
+  // app's half of the question, and M4.10 owns it.
   const back = await page.request.post('/api/auth/login', {
     data: { name: member.name, password: member.password }
   });
@@ -249,17 +275,32 @@ export async function seedFilmLedger(page, rounds = 8) {
       data: { card_token: card.token, value: i % 3 },
       failOnStatusCode: false
     });
-    if (!answered.ok()) break;
+    // Loud, not silent — the rule `13-rank.spec.js` already states over its own seeding. The
+    // `break` this replaces turned a refused write into an empty ledger, and the caller then met
+    // `waitForPool`'s poll and failed 150 s later blaming the worker's fold-in tick for a seed
+    // that never happened. [M4.8, finding 8]
+    expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
   }
   await page.request.delete('/api/rate/session');
+  // The state the caller needs, not the number of writes this run made: `createMember`'s `reuse`
+  // hands a re-run the account it seeded last time, whose sweep is already drained and which
+  // therefore legitimately answers nothing above. §6.3's board is "every rated title", so an
+  // empty one is the seed having failed however it failed.
+  const board = await page.request.get('/api/rank?kind=movie');
+  expect(board.ok(), 'reading the seeded ledger back (§6.3)').toBeTruthy();
+  const rated = (await board.json()).tiers.flatMap((tier) => tier.entries).length;
+  expect(rated, 'this member has no rated films, so §6.2 has nothing to build a pool from')
+    .toBeGreaterThan(0);
+  return rated;
 }
 
 /**
  * Wait until §5.1's per-user scores exist for this member.
  *
- * `user_score` is written by the worker's fold-in tick (§5.3, every 60 s), not by the verdict —
- * so a spec that opened a room the instant it finished rating would meet §6.2's empty pool and
- * fail for a reason that has nothing to do with what it is testing.
+ * `user_score` is written by the worker's fold-in tick — `every=60` in `worker.py`, which is the
+ * worker's own addition and not a row of §5.3's table, where the fold-in has a nightly cadence —
+ * and not by the verdict, so a spec that opened a room the instant it finished rating would meet
+ * §6.2's empty pool and fail for a reason that has nothing to do with what it is testing.
  */
 export async function waitForPool(page, { budget = 200 } = {}) {
   await expect
@@ -273,8 +314,19 @@ export async function waitForPool(page, { budget = 200 } = {}) {
         return ((await res.json()).picks ?? []).length;
       },
       {
-        message: 'the nightly fold-in has not written user_score yet, so the pool is empty',
-        timeout: 150_000,
+        // Two ticks, named as two ticks. The tick is `every=60` in
+        // `backend/spielplan/worker.py`, which says over the registration in as many words that
+        // it is not in §5.3's table — §5.3 gives the fold-in a nightly cadence, and the tick is
+        // the worker's addition for what a person sees within a sitting. So a verdict written a
+        // moment after one tick waits out the rest of it and lands on the next: 120 s is one
+        // whole missed tick plus a whole spare one. The old 150 s was a number with no
+        // arithmetic behind it, and a ceiling nobody can derive is a ceiling nobody can read a
+        // failure against — which is equally true of one derived from the wrong document, since
+        // §5.3 read on its own says nightly. [M4.8 review cycle 3: m48-c3-foldin-citation]
+        message:
+          'no picks after 120s: the fold-in tick runs every 60 s (worker.py; §5.3 gives the ' +
+          'fold-in a nightly cadence), so two ticks have passed - suspect the seeded ledger',
+        timeout: 120_000,
         intervals: [2000]
       }
     )
