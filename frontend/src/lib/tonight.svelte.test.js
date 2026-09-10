@@ -64,20 +64,27 @@ describe('the open-rooms row (§6.2 step 2)', () => {
 });
 
 describe('the waiting line (54c)', () => {
+  // The rows carry an answer and the pair it was about, which the live payload does not: 54c
+  // keeps both off the wire. They are here so the claim below can fail — grepping a line built
+  // from `name`, `answered`, `expected` and `finished` for words no field can supply asserts
+  // nothing about the renderer, only about the fixture. [M4.10 finding 33]
   const progress = [
-    { name: 'Patrick', answered: 6, expected: 20, finished: true },
-    { name: 'Jenny', answered: 9, expected: 20, finished: false },
-    { name: 'Mia', answered: 4, expected: 20, finished: false }
+    { name: 'Patrick', answered: 6, expected: 20, finished: true, answer: 'NEITHER', pair: 'Heat' },
+    { name: 'Jenny', answered: 9, expected: 20, finished: false, answer: 'EITHER', pair: 'Drive' },
+    { name: 'Mia', answered: 4, expected: 20, finished: false, answer: 'A', pair: 'Sicario' }
   ];
 
   it('shows counts and names, and nothing that could be an answer', () => {
     // 54c: "progress and never their answers". The payload cannot carry them; this is the
-    // second half — the renderer has nothing to draw them from either.
+    // second half — the renderer must not draw them even when they are handed to it.
     const line = progressLine(progress);
     expect(line).toContain('Patrick 6/6 done');
     expect(line).toContain('Jenny 9/~20');
     expect(line).toContain('waiting for 2');
-    expect(line).not.toMatch(/EITHER|NEITHER|title/i);
+    expect(line, "a seat's answer reached the waiting line").not.toMatch(/EITHER|NEITHER/i);
+    expect(line, 'the pair a seat answered about reached the waiting line').not.toMatch(
+      /Heat|Drive|Sicario/
+    );
   });
 
   it('stops saying "waiting" once everybody has finished', () => {

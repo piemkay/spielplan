@@ -216,6 +216,34 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
     assert badged == eligible
     assert badged, "the fixture has to actually produce straddlers or this proves nothing"
 
+    # Again with every title dropped somewhere, because `board.build` renders the person's drop
+    # and `queue.eligible` never sees one. This half is a guard and not a regression test, and it
+    # says so rather than claiming finding 14: `board.straddles` forwards `item.s` and
+    # `item.sigma` and never reads `assigned_tier`, so `Entry.straddle` is the same value on a
+    # dropped board as on an undropped one and this line passes on both sides of the repair. What
+    # it would catch is a later `board.build` that clamped the REACH to the rendered tier, which
+    # is a different edit from the one that mispaired the chip.
+    dropped = [
+        dataclasses.replace(item, assigned_tier=int(rng.integers(0, 7)))
+        for item in pool
+    ]
+    entries = by_id(board.build(dropped, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS))
+    badged_after_drops = {e.title_id for e in entries.values() if e.straddle is not None}
+    assert badged_after_drops == eligible
+
+    # And the CHIP, which is the half finding 14 actually broke and the half §6.3 states the
+    # identity about: "a straddling title shows \"A/S\" AND becomes queue-eligible" is a sentence
+    # about what the person sees. Measured against the pre-M4.10 expression
+    # (`labels[index]/labels[reached]`, suppressed on `reached == index`, where `index` is the
+    # rendered tier) over these six seeds: 9 chips where 13 were owed, 6 where 9, 7 where 16, 6
+    # where 16, 5 where 11, 5 where 7 -- at worst ten of sixteen queue-eligible titles wearing
+    # nothing. The two mirror tests each pin one (s, sigma, assigned) triple; this pins the set.
+    # [M4.10 finding 14; cycle 1, M410-REV4]
+    chipped = {e.title_id for e in entries.values() if e.straddle_badge is not None}
+    assert chipped == {
+        e.title_id for e in entries.values() if e.straddle is not None and e.tension is None
+    }, "a queue-eligible title on a dropped board wears no chip, or wears one it should not"
+
 
 def test_moving_the_straddle_threshold_moves_both_sets_together():
     """§4.3 / proposal 157: the threshold is a bundle constant, not a literal in a renderer.
@@ -259,9 +287,11 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
     """The invariant behind proposal 76, asserted where the clamp bug would live: a posterior
     so wide it spans the whole scale still has to name a *different* tier or none at all.
 
-    §6.3's own example is "A/S", two levels apart, so the badge names the tier the posterior
-    actually reaches rather than the neighbouring one — the rule is that it is never the same
-    tier, not that it is the next one."""
+    §6.3's badge is "tier / the adjacent tier the posterior also reaches", so both halves come
+    from the posterior: the first is the tier the MODEL places the title in and the second the
+    neighbour it reaches. The rendered tier is the person's drop (§6.3's "stays in the assigned
+    tier") and says nothing about what the model believes, so leading with it pairs two levels
+    the interval does not span — which is finding 14, and is what this line used to assert."""
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(7)
     pool = items(rng.normal(scale=2.0, size=120), sigma=rng.uniform(0.01, 4.0, size=120))
@@ -276,7 +306,48 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
             if entry.straddle_badge is not None:
                 head, _, tail = entry.straddle_badge.partition("/")
                 assert head != tail, f"a badge naming one tier twice: {entry.straddle_badge}"
-                assert head == TIER_SET[entry.tier], "the badge leads with the rendered tier"
+                assert head == TIER_SET[entry.model_tier], (
+                    "the badge leads with the posterior's own tier, not the rendered one"
+                )
+                assert tail == TIER_SET[entry.straddle]
+
+
+def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
+    """Finding 14: the chip is a statement about the posterior, so both halves are the
+    posterior's.
+
+    Measured case: s = 0.9 with σ = 1.0 sits in A and reaches A+, dropped into A+. The chip read
+    "A+/B" — the tier the person chose, against the tier the old `straddle` named two levels
+    under the model's own — describing a span the interval does not have and omitting the level
+    it occupies. The drop still decides where the row renders (§6.3: "stays in the assigned
+    tier"); it decides nothing about what the model believes.
+    """
+    cuts = model.initial_cutpoints(7)
+    entry = by_id(board.build(
+        items([0.9], sigma=1.0, assigned={1: 5}), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
+    ))[1]
+    assert entry.tier == 5, "§6.3: it stays where it was put"
+    assert entry.model_tier == 4 and entry.straddle == 5
+    assert entry.tension is None, "the bands meet, so the straddle chip is the one on screen"
+    assert entry.straddle_badge == "A/A+"
+
+
+def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_chip():
+    """Finding 14's mirror, and the half that breaks §6.3's one-sentence identity.
+
+    The suppression used to be `reached != rendered`, so dropping a straddler into the very
+    tier the model said it reached removed the chip while `straddles()` went on returning
+    non-None — a queue-eligible title wearing no badge, which is exactly the split proposal 157
+    exists to prevent. Suppression belongs to `reached == model_tier`, which the adjacency fix
+    makes unreachable, so the guard is a statement rather than a branch anybody hits.
+    """
+    cuts = model.initial_cutpoints(7)
+    entry = by_id(board.build(
+        items([0.9], sigma=1.0, assigned={1: 3}), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
+    ))[1]
+    assert entry.straddle is not None, "still queue-eligible"
+    assert entry.tier == 3 and entry.tension is None
+    assert entry.straddle_badge == "A/A+"
 
 
 # --- §6.3: tension, not snapping back ----------------------------------------------------------

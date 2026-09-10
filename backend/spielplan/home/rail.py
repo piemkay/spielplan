@@ -109,6 +109,40 @@ GATED_KEYS: tuple[str, ...] = ("model", "rail", "suppressed", "log", "ledger")
 
 MAX_LINE = 400  # Enforced here so a caller learns at the write rather than at the render.
 
+# A tier label is a choice and is REFUSED; a display name is data and is ELIDED. Both bounds
+# guard the same MAX_LINE, and `rank/tiers.py:56-62` already records what happens when neither
+# does: "a long enough label turned every drop into that tier into a 500 with the observation
+# already durable, and each retry wrote another". The same hole reaches here by the other door —
+# `title.name` is free text out of the bundle, so there is no person to refuse, and both Rank
+# routes compose their line AFTER `record_duel` / `drop` has committed (`api/rank.py`,
+# `rank/drop.py`). A renderer that can refuse is therefore a route that can 500 over a durable
+# row, which is finding 8's third raise site. So every renderer whose line a committed write
+# composes shortens the names it interpolates, and `record` keeps its refusal for the two lines
+# that are programming errors rather than data: an empty line and an unknown kind.
+# [M4.10 finding 8]
+#
+# THREE renderers and not two, which is what this comment first claimed. The rule was written for
+# the Rank pair, because finding 8's three raise sites are all on the Rank routes — and
+# `verdict_line`, §6.7's commonest line and the only one on the surface this milestone is named
+# for, interpolates two names and elided neither. `rate/session.py`'s `payload` records it after
+# `record_verdict`'s transaction has committed, so the same door stood open on Rate: at the 64
+# characters `AccountName` allows, 431 characters for a 300-character title — below the 300 the
+# exit criterion tests Rank with. `session_answer_line` and `placement_line` interpolate a name and
+# are deliberately NOT elided: Tonight's passes `str(seat["id"])` (`api/tonight.py`), a bigint, and
+# `placement` has no producer at all (`AWAITING_PRODUCER`), so neither has an over-long input to
+# shorten — and the milestone that gives placement a producer inherits this paragraph rather than a
+# silent habit. [M4.10 cycle 1, M410-R1-01]
+#
+# 120, because the longest chrome any renderer can compose around its names is 95 characters and
+# every piece of it is bounded elsewhere — `duel(a vs b) = TIE → Davidson arm, profile_battle
+# · uniform-random, held out` is 74 with outcome and context bounded by 0005's CHECKs and the arm
+# by `ARM_PHRASES`; the tier edit's 95 assumes `tiers.MAX_LABEL`; the verdict's 71 assumes
+# `VERDICT_LABELS`' longest word and a six-figure millisecond count, each further digit costing
+# one character against an 89-character margin. So 2 × 120 + 74 = 314, 120 + 95 = 215 and
+# 2 × 120 + 71 = 311, all inside MAX_LINE with room for a renderer that grows a clause. The
+# arithmetic is pinned by a test rather than trusted.
+MAX_NAME_IN_LINE = 120
+
 
 class RailError(ValueError):
     """A line this journal will not accept."""
@@ -255,12 +289,32 @@ def forget(*, user_id: int | None = None) -> int:
 # --- the four line shapes §6.7 names --------------------------------------------------------
 
 
+def _elide(name: str, limit: int = MAX_NAME_IN_LINE) -> str:
+    """One display name, shortened to `limit` characters with the marker inside the budget.
+
+    `…` rather than `...` because the rail is UI copy read in a browser and that is the register
+    the app's own surfaces already use (`BundleImport.svelte:57`, `ModelRail.svelte:75`); the
+    string it lands in carries `→` and `·` anyway. Nothing here reaches a console log.
+    """
+    if len(name) <= limit:
+        return name
+    return name[: limit - 1].rstrip() + "…"
+
+
 def verdict_line(user_name: str, title_name: str, label: str, *, refit_ms: float | None = None) -> str:
-    """`verdict(jenny, Heat) = liked → ordered-logit arm, incremental refit 31 ms` (§6.7)."""
+    """`verdict(jenny, Heat) = liked → ordered-logit arm, incremental refit 31 ms` (§6.7).
+
+    Total on BOTH names, for the reason the comment above `MAX_NAME_IN_LINE` gives: the caller is
+    `rate/session.py`'s `payload`, which records this line after the verdict and its journal row
+    are durable, so a refusal here is a 500 over an append-only row the person cannot retry —
+    `_claim_card` has already nulled the card token, so the retry is a 409 saying the card was
+    answered. Neither name is a choice somebody made: the title's is bundle free text and the
+    member's is bounded only by `AccountName`'s 64. [M4.10 finding 8, cycle 1 M410-R1-01]
+    """
     tail = "ordered-logit arm"
     if refit_ms is not None:
         tail += f", incremental refit {refit_ms:.0f} ms"
-    return f"verdict({user_name}, {title_name}) = {label} → {tail}"
+    return f"verdict({_elide(user_name)}, {_elide(title_name)}) = {label} → {tail}"
 
 
 def tier_edit_line(title_name: str, tier: str, *, via: str, neighbour_duels: int = 0) -> str:
@@ -268,8 +322,11 @@ def tier_edit_line(title_name: str, tier: str, *, via: str, neighbour_duels: int
 
     §6.3: dropping a title *between* two titles emits the edit plus two margin-less duels, and
     the rail is where "drag-and-drop is data, not override" becomes legible.
+
+    Total on `title_name`: the produced line is at most `MAX_LINE`, so `rank/drop.py`'s caller
+    cannot be handed a line `record` will refuse after the edit has committed.
     """
-    line = f"tier_edit({title_name} → {tier}, via={via})"
+    line = f"tier_edit({_elide(title_name)} → {tier}, via={via})"
     if neighbour_duels:
         line += f" + {neighbour_duels} margin-less duels vs new neighbours"
     return line
@@ -293,10 +350,18 @@ def duel_line(a: str, b: str, outcome: str, *, context: str, selection: str) -> 
     (proposal 120, proposal 146). `ARM_PHRASES` is exhaustive over `duel.selection`'s CHECK, so
     a new arm added to the column without a phrase here fails loudly rather than rendering as
     whatever the previous branch happened to say.
+
+    An unknown arm is still a refusal and a long pair of names is not: the arm is this
+    process's own vocabulary while the names are bundle data, and this line is composed after
+    the duel row is durable (`api/rank.py`). Total on `a` and `b`: the produced line is at
+    most `MAX_LINE`.
     """
     if selection not in ARM_PHRASES:
         raise RailError(f"unknown selection arm {selection!r} — add it to ARM_PHRASES")
-    return f"duel({a} vs {b}) = {outcome} → Davidson arm, {context} · {ARM_PHRASES[selection]}"
+    return (
+        f"duel({_elide(a)} vs {_elide(b)}) = {outcome} → Davidson arm, "
+        f"{context} · {ARM_PHRASES[selection]}"
+    )
 
 
 def session_answer_line(participant: str, pair: int, answer: str) -> str:

@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import asyncpg
 import numpy as np
@@ -112,12 +113,21 @@ def equal_mass_quantiles(s: np.ndarray, k: int) -> np.ndarray:
     return np.quantile(np.asarray(s, dtype=float), np.arange(1, k) / k)
 
 
-async def tier_set_of(conn: asyncpg.Connection, *, user_id: int) -> tuple[str, ...]:
-    """The person's set, or §4.2's default. One set per user; the movie row is the one asked
-    because `save` writes both and they cannot disagree."""
+async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[str, ...]:
+    """The person's set for one kind, or §4.2's default.
+
+    `kind` is required, and it used to be absent: the row was read with `ORDER BY kind LIMIT 1`
+    on the reasoning that "the movie row is the one asked because `save` writes both and they
+    cannot disagree". Finding 5 is the sentence that falsified the second half — a fit that
+    reverted one kind's `tier_set` left the two rows disagreeing, and every caller that wanted
+    the series set then got the films one, accepting a drop into a tier the series board does not
+    have. The write side enforces the invariant now (`refit.refit_user` keeps its own cutpoints
+    only while the set it fitted against is still on the row), and the read side no longer rests
+    on it: `ledger/observations.py`'s `tier_set_of` and `home/shelves.py`'s both already take a
+    required `kind`, and this was the outlier.
+    """
     row = await conn.fetchval(
-        "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 ORDER BY kind LIMIT 1",
-        user_id,
+        "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2", user_id, kind
     )
     return tuple(row) if row else DEFAULT_TIER_SET
 
@@ -143,7 +153,10 @@ async def save_tier_set(
     cutpoints and queues a refit" and a warning that cannot say whether it applies is noise.
     """
     labels = validate(tier_set)
-    previous = await tier_set_of(conn, user_id=user_id)
+    # Decision 11: "the settings control sets one set per user and writes it to both kind rows",
+    # so one row answers "what did they have before" — and KINDS[0] is named rather than implied,
+    # because that is the invariant this function maintains rather than one it may assume.
+    previous = await tier_set_of(conn, user_id=user_id, kind=KINDS[0])
     report = TierSetReport(user_id=user_id, tier_set=labels, previous=previous)
     report.k_changed = len(labels) != len(previous)
 
@@ -218,21 +231,38 @@ async def save_tier_set(
     return report
 
 
-async def refits_owed(conn: asyncpg.Connection) -> list[tuple[int, str]]:
-    """The worker's sweep. Ordered oldest first so a queue never starves its own head."""
+async def refits_owed(conn: asyncpg.Connection) -> list[tuple[int, str, datetime]]:
+    """The worker's sweep: `(user_id, kind, refit_requested_at)`, oldest first so a queue never
+    starves its own head.
+
+    The stamp travels because `clear_refit_request` needs it. Decision 11's control invites a
+    second change within the minute — "how many tiers do I want?" is answered by trying one —
+    and a clear with no predicate discards a request made *during* the fit it is clearing. The
+    person's second choice then waits for the nightly job with nothing on screen saying so.
+    """
     rows = await conn.fetch(
-        "SELECT user_id, kind FROM ledger_cutpoints WHERE refit_requested_at IS NOT NULL "
-        "ORDER BY refit_requested_at, user_id, kind"
+        "SELECT user_id, kind, refit_requested_at FROM ledger_cutpoints "
+        "WHERE refit_requested_at IS NOT NULL ORDER BY refit_requested_at, user_id, kind"
     )
-    return [(int(r["user_id"]), str(r["kind"])) for r in rows]
+    return [(int(r["user_id"]), str(r["kind"]), r["refit_requested_at"]) for r in rows]
 
 
-async def clear_refit_request(conn: asyncpg.Connection, *, user_id: int, kind: str) -> None:
+async def clear_refit_request(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, requested_at: datetime
+) -> None:
+    """Clear the request the sweep actually serviced, and only that one.
+
+    `requested_at` is the stamp `refits_owed` handed out, so a newer request survives: the
+    predicate is "nothing has been asked since I started". Required rather than defaulted —
+    a sweep that forgets which request it fitted is the bug (finding 5), and a default would let
+    it be forgotten again by omission.
+    """
     await conn.execute(
         "UPDATE ledger_cutpoints SET refit_requested_at = NULL "
-        "WHERE user_id = $1 AND kind = $2",
+        "WHERE user_id = $1 AND kind = $2 AND refit_requested_at <= $3",
         user_id,
         kind,
+        requested_at,
     )
 
 

@@ -3193,3 +3193,682 @@ def test_the_seeding_guard_sees_an_unguarded_call():
     # And a script with no seeding path is not asked for one: the M4.5 script writes through
     # the importer, not through §6.1's routes.
     assert _unguarded_seeding("def main():\n    return 0\n", "probe.py") == []
+
+
+# --- M4.10 finding 3: the Rate journal's two statements are one unit ----------------------------
+
+RATE_SESSION = REPO / "backend" / "spielplan" / "rate" / "session.py"
+
+
+def _parents(tree: ast.AST) -> dict[int, ast.AST]:
+    """Child -> parent for the whole tree, so a call can be read in its context."""
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+    return parents
+
+
+def _inside_a_transaction(node: ast.AST, parents: dict[int, ast.AST]) -> bool:
+    """Whether any ancestor of `node` is an `async with ....transaction()`.
+
+    `.transaction(` is matched on the unparsed context expression so `conn.transaction()` and
+    `other.transaction()` both count and `contextlib.AsyncExitStack()` does not -- the stack
+    inside `_append` itself is the fallback, and a fallback is not what these rules are about.
+
+    Shared by the two rules below because they ask one question in opposite directions: the
+    journal append has to be inside a transaction and the Jellyfin socket has to be outside one.
+    Two copies of this walk is how the two halves would come to disagree about what a
+    transaction is. [M4.10 cycle 1, f11-01]
+    """
+    walker: ast.AST | None = parents.get(id(node))
+    while walker is not None:
+        if isinstance(walker, ast.AsyncWith) and any(
+            ".transaction(" in ast.unparse(item.context_expr) for item in walker.items
+        ):
+            return True
+        walker = parents.get(id(walker))
+    return False
+
+
+def _bare_append_calls(source: str, label: str) -> list[str]:
+    """Every `_append(` call that no enclosing `conn.transaction()` covers.
+
+    Read with `ast` and by walking *ancestors*, not with a regex over indentation: the call sites
+    sit three and four levels in, behind `for` loops and `if`s, and the one that shipped bare sat
+    at exactly the same indentation as one that did not.
+    """
+    tree = ast.parse(source)
+    parents = _parents(tree)
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "_append":
+            continue
+        if not _inside_a_transaction(node, parents):
+            offenders.append(f"{label}:{node.lineno}: {ast.unparse(node).splitlines()[0][:72]}")
+    return offenders
+
+
+def test_every_rate_journal_append_is_inside_a_transaction():
+    """Decision 35's journal: the INSERT at `seq + 1` and the UPDATE that moves the session to
+    it are one unit, at every call site.
+
+    For a year they were one unit at four of the five. `record_skip` called `_append` bare, and
+    a process death, a dropped pool connection or a cancelled task between the two statements
+    left the journal at N+1 with the session at N -- after which `rate_observation_seq` refused
+    every later append in that session for ever. Reproduced from that state: verdict, skip and
+    not-seen all 500, `GET /api/rate` went on serving a card that could not be answered, undo
+    tombstoned the phantom row and the next verdict still 500'd, and only
+    `DELETE /api/rate/session` recovered. Skip is the most frequent tap in a sweep.
+
+    A static rule because the failure is a crash between two statements: the integration test
+    beside it injects one at the cursor move, which proves the unit holds, while this proves
+    there is no sixth call site that forgot. [M4.10 finding 3]
+    """
+    offenders = _bare_append_calls(RATE_SESSION.read_text(encoding="utf-8"), "rate/session.py")
+    assert not offenders, (
+        "a journal row is written outside any transaction, so a crash before the cursor moves "
+        "wedges that session until it is deleted:\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The shape that shipped, verbatim down to the two-line call.
+        (
+            "the bare call record_skip made",
+            "async def record_skip(conn, s):\n"
+            "    s = await _append(conn, s, kind_of='skip', card=card,\n"
+            "                      title_ids=titles)\n",
+            1,
+        ),
+        # And its four siblings' shape.
+        (
+            "wrapped like its siblings",
+            "async def record_verdict(conn, s):\n"
+            "    async with conn.transaction():\n"
+            "        s = await _append(conn, s, kind_of='verdict')\n",
+            0,
+        ),
+        # Depth must not fool it: the correction's call is four levels in.
+        (
+            "four levels inside the transaction",
+            "async def f(conn, s):\n"
+            "    async with conn.transaction():\n"
+            "        for t in titles:\n"
+            "            if t:\n"
+            "                s = await _append(conn, s, kind_of='correction')\n",
+            0,
+        ),
+        # A context manager that is not a transaction must not count as one -- including the
+        # exit stack `_append` itself uses, which is how the fallback is built.
+        (
+            "an exit stack is not a transaction",
+            "async def f(conn, s):\n"
+            "    async with contextlib.AsyncExitStack() as stack:\n"
+            "        s = await _append(conn, s, kind_of='skip')\n",
+            1,
+        ),
+        (
+            "a cursor is not a transaction",
+            "async def f(conn, s):\n"
+            "    async with conn.cursor('SELECT 1') as cur:\n"
+            "        s = await _append(conn, s, kind_of='skip')\n",
+            1,
+        ),
+        # The definition itself is not a call site, and neither is a mention of the name.
+        (
+            "the definition and a reference are not calls",
+            "async def _append(conn, s, **kw):\n"
+            "    return s\n"
+            "handler = _append\n",
+            0,
+        ),
+    ],
+)
+def test_the_append_transaction_guard_catches_a_real_violation(name, source, expected):
+    """A guard that cannot see its own violation is the M4.7 lesson, so each shape is named."""
+    assert len(_bare_append_calls(source, "probe.py")) == expected, name
+
+
+# --- M4.10 cycle 1 (f11-01): the Jellyfin socket stays outside the write's transaction ----------
+
+# The three spellings the §7.3 round trip reaches `rate/session.py` under. `_push_state` wraps
+# `seen.push_owed` for the three forward taps, and `seen.retract` is Undo's compensation; all four
+# call sites are an HTTP request against a foreign server on a 15 s budget, so the rule is the same
+# for each. Written as unparsed names rather than as `ast.Name` ids because two of the three are
+# attribute calls on the `seen` module.
+PUSH_CALLS = frozenset({"_push_state", "seen.push_owed", "seen.retract"})
+
+
+def _transacted_push_calls(source: str, label: str) -> list[str]:
+    """Every §7.3 network call that an enclosing `conn.transaction()` *does* cover.
+
+    The rule above with its predicate flipped, on the same ancestor walk: a journal append
+    outside a transaction is the offence there, a socket inside one is the offence here.
+    """
+    tree = ast.parse(source)
+    parents = _parents(tree)
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if ast.unparse(node.func) not in PUSH_CALLS:
+            continue
+        if _inside_a_transaction(node, parents):
+            offenders.append(f"{label}:{node.lineno}: {ast.unparse(node).splitlines()[0][:72]}")
+    return offenders
+
+
+def test_no_jellyfin_push_happens_inside_a_rate_transaction():
+    """§3.3 and §7.3: the app-side write commits, and *then* the media server is told. At all
+    four call sites, not only at the verdict's.
+
+    Measured before the repair with a transport sleeping 1.5 s: the tap took 1.66 s, the verdict
+    row was invisible to a second connection for 1.67 s of it, one backend sat
+    `idle in transaction` for the whole wait against a pool of ten, and a second connection's
+    UPDATE of the same row blocked 0.97 s behind it. Section 6's preamble gives a sweep card 2 s
+    in total, and §3.3 says the app works when Jellyfin is down -- which a transaction awaiting
+    its answer does not.
+
+    A static rule because the integration test beside it drives `record_verdict` alone, and the
+    verdict is the mildest of the four sites rather than the worst: a correction with
+    `side='both'` awaits two 15 s-budget sockets in series, so a Jellyfin answering in 1.5 s
+    would hold two `user_title` rows, the `rate_session` row `_claim_card` has locked and the
+    journal row for 3 s. Returning `record_not_seen` and `record_correction` to the pre-M4.10
+    shape left every test this row names green, which is the gap this closes.
+    [M4.10 finding 11; cycle 1, f11-01]
+    """
+    source = RATE_SESSION.read_text(encoding="utf-8")
+    # A rule that matches on a name has to say the name is still there, or a rename turns it into
+    # a rule about nothing -- which is the M4.8 lesson about a widened instrument that narrowed.
+    for spelling in sorted(PUSH_CALLS):
+        assert f"{spelling}(" in source, (
+            f"{spelling} is not called in rate/session.py any more, so this rule no longer "
+            f"covers the call site it was written for -- rename it here too"
+        )
+    offenders = _transacted_push_calls(source, "rate/session.py")
+    assert not offenders, (
+        "a Jellyfin round trip is awaited inside a database transaction, so a foreign server's "
+        "latency holds row locks against a pool of ten and widens the double-tap window from "
+        "milliseconds to seconds:\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The shape that shipped, verbatim: the push between the observation and the journal row.
+        (
+            "the push inside the verdict transaction",
+            "async def record_verdict(conn, s, jf):\n"
+            "    async with conn.transaction():\n"
+            "        write = await observations.record_verdict(conn)\n"
+            "        pushed, reason = await _push_state(conn, jf, user_id=1, title_id=2)\n",
+            1,
+        ),
+        # The correction's worst case: the loop is three levels in and awaits one socket per leg.
+        (
+            "the correction's two pushes, three levels in",
+            "async def record_correction(conn, s, jf):\n"
+            "    async with conn.transaction():\n"
+            "        for title_id in corrected:\n"
+            "            pushed, reason = await _push_state(conn, jf, title_id=title_id)\n",
+            1,
+        ),
+        # Undo's compensation is the fourth site and reaches `sync/seen.py` directly.
+        (
+            "undo's retraction inside its own transaction",
+            "async def undo(conn, s, jf):\n"
+            "    async with conn.transaction():\n"
+            "        if pushed:\n"
+            "            await seen.retract(conn, jf.client, jf.cfg, user_id=1, title_id=2)\n",
+            1,
+        ),
+        # And the shape that is correct: the block closes, then the socket.
+        (
+            "after the transaction closes",
+            "async def record_not_seen(conn, s, jf):\n"
+            "    async with conn.transaction():\n"
+            "        s = await _append(conn, s, kind_of='not_seen')\n"
+            "    pushed, reason = await _push_state(conn, jf, user_id=1, title_id=2)\n",
+            0,
+        ),
+        # An exit stack holds no locks, so a push inside one is not this rule's offence -- the
+        # inverse of what the `_append` rule says about the same context manager.
+        (
+            "an exit stack is not a transaction",
+            "async def f(conn, jf):\n"
+            "    async with contextlib.AsyncExitStack() as stack:\n"
+            "        await _push_state(conn, jf, user_id=1, title_id=2)\n",
+            0,
+        ),
+        # `_push_state`'s own body calls `seen.push_owed`, and that is a definition, not a site
+        # that a later edit could move into a transaction.
+        (
+            "the wrapper's own call and a bare reference are not offences",
+            "async def _push_state(conn, jf, **kw):\n"
+            "    return await seen.push_owed(conn, jf.client, jf.cfg, **kw)\n"
+            "handler = _push_state\n",
+            0,
+        ),
+    ],
+)
+def test_the_push_transaction_guard_catches_a_real_violation(name, source, expected):
+    """A guard that cannot see its own violation is the M4.7 lesson, so each shape is named."""
+    assert len(_transacted_push_calls(source, "probe.py")) == expected, name
+
+
+# --- M4.10 cycle 1 (m410-rev-01): every Rate write claims its card first ------------------------
+
+# The five §6.1 taps that write an observation. `record_correction` is in the list because it
+# supersedes two labels and redraws the pair, which is as much a write as a verdict is; the two
+# card-stash helpers are not, because their guard is the `AND card_token IS NULL` predicate in the
+# UPDATE itself rather than a row lock.
+CLAIMED_WRITES = (
+    "record_verdict",
+    "record_not_seen",
+    "record_skip",
+    "record_duel",
+    "record_correction",
+)
+
+
+def _unclaimed_write_transactions(source: str, label: str, names=CLAIMED_WRITES) -> list[str]:
+    """Every named write whose transaction does not *open* with `await _claim_card(...)`.
+
+    "Opens with" and not "contains": the lock has to be the first statement inside the
+    transaction or the loser has already done work under it -- and it has to be inside, because
+    a `FOR UPDATE` taken on an autocommit connection is released before the write it guards.
+    The function's first `.transaction(` block in source order is the one checked, so a helper
+    transaction later in the body cannot stand in for the one the observation is written under.
+
+    A missing name is an offence of its own: a rule that silently checks nothing is what M4.8
+    was about, and renaming one of the five taps is an ordinary thing for a later milestone to do.
+    """
+    tree = ast.parse(source)
+    offenders: list[str] = []
+    seen_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        if node.name not in names:
+            continue
+        seen_names.add(node.name)
+        opened: ast.AsyncWith | None = None
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.AsyncWith):
+                continue
+            if not any(
+                ".transaction(" in ast.unparse(item.context_expr) for item in inner.items
+            ):
+                continue
+            if opened is None or inner.lineno < opened.lineno:
+                opened = inner
+        if opened is None:
+            offenders.append(f"{label}:{node.lineno}: {node.name} writes outside any transaction")
+            continue
+        first = ast.unparse(opened.body[0]).splitlines()[0]
+        if not first.startswith("await _claim_card("):
+            offenders.append(f"{label}:{opened.body[0].lineno}: {node.name} opens with {first[:48]}")
+    for missing in sorted(set(names) - seen_names):
+        offenders.append(f"{label}: {missing} is not defined here any more")
+    return offenders
+
+
+def test_every_rate_write_claims_its_card_before_it_writes():
+    """§6.1 makes the card the server's, and `_claim_card` is what makes that true when two
+    answers arrive together.
+
+    Nothing behavioural distinguishes the lock from its backstop at the surface: a loser stopped
+    by `_claim_card`'s `FOR UPDATE` and a loser stopped by `rate_observation_seq` both leave as
+    `StaleCard("stale_card")`, so the route answers the same 409 either way. What differs is how
+    far the loser got first -- with the lock it stops before `observations.record_verdict`, and
+    without it it writes the ledger row, the `user_title` state and, before finding 11 moved the
+    socket out, the household's Played flag, and is then rolled back by an index. The race test
+    beside this one counts that call; this one says there is no sixth tap that forgot, and that
+    the lock is the transaction's *first* statement rather than merely somewhere inside it.
+
+    The backstop is also not load-bearing for ever: `_append`'s own docstring records that
+    `rate_observation_seq` is not partial on `undone_at`, which is exactly the shape a later undo
+    milestone might change -- after which two gathered taps would both append and the 409 would
+    be gone with nothing red. [M4.10 finding 2; cycle 1, m410-rev-01]
+    """
+    offenders = _unclaimed_write_transactions(
+        RATE_SESSION.read_text(encoding="utf-8"), "rate/session.py"
+    )
+    assert not offenders, (
+        "a Rate write does not take §6.1's card under a row lock as the first statement of its "
+        "transaction, so two taps on one token both reach the observation:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        (
+            "the shape that ships",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    async with conn.transaction():\n"
+            "        await _claim_card(conn, s, card_token)\n"
+            "        write = await observations.record_verdict(conn)\n",
+            0,
+        ),
+        # The mutation that matters most: the lock is there, one statement too late, so the loser
+        # has already written the ledger row it will be rolled back out of.
+        (
+            "claimed after the observation",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    async with conn.transaction():\n"
+            "        write = await observations.record_verdict(conn)\n"
+            "        await _claim_card(conn, s, card_token)\n",
+            1,
+        ),
+        (
+            "not claimed at all",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    async with conn.transaction():\n"
+            "        write = await observations.record_verdict(conn)\n",
+            1,
+        ),
+        # Outside the transaction the `FOR UPDATE` is released the moment its own implicit
+        # transaction commits, which is before the write it was taken for.
+        (
+            "claimed before the transaction opens",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    await _claim_card(conn, s, card_token)\n"
+            "    async with conn.transaction():\n"
+            "        write = await observations.record_verdict(conn)\n",
+            1,
+        ),
+        (
+            "no transaction at all",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    await _claim_card(conn, s, card_token)\n"
+            "    write = await observations.record_verdict(conn)\n",
+            1,
+        ),
+        # A later transaction in the same function cannot stand in for the observation's.
+        (
+            "a second transaction carries the claim",
+            "async def record_verdict(conn, s, card_token):\n"
+            "    async with conn.transaction():\n"
+            "        write = await observations.record_verdict(conn)\n"
+            "    async with conn.transaction():\n"
+            "        await _claim_card(conn, s, card_token)\n",
+            1,
+        ),
+        (
+            "a tap that no longer exists under that name",
+            "async def record_something_else(conn, s, card_token):\n"
+            "    async with conn.transaction():\n"
+            "        await _claim_card(conn, s, card_token)\n",
+            1,
+        ),
+    ],
+)
+def test_the_card_claim_guard_catches_a_real_violation(name, source, expected):
+    """Each shape named, including the rename that would leave the rule measuring nothing."""
+    found = _unclaimed_write_transactions(source, "probe.py", ("record_verdict",))
+    assert len(found) == expected, name
+
+
+# --- M4.10 review cycle 1: two decisions that named code they do not describe ----------------
+#
+# The register is cited by number from commit bodies, from comments and from coverage rows, which
+# makes it the text a later milestone reads BEFORE the code it is about. Two of M4.10's own
+# decisions named a counter and a reader the shipped code rejects, so each guard below ties one
+# decision's sentence to the symbol it rules on: if the code ever moves, the guard fails and the
+# record gets rewritten with it, which is the only order that keeps the two honest.
+# `docs/milestones/*.md` is not read here for the reason the company-claim sweep above gives --
+# the plan is the plan, the workflow forbids editing it, and a correction owed there goes to the
+# owner by hand.
+
+REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
+COVERAGE = REPO / "backend" / "tests" / "spec_coverage.toml"
+
+
+def _decision(number: int) -> str:
+    """One decision's own text: its row in the summary table plus the argued section under it.
+
+    Both halves, because the misnaming this guards was in both and a reader cites whichever they
+    opened: the row is one cell in a table of ten, the section is six paragraphs below it.
+    """
+    body = REGISTER.read_text(encoding="utf-8")
+    rows = [ln for ln in body.splitlines() if ln.startswith(f"| {number} |")]
+    assert len(rows) == 1, f"decision {number} has {len(rows)} summary rows in the register"
+    heads = list(re.finditer(r"^### (\d+)\. ", body, re.M))
+    start = next(m for m in heads if m.group(1) == str(number))
+    after = [m.start() for m in heads if m.start() > start.start()]
+    return rows[0] + "\n" + body[start.start(): after[0] if after else len(body)]
+
+
+def _derives_the_card_type_from_a_counter_called_seq(text: str) -> list[str]:
+    """Every clause in `text` that derives the card type from a counter named `seq`.
+
+    Clause-scoped rather than file-scoped: `rate_session.seq` is a real column and the argument
+    for NOT using it has to be allowed to name it. The stop class is `.` and `|` -- the sentence
+    and the table cell -- so "derived from X. `seq` is the journal's row count" does not match and
+    "derived from the session's monotone `seq`" does.
+    """
+    flat = " ".join(text.split())
+    return [
+        m.group(0).strip()
+        for m in re.finditer(r"[^.|]*\bderiv\w*[^.|]{0,90}?\bseq\b[^.|]*", flat, re.I)
+    ]
+
+
+def test_decision_200_names_the_counter_the_card_type_is_derived_from():
+    """The register said `seq`; the code says that column is specifically the wrong number.
+
+    `observation_index`'s docstring gives the argument in full and the register recorded its
+    opposite -- in the summary row, in the heading, in the decision paragraph and in
+    `library-rate-mix-alternates-blocks`'s comment. The two counters are not one number twice:
+    `_append` writes `seq = s.seq + 1` for every kind while its `advances` flag leaves the block
+    and the slot alone on a correction, and `undo`'s restoring UPDATE rewinds block, slot, card
+    and token and never `seq`. A later milestone "restoring" the decision's literal wording would
+    flip the card type on the first correction of a sitting and serve a card of the other type
+    than the one Undo had just put back -- re-creating finding 24's double sweep one undo later.
+    [M4.10 review cycle 1: M410-D8-04, M410-REV1-D200-02; decision 200]
+    """
+    offenders = [
+        f"{name}: {clause}"
+        for name, text in (
+            ("decision 200", _decision(200)),
+            ("spec_coverage.toml", COVERAGE.read_text(encoding="utf-8")),
+        )
+        for clause in _derives_the_card_type_from_a_counter_called_seq(text)
+    ]
+    assert not offenders, (
+        "decision 200's counter is `observation_index(block_index, slot)`, not the journal's row "
+        "count -- `seq` moves on a correction and Undo does not rewind it:\n  "
+        + "\n  ".join(offenders)
+    )
+    assert "observation_index" in _decision(200), (
+        "decision 200 has to name the counter it took, or the next reader guesses again"
+    )
+
+    # The other direction: the record is only right while the code still reads this way.
+    flat = " ".join(RATE_SESSION.read_text(encoding="utf-8").split())
+    assert flat.count("card_type_for(s.mode, observation_index(s.block_index, s.slot))") == 2, (
+        "the two call sites `ensure_card` and `payload` are what decision 200 describes; if the "
+        "counter really moved, amend the decision and this guard together"
+    )
+    assert "card_type_for(s.mode, s.seq" not in flat, (
+        "the card type is being read off the journal's row count, which a correction advances and "
+        "Undo does not rewind -- see `observation_index`'s docstring and decision 200"
+    )
+
+
+def test_decision_207_names_the_one_file_that_reads_the_journals_pushed_flag():
+    """The register sent an auditor of `prior_state.pushed` to the file that cannot read it.
+
+    Decision 207's Cost paragraph said "`sync/seen.py`'s retract path keeps reading
+    `prior_state.pushed`, and the integration test asserts the field for all three outcomes
+    (success, refusal, no connector)". Neither half held: the `prior_state` `sync/seen.py` takes
+    is a plain state string -- deliberately a string so `sync` does not import from `ledger` --
+    and the sole reader of the journal's flag is `undo`, which gates the compensating Played write
+    on it. The test asserts two outcomes; a refusal and a household with no connector are asserted
+    nowhere, so a regression on either was believed to be caught.
+    [M4.10 review cycle 1: M410-REV1-D207-03; decision 207]
+    """
+    readers = sorted(
+        path.relative_to(REPO).as_posix()
+        for path in (REPO / "backend" / "spielplan").rglob("*.py")
+        if any(
+            "prior_state" in line and '"pushed"' in line
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    )
+    assert readers == ["backend/spielplan/rate/session.py"], (
+        f"the journal's `pushed` flag is read by {readers}; decision 207 names its reader, so the "
+        "decision has to be amended in the same commit that moves it"
+    )
+
+    text = _decision(207)
+    assert "`rate/session.py`" in text, "the decision must name the file that reads the field"
+    retired = {
+        "retract path keeps reading": "`sync/seen.py` reads nothing from the journal",
+        "all three outcomes": "two outcomes are asserted: a push that succeeded, and an owed one",
+    }
+    offenders = [f"{phrase!r} -- {why}" for phrase, why in retired.items() if phrase in text]
+    assert not offenders, "decision 207 states what was measured:\n  " + "\n  ".join(offenders)
+
+
+@pytest.mark.parametrize(
+    "name,text,expected",
+    [
+        # The four places the register and the coverage row said it, in the four shapes they
+        # said it in: a table cell, a heading, a sentence, and a comment wrapped over two lines.
+        ("the summary row", "| 200 | `card_type_for` returns sweep on odd slots. Derive the card "
+                            "type from the session's monotone `seq`, or amend 6.1 to "
+                            '"alternates within a block"? | **Derive it from `seq`** (option a). '
+                            "Slot 1 of the *first* block stays a sweep |", 2),
+        ("the heading", "### 200. Mix alternation is derived from the session's monotone seq; "
+                        "6.1 stands", 1),
+        ("the decision paragraph", "**The decision.** Option (a). The card type is derived from "
+                                   "the session's monotone `seq` rather than from `slot`, so "
+                                   "alternation survives the roll.", 1),
+        ("the coverage comment", "# the arm 5.2 credits with within-liked resolution. Decision "
+                                 "200 derives the type from the\n# session's monotone `seq` "
+                                 "rather than amending 6.1, keeping slot 1 a sweep.", 1),
+        # The argument FOR the counter taken has to be sayable, or the record cannot explain
+        # itself and the guard is a ban on a word rather than on a claim.
+        ("the correction", "The card type is derived from `observation_index(block_index, slot)`. "
+                           "`rate_session.seq` is the journal's row count and is deliberately not "
+                           "that counter: a correction advances it without moving the slot.", 0),
+    ],
+)
+def test_the_decision_200_counter_guard_catches_each_way_it_was_said(name, text, expected):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The five cases are the four wordings that shipped plus the one that must pass: a register
+    forbidden from naming the column it rejected cannot argue the decision, so the detector is
+    scoped to the clause that DERIVES the card type rather than to the word.
+    """
+    assert len(_derives_the_card_type_from_a_counter_called_seq(text)) == expected, name
+
+
+# The files that state where a block of 15 commits. Not every file that mentions Undo: the rule
+# has one statement in the domain (`advance`'s docstring and `_undo_reaches`), one in the register,
+# one in the coverage row's `what` and one in the browser spec's title, and those four are what a
+# reader compares. `rate.svelte.js` renders whatever `undo_availability` answers -- decision 199
+# says so in as many words -- so it states nothing and scanning it would ban a word rather than a
+# claim.
+COMMIT_POINT_FILES = (
+    RATE_SESSION,
+    REPO / "backend" / "tests" / "test_rate_session.py",
+    COVERAGE,
+    REPO / "e2e" / "specs" / "11-rate.spec.js",
+)
+
+
+def _commits_the_block_when_the_counter_rolls(text: str) -> list[str]:
+    """Every clause in `text` that puts the commit on the roll instead of one observation later.
+
+    Clause-scoped for the reason the decision-200 detector above is clause-scoped: decision 199's
+    argument has to be able to describe the reading it replaced, and decision 35's own words --
+    "starting a new block commits the previous one" -- are the NEW rule stated in the old
+    vocabulary, so a ban on "fifteenth" near "commit" would forbid the register from explaining
+    itself. A clause offends only when it puts the two together AND names none of the four ways
+    the moved point is written. Stop class `.` and `|`: the sentence and the table cell.
+    """
+    flat = " ".join(text.split())
+    rolls = r"(?:the roll\b|rolls into|fifteenth|fifteen taps|slot 15|card 15)"
+    commits = r"(?:commit\w*|stops? being undoable|no longer undoable)"
+    moved = re.compile(
+        r"sixteenth|next block|new block's first|one tap later|decision 199"
+        r"|starting a new block commits",
+        re.I,
+    )
+    return [
+        m.group(0).strip()
+        for m in re.finditer(rf"[^.|]*\b{rolls}\b[^.|]*?\b{commits}\b[^.|]*", flat, re.I)
+        if not moved.search(m.group(0))
+    ]
+
+
+def test_nothing_still_commits_the_block_of_fifteen_on_the_roll():
+    """Decision 199 moved the commit point, and one of the four statements of it stayed behind.
+
+    `test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block`'s docstring went on reading "the
+    roll is also decision 35's commit: everything in the old block stops being undoable at that
+    instant" for the whole of the milestone that made it false -- 870 lines above
+    `test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands`, in the same file, so the
+    next reader of the block machine found two in-repo answers to one question and no way to tell
+    which was current. The register, `advance`'s docstring and the coverage row were all amended;
+    a sentence is not amended by the diff that contradicts it, which is why this is a rule and not
+    a review note. [M4.10 cycle 2, M410-C2-D19-04; decisions 35, 174, 199]
+    """
+    offenders = [
+        f"{path.relative_to(REPO).as_posix()}: {clause}"
+        for path in (*COMMIT_POINT_FILES, REGISTER)
+        for clause in _commits_the_block_when_the_counter_rolls(
+            _decision(199) if path is REGISTER else path.read_text(encoding="utf-8")
+        )
+    ]
+    assert not offenders, (
+        "a block of 15 is committed when the FIRST observation of the next block lands, not when "
+        "the fifteenth of this one does (decision 199):\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    "name,text,expected",
+    [
+        # The docstring that shipped, whole, because the §6.1 quote in front of it is the half
+        # that must survive: a detector that fired on the quote would take the counter claim with
+        # the Undo claim.
+        ("the docstring that stayed behind",
+         '"""§6.1: "the counter runs 1..15 and rolls into a new block." The roll is also decision '
+         "35's commit: everything in the old block stops being undoable at that instant.\"\"\"", 1),
+        ("a table cell", "| 199 | The fifteenth tap is the commit | **Change it** |", 1),
+        ("the shape `advance` used to have",
+         "The fifteenth observation rolls the counter and commits the block it ended.", 1),
+        # The four that must pass, one per place the rule is stated now.
+        ("advance's docstring", "A block is committed when the FIRST observation of the NEXT "
+                                "block lands, not when the fifteenth of this one does.", 0),
+        ("the coverage row", "the previous block stays reachable until the first observation of "
+                             "the new block lands - so the fifteenth tap is undoable and the "
+                             "sixteenth commits the block it ended", 0),
+        ("decision 35's own words", "Decision 35: the depth matches the counter the person is "
+                                    "reading, and starting a new block commits the previous one.",
+         0),
+        ("the counter claim alone", '§6.1: "the counter runs 1..15 and rolls into a new block."',
+         0),
+    ],
+)
+def test_the_commit_point_guard_catches_each_way_the_old_reading_was_said(name, text, expected):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    Three offending shapes and four true ones, because this detector's whole difficulty is that
+    the true sentences and the false ones are built from the same words -- the rule moved by one
+    observation, not by a vocabulary.
+    """
+    assert len(_commits_the_block_when_the_counter_rolls(text)) == expected, name

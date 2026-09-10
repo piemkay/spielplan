@@ -21,6 +21,7 @@
    * leaving the justification two cards down the rail. Long-press on a poster is §6.1's single
    * gesture accelerator (proposal 51): one decisive answer, without moving the toggle.
    */
+  import { onDestroy } from 'svelte';
   import RateCorrections from '$lib/components/RateCorrections.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { DECISIVE_COPY, metaLine } from '$lib/rate.svelte.js';
@@ -43,12 +44,29 @@
   let timer = null;
   let fired = false;
 
+  /**
+   * The press names the card it started on.
+   *
+   * A long press is a write that happens 500 ms after the finger lands, and the only thing that
+   * can change in that window is which pair is on the table: the `?head=` effect, the model-gate
+   * effect and Undo all call `load()`, and `rate.svelte.js` read `rate.card.token` at fire time.
+   * The timer closed over the outcome alone, so the gesture landed on whatever card had arrived —
+   * reproduced as a decisive duel posted against the pair that replaced the pressed one. It is
+   * the strongest observation the app has (§5.2 weighs decisive ~1.6 against ~1.0), §4.2 keeps it
+   * forever, and nothing in the Ledger tells it apart from one the person made. So the token is
+   * captured here, the timer drops itself when the card has moved on, and `duel()` refuses the
+   * write as well, because the card can still change between this check and the POST.
+   * [§6.1, §5.2, §4.2; M4.10 finding 28]
+   */
   function press(outcome) {
     fired = false;
     clearTimeout(timer);
+    const token = card?.token;
     timer = setTimeout(() => {
+      timer = null;
+      if (!token || token !== card?.token) return;
       fired = true;
-      onDuel(outcome, { decisive: true });
+      onDuel(outcome, { decisive: true, token });
     }, LONG_PRESS_MS);
   }
 
@@ -56,6 +74,12 @@
     clearTimeout(timer);
     timer = null;
   }
+
+  // A timer still armed when this card goes away — a navigation, a mode switch, a sweep card
+  // taking the slot — used to fire into a component nobody is looking at and write a duel. The
+  // token check above would now refuse most of those; unarming it refuses all of them, and it is
+  // the same teardown `rate/+page.svelte` and `rank/+page.svelte` already do with `reset`.
+  onDestroy(release);
 
   function tap(outcome) {
     release();

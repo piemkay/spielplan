@@ -260,6 +260,64 @@ async def test_every_card_carries_the_one_line_why_that_names_its_dominant_cause
         ]
 
 
+async def test_the_age_why_line_prints_the_titles_real_age_and_not_the_saturation_point(db, world):
+    """§6.8's why-line is copy, and copy is either true or it is not.
+
+    The printed number was derived from the `age` FEATURE, which the SQL clips to 1.0 at
+    `AGE_SATURATION_YEARS` — so every title released before `now() - 40` printed exactly "it has
+    been out 40 years", including 6,806 of the corpus's 19,071. It printed it on precisely the
+    cards where it is the sentence the person reads: an unowned title with no playback, nobody
+    else in the house and no crowd support has no other term above zero, so `dominant` names age.
+
+    The clipped feature is asserted unchanged in the same breath — saturation is the model's claim
+    that the forty-first year carries no more information about whether this household saw the
+    film, and this milestone changes the copy and not the ordering.
+
+    The expected years are counted on POSTGRES's clock, read here from the same `now()` the query
+    uses, because that is the half of the fix a Python-side `datetime.now().year` would leave
+    unasserted: two clocks that agree today disagree across a midnight or a mis-set container TZ.
+    [M4.10 finding 19]
+    """
+    patrick = world["patrick"]
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned) VALUES "
+        "(41, 'movie', 'Old and unowned', 1975, false), "
+        "(42, 'movie', 'Young and unowned', 2021, false)"
+    )
+    this_year = await db.fetchval("SELECT EXTRACT(year FROM now())::int")
+    cards = {
+        card.title_id: card
+        for card in await queue.next_sweep_cards(
+            db,
+            user_id=patrick,
+            kinds=["movie"],
+            limit=2,
+            exclude=tuple(range(1, 11)),
+            reask_rate=0.0,
+        )
+    }
+    assert set(cards) == {41, 42}, "both unowned titles are ordinary candidates"
+
+    for title_id, released in ((41, 1975), (42, 2021)):
+        years = this_year - released
+        assert cards[title_id].reason.endswith(f"it has been out {years} years"), (
+            f"title {title_id} was released in {released} and the card says: "
+            f"{cards[title_id].reason!r}"
+        )
+    assert "it has been out 40 years" not in cards[41].reason, (
+        "the 1975 film printed the saturation point rather than its age"
+    )
+
+    # The ordering number is unchanged: the feature is still clipped at 1.0 for the old title and
+    # is still the raw ratio for the young one.
+    clipped = queue.p_seen(queue.Features(owned=False, age=1.0))
+    assert cards[41].p_seen == pytest.approx(clipped)
+    assert cards[42].p_seen == pytest.approx(
+        queue.p_seen(queue.Features(owned=False, age=(this_year - 2021) / queue.AGE_SATURATION_YEARS))
+    )
+    assert cards[41].p_seen > cards[42].p_seen, "and the older film still sorts first"
+
+
 async def test_a_title_already_rated_or_explicitly_not_seen_never_returns(db, world):
     """Decision-doc proposal 37: the queue "does not exclude titles already given a verdict …
     and wraps forever". Both halves are fixed here.
@@ -407,6 +465,32 @@ def test_no_pair_exists_until_one_class_holds_two_titles():
     assert battle.draw(spread, rng=rng) is None
     split = [battle.PoolMember(1, "movie", 2), battle.PoolMember(2, "series", 2)]
     assert battle.draw(split, rng=rng) is None, "same class, different kinds, is not a pair"
+
+
+def test_the_pair_selection_why_line_says_where_selection_does_pay_off():
+    """54a's sentence, on the surface a person reads it on.
+
+    §6.1's copy is "Random pairs. For profiles no selection rule beats random - the clever ones
+    pay off where the question is which of these few, not how do you rank everything: the tier
+    queue (§6.3) and tonight's round (§6.2).", and the clause it replaced ("the clever ones only
+    pay off in the tier queue") was false one section over, where §6.2's round selects adaptively.
+    Three of the four sites carry the replacement whole; this one stopped after the first half,
+    which raises the question 54a exists to answer and answers none of it. It is the half that
+    matters most here: `RateRail.svelte` collapses its cards below 981 px, so on the phone — the
+    primary form factor — this line is the only pair-selection copy a person sees.
+
+    Verbatim is not available at this site and never was: the sentence opens "Random pairs." and
+    this line is composed inside "queued because: both of these you rated liked, drawn at random
+    within the class - ". So the clause is pinned rather than the string, and the deleted falsehood
+    is pinned as an absence. Nothing pinned any of the four copies before this.
+    [M4.10 finding 22, cycle 2 M410-C2-D19-05]
+    """
+    line = battle.reason_for(2)
+    assert line.startswith("queued because: both of these you rated liked, drawn at random")
+    assert "no selection rule beats random" in line
+    assert "not how do you rank everything" in line, line
+    assert "the tier queue (§6.3) and tonight's round (§6.2)" in line, line
+    assert "only pay off" not in line, "the clause 54a deleted is back"
 
 
 async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(db, world):

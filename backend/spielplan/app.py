@@ -48,6 +48,7 @@ from spielplan.connectors import registry
 from spielplan.core import secrets
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
+from spielplan.ledger import hyperparams
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.push import keys as push_keys
 from spielplan.scoring import backbone
@@ -224,11 +225,51 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # §5.1's basis, loaded once per process. §10 restarts on a bundle swap, so a process
         # never has to reload it — and a Backbone that fails to load degrades the scoring
         # surfaces rather than stopping a boot the admin needs in order to fix the bundle.
+        # §4.3's constants ride with the basis, and for the same reason: §10 makes a bundle swap a
+        # restart, so one read per process is all the spec ever asks for. Every Ledger router had
+        # a `_hyperparams` fallback that re-read the file per request — a read, a `from_mapping`
+        # validation and a note list on every tap of Rate, every board GET and every duel — and
+        # `load_cache` then re-digested the result. One attribute here is the whole repair, and
+        # the notes are logged once instead of being thrown away at DEBUG on every request:
+        # §4.3's provenance ("a number from a default and the same number from a bundle mean
+        # different things when someone is reading a refit report") is a boot fact.
+        #
+        # Ordered after the basis on purpose. `from_mapping` raises `ValueError` on a constant
+        # outside its range, and the attribute is then left UNSET so the routers refuse with a
+        # 503 rather than fit against silently substituted defaults — a different `hp_digest`
+        # invalidates every cached fit in the install, which is a worse failure than a refusal.
+        # Were the constants read first, that same ValueError would skip the basis and degrade
+        # the scoring surfaces for a reason that has nothing to do with them. The boot itself is
+        # not refused: §3.1 keeps a half-configured boot legal and the admin needs these routes
+        # in order to import a bundle that parses. [M4.10 finding 10; ml06, perf-07]
+        #
+        # Two `try` blocks and not one, which is the whole of the ordering argument above and none
+        # of its cost. `BackboneError` is a `RuntimeError`, so in one shared block an unusable
+        # basis — a state the comment three lines up declares supported — took the first handler
+        # and the constants read never ran: `app.state.hyperparams` stayed unset and all three
+        # routers went back to reading, validating and re-digesting the file on every request,
+        # which is the per-request cost (perf-07) this read exists to delete, with §4.3's
+        # provenance notes never logged either. `OSError` joins `ValueError` on the second because
+        # `hyperparams.load` now lets a present-but-unopenable constants file reach `read_text`
+        # rather than reading it as an absent one, and a boot that dies on it would be the one
+        # outcome §3.1 forbids here. [M4.10 cycle 1, M410-R1-02 / M410-R1-04 / M410-C1-HP-1]
         try:
             app.state.backbone = backbone.load_for(app.state.artifacts)
         except backbone.BackboneError:
             log.exception("backbone.npz is unusable — serving without collaborative scores")
             app.state.backbone = backbone.Backbone.empty()
+        try:
+            hp, notes = hyperparams.load(app.state.artifacts)
+            app.state.hyperparams = hp
+            for note in notes:
+                log.info("hyperparameters: %s", note)
+        except (ValueError, OSError):
+            # `log.exception` so the key is named twice: once in the message the operator greps
+            # for and once in the traceback that says which check refused it.
+            log.exception(
+                "ledger_hyperparams.json is unusable - the Rate and Rank surfaces will answer "
+                "503 until the bundle is fixed (spec section 4.3)"
+            )
 
     if app.state.artifacts.is_empty:
         log.info("no artifact bundle active — serving setup wizard and admin routes (§3.1)")

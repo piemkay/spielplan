@@ -105,10 +105,29 @@ def _unseal(token: str, *, participant_id: int) -> tuple[round_rules.Pair, int]:
 def _z(request: Request) -> float:
     """§6.3's `straddle_z`, reused: the round's "still straddles the boundary" is the same
     predicate the board's badge uses, so it reads the same bundle-shipped constant rather than
-    growing a second one that could drift."""
+    growing a second one that could drift.
+
+    `app.state.hyperparams` is set once by the lifespan (`app.py`); the fallback is for an app
+    constructed without it. Its `ValueError` is refused rather than allowed out, for the reason
+    `api/rate.py:_hyperparams` states at length: a bad constant is a 503 naming where to look,
+    never a 500 and never the defaults, whose `hp_digest` differs. A round is four reads deep in
+    this constant (`state_for`, two pair draws, `answer`), so a refusal here is the whole
+    evening refusing coherently instead of one of the four failing. [M4.10 finding 10]
+
+    `OSError` beside `ValueError` so all four readers of this file agree on the class they refuse:
+    `hyperparams.load` no longer reads a present-but-unopenable constants file as an absent one.
+    [M4.10 cycle 1, M410-R1-06]
+    """
     cached = getattr(request.app.state, "hyperparams", None)
     if cached is None:
-        cached, _ = hyperparams.load(getattr(request.app.state, "artifacts", None))
+        try:
+            cached, _ = hyperparams.load(getattr(request.app.state, "artifacts", None))
+        except (ValueError, OSError) as exc:
+            log.error("ledger_hyperparams.json is unusable: %s", exc)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ledger constants unreadable - see backend log",
+            ) from exc
     return float(cached.straddle_z)
 
 

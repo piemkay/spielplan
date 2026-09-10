@@ -19,7 +19,12 @@ from __future__ import annotations
 import pytest
 
 from spielplan.connectors.jellyfin import JellyfinClient
-from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
+from spielplan.connectors.registry import (
+    SECRETS_UNREADABLE_REASON,
+    JellyfinConfig,
+    load_jellyfin,
+    save_jellyfin,
+)
 from spielplan.sync import seen
 
 PATRICK_JF = "jf-user-patrick"
@@ -596,3 +601,213 @@ async def test_the_sweep_boundary_ignores_this_processs_clock(db, world, monkeyp
     )
     assert (await _state(db, world["patrick"], 1))["state"] == "unseen"
     assert world["module"].state.write_log == [], "nothing should have been pushed back"
+
+
+# --- M4.10 finding 11: the two halves of the explicit action, apart -----------------------------
+#
+# `set_state` is the app-side write and then the network call. `rate/session.py` awaited the
+# whole of it inside the verdict transaction, so a Jellyfin taking 1.5 s held the row locks for
+# 1.5 s. `push_owed` is the second half on its own, and `retract` is the compensating write that
+# `rate/session.py` used to keep a private, drifted copy of.
+
+
+async def _owe(db, user_id: int, title_id: int, state: str) -> None:
+    """The app-side write exactly as an observation's transaction leaves it.
+
+    `jf_synced_at = NULL` is §7.3's table reading "the person acted and Jellyfin has not been
+    told yet" — the debt `push_owed` settles and the sweep would settle eventually.
+    """
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at) "
+        "VALUES ($1, $2, $3, now(), NULL)",
+        user_id, title_id, state,
+    )
+
+
+async def test_push_owed_pushes_the_state_the_app_already_committed(db, world):
+    """§7.3's mapping, from the row rather than from an argument: `seen` -> Played = true, under
+    the linked user's own token. The fake refuses the admin key on that route, so a fallback to
+    it would fail here."""
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    await _owe(db, world["patrick"], 1, "seen")
+
+    pushed, reason = await seen.push_owed(
+        db, world["client"], world["cfg"], user_id=world["patrick"], title_id=1
+    )
+    assert (pushed, reason) == (True, None)
+    assert world["module"].state.write_log == [
+        {"user": PATRICK_JF, "item": "jf-1", "played": True}
+    ]
+    assert (await _state(db, world["patrick"], 1))["jf_synced_at"] is not None
+
+    # And the other direction, from the same function with nothing but the row changed.
+    await db.execute(
+        "UPDATE user_title SET state = 'unseen', jf_synced_at = NULL WHERE title_id = 1"
+    )
+    pushed, reason = await seen.push_owed(
+        db, world["client"], world["cfg"], user_id=world["patrick"], title_id=1
+    )
+    assert pushed is True
+    assert "jf-1" not in world["module"].state.played[PATRICK_JF]
+
+
+async def test_push_owed_finds_nothing_owed_where_there_is_no_row(db, world):
+    """§7.3: "an absent row is the *default*, not an assertion." There is nothing to push, and
+    saying so is not the same as failing to push — the caller's `_sync_line` prints this reason
+    into §6.7's rail verbatim, so it has to be true."""
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    pushed, reason = await seen.push_owed(
+        db, world["client"], world["cfg"], user_id=world["patrick"], title_id=1
+    )
+    assert (pushed, reason) == (False, "nothing owed")
+    assert world["module"].state.write_log == []
+    assert await _state(db, world["patrick"], 1) is None, "reading the debt must not invent one"
+
+
+async def test_push_owed_refuses_for_the_same_four_reasons_set_state_did(db, world):
+    """The refusal strings are a published interface: §6.7's rail prints them and `_sync_line`
+    does not translate them. Moving the network half into its own function must not reword one.
+
+    The unreadable-DEK case is the one that matters most and is the one that would rot quietly:
+    "Jellyfin not configured" is a lie an admin cannot act on, because the connector *is*
+    configured and its credentials are sealed under a SECRETS_KEY this process does not have
+    (M4.7 dd03).
+    """
+    patrick, jenny = world["patrick"], world["jenny"]
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    await _owe(db, patrick, 1, "seen")
+    await _owe(db, patrick, 2, "seen")
+    await _owe(db, jenny, 1, "seen")
+
+    assert await seen.push_owed(
+        db, None, JellyfinConfig(), user_id=patrick, title_id=1
+    ) == (False, "Jellyfin not configured")
+    assert await seen.push_owed(
+        db, None, JellyfinConfig(url="http://jellyfin.test", secrets_unreadable=True),
+        user_id=patrick, title_id=1,
+    ) == (False, SECRETS_UNREADABLE_REASON)
+    # Title 2 carries no `jellyfin_id`: the app knows the film and the server does not.
+    assert await seen.push_owed(
+        db, world["client"], world["cfg"], user_id=patrick, title_id=2
+    ) == (False, "not on Jellyfin")
+    pushed, reason = await seen.push_owed(
+        db, world["client"], world["cfg"], user_id=jenny, title_id=1
+    )
+    assert pushed is False and "not linked" in reason
+
+    assert world["module"].state.write_log == [], "nothing refused may have reached the server"
+    for user_id, title_id in ((patrick, 1), (patrick, 2), (jenny, 1)):
+        row = await _state(db, user_id, title_id)
+        assert row["state"] == "seen" and row["jf_synced_at"] is None, (
+            "every refusal leaves the write owed rather than lost (§3.3)"
+        )
+
+
+async def test_set_state_is_still_the_write_and_then_the_push(db, world):
+    """The composition, asserted where it used to be an argument about reading order.
+
+    `set_state` keeps its contract exactly — the dict, the owed row, the push — and what has
+    changed is only that the second half has a name its other caller can reach for.
+    """
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    result = await seen.set_state(
+        db, world["client"], world["cfg"], user_id=world["patrick"], title_id=1, state="seen"
+    )
+    assert result == {"state": "seen", "synced": True, "reason": None}
+    assert world["module"].state.write_log == [
+        {"user": PATRICK_JF, "item": "jf-1", "played": True}
+    ]
+    # The state that reached Jellyfin is the one the first statement wrote, not one carried past
+    # it: `push_owed` reads the row, so the two can no longer disagree.
+    assert (await _state(db, world["patrick"], 1))["state"] == "seen"
+
+
+async def test_retract_puts_back_exactly_the_flag_the_forward_action_set(db, world):
+    """Decision 35's compensating write, as a function of the prior state alone.
+
+    A prior `seen` means we set Played false and must set it back to true; no prior row at all
+    means we set it true and must set it false — and must NOT write an app-side `unseen`, because
+    §7.3 makes an absent row the default rather than an assertion.
+    """
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    patrick = world["patrick"]
+
+    await _owe(db, patrick, 1, "unseen")
+    pushed, reason = await seen.retract(
+        db, world["client"], world["cfg"], user_id=patrick, title_id=1, prior_state="seen"
+    )
+    assert (pushed, reason) == (True, None)
+    assert world["module"].state.write_log[-1] == {
+        "user": PATRICK_JF, "item": "jf-1", "played": True
+    }
+    # The row we do hold is stamped as agreed; its own state is left exactly as found.
+    row = await _state(db, patrick, 1)
+    assert row["state"] == "unseen" and row["jf_synced_at"] is not None
+
+    await db.execute("DELETE FROM user_title WHERE user_id = $1 AND title_id = 1", patrick)
+    pushed, _reason = await seen.retract(
+        db, world["client"], world["cfg"], user_id=patrick, title_id=1, prior_state=None
+    )
+    assert pushed is True
+    assert world["module"].state.write_log[-1] == {
+        "user": PATRICK_JF, "item": "jf-1", "played": False
+    }
+    assert await _state(db, patrick, 1) is None, (
+        "an absence was turned into an explicit `unseen` assertion (§7.3)"
+    )
+
+
+async def test_retract_asks_for_a_re_link_where_the_old_private_copy_said_nothing(db, world):
+    """§7.3: "a 401 on write -> re-link prompt" — on the retraction as much as on the push.
+
+    `rate/session.py._compensate_push` was a second implementation of this path and it had lost
+    both of `_push`'s refusal branches: a link with no usable token and a token Jellyfin rejects
+    both returned silently, so a token that expired between a tap and its Undo left
+    `jellyfin_link_state` reading `linked` with nothing anywhere asking the person to fix it.
+    """
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-1' WHERE id = 1")
+    patrick = world["patrick"]
+    await _owe(db, patrick, 1, "unseen")
+
+    tokenless = JellyfinConfig(url="http://jellyfin.test", api_key=world["module"].API_KEY)
+    pushed, reason = await seen.retract(
+        db, world["client"], tokenless, user_id=patrick, title_id=1, prior_state="seen"
+    )
+    assert pushed is False and "re-link" in reason
+    assert world["module"].state.write_log == [], "the admin key was never tried"
+    assert await db.fetchval(
+        "SELECT jellyfin_link_state FROM app_user WHERE id = $1", patrick
+    ) == "needs_relink"
+
+    await db.execute("UPDATE app_user SET jellyfin_link_state = 'linked' WHERE id = $1", patrick)
+    expired = JellyfinConfig(
+        url="http://jellyfin.test", api_key=world["module"].API_KEY,
+        user_tokens={str(patrick): "expired-token"},
+    )
+    pushed, reason = await seen.retract(
+        db, world["client"], expired, user_id=patrick, title_id=1, prior_state="seen"
+    )
+    assert pushed is False and "re-link" in reason
+    assert await db.fetchval(
+        "SELECT jellyfin_link_state FROM app_user WHERE id = $1", patrick
+    ) == "needs_relink"
+    # The restored row is untouched by a retraction that could not be made: the debt stands.
+    assert (await _state(db, patrick, 1))["jf_synced_at"] is None
+
+
+async def test_retract_refuses_without_a_client_and_without_a_jellyfin_id(db, world):
+    """The two cases the old copy got right, kept: no connector and a title the server does not
+    carry are both "nothing to retract", and neither is an error the person can act on."""
+    patrick = world["patrick"]
+    await _owe(db, patrick, 1, "unseen")
+    assert await seen.retract(
+        db, None, JellyfinConfig(), user_id=patrick, title_id=1, prior_state="seen"
+    ) == (False, "Jellyfin not configured")
+    assert await seen.retract(
+        db, None, JellyfinConfig(url="http://jellyfin.test", secrets_unreadable=True),
+        user_id=patrick, title_id=1, prior_state="seen",
+    ) == (False, SECRETS_UNREADABLE_REASON)
+    assert await seen.retract(
+        db, world["client"], world["cfg"], user_id=patrick, title_id=1, prior_state="seen"
+    ) == (False, "not on Jellyfin")
+    assert world["module"].state.write_log == []

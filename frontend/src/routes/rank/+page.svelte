@@ -24,12 +24,14 @@
     TAP_FOOTNOTE,
     answer,
     chipFor,
+    chooseKind,
     clearFilters,
     closeQueue,
     draft,
     drop,
     dropLifted,
     emptyState,
+    sharpenWhy,
     facets,
     lift,
     load,
@@ -43,6 +45,7 @@
 
   const showModel = $derived(!!session.user?.show_model);
   const empty = $derived(emptyState());
+  const why = $derived(sharpenWhy());
   const lifted = $derived(rank.lifted);
 
   onMount(() => {
@@ -53,11 +56,6 @@
   // lift is a pending write naming a bare title id, so one left armed across a navigation is a
   // `tier_edit` waiting to land wherever the next tap happens to be.
   onDestroy(reset);
-
-  async function chooseKind(key) {
-    await loadFacets(key);
-    await load(key);
-  }
 
   let lastModelEpoch = modelGate.epoch;
   $effect(() => {
@@ -168,16 +166,11 @@
     >
   </div>
   <!-- Decision 35's rule, generalised: a control that disables has to say why, or the person
-       reads a dead button as a broken one. `queue_eligible` is the server's own answer. -->
-  {#if rank.booted && rank.ratedTotal < 2}
-    <p class="why" data-testid="rank-sharpen-why">
-      Nothing to compare yet — the queue draws from titles you have rated.
-    </p>
-  {:else if rank.booted && rank.queueEligible === 0}
-    <p class="why" data-testid="rank-sharpen-why">
-      {rank.ratedTotal} rated · nothing straddles a boundary right now, so the queue is
-      exploring rather than settling one.
-    </p>
+       reads a dead button as a broken one. `sharpenWhy` decides which reason applies, in
+       rank.svelte.js beside `emptyState`, because the branch that fires during decision 209's
+       window used to give the wrong one and no test could reach it here. -->
+  {#if why}
+    <p class="why" data-testid="rank-sharpen-why" data-why-kind={why.kind}>{why.text}</p>
   {/if}
 
   {#if rank.error}

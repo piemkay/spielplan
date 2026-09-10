@@ -188,14 +188,36 @@
           onDecisive={setDecisive}
         />
       {:else if rate.drained}
-        <!-- Proposal 37: the queue drains into an explicit end state rather than wrapping. -->
+        <!-- Proposal 37: the queue drains into an explicit end state rather than wrapping. The
+             chrome is keyed to `drained.cause` because proposal 37 describes ONE of the three
+             ways to have no card — the sweep queue spent — and this block was written for it
+             alone: a heading saying nothing is left to queue, the §6.3 handoff, and Rank as the
+             only way out. The battle pool has the opposite shape. It is empty because the person
+             has rated too little, not too much, and `rate/session.py`'s `DRAINED_CAUSES` says so
+             in the sentence below — so the heading contradicted it and the single CTA sent a
+             first-week member with zero ratings to an empty tier board, which is the direction
+             that cannot help. The server's `cause` exists precisely so this page picks its own
+             heading instead of inferring one (§6.8; finding 20, cycle 1 M410-D8-01). -->
         <div class="drained card" data-testid="rate-drained">
-          <h2>Nothing left to queue</h2>
-          <p class="why">{rate.drained.text}</p>
-          <p class="why">
-            The §6.3 comparison queue sharpens the boundaries once the tier list has some.
-          </p>
-          <a class="btn-ghost" href="/rank">Go to Rank</a>
+          {#if rate.drained.cause === 'pool'}
+            <h2>No pair to compare yet</h2>
+            <p class="why">{rate.drained.text}</p>
+            <!-- A mode change rather than a link: the sweep queue this names is on THIS surface,
+                 and proposal 36 makes the mode sticky from an explicit change, which this is. -->
+            <button
+              class="btn-ghost"
+              data-testid="rate-drained-cta"
+              disabled={rate.busy}
+              onclick={() => setMode('sweep')}
+            >Switch to Sweep</button>
+          {:else}
+            <h2>Nothing left to queue</h2>
+            <p class="why">{rate.drained.text}</p>
+            <p class="why">
+              The §6.3 comparison queue sharpens the boundaries once the tier list has some.
+            </p>
+            <a class="btn-ghost" data-testid="rate-drained-cta" href="/rank">Go to Rank</a>
+          {/if}
         </div>
       {/if}
     </div>

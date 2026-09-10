@@ -135,10 +135,18 @@ def candidates(
     return out
 
 
-def _nearest(pool: Iterable[Candidate], anchor: Candidate) -> Candidate | None:
-    """The closest title in `s`, excluding the anchor itself. Ties by id, so a draw is
-    reproducible from its seed."""
-    others = [c for c in pool if c.title_id != anchor.title_id]
+def _nearest(
+    pool: Iterable[Candidate], anchor: Candidate, *, asked: set[frozenset[int]] | None = None
+) -> Candidate | None:
+    """The closest title in `s`, excluding the anchor itself and any pair already answered.
+    Ties by id, so a draw is reproducible from its seed."""
+    already = asked or set()
+    others = [
+        c
+        for c in pool
+        if c.title_id != anchor.title_id
+        and frozenset((anchor.title_id, c.title_id)) not in already
+    ]
     if not others:
         return None
     return min(others, key=lambda c: (abs(c.s - anchor.s), c.title_id))
@@ -168,7 +176,12 @@ def _boundary(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
     return None
 
 
-def _exploration(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
+def _exploration(
+    pool: Sequence[Candidate],
+    rng: random.Random,
+    *,
+    asked: Iterable[frozenset[int]] | None = None,
+) -> Pair | None:
     """20% — "exploration".
 
     §6.3 names the share and nothing else. The arm that is *not* boundary-targeted and *not*
@@ -176,26 +189,47 @@ def _exploration(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
     person has compared least (ties broken by the widest posterior), against its nearest
     neighbour in `s`. It rotates on its own — answering increments both titles' counts, so the
     least-compared title is a different one next time.
+
+    THE WHOLE POOL, and that word is the repair. The anchor used to be chosen inside
+    `[c for c in pool if c.straddle is None] or list(pool)`, and §6.3 licenses no such
+    restriction: it names the share and calls the arm "exploration". On a young board nothing is
+    in that list, so the arm silently drew straddlers; the moment one title left the straddle set
+    the list inverted into the handful the model is *most* sure about, and because the route's
+    incremental update shrinks exactly the two titles it answered and never moves the cutpoints,
+    they stayed in it. Simulated over 500 answers with the route's own semantics: from answer 110
+    the list held 1-2 of 900 titles, one pair served 78 of 109 exploration draws, and its anchor
+    ended with the most comparisons on the board — under the line "the least-compared title on
+    your board".
+
+    `asked` is the unordered pairs this person has already answered, and none of them is served
+    again. `tonight/round.py`'s `select` takes the same set for the same reason
+    (M3-open-points §3.1): each repeat is an independent Davidson row, so ten repeats shrink one
+    pair's posterior by the root of ten on the strength of a single judgement — §13's reliability
+    inflation, arriving through the selector rather than through the evaluation stream.
+    Exhausting an anchor's partners moves on to the next anchor rather than returning nothing, so
+    the arm gives up only when the board itself has no unasked pair left.
     """
-    away = [c for c in pool if c.straddle is None] or list(pool)
     if len(pool) < 2:
         return None
-    fewest = min(c.comparisons for c in away)
-    widest = [c for c in away if c.comparisons == fewest]
+    already = {frozenset(p) for p in (asked or ())}
     # Fewest comparisons first, then the widest posterior — both are "where the model knows
-    # least". An exact tie on both is broken by the draw rather than by id order, so a board
-    # where everything is equally unexplored (a new one) does not serve the same pair forever.
-    broadest = max(c.item.sigma for c in widest)
-    anchor = rng.choice([c for c in widest if c.item.sigma == broadest])
-    partner = _nearest(pool, anchor)
-    if partner is None:
-        return None
-    return Pair(
-        title_a=anchor.title_id,
-        title_b=partner.title_id,
-        arm=ARM_EXPLORATION,
-        reason="the least-compared title on your board",
-    )
+    # least". The shuffle before the sort is what breaks an exact tie on both by the draw rather
+    # than by id order, so a board where everything is equally unexplored (a new one) does not
+    # walk the same prefix every time; `list.sort` is stable, so the ranking decides and the
+    # shuffle survives only inside the ties.
+    order = list(pool)
+    rng.shuffle(order)
+    order.sort(key=lambda c: (c.comparisons, -c.item.sigma))
+    for anchor in order:
+        partner = _nearest(pool, anchor, asked=already)
+        if partner is not None:
+            return Pair(
+                title_a=anchor.title_id,
+                title_b=partner.title_id,
+                arm=ARM_EXPLORATION,
+                reason="the least-compared title on your board",
+            )
+    return None
 
 
 def _holdout(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
@@ -222,12 +256,23 @@ def _holdout(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
     )
 
 
-def draw(pool: Sequence[Candidate], *, rng: random.Random) -> Pair | None:
+def draw(
+    pool: Sequence[Candidate],
+    *,
+    rng: random.Random,
+    asked: Iterable[frozenset[int]] | None = None,
+) -> Pair | None:
     """One pair, and the arm that produced it.
 
     The roll picks an arm by §6.3's shares. A boundary roll on a pool with no straddler falls
     through to exploration and *says* exploration; nothing ever falls into or out of the
     held-out arm, because its rate is the one thing §13 needs to be independent of the model.
+
+    `asked` reaches the exploration arm alone. The held-out arm must not consult it — a uniform
+    sample with pairs removed according to what the model has already been told is not a uniform
+    sample, and §13 admits no other evaluation data. The boundary arm's own repetition is
+    M3-open-points §3.1's remaining half and not this milestone's: finding 12 names the
+    exploration arm.
     """
     if len(pool) < 2:
         return None
@@ -243,8 +288,8 @@ def draw(pool: Sequence[Candidate], *, rng: random.Random) -> Pair | None:
     if arm == ARM_HOLDOUT:
         return _holdout(pool, rng)
     if arm == ARM_BOUNDARY:
-        return _boundary(pool, rng) or _exploration(pool, rng)
-    return _exploration(pool, rng)
+        return _boundary(pool, rng) or _exploration(pool, rng, asked=asked)
+    return _exploration(pool, rng, asked=asked)
 
 
 __all__ = [

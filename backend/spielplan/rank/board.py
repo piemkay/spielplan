@@ -77,7 +77,7 @@ class Entry:
     assigned_tier: int | None   # where the person put it, if they have
     tier: int                   # where the board renders it — the one above that exists
     straddle: int | None        # the adjacent tier the posterior also reaches
-    straddle_badge: str | None  # "A/S", suppressed while a tension badge holds
+    straddle_badge: str | None  # "A/S" from `model_tier`, suppressed while a tension badge holds
     above: str | None
     below: str | None
     badge: str
@@ -230,11 +230,25 @@ def build(
             below = ordered[position + 1].name if position + 1 < len(ordered) else None
             reached = straddles(item, cuts=cuts, hp=hp)
             tension = tensions[item.title_id]
+            from_model = model_tiers[item.title_id]
+            # BOTH HALVES OF THE CHIP ARE THE POSTERIOR'S. `index` is where the row renders,
+            # which is the person's drop whenever they made one (§6.3's "stays in the assigned
+            # tier") and therefore says nothing about what the model believes. Leading with it
+            # paired the drop tier with the model's reach: s = 0.9, σ = 1.0, model tier A,
+            # dropped into S rendered "S/B" — two levels the interval does not span, omitting
+            # the one it occupies. And the mirror, a drop into the very tier the model reached,
+            # suppressed the chip while `straddles()` went on returning non-None, so a
+            # queue-eligible title wore no badge and §6.3's one-sentence identity broke.
+            #
+            # Suppression is therefore `reached == from_model`, which `model.straddle`'s
+            # adjacency makes unreachable — kept as a statement of the invariant rather than a
+            # branch, because a badge naming one tier twice is the bug proposal 76 recorded.
+            #
             # Proposal 71: the two chips compete for the same corner, and tension wins while it
             # holds. `reached` is untouched — eligibility is the predicate, not the string.
             badge = (
-                f"{labels[index]}/{labels[reached]}"
-                if reached is not None and reached != index and tension is None
+                f"{labels[from_model]}/{labels[reached]}"
+                if reached is not None and reached != from_model and tension is None
                 else None
             )
             entries.append(
@@ -243,7 +257,7 @@ def build(
                     name=item.name,
                     s=item.s,
                     sigma=item.sigma,
-                    model_tier=model_tiers[item.title_id],
+                    model_tier=from_model,
                     assigned_tier=item.assigned_tier,
                     tier=index,
                     straddle=reached,

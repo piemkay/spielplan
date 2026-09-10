@@ -55,9 +55,19 @@
          Proposal 39 puts it under the meta line and above the recall aid. -->
     <p class="why" data-testid="rate-queue-reason">{card?.reason ?? ''}</p>
 
+    <!-- `substituted_for` is the type the counter called for, and it carries nothing about why
+         the flip happened — so this line says that and no more. It used to name a cause ("no
+         battle pair yet in this partition"), which was true while exactly one site set the
+         marker: the thin-pool substitution. M4.10 marks every flip (finding 21), and the other
+         two have other causes — §6.0's banner redraw serves a sweep because the CTA pinned a
+         title, with a battle pool that can be demonstrably full, and the correction fallbacks
+         because the survivor's verdict band emptied. One sentence cannot carry three causes, and
+         §6.8 makes a false line about the app's own state a defect rather than a wording
+         preference. Stating the cause here would need it on the wire; it is not, so the claim
+         goes and the fact stays. [§6.1, §6.8; cycle 1 M410-D8-07] -->
     {#if card?.substituted_for}
       <p class="data" data-testid="rate-substituted">
-        no battle pair yet in this partition — serving a sweep card instead
+        a {card.substituted_for} was due in this slot — serving a sweep card instead
       </p>
     {/if}
 

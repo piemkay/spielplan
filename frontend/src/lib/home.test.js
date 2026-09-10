@@ -140,15 +140,36 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
     expect(rows.every((r) => r.shelf === 'top_of_ledger')).toBe(true);
   });
 
-  it('never merges the two arrays', () => {
-    // The falsifier for an interleaved ranking: each row must still hold exactly its own
-    // section's items, and the two item arrays must not be the same object or a concatenation.
-    const rows = shelfRows(payload);
-    expect(rows[0].section.items).toHaveLength(1);
-    expect(rows[1].section.items).toHaveLength(1);
-    expect(rows[0].section.items[0].title_id).toBe(1);
-    expect(rows[1].section.items[0].title_id).toBe(2);
-    expect(rows[0].section.items).not.toBe(rows[1].section.items);
+  it('never merges the two arrays, on a payload that hands both sections one array', () => {
+    // The falsifier for an interleaved ranking, rebuilt. The last assertion used to be
+    // `rows[0].section.items).not.toBe(rows[1].section.items)` against two *distinct* fixture
+    // arrays, which no implementation could ever fail: the objects differ in the fixture, before
+    // `shelfRows` is called. The case that discriminates is the one where the payload hands both
+    // sections the same array — a merging `shelfRows` concatenates or pushes, and the length is
+    // then the tell; one that flattened the shelf would return a single row instead of two.
+    // [§4.1 rule 5, decision 18; M4.10 finding 33]
+    const shared = [{ title_id: 1 }, { title_id: 2 }];
+    const rows = shelfRows({
+      shelves: [
+        {
+          id: 'top_of_ledger',
+          ranking: true,
+          sections: [
+            { kind: 'movie', heading: 'Films', why: 'β 0.62', items: shared },
+            { kind: 'series', heading: 'Series', why: 'β 0.62', items: shared }
+          ]
+        }
+      ]
+    });
+    expect(rows, 'one row per (shelf, kind), never one interleaved list').toHaveLength(2);
+    expect(rows.map((r) => r.section.kind)).toEqual(['movie', 'series']);
+    expect(rows[0].section, 'each row keeps its own section').not.toBe(rows[1].section);
+    expect(rows.map((r) => r.section.items.length), 'the rows grew').toEqual([2, 2]);
+    expect(shared, "the payload's own array was mutated").toHaveLength(2);
+
+    // And the ordinary payload, where each section brings its own: still exactly its own items.
+    const split = shelfRows(payload);
+    expect(split.map((r) => r.section.items.map((i) => i.title_id))).toEqual([[1], [2]]);
   });
 
   it('reports which kinds a shelf actually shipped', () => {
@@ -170,12 +191,16 @@ describe('the pending-verdicts banner (proposals 21 and 150)', () => {
     cta: {
       label_wide: 'Rate now',
       label_compact: 'Rate',
-      route: '/rate?mode=sweep&head=1123&head=1023'
+      // The link the server actually emits. `mode=sweep` led this query until decision 203
+      // removed a parameter `GET /api/rate` never declared and this page never read, and a
+      // fixture is where a stale spelling survives longest: the parser only reads `head`, so
+      // nothing here would have failed.
+      route: '/rate?head=1123&head=1023'
     }
   };
 
   it('follows the server link verbatim when it carries every named title', () => {
-    expect(bannerHref(banner)).toBe('/rate?mode=sweep&head=1123&head=1023');
+    expect(bannerHref(banner)).toBe('/rate?head=1123&head=1023');
   });
 
   it('refuses a bare /rate — naming titles then serving another card is the failure', () => {
@@ -183,16 +208,16 @@ describe('the pending-verdicts banner (proposals 21 and 150)', () => {
   });
 
   it('refuses a link that drops one of the named titles', () => {
-    expect(bannerHref({ ...banner, cta: { route: '/rate?mode=sweep&head=1123' } })).toBeNull();
+    expect(bannerHref({ ...banner, cta: { route: '/rate?head=1123' } })).toBeNull();
   });
 
   it('refuses a comma-joined head, which GET /api/rate answers with a 422', () => {
-    expect(bannerHref({ ...banner, cta: { route: '/rate?mode=sweep&head=1123,1023' } })).toBeNull();
+    expect(bannerHref({ ...banner, cta: { route: '/rate?head=1123,1023' } })).toBeNull();
   });
 
   it('refuses a link whose head is in a different order than the copy named', () => {
     expect(
-      bannerHref({ ...banner, cta: { route: '/rate?mode=sweep&head=1023&head=1123' } })
+      bannerHref({ ...banner, cta: { route: '/rate?head=1023&head=1123' } })
     ).toBeNull();
   });
 

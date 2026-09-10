@@ -39,7 +39,7 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.10, M4.11 and M4.14 through M4.16 are not in the list yet — each is added
+# "M4.5". M4.11 and M4.14 through M4.16 are not in the list yet — each is added
 # by the milestone that opens it, in one commit with its first row.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
@@ -83,7 +83,32 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # other side: every row below is measured by the instrument M4.8 repaired, and the three
 # pre-release fixes already parked at M4.9 above are the same milestone's first three
 # commits. See docs/milestones/M4.9-plan.md.
-MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9",
+#
+# M4.10 follows it and takes a §12 row too, on M4.9's argument rather than M4.6's and
+# M4.7's: §12's M2 row owns the rating view, the Personal Ledger and §6.1's prediction
+# reveal and §12's M3 row owns Rank's tiers and its comparison queue, and both were closed
+# against surfaces that guard every Ledger write with a read, then some work, then a write,
+# on a connection that autocommits each statement — asserted one request at a time, which
+# is the only way they hold. Two gathered answers under one sealed pair write two `duel`
+# rows in most races with no injected latency, one of those races drawing §13's held-out
+# arm; two gathered Rate taps on one card token leave the loser holding a refusal §6.1 does
+# not define — since M4.7's handler a 409 naming `rate_observation_seq`, not the plan's 500,
+# which is no more actionable by the client — with its Jellyfin write already sent; and both
+# Rank routes raise after their observation is durable, so every retry writes another
+# append-only row. What it applies is the property `write_txn(lock=...)` (`api/deps.py:73-92`)
+# exists for — the winner's write is serialised ahead of the loser's read, so the loser reads
+# what the winner committed — at four Ledger seams, in the form each one can carry: the
+# two-int `pg_advisory_xact_lock` that `tonight/play.py:611` uses, issued as the first
+# statement inside the Rank answer's `write_txn(conn)` and not through that helper's own
+# `lock=`, whose single-argument `hashtext(...)::bigint` form is a different lock space that
+# could not collide with a number here (`api/deps.py:86-88` says so); a `SELECT ... FOR UPDATE`
+# on `rate_session` as the first statement of every Rate write; an `AND card_token IS NULL` on the
+# card stash; and a compare-and-set on the tier set a refit fitted against. The fit runs after the
+# commit, never under the lock. It sits here, after M4.9, because its rows are measured by
+# the instrument M4.8 repaired and read the layer M4.9 corrected: the reveal row is measured
+# on the seed list M4.9's loader fills, and the two queue rows read the board its facet work
+# renders. Decisions 199-208 record the calls it needed. See docs/milestones/M4.10-plan.md.
+MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 

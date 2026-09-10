@@ -746,8 +746,17 @@ async def test_the_incremental_path_serves_an_undo_with_the_same_call(db, world)
 
 async def test_a_cache_from_other_hyperparameters_is_refitted_rather_than_trusted(db, world):
     """§4.3: "every constant comes from `ledger_hyperparams.json`". A cache built under other
-    constants does not produce a stale `s`, it produces a wrong one — so the digest mismatch
-    triggers a full refit and the delta says plainly that it was not the <50 ms path."""
+    constants does not produce a stale `s`, it produces a wrong one — so a digest mismatch is a
+    miss, like having no cache at all, and the delta says plainly that it was not the <50 ms path.
+
+    What a miss costs changed in M4.10 (finding 9): it used to run the whole MAP fit here, inside
+    the request that made the observation — §5.3 budgets that at "seconds" and this row at
+    "<50 ms", measured at 6.96 s over 2000 titles. The miss now stamps
+    `ledger_cutpoints.refit_requested_at` for the 60 s sweep and returns with no rows, because
+    the observation the caller made is already durable and rebuilding the cache *is* the fit.
+    `ledger_fit` is left untouched rather than rewritten under the new digest: a cache nobody
+    fitted would be a wrong one wearing the right name.
+    """
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
     retuned = Hyperparams(lambda_ridge=30.0)
@@ -755,11 +764,14 @@ async def test_a_cache_from_other_hyperparameters_is_refitted_rather_than_truste
     delta = await refit.update_incrementally(
         db, user_id=user, kind="movie", title_ids=[1], hp=retuned, embeddings=fixture_embeddings
     )
-    assert delta.refit is True and delta.fit_source == "nightly"
-    assert delta.rows and np.isfinite(delta.rows[0].s)
+    assert delta.refit is True and delta.fit_source == refit.QUEUED
+    assert delta.rows == ()
     assert await db.fetchval(
-        "SELECT hp_digest FROM ledger_fit WHERE user_id=$1 AND kind='movie'", user
-    ) == retuned.digest()
+        "SELECT count(*) FROM ledger_fit WHERE user_id=$1 AND kind='movie'", user
+    ) == 0
+    assert await db.fetchval(
+        "SELECT refit_requested_at FROM ledger_cutpoints WHERE user_id=$1 AND kind='movie'", user
+    ) is not None
 
 
 # --- §5.3's budgets, measured --------------------------------------------------------------------

@@ -549,7 +549,15 @@ async def validate_for_install(conn: asyncpg.Connection, bundle: Bundle) -> Impo
         # buried under thirty table counts.
         return report
     spine = None if bundle.content_db is not None else await installed_spine(conn)
-    return validate(bundle, spine=spine)
+    report = validate(bundle, spine=spine)
+    # §10's swap sequence ends in a restart, so step 1 is the last moment at which a constant the
+    # §5.2 fit cannot use can be reported to the operator rather than discovered as a refusal on
+    # the Rate and Rank surfaces afterwards. Here and not inside `validate` because `validate` is
+    # also the pre-flight tools' entry point with no install behind it, while this is the function
+    # `api/artifacts.py`'s validate route and `import_bundle` below both go through — the two
+    # paths that can actually stage and flip. [M4.10 finding 10; ml06]
+    validator.validate_hyperparams(bundle.artifacts_dir, report)
+    return report
 
 
 async def position_id_sequences(conn: asyncpg.Connection, report: ImportReport) -> None:

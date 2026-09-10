@@ -255,19 +255,34 @@ async def pending_verdicts(
     one title, and its first tap writes `seen`. This one writes nothing at all, names up to
     three titles that are already seen "whatever set them so", and a finish prompt answered
     "yes" moves a title INTO this population and leaves it here until a verdict lands.
+
+    FILTERED BY THE LIVE SESSION'S KINDS, because the CTA has to be able to serve what the copy
+    names. §6.1's queue draws from the kinds the person set on the Rate surface, so a films-only
+    session offered a banner naming a seen-but-unrated series and a link that opened on an
+    unrelated film — proposal 150's own failure mode, "a prompt that names titles and then
+    presents a different one is worse than no prompt". With no live session the queue has not
+    been narrowed yet and both kinds are served, so both kinds are named. [M4.10 finding 23]
     """
+    # One live session per person (0011's `rate_session_one_live`), so this is one row or none.
+    # The default is taken from `KIND_HEADINGS` rather than spelled again, so the banner cannot
+    # drift onto a third spelling of the two kinds.
+    live = await conn.fetchval(
+        "SELECT kinds FROM rate_session WHERE user_id = $1 AND ended_at IS NULL", user_id
+    )
+    kinds = list(live or KIND_HEADINGS)
     rows = await conn.fetch(
         """
         SELECT t.id, t.name, t.kind, ut.state_changed_at
           FROM user_title ut
           JOIN title t ON t.id = ut.title_id
-         WHERE ut.user_id = $1 AND ut.state = 'seen'
+         WHERE ut.user_id = $1 AND ut.state = 'seen' AND t.kind = ANY($2::text[])
            AND NOT EXISTS (
                 SELECT 1 FROM verdict v
                  WHERE v.user_id = $1 AND v.title_id = t.id AND v.superseded_by IS NULL)
          ORDER BY ut.state_changed_at DESC, t.id DESC
         """,
         user_id,
+        kinds,
     )
     if not rows:
         return None
@@ -284,7 +299,10 @@ async def pending_verdicts(
     # `head=1,2` is a 422 and `head=1&head=2` is the contract. The client route uses the same
     # spelling so a client can forward the query string it was handed, verbatim, rather than
     # re-encoding it — which is the step at which the head would drift from the copy.
-    query = "&".join(["mode=sweep"] + [f"head={i}" for i in head])
+    # `mode=sweep` used to lead this query and carried nothing: `GET /api/rate` declares `head`
+    # only (`api/rate.py`) and `rate/+page.svelte` reads only `head` from `searchParams`, so the
+    # link stated a control neither end has. Removed rather than honoured — decision 203.
+    query = "&".join(f"head={i}" for i in head)
     return {
         "count": total,
         "named": [{"title_id": int(r["id"]), "name": r["name"], "kind": r["kind"]} for r in named],
@@ -303,6 +321,9 @@ async def pending_verdicts(
             # can drift from the copy it just rendered; following the app's own link cannot.
             "route": f"/rate?{query}",
             "api": f"/api/rate?{query}",
+            # Decision 203 removed the dead `mode=sweep` from the two LINKS, not this field:
+            # `POST /api/rate/session` does take a mode, so a client that wants the banner's
+            # intent has a route for it. `GET /api/rate` still gains no `mode` parameter.
             "mode": "sweep",
             "head": head,
         },
@@ -1205,6 +1226,6 @@ def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | Non
             # §6.1's own learning-curve copy, so Home and Rate promise the same thing.
             "why": "personal signal roughly triples from 5 to 100 labels — 50–100 in the first "
                    "sitting or two is the target",
-            "cta": {"label": "Rate 50 titles", "route": "/rate?mode=sweep"},
+            "cta": {"label": "Rate 50 titles", "route": "/rate"},  # decision 203
         }
     return None

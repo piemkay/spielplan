@@ -666,3 +666,101 @@ async def test_the_data_tab_s_validate_route_runs_the_install_state_refusals(
     payload = response.json()["report"]
     assert payload["ok"] is False
     assert [f["rule"] for f in payload["findings"] if f["severity"] == "fail"] == ["seed-once"]
+
+
+async def test_validate_refuses_a_bundle_whose_ledger_constants_the_fit_cannot_use(
+    db, build, artifacts_root
+):
+    """§10 step 1, for §4.3's constants file — the one bundle file nothing used to read here.
+
+    `break_straddle_z` is §6.3's threshold at zero, which `hyperparams.from_mapping` refuses. The
+    refusal had no catcher anywhere: the validator never opened `ledger_hyperparams.json`, so the
+    bundle passed step 1, got staged, had the active row flipped onto it, and the `ValueError`
+    then surfaced out of a *request handler* — every Rate write and every Rank board, for every
+    member, after the operator had committed and gone home. §10 makes validate the decision point
+    precisely so a bundle this install cannot serve never becomes the active one.
+
+    Both halves are asserted because each covers for the other: a clean bundle's report has to
+    carry the line proving the check ran at all, and the broken one's has to name the key and
+    leave `artifacts/<version>/` absent.
+    """
+    seeded = await seed(db, build, artifacts_root)
+    assert [
+        f.message for f in seeded.findings
+        if f.rule == "hyperparams" and f.severity == "note"
+    ], "a clean bundle's report must show the constants were read: " + seeded.render()
+
+    broken = build("test-v2", models_only=True)
+    fx.break_straddle_z(broken)
+
+    report = await bundle_import.validate_for_install(db, bundle_import.Bundle.open(broken))
+
+    assert not report.ok
+    messages = failures_of(report, "hyperparams")
+    assert len(messages) == 1, [f.rule for f in report.failures]
+    assert "straddle_z" in messages[0], messages[0]
+
+    # And the import the operator would have pressed next refuses in the same words, with §10
+    # step 2 never reached: a staged directory left behind by a bundle that was then refused is
+    # the state the swap sequence exists to make impossible.
+    attempted = await import_bundle_at(db, broken, artifacts_root)
+    assert failures_of(attempted, "hyperparams"), attempted.render()
+    assert not (artifacts_root / "test-v2").exists(), "a refused bundle may not be staged"
+
+    # A file that is not a JSON object at all — the class the check could not see. `from_mapping`
+    # met it with an `AttributeError`, which is neither the `ValueError` this section catches nor
+    # the `json.JSONDecodeError` above it, so there was no report line and no failure: the operator
+    # pressing Validate on the Data tab got a 500 from a button whose only job is to report, because
+    # `api/artifacts.py` wraps this call in no try and `app.py` registers no handler for it.
+    # [M4.10 cycle 1, M410-R1-03]
+    shapeless = build("test-v3", models_only=True)
+    (shapeless / "artifacts" / "ledger_hyperparams.json").write_text("[]", encoding="utf-8")
+
+    report = await bundle_import.validate_for_install(db, bundle_import.Bundle.open(shapeless))
+
+    assert not report.ok
+    messages = failures_of(report, "hyperparams")
+    assert len(messages) == 1, [f.rule for f in report.failures]
+    assert "JSON object" in messages[0], messages[0]
+
+    # And a constants path that is present but unopenable, which `is_file()` read as an ABSENT
+    # optional artifact: no failure, and not even the "constants read" note, while the install ran
+    # on DEFAULTS under a different `hp_digest` — every cached fit discarded behind a number nobody
+    # chose. §4.3's optional file is the one thing this check may pass silently, and a directory of
+    # that name is not it. [M4.10 cycle 1, M410-R1-06]
+    shadowed = build("test-v4", models_only=True)
+    constants = shadowed / "artifacts" / "ledger_hyperparams.json"
+    constants.unlink()
+    constants.mkdir()
+
+    report = await bundle_import.validate_for_install(db, bundle_import.Bundle.open(shadowed))
+
+    assert not report.ok
+    assert failures_of(report, "hyperparams"), report.render()
+
+    # And the attribution: a truncated `artifacts/manifest.json` with byte-perfect constants. The
+    # section reached `hyperparams.load` through `ArtifactStore.open`, which re-parses the manifest,
+    # so the manifest's own `JSONDecodeError` came back a second time under the `hyperparams` rule —
+    # the operator is told two files are broken, opens a valid one, and finds every constant in
+    # range. That is the misattribution this section's own comment was written to prevent one file
+    # type over ("send the operator looking for a key that is not the problem"), on the surface §10
+    # makes the decision point. `validate_artifacts` owns the manifest line and already named it.
+    # [M4.10 cycle 2, m410-c2-validate-blames-the-constants-for-a-broken-manifest]
+    mangled = build("test-v5", models_only=True)
+    (mangled / "artifacts" / "manifest.json").write_text("{not json", encoding="utf-8")
+
+    report = await bundle_import.validate_for_install(db, bundle_import.Bundle.open(mangled))
+
+    assert not report.ok
+    assert [f.rule for f in report.failures] == ["artifacts"], (
+        "one broken file, two failures: " + report.render()
+    )
+    assert "manifest.json" in failures_of(report, "artifacts")[0]
+    assert failures_of(report, "hyperparams") == [], (
+        "the constants file is valid and the report blames it for the manifest's parse error: "
+        + report.render()
+    )
+    assert [
+        f.message for f in report.findings
+        if f.rule == "hyperparams" and f.severity == "note"
+    ], "the constants were never checked at all: " + report.render()

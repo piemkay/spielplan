@@ -255,6 +255,13 @@ WITH household AS (
     SELECT t.id,
            t.kind,
            t.year,
+           -- The clock the printed age is counted on, selected rather than read off
+           -- `datetime.now()` in Python: `age` below is clipped to 1.0 because that is where the
+           -- *feature* saturates, so the why-line cannot be derived from it and has to subtract
+           -- years itself. Two clocks would make the sentence disagree with the ordering it
+           -- explains across a midnight or a mis-set container TZ; both `now()` calls in this
+           -- statement are the one transaction timestamp. [M4.10 finding 19, §6.8]
+           EXTRACT(year FROM now())::int                             AS this_year,
            COALESCE(ut.state = 'seen', false)                       AS seen,
            t.is_owned                                               AS owned,
            sl.position                                              AS seed_position,
@@ -323,7 +330,16 @@ def _card(row: asyncpg.Record, *, seed_total: int, weights: SeenWeights) -> Queu
         source = "p_seen"
     years_out = None
     if row["year"] is not None:
-        years_out = int(round(float(row["age"]) * AGE_SATURATION_YEARS))
+        # From the year, NOT from `age` — which is the clipped feature and therefore pegged at
+        # 1.0 for everything released before `now() - AGE_SATURATION_YEARS`. Multiplying it back
+        # out printed "it has been out 40 years" for 6,806 of the corpus's 19,071 titles, on
+        # exactly the cards where the age term is the dominant one and so the one the line names
+        # (unowned, no playback, nobody else in the house, no crowd support). §6.8 makes the
+        # why-line normative copy, and a sentence that is wrong by eleven years for a 1975 film
+        # is not a quiet reason, it is a false one. The feature stays clipped: saturation is the
+        # model's claim that the 41st year carries no more information, and this changes only
+        # what the card says. [M4.10 finding 19]
+        years_out = max(0, int(row["this_year"]) - int(row["year"]))
     return QueueCard(
         title_id=int(row["id"]),
         reason=reason_for(

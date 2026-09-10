@@ -45,6 +45,11 @@ log = logging.getLogger("spielplan.rank.read")
 class Cutpoints:
     boundaries: np.ndarray
     tier_set: tuple[str, ...]
+    # Whether a full MAP fit is owed for this (user, kind) — `refit_requested_at` is set. It
+    # travels with the boundaries because it says how much of what they describe has landed yet,
+    # and because this row is already being read: a second query for one boolean would put a
+    # round trip on every board read. Decision 209.
+    refit_owed: bool = False
 
 
 async def cutpoints_of(
@@ -55,9 +60,14 @@ async def cutpoints_of(
     §5.2: the tier arm's cutpoints *are* the displayed boundaries, so there is no second set
     and no percentile fallback — the fallback when there is no row at all is the same prior the
     model would start from, which is not the same thing as cutting the current population.
+
+    No row at all is `refit_owed=False`, and not because nothing could be owed: a refit is asked
+    for by *writing* this row (`refit._queue_full_refit` INSERTs precisely so the first tap of
+    all has somewhere to stamp), so an absent row is a (user, kind) nobody has asked a fit for.
     """
     row = await conn.fetchrow(
-        "SELECT boundaries, tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2",
+        "SELECT boundaries, tier_set, refit_requested_at FROM ledger_cutpoints "
+        "WHERE user_id = $1 AND kind = $2",
         user_id,
         kind,
     )
@@ -71,6 +81,7 @@ async def cutpoints_of(
     return Cutpoints(
         boundaries=np.asarray([float(b) for b in row["boundaries"]], dtype=float),
         tier_set=tuple(row["tier_set"]),
+        refit_owed=row["refit_requested_at"] is not None,
     )
 
 
@@ -151,6 +162,40 @@ async def comparison_counts(
         HELD_OUT,
     )
     return {int(r["title_id"]): int(r["n"]) for r in rows}
+
+
+async def asked_pairs(
+    conn: asyncpg.Connection, *, user_id: int, kind: str
+) -> set[frozenset[int]]:
+    """The unordered pairs this person has already judged, **excluding §13's held-out stream**.
+
+    `queue._exploration` refuses to re-serve one. Without it the arm re-served the same handful
+    forever (finding 12: one pair took 78 of 109 exploration draws in a 500-answer simulation),
+    and each repeat is an independent Davidson row — ten repeats shrink that pair's posterior by
+    the root of ten on the strength of one judgement, which is §13's reliability inflation
+    reached through the selector rather than through the evaluation stream.
+
+    Every context, not only `tier_queue`: a pair the person settled in a §6.1 battle or by
+    dropping one title next to the other is a pair they have answered, and exploring it again
+    explores nothing. The held-out exclusion is the same one `comparison_counts` makes and for
+    the same reason — this is a selector input, and §13 says the uniform 10% feeds neither the
+    selection rule nor any quality figure.
+
+    Both sides are joined to `title` because §4.1 rule 5 partitions by kind and §10's re-import
+    can reclassify one side of an old row (`load_observations` joins both for the same reason).
+    """
+    rows = await conn.fetch(
+        """
+        SELECT d.title_a, d.title_b FROM duel d
+        JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
+        JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
+        WHERE d.user_id = $1 AND d.selection <> $3
+        """,
+        user_id,
+        kind,
+        HELD_OUT,
+    )
+    return {frozenset((int(r["title_a"]), int(r["title_b"]))) for r in rows}
 
 
 async def answered_comparisons(
@@ -251,6 +296,7 @@ def public(tiers: Sequence[board.Tier]) -> list[dict[str, Any]]:
 __all__ = [
     "Cutpoints",
     "answered_comparisons",
+    "asked_pairs",
     "candidates",
     "comparison_counts",
     "cutpoints_of",

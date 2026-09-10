@@ -263,23 +263,36 @@ async def me(user: CurrentUser, conn: DB) -> dict[str, object]:
 
 @router.post("/password")
 async def change_password(
-    body: ChangePasswordRequest, user: CurrentUser, conn: DB
+    body: ChangePasswordRequest, response: Response, user: CurrentUser, conn: DB
 ) -> dict[str, object]:
     """The route that ends §3.1's forced first-login change, and one of the four reachable
     while it stands: `/me`, `/password`, `/logout` and `/switch` (decision 179). Every other
     authenticated route in the app is refused until this one has been used.
 
-    A password change revokes every other session for the account. A change made because the
-    old password leaked has to actually end the other sessions; otherwise every device that
-    already has a cookie stays signed in for the full sliding 90 days.
+    A password change revokes every other session for the account *and rotates the caller's own*
+    (decision 208). A change made because the old password leaked has to actually end the other
+    sessions; otherwise every device that already has a cookie stays signed in for the full
+    sliding 90 days. The caller's own session is the half dd24 left out: login, the passkey login
+    and the PIN switch each destroy the session their own cookie names before minting the new one
+    — one cookie names one row, and a device that re-proves itself does not keep the row it was
+    holding — and this route was the fourth member of that family and the only one not doing it,
+    while being the only route where the credential behind a live cookie changes underneath it.
+    So the response carries one fresh `Set-Cookie` and the session id the caller arrived with
+    stops authenticating. `sessions_revoked` keeps its meaning — the number of OTHER devices
+    ended — because that is the sentence the surface says to the person (§6.6's admin-side twin
+    reports the same number).
 
-    Those are three writes, so they run inside `write_txn` — §4.2's house idiom, and the same
-    shape `api/admin.py`'s `reset_password` gives the identical three on the admin side. One
+    Those are five writes — the hash, the lockout counters, the other sessions and the rotation's
+    own pair — so they run inside `write_txn`, §4.2's house idiom, and the same shape
+    `api/admin.py`'s `reset_password` gives the identical first three on the admin side. One
     duty must not be transactional on one half and autocommit on the other: uncommitted
     together, a failure after the hash UPDATE changes the password and leaves every other
     device signed in for its full sliding window, which is exactly what this route promises
-    above will not happen. argon2 is tens of milliseconds (§3.2), so — as in `setup.py`'s first
-    boot — the hash is computed before the transaction opens rather than held inside it.
+    above will not happen — and, since decision 208, a failure between the rotation's DELETE and
+    its INSERT would sign this device out of a session it had before the request and cannot get
+    back, which is the failure dd24 costed at the other three doors. argon2 is tens of
+    milliseconds (§3.2), so — as in `setup.py`'s first boot — the hash is computed before the
+    transaction opens rather than held inside it.
     """
     # Through `check_password`, never a bare verify: §3.2's lockout counts wherever this
     # credential is checked (core/auth.py). This route is `CurrentUser`, so it is reachable
@@ -305,6 +318,37 @@ async def change_password(
         # one-time password must not stay locked against the password that replaced it.
         await auth.clear_password_lockout(conn, user.id)
         revoked = await auth.destroy_other_sessions(conn, user.id, keep=user.session_id)
+        # Decision 208, and the reason it is two DELETEs rather than one: the count above is the
+        # sentence the surface says — other devices ended — so the caller's own row is ended as
+        # its own statement, after it, and is not folded into that number.
+        #
+        # The new row carries the `auth_method` the rotated one carried, not 'password'. §3.2
+        # makes the PIN a switch convenience derived from the credential rather than the
+        # credential itself, and decision 179 keeps this route reachable from a switched-in
+        # phone; minting 'password' there would walk that phone out of the rotation holding a
+        # session `create_session`'s CASE stamps `admin_verified_at` on and `credentialed_user`
+        # lets register a passkey — the chain `test_account_security.py` shuts at its first step.
+        # `verified` stays at the default for the reason `create_session` documents — a typed
+        # password is itself the verification — and this request has just checked one, which is
+        # the same proof §3.2's 24 h re-prompt accepts at `/reauth`. The device label travels for
+        # the same reason the id does not: it describes the device, which is the one thing this
+        # request did not change.
+        label = await conn.fetchval(
+            "SELECT device_label FROM auth_session WHERE id = $1", user.session_id
+        )
+        await auth.destroy_session(conn, user.session_id)
+        sid = await auth.create_session(
+            conn, user.id, auth_method=user.auth_method, device_label=label
+        )
+    # `deps.current_user`'s slide may already have written a Set-Cookie for the row this rotation
+    # has just deleted — at most once a day, and a password change is exactly the request someone
+    # makes on a session older than a day. core/auth.py states §3.2's contract as "slides in the
+    # row and in the cookie together or not at all", and the row it slid is gone, so the re-issue
+    # naming it is dropped rather than left for the browser to resolve by header order. That
+    # dependency is the only writer of a cookie on this response, which is why clearing the
+    # header is precise here and would not be in a route that set others.
+    del response.headers["set-cookie"]
+    set_session_cookie(response, sid)
     return {"ok": True, "sessions_revoked": revoked}
 
 

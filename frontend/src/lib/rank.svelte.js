@@ -60,6 +60,8 @@ export const rank = $state({
   tiers: [],
   rated: 0,
   ratedTotal: 0,
+  /** Decision 209: the server says a full fit is owed, so the two counts above are not yet final. */
+  fitting: false,
   queueEligible: 0,
   why: '',
   /** @type {Record<string, any>} what the person has switched on */
@@ -106,6 +108,7 @@ export function apply(payload) {
   rank.tiers = payload.tiers ?? [];
   rank.rated = payload.rated ?? 0;
   rank.ratedTotal = payload.rated_total ?? 0;
+  rank.fitting = payload.fitting ?? false;
   rank.queueEligible = payload.queue_eligible ?? 0;
   rank.why = payload.why ?? '';
   rank.filters = payload.filters ?? {};
@@ -159,6 +162,27 @@ export async function load(kind = rank.kind) {
     rank.loading = false;
     fail(err);
   }
+}
+
+/**
+ * §4.1 rule 5's switch, as one event rather than two.
+ *
+ * The genre and decade vocabularies are scoped to the kind (`loadFacets` asks for one kind), so a
+ * value carried over from the kind you just left stays in the query, renders blank in a `<select>`
+ * that no longer offers it, and the board comes back empty with a filter the person cannot see.
+ * Home's `toggleKind` (`routes/+page.svelte`) clears exactly these two for exactly this reason.
+ * `q`, `dna`, `runtime_max` and `seen` are not kind-scoped, and a kind switch is no reason to
+ * throw away what somebody typed.
+ *
+ * It lives here rather than in the page because a kind change and a filter change are different
+ * events and only one of them resets anything — `load()` must stay the filter change, which is
+ * why this is not folded into it — and because this is the layer a test can reach. [finding 27]
+ */
+export async function chooseKind(kind) {
+  draft.genre = '';
+  draft.decade = '';
+  await loadFacets(kind);
+  await load(kind);
 }
 
 /**
@@ -219,20 +243,28 @@ export function dropLifted(tierIndex) {
  * The two titles a drop lands between, in the tier it lands in.
  *
  * `beforeTitleId` is the poster the drop landed *on*, which is §6.3's "between two titles": the
- * new title goes above it and below whatever was above it. Absent — a tap, or a drop on the
- * row rather than on a poster — it lands at the bottom, where the one neighbour that exists is
- * the current last entry and §6.3's two duels become one. Inventing a second would put a
- * comparison in the Ledger nobody made.
+ * new title goes above it and below whatever was above it. Absent — a tap, or a drop on the row
+ * rather than on a poster — the gesture is §6.3's other case, "dropping a title into a tier
+ * emits a `tier_edit`", and it names no neighbour at all.
+ *
+ * It used to name the tier's current last entry there, and `rank/drop.py` then wrote
+ * `duel(title_a=<last>, title_b=<dropped>, outcome='A')` — a comparison the person never made,
+ * in the same direction every time, on every promotion into a non-empty tier. §6.3 makes
+ * tap-to-tier the whole of the phone's input path, so on the primary form factor that was every
+ * move; §4.2 is append-only, so every one of them was permanent; and §5.2 weighs it like a duel
+ * somebody answered. A position this tier does not hold is the same fabrication by another route
+ * — a stale board from a second tab or a read that predates a refit — so it names nobody either.
+ * The route still accepts one neighbour, because a pointer drop onto the last poster of a tier is
+ * a genuine end-of-tier insert and honestly names exactly one. [§6.3, §4.2, §5.2; finding 17]
  */
 export function neighboursIn(tierIndex, title, beforeTitleId = null) {
   const tier = rank.tiers.find((t) => t.index === tierIndex);
   const entries = (tier?.entries ?? []).filter((e) => e.title_id !== title.title_id);
-  if (!entries.length) return { above: null, below: null };
-  if (beforeTitleId === null || beforeTitleId === title.title_id) {
-    return { above: entries[entries.length - 1].title_id, below: null };
-  }
-  const at = entries.findIndex((e) => e.title_id === beforeTitleId);
-  if (at < 0) return { above: entries[entries.length - 1].title_id, below: null };
+  const at =
+    beforeTitleId === null || beforeTitleId === title.title_id
+      ? -1
+      : entries.findIndex((e) => e.title_id === beforeTitleId);
+  if (at < 0) return { above: null, below: null };
   return {
     above: at > 0 ? entries[at - 1].title_id : null,
     below: entries[at].title_id
@@ -268,7 +300,13 @@ export async function nextPair() {
  * comparison belonged to.
  */
 export async function answer(outcome, decisive = false) {
-  if (!rank.pair) return;
+  // `rank.busy` is the guard `drop()` above and `rate.svelte.js`'s `send()` both take, and it is
+  // explicitly NOT the fix for the double answer: two tabs, two devices, or a tap that outruns
+  // this module still reach the route together, and only the advisory lock the route takes inside
+  // its transaction can make the loser the 409 `fail()` renders as a notice rather than a second
+  // `duel` row that §4.2 keeps forever. What this line buys is that a double tap on one surface
+  // stops being the easy way to get there. [§6.3, §4.2; finding 1]
+  if (!rank.pair || rank.busy) return;
   rank.busy = true;
   rank.notice = '';
   try {
@@ -288,6 +326,21 @@ export async function answer(outcome, decisive = false) {
     rank.log = line;
   } catch (err) {
     fail(err);
+    if (err instanceof ApiError && err.status === 409) {
+      // The refusal is permanent for this token, not transient. The seal the route checks is a
+      // count of this user's `tier_queue` duels and `duel` is append-only (§4.2), so once the
+      // winner's row has landed the count never returns to the sealed value — every further tap on
+      // these two posters is refused the same way. Rendered as a notice and nothing else, the
+      // losing device sat on a dead pair with no control that said so: `closeQueue` and a reopen
+      // were the only way out. So the pair comes off the table and the queue is re-read, which is
+      // what `rate.svelte.js`'s stale branch does at the same seam ("the card moved on without us.
+      // Say so and re-read the table rather than guessing"). Here rather than in `fail()` because
+      // `drop()` shares that helper and carries no seal — decision 202 leaves it without a 409 —
+      // so clearing the pair there would be a recovery from a refusal that cannot happen.
+      // [§6.3, §4.2; cycle 1 m410-rev-03]
+      rank.pair = null;
+      await nextPair();
+    }
   } finally {
     rank.busy = false;
   }
@@ -318,12 +371,49 @@ export function activeFilterText() {
   return parts.join(', ') || 'these filters';
 }
 
-/** Proposal 80's two states, decided from one payload so they cannot both render. */
+/** Why Sharpen is disabled, decided here rather than in the template so it can be tested.
+ *
+ * Decision 35's rule, generalised by the template this replaces: a control that disables has to
+ * say why, or the person reads a dead button as a broken one. It said "the queue draws from titles
+ * you have rated" for every `ratedTotal < 2`, which during decision 209's window is said to
+ * somebody who has rated ten — the same sentence for both states, which is the reading
+ * `emptyState` above was changed to stop making. The cause is the owed fit, so name it.
+ */
+export function sharpenWhy() {
+  if (!rank.booted) return null;
+  if (rank.ratedTotal === 0 && rank.fitting) {
+    return { kind: 'fitting', text: 'Nothing to compare until your first tiers are fitted.' };
+  }
+  if (rank.ratedTotal < 2) {
+    return { kind: 'thin', text: 'Nothing to compare yet - the queue draws from titles you have rated.' };
+  }
+  if (rank.queueEligible === 0) {
+    return {
+      kind: 'exploring',
+      text: `${rank.ratedTotal} rated - nothing straddles a boundary right now, so the queue is exploring rather than settling one.`
+    };
+  }
+  return null;
+}
+
+/** Proposal 80's two states and decision 209's, decided from one payload so two cannot render. */
 export function emptyState() {
   // Nothing is claimed before the board has been read. "You're at 0" is a statement about the
   // person's ledger, and asserting it while the request is still in flight — or after it
   // failed, with the error banner right above — is §6.8's register saying something untrue.
   if (rank.loading || !rank.booted || rank.error) return null;
+  // Decision 209, and before the two counting states because it is the reason the count is 0.
+  // §6.3's board reads the fit, §5.3 puts the first fit on the 60 s sweep rather than in the
+  // request, and in between "you're at 0" is the ledger statement above made about somebody who
+  // has just rated ten films. `fitting` is the server's stamp, so the claim here is only that a
+  // fit is owed — no duration, because the sweep's period is not a promise this copy can keep.
+  if (rank.ratedTotal === 0 && rank.fitting) {
+    return {
+      kind: 'fitting',
+      text: 'Nothing is missing — your first tiers are still being fitted. They appear here shortly.',
+      cta: 'Rate some titles'
+    };
+  }
   if (rank.ratedTotal === 0) {
     return {
       kind: 'unrated',

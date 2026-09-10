@@ -490,7 +490,14 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     // anything more global than that would leak here and nowhere else.
     await other.reload();
     await expect(other.getByTestId('home-greeting')).toBeVisible();
-    await expect(other.getByTestId('shelf-card')).toHaveCount(shelfCardCount);
+    // Not an equality. Shelf membership is a function of the fold-in tick, which `every=60` in
+    // worker.py runs on its own clock, and M4.10's finding 9 moved the first fit off the request
+    // onto that sweep -- so this account's shelves legitimately keep arriving while the test
+    // runs, and an equality here read 9 against a 3 captured moments earlier. Decision 117 gates
+    // the rail, the model notes and the payload keys, not which shelves qualify: the three
+    // assertions below are the claim, and this one only says the page did not LOSE content while
+    // another account threw its own switch.
+    expect(await other.getByTestId('shelf-card').count()).toBeGreaterThanOrEqual(shelfCardCount);
     await expect(other.getByTestId('model-rail-open')).toHaveCount(0);
     await expect(other.locator('[data-model-note]')).toHaveCount(0);
     expect([...gatedKeysIn(await homePayload(other.request))]).toEqual([]);

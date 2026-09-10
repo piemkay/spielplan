@@ -17,6 +17,7 @@ import {
   verdict,
   undo,
   skip,
+  duel,
   reset
 } from './rate.svelte.js';
 
@@ -122,7 +123,13 @@ describe('pure helpers', () => {
   });
 
   it('gives the same title the same hue every render', () => {
-    expect(hueOf('Heat')).toBe(hueOf('Heat'));
+    // Pinned to the value rather than compared with itself: `hueOf('Heat') === hueOf('Heat')` is
+    // true of every pure function and of several impure ones, so it could not fail. The claim
+    // worth keeping is that the hue is stable *across renders and releases* — the same film is
+    // the same colour on Home, on the card and after a deploy — and only a literal says that.
+    // [M4.10 finding 33]
+    expect(hueOf('Heat')).toBe(179);
+    expect(hueOf('Prisoners')).toBe(54);
     expect(hueOf('Heat')).not.toBe(hueOf('Prisoners'));
   });
 
@@ -258,6 +265,38 @@ describe('the envelope', () => {
       .mockResolvedValueOnce(ok(envelope()));
     await undo();
     expect(rate.notice).toMatch(/no further/);
+  });
+
+  it('answers the card the gesture started on, or no card at all', async () => {
+    // Finding 28, at the layer that can see it. Proposal 51's long-press is a *delayed* write,
+    // and the only thing that can change in those 500 ms is which card is on the table: the
+    // `?head=` effect, the model-gate effect and an Undo all call `load()`. The card then swaps
+    // and the write lands on a pair nobody pressed. A decisive duel is the strongest observation
+    // the app has (§5.2 weighs it ~1.6 against ~1.0), §4.2 keeps it forever, and nothing in the
+    // Ledger distinguishes it from one the person actually made.
+    fetchMock.mockResolvedValue(ok(envelope()));
+    await duel('A', { decisive: true, token: 't1' });
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.card_token, 'the pressed token is the one that is answered').toBe('t1');
+    expect(sent.decisive).toBe(true);
+
+    // Now the card moves under the press, exactly as a reload would move it.
+    fetchMock.mockResolvedValueOnce(ok(envelope({ card: { ...envelope().card, token: 't2' } })));
+    await load({ quiet: true });
+    expect(rate.card.token).toBe('t2');
+    fetchMock.mockClear();
+
+    await duel('A', { decisive: true, token: 't1' });
+    expect(fetchMock, 'the long press answered the card that replaced the pressed one')
+      .not.toHaveBeenCalled();
+  });
+
+  it('still answers the live card when the caller names no token', async () => {
+    // The strip buttons and the keyboard path have no pointerdown to capture one, so an absent
+    // token means "the card on the table" and must not become a refusal.
+    fetchMock.mockResolvedValue(ok(envelope()));
+    await duel('TIE');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).card_token).toBe('t1');
   });
 
   it('drops a held reveal when Undo takes the observation back', async () => {

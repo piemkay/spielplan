@@ -2655,6 +2655,435 @@ the milestone that builds the wander inherits the number instead of the promise.
 
 ---
 
+## Decisions taken (owner, 2026-09-10)
+
+Ten, taken as M4.10 opened on the questions `docs/milestones/M4.10-plan.md` refused to settle inside
+a diff, plus the spec half of a divergence M4.6 split in two and M4.8 only half repaired. An
+eleventh, 209, was taken as the milestone closed, and on a question the plan could not have asked:
+finding 9 moved the first full fit per member off the request path and onto the 60 s sweep, which is
+§5.3 obeyed — and opened a window in which §6.3's board reads "0 rated" to somebody who has just
+rated their evening. Nothing in the plan or in decisions 199-208 acknowledged that trade. This
+milestone takes a **§12 row**, and for M4.9's reason rather than M4.6's and M4.7's: what it repairs
+are rows the table already had. §12's M2 owns the Rate surface, the Personal Ledger and §6.1's
+prediction reveal; §12's M3 owns Rank's tiers and its comparison queue; both were closed against
+code whose writes had never been made by two requests at once. Every Personal-Ledger write on either
+surface is a check-then-act on a connection that autocommits every statement, and both surfaces
+raise *after* the row is durable — so the person is told a write failed that in fact happened, and
+retries it into a table §4.2 makes append-only on a surface with no undo.
+
+Each decision below answers a measurement rather than a preference, and the numbers are the plan's
+own probes: two gathered answers under one sealed pair wrote two `duel` rows in most races with no
+injected latency, one of those doubled races drawing §13's held-out arm; two gathered Rate taps on
+one card token answered 500 rather than §6.1's 409, with the loser's Jellyfin write already sent; a
+1.5 s push held one backend `idle in transaction` for the whole wait against a pool of ten; §6.1's
+reveal was unavailable on 50 of 50 taps for both members on `v20260828`; and the exploration arm
+served one pair on 78 of 109 draws while calling its anchor the least-compared title on the board.
+Where a decision below argues from a number, that number came from one of those probes.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 199 | A block's last observation is un-undoable the instant it lands, because `advance` rolls the block on the fifteenth while `undo` compares the newest journal row's block with the session's. Change it, or record today's behaviour as deliberate? | **Change it.** `undo_availability` and `undo` additionally accept the newest live row when the session sits at slot 1 and that row is slot 15 of the previous block: the old block stays reachable only while the new one has no content. `advance` and the journal are untouched. |
+| 200 | `card_type_for` returns sweep on odd slots and `advance` rolls slot 15 to slot 1, so every block ends and the next begins with a sweep. Derive the card type from the session's monotone observation counter, or amend §6.1 to "alternates within a block"? | **Derive it from the monotone observation index** (option a) — `observation_index(block_index, slot)`, not the journal's row count, which a correction moves and Undo does not rewind. Slot 1 of the *first* block stays a sweep so a new labeller opens on an answerable card; §6.1 is not amended and `BLOCK_SIZE` is not touched. |
+| 201 | `api/rank.py` says "§6.1's decisive toggle applies here too" above a queue panel that has no toggle and a client that can only ever send `false`. Ship the control, or stop claiming it? | **Stop claiming it.** The comment is rewritten to say the field is accepted on the wire for a control the surface does not have, and why. `decisive: bool = False` stays; `margin_decisive` / `margin_hesitant` are untouched. |
+| 202 | The exit criterion asks two gathered drops to return one 409, which needs a refusal rule §6.3 does not state and no finding supplies. Ship the refusal? | **No.** A drop carries no seal, and two identical drops a minute apart are two legitimate gestures. Clause 3 narrows to board consistency: neither answers 500, each writes at most one `tier_edit` and at most one pair of neighbour duels, and no duel names a neighbour outside the target tier. |
+| 203 | `home/shelves.py` appends `mode=sweep` to a CTA that `GET /api/rate` does not declare and `rate/+page.svelte` does not read. Honour it, or drop it? | **Drop it**, on the banner CTA and on the empty-state CTA that carries the same dead spelling. `GET /api/rate` gains no `mode` parameter and `set_controls` is untouched. |
+| 204 | Once `drop.py` refuses a neighbour that is not in the target tier, what does a drop made on a *filtered* board write? | **The tier edit and no neighbour duels.** On a filtered board "between" is a fact about what is on screen rather than about the tier, so the comparison is not one the person made. Do not silently re-point the duels at the unfiltered neighbours. |
+| 205 | The plan's header binds this milestone to decision 175, which retunes `straddle_z` 1.0 -> 0.15 and gives Tonight its own `BOUNDARY_Z`. Does M4.10 retune the constant? | **No.** M4.10 obeys 175 as a *constraint* — the ±z·σ predicate stays, `model.straddle` is restricted to the two adjacent tiers and returns the nearer cut — and leaves the retune and the borrowed z to M4.12, whose findings 31 and 32 own them. The tension badge is measured, not moved. |
+| 206 | M4.9 taught `test_spec_coverage.py` to read vitest ids, so the plan's "Vitest tests cannot be registered" is false. Do findings 27 and 28 get coverage rows? | **No.** The ten rows below are the whole contract and the exit criterion fixes the count at `M4.10 10/10 covered`; both findings are defects under rows that already exist. The stale sentence is corrected in the milestone's report, not by adding rows. |
+| 207 | With the Jellyfin push outside the verdict transaction the journal row is written before the push resolves. Accept `pushed=False` and let §7.3's sweep reconcile, or correct it? | **One follow-up UPDATE**, outside the observation transaction, best-effort and logged if it fails. `prior_state` records what the write did, not what it intended, and undo compensates from it. |
+| 208 | After `POST /api/auth/password` the route answers 200 with no `Set-Cookie` and keeps the caller's own session row. Is the server right to send nothing? | **No.** The route rotates the session it was called on — every session for the account destroyed inside the `write_txn` it already opens, a new one minted, one `Set-Cookie` on the response. §3.2 gains one sentence; `sessions_revoked` keeps its present meaning. |
+| 209 | Finding 9 owes the first fit per member to the 60 s sweep, so for up to a minute §6.3's board answers `rated: 0` to somebody with eight verdicts on file — the same reading a member who has never opened Rate gets. Let the route wait for the fit, or make the board say which of the two it is looking at? | **Say which.** `GET /api/rank` carries `fitting`, read from the `refit_requested_at` the queued fit already stamped, and the empty board reads "your first tiers are still being fitted" rather than "you're at 0". The route does not wait, no knob is added, and a member with nothing rated at all keeps proposal 80's existing handoff. |
+
+### 199. The fifteenth tap stays undoable until the sixteenth lands
+
+**What the spec says.** §6.1 runs the counter 1..15 and rolls into a new block, and decision 35 hangs
+Undo's depth off that counter: the depth matches the number the person is reading, "the chip disables
+visibly at the boundary", and "starting a new block commits the previous one". §6's preamble says
+undo everywhere.
+
+**Why it changes.** `advance` (`rate/session.py:173-180`) rolls the block on the *fifteenth*
+observation, and `undo_availability` (`:1194-1206`) and `undo` refuse on
+`row["block_index"] != s.block_index` — so the chip disables on the same round trip that answered
+card 15: the person has made a tap they can see and cannot retract, and the counter in front of them
+has already rolled to "1 / 15".
+Decision 174 has already ruled on exactly this, in its own words: "the fifteenth tap of every block
+is currently un-undoable the instant it lands, and that should be fixed by moving the commit point
+one observation later — a block is committed when the FIRST observation of the next block lands,
+which is literally what decision 35 says". The quantity is 6.7% of every observation a household
+makes, it falls on the last tap of a run, which is where fatigue mis-taps live, and in explicit
+Battle mode slot 15 is a duel — a duel has no supersede path, so the loss is permanent rather than
+re-rateable.
+
+**The decision.** Change it. `undo_availability` and `undo` additionally accept the newest live
+journal row when `s.slot == 1 and row.block_index == s.block_index - 1 and row.slot == BLOCK_SIZE` —
+the previous block stays reachable only while nothing has been observed in the new one, which is
+decision 35's commit point stated as arithmetic rather than as a second rule. `advance` is unchanged
+and so is the block and slot each journal row stores, because the fix is in the *reach* of undo and
+not in where the counter is; the frontend chip needs nothing, since it renders what
+`undo_availability` answers. `undo_availability`'s query gains `slot` in its select list, which it
+does not read today.
+
+**Cost.** Three artefacts encode today's reading and change with it: `advance`'s docstring, which
+says everything in the old block stops being undoable the instant the fifteenth lands;
+`library-rate-undo-block-depth`'s `what`; and
+`test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_opping`, which loses its
+fifteenth-tap claim to a new `test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands`. The
+§4.2 sentence decision 174 also mandates — the one that states the delete and names this commit
+point — stays M4.13's, which owns that ruling; nothing here contradicts §4.2 as it stands, because
+the clause the code was failing is decision 35's own.
+
+### 200. Mix alternation is derived from the monotone observation index; §6.1 stands
+
+**What the spec says.** §6.1: "Mix (default — alternates sweep and battle); blocks of 15." §5.2
+credits the battle arm with within-liked resolution (+0.008..+0.016 at 30 duels), which is the
+quantity a missing duel costs.
+
+**Why it changes.** `card_type_for` (`rate/session.py:159-170`) is a pure function of the slot and
+returns sweep on odd slots; `advance` rolls slot 15 to slot 1. Fifteen is odd, so every block ends
+and the next begins with a sweep — one consecutive-same pair per block, eight sweeps to seven
+battles. Over §6.1's 50-100-verdict target that is three to seven fewer duels than the alternation
+the clause states, in exactly the arm §5.2 measures. `test_rate_session.py:145-175` asserts
+alternation *from the slot*, so the instrument cannot see the boundary it is standing on.
+
+**The decision.** Option (a). The card type is derived from the session's monotone observation
+counter rather than from the slot inside one block, so alternation survives the roll; slot 1 of the
+*first* block stays a sweep, so a new labeller still opens on a card that needs no prior ratings to
+answer. §6.1 is not amended and `BLOCK_SIZE` is not touched.
+
+The counter is `observation_index(block_index, slot)` (`rate/session.py`), NOT the journal's row
+count — the `rate_session.seq` column the plan's option (a) names in shorthand. The two numbers part
+company in exactly the two places this decision has to survive: a correction appends a journal row
+and moves that count without moving the block or the slot (§6.1 makes a correction a repair of the
+question, not an answer to it), and `undo`'s restoring UPDATE rewinds block, slot, card and token
+while leaving it where it stood. A card type read off the row count would therefore flip on a
+correction that must not advance, and would contradict the card Undo had just restored — re-creating
+this finding's double sweep one undo later. `observation_index`'s own docstring carries the argument
+at the call site; this paragraph is the record it cites.
+
+The plan marks neither option, so CLAUDE.md decides: the spec is the authority and where code and
+spec disagree the code is the bug. §6.1 says the mode alternates; the block boundary is the code
+failing to. The plan's own coverage table agrees — both of its conditional amendments are written
+"only if the owner takes option (a)".
+
+**Cost.** `library-rate-mix-alternates-blocks`'s `what` gains "including across the block boundary",
+and the test that asserts alternation from the slot has to assert it across a roll instead, which is
+a session-level assertion rather than a pure-function one. Sweep and Battle mode are unaffected:
+they serve their own type and the slot still advances, so switching modes mid-block does not restart
+the counter.
+
+### 201. The tier queue does not get a decisive control; the comment that claims one is corrected
+
+**What the spec says.** §6.1 gives **Battle** the persistent decisive toggle — "sets the margin
+weight (~1.6 vs 1.0)" with its own copy — and §6.3's comparison queue names the three selection
+shares and nothing else. §6.8 makes every claim the app states about its own model a matter of
+honesty.
+
+**Why it changes.** `api/rank.py`'s `AnswerBody` comment says "§5.2: tier-queue duels are
+margin-weighted, so §6.1's decisive toggle applies here too". That describes the wire, not the
+surface: `rank.svelte.js:270` defaults `decisive` to false, the three callers in
+`rank/+page.svelte:308,314,320` pass only the outcome, the panel has no toggle, and
+`rank.svelte.test.js:205` pins the body shape. So the one sentence a maintainer reads about the
+field asserts a control nobody can reach. The effect of the absence is real and small: measured on a
+900-title board, a rater who taps decisive 40% of the time in Rate has each queue row weigh
+0.80-0.82x a battle row, because `_duel_weights` normalises by the mean margin — had they been
+decisive on 40% of queue duels, 28-39 of 900 titles would change tier.
+
+**The decision.** Stop claiming it. The comment is rewritten to say the field is accepted on the wire
+for a control the surface does not have, and why: §6.1 gives the persistent toggle to Battle, §6.3
+states no such control for the queue, and CLAUDE.md forbids unrequested configurability. The API
+field stays `decisive: bool = False`, `margin_decisive` / `margin_hesitant` are untouched, and
+`rank.svelte.test.js:205`'s pinned body shape is unchanged. The plan marks neither option, so its own
+exit-criterion machinery decides: the coverage section says "`05-milestones.spec.js` is untouched
+because no new surface ships", and a persistent switch on the Rank queue panel is a new surface with
+no coverage row, no e2e assertion and no §6.3 sentence behind it.
+
+**Cost.** The 3-6% of tiers that a queue-side toggle would move stay unmoved, and the number is
+recorded here rather than promised, so the milestone that next opens the Rank panel inherits it. No
+coverage row and no frontend change; the repair is one comment, at zero risk, on the artefact that
+was lying.
+
+### 202. No new 409 on the drop route; the exit criterion's drop clause narrows instead
+
+**What the spec says.** §6.3 makes a drop an observation: "dropping a title into a tier emits a
+`tier_edit`; dropping it *between* two titles emits that edit plus two margin-less duels". It states
+no conditions under which a drop is refused as redundant, and §6.1's 409 is about a card token — a
+seal the drop route does not carry.
+
+**Why it changes.** It does not. The plan's exit criterion asked two gathered drops to leave one
+observation *and* return one 409, and the second half needs a refusal rule that does not exist: "a
+drop into the tier the title's own latest `tier_edit` already names, with the same neighbours and no
+intervening observation, is refused 409 as already applied". The plan says so itself — "it is a new
+refusal, so take it to the owner rather than shipping it" — and names the narrowed clause as the
+answer if the ruling is no.
+
+**The decision.** Do not ship the refusal. A drop carries no seal, the board would happily offer the
+gesture twice, and two identical drops a minute apart are two legitimate gestures by a person
+confirming a placement. Clause 3 of the exit criterion narrows to board consistency: two gathered
+POSTs at `/api/rank/drop` leave the board consistent — neither answers 500, each writes at most one
+`tier_edit` and at most one pair of neighbour duels, and no duel names a neighbour that is not in the
+target tier. Inventing a refusal the spec does not state, on the one Rank gesture with no undo, is
+the kind of unrequested rule CLAUDE.md's surgical-diff rule exists to stop.
+
+**Cost.** Two deliberate taps on the same tier still write two `tier_edit` rows, which is what §4.2's
+append-only history is for and what the model already reads as one repeated judgement. The drop route
+still gets the rest of its repairs: no raise after the commit (finding 8), a neighbour outside the
+target tier refused 422 (finding 18), and decision 204's answer for the filtered board.
+`tonight-rank-no-route-raises-after-its-observation-commits` carries the drop's assertions.
+
+### 203. `mode=sweep` is removed from the banner CTAs rather than honoured
+
+**What the spec says.** §6.0 gives Home a pending-verdicts banner whose CTA opens §6.1's queue with
+the named titles at its head; proposal 150 states the failure mode in one sentence — a prompt that
+names titles and then presents a different one is worse than no prompt.
+
+**Why it changes.** `home/shelves.py:287` builds the CTA query as `mode=sweep` plus the `head=` ids,
+and `:1208` spells the same parameter into the empty-state CTA as `/rate?mode=sweep`. Neither end
+exists: `api/rate.py`'s `current` declares `head` only, and `frontend/src/routes/rate/+page.svelte`
+reads exactly `head` from `searchParams` (`:75`, `:99`). So the link carries an instruction nothing
+receives, and a reader of either file is told the banner controls the mode.
+
+**The decision.** Drop it. The banner's CTA query becomes `head=` alone and the empty-state CTA
+becomes `/rate`, under the same reason. `GET /api/rate` gains no `mode` parameter and `set_controls`
+is untouched: honouring the parameter would add a query argument to a shipped route, a client read,
+and a control path into `set_controls` that nothing asks for — unrequested configurability for a
+spelling that has never worked. Removing it is one edit per link and makes the surface honest, which
+is the whole of finding 23's second half. Verified against the tree before taking it: nothing loses
+behaviour, because nothing read the parameter.
+
+**Cost.** None to behaviour. The other half of finding 23 is the real repair and lands beside it: the
+banner's population is filtered by the live session's kinds, so a films-only session stops naming a
+series it cannot serve. `library-rate-pending-verdicts-banner`'s `what` gains that clause and records
+that the dead parameter was removed.
+
+### 204. Under an active filter a drop writes the tier edit and no neighbour duels
+
+**What the spec says.** §6.3 reserves the two margin-less duels for a drop *between two titles*, and
+gives a drop into a tier the bare `tier_edit`. §6.3's filters are part of the same surface: genre,
+kind, decade, runtime, seen-state and DNA predicates.
+
+**Why it changes.** The client computes the neighbours from `rank.tiers`, which is the board *as
+filtered* (`rank.svelte.js:228`), and the drop route deliberately answers with the filtered board
+(`api/rank.py:245-252`). `rank/drop.py:88-98` refuses only self-reference and `above == below`: it
+never checks that either id is in the tier being dropped into. Once finding 18's repair resolves each
+named neighbour's current tier and refuses a mismatch, the filtered case needs a stated answer rather
+than an accidental one — because on a filtered board the two titles the person dropped between are
+simply the two they could see, and the titles hidden by the filter may sit between them.
+
+**The decision.** Suppress them. When the drop request carries any active filter, `rank/drop.py`
+writes the `tier_edit` and no neighbour duels, with a comment citing §6.3 and this decision. Do not
+silently re-point the duels at the unfiltered neighbours: writing an append-only comparison the
+person did not make is finding 17's failure mode, and this milestone is repairing that one — a
+footnote on a surface nobody is building here would not undo the row. The bare `tier_edit` is the
+same body the phone's tap posts under finding 17's repair, so the two paths agree rather than
+diverging on the same gesture.
+
+**Cost.** A person who rearranges a filtered board teaches the model the tier and not the order
+within it, and nothing on screen says so yet. That is the narrower claim and it is the true one; the
+alternative was two duels against titles the person never compared.
+`tonight-rank-drop-writes-observations`'s amendment covers it, and
+`test_the_drop_route_answers_with_the_board_under_the_filters_it_was_given`
+(`test_rank_routes.py:354`) gains the duel-count assertion.
+
+### 205. Decision 175's straddle_z retune is not M4.10's, and the tension badge is measured rather than moved
+
+**What the spec says.** §6.3: "a straddling title shows 'A/S' and becomes queue-eligible", and "if
+the model disagrees strongly, the title's badge shows the tension rather than snapping back". §6.2's
+round is ~10 candidate votes per participant. Decision 175 keeps the ±z·σ reach, retunes
+`straddle_z` from 1.0 to 0.15, and gives Tonight its own `BOUNDARY_Z = 0.6`.
+
+**Why it changes.** Verified against the tree: `api/tonight.py:106-112`'s `_z` still borrows
+`hp.straddle_z` for the round's boundary test, and its docstring argues for the sharing. Retuning the
+shared constant to 0.15 before the sharing is broken would end Tonight's round in ~1.5 pairs against
+§6.2's ~10 — decision 175's own probe numbers. The two halves of that ruling are coupled, and the
+half that breaks the sharing is M4.12's: `M4.12-plan.md`'s findings 31 and 32 name `straddle_z`,
+`CAP_PAIRS` and the borrowed z explicitly. Retuning here would also rewrite the σ-and-cut geometry
+of `test_rank_board.py`'s and `test_rank_queue.py`'s fixtures and add a board-maturity and a
+Tonight-convergence test, none of which appears in this plan's ordered work, its coverage rows or its
+exit criterion.
+
+**The decision.** No. M4.10 obeys decision 175 as a *constraint*: it keeps the ±z·σ predicate,
+restricts `model.straddle` to the two adjacent tiers and returns the nearer cut when the posterior
+reaches both, and refuses the two fixes 175 rejects — it does not redefine straddling by posterior
+mass, does not narrow `prior_var` or `b_i_tau`, and does not close finding 12 by moving the constant.
+The retune of `hyperparams.straddle_z`, `BOUNDARY_Z` in `tonight/round.py` and the deletion of
+`api/tonight.py:106-112`'s `_z` stay with M4.12. The tension-badge geometry — what fraction of a
+fitted board wears a chip at z = 1.0 — is recorded in this milestone's report as a measurement.
+
+**Cost.** On a mature board nearly every title still straddles at z = 1.0, so §6.3's badge keeps
+saying less than it should until M4.12. `rank/board.py`'s `straddles` docstring, which makes one
+predicate serve both the badge and `queue.eligible`, stays true; the claim that Tonight reads the
+same constant is in `api/tonight.py`'s `_z` and is M4.12's to correct. The rank-domain stage reports
+the measured fraction it observes, so M4.12 inherits a number rather than a promise.
+
+### 206. Findings 27 and 28 carry no coverage row, even though vitest ids are now registrable
+
+**What the spec says.** `docs/TESTING.md` makes the coverage map the contract: one row per testable
+requirement, and a row is a claim about a spec requirement that some test asserts.
+
+**Why it changes.** The plan's coverage section opens with a gotcha — "**Vitest tests cannot be
+registered.** A row naming `frontend/src/lib/rank.svelte.test.js::...` fails
+`test_every_named_test_exists`" — and concludes that the frontend-only repairs either earn an e2e
+assertion or carry no row. M4.9 added `_vitest_ids()` to `test_spec_coverage.py`, so the premise is
+false: a row may now name a frontend test. The count is the binding half, though. Clause 8 of the
+exit criterion reads `M4.10 10/10 covered`, and an eleventh row would make that sentence false the
+day it was written.
+
+**The decision.** No rows. The ten listed rows are the whole contract. Neither finding 27 (Rank
+carries the film filters onto the Series board) nor finding 28 (the long-press duel bound to an
+outcome rather than to a card) is a requirement the map is missing — both are defects under rows that
+already exist, and registering them would also make the frontend stage's vitest titles
+build-breaking names for no coverage gain. The stale sentence is corrected in the milestone's report
+rather than by adding rows, and the coverage-and-spec stage confirms the report prints exactly
+`M4.10 10/10 covered`.
+
+**Cost.** Two real repairs ship with real vitest tests that no row names, so a later deletion of
+either test breaks no build. That is the same trade every vitest test in the repository carried
+before M4.9, and it is named here rather than discovered later.
+
+### 207. The journal's `prior_state.pushed` is corrected after the push, not left false
+
+**What the spec says.** §7.3 makes the app authoritative and `jf_synced_at` the loop's bookkeeping;
+§3.3 says the app must work when Jellyfin is down. §4.2's `rate_observation` is the journal undo
+reads to compensate.
+
+**Why it changes.** Step 4 moves the Jellyfin round trip out of the verdict transaction, so the
+journal row is written before the push resolves, and `_state_entries` (`rate/session.py:694-702`)
+would record `pushed: false` for a title Jellyfin was in fact told about. Its own docstring says what
+the field is for — "what `user_title` held, plus whether we reached Jellyfin. Undo compensates what
+it did, not what it intended" — so a permanently false `pushed` makes `undo` skip the compensating
+Played write, leaving the media server marked Played against an app row that says otherwise and
+letting §7.3's next sweep adopt it back.
+
+**The decision.** The follow-up UPDATE. After `push_owed` returns, `record_verdict` /
+`record_not_seen` / `record_correction` update the journal row's `prior_state` entries with the real
+`pushed` value: one statement, outside the observation transaction, best-effort, and logged if it
+fails. The coverage row decides between the two options the plan offers —
+`library-rate-the-jellyfin-push-is-outside-the-verdict-transaction`'s `what` requires that "the
+journal's `prior_state.pushed` and §7.3's `jf_synced_at` bookkeeping are unchanged whether the push
+succeeds, fails or is owed", and leaving the field false changes it.
+
+**Cost.** One extra statement per tap on the path §6's preamble budgets at under two seconds, and a
+window between the two writes in which the journal understates what happened — bounded by the push
+itself, and closed by the tap. This paragraph first read that an undo in that window merely "skips a
+compensation that §7.3's sweep then reconciles from `jf_synced_at`", and that was false: undo deletes
+the `user_title` row a first verdict created, so the sweep finds an absent row plus a Played flag and
+*adopts* it — the app reading its own write back as the household's history. So the follow-up UPDATE
+carries `AND undone_at IS NULL` and, when it therefore matches nothing, the tap makes the
+`seen.retract` the undo could not. What is left is a Played flag held for the length of one push and
+then handed back, where the rejected option would have left it standing for ever.
+[corrected M4.10 cycle 2, M410-C2-F11-01]
+The field has exactly one reader, and it is not the sweep: `undo` (`rate/session.py`) loads the
+journal row's `prior_state` and gates the compensating Played write on it. `sync/seen.py` reads
+nothing from the journal — the `prior_state` its `retract` takes is a plain state string, deliberately
+a string so `sync` does not import from `ledger` — so an audit of this contract belongs in `undo`.
+The integration test asserts the field on the two outcomes it can reach: a push that succeeded, and a
+push owed because the title carries no `jellyfin_id`. A Jellyfin refusal and a household with no
+connector at all are asserted nowhere; both land on `_mark_pushed`'s early return, which the owed
+case already walks, so what is untested is the entry rather than the branch.
+
+### 208. A password change rotates the caller's own session and issues a fresh cookie
+
+**What the spec says.** §3.2 makes the session cookie the credential a device holds for ninety
+sliding days, and §3.1 makes `POST /api/auth/password` the way out of the forced first-login lock —
+the one route where the credential behind the cookie changes underneath it. §3.2 also says logout
+clears the session cookie only.
+
+**Why it changes.** M4.6 diagnosed `13-rank.spec.js`'s WebKit failure and split it in two: a harness
+half, which M4.8 fixed under decision 186, and an app half recorded as M4.10's. The app half is this.
+Today the route answers 200 with no `Set-Cookie` and keeps the caller's own session row
+(`api/auth.py:307`, `destroy_other_sessions(..., keep=user.session_id)`), so the session identifier
+that existed under the old password stays live. That is the session-fixation shape the project
+refuses everywhere else: `test_account_security.py`'s own docstring records that login, PIN and
+switch each "destroy the session their own cookie names before minting the new one" (dd24), inside a
+transaction so a failure leaves the device holding what it arrived with. The password route is the
+fourth member of that family and the only one not doing it. The client-visible ambiguity is the
+second reason: a response that changes the account's credential and says nothing about the cookie
+leaves every HTTP client to guess, and at least one — WebKit's `APIRequestContext` — guesses
+differently from its own browser context, which is the divergence the harness has been working
+around.
+
+**The decision.** Rotate. `POST /api/auth/password` destroys every session for the account including
+the caller's own and mints a new one, inside the `write_txn` it already opens for the hash, the
+lockout counters and the revoke; the response carries the single `Set-Cookie` that
+`deps.set_session_cookie` writes. `sessions_revoked` keeps its present meaning — other devices ended
+— because that is the number the surface prints and the promise the route's docstring makes.
+Decision 179's reachable set survives the rotation unchanged: the new session is minted for the
+same `user.id` the caller already held, so a member who changes their password from a PIN-switch
+session stays on that member's profile, and the four routes reachable while §3.1's lock stands
+stay the four — the fresh cookie carries the device past the lock that the same transaction has
+just cleared. §3.2 gains one sentence saying that a password change rotates the session it was
+made from.
+
+**Cost.** One more write inside a transaction that already holds three, and one response header where
+there was none. `e2e/helpers.js`'s re-login workaround stays in place — it is what a member holding a
+password can always do, and the browser gate is not run in this build — but its "M4.10 owns it"
+sentence is replaced by this decision's answer. `test_account_security.py:594`'s rollback test still
+holds, because the rotation is inside the same transaction as the writes it already covers: a failure
+anywhere leaves the old password and the old session standing. No coverage row is added; the auth
+stage adds tests beside the existing dd24 ones and reports them.
+
+### 209. An empty board says whether the fit is owed, and never reads as "you have not started"
+
+**What the spec says.** §6.3 makes the board "every rated title" of one kind, in tiers, best-first,
+and §5.2 makes the tier arm's *fitted* cutpoints the displayed boundaries — so what this surface
+renders is the fit, not the verdicts behind it. §5.3 budgets the two Ledger jobs apart: "Ledger
+incremental update | every observation | <50 ms" and "Ledger full MAP refit + cutpoints + σ |
+nightly | seconds". §6.8 governs the words: quiet reasons, and a why-line on every surface.
+
+**Why it changes.** This is §6.3 against §5.3 — what the board promises to show against what a
+request is allowed to cost — and M4.10's finding 9 is where the two met with nothing mediating them.
+The incremental path used to run the full MAP fit inline whenever the fit cache missed — measured at
+0.39 s over 300 titles and 33.4 s over 4000, on the event loop, for an observation the caller had
+already committed — and the commonest miss of all is the first tap ever per (user, kind). It now
+stamps `ledger_cutpoints.refit_requested_at` and returns; `worker.py`'s `tier-set-refit` job
+services it at `every=60`. That is §5.3 obeyed and it stays: the fit is **owed, not missing**, and
+no observation is lost — `verdict`, `duel` and `tier_edit` are all durable before the stamp is
+written, and the sweep's fit is the same fit the night would have run.
+
+The §6.3 half was left unstated. The board route reads `ledger_state`, and until that fit lands a
+first-sitting member has no row in it: measured directly, eight verdicts written, `verdict` rows 8,
+`ledger_state` rows 0, board `rated: 0, rated_total: 0` with every tier empty — and servicing the
+owed refit exactly as the worker does gives `rated: 8`. So somebody who has just rated ten films
+opens Rank and is told they have rated none, in the same words, from the same payload, as a member
+who has never opened Rate. That is an instrument whose healthy reading equals its broken one, which
+is the shape this project keeps removing; and it is a §6.8 failure twice over, because proposal 80's
+empty state and the board's own why-line each state the false count independently.
+
+**The decision.** Make the board distinguish the two states, and do not make the route wait. `GET
+/api/rank` (and every route that answers with a board) carries `fitting`: true exactly when
+`refit_requested_at` is set for that `(user, kind)`. The signal is not new state — it is the stamp
+the queued fit already writes, read from the `ledger_cutpoints` row `read.cutpoints_of` fetches
+anyway, so the board costs no extra query and no migration. With nothing yet readable and a fit
+owed, the member sees "Nothing is missing — your first tiers are still being fitted. They appear
+here shortly.", the handoff to Rate beside it, and a why-line that says tiers are still being fitted
+instead of counting to zero. "Shortly" and no number: the sweep's period is 60 s and a queue ahead
+of you is allowed, so a duration would be a promise the app cannot keep. A member whose board is
+genuinely empty — nothing rated, nothing owed — keeps proposal 80's existing copy unchanged, and a
+board that already has rows keeps its count whether or not a refit is owed over it (that window is
+decision 11's, and it has its own copy). No knob, no poll interval, no configurable message; the
+next board read is what clears the state, and the surface already re-reads on every kind switch,
+filter change and tap. §6.3 gains no sentence: the clause it already has is the one being honoured —
+what changes is that the surface stops describing an owed fit as an empty ledger.
+
+**Cost.** One boolean on the wire, one field on `read.Cutpoints`, one branch in the board's
+why-line, one branch in `emptyState()`, and the key added to `ops/devstub.py`'s board payload so the
+harness is not the one place the client reads an absence. No migration: 0012 added the column and
+M4.10's 0019 allocation stays unused. One imprecision is accepted rather than papered over: the
+stamp records that a fit is owed and not why, so a member who changes their tier-set count before
+rating anything — the only other writer of that column — reads the fitting copy for at most one
+sweep instead of the unrated copy. The copy claims nothing about their ratings for that reason, it
+is self-healing at the next sweep, and the alternative is a second column recording a reason, which
+is inventing state to describe state. No e2e spec changes: `13-rank.spec.js` already waits this
+window out through `waitForBoard` — a helper finding 9 made necessary, and the browser gate's own
+record that the window is real — and the `rank-why` assertion it makes is on the half of the line
+both branches keep. Registered on
+`tonight-rank-no-route-raises-after-its-observation-commits`, whose `what` is widened by a clause
+and whose comment already states this rule in finding 9's own words — "what the person reads is the
+truth: the fit is owed, not lost". Decision 206's count of ten coverage rows is untouched.
+
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

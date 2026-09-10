@@ -80,14 +80,35 @@ class CorrectionBody(BaseModel):
 def _hyperparams(request: Request) -> Hyperparams:
     """§4.3's constants, from the active bundle when there is one.
 
-    `app.state.hyperparams` is where the nightly job's copy lives once startup sets it; until
-    then this reads the same file the job would. §3.1 makes a bundle-less household legal, so
-    the fallback is the documented defaults and never an error.
+    `app.state.hyperparams` is where the lifespan's one read lands (`app.py`), and that is the
+    normal path: §10 makes a bundle swap a restart, so nothing in a running process can change
+    these numbers and re-reading the file per tap bought nothing but a file read, a
+    `from_mapping` validation and a discarded note list on every request.
+
+    The fallback stays because tests construct the app without its lifespan, and because §3.1
+    makes a bundle-less household legal — there the defaults are the honest answer. What it no
+    longer does is let `from_mapping`'s `ValueError` out: a hand-edited or badly restored
+    constant turned every Rate write and every Rank board into a 500 for everyone, with nothing
+    on screen saying why. Refused with a 503 instead, and deliberately NOT defaulted: the
+    defaults have a different `hp_digest`, so serving them would invalidate every cached fit in
+    the install and re-fit the whole household behind a number nobody chose. [M4.10 finding 10]
+
+    `OSError` beside `ValueError` because `hyperparams.load` no longer reads a constants file that
+    is present and unopenable — a path that is a directory, a dangling symlink — as an absent one:
+    the refusal this clause exists to render is the same refusal whether the file cannot be parsed
+    or cannot be opened, and only a silent fall back to DEFAULTS would be worse than either.
+    [M4.10 cycle 1, M410-R1-03 / M410-R1-06]
     """
     cached = getattr(request.app.state, "hyperparams", None)
     if cached is not None:
         return cached
-    hp, notes = hyperparams.load(getattr(request.app.state, "artifacts", None))
+    try:
+        hp, notes = hyperparams.load(getattr(request.app.state, "artifacts", None))
+    except (ValueError, OSError) as exc:
+        log.error("ledger_hyperparams.json is unusable: %s", exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "ledger constants unreadable - see backend log"
+        ) from exc
     for note in notes:
         log.debug("hyperparameters: %s", note)
     return hp

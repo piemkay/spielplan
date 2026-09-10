@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.9"
+current_milestone = "M4.10"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -535,10 +535,30 @@ id = "library-rate-undo-block-depth"
 spec = "decision 35 + §6.1 (blocks of 15)"
 milestone = "M2"
 kind = "integration"
-what = "Undo reaches back only to the start of the current block of 15: repeated Undo stops at the block's first observation and the response reports undo as unavailable rather than silently no-opping, and once a new block starts the previous block's observations are no longer undoable."
+what = "Undo reaches back only to the start of the current block of 15: repeated Undo stops at the block's first observation and the response reports undo as unavailable rather than silently no-opping, and the previous block stays reachable until the first observation of the new block lands — so the fifteenth tap is undoable and the sixteenth commits the block it ended."
 why = "Decision 35: the depth matches the counter the user is already reading (\"7 / 15 this block\"), the boundary is refused explicitly rather than silently, and starting a new block commits the previous one."
+# The commit point moved in M4.10 under decision 199, which is decision 174's ruling applied: a block
+# is committed when the FIRST observation of the next block lands, "which is literally what decision
+# 35 says". `advance` rolls the block on the fifteenth observation, so the chip disabled on the same
+# round trip that answered card 15 — 6.7% of every observation a household makes, on the last tap of
+# a run where fatigue mis-taps live, and in explicit Battle mode a duel, which has no supersede path.
+# `advance` and the journal's stored block and slot are unchanged; only undo's reach moved.
+# [M4.10 finding 25, rrh-fifteenth-tap-is-permanent]
+#
+# The static pair is cycle 2's, and it is about the artefacts rather than the rule. Decision 199's
+# Cost paragraph listed three statements of the commit point that change with it; the diff amended
+# those three and left a fourth, `test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block`'s
+# docstring, still calling the roll "decision 35's commit" — in the same file as the test that holds
+# the rule the code has, 870 lines above it, so the next reader of the block machine found two
+# in-repo answers and no way to tell which was current. A sentence is not amended by the diff that
+# contradicts it, so the agreement of the four statements is a rule now, with a self-test because
+# the true wordings and the false ones are built from the same words.
+# [M4.10 cycle 2, M410-C2-D19-04]
 tests = [
     "backend/tests/test_rate_session.py::test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_opping",
+    "backend/tests/test_rate_session.py::test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands",
+    "backend/tests/test_static_contracts.py::test_nothing_still_commits_the_block_of_fifteen_on_the_roll",
+    "backend/tests/test_static_contracts.py::test_the_commit_point_guard_catches_each_way_the_old_reading_was_said",
     "backend/tests/test_rate_session.py::test_undo_walks_back_to_the_first_observation_of_the_block_and_then_refuses",
     "backend/tests/test_rate_session.py::test_the_route_reports_undo_as_unavailable_rather_than_no_opping",
     "e2e/specs/11-rate.spec.js::the counter runs to 15 and rolls, and Undo then disables visibly at the boundary",
@@ -741,15 +761,31 @@ id = "library-rate-pending-verdicts-banner"
 spec = "§6.0 M2 (pending-verdicts banner) + §7.3"
 milestone = "M2"
 kind = "integration"
-what = "The banner's population is exactly the titles the user has marked seen and given no verdict, at most three named; its CTA opens the §6.1 queue with those titles at the head of the queue, not at whatever position the standing queue held."
+what = "The banner's population is exactly the titles the user has marked seen and given no verdict, at most three named, and names only titles the live session's kinds can serve; its CTA opens the §6.1 queue with those titles at the head of the queue, not at whatever position the standing queue held, and carries `head=` alone."
 why = "The banner is §7.3's capture prompt given a permanent surface; naming titles and then presenting a different card is worse than no prompt."
+# Both new clauses are M4.10's. The population was built with no kind predicate, so a films-only
+# session with a seen-but-unrated series got a banner naming the series and a CTA that landed on an
+# unrelated film — proposal 150's own failure mode, reached by the surface that quotes it. And the
+# CTA appended `mode=sweep`, which `api/rate.py`'s `current` does not declare and
+# `routes/rate/+page.svelte` does not read (it reads `head` only, at :75 and :99): decision 203
+# removes the dead parameter from this CTA and from the empty-state CTA rather than teaching
+# `GET /api/rate` a `mode` argument nothing asks for. [M4.10 finding 23,
+# rrh-banner-names-a-title-the-session-cannot-serve]
+#
+# The harness carries both clauses too, because it is what Home is developed against on :5173 and it
+# was the last producer of `/rate?mode=sweep&head=...` anywhere in the tree. Neither generic devstub
+# guard can see that: one compares OpenAPI paths, the other required query parameters, and a dead
+# parameter inside a link in a response body is in neither document.
+# [M4.10 review cycle 1: M410-D8-06, M410-REV1-D203-04]
 tests = [
     "backend/tests/test_home.py::test_the_banner_is_exactly_the_seen_titles_with_no_live_verdict",
     "backend/tests/test_home.py::test_the_banner_that_names_at_most_three_counts_the_rest",
     "backend/tests/test_home.py::test_three_pending_titles_are_all_named",
     "backend/tests/test_home.py::test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head",
     "backend/tests/test_home.py::test_following_the_banners_own_link_serves_the_first_named_title",
+    "backend/tests/test_home.py::test_the_banner_names_only_the_kinds_the_live_session_can_serve",
     "backend/tests/test_home.py::test_rendering_home_writes_nothing",
+    "backend/tests/test_devstub_contract.py::test_the_harness_serves_the_banner_population_and_link_the_app_serves",
 ]
 
 [[requirement]]
@@ -771,14 +807,32 @@ id = "library-rate-mix-alternates-blocks"
 spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\")"
 milestone = "M2"
 kind = "integration"
-what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and flips the served card type between sweep and battle, so a run of duels still returns sweep cards; the counter runs 1..15 and rolls into a new block."
+what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and flips the served card type between sweep and battle, so a run of duels still returns sweep cards — including across the block boundary; the counter runs 1..15 and rolls into a new block."
 why = "Mix is the default mode and the block of 15 is the unit Undo's depth and the counter copy both hang off (decision 35)."
+# The boundary clause is M4.10's. `card_type_for` was a pure function of the slot and returned sweep
+# on odd slots, and `advance` rolls slot 15 to slot 1: fifteen is odd, so every block ended and the
+# next began with a sweep — eight sweeps to seven battles and one consecutive-same pair per block,
+# which over §6.1's 50-100-verdict target is three to seven fewer duels than the clause promises, in
+# the arm §5.2 credits with within-liked resolution. Decision 200 derives the type from the monotone
+# observation index over (block, slot) rather than amending §6.1, keeping slot 1 of the FIRST block a
+# sweep; the test that asserted alternation from the slot could not see the boundary it stood on.
+# [M4.10 finding 24, cs-64]
+#
+# The static pair is the register's half. Decision 200's own text named `rate_session.seq` — the
+# journal's row count, which a correction advances and Undo does not rewind — so the binding record
+# described an implementation `observation_index`'s docstring argues at length against. A later
+# milestone citing the decision would have rewired the call site onto that column, and nothing in
+# the list above distinguishes the two counters: they agree on every plain answer.
+# [M4.10 review cycle 1: M410-D8-04, M410-REV1-D200-02]
 tests = [
     "backend/tests/test_rate_session.py::test_mix_alternates_on_the_counter_and_not_on_the_last_card_served",
     "backend/tests/test_rate_session.py::test_a_run_of_duels_still_returns_sweep_cards",
     "backend/tests/test_rate_session.py::test_every_kind_of_observation_advances_the_counter_by_exactly_one",
     "backend/tests/test_rate_session.py::test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block",
-    "backend/tests/test_rate_session.py::test_the_card_type_is_a_pure_function_of_the_slot_and_the_block_rolls_at_fifteen",
+    "backend/tests/test_rate_session.py::test_the_card_type_is_a_pure_function_of_the_monotone_counter_and_the_block_rolls_at_fifteen",
+    "backend/tests/test_rate_session.py::test_mix_keeps_alternating_across_the_block_roll",
+    "backend/tests/test_static_contracts.py::test_decision_200_names_the_counter_the_card_type_is_derived_from",
+    "backend/tests/test_static_contracts.py::test_the_decision_200_counter_guard_catches_each_way_it_was_said",
     "e2e/specs/11-rate.spec.js::a fresh session opens in Mix, at 1 / 15, on a sweep card that says why it is here",
     "e2e/specs/11-rate.spec.js::Mix alternates on the counter, so an answered duel is followed by a sweep card",
     "e2e/specs/11-rate.spec.js::the counter runs to 15 and rolls, and Undo then disables visibly at the boundary",
@@ -827,6 +881,7 @@ tests = [
     "backend/tests/test_rate_queue.py::test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending_p_seen",
     "backend/tests/test_rate_queue.py::test_p_seen_moves_the_queue_when_a_signal_moves",
     "backend/tests/test_rate_queue.py::test_every_card_carries_the_one_line_why_that_names_its_dominant_cause",
+    "backend/tests/test_rate_queue.py::test_the_age_why_line_prints_the_titles_real_age_and_not_the_saturation_point",
     "backend/tests/test_rate_queue.py::test_a_title_the_app_already_holds_as_seen_leads_the_queue",
 ]
 
@@ -988,14 +1043,30 @@ id = "tonight-rank-straddle-equals-eligible"
 spec = "§6.3 badges and queue (proposals 157, 76)"
 milestone = "M3"
 kind = "backend"
-what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, and the threshold constant is read from ledger_hyperparams.json rather than hard-coded."
+what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, the reach is restricted to the two ADJACENT tiers and when the posterior reaches both neighbours it names the nearer cut, and the threshold constant is read from ledger_hyperparams.json rather than hard-coded."
 why = "One predicate doing both jobs; the prototype badged at σ>0.13 and queued at σ>0.09, so a title at σ 0.11 was queue-eligible and unbadged, and an S-tier title rendered 'S/S'."
+# The adjacency half was in the row from the start and nothing asserted it, which is how
+# `model.straddle` came to set the reach to `searchsorted(lo)` whenever it differs from the tier: a
+# wide posterior crossing two cuts is reported two tiers down (badge "B/F" on a five-tier board),
+# and because the lower reach is tested first a title 0.1 below its upper cut and 0.9 above its
+# lower one is badged downward. `queue._boundary` consumes the same value, so the pairs drawn to
+# settle a boundary can be pairs that do not span it. The ±z·σ predicate itself stays, and
+# `straddle_z` is NOT retuned here — decision 205 leaves 175's retune and Tonight's borrowed z to
+# M4.12. [M4.10 finding 13, rrh-straddle-names-non-adjacent-tier-and-prefers-downward]
+#
+# `test_restricting_the_named_tier_does_not_narrow_the_straddling_set` passes on both sides of that
+# fix by design, and is registered anyway: this row's first clause is the identity between the
+# badged set and the queue pool, which is precisely what restricting the named tier could have
+# broken, and an unasserted identity is how the reach came to drift in the first place.
 tests = [
     "backend/tests/test_rank_board.py::test_the_badged_set_and_the_queue_pool_are_the_same_set",
     "backend/tests/test_rank_board.py::test_moving_the_straddle_threshold_moves_both_sets_together",
     "backend/tests/test_rank_board.py::test_the_top_and_bottom_tiers_never_straddle_into_themselves",
     "backend/tests/test_rank_board.py::test_a_straddle_badge_never_repeats_the_titles_own_tier",
     "backend/tests/test_ledger_model.py::test_a_posterior_that_reaches_the_next_tier_is_flagged",
+    "backend/tests/test_ledger_model.py::test_a_straddle_never_names_a_tier_that_is_not_adjacent",
+    "backend/tests/test_ledger_model.py::test_a_posterior_reaching_both_neighbours_names_the_nearer_cut",
+    "backend/tests/test_ledger_model.py::test_restricting_the_named_tier_does_not_narrow_the_straddling_set",
 ]
 
 [[requirement]]
@@ -1003,8 +1074,18 @@ id = "tonight-rank-queue-selection-mix"
 spec = "§6.3 comparison queue"
 milestone = "M3"
 kind = "backend"
-what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, and the held-out 10% feeds neither the selection rule nor any tier-model quality figure."
+what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, the held-out 10% feeds neither the selection rule nor any tier-model quality figure, and the exploration arm's anchor is the least-compared title on the WHOLE pool and never re-serves a pair already asked — in the arm, through `draw`, and through `GET /api/rank/queue`, which is where the set is read and forwarded."
 why = "The adaptive-inflation guard: adaptively selected pairs inflate measured reliability, so the evaluation stream cannot be the selection stream."
+# The exploration clause is M4.10's. `queue.py`'s `away = [c for c in pool if c.straddle is None] or
+# list(pool)` inverts the moment one title leaves the straddle set: the arm then draws from the
+# handful the model is MOST sure about, and because the route's incremental update shrinks exactly
+# those two titles' sigma without moving the cutpoints they never leave. Simulated over 500 answers
+# with the route's own semantics: from answer 110 `|away|` was 1-2 of 900, one pair served 78 of 109
+# exploration draws, and its anchor ended with the most comparisons on the board (88) while the
+# §6.7 line read "the least-compared title on your board". Each repeat counts as an independent
+# Davidson row. `test_exploration_reaches_the_least_compared_title` and
+# `test_exploration_rotates_as_comparisons_accrue` pass today against that collapse and are
+# strengthened. [M4.10 finding 12, dd07-exploration-arm-locks-onto-settled-titles]
 tests = [
     "backend/tests/test_rank_queue.py::test_a_long_draw_is_seventy_twenty_ten",
     "backend/tests/test_rank_queue.py::test_the_shares_are_the_specs_own_numbers",
@@ -1015,17 +1096,64 @@ tests = [
     "backend/tests/test_rank_queue.py::test_a_boundary_pair_crosses_the_cutpoint_the_title_straddles",
     "backend/tests/test_rank_queue.py::test_exploration_reaches_the_least_compared_title",
     "backend/tests/test_rank_queue.py::test_exploration_rotates_as_comparisons_accrue",
+    "backend/tests/test_rank_queue.py::test_exploration_anchors_on_the_least_compared_title_of_the_whole_pool",
+    "backend/tests/test_rank_queue.py::test_exploration_never_re_serves_a_pair_it_has_already_asked",
     "backend/tests/test_rank_queue.py::test_a_pair_is_never_a_title_against_itself",
     "backend/tests/test_rank_queue.py::test_the_selector_reads_no_held_out_comparison",
+    "backend/tests/test_rank_integration.py::test_the_asked_set_leaves_the_held_out_stream_out_of_the_selector",
+    "backend/tests/test_rank_routes.py::test_the_queue_never_re_serves_a_pair_this_person_has_answered",
 ]
+# The route leg is cycle 1's. The no-repeat property was asserted of `queue._exploration` over 200
+# draws and then, through `draw`, behind `if served.arm == queue.ARM_EXPLORATION:` on a single draw
+# whose roll off that generator's state is 0.968 — the held-out band, so the branch never ran. The
+# two forwarding hops the route depends on (`_draw` -> `draw` -> `_exploration`) were therefore
+# covered by nothing: dropping `asked=asked` from `draw`'s two calls left the whole suite green
+# while the arm re-served answered pairs. The `draw` clause is counted now rather than guarded, and
+# the route leg answers six pairs in a row on the fixture's own board. [M4.10 cycle 1, M410-REV3]
 
 [[requirement]]
 id = "tonight-rank-drop-writes-observations"
 spec = "§6.3 drag-and-drop"
 milestone = "M3"
 kind = "integration"
-what = "Dropping a title into a tier writes exactly one tier_edit with via='drag_drop'; dropping it between two titles writes that edit plus exactly two duels against the two new neighbours with context='tier_insert' and margin NULL."
+what = "Dropping a title into a tier writes exactly one tier_edit with via='drag_drop'; dropping it between two titles writes that edit plus exactly two duels against the two new neighbours with context='tier_insert' and margin NULL. A drop into a tier that names no position writes the edit and NO duel, which is the body the phone's tap actually posts; a named neighbour that is not in the target tier is refused 422 and nothing is written; and a drop made while any filter is active writes the edit and no neighbour duels (decision 204)."
 why = "Drag-and-drop is data, not override — the rearrange is an observation into the Ledger, and the two neighbour duels are what carry the placement."
+# The three new clauses are M4.10's. §6.3 reserves the margin-less duels for a drop BETWEEN two
+# titles, and `rank.svelte.js` returned `{above: <last entry>, below: null}` whenever
+# `beforeTitleId` was null — which is both the phone tap and a pointer drop on a row's empty space —
+# so on the primary form factor every promotion into a non-empty tier wrote an append-only
+# comparison the person never made, always in the same direction. The two tests closing this row
+# called `drop.drop()` with no neighbours, a body the shipped client never sent for a non-empty
+# tier. The filtered case is decision 204: the client reads neighbours from the board AS FILTERED,
+# so "between" is a fact about what was on screen and the titles the filter hid may sit between the
+# two that did not. [M4.10 findings 17, 18: cs-03, cs-60]
+#
+# The row gains no concurrency clause and the drop route gains no 409: decision 202 rules that a
+# drop carries no seal, so two identical drops a minute apart are two legitimate gestures and a
+# refusal would encode the opposite. What the gathered-drops test holds is this row's own claims
+# under a race — at most one `tier_edit` per drop, at most one pair of neighbour duels, and no
+# stored neighbour outside the target tier — which is the exit criterion's clause 3 as 202 narrowed
+# it.
+#
+# Cycle 2 found that version inert. Gathered with the SAME body twice, neither request can move the
+# neighbour either of them names, so all five of its assertions held under every interleaving and at
+# the M4.9 head — a clause of the exit criterion discharged by a test with no reachable red. The
+# pair disagrees now: one drop names title 1 as its neighbour while the other pulls title 1 out of
+# the tier, which is the one shape in which a duel can be stored against a placement nobody made.
+# What it asserts is ORDER and not the final board, because the mover legitimately leaves the
+# neighbour elsewhere — `tier_edit.id` is a bigserial, so an accepted sandwich has to be the earlier
+# insert, which is the neighbour check and the duel being one gesture. The identical pair stays as
+# the first half, because decision 202's own claim is that it is answered twice.
+# [M4.10 cycle 2, M410-C2-D202-02]
+#
+# Decision 204's Cost paragraph promised that `test_the_drop_route_answers_with_the_board_under_the_
+# filters_it_was_given` would gain the duel-count assertion, and cycle 1 found that it had not: the
+# only decision-204 assertion handed `filtered=True` to `drop.drop` itself, so `api/rank.py`'s
+# `filtered=bool(filters.active())` — the one line joining the decision to the surface — could be
+# deleted with this row green and a filtered two-neighbour gesture would store two comparisons
+# nobody made. It is asserted now as an A/B on one body under `q=Title`, which matches every title
+# in that fixture, so the board is the same board and the filter flag is the only difference.
+# [M4.10 cycle 1, M410-REV1-D204-01]
 tests = [
     "backend/tests/test_rank_integration.py::test_dropping_into_a_tier_writes_one_tier_edit_and_no_duel",
     "backend/tests/test_rank_integration.py::test_dropping_between_two_titles_writes_the_edit_and_two_margin_less_duels",
@@ -1034,8 +1162,12 @@ tests = [
     "backend/tests/test_rank_integration.py::test_a_drop_is_one_transaction",
     "backend/tests/test_rank_integration.py::test_the_board_renders_the_drop_and_does_not_snap_it_back",
     "backend/tests/test_rank_integration.py::test_tap_to_tier_writes_exactly_what_the_pointer_path_writes",
+    "backend/tests/test_rank_integration.py::test_a_drop_naming_a_neighbour_that_is_not_in_the_target_tier_is_refused",
+    "backend/tests/test_rank_integration.py::test_a_drop_naming_a_neighbour_that_is_not_on_the_board_is_refused",
+    "backend/tests/test_rank_integration.py::test_a_drop_under_an_active_filter_writes_the_edit_and_no_neighbour_duels",
     "backend/tests/test_rank_routes.py::test_the_drop_route_answers_with_the_board_under_the_filters_it_was_given",
     "backend/tests/test_rank_routes.py::test_the_drop_route_refuses_a_tier_outside_the_set_and_writes_nothing",
+    "backend/tests/test_rank_routes.py::test_two_gathered_drops_leave_the_board_consistent",
     "e2e/specs/13-rank.spec.js::dragging a title onto another writes the edit and two neighbour duels",
 ]
 
@@ -1060,11 +1192,17 @@ id = "tonight-rank-tap-to-tier-and-cancel"
 spec = "§6.3 phones (proposals 74, 75)"
 milestone = "M3"
 kind = "e2e"
-what = "On a phone, tapping a title lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes; re-tapping the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
+what = "On a phone, tapping a title lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes — and no duel: a drop into a tier that names no position writes the edit alone, which is the body the phone's tap actually posts. Re-tapping the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
 why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift with an undiscoverable exit is the classic tap-to-move failure."
+# The zero-duel clause is M4.10's, and it belongs on this row as much as on
+# `tonight-rank-drop-writes-observations`: on phones — §6.3's primary form factor — tap-to-tier is
+# the ONLY way to move a title, so the fabricated neighbour duel was not an edge case but every
+# promotion into a non-empty tier. The e2e tap test asserts zero `tier_insert` duels.
+# [M4.10 finding 17, cs-03]
 tests = [
     "e2e/specs/13-rank.spec.js::a title lifts on a tap and puts itself down again, writing nothing",
     "e2e/specs/13-rank.spec.js::tapping a tier drops the lifted title into it, and it stays there",
+    "e2e/specs/13-rank.spec.js::a tap into an occupied tier writes the edit and no neighbour duel",
     "backend/tests/test_rank_integration.py::test_tap_to_tier_writes_exactly_what_the_pointer_path_writes",
     "e2e/specs/13-rank.spec.js::every control on the board meets the 48 px touch floor",
 ]
@@ -1137,8 +1275,16 @@ id = "tonight-rank-neighbourhood-badge"
 spec = "§6.3 badges"
 milestone = "M3"
 kind = "backend"
-what = "A title's badge names its tier and its neighbourhood — the titles immediately above and below it in the same tier, in the ledger order the board renders — and a title alone in its tier, or at either end of it, names only the neighbours that exist rather than inventing one or naming itself."
+what = "A title's badge names its tier and its neighbourhood — the titles immediately above and below it in the same tier, in the ledger order the board renders — and a title alone in its tier, or at either end of it, names only the neighbours that exist rather than inventing one or naming itself; the straddle chip is built from the posterior's own placement, so a dropped title's chip never pairs its assigned tier with the model's reach."
 why = "§6.3: \"Badge shows tier + neighbourhood (\\\"A — between Heat and Prisoners\\\")\". A neighbourhood computed over an ordering other than the one on screen is unverifiable, and the ends of a tier are exactly where an off-by-one produces a badge that names the title it is attached to."
+# The chip clause is M4.10's and lives here rather than on `tonight-rank-straddle-equals-eligible`,
+# which owns the predicate: this is the row about what the badge RENDERS. `board.py` builds the chip
+# as labels[rendered]/labels[reached] where `rendered` is the assigned tier and `reached` comes from
+# the model's own — two halves describing different placements, so s=0.9 σ=1.0 with model tier A
+# dropped into S renders "S/B", two tiers the posterior does not span, omitting the one it occupies;
+# the mirror case suppresses the chip on a title `straddles()` still returns non-None for, breaking
+# the identity §6.3 states in one sentence. `test_rank_board.py:279` asserts "the badge leads with
+# the rendered tier" and is inverted. [M4.10 finding 14, cs-18]
 tests = [
     "backend/tests/test_rank_board.py::test_the_badge_names_the_two_neighbours_inside_its_own_tier",
     "backend/tests/test_rank_board.py::test_the_ends_of_a_tier_name_only_the_neighbour_that_exists",
@@ -1146,7 +1292,16 @@ tests = [
     "backend/tests/test_rank_board.py::test_the_badge_never_names_the_title_it_is_attached_to",
     "backend/tests/test_rank_board.py::test_a_neighbour_is_never_borrowed_from_another_tier",
     "backend/tests/test_rank_board.py::test_within_a_tier_the_board_is_ordered_by_the_ledger",
+    "backend/tests/test_rank_board.py::test_the_straddle_chip_is_built_from_the_posteriors_own_placement",
+    "backend/tests/test_rank_board.py::test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_chip",
+    "backend/tests/test_rank_board.py::test_the_badged_set_and_the_queue_pool_are_the_same_set",
 ]
+# The last id is registered here by cycle 1 of this milestone's review, and it is the chip clause at
+# scale rather than at a point. The dropped-board run this milestone added asserted `straddle is not
+# None`, which `board.straddles` computes from `s` and `sigma` alone and which is therefore the same
+# value before and after finding 14's repair — so it passed on the board that shipped the bug. It
+# now asserts the CHIP set as well, and against the pre-M4.10 expression that fails on all six
+# seeds: 9 chips where 13 were owed, 6/9, 7/16, 6/16, 5/11, 5/7. [M4.10 cycle 1, M410-REV4]
 
 [[requirement]]
 id = "tonight-rank-cutpoints-learned-not-percentile"
@@ -1202,10 +1357,16 @@ id = "tonight-rank-queue-pair-is-single-use"
 spec = "§13 stream (a) + §6.1 card_token"
 milestone = "M3"
 kind = "integration"
-what = "A comparison-queue pair can be answered exactly once: the sealed pair carries the number of comparisons the person had answered when it was drawn, a second answer under the same seal is refused with §6.1's 409 and writes no duel, and one person's seal is refused for another account."
+what = "A comparison-queue pair can be answered exactly once: the sealed pair carries the number of comparisons the person had answered when it was drawn, a second answer under the same seal is refused with §6.1's 409 and writes no duel, one person's seal is refused for another account, and two concurrent answers under one seal write one duel, not two."
 why = "§13's agreement figure counts rows, so replaying one uniform-random pair weights a single judgement N-fold in the only data admitted to evaluate the tier model — and §4.2's tables are append-only, so a duplicate comparison cannot be taken back. §6.1 reaches the same property through `rate_session.card_token`; this surface claimed the equivalence without having it."
+# The concurrency clause is M4.10's: the single-use guard is a `SELECT count(*)` compared with the
+# seal and an INSERT two round trips later, in autocommit, so the row claimed a property that only
+# a sequential replay had ever tested. Four probes agree that two gathered answers wrote two rows
+# in most races with no injected latency. The gather test lands with the advisory lock.
+# [M4.10 finding 1, dd08-rank-queue-answer-double-write]
 tests = [
     "backend/tests/test_rank_routes.py::test_a_pair_can_only_be_answered_once",
+    "backend/tests/test_rank_routes.py::test_two_gathered_answers_under_one_seal_write_one_comparison",
     "backend/tests/test_rank_routes.py::test_a_drop_does_not_invalidate_a_pair_on_the_table",
     "backend/tests/test_rank_routes.py::test_one_persons_sealed_pair_cannot_be_answered_by_another",
     "backend/tests/test_rank_routes.py::test_the_whole_rank_surface_is_behind_a_session",
@@ -2521,7 +2682,9 @@ tests = [
     # The browser half. `ops/m49_exit_criterion.py` substitutes a key-injectivity check over the
     # dumped payloads for §7 measure 2's jsdom mount (this repository ships neither `jsdom` nor
     # `@testing-library/svelte`) and names this Playwright case as the render in a real browser;
-    # docs/TESTING.md:270 repeats that. Unregistered, the case was the one of the seven this
+    # docs/TESTING.md's M4.9 exit-criterion note repeats that (a phrase rather than the line it
+    # stood on: M4.10's ledger entry pushed that paragraph down by forty-six lines). Unregistered,
+    # the case was the one of the seven this
     # milestone added that `test_every_named_test_exists` held nothing about — so renaming or
     # deleting it, the natural move the first time it flakes on a bundle with no cross-department
     # title, would have taken the exit criterion's browser half with it and left the script and
@@ -3461,3 +3624,435 @@ tests = [
     "backend/tests/test_static_contracts.py::test_one_runtime_label_serves_every_surface",
     "backend/tests/test_static_contracts.py::test_the_runtime_sweep_catches_the_copies_it_is_written_for",
 ]
+# --- M4.10: the verdict path and the tier board (decisions 199-208; M4.10-plan.md) ----------
+#
+# One milestone because one shape, at four seams: `rate/session.py` and `api/rank.py` are the two
+# surfaces that write the Personal Ledger, and each guards its write with a read, then some work,
+# then a write, on a connection that autocommits every statement — the Rank queue seal, the Rate
+# card token, the skip journal append, and the tier-set PUT racing the worker's refit. The project
+# already owns the idiom that fixes all four (`tonight/play.py`'s two-int `pg_advisory_xact_lock`)
+# and uses it in exactly one place. The second half is the same story from the other end: the Rate
+# seam catches a refusing refit on purpose and the two Rank routes call it bare, after the
+# observation is durable, so one surface loses the tap and each retry writes another append-only
+# row. One agent applying one idiom at four seams writes one diff; four agents write four
+# incompatible transaction shapes into the same handler.
+#
+# The rows below land BEFORE the code, with no `tests` key, so the gate's red list is the milestone's
+# test plan and says which rows are still owed rather than which test names were guessed at. Each
+# stage fills in its own row's `tests` as the tests land. The list is closed by writing them — never
+# by a waiver, never by lowering `current_milestone`. `docs/TESTING.md`'s ledger block is re-pasted
+# whenever this report changes, which is what `test_the_testing_ledger_publishes_the_counts_the_gate_prints`
+# is for.
+#
+# Nine earlier rows are amended in place above rather than duplicated here: the concurrency clause on
+# `tonight-rank-queue-pair-is-single-use`, the adjacency and nearer-cut clauses on
+# `tonight-rank-straddle-equals-eligible`, the chip clause on `tonight-rank-neighbourhood-badge`, the
+# whole-pool exploration anchor on `tonight-rank-queue-selection-mix`, the no-duel and filtered-board
+# clauses on `tonight-rank-drop-writes-observations` and `tonight-rank-tap-to-tier-and-cancel`, the
+# kind filter and the dead `mode` parameter on `library-rate-pending-verdicts-banner`, the block
+# boundary on `library-rate-mix-alternates-blocks`, and undo's commit point on
+# `library-rate-undo-block-depth`. A defect under a row that already states the requirement is that
+# row's to assert; a new row is for a requirement the map was missing.
+# `jellyfin-acquisition-eval-cpu-job-budgets` is deliberately NOT amended: the inline-MAP-fit clause
+# is claimed once, by `tonight-rank-no-route-raises-after-its-observation-commits` below.
+#
+# Findings 27 and 28 (Rank carrying film filters onto the Series board; the long-press duel bound to
+# an outcome rather than to a card) get real vitest tests and no row, under decision 206: both are
+# defects under existing rows, and the exit criterion fixes this milestone's count at ten.
+#
+# CLOSED: all ten carry tests, no row carries a waiver, and `current_milestone` was never lowered.
+# Two rows cross a file the reader would not guess from the id, and each says so in its own comment:
+# the hyperparams row is asserted in `test_ledger_hyperparams.py` and `test_rank_routes.py` because
+# its `what` names a route in each router, and the no-raise row reaches `test_home.py` because the
+# rail-line half of it was repaired in `home/rail.py`.
+
+# Three findings, one repair: the card is claimed under a row lock as the first statement inside the
+# transaction the write already opens, and the refusal leaves through §6.1's own 409. One correction
+# to the plan's text, measured rather than inherited: since M4.7 `app.py` renders an
+# `asyncpg.UniqueViolationError` as a 409 naming the constraint, so the loser's answer was no longer
+# the blanket `500 {"detail": "database error"}` finding 2 describes — it was `409 "conflict:
+# rate_observation_seq"`, a reason in no stale set the client knows, logged as "unique violation
+# reached the application handler". The repair still stands on the other half of the finding, which
+# that handler cannot reach: the loser's Jellyfin Played write has already gone out by the time the
+# constraint fires, because the push was inside the transaction (finding 11).
+# [M4.10 findings 2, 3, 4, 7: dd08-rate-tap-race-answers-500-instead-of-409,
+# ml12-double-tap-500-not-409, rrh-lifecycle-07-skip-append-not-transactional-wedges-session,
+# rrh-lifecycle-09-ensure-card-not-idempotent-under-concurrent-gets,
+# ti-11-no-double-submit-coverage-anywhere]
+
+[[requirement]]
+id = "library-rate-one-durable-observation-per-card-token"
+spec = "§6.1 (the card is the server's; a token that no longer matches is a 409) + §4.2 (append-only) + §6.2 (several people answering at once)"
+milestone = "M4.10"
+kind = "integration"
+what = "Two concurrent POSTs of the same `card_token` at `/api/rate/verdict`, `/api/rate/duel`, `/api/rate/not-seen` and `/api/rate/skip` return exactly one 200 and one 409 whose body names a reason in the stale set — never a 500 — and leave exactly one observation row, one `rate_observation` row and one advanced slot; the same holds with the Jellyfin push made slow; two concurrent `GET /api/rate` on a session with no card return the same token, and so does a second §6.0 banner redraw driven from the snapshot the first one replaced; and a `rate_observation` insert that succeeds without its session update is impossible because every `_append` call site is inside a transaction. The loser never reaches `observations.record_verdict` at all: each of §6.1's five writing taps opens its transaction with `_claim_card`, and the race counts that call."
+why = "Every guard on this surface is a check-then-act on an autocommit connection, so a double tap, a second tab or a phone and a laptop on one account all reach the write together. The loser must be refused with a reason the surface can act on, not with `app.py`'s blanket \"database error\" over a card that was in fact answered — and a journal row without its cursor move wedges every later write in that session until it is restarted."
+tests = [
+    "backend/tests/test_rate_session.py::test_two_taps_on_one_card_token_leave_one_observation_and_one_409",
+    "backend/tests/test_rate_session.py::test_two_answers_to_one_battle_card_write_exactly_one_duel",
+    "backend/tests/test_rate_session.py::test_a_slow_jellyfin_does_not_widen_the_double_tap_window",
+    "backend/tests/test_rate_session.py::test_the_loser_of_a_double_tap_never_tells_jellyfin",
+    "backend/tests/test_rate_session.py::test_two_concurrent_gets_on_an_empty_table_serve_one_card_under_one_token",
+    "backend/tests/test_rate_session.py::test_a_banner_redraw_never_replaces_a_card_it_did_not_read",
+    "backend/tests/test_rate_session.py::test_a_skip_that_dies_between_its_two_statements_leaves_no_phantom_journal_row",
+    "backend/tests/test_static_contracts.py::test_every_rate_journal_append_is_inside_a_transaction",
+    "backend/tests/test_static_contracts.py::test_the_append_transaction_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_every_rate_write_claims_its_card_before_it_writes",
+    "backend/tests/test_static_contracts.py::test_the_card_claim_guard_catches_a_real_violation",
+]
+# The static guard carries the self-test `docs/TESTING.md` demands of every source-reading rule
+# after M4.7, and it is registered beside it rather than left implicit: the shape it is written for
+# is the two-line bare call `record_skip` actually shipped, and the parametrised cases include
+# `_append`'s own transaction fallback, which must NOT count as the contract being met — a guard
+# that accepted it would pass on the day the last call site loses its `async with`.
+
+# The §13 side of the same seam, and a separate row from `tonight-rank-queue-pair-is-single-use`
+# because the property is different: that row says a pair can be answered exactly once, which a
+# sequential replay can test; this one says the answer is durable exactly once when two arrive
+# together, which only a gathered pair of clients can. The seal stays a count rather than becoming a
+# unique index on `duel` — §13's re-ask stream and `rate/battle.py` both write the same unordered
+# pair twice on purpose, so the constraint that would backstop this race would forbid a behaviour
+# the spec requires. Eight repetitions per assertion, because the probes behind this finding wrote
+# two rows in four of six attempts and five of six, not in all of them.
+#
+# The banner clause is the branch the first build's repair did not reach: `_stash_if_empty` made the
+# empty-table draw one statement, and §6.0's head redraw went on replacing a standing card with no
+# predicate at all, so two devices following the same CTA held two tokens for one session and the
+# loser's first tap was a 409 saying a card nobody had answered was already answered. It is asserted
+# from the snapshot the losing request holds rather than by gathering, because over the route the
+# split reproduced once in 40 attempts and a race that passes once has not passed — the stale
+# snapshot IS that race's state. [M4.10 cycle 1, m410-rev-02]
+#
+# The lock itself was unmeasured until the same review cycle: with `_claim_card` replaced by a
+# no-op the whole race block above stayed green, because `_append` maps `rate_observation_seq` to
+# the same `StaleCard("stale_card")` and finding 11 had already moved the socket out — so both
+# refusals look identical from the route and from the fake's write log. What differs is how far the
+# loser gets, and the race now counts `observations.record_verdict`: one call per answerable card,
+# two with the lock removed. The static rule beside it says the claim is the FIRST statement inside
+# the transaction at all five taps, which is the half a count cannot see, and it fails on a rename
+# rather than silently checking nothing. [M4.10 cycle 1, m410-rev-01]
+# [M4.10 finding 1, dd08-rank-queue-answer-double-write]
+
+[[requirement]]
+id = "tonight-rank-one-durable-comparison-per-sealed-pair"
+spec = "§13 stream (a) (\"the only data used to evaluate the tier model\") + §6.3 queue + §4.2 append-only"
+milestone = "M4.10"
+kind = "integration"
+what = "Two concurrent POSTs of one sealed pair at `/api/rank/queue/answer` return exactly one 200 and one 409 and write exactly one `duel` row with `context='tier_queue'`; repeated eight times it never writes two, and with the arm forced to `uniform_holdout` the §13 held-out stream gains exactly one row and the fit is not touched."
+why = "§13's agreement figure counts rows, so a duplicated hold-out comparison weights one judgement twice in the only data admitted to evaluate the tier model, in a table §4.2 makes append-only on a surface with no undo. The row that claimed this property rested on a sequential replay; the race writes two rows in most gathered attempts with no injected latency at all."
+tests = [
+    "backend/tests/test_rank_routes.py::test_two_gathered_answers_under_one_seal_write_one_comparison",
+    "backend/tests/test_rank_routes.py::test_two_gathered_answers_on_the_held_out_arm_write_one_evaluation_row",
+]
+
+[[requirement]]
+id = "tonight-rank-no-route-raises-after-its-observation-commits"
+spec = "§6.3 (\"the model refits — incremental immediately\") + §5.3 + §4.2"
+milestone = "M4.10"
+kind = "integration"
+what = "With `refit.update_incrementally` monkeypatched to raise `RefitRefused`, `POST /api/rank/drop` and `POST /api/rank/queue/answer` return 200 carrying `ledger.applied == false` with a reason, and exactly one `tier_edit` / one `duel` exists after the call and after a retry; with two 300-character title names the answer route still returns 200 and the recorded rail line is at most `MAX_LINE`, and so does `POST /api/rate/verdict` with a 64-character member name and a 310-character title; and on a cache miss the request returns without an inline MAP fit, with `refit_requested_at` set for that `(user, kind)` and with the response saying the fit is owed rather than reporting a millisecond count for one that never ran — neither the model log nor §6.7's rail line quotes a refit; and `GET /api/rank` over that owed fit answers `fitting: true` with a why-line that does not count to zero, clearing to `false` and to the count once the fit is serviced the way `tier-set-refit` services it, while a board with nothing rated and nothing owed keeps proposal 80's unrated copy."
+why = "Both Rank routes call the refit bare after the observation committed, while the Rate seam catches the same exceptions on purpose — so one surface loses the tap and the other does not, and each retry of the lost one writes another append-only row. A rail line built after the write can refuse a line whose write already happened, which is the failure `rank/tiers.py`'s `MAX_LABEL` comment already records for tier labels. And a request that declines to fit hands the window to the reader: §6.3's board renders `ledger_state`, so until the sweep lands it answers the first-sitting member exactly what it answers somebody who has never opened Rate."
+# The retry clause is asserted at the answer route, where the seal makes a repeat idempotent and
+# the replay is a 409 over one row. It deliberately is NOT asserted at the drop route: decision 202
+# rules that a drop carries no seal and two identical drops a minute apart are two legitimate
+# gestures, so there the property is the 200 itself — it removes the client's reason to repeat.
+#
+# Three raise sites and one rule: after the observation is durable, the route reports rather than
+# raises. The cache-miss clause is finding 9's half of the same rule — a miss used to run the full
+# MAP fit with a dense O((p+n)^3) inverse inside the request, which is both the §5.3 budget and the
+# reason a refusal landed there at all — and it is claimed here rather than on
+# `jellyfin-acquisition-eval-cpu-job-budgets`, once, as the plan requires. What the routes report is
+# `ledger.applied == false` with a reason — a miss included, which is the plan's own letter for that
+# branch ("so the caller reports `applied=False`"). The first build read `applied` as "nothing
+# refused" and kept `refit: true` with a millisecond count, which is true of the flag and false of
+# the two sentences the flag drives: `RateModelLog.svelte` renders `refit` and `ms`, and §6.7's rail
+# quotes the same `ms`, so the commonest tap in the app — the first one per (user, kind) — printed
+# "incremental refit 13 ms" over an empty `ledger_fit`. The reason names the queue instead, so what
+# the person reads is the truth: the fit is owed, not lost. [M4.10 cycle 2,
+# m410-c2-cache-miss-reports-a-refit-that-did-not-run]
+# [M4.10 findings 8, 9: ml07-rank-drop-500-after-durable-observation,
+# rrh-rank-post-commit-exceptions-duplicate-writes, perf-03-ledger-full-refit-on-the-tap-path]
+#
+# The rail clause names the Rate route as well as the two Rank ones, which the plan's own wording
+# for this row did not: finding 8's three raise sites are all on Rank, so `verdict_line` shipped
+# with neither of its two names elided while the exit criterion's clause 4 reads "no Rank OR RATE
+# route raises after its observation commits". §6.7's commonest line is the Rate one, it is composed
+# after the verdict has committed, and the retry a 500 forces is refused because the card token is
+# already nulled — so the widened `what` is this row's claim made to cover its own exit criterion.
+# No new row: decision 206 fixes the count at ten. [M4.10 cycle 1, M410-R1-01]
+#
+# The board clause is decision 209's, and it belongs here rather than on a row of its own for the
+# reason this row's own comment already gives: "what the person reads is the truth: the fit is owed,
+# not lost". That sentence was written about the model log; the surface §6.3 makes a promise about
+# was reading the same owed fit as a ledger with nothing in it. Two tests, at the two layers that
+# can each break it alone — the route, which is the only place the stamp and the counts are read
+# together, and `emptyState()`, which is the only place the two empty boards are told apart in
+# words. Decision 206's count of ten rows is untouched. [decision 209]
+tests = [
+    "backend/tests/test_rank_routes.py::test_a_refused_refit_does_not_lose_the_drop",
+    "backend/tests/test_rank_routes.py::test_a_refused_refit_does_not_lose_the_queue_answer",
+    "backend/tests/test_rank_routes.py::test_two_names_too_long_for_the_rail_do_not_lose_the_comparison",
+    "backend/tests/test_rate_session.py::test_two_long_names_on_the_rail_do_not_lose_the_verdict",
+    "backend/tests/test_rank_routes.py::test_a_ledger_cache_miss_answers_without_fitting_in_the_request",
+    "backend/tests/test_rate_session.py::test_a_cache_miss_says_the_fit_is_owed_rather_than_timing_one_that_never_ran",
+    "backend/tests/test_home.py::test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused",
+    "backend/tests/test_rank_integration.py::test_a_ledger_cache_miss_queues_the_refit_instead_of_fitting_in_the_request",
+    "backend/tests/test_rank_integration.py::test_a_first_ever_tap_queues_its_refit_even_with_no_cutpoints_row",
+    "backend/tests/test_rank_routes.py::test_a_board_whose_first_fit_is_owed_says_so_instead_of_reading_zero_rated",
+    "frontend/src/lib/rank.svelte.test.js::says the fit is owed rather than that nobody has started",
+    "frontend/src/lib/rank.svelte.test.js::still tells a member who has rated nothing that they have rated nothing",
+]
+
+# Two findings at one seam, and the only one of the four that is not a lock: the sweep reads the
+# request, fits for seconds, then upserts `tier_set` and clears the request with no predicate, so a
+# PUT that lands in between is overwritten by a fit that never saw it. A lock would have to be held
+# for the whole fit, which is exactly what the advisory lock everywhere else in this milestone is
+# sized to avoid — so the fit compares and refuses instead, and the request's own timestamp decides
+# what the sweep may clear. Decision 11's "for that user alone" is the second half: a loop with no
+# per-item isolation made one member's unfittable board everyone's, and the failure is now logged
+# into that item's report with the sweep continuing, which is what `refit_all` already did.
+# [M4.10 findings 5, 6: rrh-lifecycle-04-tier-set-sweep-reverts-put-and-splits-kinds,
+# rrh-lifecycle-05-tier-set-sweep-aborts-on-first-failure]
+
+[[requirement]]
+id = "tonight-rank-tier-set-change-survives-a-concurrent-refit"
+spec = "decision 11 (\"the settings control sets the tier set; a Ledger refit is queued for that user alone\") + §4.2 ledger_cutpoints"
+milestone = "M4.10"
+kind = "integration"
+what = "A tier-set PUT that lands while the worker's refit for that user is in flight is not reverted: both kind rows read the tier set the person last chose, the newer refit request survives the sweep that did not fit it, and a drop into any tier of the set is accepted for both kinds; one member's failing refit does not stop another member's queued refit or leave it owed for ever."
+why = "The sweep clears the request with no timestamp predicate and the fit upserts `tier_set` unconditionally, so a K change made twice within a minute — which the settings control invites — silently reverts on films, holds on series, and refuses legal drops into the upper tiers of the board that kept it. Decision 11 queues a refit *for that user alone*; a loop with no per-item isolation makes one bad fit everyone's."
+tests = [
+    "backend/tests/test_rank_integration.py::test_a_refit_cannot_overwrite_a_tier_set_it_did_not_fit_against",
+    "backend/tests/test_rank_integration.py::test_a_refit_request_made_during_a_fit_survives_the_sweep_that_did_not_fit_it",
+    "backend/tests/test_rank_integration.py::test_the_tier_set_is_read_for_the_kind_that_is_asked",
+    "backend/tests/test_rank_integration.py::test_a_drop_resolves_the_tier_set_of_the_titles_own_kind",
+    "backend/tests/test_worker_jobs.py::test_a_tier_set_put_that_lands_during_the_sweep_is_not_reverted_and_is_still_owed",
+    "backend/tests/test_worker_jobs.py::test_one_members_failing_refit_does_not_strand_another_members",
+]
+
+[[requirement]]
+id = "library-rate-the-jellyfin-push-is-outside-the-verdict-transaction"
+spec = "§7.3 (the app is authoritative) + §3.3 (\"the app must work when Jellyfin is down\") + §6 preamble (<2 s per sweep card)"
+milestone = "M4.10"
+kind = "integration"
+what = "With the fake Jellyfin's `/UserPlayedItems` sleeping 0.5 s, a verdict's row is visible to a second connection within ~100 ms of the POST starting, no backend holds an open transaction for longer than 0.3 s at any point during the tap, and the journal's `prior_state.pushed` and §7.3's `jf_synced_at` bookkeeping are unchanged whether the push succeeds, fails or is owed — on the not-seen arm as well as the verdict's, where an Undo hands back exactly the Played flag the tap set. No call site reaches the socket from inside a transaction: `_push_state`, `seen.push_owed` and `seen.retract` are all outside every `conn.transaction()` in `rate/session.py`."
+why = "§3.3 is unambiguous that the app must work when Jellyfin is down, and `sync/seen.py` and `ledger/observations._set_state` both promise in prose that the app-side write commits before the network call. Awaiting a 15 s-timeout HTTP request inside the verdict transaction holds row locks for a foreign server's latency, blocks the other member rating at the same time, and is what widens the double-tap window from milliseconds to seconds."
+tests = [
+    "backend/tests/test_rate_session.py::test_the_verdict_is_durable_before_jellyfin_answers",
+    "backend/tests/test_rate_session.py::test_the_journal_records_the_push_that_happened_and_not_the_one_intended",
+    "backend/tests/test_rate_session.py::test_an_undo_of_a_not_seen_hands_back_the_played_flag_it_set",
+    "backend/tests/test_rate_session.py::test_an_undo_whose_token_has_expired_asks_for_a_re_link",
+    "backend/tests/test_seen_sync.py::test_push_owed_pushes_the_state_the_app_already_committed",
+    "backend/tests/test_seen_sync.py::test_push_owed_finds_nothing_owed_where_there_is_no_row",
+    "backend/tests/test_seen_sync.py::test_push_owed_refuses_for_the_same_four_reasons_set_state_did",
+    "backend/tests/test_seen_sync.py::test_set_state_is_still_the_write_and_then_the_push",
+    "backend/tests/test_seen_sync.py::test_retract_puts_back_exactly_the_flag_the_forward_action_set",
+    "backend/tests/test_seen_sync.py::test_retract_asks_for_a_re_link_where_the_old_private_copy_said_nothing",
+    "backend/tests/test_static_contracts.py::test_no_jellyfin_push_happens_inside_a_rate_transaction",
+    "backend/tests/test_static_contracts.py::test_the_push_transaction_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_decision_207_names_the_one_file_that_reads_the_journals_pushed_flag",
+]
+# Decision 207 settles the one thing moving the call out changes: the journal row is written before
+# the push resolves, so `record_verdict` / `record_not_seen` / `record_correction` correct
+# `prior_state.pushed` in one follow-up UPDATE outside the observation transaction, best-effort and
+# logged if it fails. `_state_entries`' own docstring is the reason — "Undo compensates what it did,
+# not what it intended" — so a permanently false `pushed` would leave Jellyfin marked Played against
+# an app row that says otherwise, and §7.3's next sweep would adopt it back.
+#
+# All three arms are now asserted and not just claimed. The not-seen arm's follow-up UPDATE could be
+# deleted outright with the whole suite still green: every `record_not_seen` call in the suite passed
+# no connector, and the two route-level not-seen taps run under an unreadable SECRETS_KEY, where
+# `_mark_pushed` early-returns. It is the arm where a lost flag costs most, because `observations.undo`
+# restores `user_title` byte for byte including the `jf_synced_at` stamp — so the skipped retraction
+# leaves nothing owed for §7.3 to settle. [M4.10 cycle 1, f11-02]
+#
+# The field has exactly one reader and decision 207's own text named another: it sent an auditor to
+# `sync/seen.py`, whose `prior_state` is a plain state string kept a string so `sync` does not import
+# from `ledger`, while `undo` is what gates the compensating Played write on the journal's flag. The
+# static guard pins the reader set to the file the decision names, so moving the read moves the
+# record with it. [M4.10 review cycle 1: M410-REV1-D207-03]
+#
+# Two repairs from cycle 1 of this milestone's own review. The positional property was asserted at
+# one of the three call sites step 4 names: `record_not_seen` and `record_correction` could be
+# returned to the pre-M4.10 shape with every test above green, because each of them asserts the
+# push's effects (`write_log`, `jf_synced_at`, the link state, Undo's symmetry) and those are
+# identical wherever the await sits. The static rule closes all four sites including Undo's
+# `seen.retract`, and the correction is the worst of them: `side='both'` awaits two 15 s-budget
+# sockets in series. And the transaction clause is now a DURATION sampled on every poll: plain
+# `idle in transaction` is what the correct shape also reports between the three round trips of its
+# own observation transaction, so measured at the shipped 10 ms poll the unbounded predicate read
+# 1 in two of eight runs on correct code, while the old clause -- sampled only while the row was
+# still invisible, which it never was after the first poll -- asserted its own initialiser in five
+# of five. [M4.10 cycle 1, f11-01 and f11-04]
+# [M4.10 finding 11, syncpush-13-jellyfin-call-inside-the-verdict-transaction; decision 207]
+
+# §5.2's own arithmetic is the repair: an unobserved title's score is mu + <v, e> at zero extra
+# parameters, so a title with no `ledger_state` row is not a title with no prediction — it is a title
+# nobody has written a cached row for. The reveal computes it instead of reading a row that the
+# nightly refit only ever writes for observed and owned titles.
+#
+# One thing this row's second clause now depends on that it did not when it was written: finding 9
+# moved a Ledger cache miss off the request path, so a brand-new member's first tap stamps
+# `refit_requested_at` and the fit lands with the 60 s `tier-set-refit` sweep. The structural
+# darkness is gone either way — after any fit, an unowned queue title is lit — but a measurement of
+# the exit criterion's "at most the first tap per member" has to let that sweep run, or it measures
+# the absence of a worker rather than the presence of a reveal.
+# [M4.10 finding 26, dd22-rate-reveal-unavailable-for-the-whole-first-sitting]
+
+[[requirement]]
+id = "library-rate-reveal-available-in-the-first-sitting"
+spec = "§6.1 (\"Prediction reveal strictly after the tap\") + §5.2 (an unobserved title has s = μ + ⟨v, e⟩ at zero extra parameters) + §12 M2"
+milestone = "M4.10"
+kind = "integration"
+what = "A member with a fitted ledger who rates an unowned seed-list title — one with no `ledger_state` row — gets `reveal.available == true` with a banded prediction and a cdf, and the reveal is still suppressed for the very first tap of all, before any labels of their own exist."
+why = "The reveal reads `ledger_state`, the refit writes rows only for observed and owned titles, and the first queue *is* the seed list, of which 80 of 100 are unowned — so measured on the real bundle the reveal was unavailable on 50 of 50 taps for both members. §6.1's anchoring-safe feedback is dark for exactly the sitting §12's M2 exit criterion is defined over, and M2's measurement cannot be taken."
+tests = [
+    "backend/tests/test_rate_session.py::test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_row",
+    "backend/tests/test_rate_session.py::test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole_sitting",
+]
+
+# Two findings that look like a gating bug and a caching bug and are one fact: the arm was drawn
+# fresh on every GET from an unseeded generator and then shipped to the client. Gated, because
+# decision 117 puts every model-internal label behind the toggle and this one tells the person which
+# of their answers do not count; stable, because §13's guard is about the hold-out RATE, and a rate
+# that moves with the reload count is a rate the evaluation cannot divide by. The arm now derives
+# from the same `(user, kind, answered)` the seal carries, through an HMAC over the session secret —
+# so it is reproducible for a given board state without being guessable by the client, and the one
+# thing that changes it is an answer. The arm moves under `pair.model`, where `rail.redact` already
+# knows to strip it; the pair keeps one arm-independent reason, so the surface still says why.
+# [M4.10 findings 15, 16: dd13-rank-queue-arm-and-pair-rerolled-per-get,
+# cs-15-tier-queue-arm-and-reason-ungated; decision 117]
+
+[[requirement]]
+id = "tonight-rank-queue-arm-is-gated-and-the-pair-is-stable"
+spec = "decision 117 (\"the selection label in the tier queue\") + §13's non-negotiable guard + §6.3"
+milestone = "M4.10"
+kind = "integration"
+what = "`GET /api/rank/queue` returns no `arm` and no arm-naming reason to a member whose model toggle is off — the payload is identical under `rail.redact` — and the user-facing reason never says a pair is held out; thirty consecutive GETs without answering return the identical pair and token, and answering one changes it."
+why = "The one Rank route that calls neither `visible_to` nor `redact` ships the arm and the sentence \"this pair never tunes the model\" to every member, which tells the person which answers do not count; and because the arm is re-rolled per GET, a client can reload into or out of the §13 stream, making the hold-out *rate* a function of the reload count rather than independent of the model."
+tests = [
+    "backend/tests/test_rank_routes.py::test_the_queue_ships_no_arm_to_a_member_who_cannot_see_the_model",
+    "backend/tests/test_rank_routes.py::test_thirty_draws_return_one_pair_until_it_is_answered",
+    "backend/tests/test_rank_routes.py::test_the_answer_route_writes_the_arm_the_server_drew_it_under",
+]
+
+[[requirement]]
+id = "library-rate-hyperparams-loaded-once-and-refused-loudly"
+spec = "§4.3 (ledger_hyperparams.json is the shipped constants file) + §10 swap sequence"
+milestone = "M4.10"
+kind = "integration"
+what = "The app's lifespan sets `app.state.hyperparams` once and two Rate requests parse the file zero further times, including on a boot whose `backbone.npz` is unusable; a bundle whose `ledger_hyperparams.json` carries a malformed value, is not a JSON object at all, or is present as a path that cannot be opened fails `validate_for_install` with a report line naming it rather than raising; and with such a file already in place the boot still serves (§3.1) while `GET /api/rank` and `POST /api/rate/verdict` answer 503 with a reason instead of an unhandled exception."
+why = "§4.3 makes the file the single source of the constants and §10 makes a swap a restart, but nothing validates it at import and every router re-reads it per request with no exception handling — so one hand-edited or badly restored constant makes both surfaces 500 for everyone with nothing on screen or in the admin view saying why. Falling back to defaults silently is not the fix: a different digest invalidates every cache."
+tests = [
+    "backend/tests/test_ledger_hyperparams.py::test_the_lifespan_reads_the_constants_once_and_the_rate_route_never_again",
+    "backend/tests/test_ledger_hyperparams.py::test_a_constant_the_fit_cannot_use_is_a_503_with_a_reason_and_not_a_500",
+    "backend/tests/test_ledger_hyperparams.py::test_an_unusable_basis_does_not_cost_the_constants_their_one_read",
+    "backend/tests/test_ledger_hyperparams.py::test_a_constants_file_that_is_not_an_object_degrades_the_boot_rather_than_killing_it",
+    "backend/tests/test_ledger_hyperparams.py::test_a_constants_file_that_is_not_an_object_is_a_value_error",
+    "backend/tests/test_ledger_hyperparams.py::test_a_constants_path_that_is_not_a_file_is_not_read_as_an_absent_one",
+    "backend/tests/test_rank_routes.py::test_a_constant_the_fit_cannot_use_is_a_503_on_the_board_route",
+    "backend/tests/test_bundle_lifecycle.py::test_validate_refuses_a_bundle_whose_ledger_constants_the_fit_cannot_use",
+]
+# The `what` names two routes and the two halves are asserted in two files, which is why the list
+# crosses one: `api/rate.py`'s refusal is `test_ledger_hyperparams.py`'s (it also drives Tonight's
+# `_z`, the third copy of the same clause), and `GET /api/rank`'s is `test_rank_routes.py`'s,
+# because that router's copy landed with the Rank route work and asserting it needs that file's
+# board fixture. Both refuse with 503 rather than falling back to `DEFAULTS`: the defaults carry a
+# different `hp_digest`, so serving them would invalidate every cached fit in the install and
+# re-fit the whole household behind a number nobody chose. [M4.10 finding 10]
+#
+# Three malformations and one boot state were added to the `what` after the fact, because the first
+# build read "malformed" as "a constant out of range" and the other classes walked straight through
+# every instrument: a file that is not a JSON object raised `AttributeError` — not a `ValueError`,
+# so the boot FAILED rather than degraded and the Validate button answered 500 with no report line
+# — and a path present as a directory was read as an absent optional artifact, which serves DEFAULTS
+# under a different `hp_digest` and discards every cached fit in the install. The one read is also
+# claimed on a boot whose basis is unusable, a state `app.py` declares supported and which took the
+# constants read down with it while all three routers went back to parsing the file per request.
+# Still one row and no waiver. [M4.10 cycle 1, M410-R1-02 / M410-R1-03 / M410-R1-04 / M410-R1-06 /
+# M410-C1-HP-1]
+
+[[requirement]]
+id = "platform-every-http-route-is-named-by-a-test"
+spec = "§3.2 (every route behind a session) + docs/TESTING.md's M3 lesson (\"a row whose `what` names a surface has to be tested through that surface\")"
+milestone = "M4.10"
+kind = "static"
+what = "An inventory built from the app's own OpenAPI paths plus its websocket routes asserts that every `(method, path)` outside an explicit anonymous allow-list refuses an unauthenticated request with 401, and that every route is named by some test file, with an `UNTESTED` set that may only shrink; a route added without `ActiveUser` fails both rules."
+why = "Seventeen of 82 routes are named nowhere at any layer and the three hand-listed anonymous sweeps are each partial, so a new route added without a session dependency passes the suite. `docs/TESTING.md` records the M3 lesson — `api/rank.py` shipped with no HTTP test — and nothing mechanised it."
+# The seventeen is the plan's count, measured at the M4.5 head; `UNTESTED` is measured in the test
+# and stands at eight, because M4.6 through M4.9 named nine of them (the passkey set, the Tonight
+# channel) and two more were already named in passing. The row's `what` is unaffected: it states the
+# rules, and the rules are what the tests hold. [M4.10 finding 34]
+#
+# One of them did not hold, until cycle 2. "An `UNTESTED` set that may only shrink" is two
+# properties and the file implemented the closing one: `UNTESTED - unnamed` fails while an entry
+# outstays its route, and nothing counted the set. A route added behind `ActiveUser` with no test
+# answers 401, so the live sweep passes it BY DESIGN, and the naming rule's failure message hands
+# the author the escape in as many words — "add it to UNTESTED". Measured on a live app: with a
+# gated `GET /api/rank/leak_probe_xyz` registered and its path appended to the set, all seven tests
+# passed and the debt was nine. The size is pinned now rather than capped, because `<=` funds a free
+# slot the moment a legitimate shrink lands and nothing forces the number down with it — the
+# one-directional baseline M4.16's `platform-api-layer-sql-baseline` row already calls a defect
+# class. The eighth test is the blind spot itself, held end to end: rule 1 silent, rule 2 catching,
+# and the excuse costing a second line. [M4.10 cycle 2, M410-C2-COV-01]
+#
+# The seventh is the green gate's, and it is about what "named by some test file" may count. The
+# rule greps `backend/tests`, and this milestone put a harness test for decision 203's banner link
+# into that directory — a real HTTP request, made to `ops/devstub.py`'s app rather than to this one
+# — which shrank `UNTESTED` by `/api/home/pending-verdicts` while `api/home.py`'s handler stayed
+# unasserted. CLAUDE.md decides that disagreement in the app's favour, so `test_devstub_contract.py`
+# joins the module itself outside the haystack, and the new test keeps that exclusion honest: both
+# skipped names must be real files, absent from the haystack, and the harness one must still name a
+# route, or it is a narrowing that hides nothing. The set is eight on both sides of M4.10.
+#
+# `spec` quotes the M3 lesson rather than naming its line, which is the same repair one step up: the
+# plan's `docs/TESTING.md:260-265` was read at the M4.5 head and by this milestone pointed at M4.9's
+# exit-criterion shell block. A row whose citation drifts to an unrelated paragraph is a row whose
+# argument nobody can check, and the sentence it rests on is stable where its line number is not.
+tests = [
+    "backend/tests/test_route_inventory.py::test_the_inventory_is_the_apps_own_route_table",
+    "backend/tests/test_route_inventory.py::test_every_route_outside_the_anonymous_allow_list_refuses_a_signed_out_caller",
+    "backend/tests/test_route_inventory.py::test_every_route_on_the_anonymous_allow_list_is_still_served_to_a_stranger",
+    "backend/tests/test_route_inventory.py::test_every_route_is_named_by_some_test_file",
+    "backend/tests/test_route_inventory.py::test_the_untested_set_may_only_shrink",
+    "backend/tests/test_route_inventory.py::test_the_haystack_leaves_out_the_files_that_ask_their_routes_nothing",
+    "backend/tests/test_route_inventory.py::test_a_route_added_without_a_session_fails_both_rules",
+    "backend/tests/test_route_inventory.py::test_a_gated_route_with_no_test_is_invisible_to_rule_1_and_caught_only_by_rule_2",
+]
+
+# The registry says of itself that it is a readable copy of §5.3, and nothing read the two against
+# each other — so row 9 was missing (bundle import, the one job implemented inside a request handler,
+# and the one whose 127 s POST no operator could see) while `run=None` meant three different things
+# at once and the boot line called two shipped M2 jobs pending. The new rule is that `run=None`
+# carries either an owner or a milestone, and the census counts the registry rather than a literal.
+#
+# Two corrections to the finding's text, both measured. The bucket the `what` calls
+# "request-triggered" is worded "run outside it" in the shipped line, because one of its three rows
+# is `cold-tower-placement`, reached through §8's acquisition pipeline rather than through a request:
+# naming the bucket for the other two would have left a shipped job in the pending count, which is
+# half of what the finding is about. And "no coverage row names any worker test" is false — ten
+# `test_worker_registry.py` ids are named above; what nothing asserted is §5.3's TABLE, which is what
+# this row adds. [M4.10 finding 35, cs-58-worker-registry-omits-row-nine-and-mislabels-two-jobs]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-worker-registry-mirrors-the-jobs-table"
+spec = "§5.3 (the jobs table; rows 1, 4 and 9)"
+milestone = "M4.10"
+kind = "backend"
+what = "Every row of §5.3's table has a `JOBS` entry, including row 9 (bundle import validation and hot swap, trigger \"admin action\"); a job with no `run` carries either an owning module or a milestone, and the startup line counts live, request-triggered and not-yet-owed separately rather than calling shipped jobs pending."
+why = "The registry documents itself as a readable copy of §5.3 and silently omits the one row implemented inside a request handler — which is exactly the row whose 127 s POST nobody could see — while telling the operator at every boot that two shipped M2 jobs await their milestone. `run=None` currently means three different things, so the count answers no question."
+tests = [
+    "backend/tests/test_worker_schedule.py::test_every_row_of_the_spec_s_jobs_table_has_a_registry_entry",
+    "backend/tests/test_worker_schedule.py::test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means",
+    "backend/tests/test_worker_schedule.py::test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed",
+    "backend/tests/test_worker_schedule.py::test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending",
+    "backend/tests/test_worker_schedule.py::test_the_boot_census_is_actually_called_at_boot",
+    "backend/tests/test_worker_schedule.py::test_the_boot_census_call_site_guard_catches_a_real_violation",
+]
+# The last two are cycle 1's, and they are about the word "startup" in the `what` above. Both census
+# tests call `_report_registry()` themselves, so neither could see `main()`'s single call site:
+# deleting it left all four registry tests green while this row went on publishing a claim about
+# what an operator reads at every boot. Read off the source rather than by booting `main()`, which
+# needs a pool, the migration wait and a signal handler, and UNCONDITIONAL as well as present —
+# behind the migration wait's `else`, or behind `if store.is_empty`, the line would be missing on
+# exactly the boots somebody is reading the log for. [M4.10 cycle 1, m410-rev1]

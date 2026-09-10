@@ -997,6 +997,190 @@ async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app
     assert await db.fetchval("SELECT count(*) FROM auth_session") == 1
 
 
+# --- §3.2 / decision 208: the fourth door, where the credential changes underneath the cookie -
+
+
+async def test_a_password_change_rotates_the_session_it_was_made_from(db, app):
+    """Decision 208. dd24's rule is that one cookie names one row and a device that re-proves
+    itself does not keep the row it was holding; the three tests above assert it at login, at the
+    passkey login and — through `_switched_in` — at the switch. `POST /api/auth/password` was the
+    fourth door and the only one not doing it, while being the one door where the credential
+    *behind* a live cookie changes: `destroy_other_sessions` ended every other device and kept
+    the caller's own row, so the session id that the leaked password opened kept authenticating
+    for its full sliding 90 days.
+
+    What the route now answers with is one `Set-Cookie` and nothing else about it moved:
+    `sessions_revoked` is still the number of OTHER devices ended (§6.6's admin-side twin reports
+    the same number from the same helper), and the label that describes the device survives the
+    rotation because the device is the one thing this request did not change.
+    """
+    admin = await _admin(app)
+    member = await _member(app, admin)
+    jenny = (await member.get("/api/auth/me")).json()["id"]
+    other_device = app()
+    elsewhere = await other_device.post(
+        "/api/auth/login",
+        json={"name": "jenny", "password": MEMBER_PASSWORD, "device_label": "the kitchen tablet"},
+    )
+    assert elsewhere.status_code == 200, elsewhere.text
+    arrived = auth.open_session_cookie(member.cookies.get(auth.SESSION_COOKIE))
+    await db.execute(
+        "UPDATE auth_session SET device_label = $2 WHERE id = $1", arrived, "jenny's phone"
+    )
+
+    changed = await member.post(
+        "/api/auth/password",
+        json={"current_password": MEMBER_PASSWORD, "new_password": "a-brand-new-password"},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["sessions_revoked"] == 1, (
+        "`sessions_revoked` names the other devices ended, and the rotation must not be counted"
+        f" into it: {changed.json()}"
+    )
+
+    issued = [
+        header
+        for header in changed.headers.get_list("set-cookie")
+        if header.startswith(f"{auth.SESSION_COOKIE}=")
+    ]
+    assert len(issued) == 1, f"one rotation, one cookie; this response carried {issued}"
+    assert f"Max-Age={settings().session_days * 24 * 3600}" in issued[0], issued[0]
+    minted = auth.open_session_cookie(member.cookies.get(auth.SESSION_COOKIE))
+    assert minted is not None and minted != arrived, "the jar still names the rotated session"
+
+    rows = await db.fetch("SELECT id, device_label FROM auth_session WHERE user_id = $1", jenny)
+    assert [row["id"] for row in rows] == [minted], (
+        f"one device, one row: {[row['id'] for row in rows]} against the minted {minted}"
+    )
+    assert rows[0]["device_label"] == "jenny's phone", (
+        f"the rotation lost the label that describes the device: {rows[0]['device_label']!r}"
+    )
+
+    # The id the caller arrived with is what the old password opened, so it is what must stop
+    # working — asserted on a second jar, because the caller's own jar has moved on.
+    stale = app()
+    stale.cookies.set(auth.SESSION_COOKIE, auth.seal_session_id(arrived))
+    assert (await stale.get("/api/auth/me")).status_code == 401, (
+        "the session the old password opened still authenticates after the change"
+    )
+    # And the caller is not signed out by its own change: this is the request the forced
+    # first-login flow makes next, and decision 179 leaves it nowhere else to go.
+    back = await member.get("/api/auth/me")
+    assert back.status_code == 200, back.text
+    assert back.json()["name"] == "jenny"
+
+
+async def test_the_rotation_replaces_the_cookie_the_slide_earned_rather_than_adding_to_it(db, app):
+    """core/auth.py states §3.2's contract as "slides in the row and in the cookie together or
+    not at all", and a password change is exactly the request someone makes on a session older
+    than a day: `deps.current_user` re-issues the cookie for the row it slid, and then the
+    rotation deletes that row. Two `Set-Cookie` headers for one name, the first naming a session
+    that no longer exists, is the browser resolving §3.2's window by header order.
+
+    now() moves through the row rather than through the clock, for the reason
+    `test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day` gives above.
+    """
+    admin = await _admin(app)
+    member = await _member(app, admin)
+    jenny = (await member.get("/api/auth/me")).json()["id"]
+    # Aged after that read, because the read would otherwise slide the row it is about.
+    await db.execute("UPDATE auth_session SET last_seen_at = now() - interval '25 hours'")
+
+    changed = await member.post(
+        "/api/auth/password",
+        json={"current_password": MEMBER_PASSWORD, "new_password": "a-brand-new-password"},
+    )
+    assert changed.status_code == 200, changed.text
+    issued = [
+        header
+        for header in changed.headers.get_list("set-cookie")
+        if header.startswith(f"{auth.SESSION_COOKIE}=")
+    ]
+    assert len(issued) == 1, f"the slide and the rotation both answered: {issued}"
+    live = await db.fetchval("SELECT id FROM auth_session WHERE user_id = $1", jenny)
+    assert auth.open_session_cookie(member.cookies.get(auth.SESSION_COOKIE)) == live
+    assert (await member.get("/api/auth/me")).status_code == 200
+
+
+async def test_a_password_change_from_a_pin_session_is_still_a_pin_session(db, app):
+    """The rotation mints the `auth_method` the rotated session carried, not 'password'.
+
+    §3.2 makes the PIN "for fast user-switching on a shared device" and the password the account
+    credential; decision 179 keeps this route reachable from a switched-in phone, and decision
+    170 already costs a PIN the password without the reverse being true. A rotation that minted
+    'password' would hand that phone a session `create_session`'s CASE stamps `admin_verified_at`
+    on and `credentialed_user` lets register a passkey — the chain
+    `test_a_pin_session_is_refused_every_route_that_mints_a_credential` shuts at its first step,
+    re-opened by four digits and a password typed into the same phone.
+    """
+    admin = await _admin(app)
+    member = await _member(app, admin)
+    phone, jenny = await _switched_in(admin, member)
+
+    changed = await phone.post(
+        "/api/auth/password",
+        json={"current_password": MEMBER_PASSWORD, "new_password": "a-brand-new-password"},
+    )
+    assert changed.status_code == 200, changed.text
+    rows = await db.fetch(
+        "SELECT auth_method, admin_verified_at FROM auth_session WHERE user_id = $1", jenny
+    )
+    assert [row["auth_method"] for row in rows] == ["pin"], (
+        f"the switched-in phone walked out of the rotation holding: {[r['auth_method'] for r in rows]}"
+    )
+    assert rows[0]["admin_verified_at"] is None, "§3.2's re-prompt cannot be answered by a PIN"
+    refused = await phone.post(
+        "/api/auth/pin", json={"pin": "1111", "current_password": "a-brand-new-password"}
+    )
+    assert refused.status_code == 403, f"a PIN session minted a credential: {refused.text}"
+
+
+async def test_a_rotation_that_fails_leaves_the_device_holding_the_session_it_arrived_with(
+    db, app, monkeypatch
+):
+    """The shape `test_a_sign_in_that_fails_part_way...` proves at the other three doors, now
+    owed here too (decision 208): on autocommit the rotation's DELETE would commit before its
+    INSERT was attempted, and a `create_session` that failed on a statement timeout or a reset
+    connection would answer 500 having signed the device out of a session it had before the
+    request and cannot get back — while the password it can no longer use the route to change
+    had already been replaced.
+
+    `test_a_password_change_that_fails_part_way_changes_nothing` above forces the failure one
+    statement earlier, at the revoke. This one forces it at the seam decision 208 added, and
+    asserts what that test cannot: that the caller's cookie still reaches the app.
+    """
+
+    def boom(*_args, **_kwargs):
+        raise asyncpg.PostgresError("the rotation's session insert failed")
+
+    admin = await _admin(app)
+    member = await _member(app, admin)
+    jenny = (await member.get("/api/auth/me")).json()["id"]
+    other_device = app()
+    assert (
+        await other_device.post(
+            "/api/auth/login", json={"name": "jenny", "password": MEMBER_PASSWORD}
+        )
+    ).status_code == 200
+    arrived = auth.open_session_cookie(member.cookies.get(auth.SESSION_COOKIE))
+
+    monkeypatch.setattr(auth, "create_session", boom)
+    failed = await member.post(
+        "/api/auth/password",
+        json={"current_password": MEMBER_PASSWORD, "new_password": "a-brand-new-password"},
+    )
+    assert failed.status_code == 500
+
+    held = await member.get("/api/auth/me")
+    assert held.status_code == 200, "a failed rotation signed the device out"
+    assert auth.open_session_cookie(member.cookies.get(auth.SESSION_COOKIE)) == arrived
+    stored = await db.fetchval("SELECT password_hash FROM app_user WHERE id = $1", jenny)
+    assert auth.verify_password(stored, MEMBER_PASSWORD), "the old password must still stand"
+    assert await db.fetchval("SELECT count(*) FROM auth_session WHERE user_id = $1", jenny) == 2, (
+        "the revoke rolled back with the rotation, so the other device is still signed in"
+    )
+
+
 # --- §14.4 / sec-14: what an anonymous caller may reach -------------------------------------
 
 

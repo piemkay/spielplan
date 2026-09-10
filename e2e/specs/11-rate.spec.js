@@ -569,7 +569,9 @@ test.describe('rate', () => {
   test('the counter runs to 15 and rolls, and Undo then disables visibly at the boundary', async () => {
     // §6.1's "blocks of 15", and decision 35's commit: "the instant the 15th observation lands,
     // the block index moves and everything in the old block stops being undoable … the chip
-    // disables visibly, not silently, at the boundary."
+    // disables visibly, not silently, at the boundary." Decision 174 says WHEN that instant is —
+    // when the first observation of the next block lands — and decision 199 is this file's half
+    // of it: the roll and the commit are one round trip apart, not zero.
     //
     // The first fourteen are answered over HTTP — they are the arrangement, not the claim. The
     // fifteenth is a tap, because the roll is what has to be visible.
@@ -583,10 +585,44 @@ test.describe('rate', () => {
     await expect(counter(page)).toContainText('15 / 15 this block');
     await expect(undoChip(page)).toBeEnabled();
 
-    await tapAnswer(page);
+    const fifteenth = await tapAnswer(page);
 
     await expect(counter(page)).toContainText('1 / 15 this block');
     expect((await envelope(page)).session.block.index, 'the block rolled').toBe(block + 1);
+    // Decision 200: the roll no longer repeats a card type. Fifteen is odd, so a type derived
+    // from the slot made slot 15 a sweep and the next block's slot 1 a sweep too — eight sweeps
+    // to seven battles per block, in the arm §5.2 credits with within-liked resolution. Derived
+    // from the session's monotone observation index, the alternation carries across the roll.
+    await expect(counter(page)).toContainText('· battle');
+
+    // DECISION 199: the roll is not the commit. `advance` moves the block index ON the fifteenth
+    // observation, so comparing block indexes alone disabled the chip in the same round trip
+    // that answered card 15 — the tap still on screen, at the end of a run where fatigue
+    // mis-taps live, and in Battle mode a duel, which §4.2 gives no supersede path. The
+    // fifteenth stays retractable until the sixteenth lands.
+    await expect(undoChip(page)).toBeEnabled();
+    // The chip has to name the fifteenth tap, so the kind is DERIVED from the card that was
+    // tapped rather than enumerated: `tapAnswer` answers a sweep with a verdict and a battle
+    // with the tie strip, and a TIE is its own journal kind among decision 35's six
+    // (`kind_of="tie" if outcome == "TIE"`, `rate/session.py`). The enumeration this replaces —
+    // /verdict|duel/ — admitted a kind this file cannot write and excluded the one it does, and
+    // it read as correct only while slot 15 was a sweep in every block: fifteen is odd, and the
+    // type used to come off the slot. Decision 200 derives it from the monotone observation
+    // index instead, so slot 15 is a sweep in even blocks and a battle in odd ones — and §6.1's
+    // drained state can substitute a battle into the slot whatever the counter called for. What
+    // the fifteenth tap was is therefore a fact to carry here, not one to guess.
+    // [decisions 35, 199, 200; §6.1]
+    await expect(undoChip(page)).toHaveAttribute(
+      'data-undo-kind',
+      fifteenth === 'sweep' ? 'verdict' : 'tie'
+    );
+
+    // And the sixteenth commits the block it ended: retracting it puts the person back at slot
+    // 1 with block 0 closed behind them, which is decision 35's "and no further" bounding a
+    // walk rather than one tap.
+    await tapAnswer(page);
+    await undoChip(page).click();
+    await expect(counter(page)).toContainText('1 / 15 this block');
 
     // Not a button that quietly does nothing: disabled, with the server's reason beside it.
     await expect(undoChip(page)).toBeDisabled();

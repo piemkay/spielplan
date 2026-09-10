@@ -196,6 +196,7 @@ Two things happen on the way that are easy to miss:
 > M4.7   17/17  covered
 > M4.8   10/10  covered
 > M4.9   23/23  covered
+> M4.10   10/10  covered
   M4.12    1/1   covered
   M4.13    2/2   covered
   M5    0/10  covered
@@ -216,8 +217,68 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.9 is the open milestone, and unlike M4.6, M4.7 and M4.8 it has a §12 row of its own.** The
-argument is at spec line 425: M0's exit criterion is "bundle imports clean; Library list and title
+**M4.10 is the milestone this block was last re-pasted for, and it has a §12 row (spec line 415) on
+M4.9's argument rather than M4.6's and M4.7's: two rows this table already had, closed against writes
+that had never been made twice at once.** §12's M2 row owns the rating view, the Personal Ledger and
+§6.1's prediction reveal; its M3 row owns Rank's tiers and its comparison queue. Both were asserted
+one request at a time, and every Ledger write on either surface was a read, then some work, then a
+write on a connection that autocommits each statement. Measured before the repair: two gathered
+answers under one sealed pair wrote two `duel` rows in most races with no injected latency, one of
+those races drawing §13's held-out arm; two gathered Rate taps on one card token left the loser
+holding a refusal §6.1 does not define, with its Jellyfin write already sent — the plan says 500
+there, and M4.7's handler had since made it a 409 naming a database constraint, which is a different
+sentence and no more actionable by the client; a 1.5 s Played push held one backend
+`idle in transaction` for the whole wait, because the round trip was awaited inside the verdict
+transaction; both Rank routes raised after their observation was durable, so every retry wrote
+another append-only row; and §6.1's reveal was dark on 50 of 50 taps for both members on the real
+bundle. What closed it is one property at four seams, each in the form that seam can carry: the
+two-int `pg_advisory_xact_lock` of `tonight/play.py:611`, taken as the first statement inside the
+Rank answer's `write_txn(conn)` — not through that helper's own `lock=`, whose single-argument
+`hashtext(...)::bigint` form is a different lock space and cannot collide with a number there
+(`api/deps.py:86-88` says so); a `SELECT ... FOR UPDATE` on `rate_session` as the first statement of
+every Rate write; an `AND card_token IS NULL` on the card stash — joined by an
+`AND card_token = $read` one for the §6.0 banner's redraw, which must replace the card it read and
+nothing else — where the decision and the write are one statement; and a compare-and-set on the tier set a
+refit fitted against, with the request's own timestamp deciding whether clearing it is safe. In
+every case the loser either waits or matches no row, and then reads what the winner committed — with
+the refit moved after the commit and the Jellyfin round trip moved out of it. **Ten rows were
+written before the code and `current_milestone` was raised in the same change, with no `tests` key
+on any of them**: the red list that run printed — those ten ids — *is* the test plan
+(`docs/milestones/M4.10-plan.md`), and each of the ten stages filled in its own row as its tests
+landed. That differs from M4.9's opening, which named thirty-nine test ids in
+advance; here the rows were owned by stages running in parallel, and a guessed test name in another
+stage's row is a merge conflict rather than a plan. **No waiver was added and the milestone was never
+lowered.** Decisions **199–209** are numbered in `docs/spec-v2.2-proposals.md` — the last of them
+taken as the milestone closed, on the window finding 9 opened between a member's first verdict and
+the sweep that fits it: §6.3's board answered "0 rated" through it, which is what a member who has
+never opened Rate reads, so it says `fitting` instead and no route waits for a fit. **No migration** —
+every fix uses a column that already exists, so `0019` stays free.
+
+**All eight of M4.10's exit-criterion clauses are asserted in this suite; the browser gate on top of
+them is the owner's.** Every gathered assertion repeats eight times rather than once, because the
+reproductions behind the two double-write findings failed in four and in five of six attempts — a
+race that passes once has not passed. One clause carries a condition worth knowing before it is
+measured: since a Ledger cache miss stopped running the MAP fit inside the request, a brand-new
+member's first fit arrives with the 60 s `tier-set-refit` sweep, so "the reveal is available from the
+second tap" has to be measured with that sweep running, or it measures the absence of a worker rather
+than the presence of a reveal. `npm --prefix e2e run fresh` is the owner's, against no inherited red,
+so any browser failure is M4.10's; two of its cases moved with the decisions rather than with the
+code, and would have failed by design if they had not — `11-rate.spec.js` asserted the fifteenth tap
+was already unretractable, which decision 199 reverses, and `13-rank.spec.js` gained the
+tap-into-an-occupied-tier case that proves the phone's tap writes no neighbour duel. **No whole-suite
+count is published here** until a run prints one, which is decision 184's rule applied again.
+
+**One measurement M4.10 took and deliberately did not act on.** Decision 205 keeps decision 175's
+`straddle_z` retune with M4.12, so the straddle badge was measured rather than moved: at
+`straddle_z = 1.0` a settled board badges 57% of its titles, and a board nobody has rated badges
+**600 of 600** — `b_i_tau` is exactly `straddle_z`, so the prior interval always crosses a cut. What
+M4.10 changed is only which tier the badge names (the adjacent one, and the nearer cut when the
+posterior reaches both); on a mature board the old and new rules disagree on 2 badges in 1,083, and
+on a young one on 1,065 of 1,723. The number that argues for the retune is the 600, and it belongs to
+M4.12's findings 31 and 32.
+
+**M4.9 shipped before it, and unlike M4.6, M4.7 and M4.8 it has a §12 row of its own.** The
+argument is at spec line 426: M0's exit criterion is "bundle imports clean; Library list and title
 card render imported titles", and it was closed against a fixture in which the corpus's awkward
 shapes do not occur — so the row existed and was asserted about the wrong artifact. The real export
 ships two department spellings for one job, two facet namings for one vocabulary, and a term id
@@ -312,7 +373,7 @@ is not a suite that failed. If you need a database that outlives its session, gi
 `_p<digits>` and it will survive.
 
 **M4.7 shipped before it, and §12 gained a row for that one.** Decision 181 put that row between
-M4.6 and M5, with the argument at spec line 422: §12 scheduled the product and left the box it runs
+M4.6 and M5, with the argument at spec line 424: §12 scheduled the product and left the box it runs
 in unscheduled, so every §2 promise about required configuration, secrets custody with rotation, a
 nightly dump with rotation 14 and a restore was documented, coverage-mapped, and either
 unimplemented or implemented in a way that failed on the day it was needed. Seventeen rows were

@@ -511,6 +511,70 @@ def test_a_posterior_that_reaches_the_next_tier_is_flagged():
     assert flags[1] == -1, "0.20 ± 0.02 does not"
 
 
+def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
+    """§6.3's badge is the *neighbouring* level the posterior also reaches.
+
+    `rank.board.straddles`' docstring already says "the **adjacent** tier the posterior also
+    reaches" and the `tonight-rank-straddle-equals-eligible` row already says "the one adjacent
+    tier that exists"; nothing asserted it. The old implementation set the reach to
+    `searchsorted(lo)` whenever that differed from the tier, so a posterior crossing two cuts
+    came back two levels down — "B/F" on a five-tier board — and `queue._boundary` then drew the
+    partner from a tier the title does not border. Decision 205 keeps the ±z·σ predicate and
+    restricts the answer to the two neighbours; it does not retune `straddle_z`.
+    """
+    cuts = model.initial_cutpoints(7)
+    rng = np.random.default_rng(19)
+    s = rng.normal(scale=2.0, size=600)
+    sigma = rng.uniform(0.01, 3.0, size=600)
+    tier = model.tier_of(s, cuts)
+    reached = model.straddle(s, sigma, cuts, DEFAULTS)
+    named = reached >= 0
+    assert named.sum() > 100, "the fixture has to produce straddlers or this proves nothing"
+    assert np.all(np.abs(reached[named] - tier[named]) == 1), (
+        "a badge naming a tier the posterior neither occupies nor borders is a claim about "
+        "nothing"
+    )
+
+
+def test_restricting_the_named_tier_does_not_narrow_the_straddling_set():
+    """§6.3 makes the badge and queue eligibility one predicate (proposal 157), so narrowing
+    *which* tier is named must not change *who* is named at all — a fix that shrank the set
+    would shrink the comparison queue with it, silently.
+
+    The predicate, stated independently of the implementation: some cutpoint lies inside
+    (s − zσ, s + zσ].
+    """
+    cuts = model.initial_cutpoints(7)
+    rng = np.random.default_rng(23)
+    s = rng.normal(scale=2.0, size=400)
+    sigma = rng.uniform(0.01, 3.0, size=400)
+    reach = DEFAULTS.straddle_z * sigma
+    crosses = np.array(
+        [bool(np.any((cuts > s[i] - reach[i]) & (cuts <= s[i] + reach[i]))) for i in range(s.size)]
+    )
+    assert np.array_equal(model.straddle(s, sigma, cuts, DEFAULTS) >= 0, crosses)
+
+
+def test_a_posterior_reaching_both_neighbours_names_the_nearer_cut():
+    """The ambiguity §6.3 leaves and decision 205 settles: when the interval crosses the cut
+    below *and* the cut above, the badge names the tier whose boundary is closer to `s`.
+
+    The old order tested the lower reach first, so a title 0.2 under its upper cut and 0.9 over
+    its lower one was badged with the lower neighbour — the tier it is least likely to be in.
+    A tie keeps the downward choice, so the answer is a function of the numbers rather than of
+    the iteration order.
+    """
+    cuts = model.initial_cutpoints(7)
+    assert model.tier_of(np.array([0.9]), cuts)[0] == 4, "s = 0.9 sits in A on the measured set"
+    assert model.straddle(np.array([0.9]), np.array([1.0]), cuts, DEFAULTS)[0] == 5
+
+    nearer_below = float(cuts[3]) + 0.1
+    assert model.straddle(np.array([nearer_below]), np.array([1.0]), cuts, DEFAULTS)[0] == 3
+
+    midway = (float(cuts[3]) + float(cuts[4])) / 2.0
+    assert model.straddle(np.array([midway]), np.array([1.0]), cuts, DEFAULTS)[0] == 3
+
+
 # --- §5.2's freshness rule -----------------------------------------------------------------------
 
 

@@ -831,7 +831,11 @@ async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head
 
     query = parse_qs(urlsplit(banner["cta"]["route"]).query)
     assert urlsplit(banner["cta"]["route"]).path == "/rate"
-    assert query["mode"] == ["sweep"]
+    # Decision 203: the link carries `head=` and nothing else. It used to lead with
+    # `mode=sweep`, which `api/rate.py`'s `current` does not declare and `rate/+page.svelte`
+    # does not read, so the banner stated a control neither end has.
+    assert "mode" not in query, query
+    assert list(query) == ["head"], query
     assert [int(t) for t in query["head"]] == named
     assert banner["cta"]["head"] == named
     assert parse_qs(urlsplit(banner["cta"]["api"]).query)["head"] == query["head"]
@@ -854,6 +858,57 @@ async def test_following_the_banners_own_link_serves_the_first_named_title(world
     assert card["title"]["id"] == banner["head_title_ids"][0], (
         "the queue served a different card than the banner named"
     )
+
+
+async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world):
+    """§6.0's banner names what §6.1's queue can serve, and nothing else. [M4.10 finding 23]
+
+    The fixture makes this falsifiable rather than plausible: 1023 and 1123 carry the same
+    `state_changed_at` and the tie breaks on `t.id DESC`, so the most recently seen pending
+    title is a SERIES. With no kind predicate a films-only session was handed a banner whose
+    first named title was that series and a CTA that served a film instead — proposal 150's own
+    failure mode, "a prompt that names titles and then presents a different one is worse than no
+    prompt", reached by the one surface that quotes it.
+
+    The session is opened through §6.1's own control rather than by writing `rate_session`, so
+    what is under test is the chain a person walks: the control narrows the queue, and the
+    banner reads the narrowing.
+    """
+    both = (await world.home())["banner"]
+    assert both["count"] == 6
+    assert "series" in {c["kind"] for c in both["named"]}, both["named"]
+
+    opened = await world.client.post("/api/rate/session", json={"kinds": ["movie"]})
+    assert opened.status_code == 200, opened.text
+    films = (await world.home())["banner"]
+    assert films["count"] == 3, "the count is the population the CTA can serve, not all of it"
+    assert {c["kind"] for c in films["named"]} == {"movie"}
+    assert "Home Series" not in films["copy"]["wide"], films["copy"]["wide"]
+
+    # The property the copy and the link have to share, asserted against the link the BANNER
+    # emitted: following it opens on the FIRST title it named. The stashed card is cleared
+    # first, which is the state the session is in the moment after a tap and the state a person
+    # reaching Home mid-sitting is in -- `ensure_card` keeps a stashed card that is already one
+    # of the named titles, so leaving whatever the control happened to draw on the table would
+    # assert the idempotency branch instead of the pin.
+    await world.db.execute(
+        "UPDATE rate_session SET current_card = NULL, card_token = NULL "
+        "WHERE user_id = $1 AND ended_at IS NULL",
+        world.patrick,
+    )
+    served = await world.client.get(films["cta"]["api"])
+    assert served.status_code == 200, served.text
+    assert served.json()["card"]["title"]["id"] == films["head_title_ids"][0], (
+        "the queue served a different card than the banner named"
+    )
+
+    # The filter is the live session's rather than a standing narrowing of the banner: widen the
+    # session and the series is nameable again.
+    widened = await world.client.post(
+        "/api/rate/session", json={"kinds": ["movie", "series"]}
+    )
+    assert widened.status_code == 200, widened.text
+    assert (await world.home())["banner"]["count"] == 6
 
 
 async def test_rendering_home_writes_nothing(world):
@@ -1297,6 +1352,85 @@ async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world)
         rail.record(kind="verdict", line="   ")
 
 
+def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
+    """Finding 8's third raise site, closed in the renderer. [M4.10 finding 8]
+
+    `api/rank.py` composes its duel line AFTER `record_duel` has committed and `rank/drop.py`
+    composes its tier-edit line after the edit has, so a renderer that can refuse is a route
+    that can answer 500 over a durable row: measured, two 260-390 character names made the
+    answer route 500 with the duel written and the retry wrote a fifth. `rank/tiers.py:56-62`'s
+    `MAX_LABEL` comment records the same failure for tier labels and took the other branch,
+    because a label is a choice somebody made and a title name is bundle data.
+
+    The two refusals that survive are the ones that are programming errors rather than data,
+    and they survive on purpose: the Rank routes lean on that half of the contract.
+
+    `verdict_line` is asserted here too, because the rule is every renderer that interpolates a
+    name and not only the two the Rank routes call. It was written without either `_elide`, and it
+    is §6.7's commonest line on the surface this milestone is named for: `rate/session.py`'s
+    `payload` records it after the verdict has committed, so at the 64 characters `AccountName`
+    allows a 280-character title name was a 500 over a durable row whose retry the nulled card
+    token then answered 409. [M4.10 cycle 1, M410-R1-01]
+    """
+    name = ("The Assassination of Jesse James by the Coward Robert Ford " * 6)[:300]
+    assert len(name) == 300, len(name)
+
+    line = rail.duel_line(name, name, "TIE", context="tier_queue", selection="uniform_holdout")
+    assert len(line) <= rail.MAX_LINE
+    assert rail.record(kind="duel", user_id=-1, line=line) > 0, "the write must not refuse"
+    edit = rail.tier_edit_line(name, "A", via="drag_drop", neighbour_duels=2)
+    assert len(edit) <= rail.MAX_LINE
+    assert rail.record(kind="tier_edit", user_id=-1, line=edit) > 0
+    # The longest name `AccountName` (`api/setup.py`) permits, against the same 300 characters the
+    # coverage row tests the Rank half with: 64 + 300 and a 67-character chrome is 431 of 400, and
+    # at the 33 characters of "Grandma's iPad in the living room" it is exactly 400 — the threshold
+    # sits inside the range of names a household actually types.
+    member = "Grandma's iPad in the living room and the one in the kitchen :-)"
+    assert len(member) == 64, len(member)
+    spoken = rail.verdict_line(member, name, "disliked", refit_ms=31.4)
+    assert len(spoken) <= rail.MAX_LINE, len(spoken)
+    assert rail.record(kind="verdict", user_id=-1, line=spoken) > 0
+    rail.forget(user_id=-1)
+
+    # Elided, not emptied: §6.7's line still names the titles it narrates, once per name.
+    assert name[:40] in line and line.count("…") == 2
+    assert line.endswith("uniform-random, held out")
+    short = rail.tier_edit_line("Drive", "A", via="drag_drop", neighbour_duels=2)
+    assert "…" not in short and "Drive" in short
+
+    # The bound holds for the longest line either renderer can compose, not only for this name.
+    # Every other piece is bounded elsewhere, which is what `MAX_NAME_IN_LINE`'s arithmetic
+    # assumes: 0005's CHECKs on `duel.outcome` and `duel.context`, `ARM_PHRASES`, and the tier
+    # label's own bound -- imported rather than restated, because it belongs to that module.
+    from spielplan.rank import tiers
+
+    absurd = "x" * 4000
+    for context in ("profile_battle", "tier_queue", "tier_insert"):
+        for outcome in ("A", "B", "TIE"):
+            for arm in rail.ARM_PHRASES:
+                built = rail.duel_line(absurd, absurd, outcome, context=context, selection=arm)
+                assert len(built) <= rail.MAX_LINE, (context, outcome, arm, len(built))
+    widest = rail.tier_edit_line(
+        absurd, "L" * tiers.MAX_LABEL, via="drag_drop", neighbour_duels=999
+    )
+    assert len(widest) <= rail.MAX_LINE, len(widest)
+    # The verdict's chrome is bounded by `VERDICT_LABELS` and by the millisecond count, so both
+    # move while the names stay absurd -- a six-figure refit is already a pathology.
+    for label in ("liked", "fine", "disliked"):
+        for refit_ms in (None, 0.4, 31.4, 123456.7):
+            said = rail.verdict_line(absurd, absurd, label, refit_ms=refit_ms)
+            assert len(said) <= rail.MAX_LINE, (label, refit_ms, len(said))
+
+    # And the refusals the data argument does not reach stay refusals, because the Rank routes
+    # read them as the signal that the CALLER is wrong rather than the bundle.
+    with pytest.raises(rail.RailError):
+        rail.record(kind="duel", line="")
+    with pytest.raises(rail.RailError):
+        rail.record(kind="tier_drag", line=line)
+    with pytest.raises(rail.RailError):
+        rail.duel_line("a", "b", "A", context="tier_queue", selection="clairvoyance")
+
+
 def test_the_gate_removes_gated_keys_at_every_depth():
     """`redact` is the one place decision 117 is enforced, so it is tested on its own: a nested
     annotation must not survive because it was three levels down."""
@@ -1320,7 +1454,7 @@ async def test_a_profile_with_no_verdicts_gets_the_seed_route_not_a_meaningless_
     payload = await world.home()
     assert payload["verdict_count"] == 0
     assert payload["degraded"]["state"] == "zero_verdicts"
-    assert payload["degraded"]["cta"]["route"] == "/rate?mode=sweep"
+    assert payload["degraded"]["cta"]["route"] == "/rate"  # decision 203
     assert [s["id"] for s in payload["shelves"]] == ["new_in_library"]
 
 

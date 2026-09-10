@@ -44,6 +44,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
+from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
 from spielplan.core.config import settings  # noqa: E402
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
@@ -1082,8 +1083,9 @@ def admin_system() -> dict[str, Any]:
 # Everything below answers out of the bundle `tests/fixtures/make_bundle.py` writes, plus the
 # in-memory journal. Where the real app reads a fitted number, this reads an INVENTED one —
 # see `_scores`. Where the real app decides something, the decision is imported from the real
-# module rather than restated: `rate_session.card_type_for` and `.advance` run the block
-# machine, `balance.ClassBalance.of` renders the widget, `queue.reason_for` and
+# module rather than restated: `rate_session.observation_index`, `.card_type_for`, `.advance`,
+# `._undo_reaches`'s rule and `.drained_for` run the block machine and its two ends,
+# `balance.ClassBalance.of` renders the widget, `queue.reason_for` and
 # `battle.reason_for` write the why-lines, `shelves.greeting` picks the band, and
 # `rail.redact` is decision 117's gate. A harness that re-derived any of those would drift
 # from the app on exactly the properties the front end is built against.
@@ -1292,8 +1294,10 @@ def _beta(user_id: int, kind: str) -> tuple[float, bool]:
 #      ALLOW-LIST built field by field. It never copies the stored card and deletes keys: a
 #      deny-list leaks the first time a field is added, and the two fields it would leak are
 #      §13's re-ask reference and the pair's verdict band.
-#   3. THE CARD TYPE IS A FUNCTION OF THE SLOT, never of the last card served, and the counter
-#      runs 1..15 and rolls. Both come from `rate_session.card_type_for` / `.advance`.
+#   3. THE CARD TYPE IS A FUNCTION OF THE SESSION'S MONOTONE OBSERVATION INDEX, never of the
+#      last card served, and the counter runs 1..15 and rolls. All three come from
+#      `rate_session.observation_index` / `.card_type_for` / `.advance`. It was the slot, and
+#      fifteen is odd, so slot 15 and the next block's slot 1 were both sweeps [decision 200].
 #   4. A CORRECTION DOES NOT ADVANCE. It repairs the question rather than answering it.
 #
 # The reveal is the one place the harness invents a belief, and it invents it strictly after
@@ -1440,21 +1444,25 @@ def _ensure_card(s: dict[str, Any], *, head: Sequence[int] = ()) -> dict[str, An
         return s
     served = _observed_title_ids(s)
     skipped = _skipped_title_ids(s)
-    wanted = rate_session.card_type_for(s["mode"], s["slot"])
+    # Decision 200: the type follows the session's MONOTONE observation index, not the slot.
+    # Fifteen is odd, so the old slot rule served a sweep at slot 15 and another at slot 1 of
+    # the next block; the harness taught that pair to whoever developed the surface against it.
+    wanted = rate_session.card_type_for(
+        s["mode"], rate_session.observation_index(s["block_index"], s["slot"])
+    )
     card: dict[str, Any] | None
     if wanted == "battle":
         card = _draw_battle(s, exclude=skipped)
         if card is None and s["mode"] != "battle":
             card = _draw_sweep(s, exclude=served, head=head)
-            if card is not None:
-                card["substituted_for"] = "battle"
     else:
         card = _draw_sweep(s, exclude=served, head=head)
         if card is None and s["mode"] != "sweep":
             card = _draw_battle(s, exclude=skipped)
-            if card is not None:
-                card["substituted_for"] = "sweep"
-    return _stash(s, card)
+    # The app's own marker rather than a second spelling of it: `_mark_substitution` sets the
+    # field only where the type actually flipped, and finding 21 was three sites drifting apart
+    # because each one set it by hand. [M4.10 finding 21]
+    return _stash(s, rate_session._mark_substitution(card, instead_of=wanted))
 
 
 def _card_title(title_id: int) -> dict[str, Any] | None:
@@ -1577,12 +1585,35 @@ def _sync_line(state: str, reason: str = "Jellyfin not configured") -> str:
     return f"user_title.state = {state} -> not pushed ({reason})"
 
 
+def _undo_reaches(s: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Decision 35's depth with decision 199's boundary — `rate_session._undo_reaches` in a dict.
+
+    `advance` rolls the counter ON the fifteenth observation, so comparing block indexes alone
+    disabled the chip on the same round trip that answered card 15: the tap the person can still
+    see on screen was already unretractable. Decision 199 keeps the previous block reachable
+    while the new one is empty, and the third clause is what makes "until the sixteenth lands"
+    mean it — undo restores the session to the block and slot of the row it pops, so without it
+    the sixteenth could be made, retracted, and the fifteenth would come back, and from there
+    every earlier block one tap at a time. Tombstones count, exactly as the app's `SELECT 1 FROM
+    rate_observation` counts them. [decisions 35, 174, 199]
+    """
+    if row["block_index"] == s["block_index"]:
+        return True
+    if not (
+        s["slot"] == 1
+        and row["block_index"] == s["block_index"] - 1
+        and row["slot"] == rate_session.BLOCK_SIZE
+    ):
+        return False
+    return not any(o["block_index"] == s["block_index"] for o in s["observations"])
+
+
 def _undo_availability(s: dict[str, Any]) -> dict[str, Any]:
     """Decision 35: "the chip disables visibly at the boundary"."""
     live = [o for o in s["observations"] if not o["undone"]]
     if not live:
         return {"available": False, "kind": None, "reason": "empty"}
-    if live[-1]["block_index"] != s["block_index"]:
+    if not _undo_reaches(s, live[-1]):
         return {"available": False, "kind": None, "reason": "block_boundary"}
     return {"available": True, "kind": live[-1]["kind_of"], "reason": None}
 
@@ -1609,11 +1640,19 @@ def _rate_payload(
             "block": {
                 "index": s["block_index"], "slot": s["slot"], "size": rate_session.BLOCK_SIZE,
                 "counter": f"{s['slot']} / {rate_session.BLOCK_SIZE}",
-                "serving": rate_session.card_type_for(s["mode"], s["slot"]),
+                # What the counter CALLS FOR, off the same monotone index `_ensure_card` draws
+                # against, so the two cannot disagree here either. [decision 200]
+                "serving": rate_session.card_type_for(
+                    s["mode"], rate_session.observation_index(s["block_index"], s["slot"])
+                ),
             },
         },
         "card": card,
-        "drained": None if card else rate_session.DRAINED,
+        # Keyed by cause: "no card" has three of them, and in Battle mode it is not a drained
+        # sweep queue at all. The harness shipped the queue sentence for all three, which sends
+        # a person whose pool is thin to Rank instead of back to the sweep that would fix it.
+        # [M4.10 finding 20]
+        "drained": None if card else rate_session.drained_for(s["mode"]),
         "class_balance": _class_balance(s),
         "undo": _undo_availability(s),
         "reveal": reveal,
@@ -1924,8 +1963,11 @@ def _redraw_pair(
     survivor = next((t for t in (card["title_a"], card["title_b"]) if t not in corrected), None)
     exclude = _skipped_title_ids(s) | set(corrected)
     if survivor is None:
-        return _draw_battle(s, exclude=exclude) or _draw_sweep(
-            s, exclude=_observed_title_ids(s), head=()
+        # A fall-through to a sweep is a substitution exactly as much as the thin-pool one is:
+        # the counter still wants the battle this card was, and an unmarked one is a surface
+        # that changed the question and said nothing. [M4.10 finding 21]
+        return _draw_battle(s, exclude=exclude) or rate_session._mark_substitution(
+            _draw_sweep(s, exclude=_observed_title_ids(s), head=()), instead_of=card["type"]
         )
     verdicts = _verdicts(s["user_id"])
     opponents = sorted(
@@ -1934,7 +1976,10 @@ def _redraw_pair(
         and verdicts.get(t["id"]) == card["verdict_class"] and _seen_state(t["id"]) == "seen"
     )
     if not opponents:
-        return _draw_sweep(s, exclude=_observed_title_ids(s) | set(corrected), head=())
+        return rate_session._mark_substitution(
+            _draw_sweep(s, exclude=_observed_title_ids(s) | set(corrected), head=()),
+            instead_of=card["type"],
+        )
     opponent = RNG.choice(opponents)
     keep_left = survivor == card["title_a"]
     return {
@@ -1958,7 +2003,7 @@ def rate_undo(spielplan_session: str | None = Cookie(default=None)) -> dict[str,
         raise HTTPException(409, detail={
             "reason": "empty", "message": "nothing to undo in this block"})
     row = live[-1]
-    if row["block_index"] != s["block_index"]:
+    if not _undo_reaches(s, row):
         raise HTTPException(409, detail={
             "reason": "block_boundary",
             "message": "undo reaches back to the start of this block of 15 and no further",
@@ -2053,11 +2098,20 @@ def _pending_verdicts(user_id: int) -> dict[str, Any] | None:
     Beyond three the copy names two and counts the rest, so the NAMED set — and therefore the
     queue head — is two, not three. Naming one set and queueing another is the failure that
     proposal exists to prevent.
+
+    FILTERED BY THE LIVE SESSION'S KINDS, because the CTA has to be able to serve what the copy
+    names: a films-only session offered a banner naming a seen-but-unrated series and a link that
+    opened on an unrelated film. With no live session the queue has not been narrowed yet and both
+    kinds are named, which is why the session is read out of `STATE` rather than through `_rate` —
+    that one opens a session on demand, so reading the banner would be what narrowed it.
+    [M4.10 finding 23]
     """
+    live = STATE["rate"].get(user_id)
+    kinds = list(live["kinds"]) if live is not None else list(KINDS)
     verdicts = _verdicts(user_id)
     rows = [
         t for t in _catalog()
-        if _seen_state(t["id"]) == "seen" and t["id"] not in verdicts
+        if t["kind"] in kinds and _seen_state(t["id"]) == "seen" and t["id"] not in verdicts
     ]
     if not rows:
         return None
@@ -2069,8 +2123,12 @@ def _pending_verdicts(user_id: int) -> dict[str, Any] | None:
     # "two and N more" is a sentence the harness must not be free to spell differently.
     text = shelves._name_list([r["name"] for r in named], total)
     # REPEATED, not comma-joined: `GET /api/rate` declares `head: list[int]`, so `head=1,2` is
-    # a 422 and `head=1&head=2` is the contract.
-    query = "&".join(["mode=sweep"] + [f"head={i}" for i in head])
+    # a 422 and `head=1&head=2` is the contract. `mode=sweep` used to lead the query and carried
+    # nothing — `GET /api/rate` declares `head` only and `rate/+page.svelte` reads only `head` —
+    # so the link stated a control neither end has. The app dropped it (decision 203) and a
+    # harness that kept it would be the only in-repo example of a link a client is written
+    # against. The `mode` FIELD below stays, exactly as it stays in the app.
+    query = "&".join(f"head={i}" for i in head)
     return {
         "count": total,
         "named": [{"title_id": int(r["id"]), "name": r["name"], "kind": r["kind"]}
@@ -2756,6 +2814,10 @@ def _rank_board_payload(
         ],
         "rated": len(shown),
         "rated_total": len(rows),
+        # Decision 209's key, and always false here: `_rank_items` derives the board from the
+        # verdicts themselves, so this harness has no fit to owe. The client reads the key, so it
+        # is on the wire — absent, the app's `?? false` would read the same, by luck.
+        "fitting": False,
         "queue_eligible": len(rank_queue.eligible(rows, cuts=cuts, hp=hp)),
         "filters": active,
         "dna_tiers": None,
@@ -2875,16 +2937,27 @@ def rank_queue_route(
             ),
         }
     names = {t["id"]: t["name"] for t in _catalog()}
-    return {
+    served = pair.public()
+    # §13's guard, mirrored: `Pair.public()` ships the arm together with the sentence
+    # "uniform-random, held out - this pair never tunes the model", and a member told which of
+    # their answers the model ignores has been given a reason to answer it carelessly. The app
+    # moved both under `model` and gave the pair one arm-independent why-line
+    # (`api/rank.py`); a harness that went on shipping them plainly would teach the front end
+    # to render a key the real backend redacts. [M4.10 finding 16, decision 117]
+    arm = {"arm": served.pop("arm"), "reason": served.pop("reason")}
+    payload = {
         "kind": kind,
         "pair": {
-            **pair.public(),
+            **served,
             "name_a": names.get(pair.title_a),
             "name_b": names.get(pair.title_b),
             "token": _rank_seal(user["id"], kind, pair),
+            "reason": _QUEUE_WHY,
+            "model": arm,
         },
         "pool": len(pool),
     }
+    return rail.redact(payload, show_model=_show_model(user))
 
 
 @app.post("/api/rank/queue/answer")

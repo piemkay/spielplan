@@ -32,12 +32,17 @@ CUTS = model.initial_cutpoints(7)
 
 def pool(n=60, *, sigma=0.35, seed=2, comparisons=None):
     """A board wide enough that every arm can actually draw: titles spread across the whole
-    cutpoint range with a σ that makes many of them straddle, and every tier populated."""
+    cutpoint range with a σ that makes many of them straddle, and every tier populated.
+
+    `sigma` takes a sequence as well as a scalar, because finding 12's failure is a statement
+    about a board where *some* titles have settled and the rest have not.
+    """
     rng = np.random.default_rng(seed)
     values = np.linspace(float(CUTS[0]) - 1.0, float(CUTS[-1]) + 1.0, n)
     values = values + rng.normal(scale=0.05, size=n)
+    sigmas = list(sigma) if isinstance(sigma, (list, tuple, np.ndarray)) else [sigma] * n
     items = [
-        board.Item(title_id=i + 1, name=f"T{i + 1}", s=float(v), sigma=sigma)
+        board.Item(title_id=i + 1, name=f"T{i + 1}", s=float(v), sigma=float(sigmas[i]))
         for i, v in enumerate(values)
     ]
     return queue.candidates(
@@ -192,6 +197,81 @@ def test_exploration_reaches_the_least_compared_title():
     pair = queue._exploration(candidates, rng)
     assert 42 in (pair.title_a, pair.title_b)
     assert pair.arm == queue.ARM_EXPLORATION
+
+
+def test_exploration_anchors_on_the_least_compared_title_of_the_whole_pool():
+    """Finding 12. The arm used to pick its anchor out of `[c for c in pool if c.straddle is
+    None] or list(pool)`, and §6.3 licenses no such restriction — it names the share and calls
+    the arm "exploration".
+
+    On a young board nothing is in that list, so the arm silently drew straddlers; the moment one
+    title settled, the list inverted into the handful the model is *most* sure about, and the
+    least-compared title among THOSE was served while `pair.reason` said "the least-compared
+    title on your board". Simulated over 500 answers with the route's own semantics, |away| was
+    1-2 of 900 from answer 110 on and its anchor ended with the most comparisons on the board.
+    """
+    counts = {i: 50 for i in range(1, 61)} | {42: 0}
+    candidates = pool(sigma=0.35, comparisons=counts)
+    by_id = {c.title_id: c for c in candidates}
+    assert by_id[42].straddle is not None, "the least-compared title is one the model is unsure of"
+    assert [c for c in candidates if c.straddle is None], "and some of the board has settled"
+
+    rng = random.Random(4)
+    pair = queue._exploration(candidates, rng)
+    assert 42 in (pair.title_a, pair.title_b), (
+        "the anchor is the least-compared title on the board, not on the settled corner of it"
+    )
+    assert pair.arm == queue.ARM_EXPLORATION
+
+
+def test_exploration_never_re_serves_a_pair_it_has_already_asked():
+    """Finding 12's other half. Each repeat counts as an independent Davidson row, so ten
+    repeats of one judgement shrink that pair's posterior by √10 on the strength of one answer
+    — the reliability inflation §13 guards against, arriving by a different door
+    (M3-open-points §3.1, which `tonight/round.py`'s `select` already answers with `asked`).
+
+    The board here is the one that broke it: two titles settled, everything else straddling, so
+    the old filter left an `away` of exactly two and one pair served 78 of 109 draws.
+    """
+    sigmas = [3.0] * 60
+    sigmas[6] = sigmas[49] = 1e-6
+    assert len([c for c in pool(sigma=sigmas) if c.straddle is None]) == 2
+
+    counts = {i: 0 for i in range(1, 61)}
+    asked: set[frozenset[int]] = set()
+    rng = random.Random(8)
+    for draw in range(200):
+        pair = queue._exploration(pool(sigma=sigmas, comparisons=counts), rng, asked=asked)
+        assert pair is not None, f"the pool has 1770 distinct pairs and ran out at {draw}"
+        key = frozenset((pair.title_a, pair.title_b))
+        assert key not in asked, f"re-served a pair already answered: {sorted(key)}"
+        asked.add(key)
+        counts[pair.title_a] += 1
+        counts[pair.title_b] += 1
+    assert len(asked) == 200
+
+    # And through `draw`, because the route hands the set to the selector and not to the arm.
+    #
+    # Counted rather than guarded by a bare `if`: the clause that used to stand here ran a single
+    # `draw` behind `if served.arm == queue.ARM_EXPLORATION:`, and off this generator's state that
+    # roll is 0.968 -- the held-out band. The branch never executed, so a `draw` that dropped
+    # `asked=asked` on its way to `_exploration` passed it, which is the only forwarding the route
+    # depends on. Two hundred draws over §6.3's mix give the arm its 20%, and the count says so
+    # rather than hoping. The other two arms are deliberately not asserted: the held-out arm must
+    # not consult `asked` at all (§13), and the boundary arm's own repetition is
+    # M3-open-points §3.1's remaining half. [M4.10 cycle 1, M410-REV3]
+    explored = 0
+    for draw in range(200):
+        served = queue.draw(pool(sigma=sigmas, comparisons=counts), rng=rng, asked=asked)
+        assert served is not None, f"the board ran out of pairs at draw {draw}"
+        if served.arm != queue.ARM_EXPLORATION:
+            continue
+        explored += 1
+        assert frozenset((served.title_a, served.title_b)) not in asked, (
+            f"draw {draw}: `draw` served a pair already answered, so it did not hand `asked` to "
+            f"the arm: {sorted((served.title_a, served.title_b))}"
+        )
+    assert explored > 0, "no exploration draw came up, so the clause above asserted nothing"
 
 
 def test_exploration_rotates_as_comparisons_accrue():

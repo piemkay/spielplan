@@ -149,6 +149,108 @@ async def _push(
     return True, None
 
 
+async def push_owed(
+    conn: asyncpg.Connection,
+    client: JellyfinClient | None,
+    cfg: JellyfinConfig,
+    *,
+    user_id: int,
+    title_id: int,
+) -> tuple[bool, str | None]:
+    """Tell Jellyfin what the app has already written. Returns (pushed, refusal).
+
+    This is `set_state` minus its first statement, and splitting it out is what finally makes
+    that function's own promise — "the app-side write is committed before the network call and
+    never depends on it" — structurally true for its most frequent caller. `rate/session.py`
+    awaited the whole of `set_state` *inside* the verdict transaction, so a Jellyfin that took
+    1.5 s to answer held the row locks for 1.5 s: measured, a second connection could not see
+    the committed verdict for 1.67 s and one backend sat `idle in transaction` for the whole
+    wait, against a pool of ten. §3.3 ("the app must work when Jellyfin is down") is not a
+    statement about the response body alone; it is a statement about what a foreign server's
+    latency is allowed to hold. [M4.10 finding 11]
+
+    What is owed is read from `user_title` rather than passed in, because that row IS §7.3's
+    ledger of the debt: `ledger/observations._set_state` writes the state with
+    `jf_synced_at = NULL` inside the observation's transaction, which is precisely the table's
+    "the person acted and Jellyfin has not been told yet" row. Pushing anything else would be
+    pushing an intention rather than a fact.
+    """
+    state = await conn.fetchval(
+        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = $2", user_id, title_id
+    )
+    if state is None:
+        # §7.3: "an absent row is the *default*, not an assertion" — there is nothing owed and
+        # nothing to say to Jellyfin. Reached only by a caller that pushed without writing.
+        return False, "nothing owed"
+
+    jellyfin_id = await conn.fetchval("SELECT jellyfin_id FROM title WHERE id = $1", title_id)
+    if client is None or not jellyfin_id:
+        if client is not None:
+            return False, "not on Jellyfin"
+        if cfg.secrets_unreadable:
+            # The tap is kept either way — that is §3.3 — but "Jellyfin not configured" would be
+            # a lie an admin cannot act on: the connector *is* configured and its credentials are
+            # sealed under a SECRETS_KEY this process does not have (M4.7 dd03).
+            return False, SECRETS_UNREADABLE_REASON
+        return False, "Jellyfin not configured"
+
+    users = {u.app_user_id: u for u in await linked_users(conn, cfg)}
+    user = users.get(user_id)
+    if user is None:
+        return False, "this account is not linked to a Jellyfin user"
+
+    return await _push(
+        conn, client, user, title_id=title_id, jellyfin_id=jellyfin_id, seen=state == "seen"
+    )
+
+
+async def retract(
+    conn: asyncpg.Connection,
+    client: JellyfinClient | None,
+    cfg: JellyfinConfig,
+    *,
+    user_id: int,
+    title_id: int,
+    prior_state: str | None,
+) -> tuple[bool, str | None]:
+    """Put back exactly the Played flag a forward action set, and only that.
+
+    Decision 35's compensating write, moved here from `rate/session.py._compensate_push`, which
+    was a second implementation of the push path that had drifted from this one: it returned
+    silently where the person's link had no token and where Jellyfin rejected it, so an expired
+    token discovered on an Undo left `jellyfin_link_state` reading `linked` and produced no
+    re-link prompt anywhere — the one thing §7.3 says a 401 on write must produce. Going through
+    `_push` is the fix, and it is the shrink M4.10 owed. [M4.10 finding 11]
+
+    `prior_state` is the state the row held before, or None for "there was no row" — a string
+    rather than the ledger's `PriorState`, so `sync` does not import from `ledger`. It must not
+    go through `set_state`: `observations.undo` has already restored `user_title` byte for byte,
+    §7.3's `jf_synced_at` loop guard included, and a second app-side write would clear that
+    stamp and, where the prior state was no row at all, invent an explicit `unseen` assertion
+    out of an absence. `_push`'s own stamp is safe here for the same reason it is elsewhere: its
+    UPDATE names a row that either exists and is ours to stamp, or does not exist and takes no
+    rows — which is what the old code's `if prior.existed` guard spelled out by hand.
+    """
+    if client is None:
+        if cfg.secrets_unreadable:
+            return False, SECRETS_UNREADABLE_REASON
+        return False, "Jellyfin not configured"
+
+    jellyfin_id = await conn.fetchval("SELECT jellyfin_id FROM title WHERE id = $1", title_id)
+    if not jellyfin_id:
+        return False, "not on Jellyfin"
+
+    users = {u.app_user_id: u for u in await linked_users(conn, cfg)}
+    user = users.get(user_id)
+    if user is None:
+        return False, "this account is not linked to a Jellyfin user"
+
+    return await _push(
+        conn, client, user, title_id=title_id, jellyfin_id=jellyfin_id,
+        seen=prior_state == "seen",
+    )
+
+
 async def set_state(
     conn: asyncpg.Connection,
     client: JellyfinClient | None,
@@ -164,6 +266,10 @@ async def set_state(
     unambiguous that the app must work when Jellyfin is down, so a failed push leaves
     `jf_synced_at` NULL — a debt the next sync settles — rather than rolling back the person's
     action or reporting an error they cannot act on.
+
+    Two statements, and their order is that promise: the write, then `push_owed`. A caller that
+    needs the halves apart — because the write belongs in a transaction and the socket does not
+    — calls them directly, which is what the Rate surface now does. [M4.10 finding 11]
     """
     if state not in STATES:
         raise ValueError(f"state must be one of {STATES}, not {state!r}")
@@ -178,32 +284,8 @@ async def set_state(
         user_id, title_id, state,
     )
 
-    result: dict[str, Any] = {"state": state, "synced": False, "reason": None}
-    jellyfin_id = await conn.fetchval("SELECT jellyfin_id FROM title WHERE id = $1", title_id)
-    if client is None or not jellyfin_id:
-        if client is not None:
-            result["reason"] = "not on Jellyfin"
-        elif cfg.secrets_unreadable:
-            # The tap is kept either way — that is §3.3 — but "Jellyfin not configured" would be
-            # a lie an admin cannot act on: the connector *is* configured and its credentials are
-            # sealed under a SECRETS_KEY this process does not have (M4.7 dd03).
-            result["reason"] = SECRETS_UNREADABLE_REASON
-        else:
-            result["reason"] = "Jellyfin not configured"
-        return result
-
-    users = {u.app_user_id: u for u in await linked_users(conn, cfg)}
-    user = users.get(user_id)
-    if user is None:
-        result["reason"] = "this account is not linked to a Jellyfin user"
-        return result
-
-    pushed, refusal = await _push(
-        conn, client, user, title_id=title_id, jellyfin_id=jellyfin_id, seen=state == "seen"
-    )
-    result["synced"] = pushed
-    result["reason"] = refusal
-    return result
+    pushed, refusal = await push_owed(conn, client, cfg, user_id=user_id, title_id=title_id)
+    return {"state": state, "synced": pushed, "reason": refusal}
 
 
 async def _adopt(conn: asyncpg.Connection, user_id: int, title_id: int, seen: bool) -> None:

@@ -1,8 +1,16 @@
 """§6.1 Battle: two posters, drawn at random from the person's seen titles within a verdict band.
 
 §6.1: "Pairs drawn **at random** from the user's seen titles within verdict bands — no clever
-selection for profiles (measured null; the reason ships as UI copy: 'For profiles no selection
-rule beats random — the clever ones only pay off in the tier queue.')."
+selection for profiles (measured null; the reason ships as UI copy: 'Random pairs. For profiles
+no selection rule beats random — the clever ones pay off where the question is which of these
+few, not how do you rank everything: the tier queue (§6.3) and tonight's round (§6.2).')."
+
+That copy is 54a's, and the clause it replaced — "the clever ones only pay off in the tier
+queue" — was false one surface over: `tonight/round.py` selects adaptively on purpose. 54a's
+argument is that the two rules were never in tension, because the round solves best-arm
+identification inside a pool of tens rather than the global-ranking problem row 6 measured.
+Nothing here changes: this module still draws uniformly over the union of eligible pairs.
+[§6.1, §6.8, proposal 54a; M4.10 finding 22]
 
 §0 row 6 is the measurement behind that: the best selection rule beat random by +0.0013 with a
 confidence interval spanning zero. So a cleverer sampler here is a measured non-improvement,
@@ -137,10 +145,25 @@ def reason_for(verdict_class: int) -> str:
 
     Identical for a re-ask, by construction: it is a function of the band alone, and a re-ask
     pair has a band like any other.
+
+    54a's second clause rides along rather than staying in the rail: §6.8 makes what the app says
+    about its own model a matter of honesty, and this is the line a person reads at the moment
+    they are told the pair was drawn at random. Saying where selection *does* pay off is what
+    keeps that from contradicting the round they will play in §6.2. [finding 22]
+
+    Both halves of that clause, and not only the first. "which of these few" on its own raises
+    54a's question and answers none of it, and the rail card that carries the sentence whole is
+    collapsed below 981 px (`RateRail.svelte`), so on the phone this is the only pair-selection
+    copy there is. Verbatim is not available here — 54a's sentence opens "Random pairs." and this
+    line is composed inside "drawn at random within the class — " — so the adaptation keeps the
+    clause and drops only the opening the sentence structure already supplies.
+    [M4.10 cycle 2, M410-C2-D19-05]
     """
     return (
         f"queued because: both of these you rated {VERDICT_LABELS[verdict_class]}, "
-        "drawn at random within the class — for profiles no selection rule beats random"
+        "drawn at random within the class — for profiles no selection rule beats random; "
+        "the clever ones pay off where the question is which of these few, not how do you rank "
+        "everything: the tier queue (§6.3) and tonight's round (§6.2)"
     )
 
 

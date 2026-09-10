@@ -239,8 +239,14 @@ export async function signInAsMember(page, member) {
   // declares a third copy of the pair at :209-230 and decision 186's Cost paragraph keeps it
   // deliberately — desktop-only, green, named by no finding — so a repair made here does not
   // reach it, and this milestone's own `reuse` is the standing example of one that did not.
-  // [M4.8 review cycle 3: m48-c3-one-path-overclaim] Why the two contexts diverge at all is the
-  // app's half of the question, and M4.10 owns it.
+  // [M4.8 review cycle 3: m48-c3-one-path-overclaim] [M4.10, decision 208] The paragraph above
+  // describes the route as it stood: it now rotates the session it was called on, so every
+  // session for the account ends - the caller's own included - and the response carries one
+  // fresh Set-Cookie (S3.2). A context still holding the pre-change id is therefore refused
+  // rather than silently signed in, and the id it should hold arrives on the change's own
+  // response. That makes the app's half well-defined; it is not a diagnosis of WebKit, whose
+  // two contexts diverging stays the harness's half, which is why the re-login below stays
+  // exactly where decision 186 put it.
   const back = await page.request.post('/api/auth/login', {
     data: { name: member.name, password: member.password }
   });
@@ -270,7 +276,17 @@ export async function seedFilmLedger(page, rounds = 8) {
   });
   for (let i = 0; i < rounds; i++) {
     const { card } = await (await page.request.get('/api/rate')).json();
-    if (!card || card.type !== 'sweep') break;
+    // §6.1's drained state is the one legitimate way out of this loop, and `createMember`'s
+    // `reuse` is why it has to stay one: a re-run against a stack `reset.mjs` never touched gets
+    // the account this helper seeded last time, whose sweep pool it already spent.
+    if (!card) break;
+    // The other half of that condition was a second `break`, and it was the silent one. Sweep
+    // mode has no fallback to a battle — `card_type_for` answers "sweep" for every index and
+    // `ensure_card`'s substitution arm is guarded by `s.mode != "sweep"` — so a card of another
+    // type here is the route breaking §6.1's own contract, and the `break` reported that as an
+    // empty ledger nine lines below: the consequence, named instead of the cause. Loud, in the
+    // shape M4.8's finding 8 gave the write below. [§6.1, decision 200; M4.8 finding 8]
+    expect(card.type, `a sweep session was served a ${card.type} card (§6.1)`).toBe('sweep');
     const answered = await page.request.post('/api/rate/verdict', {
       data: { card_token: card.token, value: i % 3 },
       failOnStatusCode: false
@@ -281,17 +297,70 @@ export async function seedFilmLedger(page, rounds = 8) {
     // that never happened. [M4.8, finding 8]
     expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
   }
-  await page.request.delete('/api/rate/session');
   // The state the caller needs, not the number of writes this run made: `createMember`'s `reuse`
   // hands a re-run the account it seeded last time, whose sweep is already drained and which
-  // therefore legitimately answers nothing above. §6.3's board is "every rated title", so an
-  // empty one is the seed having failed however it failed.
-  const board = await page.request.get('/api/rank?kind=movie');
-  expect(board.ok(), 'reading the seeded ledger back (§6.3)').toBeTruthy();
-  const rated = (await board.json()).tiers.flatMap((tier) => tier.entries).length;
+  // therefore legitimately answers nothing above.
+  //
+  // Read from §5.2's class-balance widget and no longer from §6.3's board. `class_balance`
+  // counts the LIVE labels (`rate/balance.py`: `FROM label l`), which are the same rows
+  // `foldin.live_labels` fits §6.2's pool from and the rows the verdict writes in its own
+  // transaction — so it is true the instant the loop ends, which is what an assertion made here
+  // has to be. The board is not: M4.10's finding 9 took the full MAP fit off the request path,
+  // so the first tap of all per (user, kind) queues it instead (see `waitForBoard`) and
+  // `ledger_state` — every row `GET /api/rank` reads — is still empty at this line. It answered
+  // `rated: 0` for a seed that had just written eight verdicts, under a message blaming the
+  // seed. A spec that needs the board waits for it; this one needs the ledger, and §6.2's pool
+  // is fitted from the labels rather than from the board. [§5.2, §6.2; M4.10 finding 9]
+  const seeded = await page.request.get('/api/rate');
+  expect(seeded.ok(), 'reading the seeded ledger back (§6.1)').toBeTruthy();
+  const rated = (await seeded.json()).class_balance.total;
+  await page.request.delete('/api/rate/session');
   expect(rated, 'this member has no rated films, so §6.2 has nothing to build a pool from')
     .toBeGreaterThan(0);
   return rated;
+}
+
+/**
+ * Wait until §6.3's board holds this member's ratings.
+ *
+ * §6.3's board is "every **rated** title", and every row of it is read from `ledger_state`
+ * (`rank/read.py`'s `items`) — which a verdict no longer writes. M4.10's finding 9 took the full
+ * MAP fit off the request path: §5.3 budgets the incremental row at "<50 ms" and the full fit at
+ * "seconds", and the fit was measured at 0.39 s over 300 titles and 33.4 s over 4000, on the
+ * backend event loop, for an observation the caller had already committed. So a cache miss — and
+ * the first tap of all per (user, kind) is one — stamps `ledger_cutpoints.refit_requested_at`
+ * and returns, and the board a person has just rated into is empty until that fit runs.
+ *
+ * It runs in `worker.py`'s `tier-set-refit` job, `every=60` — decision 11's sweep, whose column
+ * nothing reserved for tier-set changes. Which makes this the same shape as `waitForPool` below
+ * and for the same kind of reason: a worker tick owns the write, so a spec that read the moment
+ * its seeding returned would fail for a reason that has nothing to do with what it is testing.
+ */
+export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`/api/rank?kind=${kind}`, {
+          failOnStatusCode: false
+        });
+        if (!res.ok()) return 0;
+        return (await res.json()).tiers.flatMap((tier) => tier.entries).length;
+      },
+      {
+        // Two ticks, counted the way `waitForPool` counts its own: the sweep is `every=60`, so a
+        // verdict written a moment after one tick waits out the rest of it and lands on the
+        // next, and 120 s is one whole missed tick plus a whole spare one. The fit itself fits
+        // inside the spare one at any fixture scale — finding 9's own measurement puts it at
+        // 0.39 s over 300 titles.
+        message:
+          'no board after 120s: a verdict queues the full refit rather than running it, and ' +
+          'the tier-set-refit sweep runs it every 60 s (worker.py; M4.10 finding 9), so two ' +
+          'ticks have passed - suspect the seeded ledger or a stopped worker',
+        timeout: 120_000,
+        intervals: [2000]
+      }
+    )
+    .toBeGreaterThanOrEqual(atLeast);
 }
 
 /**

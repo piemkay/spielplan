@@ -243,8 +243,8 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     correct against an interface the other half never called, and the join between them — the
     one thing the milestone exists to demonstrate — was not exercised anywhere.
 
-    It did not work. Rating writes `ledger_state`, so every tier badge moved on every tap; every
-    §6.0 shelf orders by `user_score`, which only the fold-in writes, and the fold-in ran
+    It did not work. Rating writes `ledger_state`, so the tier badges moved within the sitting;
+    every §6.0 shelf orders by `user_score`, which only the fold-in writes, and the fold-in ran
     nightly. A household could rate all evening and watch the badges change while the shelves
     stayed in the order they had that morning.
     """
@@ -338,3 +338,150 @@ async def test_the_tier_set_refit_job_is_a_no_op_when_nobody_asked(rated, db):
     before = await db.fetchval("SELECT count(*) FROM ledger_state")
     await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
     assert await db.fetchval("SELECT count(*) FROM ledger_state") == before
+
+
+# --- M4.10: the sweep, per item ----------------------------------------------------------------
+#
+# Two properties, and they belong together because each one is what makes the other observable.
+# The tier-set half (finding 5) lives in `rank/tiers.py` and `ledger/refit.py`: `refits_owed`
+# hands out the stamp it read, `clear_refit_request` clears only what it was handed, and
+# `refit_user` refuses to write cutpoints for a tier set it did not fit against. The isolation
+# half (finding 6) lives here: without a per-item `try` the sweep dies on the first refusal, so
+# the second owed row is never reached and nothing downstream of it can be asserted at all.
+#
+# Both halves shipped in the same milestone and in different files. Nobody else checks that they
+# meet, which is what these two tests are for. [M4.10 findings 5 and 6; decision 11]
+
+NINE_TIERS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]
+
+
+async def test_a_tier_set_put_that_lands_during_the_sweep_is_not_reverted_and_is_still_owed(
+    rated, db, monkeypatch
+):
+    """The measured failure, through the job that produced it.
+
+    Reproduced before the fix: PUT K = 5 queued a refit, PUT K = 9 landed while the fit was
+    running, and after the sweep the movie row read K = 5 with `refit_requested_at` NULL - the
+    person's second choice reverted and its request discarded - while the series row read K = 9.
+    `GET /api/rank/tiers` then answered five labels and a legal drop into tier 7 came back 422.
+    Decision 11's control is a settings pill that invites exactly this ("how many tiers do I
+    want?" is answered by trying one), so a change made twice inside a minute is ordinary use.
+
+    The PUT is issued from `load_observations`' return rather than from its entry, and the
+    ordering is the whole fixture: the fit has to have READ K = 5 before the person chooses
+    K = 9, or the compare-and-set sees no conflict and this asserts nothing. A second connection
+    (`db`) rather than the sweep's own, because a settings save is a different request.
+    """
+    from spielplan.rank import drop as drop_rules
+    from spielplan.rank import tiers
+
+    _store, patrick = rated
+    await (next(j for j in worker.JOBS if j.name == "ledger-map-refit").run())
+    await tiers.save_tier_set(db, user_id=patrick, tier_set=["F", "D", "C", "B", "A"])
+    owed = await tiers.refits_owed(db)
+    assert [k for _u, k, _t in owed] == ["movie", "series"], owed
+
+    real = observations.load_observations
+    landed: list[str] = []
+
+    async def a_put_lands_mid_fit(conn, **kwargs):
+        loaded = await real(conn, **kwargs)
+        if not landed:
+            landed.append(kwargs["kind"])
+            await tiers.save_tier_set(db, user_id=patrick, tier_set=NINE_TIERS)
+        return loaded
+
+    monkeypatch.setattr(observations, "load_observations", a_put_lands_mid_fit)
+    detail = await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
+
+    assert landed == ["movie"], f"the PUT has to land inside the first fit, not {landed}"
+    assert detail is not None and len(detail["refits"]) == 2, (
+        "the sweep stopped at the item that refused, so the second owed row was never visited"
+    )
+    refused = [r for r in detail["refits"] if r["error"]]
+    assert len(refused) == 1 and refused[0]["kind"] == "movie", detail["refits"]
+    assert "tier set changed" in refused[0]["error"], refused[0]["error"]
+
+    # Both rows read the person's last choice. The films row is the one the fit was about to
+    # overwrite; the series row is the one that never disagreed and must not start now, because
+    # every caller that asks for a set asks for one kind's.
+    assert await tiers.tier_set_of(db, user_id=patrick, kind="movie") == tuple(NINE_TIERS)
+    assert await tiers.tier_set_of(db, user_id=patrick, kind="series") == tuple(NINE_TIERS)
+
+    # And the request the person is actually waiting on survived the sweep that did not serve it.
+    still_owed = {(u, k) for u, k, _t in await tiers.refits_owed(db)}
+    assert still_owed == {(patrick, "movie"), (patrick, "series")}, still_owed
+
+    # §6.3's board, at the top of a set that only exists if the PUT held: tier 7 of nine.
+    await drop_rules.drop(db, user_id=patrick, title_id=1, tier=7, title_name="Heat")
+    await drop_rules.drop(db, user_id=patrick, title_id=6, tier=7, title_name="Severance")
+    assert await db.fetchval(
+        "SELECT count(*) FROM tier_edit WHERE user_id = $1 AND tier = 7", patrick
+    ) == 2
+
+
+async def test_one_members_failing_refit_does_not_strand_another_members(
+    rated, db, two_members, monkeypatch
+):
+    """Decision 11 queues a refit "for that user alone". A loop with no per-item guard made one
+    person's bad fit everybody's.
+
+    Reproduced: the job raised on the first owed row and all four stayed owed, so the tick
+    re-ran sixty seconds later, and again, on the loop that also carries §7.3's playback poll and
+    §2's nightly dump - one member burning a full MAP fit a minute while everyone behind them in
+    `ORDER BY refit_requested_at` waited for ever. `refit_all` has isolated per user since M2
+    ("One person's bad fit must not stop the others'"); this loop is the one that did not.
+
+    The refusal is injected at `refit_user` because that is the call this loop makes and the
+    behaviour under test is this loop's. The real raise is `ledger/refit.py`'s non-finite guard,
+    and Ana's fit is the genuine article - the wrapper delegates for her - so the test is not two
+    stubs agreeing with each other.
+    """
+    from spielplan.rank import tiers
+
+    _store, patrick = rated
+    ana = two_members[1]
+    for title_id, value in ((1, 2), (2, 0), (3, 1), (6, 2), (7, 0)):
+        await observations.record_verdict(db, user_id=ana, title_id=title_id, value=value)
+    await (next(j for j in worker.JOBS if j.name == "ledger-map-refit").run())
+
+    await tiers.save_tier_set(db, user_id=patrick, tier_set=["bad", "ok", "good"])
+    await tiers.save_tier_set(db, user_id=ana, tier_set=["bad", "ok", "good", "great"])
+    owed = await tiers.refits_owed(db)
+    assert [u for u, _k, _t in owed] == [patrick, patrick, ana, ana], (
+        f"the failing member has to be at the head of the queue or this asserts nothing: {owed}"
+    )
+
+    real = refit.refit_user
+
+    async def not_finite_for_patrick(conn, *, user_id, kind, **kwargs):
+        if user_id == patrick:
+            raise refit.RefitRefused(
+                f"user {user_id}/{kind}: the fit's dense block is not finite; ledger_state and "
+                "ledger_cutpoints keep their previous values"
+            )
+        return await real(conn, user_id=user_id, kind=kind, **kwargs)
+
+    monkeypatch.setattr(refit, "refit_user", not_finite_for_patrick)
+    detail = await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
+
+    assert detail is not None, "a sweep with four owed rows reported nothing"
+    reports = detail["refits"]
+    assert len(reports) == 4, f"the sweep visited {len(reports)} of 4 owed rows"
+    assert {r["user_id"] for r in reports if r["error"]} == {patrick}
+    ana_fits = [r for r in reports if r["user_id"] == ana]
+    assert all(r["error"] is None for r in ana_fits), ana_fits
+    ana_movies = next(r for r in ana_fits if r["kind"] == "movie")
+    assert ana_movies["fitted"] and len(ana_movies["cutpoints"]) == 3, (
+        "Ana's fit has to have actually run against her four-level set, not merely been reached"
+    )
+
+    # Cleared even where it failed. A permanently failing fit that stays owed is a full MAP fit
+    # every sixty seconds for ever; §5.3's nightly pass fits the same (user, kind) anyway, so the
+    # work moves to the cadence such a failure deserves rather than being lost.
+    assert await tiers.refits_owed(db) == [], (
+        "a fit that raises leaves its request owed, so the tick re-runs it a minute later"
+    )
+    assert await db.fetchval(
+        "SELECT max(tier) FROM ledger_state WHERE user_id = $1 AND kind = 'movie'", ana
+    ) <= 3, "Ana's board is still indexed against the seven-level set the fit replaced"

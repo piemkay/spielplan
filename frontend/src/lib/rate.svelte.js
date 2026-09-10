@@ -45,10 +45,22 @@ export const MODES = [
  */
 export const DECISIVE_COPY = 'a decisive pick teaches more than a hesitant one';
 
-/** Proposal 53: "Random pairs." turns a defence into a statement. §6.1 supplies the rest. */
+/**
+ * Proposal 53: "Random pairs." turns a defence into a statement. §6.1 supplies the rest.
+ *
+ * The rest changed in 54a. The sentence used to end "the clever ones only pay off in the tier
+ * queue", which §6.2's round made false one surface over: `tonight/round.py` selects pairs
+ * adaptively on purpose, because identifying the best few titles inside a pool of tens is
+ * best-arm identification and not the global-ranking problem §0 row 6 measured the null on. §6.8
+ * makes every claim the app states about its own model a matter of honesty, and a person who
+ * reads this card and then watches Tonight pick has been told something untrue. So the sentence
+ * now names the distinction rather than one of its two sides — the behaviour is unchanged, which
+ * is the whole point: 54a amends the explanation, not the rule. [§6.1, §6.8, 54a; finding 22]
+ */
 export const PAIR_SELECTION_COPY =
-  'Random pairs. For profiles no selection rule beats random — the clever ones only pay ' +
-  'off in the tier queue.';
+  'Random pairs. For profiles no selection rule beats random — the clever ones pay off where ' +
+  'the question is which of these few, not how do you rank everything: the tier queue (§6.3) ' +
+  "and tonight's round (§6.2).";
 
 /** §6.1's learning curve. Proposal 49: the copy is the caption, the position is the point. */
 export const LEARNING_CURVE_COPY =
@@ -74,7 +86,7 @@ export const rate = $state({
   /** The counter that belongs to `card` while a reveal is held; null otherwise. */
   frozenBlock: null,
   holding: false,
-  /** @type {null | {text:string}} */
+  /** @type {null | {cause:string, text:string}} */
   drained: null,
   /** @type {any} `rate.balance.ClassBalance.as_dict()` */
   balance: null,
@@ -326,12 +338,23 @@ export function skip() {
 
 /**
  * @param {'A'|'B'|'TIE'} outcome
- * @param {{decisive?: boolean}} [opts] proposal 51's long-press: one answer may override the
- *   persistent toggle without moving it.
+ * @param {{decisive?: boolean, token?: string}} [opts] proposal 51's long-press: one answer may
+ *   override the persistent toggle without moving it, and `token` is the card the gesture started
+ *   on.
+ *
+ * `token` exists because the long press is a *delayed* write. It is armed on `pointerdown` and
+ * fires 500 ms later, and everything that calls `load()` in that window — the `?head=` effect,
+ * the model-gate effect, an Undo — replaces the card underneath it; reading `rate.card` at fire
+ * time then posts the gesture against a pair nobody pressed. §5.2 weighs a decisive duel ~1.6
+ * against ~1.0, §4.2 keeps it forever, and nothing in the Ledger tells it apart from one the
+ * person made, so the only safe answer is none: the caller names the card it pressed and a
+ * mismatch writes nothing. An absent `token` means "the card on the table" — the strip buttons
+ * and the keyboard path have no pointerdown to capture one. [§6.1, §5.2, §4.2; finding 28]
  */
 export function duel(outcome, opts = {}) {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
+  if (opts.token !== undefined && opts.token !== token) return;
   const body = { card_token: token, outcome, latency_ms: latency(), head };
   if (opts.decisive !== undefined) body.decisive = opts.decisive;
   return send(() => post('/rate/duel', body));

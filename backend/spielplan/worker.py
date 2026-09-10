@@ -38,6 +38,17 @@ class Job:
     # in `job_run.detail`. None is a legal answer: a prune has nothing to report beyond having
     # run, and §6.6's "job health" is satisfied by the row itself. [M4.7 ops-11]
     run: Callable[[], Awaitable[dict[str, object] | None]] | None = None
+    # The module that implements a row this loop does not fire, and the reason `run=None` stopped
+    # answering a question. It meant three different things at once: work no milestone has
+    # written yet (§5.3's DNA projection, the explore-frontier caches), work that ships and is
+    # triggered by a request (the incremental Ledger update on every tap, the admin's bundle
+    # import), and work that ships and is reached through another job (the Cold Tower's forward
+    # pass, run by the placement sweep until §8's acquisition pipeline arrives). The boot line
+    # counted all three as "awaiting their milestone", so it told the operator at every start
+    # that two shipped M2 rows were unimplemented. `owner` is what separates the second and
+    # third from the first, and it names a module so the reader can go and read it.
+    # [M4.10 finding 35]
+    owner: str | None = None
     # How often the trigger column actually means, in seconds. A job with no implementation
     # yet carries its interval anyway, so the registry stays a readable copy of §5.3.
     every: int = 3600
@@ -244,10 +255,12 @@ async def _fold_in_tick() -> dict[str, object] | None:
 
     "50-100 verdicts each produce **visibly personal rankings**" is a claim about what a person
     sees after a sitting, and §6.0's every shelf orders by `user_score`. Only the fold-in writes
-    that table: the interactive path writes `ledger_state` (tier badges move immediately) and
-    nothing else. Without this tick, a household rates all evening, watches every tier badge
-    change, and every shelf stays in exactly the order it had that morning — for up to 24 hours.
-    `foldin.run`'s docstring named this tick as the answer; nothing called it.
+    that table: the interactive path writes `ledger_state` and nothing else — immediately where
+    the fit cache is warm, and on `tier-set-refit`'s 60 s sweep where it is cold, since finding 9
+    stopped a miss from running §5.3's "seconds" row inside its "<50 ms" one. Without this tick,
+    a household rates all evening, watches its tier badges move, and every shelf stays in exactly
+    the order it had that morning — for up to 24 hours. `foldin.run`'s docstring named this tick
+    as the answer; nothing called it.
 
     Cheap enough to run often: the fold-in is a closed-form ridge solve, measured at 6-7 ms for
     100 labels against 839 titles, and `only_stale=True` skips every user whose label count has
@@ -279,8 +292,23 @@ async def _tier_set_refits() -> dict[str, object] | None:
     equal-mass quantiles rather than fitted cutpoints, for up to a day, with nothing on screen
     saying so. A minute is close enough to "immediately" for a preference nobody changes twice.
 
-    The request is cleared per (user, kind) after that fit, so a failure re-runs rather than
-    being swallowed: a queue that forgets what it dropped is worse than one that retries.
+    Per item, and cleared per item. `refit_all` already isolates one person's bad fit — "One
+    person's bad fit must not stop the others'" (`ledger/refit.py`) — and this loop did not:
+    `refit_user` raises on a fit whose dense block is not finite, the sweep died on the first
+    such member, and every owed row stayed owed. The tick then re-ran sixty seconds later, so one
+    member's arithmetic burned a full MAP fit per minute on the loop that also serves §7.3's
+    playback poll and §2's nightly dump, and everyone behind them in `ORDER BY refit_requested_at`
+    waited for ever. [M4.10 finding 6; decision 11]
+
+    The request is cleared even when the fit raised, which is the one place this differs from
+    "retry until it works". A fit that fails for a reason inside the person's own data fails
+    again in sixty seconds, and §5.3's nightly pass fits the same (user, kind) anyway — so the
+    work is not dropped, it moves to the cadence a permanently failing fit deserves. Bounding the
+    attempts instead would need a column, and this milestone writes no migration.
+
+    Clearing after a failure is safe because the clear carries the stamp `refits_owed` handed
+    out: a tier-set change made *during* the fit has a newer stamp and survives it (finding 5),
+    so the request the person is actually waiting on is never the one discarded here.
     """
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
@@ -297,13 +325,22 @@ async def _tier_set_refits() -> dict[str, object] | None:
             observations.standard_embeddings(conn, bb.load_for(store)) if store else None
         )
         done: list[dict[str, object]] = []
-        for user_id, kind in owed:
-            report = await refit.refit_user(
-                conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings
+        for user_id, kind, requested_at in owed:
+            try:
+                report = await refit.refit_user(
+                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings
+                )
+            except Exception as exc:
+                log.exception("tier-set refit failed for user %s/%s", user_id, kind)
+                done.append(
+                    refit.RefitReport(user_id=user_id, kind=kind, error=str(exc)).as_dict()
+                )
+            else:
+                log.info("tier-set refit: %s", report.as_dict())
+                done.append(report.as_dict())
+            await tiers.clear_refit_request(
+                conn, user_id=user_id, kind=kind, requested_at=requested_at
             )
-            await tiers.clear_refit_request(conn, user_id=user_id, kind=kind)
-            log.info("tier-set refit: %s", report.as_dict())
-            done.append(report.as_dict())
         return {"refits": done}
 
 
@@ -376,7 +413,8 @@ JOBS: tuple[Job, ...] = (
     # the three rows above keep bounded. See `JOB_RUN_KEEP_DAYS`. [M4.7 ops-11]
     Job("job-run-prune", "M0", "daily", "ms", _prune_job_runs,
         every=86400, anchor_hour=ANCHOR_JOB_RUN_PRUNE),
-    Job("ledger-incremental", "M2", "every observation", "<50 ms"),
+    Job("ledger-incremental", "M2", "every observation", "<50 ms",
+        owner="spielplan.ledger.refit"),
     Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400,
         anchor_hour=ANCHOR_LEDGER_REFIT),
     Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
@@ -388,13 +426,24 @@ JOBS: tuple[Job, ...] = (
     Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60),
     # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
     Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60),
-    Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title"),
+    Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title",
+        owner="spielplan.placement.tower"),
     Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
         _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT),
     Job("dna-projection", "M5", "acquisition", "<1 s"),
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60),
     Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
+    # §5.3's ninth row, and the only one this table left out. The work ships —
+    # `importer/bundle.py` validates, loads and hot-swaps — but it runs inside
+    # `POST /api/artifacts/import` on the web process's event loop, measured at 127 s on the real
+    # bundle (`docs/milestones/M4.5-plan.md`). Registered with no `run` because this loop has no
+    # admin action to fire it from, and named here because a table that silently omits its
+    # longest-running row is exactly how a two-minute POST stayed invisible: a reader looking for
+    # the import in the jobs registry found nothing and concluded there was nothing to find.
+    # M4.14 owns moving it off the request path; the pointer is the whole value of this row until
+    # then. [M4.10 finding 35]
+    Job("bundle-import", "M0", "admin action", "minutes", owner="spielplan.importer.bundle"),
     # §2's backup, not §5.3's table — see `_nightly_backup`. Budget from the corpus-scale
     # measurement §10 sizes: ~1.15 GB uncompressed, minutes of `pg_dump` on the reference box.
     Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400,
@@ -493,6 +542,32 @@ def _report_starting(cfg: Settings) -> None:
         "worker starting · tz=%s · db=%s",
         zone if zone is not None else "system clock (TZ unresolved)",
         cfg.database_url.rsplit("@", 1)[-1],
+    )
+
+
+def _report_registry() -> None:
+    """The census of §5.3's table, once, at boot — three counts because `run=None` is three states.
+
+    The line this replaces said "%d job(s) live, %d awaiting their milestone" and derived the
+    second from `run is None` alone, so it named `ledger-incremental(M2)` and
+    `cold-tower-placement(M2)` — both shipped, both reachable, one of them running on every tap —
+    as work that had not been written. An operator reading it learned nothing true: the number
+    counted a category that does not exist, and the two rows genuinely awaiting a milestone were
+    buried among the two that were not. `Job.owner` is what makes the split possible, and the
+    counts are derived here rather than written down so the line cannot drift from the tuple
+    above it. ASCII only: this is the first thing a `docker compose logs worker` shows, and a
+    Windows console reading cp1252 does not survive a decorative glyph. [M4.10 finding 35]
+    """
+    live = [j for j in JOBS if j.run is not None]
+    elsewhere = [j for j in JOBS if j.run is None and j.owner is not None]
+    awaiting = [j for j in JOBS if j.run is None and j.owner is None]
+    log.info(
+        "%d job(s) live in this loop; %d run outside it: %s; %d awaiting their milestone: %s",
+        len(live),
+        len(elsewhere),
+        ", ".join(f"{j.name}({j.owner})" for j in elsewhere) or "none",
+        len(awaiting),
+        ", ".join(f"{j.name}({j.milestone})" for j in awaiting) or "none",
     )
 
 
@@ -763,13 +838,7 @@ async def main() -> None:
         if store.is_empty:
             log.info("no artifact bundle active — model jobs stay idle (§3.1: that is legal)")
 
-        pending = [j for j in JOBS if j.run is None]
-        log.info(
-            "%d job(s) live, %d awaiting their milestone: %s",
-            len(JOBS) - len(pending),
-            len(pending),
-            ", ".join(f"{j.name}({j.milestone})" for j in pending),
-        )
+        _report_registry()
 
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()

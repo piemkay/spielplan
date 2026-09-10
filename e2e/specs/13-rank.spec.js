@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, signInAsMember, signedIn } from '../helpers.js';
+import { createMember, signInAsMember, signedIn, waitForBoard } from '../helpers.js';
 
 /**
  * §6.3's Rank surface, driven in a browser.
@@ -31,9 +31,16 @@ import { createMember, signInAsMember, signedIn } from '../helpers.js';
 test.describe.configure({ mode: 'serial' });
 
 /**
- * Proposal 75's standing footnote, amended to be true of every move this surface can make.
- * The proposal's own "plus two duels" is right only for a drop between two titles; a drop at
- * the end of a tier, and every tap, has one neighbour.
+ * Proposal 75's standing footnote, as `rank.svelte.js` renders it. Verbatim on purpose: the
+ * sentence is a promise about what a gesture writes, and the surface has to keep it.
+ *
+ * IT NO LONGER DOES, and the repair is not this file's. M4.10's finding 17 stopped a tap into a
+ * tier from naming a neighbour at all — the tier's current last entry was not a position the
+ * person had chosen, and §4.2 made every fabricated duel permanent — so "each move writes a
+ * tier_edit plus a duel against each new neighbour" is now true of a drop onto a poster and of
+ * nothing else. The constant lives in `frontend/src/lib/rank.svelte.js`; changing it there
+ * without changing it here reddens this assertion, which is why the two move together or not at
+ * all. The test below asserts what the tap actually writes.
  */
 const FOOTNOTE =
   'tap a poster to pick it up, tap a tier to drop · each move writes a tier_edit plus a duel ' +
@@ -83,11 +90,73 @@ async function openRank(page) {
   await expect(board(page)).toBeVisible();
 }
 
-/** Every rated title on this account's board — §6.3's board is "every **rated** title". */
-async function boardSize(page) {
-  const res = await page.request.get('/api/rank?kind=movie');
-  expect(res.ok(), `GET /api/rank while seeding: ${res.status()}`).toBeTruthy();
-  return (await res.json()).tiers.flatMap((tier) => tier.entries).length;
+/**
+ * Put titles into a tier over HTTP until it holds `count` of them, naming no position.
+ *
+ * Arrangement, not the claim — every assertion below is made about a gesture. It exists because
+ * two of the tests need a tier that is already occupied before the gesture is made: a drop
+ * *between* two titles has no meaning in an empty tier, and neither does "a tap names no
+ * neighbour however full the tier is". The drag test used to ask the board whether such a tier
+ * happened to exist and `test.skip` past it when it did not, which on a fresh account was
+ * always — so §6.3's two-duel case, the one the M3 review found unreachable from the app, had
+ * never been proved in a browser at all. [M4.10 finding 33]
+ *
+ * `above` and `below` are deliberately absent: a seeded drop must write the edit and nothing
+ * else, or the arrangement would be writing the very duels the tests are counting.
+ */
+async function seedTier(page, index, count) {
+  const before = await (await page.request.get('/api/rank?kind=movie')).json();
+  const held = before.tiers.find((tier) => tier.index === index)?.entries ?? [];
+  const elsewhere = before.tiers
+    .filter((tier) => tier.index !== index)
+    .flatMap((tier) => tier.entries)
+    .map((entry) => entry.title_id);
+  for (const title_id of elsewhere.slice(0, Math.max(0, count - held.length))) {
+    const written = await page.request.post('/api/rank/drop?kind=movie', {
+      data: { title_id, tier: index }
+    });
+    expect(
+      written.ok(),
+      `seeding tier ${index}: ${written.status()} ${await written.text()}`
+    ).toBeTruthy();
+  }
+  const after = await (await page.request.get('/api/rank?kind=movie')).json();
+  const seeded = after.tiers.find((tier) => tier.index === index)?.entries ?? [];
+  expect(seeded.length, `tier ${index} needs ${count} titles in it`).toBeGreaterThanOrEqual(count);
+}
+
+/** A rated title this tier does not hold, so a move into it is a move. */
+async function titleOutside(page, index) {
+  const payload = await (await page.request.get('/api/rank?kind=movie')).json();
+  const outside = payload.tiers
+    .filter((tier) => tier.index !== index)
+    .flatMap((tier) => tier.entries)
+    .map((entry) => entry.title_id);
+  expect(outside.length, `every rated title is already in tier ${index}`).toBeGreaterThan(0);
+  return outside[0];
+}
+
+/** The index of a tier by its label — §4.2 fixes the count, not the letters. */
+async function tierIndexOf(page, label) {
+  const payload = await (await page.request.get('/api/rank?kind=movie')).json();
+  const index = payload.tier_set.indexOf(label);
+  expect(index, `${label} is not in this account's tier set`).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+/** Every key anywhere in a payload. A gated key one level deeper is still on the wire. */
+function keysOf(value, into = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) keysOf(item, into);
+    return into;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value)) {
+      into.add(key);
+      keysOf(nested, into);
+    }
+  }
+  return into;
 }
 
 /** Every tier_edit this account has, read over HTTP. The absence of one is the assertion. */
@@ -115,7 +184,13 @@ test.describe('rank', () => {
     // a re-run against a stack `reset.mjs` never touched finds every film already rated and
     // legitimately writes nothing above. What this file needs is a board with something on it,
     // however it got there.
-    expect(await boardSize(page), 'the seeded member needs a board to rank').toBeGreaterThanOrEqual(3);
+    //
+    // Awaited rather than read once, and the wait is not this file's to explain: since M4.10's
+    // finding 9 a verdict queues §5.3's full fit instead of running it on the request path, so
+    // `ledger_state` — which is every row of §6.3's board — arrives with the `tier-set-refit`
+    // sweep. `waitForBoard` carries the arithmetic, beside `waitForPool`, which waits out the
+    // other worker tick for the same kind of reason. [M4.10 finding 9]
+    await waitForBoard(page, { atLeast: 3 });
   });
 
   test.afterAll(async () => {
@@ -186,6 +261,57 @@ test.describe('rank', () => {
     await expect(board(page).locator(`[data-tier="S"] [data-title="${titleId}"]`)).toHaveCount(1);
   });
 
+  test('a tap into an occupied tier writes the edit and no neighbour duel', async () => {
+    // §6.3 gives the phone one input path — "tap a title (it lifts), tap a tier (it drops)" —
+    // and it is the case §6.3 spells as "dropping a title into a tier emits a `tier_edit`", full
+    // stop. The client used to name the tier's current last entry as a neighbour, so every
+    // promotion into a non-empty tier also wrote `duel(last, dropped, outcome='A')`: a
+    // comparison the person never made, in the same direction every time, permanent under §4.2
+    // and weighed like an answered duel by §5.2. On the primary form factor that was every move.
+    //
+    // The body is half the proof and the rail is the other half. What the client posts is
+    // observable here; what the server wrote is not, except through §6.7's line — which names
+    // its neighbour duels or says nothing about them, and which decision 117 gates. So the
+    // toggle goes on for the length of this test and comes off again, because every other test
+    // in this file is about a member who has not opened the rail. [M4.10 finding 17]
+    const tier = await tierIndexOf(page, 'S');
+    await seedTier(page, tier, 1);
+    const gate = await page.request.post('/api/auth/preferences', { data: { show_model: true } });
+    expect(gate.ok(), 'decision 117 is a per-user preference, and the rail is behind it')
+      .toBeTruthy();
+    try {
+      const titleId = await titleOutside(page, tier);
+      await openRank(page);
+      await expect(board(page).locator('[data-tier="S"] [data-title]')).not.toHaveCount(0);
+      const poster = board(page).locator(`[data-title="${titleId}"]`);
+      await poster.click();
+      await expect(moving(page)).toBeVisible();
+
+      const written = page.waitForResponse(
+        (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
+      );
+      await page.getByTestId('rank-tier-S').click();
+      const response = await written;
+      expect(response.ok(), `tap-to-tier: ${response.status()}`).toBeTruthy();
+
+      const body = JSON.parse(response.request().postData() ?? '{}');
+      expect(body.title_id).toBe(titleId);
+      expect(body.above, 'a tap names no title above it').toBeNull();
+      expect(body.below, 'and none below it either, however full the tier is').toBeNull();
+
+      // §6.7's line for this write. `rail.tier_edit_line` appends "+ N margin-less duels vs new
+      // neighbours" only when there were some, so the clause's absence is the count being zero.
+      // (`via=drag_drop` on a tap is not a slip: §6.3 gives the two gestures one route and one
+      // set of semantics, and `rank/drop.py` marks both with the one word.)
+      const payload = await response.json();
+      expect(payload.log?.[0], 'the rail is open, so the drop reports its own line').toBeTruthy();
+      expect(payload.log[0]).toContain('via=drag_drop');
+      expect(payload.log[0], 'a tap writes the edit and nothing else').not.toContain('duels');
+    } finally {
+      await page.request.post('/api/auth/preferences', { data: { show_model: false } });
+    }
+  });
+
   test('dragging a title onto another writes the edit and two neighbour duels', async ({
     browserName
   }, testInfo) => {
@@ -197,25 +323,25 @@ test.describe('rank', () => {
     // promised it on every move. This is the browser half of the fix; the write shapes are
     // asserted in test_rank_integration.py.
     test.skip(testInfo.project.name === 'phone', 'HTML5 drag is a pointer gesture (§6.3)');
+
+    // The tier is ARRANGED to hold two titles rather than searched for. It used to be searched
+    // for, and `test.skip(target === null)` when the search failed — which on a board nobody has
+    // rearranged is every time, so this assertion had never run once. A skip is not a pass.
+    // [M4.10 finding 33]
+    const tier = await tierIndexOf(page, 'A');
+    await seedTier(page, tier, 2);
     await openRank(page);
 
-    // A tier with at least two titles in it, so "between" has a meaning.
-    const rows = board(page).locator('[data-tier]');
-    let target = null;
-    for (const row of await rows.all()) {
-      if ((await row.locator('[data-title]').count()) >= 2) {
-        target = row;
-        break;
-      }
-    }
-    test.skip(target === null, 'no tier holds two titles yet');
-
+    const target = board(page).locator('[data-tier="A"]');
     const posters = target.locator('[data-title]');
+    expect(await posters.count(), 'the arranged tier renders what the board says it holds')
+      .toBeGreaterThanOrEqual(2);
+    const above = await posters.nth(0).getAttribute('data-title');
     const settled = await posters.nth(1).getAttribute('data-title');
-    const source = board(page)
-      .locator(`[data-title]:not([data-title="${settled}"])`)
-      .first();
-    const moving = await source.getAttribute('data-title');
+    // From OUTSIDE the target tier, so the landing really is *between* two titles: a source
+    // already in A would be filtered out of its own tier's neighbours and name only one.
+    const moving = await titleOutside(page, tier);
+    const source = board(page).locator(`[data-title="${moving}"]`);
 
     const written = page.waitForResponse(
       (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
@@ -225,10 +351,18 @@ test.describe('rank', () => {
     expect(response.ok(), `drag-and-drop in ${browserName}`).toBeTruthy();
 
     const body = JSON.parse(response.request().postData() ?? '{}');
-    expect(body.title_id).toBe(Number(moving));
+    expect(body.title_id).toBe(moving);
     expect(body.below, 'a drop onto a poster names the title it landed above').toBe(
       Number(settled)
     );
+    expect(body.above, "and the one it landed below — §6.3's two margin-less duels").toBe(
+      Number(above)
+    );
+    // Both named titles were read out of the tier being dropped into, which is exactly what
+    // `rank/drop.py` now refuses a drop for getting wrong — so the 200 above is also that
+    // refusal not misfiring on the one gesture that legitimately names two neighbours.
+    // [M4.10 finding 18]
+    await expect(board(page).locator(`[data-tier="A"] [data-title="${moving}"]`)).toHaveCount(1);
   });
 
   test('sharpen my ranking serves a pair, and answering it moves the board', async () => {
@@ -278,6 +412,26 @@ test.describe('rank', () => {
     // §13's guard: "the 10% uniform-random comparison stream is the *only* data used to
     // evaluate the tier model". A client that could name the arm could put an adaptively
     // chosen pair into the evaluation stream, which is the inflation the guard exists to stop.
+    //
+    // Both halves now. The pair the member is *served* used to carry `arm` and the arm's own
+    // sentence — on the held-out tenth, "uniform-random, held out — this pair never tunes the
+    // model" — so §13's only figure was being collected from people who had been told in words
+    // which of their answers it ignores. The arm travels sealed in the token and, for a member
+    // who has opened the rail, under the gated `model` key; this member has not, so there is
+    // nothing on the wire to name. [M4.10 finding 16; decision 117]
+    //
+    // Decision 117's default is restated rather than assumed, because the claim is about a
+    // member who has NOT opened the rail and the tap test above turns the toggle on for one
+    // gesture.
+    await page.request.post('/api/auth/preferences', { data: { show_model: false } });
+    const served = await (await page.request.get('/api/rank/queue?kind=movie')).json();
+    expect(served.pair, 'the queue must have a pair to be gated about').toBeTruthy();
+    expect([...keysOf(served)]).not.toContain('arm');
+    expect([...keysOf(served)]).not.toContain('model');
+    expect(JSON.stringify(served)).not.toContain('never tunes the model');
+    expect(served.pair.reason, '§6.8 still owes a why-line, and it says the same on every arm')
+      .not.toBe('');
+
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
     await expect(page.getByTestId('rank-pair-a')).toBeVisible();

@@ -184,7 +184,22 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
     Returns (hyperparams, notes). Unknown keys are reported rather than dropped silently — a
     constant the corpus project tuned and this app ignores is exactly the kind of thing that
     looks like it is working.
+
+    The shape check is first, and it raises `ValueError` like every other refusal here because
+    that is the class all four readers of this file catch: the lifespan (`app.py`), the three
+    routers' `_hyperparams` fallbacks, and `importer/validate.validate_hyperparams`. `json.loads`
+    accepts a top-level array, `null`, a number and a string, so `_flatten`'s `raw.items()` raised
+    `AttributeError` for those — which is not a `ValueError`, and therefore escaped all four:
+    the boot failed instead of degrading, and the Data tab's Validate button answered 500 with no
+    report line on the one surface whose job is to report. `importer/validate._read_json` already
+    applies exactly this check to `manifest.json` and `BUNDLE.json`; this file is read by
+    `load` below rather than through it, so it needs its own.
+    [M4.10 cycle 1, M410-R1-02 / M410-R1-03]
     """
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"ledger_hyperparams.json must be a JSON object, got {type(raw).__name__}"
+        )
     notes: list[str] = []
     known = {f for f in DEFAULTS.__dataclass_fields__ if f != "source"}
     fields: dict[str, Any] = {}
@@ -256,11 +271,22 @@ def load(store: Any) -> tuple[Hyperparams, list[str]]:
 
     §3.1 makes a bundle-less app a legal state, so a household can rate before any corpus
     export exists. What it must not do is pretend the numbers came from somewhere.
+
+    `exists()` and not `is_file()`, which is the distinction between "the bundle ships no
+    constants" and "the constants are there and unreadable". `is_file()` is false for a path that
+    is a directory or a dangling symlink — a `tar` extraction or an out-of-band copy makes both —
+    and it read those as absent: DEFAULTS served under a note saying the bundle ships no file, and
+    `validate_hyperparams` emitting no line at all. That is the silent substitution §4.3 and this
+    milestone refuse by name, because a different `hp_digest` discards every cached fit in the
+    install. Any path that is there at all therefore falls through to `read_text`, whose `OSError`
+    the lifespan and the validator both report — `is_symlink` beside `exists` because `exists`
+    follows the link and a dangling one is present on disk while naming nothing.
+    [M4.10 cycle 1, M410-R1-06]
     """
     if store is None or getattr(store, "is_empty", True):
         return DEFAULTS, ["no artifact bundle — §5.2 constants are this app's defaults"]
     path = store.path("ledger_hyperparams.json")
-    if not path.is_file():
+    if not (path.exists() or path.is_symlink()):
         return DEFAULTS, ["bundle ships no ledger_hyperparams.json — defaults used"]
     return from_mapping(json.loads(path.read_text(encoding="utf-8")), source="bundle")
 

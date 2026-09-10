@@ -25,6 +25,7 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 from __future__ import annotations
 
 import random
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -117,6 +118,20 @@ async def board_of(db, world):
 # --- §6.3: drag-and-drop writes observations ---------------------------------------------
 
 
+@pytest.fixture
+async def sandwich(db, board_of):
+    """Titles 1 and 2 in A+, so "between two titles" names two titles that are actually there.
+
+    The neighbours have to be in the tier being dropped into: that is what the client sends,
+    because it reads them off the row it rendered, and since finding 18 it is what `drop` checks.
+    Naming them wherever the fit happened to put them made these tests tests of a body the app
+    does not produce.
+    """
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
+    await drop.drop(db, user_id=board_of, title_id=2, tier=5)
+    return board_of
+
+
 async def test_dropping_into_a_tier_writes_one_tier_edit_and_no_duel(db, board_of):
     """§6.3: "dropping a title into a tier emits a `tier_edit`". A drop into an empty tier has
     no neighbours, so it emits that and nothing else."""
@@ -130,9 +145,10 @@ async def test_dropping_into_a_tier_writes_one_tier_edit_and_no_duel(db, board_o
     assert result.neighbour_duels == 0
 
 
-async def test_dropping_between_two_titles_writes_the_edit_and_two_margin_less_duels(db, board_of):
+async def test_dropping_between_two_titles_writes_the_edit_and_two_margin_less_duels(db, sandwich):
     """§6.3: "dropping it *between* two titles emits that edit **plus two margin-less duels**
     against its new neighbours"."""
+    board_of = sandwich
     result = await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1, below=2)
 
     assert await db.fetchval(
@@ -153,10 +169,11 @@ async def test_dropping_between_two_titles_writes_the_edit_and_two_margin_less_d
         assert row["selection"] == "random"
 
 
-async def test_the_neighbour_duels_carry_the_placement_and_not_just_the_geometry(db, board_of):
+async def test_the_neighbour_duels_carry_the_placement_and_not_just_the_geometry(db, sandwich):
     """The two duels are the point of the rule: the person said this title is under one and
     over another, which is an ordinal claim the tier arm cannot express. Written without
     outcomes they would record that a comparison happened and not what it said."""
+    board_of = sandwich
     await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1, below=2)
     rows = await db.fetch(
         "SELECT title_a, title_b, outcome FROM duel WHERE user_id=$1 AND context='tier_insert' "
@@ -167,10 +184,11 @@ async def test_the_neighbour_duels_carry_the_placement_and_not_just_the_geometry
     assert (rows[1]["title_a"], rows[1]["title_b"], rows[1]["outcome"]) == (4, 2, "A")
 
 
-async def test_a_drop_at_the_end_of_a_tier_writes_the_one_duel_that_exists(db, board_of):
+async def test_a_drop_at_the_end_of_a_tier_writes_the_one_duel_that_exists(db, sandwich):
     """§6.3 says "between two titles" and is silent about the first and last slot of a tier.
     One neighbour is one duel: refusing the drop would make those slots unreachable, and
     inventing a second duel would put a comparison in the Ledger nobody made."""
+    board_of = sandwich
     await drop.drop(db, user_id=board_of, title_id=4, tier=5, below=2)
     rows = await db.fetch(
         "SELECT title_a, title_b FROM duel WHERE user_id=$1 AND context='tier_insert'", board_of
@@ -178,15 +196,82 @@ async def test_a_drop_at_the_end_of_a_tier_writes_the_one_duel_that_exists(db, b
     assert [(r["title_a"], r["title_b"]) for r in rows] == [(4, 2)]
 
 
-async def test_a_drop_is_one_transaction(db, board_of):
+async def test_a_drop_is_one_transaction(db, sandwich):
     """The edit and its neighbour duels are one gesture. A refused neighbour must leave no
     tier_edit behind, or the board would show a placement the person never completed."""
+    board_of = sandwich
     before = await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id=$1", board_of)
     with pytest.raises(drop.DropRefused):
         await drop.drop(db, user_id=board_of, title_id=4, tier=99, above=1, below=2)
     with pytest.raises(drop.DropRefused):
         await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=4)
     assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id=$1", board_of) == before
+
+
+async def test_a_drop_naming_a_neighbour_that_is_not_in_the_target_tier_is_refused(db, board_of):
+    """Finding 18. The client computes the neighbours from the board it last rendered, and two
+    tabs — or one board read before a nightly refit — name titles that have since moved. §6.3's
+    duels *carry* the placement, so storing "I put this between those two" when neither is there
+    any more stores a comparison the person did not make, append-only, with no undo.
+
+    The route refused only self-reference and `above == below`; it never asked where the named
+    titles actually are.
+    """
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
+    await drop.drop(db, user_id=board_of, title_id=2, tier=5)
+    duels = "SELECT count(*) FROM duel WHERE user_id = $1 AND context = 'tier_insert'"
+    before = await db.fetchval(duels, board_of)
+
+    # Title 2 moves out from under the board the caller is holding.
+    await drop.drop(db, user_id=board_of, title_id=2, tier=0)
+    with pytest.raises(drop.DropRefused):
+        await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1, below=2)
+    assert await db.fetchval(duels, board_of) == before
+    assert await db.fetchval(
+        "SELECT count(*) FROM tier_edit WHERE user_id = $1 AND title_id = 4", board_of
+    ) == 0, "and the tier edit goes with the duels — the drop is one gesture"
+
+    # The same gesture against the board as it now is, is accepted: one neighbour, one duel.
+    accepted = await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1)
+    assert accepted.neighbour_duels == 1
+
+
+async def test_a_drop_naming_a_neighbour_that_is_not_on_the_board_is_refused(db, board_of):
+    """§6.3's board is "every **rated** title", so title 7 — owned, placed by the nightly refit,
+    rated by nobody — is not in A+ because it is not in any tier. Refused rather than treated as
+    absent: `above` and `below` are claims, and a claim about a title the board does not show is
+    not one §6.3 can store."""
+    assert 7 not in {i.title_id for i in await read.items(db, user_id=board_of, kind="movie")}
+    with pytest.raises(drop.DropRefused):
+        await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=7)
+
+
+async def test_a_drop_under_an_active_filter_writes_the_edit_and_no_neighbour_duels(
+    db, board_of
+):
+    """Decision 204. §6.3's two duels are for a drop "between two titles", and on a filtered
+    board "between" is a fact about the screen: the titles either side on screen are not the ones
+    either side on the board. The alternative — silently re-pointing the duels at the unfiltered
+    neighbours — would store a comparison against titles the person could not see.
+
+    The tier edit is unconditional: it is the gesture they made.
+    """
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
+    await drop.drop(db, user_id=board_of, title_id=2, tier=5)
+    duels = "SELECT count(*) FROM duel WHERE user_id = $1 AND context = 'tier_insert'"
+    before = await db.fetchval(duels, board_of)
+
+    result = await drop.drop(
+        db, user_id=board_of, title_id=4, tier=5, above=1, below=2, filtered=True
+    )
+    assert result.neighbour_duels == 0
+    assert await db.fetchval(duels, board_of) == before
+    assert await db.fetchval(
+        "SELECT count(*) FROM tier_edit WHERE user_id = $1 AND title_id = 4", board_of
+    ) == 1
+    assert "margin-less duels" not in result.log, (
+        "§6.7's line narrates what was written, so it cannot promise duels that were not"
+    )
 
 
 async def test_the_board_renders_the_drop_and_does_not_snap_it_back(db, board_of):
@@ -201,9 +286,10 @@ async def test_the_board_renders_the_drop_and_does_not_snap_it_back(db, board_of
     assert cuts.tier_set[6] == "S"
 
 
-async def test_a_drop_narrates_itself_with_the_number_of_duels_it_wrote(db, board_of):
+async def test_a_drop_narrates_itself_with_the_number_of_duels_it_wrote(db, sandwich):
     """§6.7's own example line, and proposal 120's rule that a line is identical for pointer
     and touch when the semantics are."""
+    board_of = sandwich
     both = await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1, below=2,
                            title_name="Drive")
     assert both.log == (
@@ -217,12 +303,18 @@ async def test_tap_to_tier_writes_exactly_what_the_pointer_path_writes(db, board
     """§6.3: "**On phones:** tap a title (it lifts), tap a tier (it drops) — the same
     `tier_edit` semantics". Same function, same `via`, so there is no second write path to
     drift."""
-    await drop.drop(db, user_id=board_of, title_id=3, tier=4)
-    await drop.drop(db, user_id=board_of, title_id=4, tier=4)
+    await drop.drop(db, user_id=board_of, title_id=3, tier=4, above=None, below=None)
+    await drop.drop(db, user_id=board_of, title_id=4, tier=4, above=None, below=None)
     rows = await db.fetch(
         "SELECT title_id, tier, via FROM tier_edit WHERE user_id=$1 ORDER BY id", board_of
     )
     assert [r["via"] for r in rows] == ["drag_drop", "drag_drop"]
+    # `{above: null, below: null}` is the body the phone posts for a tap, and the one a pointer
+    # drop on empty row space posts too (finding 17). §6.3 gives a drop that names no position
+    # the bare edit, so the second tap - into a tier that now holds a title - still writes none.
+    assert await db.fetchval(
+        "SELECT count(*) FROM duel WHERE user_id=$1 AND context='tier_insert'", board_of
+    ) == 0, "a tap into a tier invents no comparison"
 
 
 # --- decision 11: the tier set is a per-user preference -----------------------------------
@@ -297,11 +389,12 @@ async def test_saving_a_new_tier_set_queues_a_refit_for_that_user_alone(db, boar
     await tiers.save_tier_set(db, user_id=board_of, tier_set=["bad", "ok", "good"])
 
     owed = await tiers.refits_owed(db)
-    assert {user for user, _kind in owed} == {board_of}
-    assert {kind for _user, kind in owed} == {"movie", "series"}
+    assert {user for user, _kind, _at in owed} == {board_of}
+    assert {kind for _user, kind, _at in owed} == {"movie", "series"}
 
-    await tiers.clear_refit_request(db, user_id=board_of, kind="movie")
-    assert [k for u, k in await tiers.refits_owed(db) if u == board_of] == ["series"]
+    movie = next(at for _user, kind, at in owed if kind == "movie")
+    await tiers.clear_refit_request(db, user_id=board_of, kind="movie", requested_at=movie)
+    assert [k for u, k, _at in await tiers.refits_owed(db) if u == board_of] == ["series"]
 
 
 async def test_a_relabel_at_the_same_size_keeps_the_learned_boundaries(db, board_of):
@@ -369,6 +462,139 @@ async def test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count(db, bo
     placed = {e.title_id: e for t in rendered for e in t.entries}
     assert placed[1].tier == len(cuts.tier_set) - 1, "the top tier they had is the top they have"
     assert placed[1].assigned_tier == placed[1].tier
+
+
+async def test_a_refit_cannot_overwrite_a_tier_set_it_did_not_fit_against(
+    db, board_of, monkeypatch
+):
+    """Finding 5 / decision 11. The fit reads the tier set once, at the top, and used to write it
+    back unconditionally at the bottom — so a PUT that landed in between was reverted by a fit
+    that had never seen it.
+
+    Reproduced on the shipped code: PUT K = 5 queued a refit, PUT K = 9 landed during the fit,
+    and after the sweep the movie row read K = 5 with `refit_requested_at` NULL while the series
+    row read K = 9. The board then refused legal drops into the upper tiers of the set the person
+    is looking at, on one kind and not the other. The write is a compare-and-set now: the fit
+    keeps its own answer only while the set it fitted against is still the set on the row.
+    """
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"K{i}" for i in range(5)])
+    real = observations.load_observations
+
+    async def racing(conn, **kwargs):
+        loaded = await real(conn, **kwargs)
+        # The person's second PUT, landing after the fit has read its tier set. One connection,
+        # so this is sequential rather than concurrent — what is under test is the
+        # read-modify-write, and no lock helps a writer that never re-reads.
+        if kwargs["kind"] == "movie" and len(loaded.tier_set) == 5:
+            await tiers.save_tier_set(
+                conn, user_id=board_of, tier_set=[f"L{i}" for i in range(9)]
+            )
+        return loaded
+
+    monkeypatch.setattr(observations, "load_observations", racing)
+    with pytest.raises(refit.RefitRefused):
+        await fitted(db, board_of)
+    monkeypatch.undo()
+
+    rows = await db.fetch(
+        "SELECT kind, tier_set, boundaries, refit_requested_at FROM ledger_cutpoints "
+        "WHERE user_id = $1 ORDER BY kind",
+        board_of,
+    )
+    assert [len(r["tier_set"]) for r in rows] == [9, 9], "both kinds keep the set last chosen"
+    assert all(len(r["boundaries"]) == 8 for r in rows), "§4.2: length = |tier set| - 1"
+    assert all(r["refit_requested_at"] is not None for r in rows), (
+        "and the fit that refused leaves the request owed, so the next sweep fits the new set"
+    )
+
+
+async def test_a_refit_request_made_during_a_fit_survives_the_sweep_that_did_not_fit_it(
+    db, board_of
+):
+    """The other half of finding 5: the sweep cleared the request with no predicate at all, so a
+    request made *during* the fit was cleared by it and the second change was never serviced.
+
+    The stamp travels with the owed row and bounds the clear, which is why `refits_owed` returns
+    three values rather than two.
+    """
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=["bad", "ok", "good"])
+    owed = {(user, kind): at for user, kind, at in await tiers.refits_owed(db)}
+    assert set(owed) == {(board_of, "movie"), (board_of, "series")}
+    fitted_against = owed[(board_of, "movie")]
+
+    # The PUT that lands while the fit is running. `now()` is the transaction timestamp and two
+    # consecutive transactions can share a microsecond, so the later stamp is set explicitly —
+    # the predicate is what is under test here, not the resolution of the clock.
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"L{i}" for i in range(9)])
+    await db.execute(
+        "UPDATE ledger_cutpoints SET refit_requested_at = $2 WHERE user_id = $1",
+        board_of,
+        fitted_against + timedelta(seconds=1),
+    )
+
+    await tiers.clear_refit_request(
+        db, user_id=board_of, kind="movie", requested_at=fitted_against
+    )
+    still = {kind for user, kind, _at in await tiers.refits_owed(db) if user == board_of}
+    assert still == {"movie", "series"}, "a request the sweep did not fit is still owed"
+
+    # And the ordinary case still clears: the stamp the sweep read is the stamp on the row.
+    current = {
+        (user, kind): at for user, kind, at in await tiers.refits_owed(db)
+    }[(board_of, "movie")]
+    await tiers.clear_refit_request(db, user_id=board_of, kind="movie", requested_at=current)
+    assert [kind for user, kind, _at in await tiers.refits_owed(db) if user == board_of] == [
+        "series"
+    ]
+
+
+async def test_the_tier_set_is_read_for_the_kind_that_is_asked(db, board_of):
+    """`tier_set_of` answered from `ORDER BY kind LIMIT 1` — "the movie row is the one asked
+    because `save` writes both and they cannot disagree". Finding 5 is the sentence that
+    falsified the second half, and `ledger/observations.py:288` and `home/shelves.py:336` already
+    spell the same function with a required `kind`. This one was the outlier.
+    """
+    await db.execute(
+        "INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set) "
+        "VALUES ($1, 'series', $2::float8[], $3::text[])",
+        board_of,
+        [-0.5, 0.5],
+        ["low", "mid", "high"],
+    )
+    assert await tiers.tier_set_of(db, user_id=board_of, kind="series") == (
+        "low",
+        "mid",
+        "high",
+    )
+    assert len(await tiers.tier_set_of(db, user_id=board_of, kind="movie")) == 7
+
+
+async def test_a_drop_resolves_the_tier_set_of_the_titles_own_kind(db, board_of):
+    """The consequence, at the surface. A drop validated against the other kind's set either
+    accepted a tier the board does not have or refused one it does — and decision 11's own
+    control is what produces two rows that disagree.
+    """
+    await rate(db, board_of, verdicts=[(11, 2), (12, 0)])
+    await fitted(db, board_of, "series")
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"L{i}" for i in range(9)])
+    # Both rows on nine levels first: a series drop into the eighth tier of a nine-tier set is
+    # legal, and was refused whenever the films row had reverted underneath it.
+    assert (await drop.drop(db, user_id=board_of, title_id=11, tier=7)).kind == "series"
+
+    # What a reverted fit leaves behind: films on nine levels, series back on five.
+    await db.execute(
+        "UPDATE ledger_cutpoints SET tier_set = $2::text[], boundaries = $3::float8[] "
+        "WHERE user_id = $1 AND kind = 'series'",
+        board_of,
+        [f"K{i}" for i in range(5)],
+        [-1.0, -0.3, 0.3, 1.0],
+    )
+
+    film = await drop.drop(db, user_id=board_of, title_id=1, tier=7)
+    assert (film.kind, film.tier) == ("movie", 7)
+    with pytest.raises(drop.DropRefused):
+        await drop.drop(db, user_id=board_of, title_id=11, tier=7)
+    assert (await drop.drop(db, user_id=board_of, title_id=11, tier=4)).kind == "series"
 
 
 async def test_one_persons_tier_set_never_touches_anothers(db, board_of, world):
@@ -867,6 +1093,96 @@ async def test_a_drawn_pair_is_two_titles_from_this_persons_board(db, board_of):
         assert pair.title_a != pair.title_b
 
 
+async def test_a_ledger_cache_miss_queues_the_refit_instead_of_fitting_in_the_request(
+    db, board_of
+):
+    """Finding 9 / §5.3's "<50 ms" row. A cache miss ran the whole MAP fit inline — every
+    observation loaded, `model.fit`, and a dense (p+n)x(p+n) inverse — on the backend event loop.
+    Measured on synthetic boards: 0.39 s at n = 300, 1.10 s at n = 900, 6.96 s at n = 2000,
+    33.4 s at n = 4000. It is hit on the first tap ever per (user, kind), on every tap after a
+    bundle import, on an `hp_digest` change and on the NaN fallback.
+
+    The observation is already committed by the caller, so there is nothing to save by fitting
+    now: the request stamps `refit_requested_at` — the column and the 60 s job exist from 0012
+    and decision 11 — and the sweep does the fit. This milestone makes a miss cheap; it does not
+    make misses rare (that is the bundle-version theme's, via `data-01`).
+    """
+    await db.execute("DELETE FROM ledger_fit WHERE user_id = $1", board_of)
+    await db.execute(
+        "UPDATE ledger_cutpoints SET refit_requested_at = NULL WHERE user_id = $1", board_of
+    )
+    await observations.record_verdict(db, user_id=board_of, title_id=7, value=2)
+
+    delta = await refit.update_incrementally(
+        db, user_id=board_of, kind="movie", title_ids=[7], hp=DEFAULTS,
+        embeddings=fixture_embeddings,
+    )
+    assert delta.refit is True and delta.rows == ()
+    assert await db.fetchval(
+        "SELECT count(*) FROM ledger_fit WHERE user_id = $1", board_of
+    ) == 0, "a cache miss must not run a full MAP fit on the request path"
+    assert await db.fetchval(
+        "SELECT refit_requested_at FROM ledger_cutpoints WHERE user_id = $1 AND kind = 'movie'",
+        board_of,
+    ) is not None
+
+
+async def test_a_first_ever_tap_queues_its_refit_even_with_no_cutpoints_row(db, world):
+    """The first tap of all is a cache miss with nothing to stamp: `ledger_cutpoints` has no row
+    for that (user, kind) until something fits. An UPDATE would have queued nothing, and the
+    person's first sitting would have waited for the nightly job."""
+    jenny = world["jenny"]
+    assert await db.fetchval(
+        "SELECT count(*) FROM ledger_cutpoints WHERE user_id = $1", jenny
+    ) == 0
+    await observations.record_verdict(db, user_id=jenny, title_id=1, value=2)
+
+    delta = await refit.update_incrementally(
+        db, user_id=jenny, kind="movie", title_ids=[1], hp=DEFAULTS,
+        embeddings=fixture_embeddings,
+    )
+    assert delta.refit is True and not delta.rows
+    row = await db.fetchrow(
+        "SELECT tier_set, boundaries, refit_requested_at FROM ledger_cutpoints "
+        "WHERE user_id = $1 AND kind = 'movie'",
+        jenny,
+    )
+    assert row is not None and row["refit_requested_at"] is not None
+    assert tuple(row["tier_set"]) == observations.DEFAULT_TIER_SET, (
+        "the row the stamp needs carries §6.3's prior shape, which is what the board already "
+        "falls back to when there is no row at all"
+    )
+
+
+async def test_the_board_reads_the_displayed_sigma_and_the_badge_follows_it(db, board_of):
+    """The behavioural half of the grep below, which a comment two lines above the query would
+    satisfy (finding 33). `sigma_eff` carries §5.2's freshness inflation, and the badges are a
+    claim about how sure the model is *now*.
+
+    Deliberately agnostic about which neighbour the badge names: that geometry is decision 205's
+    measurement and M4.12's to move. What is asserted is that moving the displayed sigma moves
+    the board's sigma and its badge, which is false the moment the COALESCE stops being read.
+    """
+    await db.execute(
+        "UPDATE ledger_state SET sigma_eff = 1e-6 WHERE user_id = $1 AND kind = 'movie'",
+        board_of,
+    )
+    settled, _cuts, rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    assert rows and all(i.sigma == pytest.approx(1e-6) for i in rows)
+    assert not [e for t in settled for e in t.entries if e.straddle is not None]
+
+    target = rows[0].title_id
+    await db.execute(
+        "UPDATE ledger_state SET sigma_eff = 5.0 WHERE user_id = $1 AND title_id = $2",
+        board_of,
+        target,
+    )
+    widened, _cuts, after = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    assert {i.title_id: i.sigma for i in after}[target] == pytest.approx(5.0)
+    badged = {e.title_id for t in widened for e in t.entries if e.straddle is not None}
+    assert badged == {target}, "the badge is computed from the displayed sigma, not the fitted one"
+
+
 def test_the_board_reads_the_displayed_sigma_not_the_fitted_one():
     """§5.2's freshness rule inflates the *displayed* σ after twelve untouched months, and the
     badges are a claim about how sure the model is now. Reading `sigma` would make a board that
@@ -917,6 +1233,33 @@ async def test_the_public_projection_carries_no_ungated_model_number(db, board_o
 
 
 # --- §13's instrument, sharpened by the M3 review ---------------------------------------------
+
+
+async def test_the_asked_set_leaves_the_held_out_stream_out_of_the_selector(db, board_of):
+    """The selector's second §13 input, and the second way to leak the evaluation stream into it.
+
+    `queue._exploration` refuses to re-serve a pair in this set (finding 12), so a held-out row
+    in it would let the uniform 10% decide what the adaptive arm asks next — the coupling §13
+    calls non-negotiable, reached one query over from the one `comparison_counts` already guards.
+    """
+    await observations.record_duel(
+        db, user_id=board_of, title_a=9, title_b=10, outcome="A",
+        context="tier_queue", selection=queue.ARM_HOLDOUT,
+    )
+    await observations.record_duel(
+        db, user_id=board_of, title_a=7, title_b=8, outcome="B",
+        context="tier_queue", selection=queue.ARM_BOUNDARY,
+    )
+
+    asked = await read.asked_pairs(db, user_id=board_of, kind="movie")
+    assert frozenset((7, 8)) in asked
+    assert frozenset((9, 10)) not in asked, "§13: the evaluation stream is not a selector input"
+    assert frozenset((1, 2)) in asked, (
+        "and every context counts - a pair settled in a §6.1 battle is one they have answered"
+    )
+    assert await read.asked_pairs(db, user_id=board_of, kind="series") == set(), (
+        "§4.1 rule 5: a films pair is not a fact about the series board"
+    )
 
 
 async def test_the_evaluation_partitions_by_kind_on_both_sides_of_the_pair(db, board_of):

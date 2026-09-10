@@ -32,7 +32,16 @@ it **above every real number**. `ledger_state_rank` is `(user_id, kind, s DESC)`
 non-finite `s` does not produce a missing row or an error — it produces a title pinned to the
 top of every §6.0 shelf, for as long as it takes someone to notice. Nothing here writes a
 non-finite `s` or `σ`: the fit is checked before the transaction opens, and the incremental
-path falls back to a full refit rather than persisting one.
+path queues a full refit rather than persisting one.
+
+WHAT THE REQUEST PATH IS ALLOWED TO COST. §5.3 budgets the incremental row at "<50 ms" and the
+full fit at "seconds", so the <50 ms path must never reach for the seconds one. It used to, on
+every cache miss: the fit was run inline, measured at 0.39 s over 300 titles and 33.4 s over
+4000, on the backend event loop, for an observation the caller had already committed. A miss now
+stamps `ledger_cutpoints.refit_requested_at` and returns — the column and the 60 s sweep exist
+from 0012 and decision 11 — so the fit happens where its budget lives. The cache-miss *rate* is
+a different defect in a different theme (the refit stamped with the active bundle version rather
+than the one it was computed against); this module makes a miss cheap, not rare.
 """
 
 from __future__ import annotations
@@ -58,6 +67,23 @@ log = logging.getLogger("spielplan.ledger.refit")
 # A calendar conversion, not a tuning constant: the mean Gregorian month in days. §5.2's "12
 # months untouched" and "rate c per √month" both need months, and `hp` owns the 12 and the c.
 DAYS_PER_MONTH = 365.2425 / 12.0
+
+
+# `Delta.fit_source` when no fit ran at all: the observation is durable, the board has not
+# moved, and a sweep owes it a fit. Named rather than spelled "nightly", because "nightly" is a
+# claim that the rows in the delta came from one.
+QUEUED = "queued"
+
+# What the routers report when the delta carries no fit. It has to survive being read as the
+# tail of the clients' refused line ("ledger update refused - ..."), so it says what is true of
+# both queueing branches: the cached fit was missing or came back non-finite, and a full one is
+# owed to the 60 s sweep rather than lost.
+# [M4.10 cycle 2, m410-c2-cache-miss-reports-a-refit-that-did-not-run]
+QUEUED_REASON = "a full refit is queued; there was no usable cached fit to update"
+
+# Where the full fit stops being quiet. §5.3's "seconds" is a budget, not a promise, and
+# `model.fit`'s dense inverse is cubic in the observed count.
+LOUD_FIT_TITLES = 2000
 
 
 class RefitRefused(Exception):
@@ -154,9 +180,12 @@ class Delta:
     kind: str
     rows: tuple[Row, ...]
     fit_source: str
-    # True when the cache was cold or stale and the whole fit was redone. Not the <50 ms path:
-    # a cache miss is a cache miss, and reporting it as an incremental update would be the one
-    # way to make §5.3's budget unfalsifiable.
+    # True when the cache was cold, stale or unusable — whatever happened here, it was not the
+    # <50 ms path, and reporting a miss as an incremental update would be the one way to make
+    # §5.3's budget unfalsifiable. Since finding 9 it no longer implies the whole fit was redone
+    # in this call: `fit_source` is what separates a fit that ran from one that is owed, and the
+    # only two sites that set this flag now set `QUEUED` beside it.
+    # [M4.10 cycle 2, m410-c2-cache-miss-reports-a-refit-that-did-not-run]
     refit: bool = False
     iterations: int = 0
     micros: int = 0
@@ -327,6 +356,13 @@ async def refit_user(
         report.seconds = time.perf_counter() - started
         return report
 
+    if obs.n > LOUD_FIT_TITLES:
+        # §5.3 gives the full fit "seconds" and `model.fit` inverts a dense (p+n)x(p+n) matrix,
+        # so the cost is cubic in exactly this number: 6.96 s at n = 2000 and 33.4 s at n = 4000
+        # on the measurement behind finding 9. One line, so a slow night is legible in the log
+        # rather than inferred from a gap between two timestamps.
+        log.info("full MAP fit for user %d/%s over %d observed titles", user_id, kind, obs.n)
+
     fit = model.fit(obs, hp)
     if not (
         np.isfinite(fit.mu)
@@ -399,6 +435,31 @@ async def refit_user(
 
     bundle = await active_bundle_version(conn)
     async with conn.transaction():
+        # A COMPARE-AND-SET ON THE TIER SET, because the fit read it minutes ago and §5.3 gives
+        # itself "seconds" to run. Decision 11 makes the set a per-user preference with a control
+        # that invites a second try, so a PUT landing mid-fit is ordinary: the fit then holds
+        # cutpoints of the wrong length and a tier set nobody chose, and writing them back
+        # reverted the person's change. Reproduced before the fix: PUT K = 5 queued a refit, PUT
+        # K = 9 landed during it, and the movie row came out at K = 5 with the request cleared
+        # while the series row read K = 9 — one board refusing legal drops into its upper tiers.
+        #
+        # Refused rather than repaired: re-deriving cutpoints for a set this fit never saw would
+        # be inventing boundaries, and `refit_requested_at` is still set by the PUT, so the next
+        # sweep fits the set that is actually on the row. `FOR UPDATE` makes the window the
+        # transaction rather than the statement; the raise unwinds `_write_state` with it, so the
+        # board is never left with tiers indexed against a tier set of another length.
+        current = await conn.fetchval(
+            "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2 FOR UPDATE",
+            user_id,
+            kind,
+        )
+        if current is not None and tuple(current) != tuple(loaded.tier_set):
+            raise RefitRefused(
+                f"user {user_id}/{kind}: the tier set changed to "
+                f"{len(current)} levels while this fit was running against "
+                f"{len(loaded.tier_set)}; ledger_state and ledger_cutpoints keep their "
+                "previous values and the refit stays owed"
+            )
         await _write_state(
             conn,
             user_id=user_id,
@@ -766,6 +827,62 @@ def _sherman_morrison(
     return np.sqrt(np.clip(updated, 1e-12, sigma_prior**2))
 
 
+async def update_incrementally_reporting(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    title_ids: Sequence[int],
+    hp: Hyperparams,
+    embeddings: EmbeddingSource | None,
+) -> dict[str, Any] | None:
+    """§5.3's "<50 ms" row, run after the person's write has committed.
+
+    A fit that refuses is a model problem, not a reason to lose the tap: the observation is
+    already durable and the nightly refit will pick it up, so this reports rather than raises.
+
+    It lives here, and not in one of the two routers, because both of them call it and they used
+    to disagree: the Rate path caught these exceptions on purpose while `api/rank.py` called the
+    fit bare after `drop_rules.drop` and `record_duel` had committed — so the same refusal lost
+    the tap on one surface and not on the other, answered 500 over a row that was in fact
+    written, and every retry of the lost one wrote another append-only row. `rank/tiers.py`'s
+    `MAX_LABEL` comment records the same failure for tier labels. The shape is the one the Rate
+    surface already ships under the gated `ledger` key, so the clients need nothing.
+    """
+    try:
+        delta = await update_incrementally(
+            conn,
+            user_id=user_id,
+            kind=kind,
+            title_ids=list(title_ids),
+            hp=hp,
+            embeddings=embeddings,
+        )
+    except (RefitRefused, ValueError) as exc:
+        log.warning("incremental update refused for user %d/%s: %s", user_id, kind, exc)
+        return {"applied": False, "reason": str(exc)}
+    if delta.fit_source == QUEUED:
+        # A queued fit is not an applied one, and the two fields that would otherwise say it was
+        # are the two the surfaces read: `RateModelLog.svelte` renders `refit` and `ms` as
+        # "ledger movie - refit 12.6 ms" and `rate/session.py` passes the same `ms` into §6.7's
+        # rail as ", incremental refit 13 ms". Nothing had been fitted — `ledger_fit` empty,
+        # `ledger_state` unmoved, the board unchanged until the 60 s sweep — so both sentences
+        # described work nobody did, on the one surface §6.7 exists to make honest. This is the
+        # plan's own letter for the branch ("return `Delta(refit=True, rows=[])` so the caller
+        # reports `applied=False`", step 3), and it needs no client change: the refused branch
+        # the clients already render is the branch that says the update did not happen, and the
+        # reason says which of the two ways it did not.
+        # [M4.10 finding 9, cycle 2 m410-c2-cache-miss-reports-a-refit-that-did-not-run]
+        return {"applied": False, "reason": QUEUED_REASON}
+    return {
+        "applied": True,
+        "kind": delta.kind,
+        "refit": delta.refit,
+        "ms": round(delta.micros / 1000.0, 1),
+        "rows": [{"title_id": r.title_id, "cdf": r.cdf, "tier": r.tier} for r in delta.rows],
+    }
+
+
 async def update_incrementally(
     conn: asyncpg.Connection,
     *,
@@ -822,15 +939,16 @@ async def _update_incrementally(
 
     cache = await load_cache(conn, user_id=user_id, kind=kind, hp=hp)
     if cache is None:
-        await refit_user(
-            conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings, now=now
-        )
-        rows = await _read_rows(conn, user_id=user_id, title_ids=targets)
+        # Finding 9. The observation is already committed by the caller, so there is nothing to
+        # save by fitting now — and the fit is §5.3's "seconds" row running inside its "<50 ms"
+        # one, on the event loop, hit on the first tap ever per (user, kind), on every tap after
+        # a bundle import, on an `hp_digest` change and on the NaN fallback below.
+        await _queue_full_refit(conn, user_id=user_id, kind=kind)
         return Delta(
             user_id=user_id,
             kind=kind,
-            rows=rows,
-            fit_source="nightly",
+            rows=(),
+            fit_source=QUEUED,
             refit=True,
             micros=int((time.perf_counter() - started) * 1e6),
         )
@@ -920,17 +1038,20 @@ async def _update_incrementally(
     )
 
     if not (np.all(np.isfinite(s)) and np.all(np.isfinite(sigma))):
-        # The guard has a recovery, not just a refusal: redo the fit exactly rather than
-        # persisting a NaN or leaving the person's tap with nothing to show for it.
-        log.error("incremental update for user %d/%s went non-finite — full refit", user_id, kind)
-        await refit_user(
-            conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings, now=now
+        # The guard still has a recovery rather than only a refusal — the exact fit is asked
+        # for rather than run, which is the same recovery one sweep later and does not spend
+        # §5.3's "seconds" inside a request that has already committed its observation. What
+        # matters here is unchanged: no NaN reaches `ledger_state`, so nothing is pinned to the
+        # top of every §6.0 shelf while the fix is owed.
+        log.error(
+            "incremental update for user %d/%s went non-finite - full refit queued", user_id, kind
         )
+        await _queue_full_refit(conn, user_id=user_id, kind=kind)
         return Delta(
             user_id=user_id,
             kind=kind,
-            rows=await _read_rows(conn, user_id=user_id, title_ids=targets),
-            fit_source="nightly",
+            rows=(),
+            fit_source=QUEUED,
             refit=True,
             micros=int((time.perf_counter() - started) * 1e6),
         )
@@ -1009,6 +1130,35 @@ async def _update_incrementally(
         fit_source="incremental",
         iterations=iterations,
         micros=int((time.perf_counter() - started) * 1e6),
+    )
+
+
+async def _queue_full_refit(conn: asyncpg.Connection, *, user_id: int, kind: str) -> None:
+    """Ask the 60 s sweep for the fit this request is not going to run.
+
+    `ledger_cutpoints.refit_requested_at` and the job that reads it are 0012's and decision 11's,
+    and nothing about the column says the only thing allowed to ask is a tier-set change.
+
+    INSERT rather than UPDATE, because the first tap of all is precisely a (user, kind) with no
+    row: an UPDATE would have queued nothing and the person's first sitting would have waited for
+    the nightly job. The row it creates carries §6.3's prior shape — the same boundaries
+    `read.cutpoints_of` already falls back to when there is no row at all, so the board reads the
+    same numbers either way and the queued fit overwrites them.
+    """
+    await conn.execute(
+        """
+        INSERT INTO ledger_cutpoints
+            (user_id, kind, boundaries, tier_set, refit_requested_at, updated_at)
+        VALUES ($1, $2, $3::float8[], $4::text[], now(), now())
+        ON CONFLICT (user_id, kind) DO UPDATE
+           SET refit_requested_at = COALESCE(
+                   ledger_cutpoints.refit_requested_at, EXCLUDED.refit_requested_at
+               )
+        """,
+        user_id,
+        kind,
+        [float(c) for c in model.initial_cutpoints(len(observations.DEFAULT_TIER_SET))],
+        list(observations.DEFAULT_TIER_SET),
     )
 
 
@@ -1111,6 +1261,8 @@ async def read_board(
 
 __all__ = [
     "DAYS_PER_MONTH",
+    "LOUD_FIT_TITLES",
+    "QUEUED",
     "Delta",
     "FitCache",
     "RefitRefused",
@@ -1122,4 +1274,5 @@ __all__ = [
     "refit_all",
     "refit_user",
     "update_incrementally",
+    "update_incrementally_reporting",
 ]

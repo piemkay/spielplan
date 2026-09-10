@@ -458,6 +458,77 @@ def validate_artifacts(
     return report
 
 
+def validate_hyperparams(store_dir: Path, report: ImportReport) -> ImportReport:
+    """§4.3's constants file, read by the app's own reader before §10 stages it.
+
+    §10's sequence is validate -> stage -> recompute the rebuild set -> flip -> restart, and the
+    restart is why this check belongs at step 1 and nowhere later: `hyperparams.from_mapping`
+    raises `ValueError` on a constant outside its range, and that refusal has no catcher between
+    here and the three Ledger routers — so a bundle that reaches the flip with a hand-edited λ or
+    a non-positive `straddle_z` turns the Rate and Rank surfaces into refusals on a box whose
+    operator has already walked away, with `artifacts/<version>/` staged and the active row
+    flipped. Checked here it is one report line naming the key, in the report the operator is
+    standing in front of, with nothing written and nothing staged.
+
+    A `fail` and not a `warn`, for the same reason the routers refuse rather than default: §4.3
+    makes this file the single source of the §5.2 constants, and importing on substituted
+    defaults changes `hp_digest`, which invalidates every cached fit in the install.
+
+    Through `hyperparams.load` rather than a second parser, which is the rule `feature_contract`
+    above already follows: one reader of a bundle file, so the validator cannot pass a file the
+    app will then refuse. It is the staged directory's own layout — `ledger_hyperparams.json`
+    beside `manifest.json` — that decides whether the file is there at all.
+    [M4.10 finding 10; ml06]
+    """
+    from spielplan.ledger import hyperparams
+    from spielplan.models.artifacts import ArtifactStore
+
+    constants = store_dir / "ledger_hyperparams.json"
+    if not (constants.exists() or constants.is_symlink()):
+        # §4.3 lists the file as optional and `validate_artifacts` has already warned about every
+        # absent optional artifact by name. A second line for this one would report one absence
+        # twice, and §3.1 makes the defaults legal.
+        #
+        # ABSENT, not merely unopenable: the guard was `is_file()`, which is false for a path that
+        # exists as a directory, so an artifacts tree assembled by an extraction that made one
+        # returned this report untouched — no failure and not even the "constants read" note, while
+        # the app booted on DEFAULTS under a different `hp_digest`. `hyperparams.load` draws the
+        # same distinction for the same reason. [M4.10 cycle 1, M410-R1-06]
+        return report
+    # Constructed rather than `ArtifactStore.open`ed, which is the one place this section departs
+    # from how every other reader addresses a store. `open` re-parses `manifest.json`, and a
+    # manifest that is not readable JSON therefore raised out of it into the handler below and was
+    # reported as the CONSTANTS file's parse error: one truncated manifest, two failures, and an
+    # operator sent to open a `ledger_hyperparams.json` in which every key is in range. That is
+    # exactly the misattribution the clause below refuses one file type over, and §10 makes this
+    # report the decision point. `validate_artifacts` owns the manifest line and has already
+    # emitted it by name; `hyperparams.load` reads only `is_empty` and `path()`, so the constants
+    # are still checked on a bundle whose manifest is broken and the operator gets both facts in
+    # one pass. [M4.10 cycle 2, m410-c2-validate-blames-the-constants-for-a-broken-manifest]
+    store = ArtifactStore(version=report.bundle_version or "staged", root=store_dir)
+    try:
+        hp, _notes = hyperparams.load(store)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Before the `ValueError` clause, and not merely for tidiness: `json.JSONDecodeError` IS
+        # a `ValueError`, so the broader clause would report an unparseable file as a constant
+        # out of range and send the operator looking for a key that is not the problem.
+        report.fail("hyperparams", f"ledger_hyperparams.json is not readable JSON: {exc}")
+    except ValueError as exc:
+        report.fail(
+            "hyperparams",
+            f"ledger_hyperparams.json carries a constant the §5.2 fit cannot use: {exc}",
+        )
+    else:
+        # The digest, because §10's re-import report is a diff: two bundles whose constants agree
+        # produce the same fits, and the operator cannot tell that from a line that only says ok.
+        report.note(
+            "hyperparams",
+            f"§5.2 constants read from the bundle; fit digest {hp.digest()}",
+            hp_digest=hp.digest(), hp_source=hp.source,
+        )
+    return report
+
+
 def _read_json(path: Path, report: ImportReport, rule: str) -> dict[str, Any] | None:
     """Parse a bundle JSON file, or report why it cannot be parsed.
 

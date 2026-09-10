@@ -19,8 +19,11 @@ wall clock, which the caller supplies rather than this function reading.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import logging
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -136,8 +139,9 @@ def test_the_fold_in_runs_often_enough_to_answer_within_a_sitting():
     claim about what a person sees during a sitting, and every §6.0 shelf orders by a table only
     the fold-in writes.
 
-    A strictly nightly fold-in cannot meet it: the tier badges move on every tap (the
-    interactive path writes `ledger_state`) while the shelves stay in the order they had that
+    A strictly nightly fold-in cannot meet it: the tier badges move within the sitting (the
+    interactive path writes `ledger_state` — under the hand where the fit cache is warm, on the
+    60 s sweep finding 9 hands a miss to) while the shelves stay in the order they had that
     morning, for up to a day. §5.3's nightly pass stays exactly as §5.3 writes it; this asserts
     the tick exists alongside it and is measured in minutes, not hours.
     """
@@ -388,3 +392,304 @@ def test_the_loop_still_takes_the_fallback_clock_rather_than_stopping(tz):
 
     assert worker._local_zone() is None
     assert worker._now_local().tzinfo is None, "the fallback is the process's own naive clock"
+
+
+# --- M4.10: the registry against §5.3's own table, and a boot line that counts something ------
+#
+# `test_every_registered_job_matches_its_spec_trigger` weighs four entries against the cadences
+# §5.3 gives them, which is the half that can be written from memory. What nothing here did was
+# open the table. §5.3 has nine rows and this tuple carried eight of them: the missing one is row
+# 9, bundle import validation and hot swap, which is also the only row implemented inside a
+# request handler and the one whose 127 s POST no instrument in the box could see. A module that
+# documents itself as "the registry that says so out loud rather than a process that silently
+# does nothing" has to be held to the document it copies by something that reads it.
+# [M4.10 finding 35]
+
+SPEC_DOC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
+
+# The module the boot-census call-site rule below reads. A source path and not `inspect`, because
+# the question is where one statement sits inside `main()` rather than what a function closes over.
+# [M4.10 cycle 1, m410-rev1-boot-census-call-site-is-untested]
+WORKER_SOURCE = Path(worker.__file__)
+
+# §5.3's nine rows, keyed by the opening of each Job cell, against the registry name that stands
+# for it. Written out rather than derived, because the mapping IS the claim: "Seen-state sync
+# with Jellyfin" and `jellyfin-seen-sync` are one row only because a person says they are, and a
+# renamed job that quietly stops answering for a spec row is the failure being guarded.
+SPEC_5_3 = {
+    "Ledger incremental update": "ledger-incremental",
+    "Ledger full MAP refit": "ledger-map-refit",
+    "Fold-in user vectors": "fold-in-user-vectors",
+    "Cold Tower placement": "cold-tower-placement",
+    "Placement reconciliation": "placement-reconciliation",
+    "DNA projection": "dna-projection",
+    "Seen-state sync with Jellyfin": "jellyfin-seen-sync",
+    "Explore-frontier": "explore-frontier-cache",
+    "Bundle import validation": "bundle-import",
+}
+
+
+def _spec_jobs_table() -> list[tuple[str, str, str]]:
+    """§5.3's table as (job, trigger, budget), read out of the normative document.
+
+    Cells go through `ascii()` wherever they reach an assertion message: the budget column holds
+    an em dash and the job column holds § signs, and a Windows cp1252 console dies on either.
+    This guard may fail on this machine; it may not crash the runner reporting it.
+    """
+    rows: list[tuple[str, str, str]] = []
+    lines = SPEC_DOC.read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("### 5.3 Jobs"))
+    for line in lines[start + 1:]:
+        if line.startswith(("#", "---")):
+            break
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3 or cells[0] == "Job" or set(cells[0]) <= set("-: "):
+            continue
+        rows.append((cells[0], cells[1], cells[2]))
+    return rows
+
+
+def test_every_row_of_the_spec_s_jobs_table_has_a_registry_entry():
+    """The tuple calls itself a copy of §5.3's table; this is the diff against the original.
+
+    Trigger is compared as a prefix because the registry drops the section pointers the table
+    carries ("acquisition pipeline (§8)"); budget is compared exactly, because it is the number
+    §5.3 holds the job to and a rounded copy is a different promise.
+    """
+    table = _spec_jobs_table()
+    by_name = {job.name: job for job in worker.JOBS}
+    problems: list[str] = []
+    seen: set[str] = set()
+
+    for job_cell, trigger, budget in table:
+        matches = [key for key in SPEC_5_3 if job_cell.startswith(key)]
+        if len(matches) != 1:
+            problems.append(f"the table row {ascii(job_cell[:50])} maps to {matches}")
+            continue
+        seen.add(matches[0])
+        name = SPEC_5_3[matches[0]]
+        job = by_name.get(name)
+        if job is None:
+            problems.append(f"section 5.3 row {matches[0]!r} has no {name!r} entry in JOBS")
+            continue
+        if not trigger.startswith(job.trigger):
+            problems.append(
+                f"{name}: registry trigger {ascii(job.trigger)} is not the table's "
+                f"{ascii(trigger)}"
+            )
+        if job.budget != budget:
+            problems.append(
+                f"{name}: registry budget {ascii(job.budget)} is not the table's {ascii(budget)}"
+            )
+
+    assert not problems, problems
+    missing = sorted(set(SPEC_5_3) - seen)
+    assert not missing, f"rows this guard expects and the table no longer has: {missing}"
+    assert len(table) == 9, f"section 5.3 now has {len(table)} rows, not nine"
+
+
+def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means():
+    """`run=None` meant three states at once, and the registry could not tell them apart.
+
+    Two of them are code that ships: the incremental Ledger update runs in the web process on
+    every tap, and the bundle import runs inside the admin's POST. One is code that ships and is
+    reached through another job - the Cold Tower's forward pass, which the placement sweep calls
+    until §8's acquisition pipeline exists. Only the last two rows here are genuinely unwritten.
+    Pinned as sets rather than as counts, because the failure being guarded is a row drifting
+    from one bucket to another silently, which a count cannot see. [M4.10 finding 35]
+    """
+    elsewhere = {j.name: j.owner for j in worker.JOBS if j.run is None and j.owner is not None}
+    awaiting = {j.name: j.milestone for j in worker.JOBS if j.run is None and j.owner is None}
+
+    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement", "bundle-import"}
+    assert set(awaiting) == {"dna-projection", "explore-frontier-cache"}
+    assert sorted(awaiting.values()) == ["M5", "M6"], (
+        "a job with neither an implementation nor an owner has to name the milestone that owes "
+        f"it one, and these name a milestone this build has already shipped: {awaiting}"
+    )
+    for name, module in elsewhere.items():
+        assert importlib.util.find_spec(module) is not None, (
+            f"{name} names {module!r} as its implementation and that module does not exist"
+        )
+    # `owner` means "this loop does not fire it". A live job carrying one would make the census
+    # below double-count and, worse, would read as documentation that the loop is not the caller.
+    assert not [j.name for j in worker.JOBS if j.run is not None and j.owner is not None]
+
+
+def _census_line(caplog) -> str:
+    lines = [r.getMessage() for r in caplog.records if "job(s) live" in r.getMessage()]
+    assert len(lines) == 1, f"the boot census is not one line: {lines}"
+    return lines[0]
+
+
+def test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed(
+    monkeypatch, caplog
+):
+    """Four fabricated rows, one of each state, and the line has to follow them.
+
+    The old line derived "awaiting their milestone" from `run is None` alone, so its arithmetic
+    was right and its category was wrong. Substituting the registry is the only way to assert
+    that the counts are computed here rather than restated: against a tuple whose names the real
+    one does not share, a number somebody typed cannot survive.
+    """
+    async def _noop() -> None:
+        return None
+
+    monkeypatch.setattr(worker, "JOBS", (
+        worker.Job("fired-here", "M0", "hourly", "ms", _noop, every=3600),
+        worker.Job("runs-on-a-tap", "M0", "every observation", "ms", owner="spielplan.api.rate"),
+        worker.Job("runs-on-a-post", "M0", "admin action", "minutes",
+                   owner="spielplan.importer.bundle"),
+        worker.Job("nobody-has-written-it", "M9", "nightly", "minutes"),
+    ))
+
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        worker._report_registry()
+
+    line = _census_line(caplog)
+    assert line.startswith("1 job(s) live in this loop; 2 run outside it: ")
+    assert "runs-on-a-tap(spielplan.api.rate)" in line
+    assert "runs-on-a-post(spielplan.importer.bundle)" in line
+    assert "1 awaiting their milestone: nobody-has-written-it(M9)" in line
+    assert "fired-here" not in line, "the live jobs are counted, not listed - there are twelve"
+    assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
+
+
+def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
+    """The sentence an operator actually read, against the registry they actually have.
+
+    "4 awaiting their milestone: ledger-incremental(M2), cold-tower-placement(M2), ..." was false
+    about half of what it named, at every boot, in the one line this process writes about its own
+    contents. The remainder is asserted exactly rather than counted, because the count was never
+    the part that was wrong.
+    """
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        worker._report_registry()
+
+    line = _census_line(caplog)
+    assert line.endswith(
+        "2 awaiting their milestone: dna-projection(M5), explore-frontier-cache(M6)"
+    ), line
+    outside = line.split("run outside it: ", 1)[1].split(";", 1)[0]
+    assert "ledger-incremental(spielplan.ledger.refit)" in outside
+    assert "cold-tower-placement(spielplan.placement.tower)" in outside
+    assert "bundle-import(spielplan.importer.bundle)" in outside
+    assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
+
+
+def _census_calls_in_main(source: str) -> list[str]:
+    """Where `main()` calls `_report_registry`, and what stands between it and the boot path.
+
+    A list of descriptions rather than a bool, because there are three ways to lose the line and
+    the operator cannot tell them apart: no call at all, a call behind a branch this container
+    never takes, and a call in some other function that nothing boots. A `try` body and an
+    `async with` body are unconditional once `main` is running, so they are walked through; an
+    `if`, a loop, an `except` and a `try`'s `else` are not.
+    """
+    tree = ast.parse(source)
+    main = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == "main"
+        ),
+        None,
+    )
+    if main is None:
+        return ["worker.py has no main()"]
+
+    found: list[str] = []
+
+    def walk(body: list[ast.stmt], guard: str | None) -> None:
+        # The compound statements are descended into and then skipped, so a call inside one is
+        # reported once, under its own guard, rather than twice -- `ast.walk` over a whole
+        # statement would find it again and call it unconditional.
+        for stmt in body:
+            if isinstance(stmt, ast.Try):
+                walk(stmt.body, guard)
+                for handler in stmt.handlers:
+                    walk(handler.body, f"behind `except` at line {handler.lineno}")
+                walk(stmt.orelse, f"behind the `else` of a `try` at line {stmt.lineno}")
+                walk(stmt.finalbody, guard)
+                continue
+            if isinstance(stmt, ast.With | ast.AsyncWith):
+                walk(stmt.body, guard)
+                continue
+            if isinstance(stmt, ast.If):
+                walk(stmt.body, f"behind an `if` at line {stmt.lineno}")
+                walk(stmt.orelse, f"behind an `else` at line {stmt.lineno}")
+                continue
+            if isinstance(stmt, ast.For | ast.AsyncFor | ast.While):
+                walk(stmt.body, f"inside a loop at line {stmt.lineno}")
+                walk(stmt.orelse, f"inside a loop at line {stmt.lineno}")
+                continue
+            if isinstance(stmt, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef):
+                walk(stmt.body, f"inside a nested definition at line {stmt.lineno}")
+                continue
+            for node in ast.walk(stmt):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "_report_registry"
+                ):
+                    found.append(guard or "unconditional")
+                    break
+
+    walk(main.body, None)
+    return found
+
+
+def test_the_boot_census_is_actually_called_at_boot():
+    """The two tests above call `_report_registry()` themselves, so neither can see the one call
+    site that makes the line a boot line.
+
+    `grep -rn "_report_registry" backend/` finds three places: the definition, one call inside
+    `main()`, and those tests. Delete the call and all four registry tests stay green while the
+    coverage row goes on claiming that an operator reads these counts at every boot — which is
+    the shape of the very defect this row repairs, a line nobody read telling nobody something
+    false for two milestones.
+
+    Read off the source rather than by booting `main()`: booting it needs a pool, the migration
+    wait and a signal handler, and what is in doubt is one statement's position, which is a fact
+    about the code. `test_auth_logic.py:124` reads the CSPRNG the same way and for the same
+    reason. Unconditional matters as much as present: behind the migration wait's `else`, or
+    behind `if store.is_empty`, the line would be missing on exactly the boots an operator is
+    reading the log for. [M4.10 finding 35; cycle 1, m410-rev1-boot-census-call-site-is-untested]
+    """
+    calls = _census_calls_in_main(WORKER_SOURCE.read_text(encoding="utf-8"))
+    assert calls == ["unconditional"], (
+        "main() must call _report_registry() exactly once and on every boot; found: "
+        f"{calls or 'no call at all'}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # `main()`'s own shape: inside the try whose `finally` closes the pool.
+        ("the shape that ships",
+         "async def main():\n    try:\n        _report_registry()\n    finally:\n        pass\n",
+         ["unconditional"]),
+        ("at the top of main", "async def main():\n    _report_registry()\n", ["unconditional"]),
+        ("inside an async with", "async def main():\n    async with pool.acquire() as conn:\n"
+                                 "        _report_registry()\n", ["unconditional"]),
+        ("the call deleted",
+         "async def main():\n    try:\n        pass\n    finally:\n        pass\n", []),
+        ("behind a branch the container may not take",
+         "async def main():\n    if store.is_empty:\n        _report_registry()\n",
+         ["behind an `if` at line 2"]),
+        ("behind the migration wait's else",
+         "async def main():\n    try:\n        pass\n    except OSError:\n"
+         "        _report_registry()\n",
+         ["behind `except` at line 4"]),
+        ("called twice", "async def main():\n    _report_registry()\n    _report_registry()\n",
+         ["unconditional", "unconditional"]),
+        ("defined but booted by nothing",
+         "def _boot():\n    _report_registry()\nasync def main():\n    pass\n", []),
+    ],
+)
+def test_the_boot_census_call_site_guard_catches_a_real_violation(name, source, expected):
+    """A guard that cannot see its own violation is the M4.7 lesson, so each shape is named."""
+    assert _census_calls_in_main(source) == expected, name

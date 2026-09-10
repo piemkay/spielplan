@@ -889,18 +889,50 @@ def tier_of(s: np.ndarray, cuts: np.ndarray) -> np.ndarray:
 
 
 def straddle(s: np.ndarray, sigma: np.ndarray, cuts: np.ndarray, hp: Hyperparams) -> np.ndarray:
-    """§6.3's "A/S straddle" badge: the adjacent tier the posterior also reaches, or −1."""
+    """§6.3's "A/S straddle" badge: the adjacent tier the posterior also reaches, or −1.
+
+    ADJACENT IS THE WHOLE CONTENT OF THE WORD, and it used to be a comment rather than a
+    property. The previous version set the answer to `searchsorted(lo)` whenever that differed
+    from the tier, which is "how many cutpoints the low end of the interval clears" — on a wide
+    posterior that is two or three levels, so a title in A was badged with F, and
+    `queue._boundary` (which consumes exactly this number) then drew the partner from a tier the
+    title does not border and called the pair the one that settles its boundary. A badge naming
+    a level the posterior neither occupies nor neighbours is a claim about nothing.
+    `rank.board.straddles` has said "the **adjacent** tier" since it was written.
+
+    So the candidates are the two neighbours and nothing else, and when the interval reaches
+    both, the one whose CUT is nearer to `s` wins: that is the boundary the next comparison can
+    actually move, and the tier the title is likelier to belong to. A tie keeps the downward
+    choice the old `below`-first order had, so the answer stays a function of the numbers rather
+    than of the iteration order. Decision 205 is the constraint this obeys: the predicate stays
+    ±z·σ and `straddle_z` is not retuned here — that measurement is M4.12's.
+
+    The *set* is unchanged, deliberately. §6.3 makes one predicate do two jobs ("shows "A/S"
+    **and** becomes queue-eligible", proposal 157), so narrowing which tier is named must not
+    narrow who is named; "the interval crosses a cut" and "it crosses the cut below or the cut
+    above" are the same statement, because the nearest cut on either side of `s` is its own
+    tier's boundary.
+    """
     ordered = np.sort(cuts)
     tier = tier_of(s, ordered)
     out = np.full(s.shape, -1, dtype=np.int64)
     for i in range(s.size):
+        here = int(tier[i])
         lo, hi = s[i] - hp.straddle_z * sigma[i], s[i] + hp.straddle_z * sigma[i]
-        below = int(np.searchsorted(ordered, lo, side="right"))
-        above = int(np.searchsorted(ordered, hi, side="right"))
-        if below != tier[i]:
-            out[i] = below
-        elif above != tier[i]:
-            out[i] = above
+        # `tier_of` is `searchsorted(..., side="right")`, so tier `here` is the band
+        # [ordered[here-1], ordered[here]): its lower cut is ordered[here-1] and its upper
+        # ordered[here], each existing only when the index does — which is proposal 76's "S
+        # never renders S/S" falling out of the arithmetic at both ends.
+        down = float(ordered[here - 1]) if here > 0 else None
+        up = float(ordered[here]) if here < ordered.size else None
+        reaches_down = down is not None and lo < down
+        reaches_up = up is not None and hi >= up
+        if reaches_down and reaches_up:
+            out[i] = here - 1 if (s[i] - down) <= (up - s[i]) else here + 1
+        elif reaches_down:
+            out[i] = here - 1
+        elif reaches_up:
+            out[i] = here + 1
     return out
 
 
