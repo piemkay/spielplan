@@ -4,7 +4,7 @@
 the tests that assert it. Two rules:
 
   1. Every requirement at or before `current_milestone` names at least one test.
-  2. Every named test exists — in pytest or in the Playwright suite.
+  2. Every named test exists — in pytest, in the Playwright suite, or in the frontend's vitest.
 
 Raising `current_milestone` therefore turns the next milestone's obligations into failures with
 names, which is the whole point: a test plan nobody runs is a wish, and a coverage number
@@ -31,7 +31,8 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # on a placement path that has never met the real feature contract. See
 # docs/milestones/M4.5-plan.md.
 #
-# Nor are M4.9, M4.12 and M4.13, and for the same kind of reason: the September 2026
+# Nor were M4.9, M4.12 and M4.13 when their first rows landed, and for the same kind of
+# reason: the September 2026
 # pre-release review found three defects that only the real corpus bundle can express — a
 # title card that throws on a keyed each, a fifth of the basis served at e(t) = 0, and a
 # pair search that costs a minute. `docs/milestones/ROADMAP-to-M5.md`'s "Start here" table
@@ -71,6 +72,17 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # self-hosted runner and off every branch gate, so this milestone's own evidence stays
 # reproducible rather than becoming a secret nobody can re-run. See
 # docs/milestones/M4.8-plan.md.
+#
+# M4.9, which follows it, is the one entry above that has since GAINED a §12 row rather
+# than staying outside the table: decisions 187-193 add it, because the milestone ships
+# surface (the §6.0 credit count line and disclosure, the §6.6 Data card's outstanding
+# authoring task, §6.7's rail on every screen) and because what it repairs is M0's own
+# exit criterion, asserted for four milestones against a fixture in which the corpus's
+# two department spellings, two facet namings and self-qualified term ids do not occur.
+# It sits here — after M4.8, before M4.12 — for the reason M4.8's paragraph gives from the
+# other side: every row below is measured by the instrument M4.8 repaired, and the three
+# pre-release fixes already parked at M4.9 above are the same milestone's first three
+# commits. See docs/milestones/M4.9-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9",
               "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
@@ -119,7 +131,34 @@ def _playwright_ids() -> set[str]:
     return ids
 
 
-KNOWN_TESTS = _pytest_ids() | _playwright_ids()
+def _vitest_ids() -> set[str]:
+    """`path::title` for every vitest test in the frontend.
+
+    The third runner, and until M4.9 the map could not name one. §6.7's rail is where that
+    stopped being a formatting detail: the drawer must drop its log on close, the frame in which
+    it would show the previous open's events is one round trip long, and Playwright cannot hold a
+    response the app's service worker mediates -- so the only layer that can assert the clause is
+    a mounted component, and a row pointing at it would have failed rule 2 for naming a test that
+    "does not exist". A map that can only see two of the three suites pushes every claim it
+    cannot name either into a suite that cannot fail on it or out of the map. [M4.9 finding 27]
+
+    Single and double quotes only. Playwright's reader admits a backtick and covers the template
+    titles that follow with a `::*` wildcard; nothing here writes one, and admitting the
+    character without that fallback would register ids no runner answers to.
+    """
+    ids: set[str] = set()
+    src = REPO / "frontend" / "src"
+    if not src.is_dir():
+        return ids
+    for path in sorted(src.rglob("*.test.js")):
+        rel = path.relative_to(REPO).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"^\s*(?:it|test)\(\s*(['\"])(.+?)\1", text, re.M | re.S):
+            ids.add(f"{rel}::{match.group(2)}")
+    return ids
+
+
+KNOWN_TESTS = _pytest_ids() | _playwright_ids() | _vitest_ids()
 
 
 def _at_or_before(milestone: str) -> bool:

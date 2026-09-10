@@ -31,8 +31,13 @@
     if (n(model.b) !== null) out.push(`b(t) ${n(model.b)}`);
     if (n(model.beta) !== null) out.push(`β ${n(model.beta)}`);
     if (n(model.gate) !== null) out.push(`gate ${n(model.gate)}`);
-    if (typeof model.item_n === 'number') out.push(`n=${model.item_n}`);
-    if (model.e_source) out.push(model.e_source);
+    // No `item_n` and no `e_source`. M4.9 lifted both out of the shelf card's `model` block
+    // (`home/shelves.py`) because §8 stage 10's "new — model placement, no crowd data" badge is
+    // decided on them and decision 117's gate strips `model` wholesale, so a badge computed from
+    // inside it vanished for everyone with the toggle off — which is everyone by default. They
+    // ride the card body now and `PosterCard` reads them there. Two branches over them stayed
+    // here and could no longer fire; a branch over a key the payload cannot carry reads as an
+    // annotation and is not one. [M4.9 finding 18; review cycle 1]
     // §6.2's shared-sweet-spot extras, present only on that shelf.
     if (n(model.pair_score) !== null) out.push(`pair ${n(model.pair_score)}`);
     return out;

@@ -12,6 +12,13 @@
    * thing behind it (a bundle, a Jellyfin link) does not exist yet.
    */
   import { get, post } from '$lib/api.js';
+  // The palette and the runtime label are shared, not copied. This file held a second FACETS set
+  // and a second `facetColour`, and it was the copy that rotted: two spellings of one palette is
+  // how one of them stops matching the data. Same argument for `runtimeLabel`, which existed
+  // here without the kind branch the other two copies had, so a series read `0h 24m` two taps
+  // after a poster that said `24m/ep`. [M4.9 findings 3, 4, 37]
+  import { facetColour } from '$lib/home.svelte.js';
+  import { runtimeLabel } from '$lib/rate.svelte.js';
 
   let { titleId, onClose, onPerson, onStateChange } = $props();
 
@@ -22,15 +29,10 @@
   let error = $state('');
   let syncNote = $state('');
   let saving = $state(false);
-
-  // Vocabulary v1's eleven facets (§6.8: "a fixed colour per vocabulary facet (11)").
-  const FACETS = new Set([
-    'mood', 'themes', 'pacing', 'structure', 'visual', 'sound',
-    'character', 'place', 'era', 'sensibility', 'register'
-  ]);
-  // An unknown facet gets a neutral, never the ember: §6.8 spends the accent on selection and
-  // primary actions only, so a stray tag must not borrow it.
-  const facetColour = (f) => (FACETS.has(f) ? `var(--facet-${f})` : 'var(--ink-4)');
+  // The collapsed default, and the twelve that fit under it. Twelve is what shipped; what was
+  // missing is that the card never said it was twelve of anything. [M4.9 finding 7]
+  const CREDIT_FOLD = 12;
+  let showAllCredits = $state(false);
 
   // The corpus stores a platform score at full float precision — trakt's is 9.167481422424316 —
   // and a card that prints sixteen digits is claiming a precision nobody has. One decimal,
@@ -47,6 +49,9 @@
     data = null;
     error = '';
     syncNote = '';
+    // Reset with the rest: an expanded list carried into the next title would show the previous
+    // film's credit count against this film's people for as long as the fetch takes.
+    showAllCredits = false;
     get(`/titles/${id}`)
       .then((res) => {
         if (!cancelled) data = res;
@@ -81,10 +86,15 @@
     }
   }
 
-  const runtime = $derived(
-    data?.title?.runtime_min
-      ? `${Math.floor(data.title.runtime_min / 60)}h ${data.title.runtime_min % 60}m`
-      : null
+  // §6.0's metadata line, through the one label. This copy had no kind branch at all, so the
+  // subline said `2017 · 0h 24m · series` about the same episode the card behind it called
+  // `24m/ep`. [M4.9 finding 37]
+  const runtime = $derived(runtimeLabel(data?.title));
+  // The whole list is already on the client — `credits_for` returns every row and the card kept
+  // twelve. The disclosure spends what the payload holds; it does not fetch, and no query grew
+  // a LIMIT to make it possible.
+  const shownCredits = $derived(
+    showAllCredits ? (data?.credits ?? []) : (data?.credits ?? []).slice(0, CREDIT_FOLD)
   );
   // Joined in JS — Svelte collapses whitespace around {#if} blocks in markup.
   const subline = $derived(
@@ -173,7 +183,24 @@
 
     {#if data.credits.length}
       <section>
-        <div class="data heading">CAST &amp; CREW</div>
+        <!-- §6.0 applies a count-line discipline to the kind toggle — "with one active the count
+             line says how many the other holds" — and this surface ignored it: twelve of a
+             median twenty-four credits rendered with nothing saying so, and 89.7% of corpus
+             titles carry more than twelve, so a writer, composer or cinematographer was simply
+             absent. The line is the data voice, the collapsed twelve stay the default, and the
+             disclosure reveals the rest of a list the client already holds — no route change and
+             no LIMIT in `credits_for`, because the payload was never the problem.
+
+             Both counts carry their separators, as `countLabel`'s do: the corpus runs to 1,535
+             credits on one title against a median of 24, and `1535` in a data-voice line is the
+             same number the catalogue two screens away writes `1,535`.
+             [M4.9 finding 7 / cs-23; review cycle 1] -->
+        <div class="data heading">
+          CAST &amp; CREW
+          <span class="count" data-testid="credit-count"
+            >{shownCredits.length.toLocaleString()} of {data.credits.length.toLocaleString()}</span
+          >
+        </div>
         <div class="people">
           <!-- Keyed by person AND job, delimited: `credits_for` collapses to one row per
                (person, job), and the delimiter is what stops person 700 + job `1Actor` colliding
@@ -181,7 +208,7 @@
                where one person held one job under two department spellings, and with no
                +error.svelte the whole card died mid-render. Keyed, not unkeyed: the key is what
                keeps `onPerson` attached to the right person. -->
-          {#each data.credits.slice(0, 12) as c (c.person_id + ':' + c.job)}
+          {#each shownCredits as c (c.person_id + ':' + c.job)}
             <button class="person" onclick={() => onPerson(c)}>
               <span class="dot">{c.name.charAt(0)}</span>
               <span class="pname">{c.name}</span>
@@ -193,6 +220,26 @@
             </button>
           {/each}
         </div>
+        {#if data.credits.length > CREDIT_FOLD}
+          <!-- `btn-ghost` rather than a local size: design.css grows every interactive primitive
+               to var(--touch) = 48px under `pointer: coarse`, which is §6's phone-first rule
+               stated once instead of re-picked here.
+
+               Both labels are the constant rather than a word for it. `Show twelve` was a second
+               spelling of `CREDIT_FOLD` in English, which is the one spelling an edit to the
+               constant cannot reach: raise the fold and the button keeps saying twelve while the
+               count line above it says otherwise. [M4.9 review cycle 1] -->
+          <button
+            class="btn-ghost disclose"
+            data-testid="credits-disclosure"
+            aria-expanded={showAllCredits}
+            onclick={() => (showAllCredits = !showAllCredits)}
+          >
+            {showAllCredits
+              ? `Show ${CREDIT_FOLD}`
+              : `Show all ${data.credits.length.toLocaleString()}`}
+          </button>
+        {/if}
       </section>
     {/if}
 
@@ -221,10 +268,24 @@
     <section>
       <div class="data heading">DNA — EXTRACTED <span class="qv">quote-verified</span></div>
       {#if data.dna.extracted.length}
-        {#each data.dna.extracted as tag (tag.term)}
+        <!-- Keyed on facet, term AND PROVIDER, delimited. The crash is the platform-scores
+             block's above: `dna_tag` is unique on (title_id, version, term, provider), so §6.6's
+             parallel extraction mode writes one term twice and Svelte's keyed each raises
+             `each_key_duplicate` in the production build too. The provider is the component that
+             does that work — since 0018 section 1 the facet IS `split_part(term, '.', 1)`, so
+             facet and term together separate exactly what the term separated alone, which is
+             nothing at all for the one pair of rows this key exists to keep apart. NOT
+             de-duplicated here — §4.1 rule 1 and §6.6 both want both rows visible; the key is
+             what makes two rows two rows. [M4.9 finding 8; review cycle 1]
+
+             `{tag.term}` alone: §4.3's vocabulary id IS `facet.term`, so the shipped term
+             already carries its prefix and printing the facet again read
+             `narrative_themes.themes.love_romance`. The facet is spent on the colour, which is
+             the identity §6.8 asks for. [M4.9 finding 3] -->
+        {#each data.dna.extracted as tag (tag.facet + ':' + tag.term + ':' + tag.provider)}
           <div class="tag" style:border-left-color={facetColour(tag.facet)}>
             <div class="tagline">
-              <span class="term" style:color={facetColour(tag.facet)}>{tag.facet}.{tag.term}</span>
+              <span class="term" style:color={facetColour(tag.facet)}>{tag.term}</span>
               <span class="data">sal {tag.salience}</span>
             </div>
             {#each tag.evidence as e}
@@ -242,9 +303,13 @@
       <div class="data heading">DNA — PROJECTED (INFERRED)</div>
       {#if data.dna.projected.length}
         <div class="chips">
-          {#each data.dna.projected as p (p.term)}
+          <!-- Same label rule as the extracted tier above, and one key component fewer:
+               `dna_projected` is UNIQUE (title_id, version, term), so no second provider can put
+               one term on this list twice and the term is a key here on its own merits.
+               [M4.9 review cycle 1] -->
+          {#each data.dna.projected as p (p.facet + ':' + p.term)}
             <span class="chip" style:color={facetColour(p.facet)} style:border-color={facetColour(p.facet)}>
-              {p.facet}.{p.term}
+              {p.term}
             </span>
           {/each}
         </div>
@@ -342,6 +407,17 @@
   }
   .qv {
     color: #5fae7a;
+  }
+  /* The count rides in the heading, at the heading's own weight: it is a fact about the list,
+     not a control. §6.8's data voice is already on `.heading`. */
+  .count {
+    margin-left: auto;
+    color: var(--ink-3);
+    letter-spacing: normal;
+  }
+  .disclose {
+    margin-top: 8px;
+    font-size: 12px;
   }
   .people {
     display: flex;

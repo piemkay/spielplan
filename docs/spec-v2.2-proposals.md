@@ -371,7 +371,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the spec says.** §6.0 specifies shelves and why-lines but nothing about card chrome; §6.3 owns tiers.
 
-**Proposed amendment.** Add to §6.0: "Every shelf card carries three overlays: its rank within the shelf (top-left), and the seen dot plus tier badge (top-right). The tier vocabulary of §6.3 is therefore ambient on Home; §6.3's straddle and tension badges do **not** appear on shelf cards — the shelf card shows the settled tier only."
+**Proposed amendment.** Add to §6.0: "Every shelf card carries three overlays: its rank within the shelf (top-left), and the seen dot plus tier badge (top-right). The tier vocabulary of §6.3 is therefore ambient on Home; §6.3's straddle and tension badges do **not** appear on shelf cards — the shelf card shows the settled tier only. **Settled** is the model's fitted tier — `ledger_state.tier`, the value that settles after a refit — and not the most recent `tier_edit` that §6.3 renders a title in; a card badge and a shelf headline may therefore disagree for one night, and the headline is the sentence that reports the person's own act (decision 187)."
 
 **Cost.** Free text; it prevents each surface inventing its own badge set.
 
@@ -2283,6 +2283,374 @@ seeds through `page.request` after the re-login and was still refused. If the as
 after the swap, the residue is the spec half, it is M4.10's exactly as M4.6 recorded it, and the
 assertion is not deleted — it reports status and body on failure, which is how it was diagnosed.
 Verification is the owner's e2e run; this build may not run the suite.
+
+
+---
+
+## Decisions taken (owner, 2026-09-09)
+
+Seven, taken as M4.9 opened on the questions `docs/milestones/M4.9-plan.md` §3 refused to settle
+inside a diff. Unlike M4.8 (whose paragraph above records why it took none) this milestone takes a
+**§12 row**, and for M4.6's and M4.7's reason rather than M4.5's: it ships surface — a credit count
+line and a disclosure on the §6.0 title card, an outstanding-task line on the §6.6 Data card, and
+§6.7's rail reachable from the four screens that produce §6.7's own worked examples — and it repairs
+clauses §12 scheduled at M0 and M2 against a corpus nobody had read the rows of.
+
+Each answers a measurement rather than a preference, and every number below was taken read-only
+against `v20260828`: 29,188 of 31,540 `dna_tag` rows carrying a facet that joins `dna_facet`
+nowhere, 7,918 `(title, person, job)` triples spanning two department spellings, projected term
+weights running to 2.40 against an extracted cap of 1.00, 47,607 `title_company` rows that never
+land while `features.py` counts them, and 111 of the 130 cold badges Home draws being false. Where a
+decision below argues from a number, that number came from that bundle.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 187 | Proposal 29 says "the shelf card shows the settled tier only" and never defines "settled". Does the badge read the person's latest `tier_edit`, as §6.3 does, or `ledger_state.tier`, as `CARD_SELECT` does today? | **`ls.tier`, and proposal 29 says so.** "Settled" is defined as the model's fitted tier. Only shelf 1's headline is repaired, because its verb is "you put". |
+| 188 | `dna_projected.weight` holds `n_sources` (1..8) and `0004_dna.sql:127-128` exposes it as `confidence`, so projected term weights reach 2.40 against an extracted cap of 1.00. Is `n_sources` a weight at all, and which bounded form replaces `0.30 * COALESCE(d.confidence, 0.5)`? | **A weight, bounded by saturation:** `0.30 * (c / (1.0 + c))`, in one new `backend/spielplan/db/dna_terms.py` that `home/why.py` and `tonight/dna.py` both import. Not `LEAST`, which flattens the tier. |
+| 189 | `rail.py` declares thirteen event kinds and four call sites produce six. Narrate the seven with no producer, or delete them and declare the rail interactive-only? | **Neither wholesale.** `bundle_swap` and `reconcile` are recorded now, from `importer/bundle.py` where the web process already performs them; the five worker-side kinds are named in a new `rail.AWAITING_PRODUCER`. |
+| 190 | Adopt proposal 13 (poster art) with the licensing amendments it needs, or leave the poster-forward cards without posters? | **No posters in M4.9.** No `/api/art` route, no `<img>`, proposal 13 stays unadopted, and the close-out says so rather than shipping a proxy that hotlinks. |
+| 191 | `importer/dna.py:237-247` reads `dna_vocab/<version>/axes/*.tsv` and the shipped `dna_vocab/v1/` has no `axes/` directory. Amend §6.4, or change the loader to the filenames the corpus ships? | **Neither.** The loader is untouched, §6.4 is untouched, and the missing eleven axis files become an outstanding authoring task on the §6.6 Data card. |
+| 192 | 126 corpus series carry a *total* runtime under a column the app reads as per-episode, and `episode_count`/`season_count` map nowhere. Do they reach `title` and the card? | **No.** `validate()` gains a §10 report note counting the 126; `load.py`'s title mapping, `home/shelves.py:73-75` and the schema are unchanged. |
+| 193 | `title_company` is in `SKIPPED_TABLES` because 0003 keyed it one component coarser than the corpus, while `features.py:403` counts its rows into the thin-title signal. Load it per source, or drop `'companies'` from `_COUNT_KEYS`? | **Load it.** Migration 0018 re-keys it `(title_id, source, company, role)` exactly as `0015_seed.sql` section 9 did for its three siblings; `_COUNT_KEYS` is untouched. |
+
+### 187. "Settled tier" on a shelf card is the model's tier, and only the headline reads tier_edit
+
+**What the spec says.** §6.3 owns tiers, and `rank/board.py:24-27` quotes the sentence that decides
+placement back at it: "the most recent `tier_edit` decides where a title renders, and the model
+decides it only when there is no edit." §6.0's Home table gives shelf 1 its headline, verb included
+— "Because you put *{anchor}* in {tier}". Proposal 29 adds the card chrome and ends "§6.3's straddle
+and tension badges do **not** appear on shelf cards — the shelf card shows the settled tier only",
+and nowhere in this document or the spec is "settled" defined.
+
+**Why it changes.** `home/shelves.py`'s `CARD_SELECT` (`:302-307`) reads `ls.tier`, the tier the
+nightly fit produced. So a title a member drags from A to F on Rank keeps an A badge on Home until
+the refit absorbs the edit, and shelf 1's headline — the one sentence on Home whose grammar names
+the *person* as the actor — names a tier the person did not choose. Two reviewers read the same
+undefined word two ways and proposed opposite repairs, which is the signal that the defect is in the
+word rather than in the SQL.
+
+**The decision.** The badge stays on `ls.tier`. Proposal 29's amendment text gains the sentence that
+"settled" means the model's fitted tier — the value that settles after a refit — so the word stops
+carrying two readings, and finding 17 is closed by writing that reading down rather than by changing
+the query. Item 16, shelf 1's headline, is fixed in full: it reads the most recent `tier_edit` where
+one exists and falls back to `ls.tier` where none does, because "you put" is unambiguous about whose
+act it reports.
+
+**Cost.** The card badge and the headline above it can disagree for a night, and that is the
+disagreement this decision chooses: it is the honest one, since the two sentences report different
+facts. The alternative drags §6.3's tension explanation onto Home to explain why a badge moved
+without a refit, which proposal 29 forbids in terms ("No tension badge on Home"). Plan step 6.3 is
+therefore not executed — `CARD_FROM` gains no `tier_edit` join and `CARD_SELECT` keeps `ls.tier` —
+and the coverage row `library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned` is
+closed by the headline half plus the `observed` half, with no row asserting a card badge that reads
+`tier_edit`.
+
+### 188. n_sources is a weight, and the bounded form is saturating rather than clamped
+
+**What the spec says.** §4.1 rule 1 keeps the two DNA tiers separate and admissible — extracted is
+quote-verified, projected is inferred, and neither is discarded. Rule 2 is the harder half: the
+weight columns are weights and may never appear in a predicate, which is why the landmine guard
+reads both SQL and Python for a comparison on `salience`, `confidence` or `n_sources`.
+
+**Why it changes.** `importer/dna.py` stores the corpus's `n_sources` (1..8) in
+`dna_projected.weight`, and the `dna_tagged` view at `0004_dna.sql:127-128` re-exposes that column
+as `confidence` — the same name the extracted tier uses for a 0..1 number. Both copies of the term
+weight expression then compute `0.30 * COALESCE(d.confidence, 0.5)`, so a projected term reaches
+2.40 while an extracted term is capped at 1.00, and on 77% of sampled tagged titles the loudest term
+— the one the why-line and the Tonight match line name first — is an inferred projection outranking
+a quote-verified tag. The comment above both copies asserts the opposite ranges in as many words.
+
+**The decision.** `n_sources` stays a weight; rule 2 keeps it out of every predicate, so the repair
+is arithmetic and not a filter. The replacement is the saturating form the plan works out in §3,
+`0.30 * (c / (1.0 + c))` with `c = COALESCE(d.confidence, 0.5)`, which maps `n_sources` 1..8 onto
+0.15..0.267 and the NULL default onto 0.10, strictly below the extracted floor of 0.733. It moves to
+one new module, `backend/spielplan/db/dna_terms.py`, imported by `home/why.py` and `tonight/dna.py`,
+so the next milestone that changes it changes it once.
+
+**Cost.** The plan marks neither candidate recommended, so its own exit criterion decides — criterion
+11 requires `max(projected term weight) < min(extracted term weight)`, and both forms satisfy it.
+The plan's argument separates them: the finding's own `0.30 * LEAST(COALESCE(d.confidence, 0.5),
+1.0)` "bounds the tier correctly but flattens it: every projected term with n_sources >= 1 lands at
+exactly 0.30, so ordering *within* the projected tier disappears". The saturating form stays monotone
+in `n_sources` and borrows no constant from the current histogram, and a `LEAST`-free division is
+also what keeps the rule 2 guard green. The change moves Tonight as well as Home — tilt vectors,
+authored-axis positions, `terms_carried_by` and the winner card's match lines all read the same view
+— so the guard is written over both readers, a newly-empty shelf or tilt is a defect to report
+rather than an assertion to relax, and the comments above both copies are rewritten to the ranges
+this form actually produces.
+
+### 189. The rail narrates the two web-process writes now; the worker-side kinds are declared as awaiting a producer
+
+**What the spec says.** §6.7 makes the model rail "an ephemeral log (last ~15 events, never
+persisted)" behind a per-user toggle, and calls it the primary M2 debugging instrument — the surface
+on which a person can watch the model write. "Never persisted" is the clause that decides this: there
+is no table a second process could write and the web process could poll.
+
+**Why it changes.** `rail.py:61-77` declares thirteen kinds and four `rail.record` call sites produce
+six, so seven names exist only in `EVENT_KINDS` and in `ModelRail`'s colour rules — dead branches
+that read as coverage. Two of the seven are not worker writes at all: `importer/bundle.py` flips
+`artifact_bundle` and runs the in-request rebuild sweep inside the web process, so the rail is
+already in scope at both and simply is not called.
+
+**The decision.** Neither wholesale deletion nor a cross-process channel. `bundle_swap` is recorded
+at the `artifact_bundle` flip and `reconcile` at the rebuild sweep, both household-scoped, both in
+`importer/bundle.py`. The remaining five — `ledger_refit`, `ledger_incremental`, `foldin`,
+`blend_weight`, `placement` — stay in `EVENT_KINDS`, keep their colour rules, and are named in a new
+explicit `rail.AWAITING_PRODUCER` tuple carrying this decision number and the reason.
+
+**Cost.** Deleting the five would delete §6.7's own promise for exactly the writes a person cannot
+otherwise see, and narrating them from the worker needs a channel this milestone does not build.
+So the deferral is made loud instead: plan step 7.5's static guard cannot be "every `EVENT_KINDS`
+name appears at a call site" — five would fail it — and becomes "the kinds appearing at a
+`rail.record` call site, unioned with `rail.AWAITING_PRODUCER`, equal `set(EVENT_KINDS)`, and
+`AWAITING_PRODUCER` is exactly those five", which fails the moment a kind is added with neither a
+producer nor an entry. A note for the implementer: the plan's D3 and step 7.5 both say "four
+worker-side kinds" and the count is five (13 declared, 6 produced, 2 recorded here). Use the
+enumerated list, not the number.
+
+### 190. Posters do not ship in M4.9
+
+**What the spec says.** §6.8 designs the poster-forward card and §6.0 hangs the title card on it.
+Proposal 13 is the unadopted amendment that would put real art there; nothing in the spec obliges a
+poster, and `PosterCard.svelte`'s tinted-panel placeholder is the designed state until one is
+adopted.
+
+**Why it changes.** It does not, and the measurement is why. Proposal 13's text is wrong in three
+ways that are only visible against the real bundle: it assumes a TMDB *path* where `importer/meta.py`
+(`:43`, `:61-69`) stores a full URL; it does not exclude the 157 titles whose art is on
+`m.media-amazon.com`, which no licence permits this app to proxy; and its cache policy is off TMDB's
+own terms. Amending a normative proposal, building a caching image proxy and shipping a TMDB
+attribution notice is a milestone's worth of work, not a step inside one that already has twelve.
+
+**The decision.** `GET /api/art/{title_id}/poster` is not built, no `<img>` is added to
+`PosterCard`, `RatePoster` or the Tonight slate, proposal 13 stays unadopted, and M4.9's close-out
+says the app ships without poster art in as many words rather than shipping a route that hotlinks.
+
+**Cost.** Plan step 10 is not executed and the conditional coverage row
+`library-rate-poster-art-resolves-within-its-licences` is not added, so the map carries no
+obligation for a surface that does not exist. `PosterCard.svelte`'s placeholder comment stays true.
+The three licensing facts measured here go into the close-out report so that the milestone which
+does take this decision re-reads them rather than re-deriving them.
+
+### 191. The axis TSVs stay where the corpus put them; the loader is unchanged and the gap becomes a Data-card task
+
+**What the spec says.** §6.4 gives each facet an authored axis, and `importer/dna.py:237-247`
+implements it by reading `dna_vocab/<version>/axes/*.tsv`. §6.6's Data card is the surface on which
+an operator meets the state of the imported corpus.
+
+**Why it changes.** The shipped `dna_vocab/v1/` has no `axes/` directory. What it does ship is one
+`vocab_pacing_axes_v1.tsv` in a five-unnamed-axes-per-term shape §6.4 does not describe, so the
+eleven per-facet axis files the loader looks for have not been authored anywhere. The loader warns
+and continues, which is correct behaviour discharged into an import report nobody re-reads.
+
+**The decision.** Leave the loader exactly as it is, and leave §6.4 alone. The existing warning is
+surfaced on the §6.6 Data card as an outstanding authoring task naming the eleven
+`dna_vocab/v1/axes/axis_<facet>_v1.tsv` paths the loader would read, so the absence is a thing an
+operator sees rather than a line in a log.
+
+**Cost.** Changing the loader to a filename shape the corpus has never shipped would be inventing a
+contract, and amending §6.4 would bless a directory that does not exist; this decision buys the
+third option, which is to say out loud that the files are missing. Plan step 8.8 is executed as its
+first half only — no loader change, no spec amendment — and no coverage row is owed, because nothing
+about the app's behaviour changes. §6.4's axes stay unpopulated until the corpus authors them, and
+§6.5's Map (M6) inherits that as a dependency rather than discovering it.
+
+### 192. episode_count and season_count do not reach `title`; the mixed runtime semantics become a §10 report note
+
+**What the spec says.** §6.0's title card names the metadata it carries and neither `episode_count`
+nor `season_count` is in the list. §4.1's "one block = one droppable source" is the rule for what the
+app is allowed to derive from a column whose meaning varies by row: nothing.
+
+**Why it changes.** The corpus exports both columns and `load.py:100-118` maps neither, and 126
+shipped series carry a *total* runtime in `runtime_min` — the column `home/shelves.py:73-75` reads as
+per-episode. The arithmetic that would repair it (total divided by `episode_count`) is exactly the
+derivation rule 4.1 warns against, over a column whose semantics are not recorded per row.
+
+**The decision.** Neither column reaches `title`. `importer/bundle.py`'s `validate()` gains a note
+counting series with `runtime_min >= 110` — 126 on the shipped bundle — so §10's report names the
+mixed semantics where an operator meets it. `load.py`'s title mapping is unchanged, no migration adds
+the columns, and nothing in the app derives per-episode minutes.
+
+**Cost.** The 126 series keep a runtime a member could misread, and none of them is owned today, so
+nothing is visibly wrong on any surface. Resolving total-versus-per-episode is corpus-side work: it
+needs a per-row statement of which semantics a value carries, which is a column the export does not
+have. 0018 stays this milestone's only DDL, plan step 8.7's second half is not executed, and the
+report note — the count and the measure that produced it — is the whole of the deliverable.
+
+### 193. title_company loads, keyed per source, and the skip is removed
+
+**What the spec says.** §4.1 opens "tables mirror the corpus export" and names `title_company` in the
+spine; §10 requires a migration report with "counts per table", which is the clause a skipped table
+quietly fails.
+
+**Why it changes.** `0003_content.sql:120-125` keys the table `(title_id, company, role)` where the
+corpus keys it per source: 47,607 shipped rows, 8,594 duplicate groups under the app's key, 11,654
+rows discarded, and the whole table sitting in `SKIPPED_TABLES` because of it. §4.1's spine list is
+the argument — "tables mirror the corpus export", and 47,607 rows of the spine are missing.
+
+*(Corrected 2026-09-09, M4.9 review cycle 1. This paragraph originally reported 8,594 as a count of
+rows rather than of duplicate groups, and argued that `n_companies` reached a checkpoint fitted on
+the corpus's own company counts. The second claim is false: `n_companies_log` is a column of no
+feature contract this app has loaded, so the count is produced and discarded. Decisions 194 and 195
+record both measurements. The decision itself — load the table, keyed per source — is unchanged; it
+never rested on the tower.)*
+
+**The decision.** Load it. Migration 0018 section 3 re-keys `title_company` to
+`(title_id, source, company, role)` exactly as `0015_seed.sql` section 9 did for `title_language`,
+`title_country` and `platform_rating` four days earlier, and `load.py` moves the table out of
+`SKIPPED_TABLES` into `MAPPINGS` with `coalesce_empty` on `source` and `role`. `_COUNT_KEYS` is
+untouched.
+
+**Cost.** `n_companies` becomes non-zero for every title that ships company rows. That is a
+consequence of loading rather than a placement change — no coordinate is recomputed, nothing under
+`placement/` is edited, and per decision 194 the count reaches no column the contract declares, so
+the vector does not move either. The other correction is documentary:
+`docs/milestones/M4.5-plan.md:372-374` records the table as skipped "so nothing breaks", which is
+now wrong, and the milestone workflow forbids editing `docs/milestones/*.md`, so that line is owed to
+the owner by hand and the report names it.
+
+### 194. The company count is produced and discarded; the tower has no input for it
+
+**What the spec says.** §4.3 makes the feature contract "the exhaustive definition of the tower's
+input"; §4.1 opens "tables mirror the corpus export" and names `title_company` in the spine.
+
+**Why it changes.** M4.9 recorded, in six places, that `n_companies` read 0 for all 19,071 seeded
+titles against a checkpoint fitted on the corpus's own company counts — the migration, `load.py`, the
+coverage row, three test docstrings and decision 193. Measured against the shipped artefact instead
+of asserted: `v20260828/artifacts/feature_contract.json` declares `input_dim` 6499 = 6435 content +
+64 text, and its `meta` block is 57 columns at offset 6378 which are exactly 13 `decade:*`, 2
+`kind:*`, 5 `runtime:*` and 37 `lang:*`. There is no `n_companies_log`, no other `n_*_log`, no
+`has:*`, no `year_norm`/`runtime_norm`; `preprocessing` carries only `genome`, `absent_blocks` and
+`missing_review_text`. `features._finish_meta` does emit the value, and `build_vector`
+(features.py:104-111) resolves it through `Block.column`, gets `None`, counts a miss and continues.
+`test_placement.py:701-707` has asserted that same fact since M4.5 (`set(built.unmapped) == {"meta"}`,
+"they are *counted* rather than silently discarded"), so the milestone's own comments contradicted a
+test already on main.
+
+**The decision.** `title_company` still loads, unchanged — decision 193 is not re-opened — but it
+loads on §4.1's spine-list terms and on the 47,607 missing rows, never on a zeroed tower input. The
+argument is corrected wherever it is written, `test_import_integration.py` asserts
+`contract.block("meta").column("n_companies_log") is None` against the contract the fixture ships,
+and `test_static_contracts.py::test_no_file_repeats_a_retired_claim_about_the_company_table` keeps
+the sentence from coming back.
+
+**Cost.** Comment and docstring text, one assertion, one guard. Nothing at runtime changes. The
+reason it is a decision rather than a tidy-up is that a reader who believes the old sentence does one
+of two expensive things: re-runs placement over 19,071 titles that cannot move, or "repairs" the meta
+block by writing nine feature values into columns the contract does not declare — a real regression
+against §4.3. [M4.9 review cycle 1: M49-MIG-01]
+
+### 195. 8,594 is a count of duplicate groups, and the rows are stated beside it
+
+**What the spec says.** §10 requires a migration report with "counts per table"; §4.1's per-source
+rule is a statement about row multiplicity, so a count that conflates rows with groups fails the
+clause it is quoted under.
+
+**Why it changes.** The plan's finding 28 says "8,594 duplicate groups under the app's key" and the
+milestone's prose turned that into a row count in `0018_read_layer.sql`, in `test_migrations.py` and
+in decision 193. Measured on `v20260828`: `title_company` ships 47,607 rows; under the pre-0018 key
+`(title_id, company, role)` they reduce to 35,953 distinct keys; 8,594 groups have more than one row;
+`sum(n-1)` is 11,654 rows discarded and `sum(n)` is 20,248 rows involved in a collision. The
+group-size histogram is 6,407 pairs, 1,314 triples and 873 quadruples, so no reading of "rows that
+collide" comes to 8,594. `0015_seed.sql` section 9 — the file 0018 section 3 names as its own
+precedent — already reports this quantity as two columns: "title_language 47,302 rows 17,342
+duplicate groups under (title_id, language)".
+
+**The decision.** 0015's two-column form, everywhere: rows, then groups, then the rows discarded.
+`test_import_integration.py:800` already had it right ("8,594 groups of this shape"), and the other
+sites are corrected to match rather than the other way round.
+
+**Cost.** Prose. It is recorded because `0018_read_layer.sql` is sha256-checksummed from its first
+apply and is the artefact an operator sizing the repair reads after the plan is archived.
+[M4.9 review cycle 1: M49-MIG-05]
+
+### 196. 0018's comments are corrected once, before it is applied anywhere durable
+
+**What the spec says.** CLAUDE.md: never edit an **applied** migration — `backend/migrations/*.sql`
+are sha256-checksummed and a mismatch is a hard startup error (`db/migrate.py:41,89-94`).
+
+**Why it changes.** 0018 section 1 justified its `term LIKE '%.%'` guard with "`split_part` returns
+'' for an undotted term and `facet` is NOT NULL with no default, so an undotted vocabulary would be
+nulled out by the unguarded form". Both halves are false. Postgres's `split_part(s, '.', 1)` returns
+the WHOLE string when there is no delimiter — it is field 2 that answers `''` — and `''` is not NULL,
+so a NOT NULL column would accept it either way. Measured on the live server (16.15):
+`split_part('legacyterm', '.', 1)` is `'legacyterm'`, and the unguarded UPDATE reports one row and
+writes the term id into `facet` — a value that joins no `dna_facet` row, renders `var(--ink-4)` on
+every chip, and reads as plausible, which is worse than the NULL the sentence feared and is
+precisely why 0018 adds no CHECK. The same sentence was in `test_migrations.py`'s docstring and, most
+harmfully, in its assertion MESSAGE: the text a maintainer reads at the moment the guard fails.
+
+**The decision.** Correct it in the migration, in place, rather than record that it cannot be
+corrected. Measured before doing so: every database on this machine's Postgres tops out at
+`0017_ops` in `schema_migration`, and the only one carrying `0018_read_layer` is a review scratch
+database created during this cycle — so the file has been applied to no install, and `git status`
+still shows it untracked. The rule is unchanged for 0001-0017 and applies to 0018 from its first real
+apply; decisions 194 and 195's corrections to sections 1 and 3 ride on this same window. Anything
+discovered after 0018 is applied is 0019 with a decision of its own, exactly as the plan says.
+
+**Cost.** A comment rewrite and one changed checksum on a file no install has seen. The alternative
+was three false sentences frozen for the life of the schema, one of them the only recorded reason for
+a line whose behaviour otherwise reads as redundant. [M4.9 review cycle 1: M49-FACET-02]
+
+### 197. The `character` is a payload field; §6.0's card does not print it
+
+**What the spec says.** §6.0's title-card list names metadata, credits with each person tappable, the
+trailer key, platform scores, the DNA card, the model line and two actions. It does not name the
+character a person played.
+
+**Why it changes.** Finding 6's repair — the ordered `array_agg(c.character ORDER BY billing_order,
+source)` in `db/library.credits_for` — is correct and stays, but three artefacts said it was
+protecting something a person can see: the comment above the aggregate ("which one the card
+printed"), the coverage row's `what` ("the `character` shown"), and `ops/m49_exit_criterion.py`'s
+measure-2 heading, which cited finding 6 over a body that reads `person_id` and `job` and nothing
+else. `TitleDetail.svelte`'s credit row renders `c.name`, `c.job` and a sources clause; a grep of
+`frontend/src` finds no renderer of the field at all.
+
+**The decision.** Not rendering it is spec-correct, so the field is described as what it is: a stable
+part of the `/api/titles/{id}` payload, deterministic across imports, and a candidate for a card list
+§6.0 does not yet include. The exit criterion's measure 2 is relabelled finding 5 — its client half,
+beside measure 1's SQL half — the script's docstring says no measure covers finding 6 and why one
+cannot, and `test_static_contracts.py::test_no_m49_measure_heading_names_a_finding_it_does_not_measure`
+holds it there. Finding 6 stays closed by
+`test_a_credit_is_one_row_per_person_and_job_across_department_spellings`, which reinserts the rows
+in the opposite physical order.
+
+**Cost.** Three sentences and one heading. The heading is why this is a decision and not a typo fix:
+M4.8 shipped so that the instrument would stop reporting coverage it did not have, and a measure
+printing a finding number it never measured is that failure in the next milestone's own script.
+[M4.9 review cycle 1: M49-CARD-4]
+
+### 198. On the two wander routes the caller's kind selection IS the partition, and one ranking serves it
+
+**What the spec says.** §4.1 rule 5: "every ranking surface partitions by kind (measured: the
+unpartitioned crowd top-10 is 8/10 TV series)". §6.4's wander and a person's filmography are both
+ranking surfaces, and M4.9's step 5.4 spells the repair out — `AND t.kind = ANY($n)` in each
+statement, "**Do not partition implicitly by the anchor title's kind**".
+
+**Why it changes.** The coverage row written for that step promised the two routes "never return
+movies and series interleaved". They do, and the row's own first named test asserts it:
+`test_library_read.py` reads `{n["title_id"] for n in both["extracted"]} == {2, 3}` — one film and
+one series, in one list, from one `?kind=movie&kind=series` call. `ANY($n)` is a filter, so the
+selected kinds share one `ORDER BY count(DISTINCT o.term) DESC, t.name` and one `LIMIT`. Measured
+on a probe fixture (15 series and 3 films sharing the anchor's terms): `?kind=movie` answers 3 rows,
+`?kind=series` 12, and `?kind=movie&kind=series&limit=12` answers 12 rows of which none is a film —
+rule 5's own measured failure, reproduced at 12/12 on the surface that was meant to have closed it.
+A row closed by a test asserting the opposite of the row's sentence is the M4.8 failure again: the
+instrument reporting coverage it does not have.
+
+**The decision.** The behaviour is what step 5.4 specified and it stands; the sentence is corrected
+to describe it. The caller's selection is the partition, the anchor's own kind never decides, the
+two DNA tiers stay two statements with a limit each (§4.1 rule 1), and inside one tier the selected
+kinds share one ranking. Per-kind sectioning — the shape `scoring/serve.ranked_section` insists on
+for §6.3, one statement and one limit per kind — is not taken here: it designs the answer shape of a
+surface §6.4 does not render yet (the Map is M6, and no client asks these routes for both kinds
+today), and doing it inside a review of the loader milestone would ship a section nobody has drawn.
+
+**Cost.** Named rather than hidden: a caller that selects both kinds can still be answered entirely
+in one kind, with no count line saying how many of the other were pushed out — rule 5's failure
+surviving on this surface until §6.4 has a reader. The measurement is now in the row's `why`, so
+the milestone that builds the wander inherits the number instead of the promise.
+[M4.9 review cycle 1: M49-REV1-02]
 
 
 ---

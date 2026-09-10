@@ -234,6 +234,38 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
                 extracted_titles=extracted_titles, projected_titles=projected_titles,
             )
 
+        # The corpus's two namings, counted rather than rewritten in silence. §4.3 keys a
+        # vocabulary id as `facet.term` and the corpus files the extraction pass that found the
+        # tag under its own label (`character_dynamics` for `characters.*`), so the shipped
+        # `facet` column and the term's prefix legitimately disagree on 29,188 of 31,540
+        # `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows. `importer/dna.app_facet`
+        # stores the prefix, because `dna_facet`, `dna_term`, §6.4's axes and §6.8's palette all
+        # key on it — and §10 promises a report, so the size of that rewrite is a line in it.
+        #
+        # A NOTE, not a warn: neither naming is wrong upstream, and nothing about the bundle
+        # needs an operator's attention. What would deserve one is this number changing shape
+        # between bundles, which is why it is counted per tier. [M4.9 finding 1, step 2.2]
+        # `&=` and not `and`, for the reason the block above states: a short circuit would
+        # report the first broken tier and leave the second unexamined.
+        facets_ok = _guard(schema, report, "rule1-two-tiers", "dna_tag", "facet", "term")
+        facets_ok &= _guard(schema, report, "rule1-two-tiers", "dna_projected", "facet", "term")
+        if facets_ok:
+            relabelled = {
+                table: _count(
+                    db,
+                    f"SELECT count(*) FROM {table} WHERE instr(term, '.') > 0 "
+                    "AND facet <> substr(term, 1, instr(term, '.') - 1)",
+                )
+                for table in ("dna_tag", "dna_projected")
+            }
+            report.note(
+                "rule1-two-tiers",
+                f"{relabelled['dna_tag']:,} dna_tag and {relabelled['dna_projected']:,} "
+                "dna_projected row(s) ship the extraction label rather than the term's own "
+                "facet id; the vocabulary facet is imported and the label is not stored",
+                dna_tag=relabelled["dna_tag"], dna_projected=relabelled["dna_projected"],
+            )
+
         # "dna_evidence ships with the extracted tier — a tag without its quote is unfalsifiable."
         if "dna_evidence" not in tables:
             report.fail("rule1-evidence", "`dna_evidence` is missing; extracted tags without "

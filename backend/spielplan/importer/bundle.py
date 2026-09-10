@@ -26,6 +26,11 @@ from typing import Any
 
 import asyncpg
 
+# §6.7's rail. Imported here because two of `EVENT_KINDS` — `bundle_swap` and `reconcile` — are
+# writes this module performs inside the web process, and decision 189 records them now rather
+# than leaving two named kinds with no producer. `rail.py` is stdlib-only and touches no
+# database, so this import adds nothing to the importer's dependency surface.
+from spielplan.home import rail
 from spielplan.importer import dna as dna_loader
 from spielplan.importer import load as content_loader
 from spielplan.importer import reviews as review_loader
@@ -373,6 +378,7 @@ def validate(bundle: Bundle, *, spine: validator.Spine | None = None) -> ImportR
         db.text_factory = str          # rule 8: UTF-8 in, UTF-8 out, no cleaning
         try:
             validator.validate_content(db, report)
+            _note_series_runtime(db, report)
         finally:
             db.close()
 
@@ -391,6 +397,42 @@ def validate(bundle: Bundle, *, spine: validator.Spine | None = None) -> ImportR
     # no shipped manifest has.
     report.vocabulary_version = bundle.vocabulary_version or report.vocabulary_version
     return report
+
+
+def _note_series_runtime(db: sqlite3.Connection, report: ImportReport) -> None:
+    """§10's report names the one place `runtime_min` means two different things.
+
+    126 corpus series carry a **total** runtime in the column `home/shelves.py:73-75` reads as
+    minutes per episode (67 between 110 and 199, 59 at 200 or more: *Press Gang* 1290, *The Life
+    & Times of Tim* 900). 110 is the threshold rather than a fitted cut because it is the point
+    past which no plausible episode length survives — a two-hour episode is a special, and a
+    21-hour one is a season total.
+
+    Decision 192 makes this a report line and nothing else. `episode_count`/`season_count` stay
+    unmapped, no migration adds them, and nothing in the app divides a total by an episode count
+    to recover per-episode minutes: §4.1's "one block = one droppable source" puts that
+    resolution corpus-side, and §6.0's card list does not name either column. What the app owes
+    is that an operator can read the ambiguity in the migration report instead of discovering it
+    on a card that says a series runs 21 hours an episode. [M4.9 finding 36, decision 192]
+    """
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "title" not in tables:
+        return
+    columns = {r[1] for r in db.execute('PRAGMA table_info("title")')}
+    if not {"kind", "runtime_min"} <= columns:
+        return
+    total_shaped = db.execute(
+        "SELECT count(*) FROM title WHERE kind = 'series' AND runtime_min >= 110"
+    ).fetchone()[0]
+    if not total_shaped:
+        return
+    report.note(
+        "runtime-semantics",
+        f"{total_shaped:,} series carry runtime_min >= 110, which is a season or series total "
+        "rather than minutes per episode; the column is imported as shipped and nothing "
+        "derives per-episode minutes from it (decision 192)",
+        series=total_shaped, threshold=110,
+    )
 
 
 async def refuse_on_install_state(
@@ -650,7 +692,25 @@ async def import_bundle(
                 for step in steps:
                     report.note("rebuild", f"{step['title']}: {step.get('result', step)}")
 
+                # §6.7's rail narrates "every model write", and `run_rebuild` above is one:
+                # fold-ins, blend weights and the ledger refit are all recomputed here, inside
+                # the request, against the staged bundle. Household-scoped (`user_id` omitted)
+                # because a re-import belongs to the install rather than to whoever pressed the
+                # button — `rail.recent` merges the household buffer into every member's rail,
+                # so it is the line that explains a Home page changing under all of them.
+                # Rendered at write time, per `rail.record`'s contract. [decision 189]
+                rail.record(
+                    kind="reconcile",
+                    line=f"reconcile({bundle.version}) = {len(steps)} rebuild step(s) "
+                         "recomputed against the staged bundle",
+                    bundle_version=bundle.version,
+                    detail={"steps": [s["title"] for s in steps]},
+                )
+
                 # §10: transactionally flip. The partial unique index guarantees one active row.
+                already_active = await conn.fetchval(
+                    "SELECT version FROM artifact_bundle WHERE state = 'active'"
+                )
                 await conn.execute(
                     "UPDATE artifact_bundle SET state = 'superseded' WHERE state = 'active'"
                 )
@@ -663,6 +723,20 @@ async def import_bundle(
                     "swap",
                     "artifact_bundle flipped to active — restart backend and worker; "
                     "no process may score or refit with a different loaded version",
+                )
+                # The other web-process model write §6.7 has never narrated. `bundle_swap` has
+                # been in `EVENT_KINDS` and worn a `ModelRail` colour rule since M2 with no
+                # caller, so the one event that invalidates every fitted number in the app
+                # reached the rail from nowhere. `already_active` is read above the two UPDATEs
+                # and not here: after them the same SELECT answers with this bundle's own
+                # version, and the line would say a swap superseded itself. [decision 189]
+                rail.record(
+                    kind="bundle_swap",
+                    line=f"bundle_swap({bundle.version}) = active"
+                         + (f", superseding {already_active}" if already_active else "")
+                         + " -> every fitted number is expressed in this basis",
+                    bundle_version=bundle.version,
+                    detail={"superseded": already_active},
                 )
                 report.note(
                     "rebuild-set", "recomputed against the staged bundle: " + "; ".join(REBUILD_SET)

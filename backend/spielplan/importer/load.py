@@ -158,10 +158,45 @@ MAPPINGS: tuple[TableMap, ...] = (
         coalesce_empty=("source",),   # rule 6
     ),
     TableMap(
+        target="title_company", source="title_company",
+        # The fourth per-source table, arriving four days after 0015 fixed the other three
+        # (decision 193). The corpus keys it (title_id, source, company, role) and 0003 keyed it
+        # (title_id, company, role), so this table was named in SKIPPED_TABLES and none of its
+        # 47,607 shipped rows landed: 8,594 duplicate groups under the app's key, 11,654 rows
+        # discarded (decision 195 — a group count is not a row count).
+        #
+        # It loads on §4.1's own terms — "tables mirror the corpus export" — and NOT because the
+        # Cold Tower was missing an input. `placement/features.py:403` does count company rows
+        # into the thin-title meta block and `'companies'` does sit in `_COUNT_KEYS`, but
+        # `n_companies_log` is a column of no feature contract this app has loaded, so
+        # `build_vector` counts the key as unmapped and the count reaches no coordinate: it was
+        # produced and discarded, never fed to a checkpoint. Decision 194 records the
+        # measurement, because 0018 section 3 is checksummed once it is applied.
+        #
+        # 0018 section 3 re-keys the table and this mapping is the other half. `role` (what the
+        # company did) and `source` (who said so) are two facts, exactly as on `title_language`.
+        #
+        # `country` is shipped and not mapped: it is the company's own nationality, a fact no
+        # app surface reads and one this schema has no column for. §4.1's shape note makes that
+        # a report line, which `unmapped_columns` produces.
+        columns={"title_id": "title_id", "source": "source", "company": "company",
+                 "role": "role"},
+        coalesce_empty=("source", "role"),   # rule 6
+    ),
+    TableMap(
         target="title_video", source="title_video",
         # No `official` upstream; it stays NULL rather than being invented as true.
-        columns={"title_id": "title_id", "site": "site", "key": "key", "type": "type"},
-        coalesce_empty=("site", "type"),
+        #
+        # `source` is a key component from 0018 section 4 on. The corpus keys this table
+        # (title_id, source, key); the app keyed it (title_id, site, key) and dropped `source`
+        # altogether, so the first export in which a second source reports a trailer the first
+        # already lists turns a clean `validate()` into a unique violation on COPY — a 500 in
+        # the middle of the one transaction that carries the whole seed. Latent on the shipped
+        # bundle (one source, zero collisions) and exactly the shape 0015's three tables had
+        # before they were the live failure.
+        columns={"title_id": "title_id", "source": "source", "site": "site", "key": "key",
+                 "type": "type"},
+        coalesce_empty=("site", "type", "source"),
     ),
     TableMap(
         target="person", source="person",
@@ -191,7 +226,17 @@ MAPPINGS: tuple[TableMap, ...] = (
     TableMap(
         target="rating_source", source="rating_source",
         # §4.1 rule 4's frozen ids. The corpus records the scale as two bounds, not one string.
-        columns={"id": "id", "name": "name", "scale": "scale_hi"},
+        #
+        # url/license/version/notes are the per-dataset TERMS, and they are the reason 0018
+        # section 5 exists: the bundle's `rating_source` is the one place the corpus recorded
+        # the Netflix Prize's research-use-only clause and the CC BY attributions naming their
+        # authors, and the mapping dropped all four. Without them no surface can print the
+        # attribution those licences require and no operator can tell which of the eleven frozen
+        # sources bars redistribution of a movie-data archive — the question §6.6's Data card
+        # exists to answer. Not coalesced: a source that shipped no terms must read as "not
+        # stated" rather than as permissively licensed.
+        columns={"id": "id", "name": "name", "scale": "scale_hi", "url": "url",
+                 "license": "license", "version": "version", "notes": "notes"},
         coalesce_empty=("scale",),
         transforms={"scale": _scale_label},
         required=True,
@@ -268,13 +313,9 @@ BESPOKE_TABLES: dict[str, str] = {
 }
 
 SKIPPED_TABLES: dict[str, str] = {
-    # Not "no surface reads one": `features.py` counts company rows into the thin-title signal.
-    # The corpus keys this table (title_id, source, company) and 0003_content.sql keys it
-    # (title_id, company, role), so 8,594 of the shipped rows collide the moment `source` is
-    # dropped. Its two siblings took the other route on 2026-09-02 and adopted the corpus's key;
-    # this one has no such migration yet, so it is named here rather than mapped.
-    "title_company": "the corpus keys it per source and this app does not; loading it needs a "
-                     "cross-source dedupe that does not exist yet",
+    # `title_company` was here until M4.9 and is now in MAPPINGS above: 0018 section 3 gives it
+    # the corpus's key, so the cross-source dedupe this entry said did not exist is no longer
+    # needed — the rows are per source and stay per source (decision 193).
     "imdb_ratings": "pre-selection signal for the corpus's own crawl; the app shows IMDb's "
                     "number from platform_rating, which §4.1 rule 3 keeps display-only",
     "dna_annotation": "curator working notes; no app surface reads one",
@@ -412,7 +453,37 @@ async def _resolve_ml_links(conn: asyncpg.Connection, report: ImportReport) -> N
     M4.5 exists for. `imdb_id` and nothing else: `tmdb_id` is legitimately duplicated across
     titles (§4.1 rule 6, the movie/series pair), so a tmdb join would attach a genome vector to
     an arbitrary one of them.
+
+    **This is the one join on the key §4.1 forbids as a join key** — "`imdb_id` … must never be
+    the join key" — and the exception is stated here rather than left as an inference from a
+    comment about rule 6. It is unavoidable: MovieLens keys its link table by external ids and
+    the corpus exports it as published, so there is no `title_id` to join on and rule 6 rules
+    out the only other candidate. What the ban protects against is a duplicated key silently
+    attaching one title's genome to another, so the check below buys that protection back: a
+    duplicated non-empty `imdb_id` FAILS the import naming the rule and the value, instead of
+    the join picking whichever row Postgres reached. Zero duplicates on the shipped bundle, so
+    on a clean artifact the check costs one aggregate. [M4.9 finding 31]
     """
+    duplicated = await conn.fetch(
+        """
+        SELECT imdb_id, count(*) AS n
+          FROM title
+         WHERE imdb_id IS NOT NULL AND imdb_id <> ''
+         GROUP BY imdb_id HAVING count(*) > 1
+         ORDER BY imdb_id
+        """
+    )
+    if duplicated:
+        shown = ", ".join(f"{r['imdb_id']} ({r['n']}x)" for r in duplicated[:5])
+        report.fail(
+            "ml-link",
+            f"{len(duplicated)} imdb_id value(s) occur on more than one title, and the "
+            "MovieLens genome link has no other key to resolve on — §4.1: `imdb_id` must never "
+            f"be the join key. Duplicated: {shown}",
+            duplicated=len(duplicated),
+            values=[r["imdb_id"] for r in duplicated[:5]],
+        )
+        return
     await conn.execute(
         """
         UPDATE ml_link l SET title_id = t.id

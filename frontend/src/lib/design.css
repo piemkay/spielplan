@@ -48,14 +48,18 @@
   --ember-edge: rgba(200, 97, 58, 0.35);
 
   /* A fixed colour per vocabulary-v1 facet (11). These are identity, not decoration:
-     the same facet is the same colour on the map, the silhouette and every DNA chip. */
+     the same facet is the same colour on the map, the silhouette and every DNA chip.
+     The names are the SHIPPED facet ids — the prefix of every term in dna_vocab/v1, which is
+     what `facetColour` is handed. `characters`, not `character`: the vocabulary file is
+     `vocab_characters_v1.tsv`, and the singular spelled a twelfth facet no row can carry while
+     leaving the real one at --ink-4. [§6.8; M4.9 finding 4] */
   --facet-mood: #c8613a;
   --facet-themes: #3f7f6f;
   --facet-pacing: #8b6bd6;
   --facet-structure: #c9a227;
   --facet-visual: #4d86c6;
   --facet-sound: #c25f8e;
-  --facet-character: #5fae7a;
+  --facet-characters: #5fae7a;
   --facet-place: #b98046;
   --facet-era: #7f7fd6;
   --facet-sensibility: #4fa3a3;

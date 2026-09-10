@@ -965,6 +965,104 @@ def test_every_listing_query_partitions_by_kind():
             normalise_kinds(empty)
 
 
+# The same rule, one layer up. `db/library.py`'s builder is not the only place a listing is
+# written: `api/library.py` builds §6.4's wander neighbours and §6.0's filmography inline, and
+# both selected `t.kind` into the SELECT list and the GROUP BY and into no predicate at all --
+# so a wander from a film ranked films and series in one shared-term ordering, and a tap on a
+# director's name answered one interleaved list. The guard above reads the builder, which is
+# exactly why neither route was visible to it: they never call it. [M4.9 finding 13]
+#
+# The rule this reads is "a statement that OUTPUTS kind must CONSTRAIN it". That is the shape
+# both defects had and the shape a third would take: a route means to be rendered per kind
+# precisely when it sends the kind, and §4.1 rule 5's measured failure is a shared *ranking*
+# rather than a shared screen. It also leaves alone the statements that are not catalogue
+# listings at all -- `api/tonight.py`'s reveal reads one session's own `session_result` rows,
+# chosen upstream by §6.2's already-partitioned pool, and joins `title` only for the names --
+# without exempting any file or function by name.
+#
+# Dotted on purpose. Every statement in this layer aliases its tables, and a bare `kind` in an
+# `api/` string is far more likely to be the query parameter's own name in a message than a
+# column: the alternative pattern reports `normalise_kinds`'s own refusal text ("select at
+# least one kind: 'movie', 'series', or both"), which carries a SQL verb and the word.
+_KIND_COLUMN = re.compile(r"\b\w+\.kind\b", re.IGNORECASE)
+_KIND_PREDICATE = re.compile(
+    r"\b\w+\.kind\s*(?:=\s*(?:any\s*\(|\$\d+)|\bin\b\s*\()", re.IGNORECASE
+)
+
+
+def _unpartitioned_kind_statements(source: str) -> list[str]:
+    """Every SQL literal in `source` that returns a title's kind without selecting on it."""
+    return [
+        _excerpt(literal)
+        for literal in _sql_literals(source)
+        if _SQL_VERB.search(literal)
+        and _KIND_COLUMN.search(literal)
+        and not _KIND_PREDICATE.search(literal)
+    ]
+
+
+def test_every_listing_route_in_the_api_layer_partitions_by_kind():
+    """§4.1 rule 5: 'every ranking surface partitions by it'.
+
+    Two arms, because the defect had two halves. The statements must constrain the kind they
+    report, and the routes must take that selection from the caller through the app's own
+    validator -- §6.4's wander is the caller's choice of kinds and never the anchor title's,
+    which would be a different rule wearing rule 5's name.
+    """
+    offenders: list[str] = []
+    for path in sorted((PACKAGE / "api").glob("*.py")):
+        offenders += [
+            f"{path.name}: {hit!r}"
+            for hit in _unpartitioned_kind_statements(path.read_text(encoding="utf-8"))
+        ]
+    assert not offenders, (
+        "§4.1 rule 5: an api/ statement reports a title's kind and selects on nothing.\n"
+        + "\n".join(offenders)
+    )
+
+    source = (PACKAGE / "api" / "library.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    selectors = {
+        node.name: (ast.get_source_segment(source, node) or "")
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and any(a.arg == "kind" for a in node.args.args + node.args.kwonlyargs)
+    }
+    # `facets` is here too and takes a default rather than being required -- it is the filter
+    # vocabulary for the controls, not a listing -- but it goes through the same validator, so
+    # `?kind=` is a refusal on all four rather than a silent "everything".
+    assert {"list_titles", "similar_by_term", "person_detail", "facets"} <= set(selectors), (
+        sorted(selectors)
+    )
+    for name, body in sorted(selectors.items()):
+        assert "library.normalise_kinds(kind)" in body, f"{name} takes kind and never checks it"
+
+
+def test_the_api_kind_guard_catches_a_real_violation():
+    """The wander query as it shipped, which is the only proof the arm above can fail."""
+    wander = (
+        "async def neighbours(table):\n"
+        '    return await conn.fetch(f"""\n'
+        "        SELECT o.title_id, t.name, t.year, t.kind, count(*) AS shared\n"
+        "          FROM {table} o JOIN title t ON t.id = o.title_id\n"
+        "         WHERE o.title_id <> $1\n"
+        '         GROUP BY o.title_id, t.name, t.year, t.kind""", title_id)\n'
+    )
+    assert _unpartitioned_kind_statements(wander)
+    assert not _unpartitioned_kind_statements(
+        wander.replace("WHERE o.title_id <> $1", "WHERE o.title_id <> $1 AND t.kind = ANY($2)")
+    )
+
+    # And the shape that must NOT be reported: a slate keyed to one session, joining `title`
+    # for its names and reporting no kind at all.
+    assert not _unpartitioned_kind_statements(
+        'rows = await conn.fetch("""\n'
+        "    SELECT r.title_id, r.rank, t.name, t.year\n"
+        "      FROM session_result r JOIN title t ON t.id = r.title_id\n"
+        '     WHERE r.session_id = $1 ORDER BY r.rank""", session_id)\n'
+    )
+
+
 def test_frozen_rating_source_ids_match_the_spec():
     from spielplan.importer.validate import FROZEN_RATING_SOURCE_IDS
 

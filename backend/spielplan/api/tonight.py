@@ -413,10 +413,16 @@ async def answer(
         None if state["_pair"] is None
         else _seal(participant_id, state["_pair"], state["answered"] + 1)
     )
+    # NO EMBEDDED RAIL. This response used to carry `rail.recent(limit=5)` because §6.7's drawer
+    # was mounted on Home alone, so the surface that produces §6.7's own fourth worked example
+    # could not otherwise show it. That made the round's log a second, shorter rail with its own
+    # depth and its own refresh — one drawer per route, differing from each other. The write
+    # above still happens; `GET /api/model-log` is where it is read, and the frontend shell stage
+    # of this same milestone moves the `ModelRail` mount into the layout so the drawer opens here
+    # too. One drawer, not one per route. [M4.9 findings 25 and 26]
     payload = {
         **_public_state(state, token),
         "wrote": {"seq": written["seq"], "stop_reason": written["stop_reason"]},
-        "rail": rail.recent(user_id=user.id, limit=5),
     }
     return rail.redact(payload, show_model=rail.visible_to(user))
 
@@ -549,13 +555,28 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
     approvals = {r["title_id"]: r["approvals"] for r in counted}
     jf = await conn.fetchval("SELECT config FROM connector_config WHERE name = 'jellyfin'")
     base = (jf or {}).get("url", "") if isinstance(jf, dict) else ""
-    budget = await conn.fetchval("SELECT runtime_budget_min FROM session WHERE id = $1", session_id)
+    # Both controls off the one row that holds them. `kind` is here rather than in the slate
+    # statement above because it is the SESSION's, not each row's: 0013 makes `session.kind`
+    # single-valued and says why ("an evening resolves to ONE title"), so §4.1 rule 5's
+    # partition happened when the pool was built and every row on the slate is of this kind.
+    # Selecting `t.kind` into a statement that constrains none would be rule 5's own defect
+    # shape wearing the reveal's name. [M4.9 finding 37; review cycle 1: M49-CARD-2]
+    controls = await conn.fetchrow(
+        "SELECT kind, runtime_budget_min FROM session WHERE id = $1", session_id
+    )
+    budget = controls["runtime_budget_min"] if controls else None
 
     def card(row: asyncpg.Record) -> dict[str, Any]:
         from spielplan.tonight import pool as pool_rules
 
         return {
             "title_id": row["title_id"], "rank": row["rank"], "slot": row["slot"],
+            # `kind` travels with `runtime_min` because the runtime does not mean the same thing
+            # without it: §6.0's label reads a series in minutes per EPISODE, and the reveal was
+            # the one card that held a runtime and no kind, so it printed a series' 45 minutes
+            # the way it prints a film's. Every other slate payload already carries it
+            # (`tonight/play.py:160`). [M4.9 finding 37; review cycle 1: M49-CARD-2]
+            "kind": controls["kind"] if controls else None,
             "name": row["name"], "year": row["year"], "runtime_min": row["runtime_min"],
             "poster_path": row["poster_path"],
             "approvals": approvals.get(row["title_id"], 0),

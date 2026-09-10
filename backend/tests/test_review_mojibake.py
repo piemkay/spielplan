@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-from spielplan.importer.reviews import repair_mojibake
+from spielplan.importer.reviews import _MOJIBAKE_MARKERS, repair_mojibake
+
+
+def _markers(text: str) -> int:
+    """How many mojibake markers a string carries, counted the way `repair_mojibake` counts."""
+    return sum(text.count(m) for m in _MOJIBAKE_MARKERS)
 
 
 @pytest.mark.parametrize(
@@ -71,10 +76,50 @@ def test_repair_is_idempotent():
 
 def test_repair_never_increases_the_mojibake_markers():
     """The guard that stops a 'fix' making things worse — a string that re-encodes cleanly but
-    ends up with more markers than it started with is left alone."""
-    for text in ("Ãa va", "Â£20", "aÂ b"):
+    does not strictly reduce its marker count is left alone.
+
+    The body asserted `repaired == text or changed` until M4.9, which is true by construction of
+    every return path in `repair_mojibake`: each one is `(text, False)` or `(repaired, True)`, so
+    the disjunction cannot be false whatever the function does. With the marker-count guard
+    deleted all nineteen invocations in this file still passed. What the guard actually promises
+    is the inequality, so that is what is asserted — for the declining case AND for the repairing
+    one, because a guard that only ever declines would satisfy the first half alone.
+    [M4.9 finding 34]
+    """
+    for text in ("Ãa va", "Â£20", "aÂ b", "Un film Ãƒ voir", "CafÃ© et thÃ©"):
         repaired, changed = repair_mojibake(text)
-        assert repaired == text or changed
+        if changed:
+            assert _markers(repaired) < _markers(text), (
+                f"{text!r} was called repaired without losing a marker"
+            )
+        else:
+            assert repaired == text, f"{text!r} was rewritten while reporting no change"
+
+
+def test_declines_the_string_the_mutant_half_repairs():
+    """The one input that separates the shipped guard from a mutant without it.
+
+    Census over the real `reviews.sqlite`: 485,602 rows, **86 carry a marker, 0 repair** — 82
+    fail the UTF-8 decode and 4 the cp1252 encode, because the damage is a truncated sequence
+    (`clichÃ`, `dÃbut`) sitting beside legitimately accented text. So no shipped row exercises
+    the marker-count guard, and brute force over the marker alphabet found the string that does:
+    `'Un film \\u00c3\\u0192 voir'` re-encodes to valid UTF-8 and comes back with the SAME marker
+    count, one `Ã` traded for another. A `repair_mojibake` without the guard returns
+    `'Un film Ã voir'` and calls it changed — half a repair, which rule 8 calls worse than none
+    because the row then looks fixed to every later reader.
+
+    Not parametrised into `test_leaves_legitimate_text_exactly_as_it_arrived`: that test is a
+    list of text a human can see is legitimate, and this is a string whose whole interest is that
+    it is damaged and still must not be touched. [M4.9 finding 34]
+    """
+    text = "Un film Ãƒ voir"
+    repaired, changed = repair_mojibake(text)
+
+    assert (repaired, changed) == (text, False)
+    # The mutant's answer, spelled out so a future reader can see what is being refused rather
+    # than trusting the assertion above to have been about something.
+    assert text.encode("cp1252").decode("utf-8") == "Un film Ã voir"
+    assert _markers("Un film Ã voir") == _markers(text)
 
 
 def test_double_encoded_text_is_repaired_one_layer_at_a_time():

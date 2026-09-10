@@ -34,6 +34,8 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.db import dna_terms
+
 # §6.0 shelf 1's candidate pool. C(8,2) = 28 pairs is the whole search, which is why the pair
 # choice can be exact rather than greedy.
 ANCHOR_TERM_POOL = 8
@@ -44,13 +46,16 @@ NAMED_TERM_CAP = 2
 
 # §4.1 rule 2 made arithmetic. The extracted tier outranks the projected tier for *naming*
 # because §4.1 calls the first quote-verified and the second inferred; both tiers stay fully
-# admissible. Ranges: extracted 0.73..1.00, projected 0.00..0.30.
-TERM_RANK = """
-        CASE d.tier
-            WHEN 'extracted' THEN 0.60 + 0.40 * (COALESCE(d.salience, 1.0) / 3.0)
-            ELSE 0.30 * COALESCE(d.confidence, 0.5)
-        END
-"""
+# admissible.
+#
+# The expression itself lives in `db/dna_terms.py` because `tonight/dna.py` held a verbatim copy
+# of it and the two drifted together off the shipped data: the comment here used to promise
+# "extracted 0.73..1.00, projected 0.00..0.30" while the projected branch ran to 2.40, because
+# the column the `dna_tagged` view calls `confidence` holds `n_sources` for that tier. It is now
+# 0.733..1.00 against 0.10..0.267 and the two bands cannot cross. Reading it from one module is
+# what makes that a fact about the app rather than about this file. [M4.9 finding 20, decision
+# 188]
+TERM_RANK = dna_terms.TERM_WEIGHT
 
 ROLES = ("member", "anchor_side")
 
@@ -83,10 +88,16 @@ async def vocabulary_version(conn: asyncpg.Connection) -> str | None:
 
     §4.3 ships `dna_vocab/v1/`; a household that has imported two bundles has two versions and
     the shelves must not mix them, because a term's facet and gloss are version-scoped.
+
+    That sentence is the whole reason this function existed here first, and M4.9 found that the
+    title card, the catalog/Rank DNA predicate and §6.4's wander neighbours had never applied
+    it. Rather than teach three more modules to resolve the version, the resolution moved down
+    to `db/dna_terms.py` — where the catalog's synchronous WHERE builder can also reach it as a
+    scalar subquery — and this stays as the name the shelves call it by. One statement, one
+    answer; two would be the second notion of "active vocabulary" this comment warns about.
+    [M4.9 finding 10]
     """
-    return await conn.fetchval(
-        "SELECT version FROM dna_vocabulary ORDER BY imported_at DESC, version DESC LIMIT 1"
-    )
+    return await dna_terms.active_version(conn)
 
 
 async def terms_for(

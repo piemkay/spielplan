@@ -51,6 +51,12 @@
     tonight,
     undo
   } from '$lib/tonight.svelte.js';
+  // The winner card's year-and-runtime line, from the one place that formats a runtime. This
+  // screen spelled `{winner?.runtime_min} min` itself, so a series printed as flat minutes where
+  // every other surface says `45m/ep`, a 170-minute film read `170 min` where the catalogue two
+  // taps back said `2h 50m`, and a title of unknown runtime — nullable, and the corpus has them
+  // — rendered a bare unit with no number. [M4.9 finding 37; review cycle 1: M49-CARD-2]
+  import { metaLine } from '$lib/rate.svelte.js';
 
   let code = $state('');
   let sharpening = $state(false);
@@ -337,11 +343,6 @@
           >
         {/if}
       </div>
-      {#if tonight.rail.length}
-        <ul class="rail" data-testid="tonight-rail">
-          {#each tonight.rail as event (event.id)}<li class="data">{event.text}</li>{/each}
-        </ul>
-      {/if}
     </div>
   {/if}
 
@@ -398,9 +399,7 @@
       <p class="data beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
       <div class="winner card" data-testid="tonight-winner">
         <h2>{tonight.result.winner?.name}</h2>
-        <p class="why">
-          {tonight.result.winner?.year} · {tonight.result.winner?.runtime_min} min
-        </p>
+        <p class="why">{metaLine(tonight.result.winner)}</p>
         <p class="data" data-testid="tonight-approval-share">{approvalShare(tonight.result)}</p>
         {#if tonight.result.unanimous}
           <p class="data" data-testid="tonight-unanimous">Unanimous.</p>
@@ -598,7 +597,6 @@
   header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .back { min-height: var(--touch); }
   .empty { color: var(--ink-2); font-size: 13px; }
-  .rail { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); }
   .disabled { opacity: 0.55; }
   /* §6 preamble's 48 px floor. design.css raises `button.pill` on a coarse pointer; the Play
      CTA is an <a> (§7.1's deep link) and an aria-disabled <span>, so neither is reached by it. */

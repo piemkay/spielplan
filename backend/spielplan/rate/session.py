@@ -119,12 +119,35 @@ class RateSession:
     card_token: uuid.UUID | None
 
 
+class RailLine(str):
+    """A log line that remembers which title it narrates.
+
+    §6.7's event carries a `title_id` field and every producer left it null, so the line the
+    client rendered named a film it could not link. The id has to travel WITH the line rather
+    than be looked up beside it, because §6.7's sentence is composed at the write — see
+    `rail.record`'s contract, "the rail shows what the model believed when it acted" — while
+    `rail.record` itself is called one call later, in `payload`, by which time `s.current_card`
+    is the NEXT card and the answered one is gone.
+
+    A `str` subclass rather than a pair or a second tuple beside `log`: `Outcome.log` is also
+    §6.1's per-response echo, so every line in it is serialised into the payload and read with
+    `in` by tests and by `RateModelLog`. Subclassing leaves all of that working untouched and
+    makes the id readable by exactly the one caller that wants it.
+    """
+
+    def __new__(cls, text: str, *, title_id: int | None = None) -> RailLine:
+        line = super().__new__(cls, text)
+        line.title_id = title_id
+        return line
+
+
 @dataclass(frozen=True)
 class Outcome:
     """One tap's result: the session as it now stands, and everything the response carries."""
 
     session: RateSession
     reveal: dict[str, Any] | None = None
+    # Plain strings except where §6.7's line is about one title, which `RailLine` carries.
     log: tuple[str, ...] = ()
     ledger: dict[str, Any] | None = None
     undone: str | None = None
@@ -789,6 +812,47 @@ async def _ledger_update(
     }
 
 
+async def _verdict_rail_line(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    title_id: int,
+    value: int,
+    refit_ms: float | None,
+) -> RailLine:
+    """§6.7's commonest line, rendered here because here is where its four facts are true.
+
+    `ledger/observations.py` keeps its own sentence — `verdict(title 5) = liked -> ordered-logit
+    arm · implies seen` — and the two are DELIBERATELY different. That one is the domain layer's
+    audit record of the row it wrote: it belongs to callers that never saw a person or a rail,
+    and its qualifiers (`implies seen`, §13's re-ask marker) are facts about the row rather than
+    about the model write. This one is §6.7's narration of the same write, and it names the
+    person and the film because §6.8 forbids a bare model number — a bare title id is exactly
+    one, and nothing on the client can resolve it back into a film.
+
+    The two names cost one round trip on a path §6 budgets at 2 s, taken here rather than
+    threaded down from the route because this is the only moment that holds the title, the
+    label and the incremental refit's own milliseconds together; `rail.record`'s docstring is
+    explicit that a line recomposed later "from numbers that have since moved" is the thing to
+    avoid. [M4.9 finding 23, plan step 7.1]
+    """
+    row = await conn.fetchrow(
+        "SELECT (SELECT name FROM app_user WHERE id = $1) AS rater,"
+        " (SELECT name FROM title WHERE id = $2) AS title",
+        user_id,
+        title_id,
+    )
+    # Both rows exist by foreign key — the verdict this line narrates references them — so these
+    # fall back only for a database that has already broken its own constraints, and they say so
+    # rather than printing `None` or reaching for the id §6.8 rules out.
+    rater = row["rater"] or "an unknown rater"
+    title_name = row["title"] or "an unknown title"
+    return RailLine(
+        rail.verdict_line(rater, title_name, VERDICT_LABELS[value], refit_ms=refit_ms),
+        title_id=title_id,
+    )
+
+
 # --- the five taps ---------------------------------------------------------------------------
 
 
@@ -850,11 +914,24 @@ async def record_verdict(
         hp=hp,
         embeddings=embeddings,
     )
+    # §6.7's line is composed here, one statement after the millisecond count it quotes and
+    # while the answered card and the label are still in hand. It REPLACES `write.log` on this
+    # arm rather than joining it: `payload` turns every line in `log` into one rail event, so
+    # carrying both would narrate one write twice, in two formats. The audit sentence itself
+    # is untouched in `ledger/observations.py` — `_verdict_rail_line` says why the two are
+    # allowed to read differently. [M4.9 finding 23, plan step 7.1]
+    line = await _verdict_rail_line(
+        conn,
+        user_id=s.user_id,
+        title_id=title_id,
+        value=value,
+        refit_ms=(ledger or {}).get("ms"),
+    )
     s = await ensure_card(conn, s, rng=rng, head=head)
     return Outcome(
         session=s,
         reveal=reveal_for(prediction, value),
-        log=(write.log, _sync_line("seen", pushed, reason)),
+        log=(line, _sync_line("seen", pushed, reason)),
         ledger=ledger,
     )
 
@@ -1254,9 +1331,18 @@ async def payload(
     # §6.7's rail, fed from the lines this response already carries. `event_kind` is None for a
     # read and for a skip: §6.7 narrates "every model write", and a skip writes no observation —
     # its own log line says so. Recording it would put a non-write in the log of writes.
+    #
+    # `title_id` is read off the line rather than passed beside it because only some lines are
+    # about one title — the verdict's is, the Jellyfin push line that follows it is not — and
+    # the handler that knows which is which has already returned. See `RailLine`.
     if event_kind is not None:
         for line in log:
-            rail.record(kind=event_kind, line=line, user_id=s.user_id)
+            rail.record(
+                kind=event_kind,
+                line=line,
+                user_id=s.user_id,
+                title_id=getattr(line, "title_id", None),
+            )
 
     card = await public_card(conn, s)
     shares = await balance.class_balance(conn, user_id=s.user_id, kinds=s.kinds)

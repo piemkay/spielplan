@@ -13,23 +13,22 @@
    * chip beside it (proposals 30 and 152).
    *
    * TWO ROUTES, ON PURPOSE. The shelves half comes from `/api/home` (greeting, banner, shelves,
-   * the degraded state, and — only when §6.7's toggle is on — the rail); the grid half stays on
-   * `/api/titles`, which is the one route carrying M0's five filter dimensions. Asking
-   * `/api/home` for the grid would silently drop genre, decade and seen-state.
+   * the degraded state, and — only when §6.7's toggle is on — the model annotations and
+   * proposal 28's suppressed list); the grid half stays on `/api/titles`, which is the one route
+   * carrying M0's five filter dimensions. Asking `/api/home` for the grid would silently drop
+   * genre, decade and seen-state.
+   *
+   * §6.7's rail is NOT mounted here any more. It is one drawer in `routes/+layout.svelte`,
+   * beside the toggle that governs it, because mounted here it was reachable from this surface
+   * alone [M4.9 finding 25]. All this file still owes it is proposal 28's suppressed list, which
+   * no other payload carries.
    */
   import { onMount } from 'svelte';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
-  import {
-    countLabel,
-    gridReason,
-    hasModelAnnotations,
-    homeMode,
-    loadHome,
-    modelGate
-  } from '$lib/home.svelte.js';
+  import { countLabel, gridReason, homeMode, loadHome, modelGate } from '$lib/home.svelte.js';
+  import { publishSuppressed } from '$lib/rail.svelte.js';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
-  import ModelRail from '$lib/components/ModelRail.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PosterCard from '$lib/components/PosterCard.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
@@ -58,16 +57,21 @@
   let home = $state(null);
   let homeLoading = $state(false);
   let homeError = $state('');
-  let railOpen = $state(false);
 
   const LIMIT = 60;
 
   const mode = $derived(homeMode({ q, personId, genre, decade, seen }));
   const reason = $derived(gridReason({ q, personId, genre, decade, seen }));
-  // Decision 117: the toggle's evidence is the payload, not a local boolean. The server strips
-  // `rail`, `suppressed` and every card's `model` when it is off, so their presence is the only
-  // honest signal that the numbers are meant to be on screen.
-  const showModel = $derived(hasModelAnnotations(home));
+
+  // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
+  // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
+  // must not acquire one for a drawer. The teardown is the load-bearing half — proposal 28's
+  // rows say which (shelf, kind) sections did not ship, and left in the drawer on Rate that is
+  // a claim about a surface nobody is looking at.
+  $effect(() => {
+    publishSuppressed(home?.suppressed);
+    return () => publishSuppressed([]);
+  });
 
   const activeFilters = $derived(
     [
@@ -161,7 +165,8 @@
   // Watching `modelGate.epoch` rather than `session.user.show_model` is load-bearing.
   // `setShowModel` sets the local user optimistically and awaits the POST afterwards, so
   // refetching on the local flip races the write and returns the pre-toggle payload — the
-  // toggle moves and the rail never arrives. The chip bumps the epoch once the server has it.
+  // toggle moves and the annotations never arrive. The chip bumps the epoch once the server has
+  // it. (Closing an open drawer on the same flip is the shell's job now — it holds the drawer.)
   //
   // `lastEpoch` is deliberately NOT `$state`: it is the effect's own memory, and a reactive
   // one would be read and written in the same effect, which re-runs it forever.
@@ -170,7 +175,6 @@
     const epoch = modelGate.epoch;
     if (epoch === lastEpoch) return;
     lastEpoch = epoch;
-    if (!session.user?.show_model) railOpen = false;
     loadShelves();
   });
 
@@ -234,21 +238,7 @@
     if (which === 'seen') seen = 'any';
     load();
   }
-
-  /** Proposal 118: the rail "must be reachable in two taps" and from a keyboard shortcut. */
-  function onKeydown(event) {
-    if (event.key !== 'm' || event.metaKey || event.ctrlKey || event.altKey) return;
-    const el = event.target;
-    if (el instanceof HTMLElement) {
-      const tag = el.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) return;
-    }
-    if (!showModel) return;
-    railOpen = !railOpen;
-  }
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <!-- §7.3: the queued finish prompt, above everything, because it is about the thing that
      just happened in the living room. Proposal 150 keeps it separate from the banner below:
@@ -258,14 +248,6 @@
 <div class="head">
   <div class="greetline">
     <h1 data-testid="home-greeting" data-band={home?.greeting?.band ?? ""}>{greeting}</h1>
-    {#if showModel}
-      <!-- Only offered when decision 117's toggle is on. The rail is the primary M2 debugging
-           instrument, so it is one tap from every Home render — and `m` from the keyboard. -->
-      <button class="btn-ghost railbtn" onclick={() => (railOpen = !railOpen)} data-testid="model-rail-open">
-        Model log
-        <span class="data">m</span>
-      </button>
-    {/if}
   </div>
 
   <!-- §6.0's pending-verdicts banner. Server copy, server link. -->
@@ -374,10 +356,18 @@
         <a class="btn-primary" href="/admin/data">Import a bundle</a>
       {:else}
         <h2>No matches</h2>
-        <!-- Proposal 23: the one place the app teaches that DNA terms are searchable. -->
+        <!-- [M4.9 finding 19] This said "try a DNA term — cosy, dread, slow-burn — or check the
+             Map's compositional search", proposal 23's copy, adopted from the prototype ahead of
+             the routes it describes. `list_titles` has no `dna` parameter at all and its search
+             predicate is `lower(t.name) LIKE` or the same over `title_alias`; the Map is §6.4
+             and renders M6's placeholder. The one screen whose job is to rescue a failed search
+             was sending people to two dead ends, so it now names the dimensions §6.0's M0
+             catalog really has, in §6.8's quiet register. Making `q` search DNA terms instead is
+             not the fix — §6.4 is where compositional search is specified, and M6 owns it. -->
         <p class="why">Nothing in the library matches.</p>
-        <p class="data">
-          try a DNA term — cosy, dread, slow-burn — or check the Map's compositional search
+        <p class="data" data-testid="no-matches-help">
+          search reads the title and its aliases · the kind toggles, genre, decade and seen
+          state narrow it further · clear a chip to widen it
         </p>
       {/if}
     </div>
@@ -425,8 +415,6 @@
   />
 {/if}
 
-<ModelRail open={railOpen} onClose={() => (railOpen = false)} suppressed={home?.suppressed ?? []} />
-
 <style>
   .head {
     display: flex;
@@ -444,12 +432,6 @@
     margin: 0;
     font-size: 21px;
     font-weight: 600;
-  }
-  .railbtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
   }
   .controls {
     display: flex;

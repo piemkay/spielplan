@@ -13,8 +13,12 @@ Rule 8 is the delicate part:
 
 So: no normalisation, no stripping, no `errors='ignore'`. The only text this module changes is
 a row whose bytes are provably UTF-8 that was once decoded as cp1252 — and only when undoing
-that round-trips exactly. Everything else passes through untouched, and the repair count is
-reported so it can be compared against the expected 73.
+that round-trips exactly. Everything else passes through untouched.
+
+What the report says about that is the M4.9 correction: marked rows are counted as well as
+repaired ones, and markers with no repair are a **warning**. On the shipped corpus that is every
+marked row — see `load_reviews`'s census — so the old note's "expected around 73" was a number
+this repository cannot check against rows nothing here enumerates.
 """
 
 from __future__ import annotations
@@ -86,6 +90,11 @@ class _Counter:
     def __init__(self) -> None:
         self.rows = 0
         self.repaired = 0
+        # Rows carrying a marker, whether or not the repair could act on them. Without this the
+        # report could only say "0 repaired", which reads identically to a clean corpus and to a
+        # corpus whose every damaged row the repair declined. It is the second on the shipped
+        # artifact. [M4.9 finding 33]
+        self.marked = 0
 
 
 def _rows(db: sqlite3.Connection, available: set[str], counts: _Counter) -> Iterator[tuple]:
@@ -102,6 +111,7 @@ def _rows(db: sqlite3.Connection, available: set[str], counts: _Counter) -> Iter
         out = list(row)
         counts.rows += 1
         if isinstance(out[body_at], str):
+            counts.marked += any(m in out[body_at] for m in _MOJIBAKE_MARKERS)
             out[body_at], changed = repair_mojibake(out[body_at])
             counts.repaired += changed
         kind = out[critic_at]
@@ -135,9 +145,31 @@ async def load_reviews(
         records=_rows(db, available, counts),
     )
     report.table_counts["loaded:review_store.review"] = counts.rows
-    report.note(
-        "rule8-mojibake",
-        f"{counts.repaired} review row(s) repaired from cp1252-over-UTF-8 "
-        f"(expected around 73); the other {counts.rows - counts.repaired:,} were left byte-exact",
-        repaired=counts.repaired, expected=73, total=counts.rows,
-    )
+    # A WARN when markers were seen and nothing could be repaired, because that is the shipped
+    # artifact's actual state and the note it used to print read like success. Census over the
+    # real `reviews.sqlite`: 485,602 rows, 86 carry a marker, 0 repair — 82 fail the UTF-8
+    # decode and 4 the cp1252 encode, because the damage is a truncated sequence (`clichÃ`,
+    # `dÃbut`) sitting beside legitimately accented text. Rule 8's "fixed individually" is
+    # per-row knowledge this repository does not have: the repair here is one whole-string
+    # round trip, and teaching it to guess a lost continuation byte is ambiguous between
+    # é/ã/á/à and would corrupt `L'Âge d'Or`. The fix is upstream — the corpus exporter writing
+    # repaired bodies, or a shipped `review_fixes_v1.tsv` keyed by `review.id` — and until it
+    # arrives the honest report line is a warning that says so. The old line's "(expected
+    # around 73)" is gone with it: nothing in this repository enumerates those 73 rows, so the
+    # number was a claim the report could not support. [M4.9 finding 33]
+    if counts.marked and not counts.repaired:
+        report.warn(
+            "rule8-mojibake",
+            f"{counts.marked:,} review row(s) carry a cp1252-over-UTF-8 marker and none could "
+            "be repaired without guessing at bytes the corpus lost; the bodies are stored "
+            "exactly as shipped and the repair belongs upstream",
+            marked=counts.marked, repaired=0, total=counts.rows,
+        )
+    else:
+        report.note(
+            "rule8-mojibake",
+            f"{counts.repaired} of {counts.marked:,} marked review row(s) repaired from "
+            f"cp1252-over-UTF-8; the other {counts.rows - counts.repaired:,} were left "
+            "byte-exact",
+            repaired=counts.repaired, marked=counts.marked, total=counts.rows,
+        )

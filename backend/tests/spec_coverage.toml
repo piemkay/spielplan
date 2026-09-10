@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.8"
+current_milestone = "M4.9"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -342,9 +342,21 @@ id = "data-rules-utf8-never-cleaned"
 spec = "§4.1 rule 8"
 milestone = "M0"
 kind = "integration"
-what = "Titles, aliases and review bodies containing CJK, RTL scripts, ZWSP and emoji round-trip through import byte-identical, and only the 73 enumerated mojibake review rows differ from their input, each by its own per-row repair."
+what = "Non-ASCII text round-trips byte-identical; the conservative cp1252 repair changes a body only when it strictly reduces the marker count, and the import reports a **warning**, not a note, when marker rows are present and none was repaired."
 why = "the corpus legitimately contains non-ASCII; a blanket cleaner destroys real data while the 73 known-bad rows need individual fixes."
-tests = ["backend/tests/test_import_integration.py::test_rule8_non_ascii_survives_the_round_trip", "backend/tests/test_bundle_validation.py::test_non_ascii_survives_the_read_path", "backend/tests/test_review_mojibake.py::test_leaves_legitimate_text_exactly_as_it_arrived", "backend/tests/test_review_mojibake.py::test_repairs_cp1252_over_utf8", "e2e/specs/03-library.spec.js::non-ASCII titles survive to the screen"]
+# M4.9 amends the `what` above (the row itself stays M0) and pays the two tests it owed.
+#
+# One correction to the note this comment used to carry: the tautology is NOT in
+# test_leaves_legitimate_text_exactly_as_it_arrived, which asserts `not changed and repaired ==
+# text` and is a real assertion. It was in test_repair_never_increases_the_mojibake_markers
+# (test_review_mojibake.py:72-77 at the milestone's head), whose body was
+# `assert repaired == text or changed` — true by construction of every return path, so with
+# reviews.py's marker-count guard deleted all nineteen invocations still passed. That body now
+# asserts the inequality the guard actually promises, and goes red under the mutant; the two
+# tests NAMED here were correct and were left alone, as the row requires.
+# test_declines_the_string_the_mutant_half_repairs is the dedicated case for the one input
+# brute force found, and the warn is asserted end to end against a real import.
+tests = ["backend/tests/test_import_integration.py::test_rule8_non_ascii_survives_the_round_trip", "backend/tests/test_import_integration.py::test_marked_review_rows_that_repair_nothing_are_a_warning_not_a_note", "backend/tests/test_bundle_validation.py::test_non_ascii_survives_the_read_path", "backend/tests/test_review_mojibake.py::test_leaves_legitimate_text_exactly_as_it_arrived", "backend/tests/test_review_mojibake.py::test_repairs_cp1252_over_utf8", "backend/tests/test_review_mojibake.py::test_declines_the_string_the_mutant_half_repairs", "e2e/specs/03-library.spec.js::non-ASCII titles survive to the screen"]
 
 [[requirement]]
 id = "data-rules-seen-state-binary"
@@ -416,8 +428,8 @@ milestone = "M0"
 kind = "integration"
 what = "With an empty artifact store the title card's model line reports unavailable with a reason instead of erroring or emitting invented b(t)/β/gate numbers; with a bundle loaded it names the bundle version and returns the numbers."
 why = "§3.1 makes a bundle-less app a legal state and requires artifact-dependent surfaces to render an explicit \"no bundle imported\" state."
-tests = ["e2e/specs/04-title-card.spec.js::the card carries metadata, overview and the model line"]
-waived = "Only the bundle-loaded branch is asserted. The no-bundle branch is unreachable through the UI at M0 for a good reason: with no bundle there are no titles, so there is no card to open. It becomes reachable at M5, when a locally acquired title can outlive a deactivated bundle; test it there against that case."
+tests = ["e2e/specs/04-title-card.spec.js::the card carries metadata, overview and the model line", "backend/tests/test_scoring.py::test_the_model_line_prints_the_real_b_beta_and_gate", "backend/tests/test_scoring.py::test_the_model_line_says_so_rather_than_inventing_a_number"]
+waived = "The bundle-loaded branch is now asserted outright — the browser case names the bundle version and the numbers rather than accepting either, and the two backend tests cover both arms of the rule at the layer that produces them. Only the no-bundle branch remains untested, and it is unreachable through the UI at M0 for a good reason: with no bundle there are no titles, so there is no card to open. It becomes reachable at M5, when a locally acquired title can outlive a deactivated bundle; test it there against that case."
 
 [[requirement]]
 id = "map-taste-admin-bundle-report-and-diff"
@@ -1106,7 +1118,7 @@ spec = "§6.3 Filters (with §4.1 rules 1, 2, 5)"
 milestone = "M3"
 kind = "integration"
 what = "The Rank board filters on genre, decade, runtime and seen-state, and on a DNA predicate written either bare (`cosy`) or facet-qualified (`mood.cosy`); the predicate matches rows of both DNA tiers and every survivor still reports which tier matched it; no filter applies a threshold to salience, confidence or n_sources; each filter narrows on its own, combining them intersects, and none of them suspends the kind partition."
-why = "§12's M3 row names \"filters\" as M3 contents and §6.3 names six dimensions, two of which (runtime, DNA facet/term) the M0 catalog filter does not have. `dna_tag` stores the bare term, so the qualified form is built at query time; §4.1 rule 2 forbids the confidence cut the obvious implementation reaches for, and rule 1 forbids answering the predicate from a union that has lost the tier."
+why = "§12's M3 row names \"filters\" as M3 contents and §6.3 names six dimensions, two of which (runtime, DNA facet/term) the M0 catalog filter does not have. `dna_tag` stores the term the way §4.3 spells a vocabulary id -- `facet.term`, already qualified, which is how the corpus ships it -- so it is the BARE form that is derived at query time, and M4.9 finding 9 is that this clause had it backwards and the predicate was written to match; §4.1 rule 2 forbids the confidence cut the obvious implementation reaches for, and rule 1 forbids answering the predicate from a union that has lost the tier."
 tests = [
     "backend/tests/test_rank_integration.py::test_each_rank_filter_narrows_the_board_on_its_own",
     "backend/tests/test_rank_integration.py::test_combining_rank_filters_intersects",
@@ -1928,13 +1940,17 @@ spec = "§4.3 corrections_v1.tsv + §8 stage 3"
 milestone = "M4.5"
 kind = "backend"
 what = "corrections_v1.tsv is parsed at the header the corpus actually ships (kind, title_id, value, evidence, note), and a file whose header the parser does not recognise fails the import report naming the missing column — never raises, and never silently loads zero corrections."
-why = "§8 stage 3 re-applies this ledger at every derive and §14.5 is the scar for what happens when it is not applied. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
+why = "The ledger is parsed and stored for a derive that does not exist yet — §8 stage 3 is M5's — so nothing applies it today, and §14.5 is the scar for what happens when it is not applied. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
 tests = [
     "backend/tests/test_dna_import.py::test_corrections_ledger_parses_the_header_the_corpus_ships",
     "backend/tests/test_dna_import.py::test_an_unrecognised_corrections_header_fails_the_report_naming_the_column",
     "backend/tests/test_dna_import.py::test_a_ledger_with_no_rows_is_reported_rather_than_loaded_as_zero",
     "backend/tests/test_dna_import.py::test_a_row_whose_title_id_is_not_a_number_is_reported_not_raised",
     "backend/tests/test_dna_import.py::test_the_corrections_ledger_is_not_duplicated_by_a_re_import",
+    # M4.9's half of this row: the `why` above was rewritten when the milestone opened to say the
+    # ledger is stored for a derive that does not exist yet, and the import report said the
+    # opposite in as many words. The test below is what makes the rewritten `why` falsifiable.
+    "backend/tests/test_dna_import.py::test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowhere",
 ]
 
 [[requirement]]
@@ -2483,19 +2499,36 @@ tests = ["e2e/specs/09-passkeys.spec.js::a new member is prompted to add a passk
 # --- the pre-release first week (ROADMAP-to-M5.md, "Start here") -------------------------
 #
 # Three fixes drawn from three milestones, shipped ahead of them because none of the eleven
-# is worth starting until the app is usable against the real bundle. They stay behind
-# `current_milestone` (M4.6 since the milestone above opened): only the milestone holding it
-# has a red gate, and each of these rows lands with the test that closes it rather than as an
-# obligation.
+# is worth starting until the app is usable against the real bundle. Each of these rows lands
+# with the test that closes it rather than as an obligation, which is why raising
+# `current_milestone` past their own milestones costs nothing: M4.9's opening armed the first of
+# them without turning it red.
 
+# Findings 5 and 6 of M4.9 (ROADMAP-to-M5.md's "Start here" table pulled them forward) shipped
+# before the milestone opened, so this row is covered on arrival: `credits_for` groups by
+# (person_id, name, job) and TitleDetail keys on person_id + job. The only half of that finding
+# still owed is the count line and the disclosure, which is a row of its own below,
+# `library-rate-title-card-credit-count-names-what-is-hidden` -- do not fold it back in here.
 [[requirement]]
 id = "library-rate-title-card-credits-are-one-row-per-person-and-job"
 spec = "§4.1 (\"credit — dedupe at read time, never at import\") + §6.0 title card"
 milestone = "M4.9"
 kind = "integration"
-what = "A person credited with one job under two department spellings comes back as exactly one credit row; the set of `person_id:job` keys derived from the response is as large as the row list; and the `character` shown is stable under insertion order."
+what = "A person credited with one job under two department spellings comes back as exactly one credit row; the set of `person_id:job` keys derived from the response is as large as the row list; and the `character` in the payload is stable under insertion order (§6.0's card list does not name it, so no surface prints it yet — decision 197)."
 why = "TMDB records leads under both `Acting` and `Actor`: 7,918 (title, person, job) triples span more than one department across 1,216 of 19,071 titles, 816 of them inside the twelve credits the card renders, and Svelte 5's keyed each throws on a duplicate key in the production branch too."
-tests = ["backend/tests/test_import_integration.py::test_a_credit_is_one_row_per_person_and_job_across_department_spellings"]
+tests = [
+    "backend/tests/test_import_integration.py::test_a_credit_is_one_row_per_person_and_job_across_department_spellings",
+    # The browser half. `ops/m49_exit_criterion.py` substitutes a key-injectivity check over the
+    # dumped payloads for §7 measure 2's jsdom mount (this repository ships neither `jsdom` nor
+    # `@testing-library/svelte`) and names this Playwright case as the render in a real browser;
+    # docs/TESTING.md:270 repeats that. Unregistered, the case was the one of the seven this
+    # milestone added that `test_every_named_test_exists` held nothing about — so renaming or
+    # deleting it, the natural move the first time it flakes on a bundle with no cross-department
+    # title, would have taken the exit criterion's browser half with it and left the script and
+    # the ledger citing a test that no longer exists.
+    # [M4.9 review cycle 1: m49-rev1-exit-criterion-browser-half-is-registered-in-no-coverage-row]
+    "e2e/specs/04-title-card.spec.js::the worst cross-department titles open without a console error",
+]
 
 [[requirement]]
 id = "data-rules-a-zeroed-backbone-row-is-not-a-warm-title"
@@ -3118,3 +3151,313 @@ tests = ["backend/tests/test_harness_contracts.py::test_the_reset_parser_reads_t
 # wrong is an order of operations, and a text guard for that could only restate the fixed regex
 # and compare it with itself. `node` is the runtime that runs `e2e/reset.mjs`, so the skip when
 # it is absent costs nothing a machine without it could have proved anyway.
+
+
+# --- M4.9: from the corpus to the card (decisions 187-193; docs/milestones/M4.9-plan.md) ----
+#
+# One milestone because one chain: importer/{load,dna,reviews,meta} -> db/library ->
+# home/{shelves,why,rail} -> TitleDetail/ShelfRow/PosterCard. Every row below sits on a link of
+# it where the app reads something the real corpus export does not ship, and half a repair is
+# worse than none: decision 162 seeds content once, so an install that has already imported gets
+# no second pass in which the other half could land.
+#
+# Every row below is written BEFORE the code it covers, and each names the exact tests this
+# milestone owes rather than leaving `tests` off. The gate then fails on a test that does not
+# exist yet, which says which stage still owes what instead of only how many rows are bare; and
+# a stage cannot quietly satisfy a row by pointing it at some test that happens to exist. That
+# red list IS this milestone's test plan: it is closed by writing those tests under those names,
+# never by a waiver, never by renaming the row's test, and never by lowering `current_milestone`.
+# `docs/TESTING.md`'s ledger block is re-pasted once, when the last of them is green.
+#
+# One M4.9 row already sits above, under the pre-release banner, and stays there:
+# `library-rate-title-card-credits-are-one-row-per-person-and-job` shipped ahead of its
+# milestone and is covered. The only part of its finding still owed is the count line and the
+# disclosure, which is `library-rate-title-card-credit-count-names-what-is-hidden` below.
+
+[[requirement]]
+id = "library-rate-dna-facet-is-the-vocabulary-facet-id"
+spec = "§4.1 rule 1; §4.3 (dna_vocab/v1 ids are `facet.term`); §6.8 (a fixed colour per facet)"
+milestone = "M4.9"
+kind = "integration"
+what = "After import every dna_tag and dna_projected row carries the term's own prefix as its facet, so `SELECT count(*) FROM dna_tag g LEFT JOIN dna_facet f USING (version, facet) WHERE f.facet IS NULL` is 0 and the same holds for dna_projected; the corpus's extraction label survives only as a §10 report note counting the rows whose shipped facet differed."
+why = "The corpus keys the vocabulary id as `characters.amateur_sleuth` and the extraction axis as `character_dynamics`; 29,188 of 31,540 dna_tag rows and 206,151 of 223,136 dna_projected rows carry the second, which joins nothing. dna_facet, dna_term, §6.4's axes and §6.8's palette all key on the first."
+tests = [
+    "backend/tests/test_import_integration.py::test_every_dna_row_carries_the_terms_own_facet_prefix",
+    "backend/tests/test_dna_import.py::test_the_shipped_extraction_label_becomes_a_report_note_not_data",
+]
+
+[[requirement]]
+id = "library-rate-dna-filter-accepts-the-bare-and-the-qualified-term"
+spec = "§6.3 (\"show only `mood.cosy`\") + §4.1 rule 1"
+milestone = "M4.9"
+kind = "integration"
+what = "`?dna=cosy` and `?dna=mood.cosy` return the same rows and the same dna_tiers, and neither the catalog predicate nor dna_tiers_for constructs `facet || '.' || term`."
+why = "The shipped term IS `mood.cosy`, so the constructed form matched only the double-qualified string and the bare term the API docstring and the UI placeholder invite matched nothing."
+tests = [
+    "backend/tests/test_library_read.py::test_the_bare_and_the_qualified_dna_term_select_the_same_rows",
+    "backend/tests/test_library_read.py::test_dna_tiers_are_returned_for_both_spellings",
+]
+
+# The first test named below is the only one in this milestone that already exists, and naming
+# it is not the same as being covered by it: today `VOCAB_V1_FACETS` spells the facet
+# `character` and design.css agrees, so the guard passes while both sit on the wrong side of the
+# rename. It is named so that the stage doing the rename cannot move design.css without moving
+# the set the guard compares it against; the second test, which reads the other palette sites,
+# is what the row is actually red on.
+[[requirement]]
+id = "library-rate-facet-palette-names-the-shipped-vocabulary"
+spec = "§6.8 (\"a fixed colour per vocabulary facet (11)\")"
+milestone = "M4.9"
+kind = "static"
+what = "The eleven `--facet-*` custom properties in design.css, both frontend FACETS sets, ModelRail's colour rules and importer/dna.py's DEFAULT_FACET_COLOURS name the same eleven facet ids as the shipped vocabulary files, `characters` included; no source file spells it `character`."
+why = "The shipped file is vocab_characters_v1.tsv and every shipped term prefix is `characters`, while seven source sites spell it singular — so one of eleven facets renders neutral even after the facet normalisation, and the guard pinned the wrong spelling."
+tests = [
+    "backend/tests/test_static_contracts.py::test_facet_colours_are_exactly_vocabulary_v1",
+    "backend/tests/test_static_contracts.py::test_every_facet_palette_site_names_the_shipped_eleven",
+]
+
+[[requirement]]
+id = "library-rate-title-card-dna-chips-print-their-term-once"
+spec = "§6.0 (the DNA card) + §6.8"
+milestone = "M4.9"
+kind = "e2e"
+what = "A DNA chip on the title card and on a Home shelf renders the term exactly once (`mood.cosy`, never `mood_tone.mood.cosy`) and resolves its colour to that facet's custom property rather than to --ink-4."
+why = "§6.8 calls the facet colour identity, not decoration; the double prefix and the neutral fallback made it inoperative for 92.5% of tags on the surface §6.0 uses to teach that DNA terms are searchable."
+tests = [
+    "e2e/specs/04-title-card.spec.js::a DNA chip prints its term once and wears its facet colour",
+    "e2e/specs/10-home.spec.js::a shelf term chip prints its term once and wears its facet colour",
+]
+
+[[requirement]]
+id = "library-rate-title-card-credit-count-names-what-is-hidden"
+spec = "§6.0 M0 title detail card (\"credits, each person tappable\") + §6.0's count-line discipline"
+milestone = "M4.9"
+kind = "e2e"
+what = "The card shows twelve credits collapsed, prints how many exist (\"12 of 47\"), and a disclosure reveals the rest from the payload the client already holds; no route or query gains a LIMIT. Both of the disclosure's labels derive from CREDIT_FOLD and both counts carry their thousands separator, and the exit criterion reads the count line out of the card's rendered markup and reports the payloads that actually fold."
+why = "The corpus median is 24 credits per title and 89.7% of titles carry more than twelve, so a writer, composer or cinematographer is simply absent with nothing saying so — the truncation §6.0's count line exists to prevent. The fold was also spelled a second time as English prose (\"Show twelve\"), which no vitest can see because the constant lives in a `.svelte` file vitest cannot mount; and the corpus's longest credit list runs to 1,535, four digits printed without the separator §6.8's data voice uses everywhere else. The exit criterion's own measure 3 compared the crossing set with itself — true for every possible database state — and grepped a file that would satisfy it with the controls commented out, so it reported a transition it never observed. [M4.9 review cycle 1: M49-CARD-1, M49-CARD-5]"
+tests = [
+    "e2e/specs/04-title-card.spec.js::the credit list says how many it is hiding and the disclosure reveals them",
+    "backend/tests/test_static_contracts.py::test_the_credit_disclosure_derives_its_labels_from_the_fold",
+    "backend/tests/test_static_contracts.py::test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in",
+    "backend/tests/test_static_contracts.py::test_the_count_line_measure_reports_the_population_the_disclosure_exists_for",
+]
+
+[[requirement]]
+id = "library-rate-dna-each-blocks-key-on-facet-and-term"
+spec = "§4.1 rule 1 (two tiers, never merged); §6.6 (parallel extraction mode)"
+milestone = "M4.9"
+kind = "static"
+what = "Every DNA each-block keys on what makes its own row unique: TitleDetail's extracted tier on facet, term AND provider, because 0018 derives the facet from the term and the provider is the only component that separates two providers' opinions of one term; the projected block and ShelfRow's shared-terms block need no provider, one taking its safety from `dna_projected`'s own uniqueness and one from home/why.py's GROUP BY. dna_tag.provider is NOT NULL so `UNIQUE (title_id, version, term, provider)` actually fires."
+why = "dna_tag's uniqueness permits two rows per title per term once §6.6's parallel mode writes a second provider; the same crash already shipped once in the platform-scores block twenty lines above, and NULL provider made the arbiter index miss every row. Keying the extracted tier on facet AND term did not prevent it: 0018 section 1 makes the facet `split_part(term, '.', 1)`, so `facet:term` discriminates exactly what `term` alone discriminated — three rows for one term under three providers measured to one distinct key, on the one block the schema does not protect. [M4.9 review cycle 1: M49-REV1-01]"
+tests = [
+    "backend/tests/test_static_contracts.py::test_every_dna_each_block_keys_on_facet_and_term",
+    "backend/tests/test_schema_contracts.py::test_dna_tag_provider_is_not_null_so_its_unique_index_fires",
+]
+
+[[requirement]]
+id = "library-rate-dna-reads-are-scoped-to-the-active-vocabulary"
+spec = "§4.3 (dna_vocab is version-scoped) + decision 163"
+milestone = "M4.9"
+kind = "integration"
+what = "With two dna_vocabulary rows seeded, the title card, the catalog/Rank dna filter and similar-by-term return only the newest version's terms — the scoping home/why.py already applies to the shelves."
+why = "home/why.py scopes deliberately because \"a household that has imported two bundles has two versions and the shelves must not mix them\"; three other readers carry no version predicate, so the first vocabulary migration would put two vocabularies on one screen."
+tests = ["backend/tests/test_library_read.py::test_two_vocabularies_do_not_mix_on_the_card_the_filter_or_the_neighbours"]
+
+[[requirement]]
+id = "library-rate-catalog-pagination-is-a-total-order"
+spec = "§6.0 (\"a paginated list over title\"; the count line must name what is hidden)"
+milestone = "M4.9"
+kind = "integration"
+what = "Walking the catalogue in pages over ~600 titles tied on (year, lower(name)), with a title row rewritten between pages, returns each title exactly once: the union of the pages equals the full set, with no duplicates and nothing missing."
+why = "OFFSET over a non-total order reorders ties both when Postgres switches sort method and whenever a row is rewritten by the nightly reconcile or a sync; the corpus has 584 tie groups over 1,175 titles plus 340 NULL-year titles that all tie on the first key."
+tests = ["backend/tests/test_library_read.py::test_paging_over_ties_with_a_rewrite_between_pages_loses_and_repeats_nothing"]
+
+[[requirement]]
+id = "library-rate-catalog-search-treats-like-metacharacters-as-text"
+spec = "§6.0 (\"filter/search on title/alias\") + §4.1 rule 8"
+milestone = "M4.9"
+kind = "integration"
+what = "With titles `Heat` and `100% Wolf` present, q='%' returns only `100% Wolf`, q='_' returns nothing, q='h_at' returns nothing and q='100%' returns exactly `100% Wolf`; the hidden-by-kind count agrees with the listing, and the escaping helper is shared with scoring/serve.py's copy."
+why = "Both copies interpolate the raw needle into LIKE, so a member typing a percent sign gets the whole catalogue and a title containing one cannot be searched exactly; §4.1 rule 8's point is that escaping is not cleaning."
+tests = [
+    "backend/tests/test_library_read.py::test_like_metacharacters_in_the_search_needle_are_text",
+    "backend/tests/test_library_read.py::test_the_hidden_by_kind_count_agrees_with_the_escaped_listing",
+]
+
+[[requirement]]
+id = "library-rate-term-neighbours-and-filmography-partition-by-kind"
+spec = "§4.1 rule 5 (\"every ranking surface partitions by kind\") + §6.4 wander"
+milestone = "M4.9"
+kind = "integration"
+what = "GET /api/titles/{id}/similar-by-term and GET /api/people/{person_id} take a required repeated kind selection, 422 on empty, and answer only the kinds the caller selected — the anchor's own kind never decides, and a kind nobody selected never reaches the list; similar-by-term keeps its two DNA tiers in two statements, and inside one the selected kinds share one ranking; similar-by-term's limit is bounded (422 on 0, -1 and 61) rather than reaching Postgres."
+why = "Both routes select t.kind into the SELECT list and into no predicate, and the landmine guard reads only db/library.py's builder so neither is visible to it; an unvalidated limit turns a malformed link into a 500 and a large one into a full scan of the DNA tables. Step 5.4 prescribes `AND t.kind = ANY($n)`, which is a filter and not a section: with both kinds selected one shared LIMIT can still answer entirely in one kind (measured on a probe: 12 series, 0 films, against 3 eligible films), so this row states the selection rule rather than promising the two are never interleaved — the promise its own first test falsifies. Decision 198."
+tests = [
+    "backend/tests/test_library_read.py::test_similar_by_term_and_filmography_require_a_kind_selection",
+    "backend/tests/test_library_read.py::test_similar_by_terms_limit_is_bounded_before_it_reaches_postgres",
+    "backend/tests/test_landmine_guards.py::test_every_listing_route_in_the_api_layer_partitions_by_kind",
+    # The shape the `what` above used to deny, measured rather than promised away.
+    # [M4.9 review cycle 1: M49-REV1-02]
+    "backend/tests/test_library_read.py::test_the_selected_kinds_share_one_ranking_and_one_limit",
+]
+
+[[requirement]]
+id = "library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned"
+spec = "§6.0 table row 1 (\"Because you put *{anchor}* in {tier}\") + §6.3 + proposal 24"
+milestone = "M4.9"
+kind = "integration"
+what = "Shelf 1's anchor is a seen title with ledger_state.observed true — a synced-seen, never-rated title with a high prior is not eligible and the shelf is suppressed with a reason instead — and the tier the headline names is the most recent tier_edit where one exists, so a title dropped from A to F on Rank reads \"in F\" on Home immediately and after the nightly refit."
+why = "refit_user writes a ledger_state row for every owned title, observed or not, so §7.2's seen-sync makes unrated titles eligible; and the headline's verb is \"you put\", while §6.3 and rank/board.py define where a title renders as its latest tier_edit."
+tests = [
+    "backend/tests/test_home.py::test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one",
+    "backend/tests/test_home.py::test_the_anchor_headline_names_the_tier_the_owner_assigned",
+]
+
+[[requirement]]
+id = "library-rate-cold-badge-follows-crowd-support-not-placement"
+spec = "§8 stage 10 (\"a 'new — model placement, no crowd data' badge until ratings accrue\")"
+milestone = "M4.9"
+kind = "integration"
+what = "Home shelf cards carry e_source (and item_n) outside the decision-117 model block, so a title with a Backbone row and crowd support below the warm gate does not wear the no-crowd-data badge with the model toggle on or off; PosterCard's expression is unchanged, and ModelNote branches on no field the shelf card's model block stopped carrying."
+why = "title.placement stopped meaning \"no crowd data\" when warm was defined from §5.1's gate — 0008 stamps cold_tower on any title with a Backbone row and item_n < 90 — and on the reference library 111 of the 130 badges Home draws are false. §8 stage 10's badge is product, not debugging, so it must not ride the model gate. Lifting the two fields out left ModelNote's two hover branches over them unable to fire, so §6.7's tooltip silently stopped naming the crowd support behind the prior; a branch over a key the payload cannot carry reads as an annotation and is not one. [M4.9 review cycle 1: M49-HOME-05]"
+tests = [
+    "backend/tests/test_home.py::test_shelf_cards_carry_e_source_outside_the_model_block",
+    "backend/tests/test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement",
+    "backend/tests/test_static_contracts.py::test_every_field_the_model_note_reads_is_one_the_shelf_card_carries",
+]
+
+[[requirement]]
+id = "library-rate-projected-terms-never-outrank-the-extracted-tier"
+spec = "§4.1 rule 1 (extracted quote-verified, projected inferred; both admissible) + rule 2"
+milestone = "M4.9"
+kind = "integration"
+what = "Over an imported bundle the maximum term weight in the projected tier is strictly below the minimum in the extracted tier, and the expression that produces both exists in exactly one module, imported by home/why.py and tonight/dna.py. The band holds through the readers the two surfaces actually call — tonight/dna.vectors_for and terms_carried_by, home/why.terms_for — not only as a query over dna_tagged, and the dev harness weighs a projected term in exactly one place too."
+why = "n_sources (1..8) is stored in dna_projected.weight and read as a 0..1 confidence, so projected weights run 0.30..2.40 against an extracted cap of 1.00 — on 77% of sampled tagged titles the loudest term, the one the match line and the why-line name first, is an inferred projection. The comment above both copies asserts the opposite ranges. The Tonight and Home suites both seeded that column with 0..1 confidences — the very misreading this row exists to correct — so no assertion in either changed outcome when the expression was reverted, and what remained was a substring compare plus one query that reaches neither reader; both fixtures carry a corpus-shaped n_sources now. The harness held two weightings for one row, and the unrepaired one was `_tonight_dna`, the half decision 188's thesis says the change moves. [M4.9 review cycle 1: M49-D188-01, M49-D188-02]"
+tests = [
+    "backend/tests/test_library_read.py::test_no_projected_term_outweighs_any_extracted_term",
+    "backend/tests/test_library_read.py::test_home_and_tonight_read_one_term_weight_expression",
+    "backend/tests/test_tonight_integration.py::test_a_projection_never_outranks_a_quote_verified_tag_on_this_surface",
+    "backend/tests/test_home.py::test_an_inferred_term_never_leads_the_why_lines_term_pool",
+    "backend/tests/test_devstub_contract.py::test_the_harness_weighs_a_projected_term_once",
+]
+
+# The only row in this banner that is not M4.9. §6.0's greeting shipped at M2 and this row is a
+# repair of the M2 assertion that let it pass -- the requirement belongs to the milestone whose
+# clause it states, not to the milestone that noticed the hole, exactly as the M4.13 rows above
+# sit under their own milestone while being written here. It is armed either way, since M2 is
+# behind `current_milestone`; what the field decides is which milestone's exit criterion loses a
+# test if someone deletes it.
+[[requirement]]
+id = "library-rate-home-greeting-uses-the-household-clock"
+spec = "§2 (TZ) + §6.0 + proposal 22"
+milestone = "M2"
+kind = "integration"
+what = "With TZ set to a zone far from UTC, the /api/home payload's tz equals that zone and its band equals shelves.greeting() computed in the same zone — not merely one of the four legal bands."
+why = "The existing assertion accepts the complete set of bands, and the four real assertions call shelves.greeting() directly, so api/home.py's _now_local — which converts to §2's TZ behind a bare except — is exercised by nothing."
+tests = ["backend/tests/test_home.py::test_the_greeting_band_is_computed_in_the_household_zone"]
+
+[[requirement]]
+id = "library-rate-model-log-limit-cannot-exceed-the-buffer"
+spec = "§6.7 (\"an ephemeral log (last ~15 events, never persisted)\")"
+milestone = "M4.9"
+kind = "backend"
+what = "GET /api/model-log rejects a limit above RAIL_LIMIT, and rail.recent caps the caller's limit before merging the personal and household deques, so no response can carry more than RAIL_LIMIT events."
+why = "The route declared le=50 against a 15-deep buffer and recent() concatenated two deques before slicing, so limit=50 returned up to 30 events on a surface whose spec sentence is \"last ~15\"."
+tests = [
+    "backend/tests/test_home.py::test_the_model_log_refuses_a_limit_above_the_buffer",
+    "backend/tests/test_home.py::test_recent_caps_before_it_merges_the_two_deques",
+]
+
+[[requirement]]
+id = "library-rate-model-rail-opens-from-every-surface"
+spec = "§6.7 (\"a per-user toggle (default off) reveals … the primary M2 debugging instrument\")"
+milestone = "M4.9"
+kind = "e2e"
+what = "The show-the-model toggle opens the same rail from Home, Rate, Rank and Tonight — one mount, one control — and reopening it does not show the previous open's events before the refetch lands."
+why = "The toggle is in the account dropdown on every screen while ModelRail is mounted only on Home, so the surfaces that produce §6.7's own worked examples substituted partial logs; and the drawer rendered stale events under a header claiming to be live, the failure its own comment argues against. The second claim is asserted against a mounted component rather than in the browser: the stale frame is one round trip long, so it has to be held open, and `page.route` never sees a request the app's service worker mediates -- the e2e half kept here is the one only a live deque can answer."
+tests = [
+    "e2e/specs/02-shell.spec.js::the model rail opens from every surface, not only Home",
+    "e2e/specs/02-shell.spec.js::reopening the rail refills it from the live log, once",
+    "frontend/src/lib/components/ModelRail.svelte.test.js::drops the log, so the reopen reads the journal rather than replaying the last one",
+    "frontend/src/lib/components/ModelRail.svelte.test.js::does not let the closed open's reply land in the one that replaced it",
+]
+
+[[requirement]]
+id = "library-rate-verdict-rail-line-names-the-person-and-the-title"
+spec = "§6.7 (\"verdict(jenny, Heat) = liked → ordered-logit arm, incremental refit 31 ms\") + §6.8"
+milestone = "M4.9"
+kind = "integration"
+what = "The rail event a verdict produces renders §6.7's format with the user name, the title name and the incremental refit ms, and carries title_id; §6.1's per-response `log[0]` is that same sentence, in the app and in the dev harness; every kind in rail.EVENT_KINDS appears at some rail.record call site, is absent from the set, or is named in rail.AWAITING_PRODUCER — the explicit worker-side deferral decision 189 records."
+why = "The production line prints `verdict(title 1) = liked` — a bare integer a client cannot resolve, which §6.8 forbids — while rail.verdict_line, which renders the spec's format, is called only from tests; and seven of thirteen declared kinds have no producer, with dead ModelRail colour rules for each. The harness kept building its response log from the bare id after recording the repaired line on its own rail, so `python ops/devstub.py` taught the removed defect on the surface it was removed from while contradicting its own drawer one request later. [M4.9 review cycle 1: M49-HOME-01]"
+tests = [
+    "backend/tests/test_rate_session.py::test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms",
+    "backend/tests/test_home.py::test_every_declared_rail_kind_has_a_producer_or_is_declared_pending",
+    "backend/tests/test_devstub_contract.py::test_the_harness_echoes_the_verdict_line_the_app_sends",
+]
+
+[[requirement]]
+id = "library-rate-home-empty-state-names-only-shipped-controls"
+spec = "§6.0 M0 catalog (filter/search on title/alias/genre/decade/seen-state) + §6.8 copy register"
+milestone = "M4.9"
+kind = "e2e"
+what = "The catalogue's no-matches state names only controls that exist — the kind toggles, the genre/decade/seen chips and the alias behaviour — and does not send the person to a DNA search the route has no parameter for or to the M6 Map."
+why = "list_titles has no dna parameter and the search predicate is name-or-alias only, so the one screen whose job is to rescue a failed search offered two dead ends in one sentence."
+tests = ["e2e/specs/03-library.spec.js::the no-matches state names only controls that exist"]
+
+[[requirement]]
+id = "data-rules-title-company-loads-per-source"
+spec = "§4.1 spine list (title_company) + §10 (\"counts per table\")"
+milestone = "M4.9"
+kind = "integration"
+what = "title_company imports with its per-source rows kept — two sources naming one company for one title are two rows — and is no longer reported as skipped; features.py's n_companies is non-zero for a title that ships company rows, and reaches no column the contract declares."
+why = "The corpus keys it per source and 0003 keyed it (title_id, company, role), so all 47,607 shipped rows were skipped: 8,594 duplicate groups under the app's key, 11,654 rows discarded. §4.1's spine list is the reason to load them; features.py's `companies` count is produced and discarded, because `n_companies_log` is a column of no shipped contract (decisions 194, 195). 0015 applied exactly this repair to its three siblings."
+tests = [
+    "backend/tests/test_import_integration.py::test_title_company_lands_per_source_and_is_not_reported_skipped",
+    "backend/tests/test_load_mapping.py::test_title_company_is_mapped_rather_than_skipped",
+]
+
+[[requirement]]
+id = "data-rules-title-video-keeps-its-source"
+spec = "§4.1 (\"tables mirror the corpus export\"; one block = one droppable source)"
+milestone = "M4.9"
+kind = "integration"
+what = "Two title_video rows for one title sharing a (site, key) but arriving from different sources both land, and neither the validator nor the COPY raises."
+why = "The app dropped `source` from the corpus's key, so the first export in which a second video source reports a trailer the first already lists turns a green validate into a 500 on COPY — the same latent shape that took three tables down before 0015. The shipped bundle has one source and zero collisions, so only a fixture can falsify it."
+tests = ["backend/tests/test_import_integration.py::test_two_video_sources_sharing_a_site_and_key_both_land"]
+
+[[requirement]]
+id = "data-rules-rating-source-terms-survive-import"
+spec = "§4.1 rule 4 (frozen rating_source ids) + §10 (\"rating_source (mandatory always)\")"
+milestone = "M4.9"
+kind = "integration"
+what = "rating_source's url, license, version and notes survive the import for all eleven frozen ids, reach the route the §6.6 Data card fetches, and are rendered there as a sources-and-terms list; a dataset that states no version — the empty string, on four of the eleven — reads as absent rather than as a blank cell."
+why = "The bundle's rating_source is the one place the corpus recorded per-dataset terms — Netflix Prize research-use-only, CC BY attributions naming their authors — and the mapping dropped all four columns, so no surface can print the attribution those licences require and no operator can tell which sources bar redistribution of a movie-data archive. The rendering clause was written with nothing behind it: one round-trip assertion closed the row while the fetch, the `{#if sources}` block and the route's four columns could each be deleted green. Measured on v20260828: url, license and notes are non-empty on all eleven, version on seven — ids 1, 2, 3 and 4 ship `''`, which `?? '—'` printed as an empty cell."
+tests = [
+    "backend/tests/test_import_integration.py::test_rating_source_url_license_version_and_notes_survive_the_import",
+    # The two halves the `what` promised and nothing held. [M4.9 review cycle 1: M49-MIG-02, M49-MIG-04]
+    "backend/tests/test_import_integration.py::test_the_data_card_reads_the_terms_the_import_carried",
+    "backend/tests/test_static_contracts.py::test_the_data_card_renders_the_per_dataset_terms",
+]
+
+[[requirement]]
+id = "data-rules-ml-link-imdb-join-is-unambiguous"
+spec = "§4.1 canonical key (\"imdb_id … must never be the join key\") + §4.3 genome block"
+milestone = "M4.9"
+kind = "integration"
+what = "The import fails, naming the rule and the duplicated value, when any non-empty title.imdb_id occurs twice; on a clean bundle the ml_link resolution runs and reports how many links resolved."
+why = "The genome link is resolved by joining on imdb_id — the key §4.1 forbids as a join key — because the corpus exports ml_link with external ids only and rule 6 rules out tmdb_id. The exception is defensible and today harmless (zero duplicates, 8,022 of 9,826 resolved), but it exists only as an inference from a comment about a different rule."
+tests = [
+    "backend/tests/test_bundle_validation.py::test_a_duplicated_imdb_id_fails_the_import_naming_the_rule",
+    "backend/tests/test_import_integration.py::test_the_ml_link_resolution_reports_how_many_links_landed",
+]
+
+[[requirement]]
+id = "library-rate-runtime-is-formatted-in-one-place"
+spec = "§6.0 (title detail card metadata) + §6.8 data voice + proposal 27"
+milestone = "M4.9"
+kind = "backend"
+what = "One exported runtimeLabel serves the title card, the poster card, the rate card and Tonight's winner card: 45/movie renders `45m`, 170/movie `2h 50m`, 45/series `45m/ep` — no surface prints a leading `0h`, and no surface renders a series runtime as hours. The sweep is over every read of `runtime_min` outside the label rather than over the shape of a division, so an aliased copy and a copy with no arithmetic at all are caught too, and the reveal payload carries `kind` because the label cannot be right without it."
+why = "Three open-coded copies exist and one has drifted, so a series reads `0h 24m · series` two taps after a poster that said `24m/ep`, and 240 of 13,324 corpus movies get a leading zero hour. The sweep was first written in the shape of the expression that had been removed, so Tonight's reveal rendered `{winner?.runtime_min} min` under a green guard for the whole milestone — flat minutes for a series, and a bare unit for the NULL runtime the pool deliberately admits. [M4.9 review cycle 1: M49-CARD-2]"
+tests = [
+    "backend/tests/test_static_contracts.py::test_one_runtime_label_serves_every_surface",
+    "backend/tests/test_static_contracts.py::test_the_runtime_sweep_catches_the_copies_it_is_written_for",
+]

@@ -22,9 +22,40 @@ from typing import Any, Literal
 
 import asyncpg
 
+from spielplan.db import dna_terms
+
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
 SeenFilter = Literal["any", "seen", "unseen"]
+
+# Postgres's LIKE takes backslash as its escape character unless ESCAPE says otherwise, so the
+# three characters a needle has to lose their meaning are the backslash itself and the two
+# wildcards. Order matters: the backslash is doubled first, or the escapes added after it would
+# be escaped in turn.
+_LIKE_SPECIALS = (("\\", "\\\\"), ("%", "\\%"), ("_", "\\_"))
+
+
+def _like_needle(q: str) -> str:
+    """`q` as a substring LIKE pattern that matches it **literally**.
+
+    §6.0 asks for "filter/search on title/alias" and both search surfaces built `%{q.lower()}%`
+    straight from the input, so the wildcards kept their meaning: `%` returned the whole
+    catalogue, `_` matched every one-character name, `h_at` returned *Heat*, and a title with a
+    percent sign in it (`100% Wolf`) could not be searched for exactly. §6.0's count line was
+    wrong in the same way, because it is computed from the same predicate.
+
+    This is not injection and the fix is not sanitising: the value stays a bound parameter and
+    nothing about it reaches the SQL text. §4.1 rule 8's distinction applies — escaping is how a
+    metacharacter keeps being the character the person typed, and cleaning would be discarding
+    it. `100%` still finds `100% Wolf`; it just no longer finds everything else too.
+
+    Shared with `scoring/serve.py`, which imported it rather than keeping the second copy that
+    made this one bug two. [M4.9 finding 12]
+    """
+    needle = q.lower()
+    for character, escaped in _LIKE_SPECIALS:
+        needle = needle.replace(character, escaped)
+    return f"%{needle}%"
 
 
 def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
@@ -69,7 +100,7 @@ def _filters(
         return f"${len(args)}"
 
     if q:
-        needle = f"%{q.lower()}%"
+        needle = _like_needle(q)
         where.append(
             f"(lower(t.name) LIKE {arg(needle)} OR EXISTS ("
             f"  SELECT 1 FROM title_alias a WHERE a.title_id = t.id AND lower(a.alias) LIKE {arg(needle)}"
@@ -105,12 +136,26 @@ def _filters(
         # implementation of "only good matches" is a confidence cut, and a 0.5 cut deletes 44%
         # of the extracted tier. Membership is membership; the weights rank, they never filter.
         #
-        # The qualified form is built here rather than stored: a `dna_tag` row holds the bare
-        # term and its facet in separate columns, so `mood.cosy` exists only at query time.
+        # §4.3: the vocabulary id IS `facet.term`. The corpus ships `dna:mood.cosy`, the loader
+        # stores that string whole, and `facet` is the id's own prefix — so the qualified form
+        # is not built here, it is what the column already holds. The predicate that shipped
+        # constructed `facet || '.' || term` and therefore matched `mood_tone.mood.cosy` and
+        # nothing a person would type: `?dna=cosy` (the bare term the §6.3 placeholder invites)
+        # matched no row at all. `split_part(term, '.', 2)` is the other half of the same id,
+        # so both spellings select the same titles and a wrong facet still selects none.
+        # [M4.9 finding 2]
+        #
+        # §4.3 + §10 — one vocabulary. `dna_vocabulary` is versioned and a re-import leaves two
+        # versions coexisting; `home/why.py` scoped the shelves for that reason and this
+        # predicate did not, so the first vocabulary migration would have put a superseded
+        # term's titles on the board. The version arrives as a subquery rather than a bound
+        # argument because this builder is synchronous and shared with the Rank board, which
+        # has no awaitable seam to thread one through; `db/dna_terms.py` owns both spellings.
         needle = arg(dna.strip().lower())
         where.append(
-            "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id AND ("
-            f"lower(dt.term) = {needle} OR lower(dt.facet || '.' || dt.term) = {needle}))"
+            "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id"
+            f" AND dt.version = {dna_terms.ACTIVE_VERSION} AND ("
+            f"lower(dt.term) = {needle} OR split_part(lower(dt.term), '.', 2) = {needle}))"
         )
     if owned_only:
         where.append("t.is_owned")
@@ -188,15 +233,21 @@ async def dna_tiers_for(
     §4.1 rule 1: the two tiers "must stay distinguishable", and a filter that returns a title
     without saying whether the match was quote-verified or inferred has merged them in the only
     place it matters — the answer a person reads.
+
+    The predicate is `_filters`'s, clause for clause, version scope included: this reports
+    *which tier admitted* a row the filter already returned, so a spelling or a vocabulary the
+    two disagree about would badge a title under a term that did not select it — or, as it
+    shipped, report nothing for every row the board is showing. [M4.9 findings 2 and 10]
     """
     if not title_ids:
         return {}
     rows = await conn.fetch(
-        """
+        f"""
         SELECT DISTINCT dt.title_id, dt.tier
         FROM dna_tagged dt
         WHERE dt.title_id = ANY($1::int[])
-          AND (lower(dt.term) = $2 OR lower(dt.facet || '.' || dt.term) = $2)
+          AND dt.version = {dna_terms.ACTIVE_VERSION}
+          AND (lower(dt.term) = $2 OR split_part(lower(dt.term), '.', 2) = $2)
         ORDER BY dt.title_id, dt.tier
         """,
         [int(t) for t in title_ids],
@@ -252,7 +303,17 @@ async def list_titles(
           LEFT JOIN title_prior tp ON tp.title_id = t.id
           {seen_join}
          WHERE {clause}
-         ORDER BY t.year DESC NULLS LAST, lower(t.name)
+         -- `t.id` is not decoration: §6.0 pages this list with LIMIT/OFFSET and the client
+         -- appends, so a sort that is not a TOTAL order silently duplicates and drops rows.
+         -- Postgres is free to return tied rows in any order and does change its mind —
+         -- top-N heapsort at low offsets, quicksort at high ones — and any rewrite between two
+         -- page fetches (the nightly reconcile, a Jellyfin sync) reshuffles them outright. The
+         -- corpus has 584 tie groups covering 1,175 titles plus 340 NULL-year titles that all
+         -- tie on the first key, and the review reproduced 3 duplicated / 3 missing over 600
+         -- tied titles and 61/61 with an UPDATE between pages. The two other OFFSET readers
+         -- (`scoring/serve.py`, `ledger/refit.py`) already tie-break on the id; this is the
+         -- same fix, not keyset pagination, because §6.0 asks for offsets. [M4.9 finding 11]
+         ORDER BY t.year DESC NULLS LAST, lower(t.name), t.id
          LIMIT {lim} OFFSET {off}
         """,
         *args,
@@ -345,7 +406,10 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
                min(c.billing_order)             AS ord,
                -- Ordered, because a bare `[1]` over an unordered array_agg is COPY order: 2,300
                -- (title, person) pairs carry more than one distinct character across sources, so
-               -- which one the card printed depended on the physical row order of the import.
+               -- which one this payload carried depended on the physical row order of the
+               -- import. The PAYLOAD is what the aggregate makes deterministic, not a rendering:
+               -- §6.0's card list does not name the character and `TitleDetail.svelte` prints
+               -- name and job alone, so the field ships and no surface shows it (decision 197).
                (array_agg(c.character ORDER BY c.billing_order NULLS LAST, c.source)
                     FILTER (WHERE c.character IS NOT NULL))[1] AS character,
                array_agg(DISTINCT c.source)     AS sources
@@ -361,12 +425,24 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
     return [dict(r) for r in rows]
 
 
-async def dna_for(conn: asyncpg.Connection, title_id: int) -> dict[str, list[dict[str, Any]]]:
+async def dna_for(
+    conn: asyncpg.Connection, title_id: int, *, version: str | None
+) -> dict[str, list[dict[str, Any]]]:
     """§4.1 rule 1: two tiers, two lists, never merged, never unioned.
 
     The extracted tier carries its evidence quotes; §4.1: 'a tag without its quote is
     unfalsifiable'. No confidence/salience predicate appears anywhere below (rule 2).
+
+    `version` is the active vocabulary and is required rather than defaulted, because a card
+    that silently showed every version's tags is exactly the failure §10 warns about ("a bundle
+    re-import leaves two vocabularies coexisting") and a default would have hidden it a second
+    time. `None` means no bundle has been imported, and then there is nothing to show: the
+    caller resolves it once through `db/dna_terms.active_version` and hands the same string to
+    §6.4's neighbour queries, so one card cannot mix two vocabularies within one response.
+    [M4.9 finding 10]
     """
+    if version is None:
+        return {"extracted": [], "projected": []}
     extracted = await conn.fetch(
         """
         SELECT g.term, g.facet, g.salience, g.confidence, g.n_sources, g.provider,
@@ -376,20 +452,22 @@ async def dna_for(conn: asyncpg.Connection, title_id: int) -> dict[str, list[dic
                  '[]'::json) AS evidence
           FROM dna_tag g
           LEFT JOIN dna_evidence e ON e.dna_tag_id = g.id
-         WHERE g.title_id = $1
+         WHERE g.title_id = $1 AND g.version = $2
          GROUP BY g.id, g.term, g.facet, g.salience, g.confidence, g.n_sources, g.provider
          ORDER BY g.salience DESC, g.facet, g.term
         """,
         title_id,
+        version,
     )
     projected = await conn.fetch(
         """
         SELECT term, facet, weight, via
           FROM dna_projected
-         WHERE title_id = $1
+         WHERE title_id = $1 AND version = $2
          ORDER BY weight DESC NULLS LAST, facet, term
         """,
         title_id,
+        version,
     )
     return {"extracted": [dict(r) for r in extracted], "projected": [dict(r) for r in projected]}
 

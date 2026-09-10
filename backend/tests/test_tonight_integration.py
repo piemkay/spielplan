@@ -45,7 +45,15 @@ EXTRACTED = [
     (5, "cosy", 2), (5, "patient", 3),
     (6, "cosy", 1),
 ]
-PROJECTED = [(2, "dread", 0.7), (7, "relentless", 0.4)]
+# `(title, term, n_sources)`. The third field is a COUNT of independent keyword sources, 1..8 on
+# the shipped bundle, which the importer writes into `dna_projected.weight` and `0004_dna.sql`'s
+# view re-exposes as `confidence` — and reading that name as a 0..1 probability is finding 20
+# itself. Seeded as confidences, every projection here landed near 0.2 under either expression,
+# so the whole Tonight suite passed with decision 188 reverted and the plan's stated risk ("this
+# changes Tonight, not only Home") was covered by nothing. Title 2's 8 is the corpus maximum and
+# the value at which the unbounded `0.30 * n_sources` puts an inferred term above every
+# quote-verified one. [M4.9 review cycle 1: M49-D188-02; decision 188]
+PROJECTED = [(2, "dread", 8), (7, "relentless", 1)]
 
 
 async def seed_dna(db):
@@ -87,11 +95,12 @@ async def seed_dna(db):
             "INSERT INTO dna_evidence (dna_tag_id, quote, source) VALUES ($1, $2, 'fixture')",
             tag_id, f"a line about {term}",
         )
-    for title_id, term, weight in PROJECTED:
+    for title_id, term, n_sources in PROJECTED:
+        # Into the column the importer writes it into. `weight` is where `n_sources` lands.
         await db.execute(
             "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
             "VALUES ($1, $2, $3, $4, $5, 'keyword:fixture')",
-            title_id, VOCAB, term, TERMS[term], weight,
+            title_id, VOCAB, term, TERMS[term], n_sources,
         )
 
 
@@ -1977,3 +1986,40 @@ async def test_each_match_line_branch_says_the_thing_it_is_for(db, world):
     assert neutral["terms"] == [], "no term reached either sign, so none is named"
     assert "works against them" not in neutral["line"]
     assert neutral["line"], "a participant is never omitted"
+
+
+from spielplan.tonight import dna as tonight_dna  # noqa: E402
+
+
+async def test_a_projection_never_outranks_a_quote_verified_tag_on_this_surface(db, world):
+    """Decision 188's bound, asserted through the two readers §6.2 actually calls.
+
+    The plan's risk paragraph is that the bounded projected branch "changes Tonight, not only
+    Home" — the tilt vectors, the authored-axis positions, `terms_carried_by` and §6.2 step 7's
+    match lines all read the number. What shipped to cover that was a substring assertion over
+    the SQL fragment and a band query issued straight against `dna_tagged`: reverting the
+    expression left every assertion in the four Tonight suites passing, because their fixtures
+    seeded `weight` as a confidence and no seeded value could reach the extracted floor.
+
+    Title 2 carries `dread` in both tiers, quote-verified at salience 2 and inferred from 8
+    keyword sources. The quote-verified reading is the one the surface must speak with, and the
+    loudest term — the one a match line names first — must be the tag with a quote behind it.
+    Under `0.30 * n_sources` the projection reads 2.40 and takes both. [M49-D188-02]
+    """
+    extracted = 0.60 + 0.40 * (2 / 3)        # salience 2, the shipped extracted expression
+
+    carried = await tonight_dna.terms_carried_by(db, 2, version=VOCAB)
+    assert carried[0]["term"] == "relentless", (
+        "an inferred term is the loudest thing this title carries, so the match line names it "
+        f"first: {[(t['term'], round(t['weight'], 3)) for t in carried]}"
+    )
+    assert max(t["weight"] for t in carried) <= 1.0, (
+        "1.00 is the extracted tier's cap and nothing may speak louder than it"
+    )
+    assert next(t for t in carried if t["term"] == "dread")["weight"] == pytest.approx(extracted)
+
+    vectors = await tonight_dna.vectors_for(db, [2], version=VOCAB)
+    assert vectors[2]["dread"] == pytest.approx(extracted), (
+        "the tilt and the authored-axis positions read this vector, so the two tiers crossing "
+        "moves where the round thinks a title sits"
+    )

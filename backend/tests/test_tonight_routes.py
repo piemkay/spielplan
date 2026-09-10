@@ -357,22 +357,32 @@ async def test_the_waiting_payload_carries_counts_and_no_answer(solo_room):
 async def test_the_model_log_line_is_gated_by_the_per_user_toggle(db, solo_room):
     """§6.7 gives `session_answer(p, pair 4) = A — pool-centred tilt` as one of its four worked
     examples, and decision 117 makes the rail one per-user preference, default off, governing
-    "the rail and every inline annotation"."""
+    "the rail and every inline annotation".
+
+    READ FROM `/api/model-log`, not from the answer response. M4.9 dropped the `limit=5` rail
+    this route used to embed: §6.7's drawer is one per user, and a second shorter copy of it on
+    one surface, with its own depth and its own refresh, is not the same instrument. The write
+    is unchanged and so is the gate — what moved is where a client reads the line.
+    """
     client, seat, user_id = solo_room["client"], solo_room["seat"], solo_room["user_id"]
     token = (await client.get(f"/api/tonight/seats/{seat}/round")).json()["card_token"]
     off = (await client.post(
         f"/api/tonight/seats/{seat}/answer", json={"card_token": token, "answer": "A"}
     )).json()
-    assert "rail" not in off, "decision 117: the rail is off by default"
+    assert "rail" not in off, "the round's payload carries no rail of its own"
+    assert "events" not in (await client.get("/api/model-log")).json(), (
+        "decision 117: the rail is off by default"
+    )
 
     await db.execute("UPDATE app_user SET show_model = true WHERE id = $1", user_id)
     token = (await client.get(f"/api/tonight/seats/{seat}/round")).json()["card_token"]
-    on = (await client.post(
+    await client.post(
         f"/api/tonight/seats/{seat}/answer", json={"card_token": token, "answer": "B"}
-    )).json()
+    )
+    events = (await client.get("/api/model-log")).json()["events"]
 
-    assert on["rail"], "with the toggle on the round narrates its own write"
-    line = on["rail"][0]
+    assert events, "with the toggle on the round narrates its own write"
+    line = events[0]
     assert line["kind"] == "session_answer"
     assert line["text"].startswith("session_answer(")
     assert "pool-centred tilt" in line["text"], "§6.2 step 5's measured centring lever, named"
@@ -402,10 +412,14 @@ async def test_one_participants_rail_never_carries_anothers_answer(app, db, libr
 
     host_seat = room["lobby"]["seats"][0]["participant_id"]
     host_token = (await host.get(f"/api/tonight/seats/{host_seat}/round")).json()["card_token"]
-    host_rail = (await host.post(
+    await host.post(
         f"/api/tonight/seats/{host_seat}/answer",
         json={"card_token": host_token, "answer": "A"},
-    )).json()["rail"]
+    )
+    # From the one drawer, since M4.9 — the round no longer embeds a rail of its own. The
+    # scoping claim is unchanged and is the buffer's, not the payload's: `rail.recent` merges
+    # this user's deque with the household's and never another member's.
+    host_rail = (await host.get("/api/model-log")).json()["events"]
 
     assert all(
         line["detail"].get("session_id") is None
@@ -543,6 +557,13 @@ async def test_the_result_is_refused_until_every_seat_has_submitted(app, db, lib
     assert body["unanimous"] is True
     assert body["winner"]["fit_line"]
     assert body["winner"]["match_lines"], "§6.2 step 7: one match line per participant"
+    # The runtime does not mean the same thing without the kind: §6.0's label reads a series in
+    # minutes per EPISODE, and this was the one card that sent a runtime and no kind, so the
+    # reveal printed a series' 45 minutes the way it prints a film's while every other surface
+    # said `45m/ep`. It is the SESSION's kind (0013: "an evening resolves to ONE title"), so it
+    # is the same on every card. [M4.9 finding 37; review cycle 1: M49-CARD-2]
+    assert body["winner"]["kind"] == "movie", body["winner"]
+    assert {c["kind"] for c in body["runners_up"] + body["finalists"]} == {"movie"}
 
 
 async def test_a_ballot_naming_a_title_off_the_slate_is_refused(app, db, library):

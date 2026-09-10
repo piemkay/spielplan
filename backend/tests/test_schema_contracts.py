@@ -66,6 +66,50 @@ async def test_duplicate_tmdb_ids_are_accepted(db):
     assert await db.fetchval("SELECT count(*) FROM title WHERE tmdb_id = 42") == 2
 
 
+# --- §4.1 rule 1 + §6.6: the extracted tier's arbiter ---------------------------------
+
+
+async def test_dna_tag_provider_is_not_null_so_its_unique_index_fires(db):
+    """`0004_dna.sql:83` declares `UNIQUE (title_id, version, term, provider)` and 0018 is what
+    makes it mean anything.
+
+    NULLs are distinct in a unique index, and the importer never wrote `provider`, so every row
+    carried NULL and the arbiter matched no pair of rows at all — a constraint that reads as
+    enforced in the DDL and enforces nothing. §6.6's parallel extraction mode is the case it
+    exists for: two providers naming the same term for one title must be one row per provider,
+    and until 0018 they were unbounded rows per provider.
+
+    The two halves are separate assertions because neither implies the other. A default of `''`
+    with the column still nullable would leave every row the importer writes explicitly as NULL
+    outside the index; NOT NULL without the default would make the importer's current INSERT
+    fail rather than key correctly. Written as the violation rather than as a catalogue lookup
+    for this file's reason (module docstring): a constraint that is never tried is a comment
+    with punctuation. Before 0018 the second INSERT below landed cleanly and the row count was
+    2. [M4.9, decision 162's install is repaired by the same migration]
+    """
+    column = await db.fetchrow(
+        "SELECT is_nullable, column_default FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'dna_tag' AND column_name = 'provider'"
+    )
+    assert column["is_nullable"] == "NO", "a NULL provider is invisible to the arbiter index"
+    assert column["column_default"] is not None and "''" in column["column_default"], (
+        "the importer writes no provider today, so 'no provider recorded' needs one spelling"
+    )
+
+    await _title(db, 1)
+    await db.execute(
+        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 11, 3)"
+    )
+    insert = (
+        "INSERT INTO dna_tag (title_id, version, term, facet, salience) "
+        "VALUES (1, 'v1', 'mood.dread', 'mood', 3)"
+    )
+    await db.execute(insert)
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await db.execute(insert)
+    assert await db.fetchval("SELECT count(*) FROM dna_tag") == 1
+
+
 # --- §4.2: seen state ------------------------------------------------------------------
 
 

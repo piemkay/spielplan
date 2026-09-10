@@ -118,6 +118,34 @@ def test_the_three_per_source_tables_carry_the_corpus_key(content):
     assert platform.columns["scale"] == "scale"
 
 
+def test_title_company_is_mapped_rather_than_skipped():
+    """Decision 193, and the half of it that is a data structure rather than a key.
+
+    `title_company` sat in `SKIPPED_TABLES` with the reason "loading it needs a cross-source
+    dedupe that does not exist yet", so none of its 47,607 shipped rows landed — 8,594 duplicate
+    groups under the app's key, 11,654 rows discarded (decision 195). 0018 section 3 gives the
+    table the corpus's own key, which is what made the dedupe unnecessary rather than merely
+    overdue, and §4.1's "tables mirror the corpus export" is the reason to load it.
+
+    NOT because the Cold Tower was reading a zero. `features.py:403` does count company rows
+    into the thin-title meta block and `'companies'` does sit in `_COUNT_KEYS`, but
+    `n_companies_log` is a column of no feature contract this app has loaded, so `build_vector`
+    counts the key as unmapped and the number reaches no coordinate. That is decision 194, and
+    `test_import_integration.py` measures it against the contract the fixture ships.
+    """
+    assert "title_company" not in load.SKIPPED_TABLES
+    tmap = _map("title_company")
+    assert tmap.source == "title_company"
+    # `source` (who said so) and `role` (what the company did) are two facts, exactly as on
+    # `title_language`; both are PK components under 0018 and both are rule-6 coalesced.
+    assert tmap.columns["source"] == "source"
+    assert tmap.columns["role"] == "role"
+    assert {"source", "role"} <= set(tmap.coalesce_empty)
+    # `country` is the company's own nationality and this schema has no column for it. §4.1
+    # makes that a report line, so it must not be quietly claimed by the mapping either.
+    assert "country" not in tmap.columns.values()
+
+
 def test_language_role_and_source_are_two_different_facts(content):
     """`role` comes from `is_primary`; `source` says who claimed it. Both survive: 0015's key is
     (title_id, source, language, role), and folding one into the other loses a fact."""

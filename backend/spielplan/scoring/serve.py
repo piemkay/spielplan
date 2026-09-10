@@ -33,7 +33,12 @@ from typing import Any
 
 import numpy as np
 
-from spielplan.db.library import KINDS, Kind, SeenFilter, normalise_kinds
+# `_like_needle` is imported across the module boundary on purpose, underscore and all: it is
+# private to the catalog's WHERE builder, and the ranked section's `q` predicate is a copy of
+# that builder's. Two copies is how the LIKE metacharacters stayed unescaped in both (§6.0's
+# search and its count line read one predicate, and this file holds the other). The name keeps
+# its underscore so nothing else adopts it as a utility. [M4.9 finding 12]
+from spielplan.db.library import KINDS, Kind, SeenFilter, _like_needle, normalise_kinds
 from spielplan.scoring.backbone import Backbone, Coordinate, coordinate, unpack_vec
 
 log = logging.getLogger("spielplan.scoring.serve")
@@ -242,7 +247,7 @@ def _filters(
         return f"${len(args)}"
 
     if q:
-        needle = f"%{q.lower()}%"
+        needle = _like_needle(q)
         where.append(
             f"(lower(t.name) LIKE {arg(needle)} OR EXISTS ("
             f"  SELECT 1 FROM title_alias a WHERE a.title_id = t.id AND lower(a.alias) LIKE {arg(needle)}"

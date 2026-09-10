@@ -48,6 +48,7 @@ from spielplan.core.config import settings  # noqa: E402
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
 from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
+from spielplan.importer.dna import app_facet  # noqa: E402 - the real facet rule, not a copy
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
 from spielplan.rank import board as rank_board  # noqa: E402 - the real badges
 from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10 selector
@@ -472,6 +473,37 @@ def bundle_state() -> dict[str, Any]:
     }
 
 
+@app.get("/api/admin/data/sources")
+def data_sources() -> dict[str, Any]:
+    """§6.6's sources-and-terms list and decision 191's outstanding axis task.
+
+    The ids come from the real frozen set and the facets from the real `DEFAULT_FACET_COLOURS`,
+    with the paths built by the real rule (`axes/<facet>.tsv`), so the harness cannot teach the
+    page a shape the backend does not serve — which is what `test_devstub_contract.py` exists to
+    keep true. The licence strings are invented: the fixture's `rating_source` rows carry none,
+    and inventing a plausible-looking real licence for a real dataset is the one thing a harness
+    must not do.
+    """
+    from spielplan.importer.dna import DEFAULT_FACET_COLOURS
+    from spielplan.importer.validate import FROZEN_RATING_SOURCE_IDS
+
+    return {
+        "sources": [
+            {"id": i, "name": f"source-{i}", "scale": "10",
+             "url": "https://example.invalid/dataset", "license": "a stand-in licence string",
+             "version": "2026-08", "notes": "a stand-in note" if i == 1 else None}
+            for i in sorted(FROZEN_RATING_SOURCE_IDS)
+        ],
+        "axes": {
+            "vocabulary_version": "v1",
+            "loaded": 0,
+            "expected": [
+                f"dna_vocab/v1/axes/{facet}.tsv" for facet in sorted(DEFAULT_FACET_COLOURS)
+            ],
+        },
+    }
+
+
 def _real_report() -> dict[str, Any]:
     """Use the REAL validator so the report the UI renders is the real thing."""
     from spielplan.importer import bundle as bundle_import
@@ -650,7 +682,14 @@ def title_detail(title_id: int) -> dict[str, Any]:
             ).fetchall()
         ]
         # Upstream keys evidence by (title_id, term) and ships no `dna_tag.id`; `runs_found`
-        # is the weight the importer stores as `n_sources`, and there is no provider column.
+        # is the weight the importer stores as `n_sources`, and there is no provider column —
+        # so `provider` is `''`, which is what the loader writes and what 0018 made NOT NULL.
+        #
+        # `app_facet` is the real importer function, not a copy: the bundle's `facet` column is
+        # the label the extraction pass ran under (`mood_tone`) while the app keys on the
+        # vocabulary facet id, which is the term's own prefix (`mood`). Serving the shipped
+        # label here would teach the card that 92.5% of chips have no palette colour, which is
+        # precisely the state M4.9 ended. [M4.9 finding 1]
         extracted = []
         for g in db.execute("SELECT * FROM dna_tag WHERE title_id = ?", (title_id,)).fetchall():
             ev = db.execute(
@@ -658,13 +697,15 @@ def title_detail(title_id: int) -> dict[str, Any]:
                 (title_id, g["term"]),
             ).fetchall()
             extracted.append({
-                "term": g["term"], "facet": g["facet"], "salience": g["salience"],
+                "term": g["term"], "facet": app_facet(g["term"], g["facet"]),
+                "salience": g["salience"],
                 "confidence": g["confidence"], "n_sources": g["runs_found"],
-                "provider": None,
+                "provider": "",
                 "evidence": [{"quote": e["quote"], "source": e["src"]} for e in ev],
             })
         projected = [
-            {"term": r["term"], "facet": r["facet"], "weight": r["n_sources"],
+            {"term": r["term"], "facet": app_facet(r["term"], r["facet"]),
+             "weight": r["n_sources"],
              "via": ",".join(json.loads(r["sources"]))}
             for r in db.execute(
                 "SELECT * FROM dna_projected WHERE title_id = ?", (title_id,)
@@ -731,7 +772,18 @@ def facets(kind: list[str] = Query(default=["movie"])) -> dict[str, Any]:
 
 
 @app.get("/api/people/{person_id}")
-def person(person_id: int) -> dict[str, Any]:
+def person(person_id: int, kind: list[str] = Query(...)) -> dict[str, Any]:
+    """§6.0's filmography, partitioned by kind since M4.9 (finding 13).
+
+    The selection is required here because it is required on the real route: a harness that
+    answered an unpartitioned filmography would teach the front end that this one listing may
+    skip §4.1 rule 5. `normalise_kinds` is the app's own validator, so the 422 is the app's.
+    """
+    try:
+        kinds = normalise_kinds(kind)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    marks = ",".join("?" * len(kinds))
     with _db() as db:
         p = db.execute("SELECT * FROM person WHERE id = ?", (person_id,)).fetchone()
         if not p:
@@ -740,11 +792,12 @@ def person(person_id: int) -> dict[str, Any]:
             dict(r) for r in db.execute(
                 "SELECT t.id, t.kind, t.primary_title AS name, t.year"
                 " FROM credit c JOIN title t ON t.id = c.title_id"
-                " WHERE c.person_id = ? GROUP BY t.id", (person_id,)
+                f" WHERE c.person_id = ? AND t.kind IN ({marks}) GROUP BY t.id"
+                " ORDER BY t.year IS NULL, t.year DESC, t.id", (person_id, *kinds)
             )
         ]
     return {"person": {"id": p["id"], "name": p["name"], "profile_path": None},
-            "filmography": films}
+            "kinds": kinds, "filmography": films}
 
 
 # --- M1: passkeys, seen state, finish prompts, Jellyfin ----------------------
@@ -1090,6 +1143,24 @@ def _label_counts(user_id: int, kinds: Sequence[str]) -> list[int]:
     return counts
 
 
+def _term_weight(tier: str, value: float | None) -> float:
+    """`db/dna_terms.TERM_WEIGHT`'s two branches, in Python, for every reader in this harness.
+
+    Arithmetic for arithmetic with the SQL — `COALESCE` and `GREATEST` included, so a row the
+    fixture could not produce still cannot be answered two ways. The bundle's `n_sources` runs
+    1..8 and lands in the column the `dna_tagged` view calls `confidence`, so the unbounded
+    `0.30 * c` this harness used to spell twice ranked every projection above every
+    quote-verified tag; the saturating form keeps the count's ordering while the two bands stay
+    apart. One function rather than two expressions because a harness holding two weightings of
+    one row teaches the repair on one surface and the defect on the next.
+    [decision 188; M4.9 review cycle 1: M49-D188-01]
+    """
+    if tier == "extracted":
+        return 0.60 + 0.40 * ((1.0 if value is None else value) / 3.0)
+    c = max(0.5 if value is None else value, 0.0)
+    return 0.30 * (c / (1.0 + c))
+
+
 def _dna() -> dict[int, list[tuple[WhyTerm, float]]]:
     """The two DNA tiers, ranked the way `home.why.TERM_RANK` ranks them.
 
@@ -1113,11 +1184,11 @@ def _dna() -> dict[int, list[tuple[WhyTerm, float]]]:
 
     with _db() as db:
         for r in db.execute("SELECT title_id, term, facet, salience FROM dna_tag"):
-            offer(r["title_id"], r["term"], r["facet"], "extracted",
-                  0.60 + 0.40 * ((r["salience"] or 1.0) / 3.0))
+            offer(r["title_id"], r["term"], app_facet(r["term"], r["facet"]), "extracted",
+                  _term_weight("extracted", r["salience"]))
         for r in db.execute("SELECT title_id, term, facet, n_sources FROM dna_projected"):
-            offer(r["title_id"], r["term"], r["facet"], "projected",
-                  0.30 * (r["n_sources"] or 0.5))
+            offer(r["title_id"], r["term"], app_facet(r["term"], r["facet"]), "projected",
+                  _term_weight("projected", r["n_sources"]))
 
     cached = {
         title_id: sorted(slot.values(), key=lambda pair: (-pair[1], pair[0].term))
@@ -1131,8 +1202,18 @@ def _terms_for(title_id: int) -> list[WhyTerm]:
     return [term for term, _rank in _dna().get(title_id, [])]
 
 
-def _carries(title_id: int, term: str) -> bool:
-    return any(t.term == term for t in _terms_for(title_id))
+def _carries(title_id: int, needle: str) -> bool:
+    """`db.library._filters`'s DNA predicate, in Python.
+
+    The shipped term IS `facet.term` (§4.3), so the bare half and the whole id both select and
+    a *different* facet in front of the same bare half selects nothing — the same three answers
+    `split_part(lower(dt.term), '.', 2)` gives. [M4.9 finding 2]
+    """
+    wanted = needle.strip().lower()
+    return any(
+        t.term.lower() == wanted or t.term.lower().split(".")[1:2] == [wanted]
+        for t in _terms_for(title_id)
+    )
 
 
 def _common_terms(title_ids: Sequence[int], limit: int = NAMED_TERM_CAP) -> list[WhyTerm]:
@@ -1705,23 +1786,21 @@ def rate_verdict(
     # Strictly first: the reveal is what the model believed BEFORE this label existed.
     prediction = _prediction(user["id"], title_id, kind)
     prior = _prior_of(user["id"], title_id)
-    implied_seen = prior["state"] != "seen"
     _verdicts(user["id"])[title_id] = body.value
     STATE["seen"][title_id] = "seen"
     row_id = _next_row_id()
     _append(s, kind_of="verdict", card=card, title_ids=[title_id], prior=[prior], row_id=row_id)
     ledger = _ledger_delta(user["id"], kind, [title_id])
-    _rail_record(
-        "verdict",
-        rail.verdict_line(user["name"], _title(title_id)["name"],
-                          VERDICT_LABELS[body.value], refit_ms=ledger["ms"]),
-        user_id=user["id"], title_id=title_id,
-    )
-    log = (
-        f"verdict(title {title_id}) = {VERDICT_LABELS[body.value]} -> ordered-logit arm"
-        + (" · implies seen" if implied_seen else ""),
-        _sync_line("seen"),
-    )
+    # One sentence for one write, composed once and spent twice, exactly as `rate/session.py`
+    # spends it: `log[0]` is §6.1's per-response echo that `RateModelLog` renders, and the rail
+    # event is §6.7's drawer. The harness recorded the repaired line and shipped
+    # `verdict(title 3) = liked` on the wire in the same request — a bare model number §6.8
+    # forbids, on the surface finding 23 removed it from, in a stub that then contradicted its
+    # own drawer. [M4.9 review cycle 1: M49-HOME-01; finding 23, plan step 7.1]
+    line = rail.verdict_line(user["name"], _title(title_id)["name"],
+                             VERDICT_LABELS[body.value], refit_ms=ledger["ms"])
+    _rail_record("verdict", line, user_id=user["id"], title_id=title_id)
+    log = (line, _sync_line("seen"))
     return _rate_payload(
         _ensure_card(s, head=body.head),
         reveal=rate_session.reveal_for(prediction, body.value),
@@ -2052,13 +2131,20 @@ def _home_card(
         "runtime_min": title["runtime_min"], "poster_path": None, "placement": placement,
         "seen": _seen_state(title_id) == "seen", "rank": rank, "tier": tier_set[index],
         "terms": list(terms),
+        # OUTSIDE `model`, because `home/shelves.py:399-413` puts them there: decision 117's
+        # gate strips `model` wholesale, so §8 stage 10's "no crowd data yet" badge cannot be
+        # decided on a key that vanishes for everyone with the toggle off -- which is everyone
+        # by default. Left inside `model` here, the harness sent `PosterCard` neither field and
+        # it fell back to `title.placement`, reproducing finding 18 in dev against a server that
+        # had just been repaired. `backend/spielplan/api/` wins on any disagreement, so this
+        # follows it. [M4.9 finding 18]
+        "item_n": item_n,
+        "e_source": "cold_tower" if placement == "cold_tower" else "backbone",
         "model": {
             "score": round(score, 4),
             "cf": None if beta == 0.0 else round(score, 4),
             "b": round(score, 4),
             "gate": round(item_n / (item_n + 10), 4),
-            "item_n": item_n,
-            "e_source": "cold_tower" if placement == "cold_tower" else "backbone",
             "beta": beta,
             "s": round((cdf - 0.5) * 4.0, 4),
             "sigma": 0.4,
@@ -2469,7 +2555,9 @@ def _build_home(user, kinds, *, q=None, person_id=None, limit=60, offset=0) -> d
         # the same thing about the learning curve.
         "degraded": shelves._degraded(bundle_version, verdicts),
         "suppressed": [],
-        "rail": _rail_recent(user_id),
+        # No `rail`: `home/shelves.build_home` stopped carrying one when the drawer's mount
+        # moved into the layout and `/api/model-log` became its only source. The harness mirrors
+        # the app (M49-HOME-04); `_rail_recent` still serves `/api/model-log` below.
     }
     if mode == "grid":
         payload["catalog"] = _catalog_page(
@@ -2530,7 +2618,7 @@ def home_pending(spielplan_session: str | None = Cookie(default=None)) -> dict[s
 
 @app.get("/api/model-log")
 def model_log(
-    limit: int = Query(rail.RAIL_LIMIT, ge=1, le=50),
+    limit: int = Query(rail.RAIL_LIMIT, ge=1, le=rail.RAIL_LIMIT),
     spielplan_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     """§6.7's rail. Decision 117: one per-user toggle, default off.
@@ -2538,6 +2626,11 @@ def model_log(
     With the toggle OFF the response has NO `events` key at all — not an empty list, not a list
     the client is trusted to hide. A promise kept in CSS is not kept: the payload would still
     be in the network tab and in the service-worker cache.
+
+    `le=rail.RAIL_LIMIT`, as `api/home.py` declares it: §6.7's "last ~15 events" is the buffer's
+    depth and the route's ceiling both. The harness carried `le=50` while the app refused it,
+    which is a client written against the harness getting a 422 only in production.
+    [M4.9 finding 26]
     """
     user = _me(spielplan_session)
     if not _show_model(user):
@@ -2628,7 +2721,7 @@ def _rank_matches(item: Any, filters: Any) -> bool:
             return False
     if filters.genre and filters.genre not in _genres_of(item.title_id):
         return False
-    if filters.dna and not _carries(item.title_id, filters.dna.split(".")[-1]):
+    if filters.dna and not _carries(item.title_id, filters.dna):
         return False
     return filters.seen == "any" or (
         (filters.seen == "seen") == (_seen_state(item.title_id) == "seen")
@@ -2889,16 +2982,20 @@ def _tonight_axes() -> dict[str, dict[str, float]]:
 
 def _tonight_dna() -> dict[int, dict[str, float]]:
     """The fixture's two tiers, merged the way `dna.vectors_for` merges them: max, not sum, so
-    a term in both tiers is held once at the louder weight (§4.1 rule 1)."""
-    out: dict[int, dict[str, float]] = {}
-    for title_id, term, _facet, salience, _quote in fx.EXTRACTED:
-        weight = 0.60 + 0.40 * (salience / 3.0)
-        out.setdefault(title_id, {})[term] = max(out.setdefault(title_id, {}).get(term, 0.0), weight)
-    for title_id, term, _facet, weight, _via in fx.PROJECTED:
-        out.setdefault(title_id, {})[term] = max(
-            out.setdefault(title_id, {}).get(term, 0.0), 0.30 * float(weight)
-        )
-    return out
+    a term in both tiers is held once at the louder weight (§4.1 rule 1).
+
+    Read off `_dna()` rather than re-merged out of `fx`, which is the same merge over the same
+    rows through a second door — and the door that had not been repaired. Decision 188 bounded
+    the projected tier and this site kept `0.30 * n_sources`, so the tilt vectors, the authored
+    axis positions and §6.2 step 7's match lines were computed here with projections weighted up
+    to four times what the server weighs them. `_dna()` reads the bundle the rest of the harness
+    serves, so the vectors now describe the rows the cards show.
+    [decision 188; M4.9 review cycle 1: M49-D188-01]
+    """
+    return {
+        title_id: {term.term: weight for term, weight in ranked}
+        for title_id, ranked in _dna().items()
+    }
 
 
 def _tonight_candidates(seats: list[Any], kind: str, budget: int, rewatches: bool):
@@ -3204,9 +3301,11 @@ def tonight_answer(
         seat["ended_by"] = played.stop_reason
     line = rail.session_answer_line(str(participant_id), sealed["n"], body.answer)
     _rail_record("session_answer", line, user_id=user["id"])
+    # No embedded rail, mirroring `api/tonight.py`: §6.7's drawer is one per user, read from
+    # `GET /api/model-log`. A harness that still sent a five-deep copy here would let a client
+    # be built against a key the app stopped sending. [M4.9 finding 25]
     payload = {**_tonight_state(room, seat),
-               "wrote": {"seq": sealed["n"], "stop_reason": played.stop_reason},
-               "rail": rail.recent(user_id=user["id"], limit=5)}
+               "wrote": {"seq": sealed["n"], "stop_reason": played.stop_reason}}
     if all(s["ended_by"] for s in room["seats"]):
         _tonight_combine(room)
     return rail.redact(payload, show_model=_show_model(user))
@@ -3361,7 +3460,9 @@ def tonight_result(
     def card(title_id: int, slot: str) -> dict[str, Any]:
         c = by_id[title_id]
         return {
-            "title_id": title_id, "slot": slot, "name": c.name, "year": c.year,
+            # `kind` beside `runtime_min`, as `api/tonight.py`'s winner card now carries it: a
+            # series runtime is minutes per episode and the label cannot know that without it.
+            "title_id": title_id, "slot": slot, "kind": c.kind, "name": c.name, "year": c.year,
             "runtime_min": c.runtime_min, "poster_path": c.poster_path,
             "approvals": approvals.get(title_id, 0),
             "fit_line": c.fit_line,

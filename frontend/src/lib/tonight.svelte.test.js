@@ -142,15 +142,14 @@ describe('stepping back out to the door (§6.2 step 2)', () => {
       ballot: { slate: [] },
       result: { winner: {} },
       progress: [{ answered: 3 }],
-      approved: [11],
-      rail: [{ kind: 'session_answer' }]
+      approved: [11]
     });
 
     leave();
 
     expect(tonight.step).toBe('door');
     for (const held of ['lobby', 'round', 'ballot', 'result']) expect(tonight[held]).toBeNull();
-    for (const held of ['progress', 'approved', 'rail']) expect(tonight[held]).toEqual([]);
+    for (const held of ['progress', 'approved']) expect(tonight[held]).toEqual([]);
   });
 
   it('clears the lobby, because a frame would otherwise drag the device back in', () => {

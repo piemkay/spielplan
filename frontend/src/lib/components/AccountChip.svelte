@@ -111,7 +111,13 @@
              default off, here rather than on a settings page — it is a debugging instrument
              reached often and briefly, and this dropdown is on every screen. It governs the
              transparency rail and the inline numeric annotations; the title card's model line
-             is deliberately not gated (§6.0). -->
+             is deliberately not gated (§6.0).
+
+             "On every screen" is now true of the thing it governs as well: `+layout.svelte`
+             mounts the one `ModelRail` and its trigger in this same header, so the switch and
+             the drawer it opens are reachable from the same set of surfaces [M4.9 finding 25].
+             This component still writes only the preference — it does not open the drawer, and
+             turning the switch off closes it from the shell rather than from here. -->
         <div class="group bordered">
           <button
             class="pref"

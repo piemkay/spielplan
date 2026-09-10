@@ -39,6 +39,7 @@ from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError
 from spielplan.connectors.registry import load_jellyfin, save_jellyfin
 from spielplan.core import auth, secrets, webauthn
 from spielplan.core.config import settings
+from spielplan.importer import dna
 from spielplan.sync import playback, seen
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -620,6 +621,58 @@ async def job_health(conn) -> dict[str, object]:
             # problem to the person who needs one.
             "stale": backup_at is None or datetime.now(UTC) - backup_at > BACKUP_STALE_AFTER,
             "stale_after_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
+        },
+    }
+
+
+@router.get("/data/sources")
+async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
+    """The §6.6 Data card's two read-only lists: dataset terms, and the axes nobody authored.
+
+    **Sources and terms.** §4.1 rule 4 freezes eleven `rating_source` ids and the corpus ships
+    each one's `url`, `license`, `version` and `notes` — the Netflix Prize's research-use-only
+    clause, the CC BY attributions naming their authors. The loader dropped all four until M4.9,
+    so an operator about to share a movie-data archive had no way to learn which of the eleven
+    bars redistribution and no surface could print the attribution those licences require. This
+    is that list and nothing more: no control, no edit, no per-source page (plan step 8.3, "no
+    UI beyond that list").
+
+    **The axes.** `importer/dna._load_axes` reads `dna_vocab/<version>/axes/*.tsv` and takes each
+    file's stem as the facet; the shipped `dna_vocab/v1/` has no `axes/` directory at all, so
+    §6.4's eleven authored axes have never been authored anywhere and the loader's warning goes
+    into an import report nobody re-reads. Decision 191 leaves the loader alone and leaves §6.4
+    alone, and surfaces the gap here as an outstanding authoring task instead. The paths are
+    built from the loader's own rule — `axes/<facet>.tsv`, off the facets this install actually
+    has — rather than restated, because a hand-written list is exactly how a card comes to name
+    files the loader does not look for. (Decision 191's prose spells them
+    `axis_<facet>_v1.tsv`; that spelling would make `_load_axes` read a facet named
+    `axis_mood_v1`, and the decision's operative half is "leave the loader exactly as it is",
+    so the loader is the authority on what it reads.)
+    """
+    sources = await conn.fetch(
+        "SELECT id, name, scale, url, license, version, notes FROM rating_source ORDER BY id"
+    )
+    version = await conn.fetchval(
+        "SELECT vocabulary_version FROM artifact_bundle WHERE state = 'active'"
+    )
+    facets = [
+        r["facet"] for r in await conn.fetch(
+            "SELECT facet FROM dna_facet WHERE version = $1 ORDER BY ord, facet", version
+        )
+    ] if version else []
+    # No bundle, or a bundle whose vocabulary never loaded: the palette is still the eleven
+    # names the app ships with, and naming them is more use to an operator than an empty list.
+    if not facets:
+        facets = sorted(dna.DEFAULT_FACET_COLOURS)
+    loaded = await conn.fetchval(
+        "SELECT count(*) FROM dna_axis WHERE version = $1", version
+    ) if version else 0
+    return {
+        "sources": [dict(r) for r in sources],
+        "axes": {
+            "vocabulary_version": version,
+            "loaded": int(loaded or 0),
+            "expected": [f"dna_vocab/{version or '<version>'}/axes/{f}.tsv" for f in facets],
         },
     }
 

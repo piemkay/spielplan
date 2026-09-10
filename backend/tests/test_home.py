@@ -26,12 +26,18 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import ast
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from spielplan.core.config import settings
 from spielplan.home import rail, shelves
 from spielplan.home import why as why_mod
+from spielplan.ledger import refit
+from spielplan.ledger.hyperparams import DEFAULTS
 
 BUNDLE = "test-home-v1"
 VOCAB = "v1"
@@ -192,16 +198,24 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
 
     # §6.0 shelf 1's world: an anchor, four titles carrying BOTH of its terms, and three decoys
     # carrying only one of them plus a term the anchor also has.
+    #
+    # The projected weights are `n_sources` counts, not confidences: `importer/dna.py` writes the
+    # bundle's 1..8 source count into `dna_projected.weight`, which is finding 20's whole subject.
+    # Seeded as 0.6 and 0.5 this fixture could not see decision 188 at all — under the expression
+    # it replaced they weighed 0.18 and 0.15, far below the extracted floor of 0.733, so every
+    # assertion in this file passed with the pre-M4.9 fragment restored and the guard on the
+    # milestone's most far-reaching read was a substring compare. The anchor's 8 is the corpus
+    # maximum and weighs 2.40 under the old form. [M4.9 review cycle 1: M49-D188-02]
     for base in BASES:
         await _tag(conn, base + ANCHOR, "obsession", "themes", 3)
         await _tag(conn, base + ANCHOR, "morally-grey", "character", 2)
-        await _project(conn, base + ANCHOR, "period", "era", 0.6)
+        await _project(conn, base + ANCHOR, "period", "era", 8)
         for offset in MEMBERS:
             await _tag(conn, base + offset, "obsession", "themes", 2)
             await _tag(conn, base + offset, "morally-grey", "character", 2)
         for offset in DECOYS:
             await _tag(conn, base + offset, "obsession", "themes", 2)
-            await _project(conn, base + offset, "period", "era", 0.5)
+            await _project(conn, base + offset, "period", "era", 1)
         for offset in FRONTIER:
             await _tag(conn, base + offset, "neon", "visual", 2)
         for offset in FRONTIER[:3]:
@@ -570,6 +584,176 @@ async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
                 assert seen == 0, f"{title_id} is on a 'neither of you has seen these' shelf"
 
 
+# --- library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned ----------------
+
+
+async def test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one(world):
+    """§6.3's "every rated title" is `ledger_state.observed`, and shelf 1's anchor is one.
+
+    Proposal 24 puts the anchor on the top-scoring SEEN title, which the shelf read as "seen and
+    carrying a fitted tier". Those are not the same population: `refit_user` writes a
+    `ledger_state` row for every owned title of the kind, observed or not
+    (`ledger/refit.py:350-374`), so every title §7.2's Jellyfin sync marked watched arrived here
+    with an `s`, a `tier` and no observation at all — and won the ORDER BY whenever its prior beat
+    the rated titles. Home then said "Because you put Home Film 1021 in A" about a title this
+    person has never rated, which is not even on the Rank board the sentence is quoting
+    (`rank/read.py:106`). The two predicates stay independent in both directions: a verdict
+    implies seen (`ledger/observations.py:640-641`), a duel or a tier edit does not.
+    [M4.9 finding 15]
+    """
+    # The toggle is on throughout so the suppressed list is readable: this test's failure mode is
+    # a shelf that anchors on the wrong title, and the reason line is what names which.
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    # 1021 is seen (the sweep marked it watched) and has no live verdict — the banner's own
+    # population. Nothing has been observed about it, and its prior beats every rated title's.
+    await world.db.execute(
+        """
+        INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed)
+        VALUES ($1, 1021, 9.0, 0.2, 0.99, 4, 'movie', false)
+        """,
+        world.patrick,
+    )
+    payload = await world.home()
+    film = world.section(payload, "because_anchor", "movie")
+    assert film is not None, payload["suppressed"]
+    assert film["anchor"]["title_id"] == 1000, (
+        "the highest-scoring SEEN row anchored the shelf, rated or not"
+    )
+    assert "Home Film 1021" not in film["title"], film["title"]
+
+    # And with nothing rated at all the shelf is absent, with a reason naming BOTH predicates —
+    # they fail for different reasons and are repaired by different actions, so a line naming
+    # only "seen" sends a person who has rated nothing off to mark titles watched.
+    await world.db.execute(
+        "UPDATE ledger_state SET observed = false WHERE user_id = $1 AND kind = 'movie'",
+        world.patrick,
+    )
+    after = await world.home()
+    assert world.section(after, "because_anchor", "movie") is None
+    reason = next(
+        s["reason"] for s in after["suppressed"]
+        if s["shelf"] == "because_anchor" and s["kind"] == "movie"
+    )
+    assert "seen" in reason and "rated" in reason, reason
+    assert world.section(after, "because_anchor", "series") is not None, (
+        "the series half is untouched — the suppression is per section"
+    )
+
+
+async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
+    """§6.0 row 1's verb is "you PUT", and §6.3 says where a title a person dropped renders.
+
+    `rank/board.py:20-27`: "the most recent `tier_edit` decides where a title renders, and the
+    model decides it only when there is no edit." The headline read `ledger_state.tier` and never
+    looked at `tier_edit`, so dropping the anchor from A to F on Rank left Home still saying
+    "in A" — the same title, the same person, two surfaces disagreeing about the one thing the
+    sentence claims they did. Decision 187 keeps the shelf-card BADGE on the model's tier and
+    fixes only this sentence, because only this sentence has that verb. [M4.9 finding 16]
+    """
+    tier_set = shelves.DEFAULT_TIER_SET
+    model_tier = await world.db.fetchval(
+        "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
+    )
+    assert tier_set[model_tier] == "A", "the fixture's anchor is fitted into A"
+
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 1000, 0, 'drag_drop')",
+        world.patrick,
+    )
+    film = world.section(await world.home(), "because_anchor", "movie")
+    assert film["anchor"]["tier"] == "F", "Home is still naming the tier the model fitted"
+    assert film["title"] == "Because you put Home Film 1000 in F", film["title"]
+
+    # AND after the nightly refit, which is where the prototype's answer changed a second time:
+    # the fit absorbs the drop and moves `ledger_state.tier` part of the way, so a headline
+    # reading the model said "in A", then "in B", then "in C" while the person's own last action
+    # never changed. `tier_edit` is append-only (§4.2), so the sentence is stable by construction.
+    #
+    # Only the anchor stays `seen`, so the refit cannot hand shelf 1 to a different film: the
+    # drop is the only asymmetric observation this profile has, so it also decides which title
+    # ends up top, and without this the test would be measuring where the optimiser moved the
+    # anchor rather than which tier the sentence names. Membership is untouched — 1001-1004 are
+    # unseen owned films carrying both of the anchor's terms, which is what shelf 1 selects on.
+    await world.db.execute(
+        "DELETE FROM user_title WHERE user_id = $1 AND title_id BETWEEN 1001 AND 1099",
+        world.patrick,
+    )
+    report = await refit.refit_user(world.db, user_id=world.patrick, kind="movie", hp=DEFAULTS)
+    assert report.fitted, report.as_dict()
+    after = world.section(await world.home(), "because_anchor", "movie")
+    assert after is not None, "the refit suppressed shelf 1"
+    assert after["anchor"]["title_id"] == 1000
+    assert after["title"] == "Because you put Home Film 1000 in F", after["title"]
+
+    model_after = await world.db.fetchval(
+        "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
+    )
+    assert model_after != 0, (
+        f"the refit fitted the anchor into F itself (tier {model_after}), so the headline would "
+        "read F whichever column it took — this assertion has stopped being falsifiable"
+    )
+
+
+# --- library-rate-cold-badge-follows-crowd-support-not-placement -------------------------------
+
+
+def no_crowd_data(card: dict) -> bool:
+    """`PosterCard.svelte:34-38`'s expression, in Python, over one shelf card.
+
+    Restated rather than imported because the component is JavaScript and this is the payload
+    contract it consumes: what is under test here is whether the SERVER sends the two fields that
+    expression prefers. The component's own precedence is pinned by
+    `test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement`.
+    """
+    if card.get("e_source"):
+        return card["e_source"] == "cold_tower"
+    return card.get("item_n") == 0 or (
+        card.get("item_n") is None and card.get("placement") == "cold_tower"
+    )
+
+
+async def test_shelf_cards_carry_e_source_outside_the_model_block(world):
+    """§8 stage 10's badge is PRODUCT, so it must not ride decision 117's debugging gate.
+
+    `PosterCard`'s comment is the specification — "Off `e_source`/`item_n`, NOT off
+    `title.placement`" — and `shelves.py` put both inside `card["model"]`, which `rail.redact`
+    removes wholesale. With the toggle off, which is every account by default, `placement` was
+    the only branch the card could reach; and `0008_placement.sql:54-58` stamps `cold_tower` on
+    any title with a Backbone row and `item_n < 90`, so on the reference library 111 of the 130
+    badges Home drew were false. [M4.9 finding 18]
+    """
+    # Exactly 0008's case: a real Backbone row, crowd support under §5.1's warm gate, and the
+    # Cold Tower stamp that follows from it. The title is one of shelf 1's four members.
+    await world.db.execute("UPDATE title SET placement = 'cold_tower' WHERE id = 1001")
+    await world.db.execute(
+        "UPDATE title_prior SET e_source = 'backbone', item_n = 40 WHERE title_id = 1001"
+    )
+
+    for show_model in (False, True):
+        await world.client.post("/api/auth/preferences", json={"show_model": show_model})
+        payload = await world.home()
+        card = next(
+            c for c in world.section(payload, "because_anchor", "movie")["items"]
+            if c["title_id"] == 1001
+        )
+        assert ("model" in card) is show_model, "the gate is decision 117's, and unchanged"
+        assert card["e_source"] == "backbone", f"e_source did not survive show_model={show_model}"
+        assert card["item_n"] == 40
+        assert card["placement"] == "cold_tower", "the fixture's own premise"
+        assert not no_crowd_data(card), (
+            "a title with a Backbone row wears 'no crowd data yet' on Home"
+        )
+        # The falsifier, stated rather than trusted: the card as it shipped before this change —
+        # `placement` and nothing else — badges the same title.
+        assert no_crowd_data({"placement": card["placement"]}), (
+            "the placement-only fallback no longer reproduces the defect this test is for"
+        )
+
+    # And the honest case still badges: `new_in_library`'s cards have no Backbone row at all.
+    cold = world.section(await world.home(), "new_in_library", "movie")["items"][0]
+    assert cold["e_source"] == "cold_tower" and no_crowd_data(cold)
+
+
 # --- library-rate-pending-verdicts-banner -----------------------------------------------------
 
 
@@ -803,10 +987,16 @@ async def test_a_person_filter_switches_home_into_the_grid_and_clearing_it_resto
 
 async def test_the_greeting_uses_the_household_clock_and_has_four_bands(world):
     """Proposal 22's four bands, evaluated server-side against §2's `TZ` so the band is the
-    household clock rather than the device clock — and so it is assertable without a browser."""
+    household clock rather than the device clock — and so it is assertable without a browser.
+
+    The band the LIVE payload carries is asserted next door, against a zone chosen to move it.
+    The set-membership assertion that used to stand here accepted all four bands and therefore
+    accepted every possible answer, including the one `_now_local`'s bare `except` produces
+    [M4.9 finding 22]; what is left is the part this test is actually for — the four bands and
+    the copy — with each boundary named as a number rather than as a range.
+    """
     payload = await world.home()
     assert payload["greeting"]["text"].endswith(", patrick")
-    assert payload["greeting"]["band"] in {"up_late", "morning", "afternoon", "evening"}
     assert payload["greeting"]["tz"]
 
     at = datetime(2026, 8, 30, tzinfo=UTC)
@@ -816,13 +1006,102 @@ async def test_the_greeting_uses_the_household_clock_and_has_four_bands(world):
     assert shelves.greeting(at.replace(hour=21), "p")["text"] == "Good evening, p"
 
 
+# Spread across the dial so at least one of them is in a different greeting band from the
+# process's own clock whatever hour the suite runs at. Named rather than computed from an
+# offset, because §2's `TZ` is an IANA name and the point is that the app resolves one.
+FAR_ZONES = (
+    "Pacific/Kiritimati",   # UTC+14
+    "Pacific/Midway",       # UTC-11
+    "Asia/Tokyo",           # UTC+9
+    "America/Anchorage",    # UTC-9
+    "Pacific/Auckland",     # UTC+12/+13
+)
+
+
+def _zone_that_moves_the_band() -> str | None:
+    """A zone this checkout can resolve whose band differs from the process clock's, or None.
+
+    None has two causes and they are the same case for this test: a checkout with no tz database
+    at all (a Windows checkout has neither `/usr/share/zoneinfo` nor, unless someone installed
+    it, the `tzdata` wheel — see `test_worker_schedule._resolvable_zone`), or the freak hour at
+    which every candidate happens to share a band with the host. In both, `_now_local` takes its
+    §3.1 fallback or its answer is not falsifiable, and the test asserts the half that still is.
+    """
+    here = shelves.greeting(datetime.now(), "p")["band"]  # noqa: DTZ005 - the naive fallback
+    for name in FAR_ZONES:
+        try:
+            zone = ZoneInfo(name)
+        except Exception:  # noqa: BLE001 - no tz database is the case this is detecting
+            continue
+        if shelves.greeting(datetime.now(zone), "p")["band"] != here:
+            return name
+    return None
+
+
+async def test_the_greeting_band_is_computed_in_the_household_zone(world, monkeypatch):
+    """§2's `TZ`, proposal 22: "a greeting in four bands against §2's TZ" — the HOUSEHOLD clock.
+
+    `api/home.py:_now_local` converts to that zone behind a bare `except`, and nothing exercised
+    it: the assertion next door accepted the complete set of bands, and the four real assertions
+    call `shelves.greeting()` with hand-built datetimes, which is the pure function and not the
+    route. So the band could have come from the process's clock, from UTC, or from the fallback
+    branch, and every test in the file would still have been green. [M4.9 finding 22]
+
+    Three arms, none of them skipped. The payload must NAME the configured zone whichever branch
+    `_now_local` took — §6.8's rule that the app does not report a setting it did not honour.
+    Where the zone resolves, the band is asserted to be that zone's, against a candidate picked
+    so its band differs from the process's own: without that difference "equal to `greeting()` in
+    that zone" would be incidentally true and would prove nothing. Where it does not resolve, the
+    §3.1 fallback is asserted instead — the process's own naive clock, not UTC and not a constant
+    — so a checkout with no tz database still falsifies something rather than skipping.
+    """
+    zone = _zone_that_moves_the_band()
+    resolved, zone = zone is not None, zone or FAR_ZONES[0]
+    monkeypatch.setenv("TZ", zone)
+    settings.cache_clear()
+    try:
+        payload = await world.home()
+        assert payload["greeting"]["tz"] == zone, (
+            "the payload names the zone the greeting was computed in, or the client cannot tell "
+            "a household clock from a device clock"
+        )
+        # Bracketing the request rather than sampling once: the two agree at every instant except
+        # a band boundary crossed mid-request, and a one- or two-element set is still an
+        # assertion about THIS clock — which is the whole difference from the four-band set.
+        def band_now() -> str:
+            at = datetime.now(ZoneInfo(zone)) if resolved else datetime.now()  # noqa: DTZ005
+            return shelves.greeting(at, "p")["band"]
+
+        before = band_now()
+        payload = await world.home()
+        assert payload["greeting"]["band"] in {before, band_now()}, (
+            f"the band is not the one {'TZ=' + zone if resolved else 'the fallback clock'} is in"
+        )
+        if resolved:
+            assert shelves.greeting(datetime.now(), "p")["band"] != before, (  # noqa: DTZ005
+                "the chosen zone no longer moves the band away from the process clock, so the "
+                "assertion above proves nothing — widen FAR_ZONES"
+            )
+    finally:
+        settings.cache_clear()
+
+
 # --- §6.7 / decision 117: the show-the-model gate ----------------------------------------------
 
 # Every key that carries a number about THIS VIEWER's model. Walked recursively, so a builder
 # that adds a seventh annotation under a new name is caught by the shape of the test rather
 # than by someone remembering to extend a list of call sites.
+#
+# `e_source` LEFT THIS SET IN M4.9, and it is the one entry that ever should. It is not a number
+# about this viewer: it names which half of §5.1 produced the item's prior, it is identical for
+# every account, and §8 stage 10 requires the card to badge on it — "a 'new — model placement,
+# no crowd data' badge until ratings accrue" — which is product copy, not a debugging
+# annotation. Gating it left `title.placement` as the only branch `PosterCard` could reach with
+# the toggle off, and 0008 stamps that column on any title with a Backbone row and item_n < 90.
+# `test_shelf_cards_carry_e_source_outside_the_model_block` asserts the other half: that it is
+# present with the toggle in both positions. [M4.9 finding 18]
 MODEL_KEYS = frozenset(
-    {"model", "rail", "suppressed", "score", "cf", "sigma", "cdf", "s", "e_source",
+    {"model", "rail", "suppressed", "score", "cf", "sigma", "cdf", "s",
      "tier_index", "mine_cdf", "theirs_cdf", "pair_score"}
 )
 
@@ -852,7 +1131,11 @@ async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
 
     payload = await world.home()
     assert model_keys_in(payload) == []
-    assert "rail" not in payload and "suppressed" not in payload
+    # `suppressed` alone, and not `rail` beside it: no route emits a `rail` key any more, so
+    # asserting its absence here would pass by being unable to fail. The one drawer reads
+    # `/api/model-log`, which is gated by `rail.visible_to` at the route rather than by
+    # `redact`. [M4.9 review cycle 1: M49-HOME-04]
+    assert "suppressed" not in payload
     for shelf in payload["shelves"]:
         for section in shelf["sections"]:
             assert section["items"], shelf["id"]
@@ -874,8 +1157,14 @@ async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(worl
     assert on.json() == {"ok": True, "show_model": True}
 
     payload = await world.home()
-    assert payload["rail"], "the rail is the whole point of the toggle"
-    assert payload["rail"][0]["text"].startswith("verdict(patrick, Home Film 1000) = liked")
+    # The events are read from `/api/model-log`, and Home carries no copy of them. This payload
+    # used to ship up to RAIL_LIMIT events on every load because the drawer was mounted on Home
+    # and decision 117's gate was asked of the response; M4.9 moved the mount into the layout,
+    # so `ModelRail` refetches on every open and the key had no reader — one drawer, not one per
+    # route, the same rule `api/tonight.py` states. [M4.9 review cycle 1: M49-HOME-04]
+    assert "rail" not in payload, "one drawer, not one per route"
+    events = (await world.client.get("/api/model-log")).json()["events"]
+    assert events[0]["text"].startswith("verdict(patrick, Home Film 1000) = liked")
     card = payload["shelves"][0]["sections"][0]["items"][0]
     assert card["model"]["beta"] == pytest.approx(FITTED_BETA, abs=1e-6)
     assert card["model"]["b"] is not None and card["model"]["gate"] is not None
@@ -922,6 +1211,62 @@ async def test_the_model_log_route_omits_the_events_key_when_the_toggle_is_off(w
     assert len(on["events"]) == rail.RAIL_LIMIT == 15, "§6.7 caps the rail at ~15 events"
     assert on["kinds"] == ["verdict"]
     assert on["events"][0]["at"] >= on["events"][-1]["at"], "newest first"
+
+
+# --- library-rate-model-log-limit-cannot-exceed-the-buffer -------------------------------------
+
+
+async def test_the_model_log_refuses_a_limit_above_the_buffer(world):
+    """§6.7: "an ephemeral log (last ~15 events, never persisted)". The route's ceiling IS that.
+
+    It declared `le=50` against a 15-deep buffer, so the one number in §6.7's sentence and the
+    one number the URL would accept were three and a bit apart. Refused at the edge rather than
+    silently truncated: a client that asks for fifty and receives fifteen cannot tell a capped
+    answer from an exhausted buffer, and this route is the debugging instrument. [M4.9 finding 26]
+    """
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    for i in range(rail.RAIL_LIMIT * 2):
+        rail.record(kind="verdict", user_id=world.patrick, line=f"verdict(patrick, {i}) = liked")
+
+    refused = await world.client.get("/api/model-log", params={"limit": rail.RAIL_LIMIT + 1})
+    assert refused.status_code == 422, refused.text
+    assert (await world.client.get("/api/model-log", params={"limit": 50})).status_code == 422
+    assert (await world.client.get("/api/model-log", params={"limit": 0})).status_code == 422
+
+    at_the_edge = await world.client.get(
+        "/api/model-log", params={"limit": rail.RAIL_LIMIT}
+    )
+    assert at_the_edge.status_code == 200
+    assert len(at_the_edge.json()["events"]) == rail.RAIL_LIMIT
+
+
+async def test_recent_caps_before_it_merges_the_two_deques(world):
+    """The other half of finding 26, and the half the route's `le` cannot reach.
+
+    `recent` concatenated the caller's deque and the household's and only then sliced, so two
+    RAIL_LIMIT-deep buffers answered with up to thirty events — the buffer was bounded and the
+    response was not. Called directly here because `rail.recent` is public and `api/tonight.py`
+    used to call it with a limit of its own; the property is the function's, not the route's.
+    """
+    rail.forget()
+    for i in range(rail.RAIL_LIMIT):
+        rail.record(kind="verdict", user_id=world.patrick, line=f"verdict(patrick, {i}) = liked")
+        rail.record(kind="ledger_refit", line=rail.refit_line("movie", n_titles=i, seconds=0.1))
+
+    assert len(rail.recent(user_id=world.patrick, limit=50)) == rail.RAIL_LIMIT
+    assert len(rail.recent(user_id=world.patrick)) == rail.RAIL_LIMIT
+    assert len(rail.recent(user_id=world.patrick, limit=4)) == 4, "a smaller ask is still honoured"
+    assert rail.recent(user_id=world.patrick, limit=0) == [], (
+        "an empty ask must be empty, not the whole buffer — `[-0:]` is the whole list"
+    )
+    # Newest-first survives the earlier slice: ids come from one process-wide counter, so the
+    # newest `keep` of each deque contains everything the merged newest `keep` can contain.
+    events = rail.recent(user_id=world.patrick, limit=50)
+    assert [e["id"] for e in events] == sorted((e["id"] for e in events), reverse=True)
+    assert {e["scope"] for e in events} == {"you", "household"}, (
+        "capping each deque first must not drop one of them entirely"
+    )
+    rail.forget()
 
 
 async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world):
@@ -1021,6 +1366,22 @@ async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):
     assert [t.tier for t in again if t.term == "obsession"] == ["projected"]
 
 
+async def test_an_inferred_term_never_leads_the_why_lines_term_pool(world):
+    """§4.1 rule 1 through the reader Home actually calls, not through the SQL string.
+
+    `terms_for` is where a shelf's terms are chosen and where §6.0's why-line gets the term it
+    names first, so decision 188's band is a property of this list — the anchor carries an
+    8-source projection, the loudest an import can produce, and it still ranks below a salience-2
+    quote. Asserting the fragment's text instead would pass over any future reader that stops
+    spending it. [M4.9 review cycle 1: M49-D188-02]
+    """
+    for base in BASES:
+        terms = await why_mod.terms_for(world.db, base + ANCHOR, version=VOCAB)
+        assert [t.term for t in terms] == ["obsession", "morally-grey", "period"], terms
+        assert terms[0].tier == "extracted", "an inferred term is named first"
+        assert [t.tier for t in terms] == ["extracted", "extracted", "projected"]
+
+
 async def _live_row_count(db) -> int:
     """Rows in every public table, counted exactly.
 
@@ -1104,6 +1465,105 @@ def test_a_noisy_account_cannot_push_another_accounts_events_out_of_its_rail():
     assert len(quiet) == 1 and "quiet" in quiet[0]["text"]
     assert len(rail.recent(user_id=2)) == rail.RAIL_LIMIT
     rail.forget()
+
+
+# --- library-rate-verdict-rail-line-names-the-person-and-the-title -----------------------------
+
+
+def _rail_record_kinds() -> set[str]:
+    """Every `kind` a `rail.record` call in `backend/spielplan` can actually write.
+
+    AST and not a regex, and with ONE hop of resolution, because five of the thirteen kinds are
+    not spelled at a `rail.record` call at all: `rate/session.py:1259` writes
+    `rail.record(kind=event_kind, ...)` and `api/rate.py` passes `event_kind="verdict"`,
+    `"not_seen"`, `"duel"` and `"undo"` into `session.payload`. A guard that read only the
+    literals at the record sites would report those four as unproduced and the tuple below would
+    have to absorb them — which would make `AWAITING_PRODUCER` a list of "kinds the guard cannot
+    see" instead of decision 189's list of "kinds nothing writes".
+    """
+    root = Path(rail.__file__).resolve().parent.parent
+    trees = [ast.parse(p.read_text(encoding="utf-8")) for p in sorted(root.rglob("*.py"))]
+
+    def is_record(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "record"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "rail"
+        )
+
+    literal: set[str] = set()
+    forwarded: set[tuple[str, str]] = set()
+    for tree in trees:
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            params = {
+                a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)
+            }
+            for call in ast.walk(fn):
+                if not is_record(call):
+                    continue
+                for kw in call.keywords:
+                    if kw.arg != "kind":
+                        continue
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        literal.add(kw.value.value)
+                    elif isinstance(kw.value, ast.Name) and kw.value.id in params:
+                        forwarded.add((fn.name, kw.value.id))
+
+    for tree in trees:
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call):
+                continue
+            called = (
+                call.func.attr if isinstance(call.func, ast.Attribute)
+                else getattr(call.func, "id", None)
+            )
+            for fn_name, param in forwarded:
+                if called != fn_name:
+                    continue
+                for kw in call.keywords:
+                    if kw.arg == param and isinstance(getattr(kw.value, "value", None), str):
+                        literal.add(kw.value.value)
+    return literal
+
+
+def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
+    """§6.7's rail "narrates every model write", and `ModelRail` colours thirteen kinds.
+
+    Seven of them were written by nothing. `ledger_refit`, `ledger_incremental`, `foldin`,
+    `blend_weight`, `placement`, `reconcile` and `bundle_swap` — exactly the writes a person
+    cannot otherwise see — had renderers, colour rules and a place in the filter row, and no
+    call site, so a household turning the toggle on to find out why Home changed overnight saw
+    nothing about the refit that changed it. [M4.9 finding 24]
+
+    Decision 189 answers it in two halves and this guard holds both. `bundle_swap` and
+    `reconcile` happen inside the WEB process (`importer/bundle.py`'s hot swap and its
+    in-request rebuild sweep) and are recorded now, so they must appear at a call site. The
+    other five are worker-side, and §6.7's "never persisted" makes the buffer per process, so
+    there is no channel this milestone builds for them — they are declared pending instead, by
+    name, in one tuple. What the guard forbids is the third state the rail was actually in: a
+    kind that is neither written nor declared, which is a filter chip for events that cannot
+    arrive.
+    """
+    produced = _rail_record_kinds()
+    pending = set(rail.AWAITING_PRODUCER)
+
+    assert pending == {
+        "ledger_refit", "ledger_incremental", "foldin", "blend_weight", "placement",
+    }, "decision 189 names five worker-side kinds; this tuple has drifted from it"
+    assert not produced & pending, (
+        f"{sorted(produced & pending)} is written somewhere and still declared pending"
+    )
+    assert produced | pending == set(rail.EVENT_KINDS), (
+        f"unproduced and undeclared: {sorted(set(rail.EVENT_KINDS) - produced - pending)}; "
+        f"written but not in EVENT_KINDS: {sorted(produced - set(rail.EVENT_KINDS))}"
+    )
+    assert {"bundle_swap", "reconcile"} <= produced, (
+        "decision 189 records the two writes that already happen in the web process"
+    )
 
 
 async def test_the_hidden_count_is_what_the_toggle_would_actually_reveal(db, world):

@@ -125,11 +125,22 @@ export function counterLine(block, kinds) {
   return parts.join(' · ');
 }
 
-/** Runtime in the shape the rest of the app uses (see PosterCard). */
+/**
+ * Runtime in the shape the rest of the app uses — and there is only one shape, because this is
+ * the only copy. `PosterCard` and `TitleDetail` import it rather than open-coding it; the title
+ * card's copy had never grown the series branch, so a 24-minute episode read `2017 · 0h 24m ·
+ * series` two taps after the poster that said `24m/ep`.
+ *
+ * The zero-hour branch is the same argument at the other end: `0h 45m` is the data voice
+ * claiming an hour that is not there, and 240 of the 13,324 corpus movies run under one.
+ * [§6.0 metadata, §6.8 data voice, proposal 27; M4.9 finding 37]
+ */
 export function runtimeLabel(title) {
   if (!title?.runtime_min) return null;
   if (title.kind === 'series') return `${title.runtime_min}m/ep`;
-  return `${Math.floor(title.runtime_min / 60)}h ${title.runtime_min % 60}m`;
+  const h = Math.floor(title.runtime_min / 60);
+  const m = title.runtime_min % 60;
+  return h ? `${h}h ${m}m` : `${m}m`;
 }
 
 /**

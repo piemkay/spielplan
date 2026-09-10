@@ -26,7 +26,7 @@ PYPROJECT = REPO / "backend" / "pyproject.toml"
 # place/era/sensibility/register — and that "everything facet-shaped binds to the real 11".
 VOCAB_V1_FACETS = {
     "mood", "themes", "pacing", "structure", "visual", "sound",
-    "character", "place", "era", "sensibility", "register",
+    "characters", "place", "era", "sensibility", "register",
 }
 PROTOTYPE_ONLY_FACETS = {"dialogue", "tone", "setting", "craft"}
 
@@ -313,6 +313,371 @@ def test_the_signed_exception_guard_catches_an_unsigned_one(tmp_path):
     )
     caught = _unsigned_exceptions(tmp_path)
     assert len(caught) == 1 and "Unsigned.svelte" in caught[0], caught
+
+
+# --- §6.8, §6.0: the facet palette and the card that renders it -------------------------
+
+# The five places vocabulary v1's facet names are written down outside the corpus. They are one
+# vocabulary spelled five times, which is why they are guarded together: for the whole life of
+# the app before M4.9 they agreed with each other and disagreed with the data, so every
+# consistency check passed while ten of the eleven facets rendered neutral. A guard over one
+# site would have said the same thing. [M4.9 findings 3 and 4]
+FRONTEND = REPO / "frontend" / "src"
+HOME_MODULE = FRONTEND / "lib" / "home.svelte.js"
+RATE_MODULE = FRONTEND / "lib" / "rate.svelte.js"
+TITLE_DETAIL = FRONTEND / "lib" / "components" / "TitleDetail.svelte"
+SHELF_ROW = FRONTEND / "lib" / "components" / "ShelfRow.svelte"
+POSTER_CARD = FRONTEND / "lib" / "components" / "PosterCard.svelte"
+MODEL_RAIL = FRONTEND / "lib" / "components" / "ModelRail.svelte"
+DNA_IMPORTER = REPO / "backend" / "spielplan" / "importer" / "dna.py"
+
+
+def _src(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _frontend_sources() -> list[Path]:
+    """The shipped frontend. Colocated `*.test.js` are excluded on purpose: they are falsifiers,
+    not palette sites, and the one that names `character` names it to assert that the singular is
+    NOT a facet and resolves to the neutral. Vitest is what reads those files."""
+    return [
+        p for p in sorted(FRONTEND.rglob("*"))
+        if p.is_file() and p.suffix in {".css", ".js", ".svelte"} and not p.name.endswith(".test.js")
+    ]
+
+
+def _declared_facets() -> set[str]:
+    return set(re.findall(r"--facet-([a-z]+)\s*:", _css()))
+
+
+def _facets_used_as_vars(source: str) -> set[str]:
+    """Every `var(--facet-x)` a component spends. A component names the facets its own subject
+    has, not all eleven, so this is read as a subset rather than as a second palette."""
+    return set(re.findall(r"var\(--facet-([a-z]+)\)", source))
+
+
+def _js_string_set(source: str, name: str) -> set[str]:
+    """The single-quoted members of a `const NAME = new Set([...])` literal."""
+    block = re.search(re.escape(name) + r"\s*=\s*new Set\(\[(.*?)\]\)", source, re.S)
+    assert block, f"no `{name} = new Set([...])` to read"
+    return set(re.findall(r"'([a-z_]+)'", block.group(1)))
+
+
+def _default_facet_colours() -> set[str]:
+    """`DEFAULT_FACET_COLOURS`'s keys, read from the AST rather than from the text: the dict is
+    written several pairs to a line and a regex over it would silently read half of it."""
+    tree = ast.parse(_src(DNA_IMPORTER))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "DEFAULT_FACET_COLOURS" for t in node.targets):
+            continue
+        assert isinstance(node.value, ast.Dict)
+        return {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+    raise AssertionError("importer/dna.py no longer defines DEFAULT_FACET_COLOURS")
+
+
+def _spelt_singular(source: str) -> list[int]:
+    """Line numbers where a facet is still named `character`. The lookahead matters: the correct
+    spelling has the wrong one as a prefix, so a substring test can never be satisfied."""
+    return [
+        source[: m.start()].count("\n") + 1
+        for m in re.finditer(r"--facet-character(?![a-z])|'character'", source)
+    ]
+
+
+def test_every_facet_palette_site_names_the_shipped_eleven():
+    """§6.8: "a fixed colour per vocabulary facet (11)" — and the eleven are the shipped ones.
+
+    The vocabulary directory ships `vocab_characters_v1.tsv` and every shipped term prefix is
+    `characters`; seven source sites spelled it `character`, including the set the guard above
+    compares design.css against. So the palette was internally consistent, externally wrong, and
+    the guard was the thing that would have rejected the repair. This reads all five sites at
+    once because the failure mode is not "a site is wrong" but "the sites agree and the data
+    does not". [M4.9 finding 4; the editorial licence in M4.9-plan.md §1]
+
+    The three complete palettes must BE the eleven. `ModelRail` is read as a subset on purpose:
+    its rules colour event kinds, and it has thirteen kinds to spend nine facets on. Requiring
+    equality there would be a rule the file cannot satisfy, which is the kind of guard that gets
+    weakened rather than obeyed.
+    """
+    complete = {
+        "design.css": _declared_facets(),
+        "home.svelte.js FACETS": _js_string_set(_src(HOME_MODULE), "FACETS"),
+        "importer/dna.py DEFAULT_FACET_COLOURS": _default_facet_colours(),
+    }
+    for label, names in complete.items():
+        assert names == VOCAB_V1_FACETS, (
+            f"{label} does not name vocabulary v1: missing {sorted(VOCAB_V1_FACETS - names)}, "
+            f"unexpected {sorted(names - VOCAB_V1_FACETS)}"
+        )
+
+    rail = _facets_used_as_vars(_src(MODEL_RAIL))
+    assert rail and rail <= VOCAB_V1_FACETS, (
+        "ModelRail colours an event kind with a facet that is not one of the eleven: "
+        f"{sorted(rail - VOCAB_V1_FACETS)}"
+    )
+
+    # TitleDetail held a second copy of the set and a second `facetColour`. Two spellings of one
+    # palette is how one of them rots -- and the one that rotted was the copy, not the shared
+    # module. There is one palette function, and every surface imports it.
+    detail = _src(TITLE_DETAIL)
+    assert not re.search(r"\bconst\s+FACETS\b", detail), (
+        "TitleDetail declares its own facet set again; import facetColour from $lib/home.svelte.js"
+    )
+    assert not re.search(r"\bconst\s+facetColour\s*=", detail), (
+        "TitleDetail defines a second facetColour; there is one, in $lib/home.svelte.js"
+    )
+    assert re.search(
+        r"import\s*\{[^}]*\bfacetColour\b[^}]*\}\s*from\s*'\$lib/home\.svelte\.js'", detail, re.S
+    ), "TitleDetail must import facetColour from $lib/home.svelte.js"
+
+    # The singular is not a spelling variant, it is a facet no row can ever carry.
+    singular = [
+        f"{path.relative_to(REPO).as_posix()}:{line}"
+        for path in _frontend_sources()
+        for line in _spelt_singular(_src(path))
+    ]
+    assert not singular, (
+        "the shipped facet id is `characters` (vocab_characters_v1.tsv); still singular at:\n  "
+        + "\n  ".join(singular)
+    )
+
+
+# §4.1 rule 1 and §6.6: two tiers, never merged, and a parallel extraction mode that writes a
+# second row for one term. `dna_tag`'s uniqueness is (title_id, version, term, provider), so the
+# term alone was never a key -- and Svelte 5 raises `each_key_duplicate` in the production build
+# too, which took the whole panel down mid-render rather than dropping a chip. [M4.9 finding 8]
+#
+# And the facet is not what separates those two rows. Since 0018 section 1 `facet` IS
+# `split_part(term, '.', 1)`, so `facet + ':' + term` discriminates exactly as well as the term
+# alone did -- the provider is the column that varies, which is what 0018 section 2 armed the
+# unique index for. Only `dna_tag` has one: `dna_projected` is UNIQUE (title_id, version, term)
+# and the shelf's `shared_terms` arrive already grouped by term (`home/why.py`), so those two
+# blocks are safe for a reason that is theirs and not the key's.
+# [M4.9 review cycle 1: M49-REV1-01]
+_EACH_HEAD = re.compile(r"\{#each\s+(?P<head>[^{}]+?)\s*\}")
+_DNA_COLLECTION = re.compile(r"\.dna\.|shared_terms")
+_TAG_COLLECTION = re.compile(r"\.dna\.extracted")
+
+
+def _dna_each_keys(source: str) -> list[str]:
+    """Every DNA each-block in `source` whose key cannot tell its own rows apart, as complaints.
+
+    A block counts as DNA either by its collection or by its key naming `.term` -- the second
+    clause is what makes a regression to `(tag.term)` fail rather than merely go unclassified.
+    """
+    offenders = []
+    for m in _EACH_HEAD.finditer(source):
+        head = " ".join(m.group("head").split())
+        collection, _, binding = head.partition(" as ")
+        keyed = binding.endswith(")") and "(" in binding
+        key = binding[binding.index("(") + 1: -1] if keyed else ""
+        if not (_DNA_COLLECTION.search(collection) or ".term" in key):
+            continue
+        line = source[: m.start()].count("\n") + 1
+        if ".facet" not in key or ".term" not in key:
+            offenders.append(f"line {line}: {{#each {head}}} keys on {key or 'nothing'}")
+        elif _TAG_COLLECTION.search(collection) and ".provider" not in key:
+            offenders.append(f"line {line}: {{#each {head}}} keys a dna_tag row without .provider")
+        elif not re.search(r"""['"][^'"]+['"]""", key):
+            offenders.append(f"line {line}: {{#each {head}}} concatenates without a delimiter")
+    return offenders
+
+
+def test_every_dna_each_block_keys_on_facet_and_term():
+    """The DNA blocks key on facet AND term, delimited -- the shape the platform-scores block
+    twenty lines away already uses, and whose comment records that this exact crash shipped once.
+    The extracted tier keys on its provider as well, because that is the component two rows of
+    one term actually differ in and the facet, since 0018, is the term's own prefix.
+
+    Not de-duplicated in the client: §4.1 rule 1 and §6.6 both want both rows visible. The key is
+    what makes two rows two rows.
+    """
+    offenders = []
+    for path in (TITLE_DETAIL, SHELF_ROW):
+        offenders += [f"{path.name} {complaint}" for complaint in _dna_each_keys(_src(path))]
+    assert not offenders, (
+        "a DNA each-block is keyed on something that is not unique per row:\n  "
+        + "\n  ".join(offenders)
+        + "\n\ndna_tag is unique on (title_id, version, term, provider) and 0018 derives the"
+        " facet from the term, so the provider is what separates two opinions of one term. Key"
+        " the extracted tier on `tag.facet + ':' + tag.term + ':' + tag.provider`."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "markup"),
+    [
+        ("on the term alone", "{#each data.dna.extracted as tag (tag.term)}"),
+        ("on the facet alone", "{#each section.shared_terms as t (t.facet)}"),
+        ("on nothing at all", "{#each data.dna.projected as p}"),
+        ("on both, undelimited", "{#each section.shared_terms as t (t.facet + t.term)}"),
+        ("on the index", "{#each data.dna.projected as p, i (i)}"),
+        ("across a line break", "{#each data.dna.extracted as tag\n  (tag.term)}"),
+        (
+            "on a facet the term already carries",
+            "{#each data.dna.extracted as tag (tag.facet + ':' + tag.term)}",
+        ),
+    ],
+)
+def test_the_dna_key_guard_catches_a_real_violation(name, markup):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The term alone is what all three blocks keyed on before M4.9; the last case is what M4.9 put
+    in their place, and it belongs here because 0018 section 1 derives the facet from the term --
+    so on the one block a second provider can duplicate, that key discriminates no better than
+    the one it replaced. `(i)` is here because an index key is the tempting fix for a
+    duplicate-key crash and is the worse one: it makes Svelte keep the wrong node when a row is
+    inserted, which is the failure the credits block's own comment records.
+    [M4.9 finding 8; review cycle 1: M49-REV1-01]
+    """
+    assert _dna_each_keys(markup), f"a DNA each keyed {name} went unnoticed"
+
+
+def test_the_dna_key_guard_leaves_the_other_each_blocks_alone():
+    """The other half of a guard's self-test: what it must NOT say. The platform-scores block is
+    already correct and must not be reported; the shelf's poster row keys on a title id, which is
+    not a DNA row and has no facet to name. The projected tier and the shelf's shared terms are
+    not asked for a provider: neither table has one, and `dna_projected` is unique on the term."""
+    innocent = (
+        "{#each data.platform_ratings.items as p (p.platform + ':' + p.metric)}\n"
+        "{#each section.items as item (item.title_id)}\n"
+        "{#each tag.evidence as e}\n"
+        "{#each data.dna.extracted as tag (tag.facet + ':' + tag.term + ':' + tag.provider)}\n"
+        "{#each data.dna.projected as p (p.facet + ':' + p.term)}\n"
+        "{#each section.shared_terms as t (t.facet + ':' + t.term)}\n"
+    )
+    assert _dna_each_keys(innocent) == []
+
+
+# §8 stage 10's badge. The expression is pinned rather than described because the fallback it
+# replaced is the natural thing to write: `title.placement === 'cold_tower'` reads correctly and
+# is false 111 times out of 130 on the reference library, since 0008_placement.sql stamps
+# cold_tower on any title with a Backbone row and item_n < 90. [M4.9 finding 18]
+_COLD_BADGE = (
+    "title.e_source ? title.e_source === 'cold_tower' "
+    ": title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower')"
+)
+
+
+def test_the_cold_badge_expression_reads_e_source_not_placement():
+    """PosterCard's `noCrowdData` was already right, and this is what keeps it right.
+
+    Home's payload is what changed under it: `e_source` and `item_n` used to sit inside
+    `card["model"]`, which decision 117 strips wholesale, so `placement` was the only branch the
+    shelf could reach. With the payload repaired, an edit that "simplifies" the expression back
+    to the placement test would be invisible again -- the badge would simply be wrong, on a
+    surface with no assertion that reads it. The comment beneath it IS the specification and is
+    pinned with it.
+    """
+    poster = _src(POSTER_CARD)
+    derived = re.search(r"noCrowdData\s*=\s*\$derived\((?P<expr>.*?)\n\s*\);", poster, re.S)
+    assert derived, "PosterCard no longer derives noCrowdData"
+    assert " ".join(derived.group("expr").split()) == _COLD_BADGE, (
+        "the no-crowd-data badge is off `e_source`/`item_n`, NOT off `title.placement`:\n"
+        f"  found:  {' '.join(derived.group('expr').split())}\n  wanted: {_COLD_BADGE}"
+    )
+    assert "Off `e_source`/`item_n`, NOT off `title.placement`." in poster, (
+        "the comment stating the rule is the specification and travels with the expression"
+    )
+
+
+# §6.0's metadata line and proposal 27's data voice. One label, every surface. [M4.9 finding 37]
+_RUNTIME_BRANCH = "return h ? `${h}h ${m}m` : `${m}m`;"
+
+# A title's runtime, read by a surface. The sweep below was shaped like the expression that had
+# been removed -- `runtime_min / 60` -- rather than like the rule its own message states, so it
+# was green on the two ways of formatting a runtime that do not divide: through a local alias,
+# and not at all. Tonight's reveal rendered `{winner?.runtime_min} min` under it for the whole
+# milestone, which is finding 37's own defect (a series printed as flat minutes, a NULL runtime
+# printed as a bare unit) on a fourth surface. [M4.9 review cycle 1: M49-CARD-2]
+_RUNTIME_READ = re.compile(r"(?:\?\.|\.)runtime_min\b")
+# The one legal read outside the label: carrying the field forward under its own name, which
+# neither formats it nor prints it. `home.svelte.js`'s `toPosterTitle` hands it to `PosterCard`,
+# which calls `runtimeLabel`. A filter key spelled `'runtime_min'` (`rank.svelte.js`) is not a
+# read of a title at all and never matches.
+_RUNTIME_CARRIED = re.compile(r"\bruntime_min\s*:\s*[\w?.\[\]]*\.runtime_min\b")
+
+
+# Commentary, in the three forms the frontend writes it. Blanked rather than deleted, because
+# the sweep below reports line numbers and a stripper that shortened the file would report the
+# wrong ones. This codebase quotes the expression a surface stopped using in the sentence saying
+# why it stopped -- `ShelfRow.svelte` does, and so does the import comment this rule was written
+# for -- so a sweep over the raw file reports the repair as the defect.
+_COMMENTARY = re.compile(r"<!--.*?-->|/\*.*?\*/|//[^\n]*", re.S)
+
+
+def _runtime_reads(source: str) -> list[int]:
+    """The 1-based lines on which `source` reads a title's runtime other than to pass it on."""
+    code = _COMMENTARY.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), source)
+    carried = [m.span() for m in _RUNTIME_CARRIED.finditer(code)]
+    return [
+        code[: m.start()].count("\n") + 1
+        for m in _RUNTIME_READ.finditer(code)
+        if not any(start <= m.start() and m.end() <= end for start, end in carried)
+    ]
+
+
+def test_one_runtime_label_serves_every_surface():
+    """A series read `2017 - 0h 24m - series` two taps after a poster that said `24m/ep`.
+
+    Three open-coded copies, one of which had never grown the kind branch: the title card's. The
+    zero-hour branch is here rather than in a formatting module because there is one function,
+    and a `format.js` holding it would be an abstraction invented for a single caller.
+
+    The sweep is over every read of the field rather than over the shape of the division,
+    because the defect is a surface holding a runtime and deciding for itself what it says --
+    `${title.runtime_min} min` is that defect with no arithmetic in it at all.
+    """
+    rate = _src(RATE_MODULE)
+    assert len(re.findall(r"export function runtimeLabel\b", rate)) == 1, (
+        "there is exactly one runtimeLabel and rate.svelte.js exports it"
+    )
+    body = re.search(r"export function runtimeLabel\b.*?\n\}", rate, re.S)
+    assert body and _RUNTIME_BRANCH in body.group(0), (
+        "runtimeLabel must not print a leading `0h`: 240 of 13,324 corpus movies run under an "
+        f"hour. Wanted: {_RUNTIME_BRANCH}"
+    )
+
+    open_coded = [
+        f"{path.relative_to(REPO).as_posix()}:{line}"
+        for path in _frontend_sources()
+        if path != RATE_MODULE
+        for line in _runtime_reads(_src(path))
+    ]
+    assert not open_coded, (
+        "a surface holds a title's runtime and decides for itself what it says; hand the title "
+        "to runtimeLabel or metaLine from $lib/rate.svelte.js, or carry the field on under its "
+        "own name (`runtime_min: title.runtime_min`):\n  " + "\n  ".join(open_coded)
+    )
+    for path in (TITLE_DETAIL, POSTER_CARD):
+        assert re.search(
+            r"import\s*\{[^}]*\bruntimeLabel\b[^}]*\}\s*from\s*'\$lib/rate\.svelte\.js'",
+            _src(path),
+            re.S,
+        ), f"{path.name} must read the shared runtimeLabel"
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The copy that shipped, and the two the old `runtime_min / 60` sweep was green on.
+        ("the division that shipped", "const h = Math.floor(data.title.runtime_min / 60);", 1),
+        ("the same division through an alias", "const m = t.runtime_min;\nMath.floor(m / 60);", 1),
+        ("a runtime rendered with no arithmetic", "<p>{winner?.runtime_min} min</p>", 1),
+        # And the reads that are not a surface formatting anything.
+        ("the field carried forward", "runtime_min: item.runtime_min,", 0),
+        ("carried forward from an optional", "runtime_min: item?.title.runtime_min,", 0),
+        ("a filter key of the same name", "if (key === 'runtime_min') return `${v} min`;", 0),
+        ("the title handed to the label", "const minutes = $derived(runtimeLabel(title));", 0),
+        # The sentence saying why a surface stopped open-coding one is not a surface doing it.
+        ("the repair quoted in a comment", "// it spelled `{w?.runtime_min} min` itself", 0),
+        ("the same, in markup", "<!-- was {winner.runtime_min} min -->", 0),
+    ],
+)
+def test_the_runtime_sweep_catches_the_copies_it_is_written_for(name, source, expected):
+    assert len(_runtime_reads(source + "\n")) == expected, name
 
 
 # --- §1, §2: the stack -----------------------------------------------------------------
@@ -1555,14 +1920,23 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
 
 
-# --- §12: the three exit scripts, and the console they print to ---------------------------
+# --- §12: the four exit scripts, and the console they print to ----------------------------
 #
-# §12's M2, M3 and M4 rows are measured by hand, by `ops/m*_exit_criterion.py`, and a milestone
-# is closed on what they print and the code they exit with. A verdict that cannot come out `no`
-# is a certificate rather than a measurement, so these read the scripts as source: no `check()`
-# whose answer is settled before the run, no dereference of a result the verdict has not been
-# computed from yet, no `main()` ending in a literal, and nothing printed that a Windows
-# console can crash on.
+# §12's M2, M3, M4 and M4.9 rows are measured by hand, by `ops/m*_exit_criterion.py`, and a
+# milestone is closed on what they print and the code they exit with. A verdict that cannot
+# come out `no` is a certificate rather than a measurement, so these read the scripts as
+# source: no `check()` whose answer is settled before the run, no dereference of a result the
+# verdict has not been computed from yet, no `main()` ending in a literal, and nothing printed
+# that a Windows console can crash on.
+#
+# The count each guard asserts is a tripwire rather than a fact worth keeping current for its
+# own sake: it fires when a milestone adds a script these four rules have never been read
+# against, which is the only way a new exit criterion could inherit the defects M4.8 found in
+# the three that existed. `ops/m49_exit_criterion.py` is the fourth, and the number moved only
+# after it was measured against all four -- no printed literal outside cp850, no predicate
+# settled before the run, no terminal constant, and no `rate()` seeding path for the last of
+# them to read, the same exemption `ops/m45_exit_criterion.py` has for writing through the
+# importer rather than through §6.1's routes. [M4.9]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -1669,7 +2043,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -1749,7 +2123,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -1875,7 +2249,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2021,6 +2395,357 @@ def _exit_script(name: str):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+# --- M4.9 review cycle 1: two claims about `title_company`, retired ------------------------
+
+# Each phrase is a sentence this milestone wrote in several places and measured wrong afterwards.
+# Kept as literals rather than described, because the point is that the exact wording does not
+# come back: prose is how this codebase argues, and the two acts a reader takes from these two
+# sentences are both expensive.
+RETIRED_COMPANY_CLAIMS = {
+    # Decision 194. `n_companies_log` is a column of no feature contract this app has loaded --
+    # v20260828's `meta` block is 57 one-hots -- so the count was produced and discarded, and no
+    # checkpoint was ever trained on it. A reader who believes otherwise either re-runs placement
+    # over 19,071 titles that cannot move, or "repairs" the meta block by writing values into
+    # columns §4.3 calls the exhaustive definition of the tower's input.
+    "trained on the corpus's real counts": "decision 194",
+    "trained on the real counts": "decision 194",
+    # Decision 195. 8,594 is the number of duplicate GROUPS under (title_id, company, role);
+    # the rows discarded are 11,654 and the rows involved in a collision 20,248. Neither reading
+    # of "rows that collide" is 8,594, and the file that states it is about per-source row
+    # multiplicity.
+    "shipped rows collide": "decision 195",
+}
+
+
+def test_no_file_repeats_a_retired_claim_about_the_company_table():
+    """The permanent record says what was measured. [M4.9 review cycle 1: M49-MIG-01, M49-MIG-05]
+
+    `backend/migrations/0018_read_layer.sql` is the artefact that outlives the plan and is
+    sha256-checksummed from its first apply, so a sentence that is wrong there is wrong for
+    good; the same two sentences were copied into `load.py`, three test docstrings, the coverage
+    row and decision 193. `docs/milestones/*.md` is not scanned: it is the plan, the workflow
+    forbids editing it, and the corrections owed there go to the owner by hand.
+    """
+    offenders = []
+    scanned = 0
+    for path in sorted(
+        [*(REPO / "backend" / "spielplan").rglob("*.py"),
+         *(REPO / "backend" / "tests").rglob("*.py"),
+         *(REPO / "backend" / "migrations").glob("*.sql"),
+         *(REPO / "ops").glob("*.py"),
+         REPO / "backend" / "tests" / "spec_coverage.toml",
+         REPO / "docs" / "spec-v2.2-proposals.md"]
+    ):
+        if path == Path(__file__).resolve():
+            continue        # this file states them in order to forbid them
+        scanned += 1
+        body = path.read_text(encoding="utf-8")
+        for phrase, decision in RETIRED_COMPANY_CLAIMS.items():
+            if phrase in body:
+                offenders.append(f"{path.relative_to(REPO).as_posix()}: {phrase!r} ({decision})")
+    assert scanned > 100, f"the sweep read {scanned} files and is not covering the tree"
+    assert not offenders, (
+        "§4.1's spine list is why `title_company` loads; the Cold Tower is not, and 8,594 is a "
+        "group count. See decisions 194 and 195:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_m49_measure_heading_names_a_finding_it_does_not_measure():
+    """An instrument that prints a heading for a measurement it did not take.
+
+    Measure 2 shipped as "Key injectivity over the dumped payloads (finding 6)" over a body that
+    builds `person_id + ':' + job` and reads nothing else -- which is finding 5's client half,
+    the same finding measure 1 is labelled with. Finding 6 is the ordered
+    `array_agg(character)`; §7's twelve measures assign it none, and none is invented here,
+    because §6.0's card list does not name the field and no surface renders it. An operator
+    reading the heading believed finding 6 had been measured on the corpus. It had not, and
+    from this script it cannot be.
+
+    The module docstring is dropped before the search rather than the file being grepped whole:
+    the docstring explains all of this, and it must be able to say the words. [M49-CARD-4]
+    """
+    source = (REPO / "ops" / "m49_exit_criterion.py").read_text(encoding="utf-8")
+    headings = re.findall(r'print\("\\n([^"]+)"', source)
+    assert len(headings) == 10, f"the heading sweep found {len(headings)}: {headings}"
+
+    module = ast.parse(source)
+    code = "\n".join(ast.unparse(node) for node in module.body[1:])
+    assert "character" not in code, (
+        "this script now reads `character`, so it may be measuring finding 6 after all - "
+        "rewrite this guard against whatever it measures rather than deleting it"
+    )
+    offenders = [h for h in headings if "finding 6" in h]
+    assert not offenders, (
+        "a numbered measure cites finding 6 (the ordered `array_agg(character)`) while nothing "
+        f"in the script reads the field: {offenders}. Measures 1 and 2 are finding 5's SQL half "
+        "and its client half; finding 6 is closed by "
+        "`test_a_credit_is_one_row_per_person_and_job_across_department_spellings`"
+    )
+
+
+# --- M4.9 review cycle 1: measure 3, which measured its own population ---------------------
+#
+# `check(has_count and has_fold and with_credits == len(crossing), "the card names what it
+# hides, on {with_credits}/{len(crossing)} payloads")`. Every member of `crossing` has at least
+# one `credit` row by construction and `credit.person_id` is `NOT NULL REFERENCES person(id)`,
+# so `credits_for`'s join cannot drop one: the printed `1,216/1,216` compared `crossing` with
+# itself, and a bundle on which no title carries more than twelve credits -- the population the
+# disclosure exists for -- still PASSED. The two source halves were whole-file `in` tests over
+# a component this repository already shipped a guard against once, in the compose landmine
+# that passed on a file of pure comments. [M49-CARD-1]
+
+TITLE_CARD_RELATIVE = "frontend/src/lib/components/TitleDetail.svelte"
+
+
+def _components_read_whole(source: str, label: str) -> list[str]:
+    """Every `source("....svelte")` an exit script reads: a component read commentary and all.
+
+    `ast`, not a regex, for the reason `_constant_check_predicates` is: the call wraps across
+    lines in the file it was written for. `home.svelte.js` and `design.css` are deliberately not
+    matched -- a module's constants and a stylesheet's custom properties are not markup, and
+    this rule is about a control that a person can comment out and still satisfy.
+    """
+    out: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "source" or not node.args:
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Constant) and str(arg.value).endswith(".svelte"):
+            out.append(f"{label}:{node.lineno}: source({arg.value!r})")
+    return out
+
+
+def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
+    """A control commented out of the markup and left standing as prose passes a whole-file grep.
+
+    This codebase argues its decisions in comments beside the code that carries them, so the
+    file and the component are different documents; `ops/m49_exit_criterion.py:140`'s `markup()`
+    exists for exactly that and measure 6 already reads through it. Measure 3 did not, so
+    `'data-testid="credit-count"' in card_source` was satisfied by a card whose count line had
+    been commented out -- the same shape as the compose guard that passed on a file of pure
+    comments, which is why the rule is over the scripts rather than over the one measure.
+    """
+    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    offenders = [
+        line
+        for path in EXIT_SCRIPTS
+        for line in _components_read_whole(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert not offenders, (
+        "an exit measure reads a component's comments as if they were its markup; read it "
+        "through markup():\n  " + "\n  ".join(offenders)
+    )
+
+    # And markup() is doing the work the rule assumes: it drops the commentary and keeps the
+    # three controls measure 3 asks about. A stripper that stopped stripping would leave this
+    # rule true and toothless.
+    m49 = _exit_script("m49_exit_criterion")
+    whole, rendered = m49.source(TITLE_CARD_RELATIVE), m49.markup(TITLE_CARD_RELATIVE)
+    assert len(rendered) < len(whole), "markup() strips nothing, so reading through it asks nothing"
+    for control in ('data-testid="credit-count"', "CREDIT_FOLD", 'data-testid="credits-disclosure"'):
+        assert control in rendered, f"{control} is commentary, not markup, on the title card"
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        ("the read that shipped", 'card = source("frontend/src/lib/components/X.svelte")', 1),
+        ("the same read, wrapped", 'card = source(\n    "a/X.svelte",\n)', 1),
+        ("read through the stripper", 'card = markup("frontend/src/lib/components/X.svelte")', 0),
+        # `home.svelte.js` ends in `.js` and is not a component; a Python module never is.
+        ("a module beside a component", 'js = source("frontend/src/lib/home.svelte.js")', 0),
+        ("a stylesheet", 'css = source("frontend/src/lib/design.css")', 0),
+    ],
+)
+def test_the_component_read_guard_catches_a_real_violation(name, source, expected):
+    assert len(_components_read_whole(source + "\n", "probe.py")) == expected, name
+
+
+def test_the_count_line_measure_reports_the_population_the_disclosure_exists_for():
+    """Measure 3's verdict has to turn on a number that can be zero on a real bundle.
+
+    `with_credits == len(crossing)` is not one: `crossing` is built from `credit` rows, so every
+    member has one, and the inner join to `person` is total under the FK. `folded_titles` is the
+    honest subject -- the payloads that carry more than `CREDIT_FOLD` credits and therefore have
+    something to hide -- and a bundle on which nothing folds leaves the disclosure unmeasured
+    and must FAIL rather than print 1,216/1,216 and pass. [M49-CARD-1]
+    """
+    tree = ast.parse((REPO / "ops" / "m49_exit_criterion.py").read_text(encoding="utf-8"))
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "check" and len(node.args) > 1
+    ]
+    hides = [node for node in calls if "hides" in ast.unparse(node.args[1])]
+    assert len(hides) == 1, f"measure 3's check is not identifiable by its label: {len(hides)}"
+    predicate = ast.unparse(hides[0].args[0])
+    assert "folded_titles" in predicate, (
+        "measure 3 passes on a bundle whose disclosure it never exercised; the predicate is "
+        f"{predicate}"
+    )
+
+
+# --- M4.9 review cycle 1: §6.6's sources-and-terms list, which nothing read ----------------
+
+DATA_CARD = FRONTEND / "routes" / "admin" / "data" / "+page.svelte"
+
+
+def _rendered_markup(path: Path) -> str:
+    """A Svelte file's template: script block, style block and HTML comments removed.
+
+    Read this way because a sweep over the whole file passes on markup that has been commented
+    out -- the failure a compose guard in this repository already shipped once, green against a
+    file of nothing but comments (M4.7 ddocs-08). The claim below is that the card RENDERS these
+    fields, so what is searched has to be what renders.
+    """
+    body = re.sub(r"<script\b.*?</script>", "", path.read_text(encoding="utf-8"), flags=re.S)
+    body = re.sub(r"<style\b.*?</style>", "", body, flags=re.S)
+    return re.sub(r"<!--.*?-->", "", body, flags=re.S)
+
+
+def test_the_data_card_renders_the_per_dataset_terms():
+    """The surface half of `data-rules-rating-source-terms-survive-import`.
+
+    The row promises the terms "are rendered on the §6.6 Data card as a sources-and-terms list"
+    and nothing in the repository read that page: `routes/admin/data/` has no colocated vitest
+    (jsdom arrived with finding 27, for one drawer; no route has been mounted under it), and the
+    three e2e specs that visit `/admin/data` assert the tab row, the bundle heading and the
+    rebuild set. So the fetch,
+    the `{#if sources}` block or the four columns could each be deleted with ruff, pytest,
+    vitest, `npm run build` and `M4.9 23/23 covered` all green, and the operator's question --
+    which of the eleven sources bars redistribution of a movie-data archive -- would have no
+    answer again. The route's own half is
+    `test_import_integration.py::test_the_data_card_reads_the_terms_the_import_carried`.
+
+    `version` is read with `||` rather than `??` because the corpus states "no version" with the
+    empty string on four of the eleven frozen ids (v20260828: 1, 2, 3 and 4), which `??` lets
+    through as a blank cell -- indistinguishable, to the operator reading the table, from a
+    column the importer dropped. [M4.9 review cycle 1: M49-MIG-02, M49-MIG-04]
+    """
+    source = _src(DATA_CARD)
+    assert "get('/admin/data/sources')" in source, (
+        "the Data card renders a list it no longer fetches"
+    )
+    markup = _rendered_markup(DATA_CARD)
+    assert "SOURCES AND TERMS" in markup and "{#each sources.sources as s" in markup, (
+        "the sources-and-terms list is not in the rendered markup of "
+        f"{DATA_CARD.relative_to(REPO).as_posix()}"
+    )
+    dropped = [field for field in ("s.name", "s.license", "s.version", "s.notes")
+               if field not in markup]
+    assert not dropped, (
+        f"the terms list stopped printing {dropped}; §4.1 rule 4's eleven ids ship all four and "
+        "the licence text is the one an operator has to read before sharing an archive"
+    )
+    assert "s.version ??" not in markup, (
+        "`??` renders the empty string four of the eleven ids ship as a blank VERSION cell; "
+        "`||` is what makes an unversioned dataset read as absent"
+    )
+
+
+# --- M4.9 review cycle 1: the title card's counts, and a note over a payload that moved ----
+
+# A rendered credit count. §6.8's data voice separates one everywhere else the app prints one --
+# `home.svelte.js:countLabel`, the catalogue's `Show more · N left` -- and the corpus's longest
+# credit list is 1,535 rows against a median of 24, so the four-digit case is a page a person
+# opens rather than a hypothetical.
+_BARE_COUNT = re.compile(r"\.length(?!\s*\.toLocaleString\(\))")
+
+
+def test_the_credit_disclosure_derives_its_labels_from_the_fold():
+    """`CREDIT_FOLD = 12` and the button said `Show twelve`: one number, spelled twice.
+
+    The file's own import comment fifteen lines above the constant argues that two spellings of
+    one palette is how one of them rots, and English prose is the spelling no edit to the
+    constant can reach: change the fold to twenty and the button keeps saying twelve while the
+    count line says `20 of 47`. Nothing else can see it: the title card has no colocated vitest
+    (finding 27 brought jsdom in for §6.7's drawer, and mounting this card is a bigger decision
+    than one drawer -- §7's own measure 2 wants 1,216 payloads through it) and
+    `e2e/specs/04-title-card.spec.js` restates `FOLD = 12` as its own literal.
+    [M4.9 finding 7; review cycle 1: M49-CARD-5]
+    """
+    markup = _rendered_markup(TITLE_DETAIL)
+    label = re.search(r'data-testid="credits-disclosure"(?P<label>.*?)</button>', markup, re.S)
+    assert label, "the credit disclosure is not in the rendered markup of the title card"
+    assert "CREDIT_FOLD" in label.group("label"), (
+        "the disclosure states the fold in its own words; derive both labels from the constant. "
+        f"It reads: {' '.join(label.group('label').split())}"
+    )
+
+    count = re.search(r'data-testid="credit-count"\s*>(?P<line>.*?)</span', markup, re.S)
+    assert count, "the credit count line is not in the rendered markup of the title card"
+    bare = [
+        f"the {name} prints `{' '.join(text.split())}`"
+        for name, text in (("count line", count.group("line")), ("disclosure", label.group("label")))
+        if _BARE_COUNT.search(text)
+    ]
+    assert not bare, (
+        "a credit count is rendered without its thousands separator, two screens from a "
+        "catalogue that writes `1,535`:\n  " + "\n  ".join(bare)
+    )
+
+
+MODEL_NOTE = FRONTEND / "lib" / "components" / "ModelNote.svelte"
+SHELVES = REPO / "backend" / "spielplan" / "home" / "shelves.py"
+_MODEL_READ = re.compile(r"\bmodel\.(?P<field>[a-z_]+)")
+
+
+def _shelf_card_model_keys() -> set[str]:
+    """Every key a shelf card's `model` block can carry: the literal `_shelf_card` builds, plus
+    the `extra=` dicts it merges in for §6.2's shared-sweet-spot numbers.
+
+    `ast`, not a regex: the block is written one pair to a line and the merge happens at a call
+    site three hundred lines away, so a text sweep would read one of the two.
+    """
+    keys: set[str] = set()
+    for node in ast.walk(ast.parse(_src(SHELVES))):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "model"
+                    and isinstance(value, ast.Dict)
+                ):
+                    keys |= {k.value for k in value.keys if isinstance(k, ast.Constant)}
+        elif isinstance(node, ast.keyword) and node.arg == "extra" and isinstance(node.value, ast.Dict):
+            keys |= {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+    assert keys, "home/shelves.py no longer builds a card['model'] block"
+    return keys
+
+
+def test_every_field_the_model_note_reads_is_one_the_shelf_card_carries():
+    """§6.7's annotation renders `_shelf_card`'s `model` block, and only that block.
+
+    M4.9 lifted `item_n` and `e_source` out of it -- §8 stage 10's badge is decided on those two
+    and decision 117 strips `model` wholesale, so a badge computed from inside it vanished for
+    everyone with the toggle off -- and the two branches reading them here stayed. They cannot
+    fire: the hover line stopped naming the crowd support behind the prior, and the compact line
+    never showed those two (`all.slice(0, 2)`), which is why nothing went red. A branch over a
+    key the payload cannot carry reads as a feature and is not one.
+    [M4.9 finding 18; review cycle 1: M49-HOME-05]
+    """
+    callers = [
+        path.relative_to(REPO).as_posix()
+        for path in _frontend_sources()
+        if path != MODEL_NOTE and "ModelNote" in _src(path)
+    ]
+    assert callers == ["frontend/src/lib/components/ShelfRow.svelte"], (
+        "ModelNote is rendered somewhere else now, so the payload it prints is no longer the "
+        f"shelf card's alone and this guard has the wrong subject: {callers}"
+    )
+
+    reads = set(_MODEL_READ.findall(_COMMENTARY.sub("", _src(MODEL_NOTE))))
+    assert reads, "ModelNote no longer reads a field off `model`"
+    carried = _shelf_card_model_keys()
+    assert reads <= carried, (
+        "ModelNote branches on a field the shelf card's model block does not carry: "
+        f"{sorted(reads - carried)}. home/shelves.py builds {sorted(carried)}; either the "
+        "server sends the field or the branch goes."
+    )
 
 
 def test_the_m45_script_removes_a_staging_tree_it_still_holds_open():
@@ -2432,7 +3157,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 3, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS

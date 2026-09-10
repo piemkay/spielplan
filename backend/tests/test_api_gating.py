@@ -46,9 +46,12 @@ MEMBER_PASSWORD = "a-member-password"
 # which is wanted — re-stating the number by hand is how the two sweeps below become known to
 # be covering every route someone meant to gate. What it still cannot see is a new route that
 # never had `AdminUser` at all: a walk over gated routes has nothing to enumerate it with.
-# 21 until M4.7 added §6.6's System card (`GET /api/admin/system`, decision 182). Re-stated by
-# hand, which is what the paragraph above says this number is for.
-ADMIN_ROUTE_COUNT = 22
+# 21 until M4.7 added §6.6's System card (`GET /api/admin/system`, decision 182), and 22 until
+# M4.9 added the Data card's sources-and-terms list (`GET /api/admin/data/sources`, decisions
+# 191 and 193 — the eleven frozen sources' licence terms, and §6.4's unauthored axis artifact as
+# an outstanding task). Re-stated by hand, which is what the paragraph above says this number is
+# for: the equality failing on the added route is the check working.
+ADMIN_ROUTE_COUNT = 23
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -143,6 +146,34 @@ async def _bootstrap(app):
 
 
 # --- §6.6: admin routes are admin-only ----------------------------------------------------
+
+
+def test_a_route_without_conn_still_holds_a_pooled_connection_for_its_session():
+    """Dropping `conn: DB` from a handler is tidiness, never pool relief.
+
+    `api/home.py:model_log` reads an in-process ring buffer and took a `conn` it never used;
+    M4.9 removed the parameter and argued the removal saved an acquisition. It saved none.
+    `ActiveUser` resolves `active_user` -> `current_user`, and `current_user` takes `conn: DB`
+    (`api/deps.py:115`) to load the session; FastAPI caches a dependency per request, so the
+    route's own parameter was a second reference to the connection the session load had already
+    taken. `deps.db` holds it for the whole request by design ("One pooled connection for the
+    whole request").
+
+    Asserted on the dependency graph rather than on the docstring, so it is the WIRING that
+    keeps the sentence honest: on the day `current_user` stops needing a connection this goes
+    red, and the paragraph in `model_log` has to be rewritten rather than quietly become true
+    by accident. §7.3's poll and §6.7's drawer are both surfaces a phone reopens repeatedly, and
+    `max_size` is 10. [M4.9 review cycle 1: M49-HOME-02]
+    """
+    behind_db = paths_behind(deps.db)
+    assert ("GET", "/api/model-log") in behind_db, (
+        "the route that takes no `conn` is not behind `deps.db` either - if that is now true, "
+        "`api/home.py:model_log`'s docstring says the opposite and is the thing to fix"
+    )
+    # Not a property of this one route: every authenticated route is behind it, because the
+    # session load is. A sweep, so a future connection-free route cannot be read as free.
+    behind_user = paths_behind(deps.active_user)
+    assert behind_user <= behind_db, sorted(behind_user - behind_db)
 
 
 def test_the_app_actually_has_admin_routes_to_gate():

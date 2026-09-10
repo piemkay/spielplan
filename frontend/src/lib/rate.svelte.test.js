@@ -105,6 +105,22 @@ describe('pure helpers', () => {
     expect(metaLine({ kind: 'movie', runtime_min: 170 })).toBe('— · 2h 50m');
   });
 
+  it('says 45m rather than 0h 45m, on every surface that asks', () => {
+    // The real falsifier behind `test_one_runtime_label_serves_every_surface`: the pytest guard
+    // can pin which module the label lives in, but only this can say what it prints. 240 of the
+    // 13,324 corpus movies and 7 of the 839 owned run under an hour, and a leading zero hour is
+    // the data voice claiming a precision the sentence does not have (§6.8, proposal 27).
+    expect(runtimeLabel({ kind: 'movie', runtime_min: 45 })).toBe('45m');
+    expect(runtimeLabel({ kind: 'movie', runtime_min: 59 })).toBe('59m');
+    // The hour boundary is where an `h ? ...` branch goes wrong in the other direction.
+    expect(runtimeLabel({ kind: 'movie', runtime_min: 60 })).toBe('1h 0m');
+    // A series is per-episode whatever its length: the kind branch outranks the zero-hour one.
+    expect(runtimeLabel({ kind: 'series', runtime_min: 45 })).toBe('45m/ep');
+    expect(runtimeLabel({ kind: 'series', runtime_min: 170 })).toBe('170m/ep');
+    expect(runtimeLabel(null)).toBe(null);
+    expect(metaLine({ kind: 'movie', year: 2019, runtime_min: 45 })).toBe('2019 · 45m');
+  });
+
   it('gives the same title the same hue every render', () => {
     expect(hueOf('Heat')).toBe(hueOf('Heat'));
     expect(hueOf('Heat')).not.toBe(hueOf('Prisoners'));

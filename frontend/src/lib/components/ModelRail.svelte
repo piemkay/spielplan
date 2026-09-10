@@ -27,6 +27,14 @@
   // Refetch every time the drawer opens: the log is ephemeral by definition, and a rail that
   // shows what the model did ten minutes ago while claiming to be live is worse than closed.
   $effect(() => {
+    // Dropped on the way DOWN as well as on the way up. Without it the second open renders the
+    // FIRST open's events under a header reading "never persisted" until the refetch lands -- and
+    // the `{:else if !log}` branch below, which exists to say the drawer is reading, was
+    // unreachable after the first open. Clearing it only on the way up leaves the same render one
+    // frame long: `{#if open}` paints before this effect runs, so the drawer would still show the
+    // previous open's events, briefly, under that header. §6.7's log is ephemeral, and a drawer
+    // that holds one across a close is keeping it. [M4.9 finding 27]
+    log = null;
     if (!open) return;
     let cancelled = false;
     error = '';
@@ -204,7 +212,7 @@
   .events li[data-kind='ledger_refit'],
   .events li[data-kind='ledger_incremental'] { border-left-color: var(--facet-themes); }
   .events li[data-kind='foldin'],
-  .events li[data-kind='blend_weight'] { border-left-color: var(--facet-character); }
+  .events li[data-kind='blend_weight'] { border-left-color: var(--facet-characters); }
   .events li[data-kind='placement'],
   .events li[data-kind='reconcile'] { border-left-color: var(--facet-visual); }
   .events li[data-kind='bundle_swap'] { border-left-color: var(--facet-era); }

@@ -493,9 +493,10 @@ never as anyone's name.
 M4.8 added the two corpus shapes that eight titles were still missing, because a manifest of shapes
 does not make the fixture *carry* them: the same credit filed under two department spellings (7,918
 such triples across 1,216 real titles), and a `dna_tag.facet` that is the extraction label rather
-than the term's own prefix (29,188 of 31,540 rows). The facet is a live defect M4.9 still repairs;
-the credit collision was one until `ee35d52` grouped `credits_for` by (person, job) and keyed the
-card on the same pair. Neither was reachable *through the importer* until the fixture carried it —
+than the term's own prefix (29,188 of 31,540 rows). Both were live defects and both are now
+closed: the credit collision by `ee35d52`, which grouped `credits_for` by (person, job) and keyed
+the card on the same pair, and the facet by M4.9 below. Neither was reachable *through the
+importer* until the fixture carried it —
 the credit shape existed only where `test_import_integration.py` inserts one by hand, which proves
 the query and says nothing about the bundle it has to survive. It also added an opt-in
 `make_bundle(dir, pool_titles=N)`, generated entirely from the authored vocabulary so the feature
@@ -508,6 +509,26 @@ supplies trained models; movie data is seeded **once**; every later title is acq
 corpus's own `sqlite_sequence` reads 21442 and "mint above the imported maximum" would have
 started this app at exactly the id the corpus mints next. **163:** a DNA vocabulary change is a
 data migration, not an import, and is refused until that migration exists.
+
+**M4.9** has a §12 row of its own, and it is a row this table already had — M0's "bundle imports
+clean; Library list and title card render imported titles" was closed against the fixture, and the
+fixture does not carry the shapes the export actually ships. M4.9 is the repair, end to end: one
+facet vocabulary from the loader through migration `0018_read_layer.sql`'s backfill, the SQL
+predicate, the chip and §6.8's palette; a title card that renders past its credits on the 1,216
+titles whose keyed each used to throw, and says how many of them it is hiding; a catalogue whose
+pagination is a total order and whose search treats `%` and `_` as text; two authenticated routes
+that partition by kind; a Home whose shelf-1 anchor is a title its owner actually rated and whose
+"no crowd data yet" badge reads `e_source` rather than the placement stamp; §6.7's rail mounted
+once in the shell so it opens from every surface; and `title_company`, `title_video`,
+`rating_source` and the ML link no longer dropped or misreported by the loader. Owner decisions
+**187–193** record the seven calls it needed — including that a projected DNA term is bounded by a
+saturating weight rather than clamped (188), that posters do not ship here (190), and that
+`title_company` loads keyed per source (193).
+
+Its exit criterion is `ops/m49_exit_criterion.py`: twelve measures against the real bundle, which
+it **refuses to run without** — every one of them is zero on eight fixture titles. It has been
+written and not yet run; `docs/TESTING.md` carries the command and says why no count is published
+here until a real run prints one.
 
 ### Before the release: M4.6 – M4.16
 

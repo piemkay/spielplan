@@ -12,7 +12,7 @@ the coverage map is the contract that says which requirement each milestone owes
 | **schema** | (part of pytest) | node | the migrations apply to a real Postgres engine (PGlite, wasm), and produce the structure §4.1 requires |
 | **integration** | `TEST_DATABASE_URL=… pytest` | Postgres 16 | anything that only exists against a real server — COPY resolves encoders from destination column types |
 | **e2e** | `node e2e/run.mjs` | the compose stack | what actually ships: the real backend serving the real PWA in a real browser, desktop and phone |
-| **frontend units** | `npm --prefix frontend test` | nothing | client helpers with real edge cases (query building, error classification) |
+| **frontend units** | `npm --prefix frontend test` | nothing | client helpers with real edge cases (query building, error classification), and — under jsdom, in `*.svelte.test.js` files — a mounted component whose state a browser cannot be held still enough to observe |
 
 Two of those layers exist because of bugs that reached the running app and could not have been
 caught anywhere cheaper: SQLite integer booleans hitting Postgres `boolean` columns (integration),
@@ -148,8 +148,9 @@ tests = ["backend/tests/test_bundle_validation.py::test_tag_without_evidence_fai
 `test_spec_coverage.py` enforces two rules:
 
 1. **Every requirement at or before `current_milestone` names at least one test.**
-2. **Every named test exists** — checked against the real pytest functions and Playwright titles,
-   so a renamed or deleted test breaks the build rather than silently uncovering a requirement.
+2. **Every named test exists** — checked against the real pytest functions, Playwright titles and
+   vitest titles, so a renamed or deleted test breaks the build rather than silently uncovering a
+   requirement.
 
 A row that genuinely should not be tested yet carries `waived = "an honest reason"` and appears
 in the report as waived rather than vanishing.
@@ -187,14 +188,14 @@ Two things happen on the way that are easy to miss:
 ```
 > M0   34/35  covered (1 waived)
 > M1   10/10  covered
-> M2   26/26  covered
+> M2   27/27  covered
 > M3   15/15  covered
 > M4   42/42  covered
 > M4.5   18/18  covered
 > M4.6   12/12  covered
 > M4.7   17/17  covered
 > M4.8   10/10  covered
-  M4.9    1/1   covered
+> M4.9   23/23  covered
   M4.12    1/1   covered
   M4.13    2/2   covered
   M5    0/10  covered
@@ -215,7 +216,65 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.8 is the open milestone, and it is not in §12 — it is about this file's own subject.** The
+**M4.9 is the open milestone, and unlike M4.6, M4.7 and M4.8 it has a §12 row of its own.** The
+argument is at spec line 425: M0's exit criterion is "bundle imports clean; Library list and title
+card render imported titles", and it was closed against a fixture in which the corpus's awkward
+shapes do not occur — so the row existed and was asserted about the wrong artifact. The real export
+ships two department spellings for one job, two facet namings for one vocabulary, and a term id
+that already carries its own facet, and the whole chain that reads them (`importer/*` →
+`db/library.py` → `home/*` → the cards) was written against a fixture where none of that is true.
+The card throws inside the client render on 1,216 of 19,071 real titles; 29,188 of 31,540 extracted
+DNA rows carry a facet that joins nothing; the catalogue pages over an order that is not total; four
+shipped tables are dropped or misreported. **Twenty-three rows were written before the code and
+`current_milestone` was raised in the same change**, arming all twenty-three at once — the red list
+that run printed, thirty-nine test names of which one existed, is the test plan
+(`docs/milestones/M4.9-plan.md`), and it was closed by writing the other thirty-eight. Migration
+`0018_read_layer.sql` backfills the facet on both DNA tiers, arms `dna_tag`'s unique index by
+making `provider` NOT NULL, and re-keys `title_company` and `title_video` per source. Decisions
+**187–193** are numbered in `docs/spec-v2.2-proposals.md`. **No waiver was added and the milestone
+was never lowered.**
+
+**One earlier count moved, and it is not a milestone gaining a test.** The block above reads
+`M2 27/27` where M4.8's read `26/26`: `library-rate-home-greeting-uses-the-household-clock` states a
+§6.0 M2 clause, so it is filed under the milestone whose clause it states rather than under the one
+that repaired it — the same way the two M4.13 rows already sit. Nothing was added to M2's scope and
+nothing was removed from M4.9's.
+
+**Two of M4.9's browser cases intercept the response they assert against, and that is worth knowing
+before trusting them.** `04-title-card.spec.js::the credit list says how many it is hiding and the
+disclosure reveals them` needs a title with more than twelve credits, and the fixture's richest
+title collapses to two; `10-home.spec.js::a shelf term chip prints its term once and wears its facet
+colour` needs a section whose cards share a DNA term, and `why.common_terms` is an intersection over
+three or more cards that no three of the fixture's eight titles satisfy. Both take the server's own
+payload and extend the one list the fixture is too small to fill — rows of the same shape for the
+first, and a term and facet read back from `/api/titles/{id}` for a card genuinely on that shelf for
+the second. Neither invents a shape the corpus does not ship, and both are noted here rather than in
+a comment nobody re-reads, because the honest fix is in `backend/tests/fixtures/make_bundle.py`,
+which M4.8 owns.
+
+**The M4.9 exit criterion is written and has not been run.** `ops/m49_exit_criterion.py` follows
+`ops/m45_exit_criterion.py`'s shape — it creates and drops its own database, imports the real bundle,
+connects through `db/pool.py` rather than a bare `asyncpg.connect` (the json/jsonb codec
+`title_meta.payload` needs), and **refuses to run on the fixture on purpose**, because all twelve of
+its measures are zero on eight titles. Run it with:
+
+```bash
+CORPUS_BUNDLE_DIR=.../export_bundle/v20260828 \
+TEST_DATABASE_URL=postgresql://... \
+  backend/.venv/Scripts/python ops/m49_exit_criterion.py
+```
+
+Its measure 2 is deliberately not the plan's: §7 writes it as 1,216 payloads mounted through the
+real `TitleDetail` in vitest/jsdom, and when the script was written this repository shipped neither
+`jsdom` nor `@testing-library/svelte` (finding 27 has since brought the first in, for §6.7's drawer;
+the card has still never been mounted), so it is implemented as a key-injectivity check over the
+dumped payloads
+— exactly what Svelte 5's `each_key_duplicate` checks — with the render itself covered in a real
+browser by `04-title-card.spec.js::the worst cross-department titles open without a console error`.
+The script says so in its own docstring. **No count is published here** until a real run prints one,
+which is decision 184's rule applied to the milestone that follows it.
+
+**M4.8 shipped before it, and it is not in §12 — it was about this file's own subject.** The
 eleven milestones between M4.5 and M5 are all failure-driven, and the review that produced them
 found that the instrument reporting on them could not report: `ci.yml` ran on `push: main` alone, so
 four milestones reached main having never run on Linux; the fixture every importer and placement

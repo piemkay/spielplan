@@ -24,15 +24,20 @@ from collections.abc import Sequence
 
 import asyncpg
 
-# The same ranking `home/why.py` uses, and for the same reason: §4.1 calls the extracted tier
-# quote-verified and the projected tier inferred, so extracted speaks louder — while both stay
-# fully admissible. Ranges: extracted 0.73..1.00, projected 0.00..0.30.
-TERM_WEIGHT = """
-        CASE d.tier
-            WHEN 'extracted' THEN 0.60 + 0.40 * (COALESCE(d.salience, 1.0) / 3.0)
-            ELSE 0.30 * COALESCE(d.confidence, 0.5)
-        END
-"""
+from spielplan.db import dna_terms
+
+# The same ranking `home/why.py` uses, and now literally the same string: §4.1 calls the
+# extracted tier quote-verified and the projected tier inferred, so extracted speaks louder
+# while both stay fully admissible.
+#
+# It was a verbatim copy until M4.9, and the copy is what let both comments keep promising
+# "extracted 0.73..1.00, projected 0.00..0.30" after the projected branch had started running to
+# 2.40 — the `dna_tagged` view exposes `dna_projected.weight` as `confidence`, and the importer
+# stores `n_sources` there. Everything on this surface reads the number: the tilt vectors, the
+# authored-axis positions, `terms_carried_by` and §6.2 step 7's per-person match lines, so a
+# projection outranking a quote-verified tag was not a Home-only defect. [M4.9 finding 20,
+# decision 188]
+TERM_WEIGHT = dna_terms.TERM_WEIGHT
 
 
 async def vectors_for(
@@ -92,10 +97,10 @@ async def poles_for(conn: asyncpg.Connection, *, version: str) -> dict[str, tupl
 
 async def active_version(conn: asyncpg.Connection) -> str | None:
     """The vocabulary every read here is scoped to. Same resolution `home/why.py` uses, so two
-    surfaces cannot disagree about which vocabulary is live."""
-    return await conn.fetchval(
-        "SELECT version FROM dna_vocabulary ORDER BY imported_at DESC, version DESC LIMIT 1"
-    )
+    surfaces cannot disagree about which vocabulary is live — which was true by duplication and
+    is now true by construction: both call `db/dna_terms.active_version`, which is also the
+    statement the catalog's WHERE builder inlines. [M4.9 finding 10]"""
+    return await dna_terms.active_version(conn)
 
 
 async def terms_carried_by(

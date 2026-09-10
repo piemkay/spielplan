@@ -30,6 +30,7 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import asyncpg
@@ -1094,6 +1095,86 @@ async def test_a_tap_reaches_the_transparency_rail(db, rate_client):
     before = len(rail.recent(user_id=user_id))
     await client.post("/api/rate/skip", json={"card_token": body["card"]["token"]})
     assert len(rail.recent(user_id=user_id)) == before, "a skip is not a model write"
+    rail.forget()
+
+
+async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms(
+    db, rate_client
+):
+    """§6.7's commonest line: `verdict(jenny, Heat) = liked -> ordered-logit arm, incremental
+    refit 31 ms` — the person, the film, and what the write actually cost.
+
+    What shipped instead was `ledger/observations.py`'s audit sentence forwarded unchanged,
+    `verdict(title 3) = liked -> ordered-logit arm`: a bare integer, which §6.8 rules out
+    because nothing on the client can resolve it into the film it names. `rail.verdict_line`
+    had rendered §6.7's format since M2 and was called from `test_home.py` and from
+    `ops/devstub.py:1782`, which has narrated the person, the film and the ms since M2 — the
+    harness modelled the line the app it stands in for never sent. The event's own `title_id`
+    field was null at every producer, and the incremental refit's milliseconds were computed
+    in the same handler and thrown away.
+
+    Driven through the route rather than through `record_verdict`, because the four facts meet
+    in three different places: the person is the request's session user, the film and the label
+    are the handler's, and the milliseconds come from the ledger delta the same response
+    reports under `ledger.ms` — which is what lets the number in the line be checked against
+    something other than itself.
+
+    The films are named rather than numbered on purpose. `Title 5` would satisfy the negative
+    assertion below by accident; a cast with no digit in it makes any digit in the sentence one
+    the renderer put there.
+    """
+    from spielplan.home import rail
+
+    films = ["Heat", "Drive", "Ronin", "Collateral", "Thief", "Sicario", "Zodiac", "Michael Clayton"]
+    client, user_id = rate_client
+    rail.forget()
+    await make_titles(db, [(i, "movie", films[i - 1]) for i in range(1, 9)])
+    await seed_ledger(db, user_id, range(1, 9))
+    for title_id in (1, 2, 3, 4):
+        await label(db, user_id, title_id, 2)
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    rater = (await client.get("/api/auth/me")).json()["name"]
+
+    card = (await client.get("/api/rate")).json()["card"]
+    rated_id, rated_name = card["title"]["id"], card["title"]["name"]
+    assert not any(ch.isdigit() for ch in rated_name), "the cast must carry no digits"
+
+    body = (
+        await client.post("/api/rate/verdict", json={"card_token": card["token"], "value": 2})
+    ).json()
+    assert body["ledger"]["applied"] is True, (
+        "the fixture owes a real incremental refit, or the ms in the line is untested"
+    )
+    ms = body["ledger"]["ms"]
+    assert ms > 0, "a refit that cost no measurable time cannot pin the number in the line"
+
+    events = rail.recent(user_id=user_id)
+    assert [e["kind"] for e in events] == ["verdict", "verdict"], (
+        "one verdict still narrates exactly two lines: the write and the seen-state push"
+    )
+    line = next(e for e in events if e["text"].startswith("verdict("))
+
+    # (a) §6.7's format, naming the person and the film's NAME. Compared against the renderer
+    # rather than against a literal because `test_home.py` already pins what that renderer
+    # emits; what is under test here is that the producer calls it, with these four facts.
+    assert line["text"] == rail.verdict_line(rater, rated_name, "liked", refit_ms=ms)
+    assert f"verdict({rater}, {rated_name}) = liked" in line["text"]
+    assert "ordered-logit arm" in line["text"]
+
+    # (b) the milliseconds are the delta's own, not a decoration: the same number the response
+    # reports under `ledger.ms`, which `refit.update_incrementally` measured.
+    printed = re.search(r"incremental refit (\d+) ms", line["text"])
+    assert printed is not None, line["text"]
+    assert printed.group(1) == f"{ms:.0f}"
+
+    # (c) the event's own field, null at every producer before this one.
+    assert line["title_id"] == rated_id
+
+    # And the negative the finding is named after.
+    assert re.search(r"title \d", line["text"]) is None, line["text"]
+
+    # One sentence, not two renderings: §6.1's per-response echo is the same line the rail took.
+    assert body["log"][0] == line["text"]
     rail.forget()
 
 

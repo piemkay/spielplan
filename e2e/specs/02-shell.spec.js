@@ -113,3 +113,102 @@ test('a deep link while signed out lands on sign-in, not a broken shell', async 
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
 });
+
+// --- §6.7's drawer, now that it is shell chrome ----------------------------------------------
+
+/** Decision 117's switch, set through the route the account dropdown PATCHes.
+ *
+ *  Through the API rather than the menu here, unlike the toggle test above: that test's subject
+ *  IS the control, while these two are about a drawer that the control merely gates, and each
+ *  of them crosses four surfaces where re-opening the dropdown would be four more chances for
+ *  an unrelated flake. `10-home.spec.js` seeds the same preference the same way. */
+async function showModel(page, on) {
+  const res = await page.request.post('/api/auth/preferences', { data: { show_model: on } });
+  expect(res.ok(), `setting show_model=${on}: ${res.status()}`).toBeTruthy();
+}
+
+test('the model rail opens from every surface, not only Home', async ({ page }) => {
+  // §6.7 calls the rail "the primary M2 debugging instrument" and proposal 118 requires it
+  // "reachable in two taps" — from wherever the person is when the model does something
+  // surprising, which is Rate and Rank more often than Home. It was mounted inside
+  // `routes/+page.svelte`, so the four surfaces that write the events it narrates could not
+  // open it at all, and the keyboard shortcut only worked on the one screen that did not need
+  // it. [M4.9 finding 25]
+  //
+  // ONE mount and ONE control, asserted as counts rather than as visibility: the failure mode
+  // of moving a drawer into the shell is leaving the old mount behind, and two drawers reading
+  // the same ephemeral log render two copies of every line while only one of them closes.
+  await showModel(page, true);
+  try {
+    for (const surface of ['/', '/rate', '/rank', '/tonight']) {
+      await page.goto(surface);
+      // Not bounced: the trigger is absent on `/login` and `/setup` too, for a reason that has
+      // nothing to do with where the drawer is mounted.
+      await expect(page, `${surface} bounced to sign-in`).not.toHaveURL(/\/login$/);
+
+      const trigger = page.getByTestId('model-rail-open');
+      await expect(trigger, `no rail control on ${surface}`).toHaveCount(1);
+      await trigger.click();
+
+      const rail = page.getByTestId('model-rail');
+      await expect(rail, `${surface} mounted the drawer more than once`).toHaveCount(1);
+      await expect(rail).toBeVisible();
+      // §6.7's header is the promise the drawer makes about itself; proposal 118 pins the
+      // depth ("the last 15 events — a pinned depth, not 'about fifteen'").
+      await expect(rail).toContainText('last 15 events');
+
+      await page.getByTestId('model-rail-close').click();
+      await expect(rail, `${surface} could not close the drawer it opened`).toHaveCount(0);
+    }
+  } finally {
+    // Default off is part of the contract, and every spec after this file opens on it.
+    await showModel(page, false);
+  }
+});
+
+test('reopening the rail refills it from the live log, once', async ({ page }) => {
+  // The half of §6.7's "ephemeral log … never persisted" that only a real server can answer.
+  //
+  // THE OTHER HALF IS NOT HERE, AND CANNOT BE. The drawer must drop its payload on close, so
+  // that the frame between a reopen and its refetch is the "reading the journal" branch rather
+  // than the previous open's events under a live header. That frame is one round trip long, so
+  // asserting it needs the response held — and this layer cannot hold it: the app is a PWA, and
+  // although `src/service-worker.js` refuses to cache anything under `/api` it is still what
+  // every request passes through, which is enough that `page.route` never sees one. Blocking
+  // service workers means a browser context of this test's own, and a filename-ordered suite
+  // that signs in once has none to spend. It is asserted where the claim lives, against a
+  // mounted component with the reply held open, in
+  // `frontend/src/lib/components/ModelRail.svelte.test.js`. [M4.9 finding 27]
+  //
+  // What is left here is the complement, and it is the part that would still be broken if the
+  // clear were the whole fix: a drawer that drops the payload and does not read it back is a
+  // panel stuck on the loading line, and one that merges instead of replacing shows every line
+  // twice. §6.7's deque is ephemeral in the server's process, not in the drawer, so a close
+  // that writes nothing leaves the same body to come back — whether that body is events or the
+  // "nothing written yet" line depends on what this run has done by now, and the assertion is
+  // that it is the SAME one either way.
+  await showModel(page, true);
+  try {
+    await page.goto('/');
+    const rail = page.getByTestId('model-rail');
+    const body = rail.getByTestId('model-rail-event').or(rail.getByTestId('model-rail-empty'));
+
+    await page.getByTestId('model-rail-open').click();
+    await expect(rail).toBeVisible();
+    await expect(body.first(), 'the first open never finished reading').toBeVisible();
+    const read = await body.allTextContents();
+
+    await page.getByTestId('model-rail-close').click();
+    await expect(rail).toHaveCount(0);
+
+    await page.getByTestId('model-rail-open').click();
+    await expect(rail).toBeVisible();
+    await expect(body.first(), 'the reopened drawer never finished reading').toBeVisible();
+    expect(await body.allTextContents(), 'the reopened drawer is not the log again').toEqual(read);
+    // §6.7's header is the promise the drawer makes about itself, and it is the promise the
+    // reopened one has to be able to keep.
+    await expect(rail).toContainText('last 15 events');
+  } finally {
+    await showModel(page, false);
+  }
+});

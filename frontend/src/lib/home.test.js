@@ -8,7 +8,6 @@ import {
   eventTime,
   facetColour,
   gridReason,
-  hasModelAnnotations,
   homeMode,
   kindsOnShelf,
   plural,
@@ -221,6 +220,8 @@ describe('the shelf card (proposal 29)', () => {
       runtime_min: 95,
       poster_path: null,
       placement: 'warm',
+      item_n: 480,
+      e_source: 'backbone',
       seen: true,
       rank: 3,
       tier: 'A+'
@@ -233,6 +234,8 @@ describe('the shelf card (proposal 29)', () => {
       runtime_min: 95,
       poster_path: null,
       placement: 'warm',
+      item_n: 480,
+      e_source: 'backbone',
       seen_state: 'seen'
     });
   });
@@ -240,13 +243,18 @@ describe('the shelf card (proposal 29)', () => {
   it('maps an unseen card to the string the catalog card expects, not to false', () => {
     expect(toPosterTitle({ title_id: 1, seen: false }).seen_state).toBe('unseen');
   });
-});
 
-describe('decision 117: the gate is the payload, not a local boolean', () => {
-  it('reads the annotations as present only when the server sent the rail', () => {
-    expect(hasModelAnnotations({ rail: [] })).toBe(true);
-    expect(hasModelAnnotations({ shelves: [] })).toBe(false);
-    expect(hasModelAnnotations(null)).toBe(false);
+  it('carries the two fields the no-crowd-data badge is decided on', () => {
+    // §8 stage 10's badge is off `e_source`/`item_n`, not off `placement` — PosterCard's own
+    // comment says so. The server moved both out of the decision-117 `model` block for exactly
+    // this reason; a rename that drops them here puts the card straight back on the fallback,
+    // where 111 of the 130 badges Home drew were false. [M4.9 finding 18]
+    const warm = toPosterTitle({ title_id: 7, placement: 'cold_tower', item_n: 480, e_source: 'backbone' });
+    expect(warm.e_source).toBe('backbone');
+    expect(warm.item_n).toBe(480);
+    const cold = toPosterTitle({ title_id: 8, placement: 'warm', item_n: 0, e_source: 'cold_tower' });
+    expect(cold.e_source).toBe('cold_tower');
+    expect(cold.item_n).toBe(0);
   });
 });
 
@@ -254,10 +262,19 @@ describe('the data voice (§6.8)', () => {
   it('gives every vocabulary-v1 facet its own colour token', () => {
     for (const facet of [
       'mood', 'themes', 'pacing', 'structure', 'visual', 'sound',
-      'character', 'place', 'era', 'sensibility', 'register'
+      'characters', 'place', 'era', 'sensibility', 'register'
     ]) {
       expect(facetColour(facet)).toBe(`var(--facet-${facet})`);
     }
+  });
+
+  it('spells the fifth facet the way the shipped vocabulary does', () => {
+    // The shipped file is `vocab_characters_v1.tsv` and every shipped term prefix is
+    // `characters`, so the singular named a twelfth facet no row can carry and left the real one
+    // at the neutral. The negative half is the point: seven sites agreed on `character` and the
+    // static guard pinned it, so the palette was consistent and wrong. [M4.9 finding 4]
+    expect(facetColour('characters')).toBe('var(--facet-characters)');
+    expect(facetColour('character')).toBe('var(--ink-4)');
   });
 
   it('never lends the ember to an unknown facet', () => {

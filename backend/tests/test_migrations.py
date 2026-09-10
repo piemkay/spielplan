@@ -2,6 +2,11 @@
 
 Runs against PGlite — a real Postgres compiled to wasm — so DDL errors are caught on a machine
 with no Docker. Skips when `tests/pglite/node_modules` is absent; see tests/pglite/README.md.
+
+One exception, at the foot of the file: 0018's DNA facet backfill is a data rewrite, and
+`apply.mjs` reports catalogue shape over an empty database. That one test takes the `db` fixture
+and so needs TEST_DATABASE_URL, for the reason `test_schema_contracts.py` gives — a migration
+whose UPDATE is never run against rows is a comment with punctuation.
 """
 
 from __future__ import annotations
@@ -343,3 +348,182 @@ def test_a_retracted_answer_does_not_block_its_own_replacement(schema):
     assert "retracted_at IS NULL" in seq[0]["indexdef"], (
         "a non-partial unique index here turns undo into a one-way door"
     )
+
+
+# --- M4.9's read layer (0018) -----------------------------------------------------------
+
+
+def _primary_key(schema: dict, table: str, table_schema: str = "public") -> list[str]:
+    """The primary key's columns, in key order, read off the index PGlite reports.
+
+    `information_schema.table_constraints` would name the constraint; `pg_indexes` is what
+    `apply.mjs` already collects, and the indexdef carries the ORDER — which is the half that
+    matters here, because (title_id, source, key) and (title_id, key, source) are the same set
+    and only one of them prefixes the lookups the read layer makes.
+    """
+    for row in schema["indexes"]:
+        if row["table_schema"] == table_schema and row["indexname"] == f"{table}_pkey":
+            inner = row["indexdef"][row["indexdef"].index("(") + 1: row["indexdef"].rindex(")")]
+            return [c.strip() for c in inner.split(",")]
+    raise AssertionError(f"{table_schema}.{table} has no primary key index")
+
+
+def test_the_two_per_source_tables_carry_the_corpus_key_and_not_the_apps(schema):
+    """§4.1 opens "tables mirror the corpus export" and says of `title_meta`: "multi-source,
+    per-source rows kept — one block = one droppable source". `0015_seed.sql` section 9 applied
+    that to `title_language`, `title_country` and `platform_rating`; 0018 finishes the sweep.
+
+    `title_company` is the measured half, in 0015's own two-column form: 47,607 shipped rows,
+    8,594 duplicate groups under the app's `(title_id, company, role)` key, 11,654 rows
+    discarded. A group count is not a row count, and this file's whole subject is per-source row
+    multiplicity (decision 195). That is why `importer/load.py` names the whole table in
+    `SKIPPED_TABLES`; decision 193 re-keys it and loads it on §4.1's spine-list terms.
+    `placement/features.py` does count company rows into the thin-title meta block, but
+    `n_companies_log` is a column of no contract this app has loaded, so that count is produced
+    and discarded rather than fed to the tower (decision 194).
+
+    `title_video` is the unmeasured half, and is asserted for the reason 0015's three were: the
+    shipped bundle has one video source and zero collisions, so nothing is wrong until a second
+    source reports a trailer the first already lists, at which point a green `validate()` becomes
+    a 500 on COPY. The key is the corpus's `(title_id, source, key)` and NOT the app's `site`
+    plus `source` — `site` stays an ordinary column (it is what §6.0's card would link out to)
+    and carries no key role, because the corpus's own primary key already guarantees that no two
+    rows share (title_id, source, key).
+    """
+    assert _primary_key(schema, "title_company") == ["title_id", "source", "company", "role"]
+    assert _primary_key(schema, "title_video") == ["title_id", "source", "key"]
+
+    video = _columns(schema, "title_video")
+    assert "site" in video, "0018 demotes `site` out of the key; it does not drop it"
+    assert video["source"]["is_nullable"] == "NO"
+    company = _columns(schema, "title_company")
+    assert company["source"]["is_nullable"] == "NO", (
+        "an unattributed row must have one spelling, not NULL beside '': it is a key component"
+    )
+
+
+def test_rating_source_can_hold_the_terms_each_dataset_ships_with(schema):
+    """§4.1 rule 4's eleven frozen ids are the only place the corpus recorded per-dataset terms:
+    the Netflix Prize's research-use-only clause, the CC BY attributions naming their authors,
+    the version each dataset's ids were frozen against. `0003_content.sql` kept `id`, `name` and
+    `scale` alone, so no surface could print an attribution those licences require and §6.6's
+    Data card could not answer the question it exists to answer.
+
+    All four nullable and defaultless on purpose: a source that shipped no terms must read as
+    "not stated" rather than as permissively licensed, and a default would erase the difference.
+    """
+    columns = _columns(schema, "rating_source")
+    for name in ("url", "license", "version", "notes"):
+        assert name in columns, f"0018 must add rating_source.{name}"
+        assert columns[name]["is_nullable"] == "YES", (
+            f"rating_source.{name} unstated must stay distinguishable from {name} being empty"
+        )
+    # Rule 4's frozen-id CHECK is the one thing here that must NOT have moved; adding columns to
+    # a table is exactly the edit that quietly rewrites it.
+    # `test_the_database_refuses_a_renumbered_rating_source` proves it still bites.
+    assert columns["id"]["is_nullable"] == "NO"
+
+
+def _facet_backfill_statements() -> list[str]:
+    """0018 section 1's two UPDATEs, read out of the shipped file rather than restated here.
+
+    A restatement would test a paraphrase; the assertion below is about the SQL that actually
+    runs on every existing install. Section 2's `UPDATE dna_tag SET provider = ''` must not be
+    swept in with them, so the filter is the `split_part` only section 1 uses.
+
+    Comments come off before the split rather than after: this file's headers quote spec
+    sentences, several of which carry a semicolon, so splitting the raw text first cuts a
+    statement's own chunk open at a clause boundary in prose.
+    """
+    body = (MIGRATIONS / "0018_read_layer.sql").read_text(encoding="utf-8")
+    code = " ".join(
+        line for line in body.splitlines() if not line.strip().startswith("--")
+    )
+    found = [s.strip() + ";" for s in code.split(";") if "split_part(term" in s]
+    assert len(found) == 2 and all(s.startswith("UPDATE") for s in found), (
+        f"0018 section 1 is two UPDATEs, one per DNA tier; found {found}"
+    )
+    return found
+
+
+async def test_the_dna_facet_backfill_repairs_each_row_once_and_then_changes_nothing(db):
+    """§4.3: a `dna_vocab/v1` id is `facet.term`, and decision 162 seeds content ONCE.
+
+    That second clause is why this is a migration and not only a loader fix. The install the
+    M4.5 exit criterion already seeded has no re-import, so `dna_tag.facet` stays `mood_tone`
+    for ever unless something rewrites it in place: 29,188 `dna_tag` rows and 206,151
+    `dna_projected` rows on the shipped bundle carry the label the extraction pass ran under
+    (`character_dynamics`) where `dna_facet`, `dna_term`, §6.4's axes and §6.8's eleven-colour
+    palette all key on the vocabulary facet id (`characters`).
+
+    Idempotence is asserted by running the shipped statements a second time and reading the
+    command tag, because a backfill nobody can re-run is a backfill nobody can verify: an
+    operator unsure whether 0018 reached their install has to be able to execute section 1 by
+    hand and read `UPDATE 0`, rather than wonder what a second pass just touched.
+
+    The undotted row is the `term LIKE '%.%'` guard, asserted rather than trusted — and what the
+    guard prevents is not a NULL. `split_part(term, '.', 1)` returns the WHOLE string when there
+    is no delimiter (it is field 2 that answers `''`), so the unguarded form would overwrite
+    every row of a future undotted vocabulary with the term id itself: a facet that joins no
+    `dna_facet` row, renders `var(--ink-4)` on every chip, and reads as plausible. The last
+    block below runs the unguarded form in a transaction it rolls back and reads that value
+    out, so the reason recorded here is a measurement rather than a belief about `split_part`.
+    An undotted vocabulary is also why 0018 adds no CHECK pinning
+    `facet = split_part(term, '.', 1)`. [M4.9 review cycle 1: M49-FACET-02]
+    """
+    statements = _facet_backfill_statements()
+    await db.execute("INSERT INTO title (id, kind, name) VALUES (1, 'movie', 'x')")
+    await db.execute(
+        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 11, 3)"
+    )
+    await db.execute(
+        "INSERT INTO dna_tag (title_id, version, term, facet, salience) VALUES "
+        "(1, 'v1', 'characters.morally_grey', 'character_dynamics', 2), "
+        "(1, 'v1', 'mood.dread', 'mood', 3), "
+        "(1, 'v1', 'undotted_legacy_term', 'legacy', 1)"
+    )
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight) VALUES "
+        "(1, 'v1', 'themes.obsession', 'narrative_themes', 0.5), "
+        "(1, 'v1', 'undotted_legacy_term', 'legacy', 0.5)"
+    )
+
+    first = [await db.execute(s) for s in statements]
+    assert first == ["UPDATE 1", "UPDATE 1"], (
+        f"one mismatched row per tier, and neither the already-correct nor the undotted: {first}"
+    )
+    assert await db.fetchval(
+        "SELECT facet FROM dna_tag WHERE term = 'characters.morally_grey'"
+    ) == "characters"
+    assert await db.fetchval(
+        "SELECT facet FROM dna_projected WHERE term = 'themes.obsession'"
+    ) == "themes"
+    kept = await db.fetch(
+        "SELECT facet FROM dna_tag WHERE term = 'undotted_legacy_term' "
+        "UNION ALL SELECT facet FROM dna_projected WHERE term = 'undotted_legacy_term'"
+    )
+    assert [r["facet"] for r in kept] == ["legacy", "legacy"], (
+        "the LIKE '%.%' guard is what keeps split_part from rewriting an undotted vocabulary's "
+        "facet to the term id itself"
+    )
+
+    again = [await db.execute(s) for s in statements]
+    assert again == ["UPDATE 0", "UPDATE 0"], f"the backfill is not idempotent: {again}"
+
+    # What the guard actually prevents, run rather than asserted from memory. Rolled back, so
+    # the rows above stay as the assertions left them.
+    transaction = db.transaction()
+    await transaction.start()
+    try:
+        assert await db.fetchval("SELECT split_part('undotted_legacy_term', '.', 1)") == (
+            "undotted_legacy_term"
+        ), "split_part returns the whole string with no delimiter; field 2 is the empty one"
+        await db.execute("UPDATE dna_tag SET facet = split_part(term, '.', 1)")
+        assert await db.fetchval(
+            "SELECT facet FROM dna_tag WHERE term = 'undotted_legacy_term'"
+        ) == "undotted_legacy_term", (
+            "the unguarded form writes the term id into `facet`, which is a value that joins no "
+            "`dna_facet` row -- not the NULL a NOT NULL column would have refused"
+        )
+    finally:
+        await transaction.rollback()

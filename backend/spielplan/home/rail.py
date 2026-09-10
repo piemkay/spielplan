@@ -76,6 +76,28 @@ EVENT_KINDS: tuple[str, ...] = (
     "bundle_swap",
 )
 
+# Declared, coloured by `ModelRail.svelte`, and produced by nobody — on purpose, and named here
+# so "nobody produces it" is a recorded state rather than something a reader has to discover by
+# grepping. All five are WORKER-side writes: the nightly MAP refit, the incremental refit the
+# worker runs, the fold-in, the blend-weight fit and the Cold Tower placement sweep. §6.7 says
+# the log is "never persisted", so it is an in-process ring buffer (see the module docstring) —
+# and an event recorded in the worker process therefore reaches no web request's rail. Narrating
+# them would take a cross-process channel this milestone does not build, and deleting them would
+# throw away the colour rules and the renderers (`refit_line`, `placement_line`) that the
+# milestone which does build it will need. So they stay declared, and this tuple is the thing a
+# guard can read. [decision 189, M4.9 finding 24]
+#
+# `bundle_swap` and `reconcile` are deliberately NOT here: both are written inside the WEB
+# process, at `importer/bundle.py`'s hot swap and its in-request rebuild sweep, so they reach a
+# rail today and are held to the "has a producer" half of the guard.
+AWAITING_PRODUCER: tuple[str, ...] = (
+    "ledger_refit",
+    "ledger_incremental",
+    "foldin",
+    "blend_weight",
+    "placement",
+)
+
 # Decision 117's inventory, and the only thing `redact` knows about. `model` is the per-card
 # annotation block; `rail` is §6.7's log; `suppressed` is the shelf-by-shelf account of what did
 # not ship and why, which is a debugging instrument by the same argument.
@@ -195,12 +217,24 @@ def recent(*, user_id: int, limit: int = RAIL_LIMIT) -> list[dict[str, Any]]:
     writes that explain a Home page changing overnight; another *person's* events are not,
     because §6.7's rail narrates this user's model and decision 117 turns the toggle on for one
     account only.
+
+    THE CAP IS APPLIED BEFORE THE MERGE, and that is the whole of finding 26. Two deques of
+    `RAIL_LIMIT` were concatenated and only then sliced, so `?limit=50` answered with up to
+    thirty events on a surface whose spec sentence is "last ~15" — the buffer was bounded and
+    the response was not. `keep` bounds both reads and the result, so no argument reaches past
+    §6.7's number and the route's `le=RAIL_LIMIT` refuses at the edge rather than depending on
+    this function to truncate. Taking the newest `keep` of each deque first is not an
+    optimisation with a different answer: an event in the final slice is among the newest `keep`
+    of the deque it came from, because ids increase with time in one process-wide counter.
     """
+    keep = min(max(int(limit), 0), RAIL_LIMIT)
+    if keep == 0:
+        return []
     with _LOCK:
-        mine = list(_BUFFERS.get(user_id, ()))
-        ours = list(_BUFFERS.get(HOUSEHOLD, ()))
+        mine = list(_BUFFERS.get(user_id, ()))[-keep:]
+        ours = list(_BUFFERS.get(HOUSEHOLD, ()))[-keep:]
     merged = sorted(mine + ours, key=lambda e: e["id"], reverse=True)
-    return [dict(e) for e in merged[:limit]]
+    return [dict(e) for e in merged[:keep]]
 
 
 def forget(*, user_id: int | None = None) -> int:

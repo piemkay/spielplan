@@ -34,14 +34,14 @@ edit plus a copy change rather than a redesign.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 import asyncpg
 
 from spielplan.db import library
-from spielplan.home import rail
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
 from spielplan.scoring import serve
@@ -135,6 +135,8 @@ class Suppressed:
     shelf: str
     kind: str | None
     reason: str
+    # How long the builder that decided this took. NOT in `as_dict`: see `Section.ms`.
+    ms: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"shelf": self.shelf, "kind": self.kind, "reason": self.reason}
@@ -155,6 +157,17 @@ class Section:
     anchor: dict[str, Any] | None = None
     items: list[dict[str, Any]] = field(default_factory=list)
     see_all: dict[str, Any] | None = None
+    # How long this section's builder took, in milliseconds, filled by `build_shelves`.
+    #
+    # NOT IN `as_dict`, and that is the whole design. perf-10 is a fan-out to measure — six
+    # shelves x two kinds, each with its own reads over `dna_tagged` — and the number that
+    # measures it is a debugging annotation by decision 117's own definition. `rail.py`'s
+    # docstring warns that "a builder that invents a new top-level numeric block does not
+    # inherit the gate", so a per-section `ms` rendered beside the why-line would be a number
+    # about this viewer's request travelling ungated past a gate implemented as a deletion.
+    # `build_home` puts the roll-up inside the gated `model` block and `api/home.py` writes the
+    # line to the server log, which is where a measurement belongs. [M4.9 finding 21]
+    ms: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -364,6 +377,14 @@ def _card(
     lives in `model`, which decision 117's gate removes wholesale (`rail.redact`).
 
     §6.3's straddle and tension badges deliberately do not appear — Home shows the settled tier.
+
+    AND "SETTLED" IS THE MODEL'S. Decision 187 fixes proposal 29's undefined word: settled means
+    the fitted tier, `ledger_state.tier` — the value that settles after a refit — so `CARD_FROM`
+    joins no `tier_edit` and this letter is not the one Rank renders. The two disagree for
+    exactly as long as a drop takes to be absorbed, which is the disagreement §6.3 makes visible
+    with a tension badge on the surface built to show it; proposal 29 forbids that badge here,
+    so Home states the model's reading and says nothing it cannot qualify. The one sentence on
+    Home that must read the drop instead is shelf 1's headline, because its verb is "you put".
     """
     index = row["tier"]
     tier = tier_set[index] if index is not None and 0 <= index < len(tier_set) else None
@@ -375,6 +396,19 @@ def _card(
         "runtime_min": row["runtime_min"],
         "poster_path": row["poster_path"],
         "placement": row["placement"],
+        # OUTSIDE `model`, deliberately. §8 stage 10's badge — "new — model placement, no crowd
+        # data" — is PRODUCT, not debugging, and decision 117's gate strips `model` wholesale
+        # (`rail.GATED_KEYS`), so a badge computed from these two would simply vanish for every
+        # person with the toggle off, which is everyone by default. `PosterCard.svelte:47-55`
+        # states the rule the card must follow and it is the specification: "Off `e_source`/
+        # `item_n`, NOT off `title.placement`." With them gated, `placement` was the only branch
+        # Home could reach, and `0008_placement.sql:54-58` stamps `cold_tower` on any title with
+        # a Backbone row and `item_n < 90` — so on the reference library 111 of the 130 badges
+        # Home drew were false. `placement` stays beside them because §6.3's chrome and the
+        # Cold Tower shelf both read it; what changed is that it is no longer the only thing a
+        # card carries about its crowd support. [M4.9 finding 18]
+        "item_n": row["item_n"],
+        "e_source": row["e_source"],
         "seen": bool(row["seen"]),
         "rank": rank,
         "tier": tier,
@@ -386,8 +420,6 @@ def _card(
             "cf": _float(row["cf"]),
             "b": _float(row["b"]),
             "gate": _float(row["gate"]),
-            "item_n": row["item_n"],
-            "e_source": row["e_source"],
             "beta": beta,
             "s": _float(row["s"]),
             "sigma": _float(row["sigma"]),
@@ -480,13 +512,39 @@ async def because_anchor(
     # Proposal 24: "Shelf 1's anchor is the user's top-scoring **seen** title in the active
     # kind." No fallback to the top-scoring title: the section says "Because you put X in A",
     # which is only true of a title this person actually placed.
+    #
+    # TWO PREDICATES, NOT ONE, and neither implies the other. `ut.state = 'seen'` is proposal
+    # 24's; `ls.observed` is §6.3's "every rated title", read exactly as `rank/read.py:6` reads
+    # it. They came apart because `refit_user` writes a `ledger_state` row for EVERY owned title
+    # of the kind, observed or not (`ledger/refit.py:350-374`) — so a title §7.2's sync merely
+    # marked watched arrived here with a fitted `tier`, and won the ORDER BY whenever its prior
+    # beat the rated titles. Home then said "Because you put Title 9 in C" about a title with
+    # zero observations, which is not even on the Rank board that sentence is quoting.
+    # The converse fails too, which is why the `seen` join stays: a verdict implies seen
+    # (`ledger/observations.py:640-641`) but a duel or a tier edit does not, so an observed
+    # title can be one this person has never watched. [M4.9 finding 15]
+    #
+    # WHICH TIER THE HEADLINE NAMES is the same question §6.3 answers for the board, and the
+    # verb decides it: "Because you PUT X in A" is a sentence about the last thing this person
+    # did, not about the fit. `rank/board.py:20-27` — "the most recent `tier_edit` decides where
+    # a title renders, and the model decides it only when there is no edit" — so the same
+    # `DISTINCT ON (title_id)` subquery `rank/read.py:99-104` uses is joined here, rather than a
+    # correlated subquery that would re-run per row against an index keyed (user_id, created_at)
+    # which cannot answer "this title's latest". `model_tier` travels alongside because the
+    # range check below is about the FIT, not about the drop. [M4.9 finding 16, decision 187]
     anchor = await conn.fetchrow(
         """
-        SELECT t.id, t.name, ls.tier
+        SELECT t.id, t.name, ls.tier AS model_tier, COALESCE(te.tier, ls.tier) AS tier
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
-         WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL
+          LEFT JOIN (
+              SELECT DISTINCT ON (title_id) title_id, tier
+                FROM tier_edit
+               WHERE user_id = $1
+               ORDER BY title_id, created_at DESC, id DESC
+          ) te ON te.title_id = ls.title_id
+         WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
          ORDER BY ls.s DESC, t.id
          LIMIT 1
         """,
@@ -494,12 +552,29 @@ async def because_anchor(
         kind,
     )
     if anchor is None:
-        return None, Suppressed(sid, kind, "no seen title of this kind carries a fitted tier yet")
+        # Both predicates, named: "seen" and "rated" fail for different reasons and are fixed by
+        # different actions, and a reason line that names only one sends a person who has rated
+        # nothing off to mark titles watched (§6.8 — the suppressed list exists to be acted on).
+        return None, Suppressed(
+            sid, kind,
+            "no title of this kind is both seen and rated with a fitted tier yet",
+        )
 
     tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    index = int(anchor["tier"])
-    if not 0 <= index < len(tier_set):
-        return None, Suppressed(sid, kind, f"anchor tier index {index} is outside the tier set")
+    model_index = int(anchor["model_tier"])
+    if not 0 <= model_index < len(tier_set):
+        return None, Suppressed(
+            sid, kind, f"anchor tier index {model_index} is outside the tier set"
+        )
+    # CLAMPED, not suppressed, and only for the ASSIGNED tier. Decision 11 keeps `tier_edit` rows
+    # across a change in K, so a drop into a level that no longer exists is a state this shelf is
+    # guaranteed to meet — and `rank/board.py:203-213` already answers it by clamping into the
+    # current set rather than by dropping the title, because the edit is still an observation
+    # that says "the top tier they had". Suppressing shelf 1 over it would take the whole shelf
+    # down for the one person who uses drag-and-drop most. The FIT is checked above instead: a
+    # model tier outside the set means the refit and the cutpoints disagree, which is a bug
+    # rather than a state, and no clamp should paper over it. [decision 11, M4.9 finding 16]
+    index = max(0, min(len(tier_set) - 1, int(anchor["tier"])))
 
     pool = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version)
     pair = await why_mod.best_pair(
@@ -935,6 +1010,11 @@ async def build_shelves(
                                                "rank on a ledger this profile does not have")
                 )
                 continue
+            # perf-10: measured, not restructured. Every builder is timed at the one place they
+            # are all called, so the number is the same arithmetic for all six and no builder
+            # can be given a stopwatch someone else forgot. `perf_counter` and not `time`: this
+            # is an interval, and a wall clock can move backwards under NTP.
+            started = perf_counter()
             if shelf_id == "because_anchor":
                 section, note = await because_anchor(conn, ctx=ctx, kind=kind)
             elif shelf_id == "top_of_ledger":
@@ -947,10 +1027,14 @@ async def build_shelves(
                 section, note = await school_night(conn, ctx=ctx, kind=kind)
             else:
                 section, note = await new_in_library(conn, ctx=ctx, kind=kind)
+            elapsed = (perf_counter() - started) * 1000.0
             if section is not None:
+                section.ms = elapsed
                 shelf.sections.append(section)
             elif note is not None:
-                dropped.append(note)
+                # `replace` rather than assignment: `Suppressed` is frozen, because a reason line
+                # that could be edited after the fact is not a record of why a shelf did not ship.
+                dropped.append(replace(note, ms=elapsed))
         # §6.0: a shelf that cannot justify itself is ABSENT, never present and empty.
         if shelf.sections:
             shelves.append(shelf)
@@ -1025,9 +1109,20 @@ async def build_home(
         "catalog": None,
         "degraded": _degraded(bundle_version, verdicts),
         "suppressed": [],
-        # §6.7's rail travels with the surface it explains; `redact` removes it when the toggle
-        # is off, and the route omits it rather than sending an empty list.
-        "rail": rail.recent(user_id=user.id),
+        # NO EMBEDDED RAIL, for the reason `api/tonight.py` gives one file away: one drawer, not
+        # one per route. This payload carried `rail.recent(user_id=...)` because the drawer was
+        # mounted on Home and decision 117's gate was asked of the response
+        # (`hasModelAnnotations`, whose whole body was `Array.isArray(payload?.rail)`). The
+        # frontend shell stage of this milestone moved the mount into `+layout.svelte` and made
+        # `showModel` read the preference, so `ModelRail` refetches `/api/model-log` on every
+        # open and nothing in the app reads this key — up to RAIL_LIMIT events rode every Home
+        # load, on Home's cadence rather than the drawer's, for no reader. The client gate went
+        # with the key rather than staying behind it: asked of a payload that can no longer
+        # carry a rail it answers `false` for every response this function builds, so the next
+        # surface to reach for it hides the numbers decision 117 was turned on to show.
+        # `suppressed` stays: it is a Home fact, it has no route of its own, and the drawer
+        # renders it as a prop.
+        # [M4.9 review cycle 1: M49-HOME-04]
     }
 
     if mode == "grid":
@@ -1062,7 +1157,31 @@ async def build_home(
     payload["sections"] = sections_by_kind(shelves, chosen)
     payload["shelves_total"] = len(shelves)
     payload["suppressed"] = [s.as_dict() for s in dropped]
+    # INSIDE `model`, so decision 117's gate removes it with everything else it removes. This is
+    # the only top-level annotation Home's payload carries and it exists so `api/home.py` can
+    # write one measurement line without re-timing what `build_shelves` already timed.
+    payload["model"] = {"sections_ms": timings_of(shelves, dropped)}
     return payload
+
+
+def timings_of(
+    shelves: Sequence[Shelf], dropped: Sequence[Suppressed]
+) -> list[dict[str, Any]]:
+    """Every builder that ran this request, slowest first. perf-10's instrument.
+
+    Suppressed sections are in here too, and they have to be: a shelf that reads its whole
+    population and then fails `_finish`'s floor costs the same milliseconds as one that ships,
+    and a measurement that counted only what shipped would report the cheap half of the fan-out.
+    """
+    rows = [
+        {"shelf": shelf.id, "kind": section.kind, "shipped": True, "ms": round(section.ms, 1)}
+        for shelf in shelves
+        for section in shelf.sections
+    ] + [
+        {"shelf": s.shelf, "kind": s.kind, "shipped": False, "ms": round(s.ms, 1)}
+        for s in dropped
+    ]
+    return sorted(rows, key=lambda r: r["ms"], reverse=True)
 
 
 def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | None:

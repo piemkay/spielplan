@@ -447,15 +447,22 @@ async def test_a_dump_from_an_older_release_leaves_ddl_the_next_boot_cannot_appl
     [M4.7 ops-01, data-08]
     """
     # 0016 and 0017 by name rather than "the newest two": this is the release pair the README
-    # paragraph was written against, and a migration added later leaves the property where it is.
+    # paragraph was written against, and re-pointing the drill at whichever pair is newest would
+    # keep rewriting it instead of holding it. What a later migration DOES move is the restore
+    # below rather than the pair, and the original comment here claimed otherwise. [M4.9]
     older = _stage(tmp_path, "0016_users")
 
     # 1. `git checkout <the older release> && docker compose up -d --build`, first thing.
     with pytest.raises(RuntimeError, match="0017_ops"):
         await migrate.apply_all(fresh, older)
 
-    # 2. The restore that was supposed to precede it, and what it leaves behind.
-    await fresh.execute("DELETE FROM schema_migration WHERE version = '0017_ops'")
+    # 2. The restore that was supposed to precede it, and what it leaves behind. Keyed on "newer
+    # than the archive" rather than on 0017 by name, because that is what `pg_restore --clean`
+    # does to `schema_migration`: it drops the table and reloads the archive's copy, which ends
+    # at 0016 however many releases have shipped since. Naming one version left M4.9's 0018
+    # recorded here, and the older release then refused on an orphan the restore had removed --
+    # a failure of the model, not of the runner, which was reporting the state it was handed.
+    await fresh.execute("DELETE FROM schema_migration WHERE version > '0016_users'")
     await fresh.execute("DROP INDEX data_encryption_key_one_active")
     assert await fresh.fetchval("SELECT to_regclass('public.job_run')") is not None, (
         "the leftover table is the whole subject: --clean drops only what the archive carries"
@@ -507,9 +514,16 @@ async def raced(pg_url, tmp_path, monkeypatch):
         settings.cache_clear()
 
 
-async def _refuses_at_the_index(conn, directory) -> None:
-    """Apply the rest and assert 0017 aborts, leaving nothing of itself behind."""
-    _complete(directory)
+async def _refuses_at_the_index(conn, directory) -> list[str]:
+    """Apply the rest and assert 0017 aborts, leaving nothing of itself behind.
+
+    Returns what `_complete` staged in -- the rest of the release, 0017 first -- because the
+    claim the two callers make afterwards is that the documented repair lets the run finish,
+    not that 0017 is the last migration in the tree. It was when this drill was written and
+    stopped being when M4.9 added 0018, so the assertion is restated against the release the
+    fixture actually staged rather than against a version number. [M4.9]
+    """
+    rest = _complete(directory)
     with pytest.raises(asyncpg.UniqueViolationError, match="data_encryption_key_one_active"):
         await migrate.apply_all(conn, directory)
     # Each migration is its own transaction (db/migrate.py:119), so the failure leaves no half of
@@ -518,6 +532,7 @@ async def _refuses_at_the_index(conn, directory) -> None:
         "SELECT count(*) FROM schema_migration WHERE version = '0017_ops'"
     ) == 0
     assert await conn.fetchval("SELECT to_regclass('public.job_run')") is None
+    return rest
 
 
 async def test_two_active_dek_rows_abort_the_boot_and_the_documented_update_repairs_it(raced):
@@ -533,14 +548,14 @@ async def test_two_active_dek_rows_abort_the_boot_and_the_documented_update_repa
     await _seed_dek(conn, "the-winner", OLD_KEY)
     await _seed_dek(conn, "the-loser", OLD_KEY)
 
-    await _refuses_at_the_index(conn, directory)
+    rest = await _refuses_at_the_index(conn, directory)
 
     # The repair 0017's comment gives, verbatim in shape: retire, never delete — `load_dek`
     # finds a retired row by id, so every ciphertext naming the loser still opens.
     await conn.execute(
         "UPDATE data_encryption_key SET retired_at = now() WHERE key_id = 'the-loser'"
     )
-    assert await migrate.apply_all(conn, directory) == ["0017_ops"]
+    assert await migrate.apply_all(conn, directory) == rest
     assert await conn.fetchval("SELECT count(*) FROM data_encryption_key") == 2
 
 
@@ -562,7 +577,7 @@ async def test_reset_clears_the_way_when_the_racing_rows_are_the_ones_it_can_rec
         "VALUES ('jellyfin', '{}'::jsonb, $1, 'the-winner')",
         b"a-sealed-blob",
     )
-    await _refuses_at_the_index(conn, directory)
+    rest = await _refuses_at_the_index(conn, directory)
 
     monkeypatch.setenv("SECRETS_KEY", NEW_KEY)
     settings.cache_clear()
@@ -574,7 +589,7 @@ async def test_reset_clears_the_way_when_the_racing_rows_are_the_ones_it_can_rec
     assert await conn.fetchval(
         "SELECT count(*) FROM data_encryption_key WHERE retired_at IS NULL"
     ) == 0
-    assert await migrate.apply_all(conn, directory) == ["0017_ops"]
+    assert await migrate.apply_all(conn, directory) == rest
 
 
 async def test_reset_declines_the_race_it_was_asked_to_repair_when_both_rows_still_open(

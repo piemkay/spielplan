@@ -18,6 +18,27 @@ database with no admin. Without a reset it skips rather than pretending to have 
 other file adapts — it signs in if an admin exists, and skips the bundle-dependent assertions if
 nothing has been imported.
 
+## The bundle it imports
+
+`fresh` does **not** build one. `data/import` is untracked runtime state, so the suite imports
+whatever bundle is sitting there — and a fixture that has moved on since that file was written is
+tested against the old shapes, silently. `.github/workflows/ci.yml` rebuilds it on every run;
+locally it is one command, and it is what to run after any change to
+`backend/tests/fixtures/make_bundle.py`:
+
+```bash
+backend/.venv/Scripts/python -c "import sys, pathlib; sys.path.insert(0, 'backend'); \
+  from tests.fixtures.make_bundle import make_bundle; make_bundle(pathlib.Path('data/import'))"
+# POSIX: .venv/bin/python. No `pool_titles`: 10-home and test_import_integration count what
+# this writes, so the scale mode stays off here for the same reason it is off in CI.
+```
+
+A case whose subject is a fixture shape says so rather than passing vacuously.
+`04-title-card.spec.js`'s cross-department credit case fails its own precondition — "no title in
+this bundle carries a cross-department credit - nothing here is under test" — against a bundle
+built before M4.8 gave `make_bundle` the second department spelling (`eef036c`). That message
+means this command, not a broken read layer.
+
 ## Where it points
 
 `BASE_URL` defaults to `http://localhost:8080` — the real backend serving the built PWA, which

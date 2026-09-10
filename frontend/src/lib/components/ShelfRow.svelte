@@ -100,13 +100,22 @@
       <!-- Computed by the server as the intersection over the cards actually returned, so the
            chips cannot be false of a card on this row. -->
       <div class="terms">
-        {#each section.shared_terms as t (t.term)}
+        <!-- Keyed on facet AND term, delimited, like the platform-scores block on the title
+             card: `dna_tag` is unique on (title_id, version, term, provider), so §6.6's parallel
+             extraction mode puts one term on the row twice and an unkeyed duplicate throws
+             `each_key_duplicate` in the production build. [M4.9 finding 8]
+
+             The chip prints `{t.term}` alone because §4.3's vocabulary id IS `facet.term` — the
+             shipped term already carries its prefix, and `{t.facet}.{t.term}` printed
+             `narrative_themes.themes.love_romance` on real data. The facet is spent on the
+             colour instead, which is what §6.8 calls identity rather than decoration. -->
+        {#each section.shared_terms as t (t.facet + ':' + t.term)}
           <span
             class="term"
             data-testid="shelf-term"
             style:color={facetColour(t.facet)}
             style:border-color={facetColour(t.facet)}
-          >{t.facet}.{t.term}{#if t.tier === 'projected'}<span class="tier-note"> ·&nbsp;projected</span>{/if}</span>
+          >{t.term}{#if t.tier === 'projected'}<span class="tier-note"> ·&nbsp;projected</span>{/if}</span>
         {/each}
       </div>
     {/if}

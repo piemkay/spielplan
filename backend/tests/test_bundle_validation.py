@@ -21,6 +21,8 @@ import numpy as np
 import pytest
 
 from spielplan.importer import bundle as bundle_import
+from spielplan.importer import load
+from spielplan.importer.report import ImportReport
 from spielplan.importer.validate import IDENTITY_ARRAY
 from tests.fixtures import make_bundle as fx
 
@@ -687,3 +689,73 @@ def test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused(clean):
     assert not report.ok
     assert "identity" in _rules(report, "fail")
     assert any("does not carry" in f.message for f in report.failures)
+
+
+def test_a_series_runtime_that_is_a_total_is_named_in_the_report(clean):
+    """Decision 192: `runtime_min` means two things on `series`, and §10's report says so.
+
+    126 corpus series carry a season or series **total** in the column `home/shelves.py:73-75`
+    reads as minutes per episode — 67 between 110 and 199, 59 at 200 or more (*Press Gang* 1290,
+    *The Life & Times of Tim* 900). None is owned today, so nothing is visibly wrong yet, which
+    is exactly why the report is where it has to be visible. Decision 192 stops there: no
+    `episode_count`/`season_count` column, and nothing in the app dividing a total by an episode
+    count — §4.1 puts that resolution corpus-side.
+
+    The fixture's two series run 48 and 30 minutes, so the clean bundle prints no such line and
+    one is written here to make the branch reachable.
+    """
+    assert not any(f.rule == "runtime-semantics" for f in _validate(clean).findings), (
+        "the committed fixture must be clean or this test cannot tell the branch apart"
+    )
+    db = sqlite3.connect(clean / "content.sqlite")
+    db.execute("UPDATE title SET runtime_min = 1290 WHERE kind = 'series' AND id = 6")
+    db.commit()
+    db.close()
+
+    report = _validate(clean)
+
+    assert report.ok, report.render()
+    notes = [f for f in report.findings if f.rule == "runtime-semantics"]
+    assert [f.severity for f in notes] == ["note"]
+    assert notes[0].detail == {"series": 1, "threshold": 110}
+    assert "rather than minutes per episode" in notes[0].message
+
+
+# --- M4.9: the one join on the key §4.1 forbids ------------------------------------------------
+#
+# Needs a server, unlike everything above it: the check runs after the spine is loaded, because
+# `imdb_id` is UNIQUE in the corpus's own sqlite and the duplicate this refuses is one a *merged*
+# or hand-repaired spine would carry. Skipped without TEST_DATABASE_URL; see tests/conftest.py.
+
+
+async def test_a_duplicated_imdb_id_fails_the_import_naming_the_rule(db):
+    """§4.1: "`imdb_id` … must never be the join key", and `_resolve_ml_links` uses it as one.
+
+    The exception is unavoidable — MovieLens keys its link table by external ids, so there is no
+    `title_id` to join on, and rule 6 rules out `tmdb_id` because 315 tmdb_ids are legitimately
+    duplicated across the movie/series pair. What the ban protects against is a duplicated key
+    silently attaching one title's genome vector to another, and until M4.9 the only thing
+    standing in for it was a comment about rule 6. Zero duplicates on the shipped bundle, so the
+    refusal costs one aggregate and buys the guarantee the join was assuming.
+    """
+    await db.executemany(
+        "INSERT INTO title (id, kind, name, imdb_id) VALUES ($1, $2, $3, $4)",
+        [
+            (1, "movie", "Heat", "tt0113277"),
+            # The same external id on a second row: a merged spine, or a hand-repaired one.
+            (2, "movie", "Heat (1995)", "tt0113277"),
+            # Empty is not a duplicate — rule 6 coalesces absent ids and thousands share ''.
+            (3, "movie", "Untracked One", ""),
+            (4, "movie", "Untracked Two", ""),
+        ],
+    )
+    report = ImportReport()
+
+    await load._resolve_ml_links(db, report)
+
+    assert not report.ok, report.render()
+    failure = report.failures[0]
+    assert failure.rule == "ml-link"
+    assert "imdb_id must never be the join key" in failure.message.replace("`", "")
+    assert "tt0113277 (2x)" in failure.message, "the operator has to be told which value"
+    assert failure.detail["values"] == ["tt0113277"]

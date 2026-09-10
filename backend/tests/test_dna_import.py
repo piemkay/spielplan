@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from spielplan.importer import dna
+from spielplan.importer import validate as validator
 from spielplan.importer.load import SKIPPED_TABLES
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
@@ -385,6 +386,52 @@ async def test_the_projected_tier_keeps_n_sources_as_a_weight(db, vocab_dir, con
     assert "keyword:obsession" in row["via"] and "keyword:heist" in row["via"]
 
 
+async def test_the_shipped_extraction_label_becomes_a_report_note_not_data(
+    db, vocab_dir, content_db
+):
+    """§4.3 + §10: the corpus's two namings, one of which the app keys on.
+
+    The corpus keys a vocabulary id as `characters.amateur_sleuth` and files the extraction pass
+    that found the tag under its own label — `character_dynamics`, `mood_tone`,
+    `narrative_themes`. Both are correct upstream and they are not the same name for the same
+    thing, so the app has to choose: `dna_facet`, `dna_term`, §6.4's axes and §6.8's palette all
+    key on the vocabulary facet, so that is what lands and the extraction label is counted into
+    the migration report instead. 29,188 of 31,540 `dna_tag` rows and 206,151 of 223,136
+    `dna_projected` rows carry the label on the shipped bundle; the fixture ships the three
+    measured labels plus the identical remainder.
+    """
+    labelled = [row for row in fx.EXTRACTED if row[2] in fx.EXTRACTION_LABELS.values()]
+    assert labelled, "the fixture must ship extraction labels or this test asserts nothing"
+
+    await _seed_titles(db)
+    report = ImportReport()
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+    await dna.load_tags(db, content_db, "v1", report)
+    await dna.load_projected(db, content_db, "v1", report)
+
+    # The data: the vocabulary facet, on every row of both tiers, joinable to `dna_facet`.
+    for table in ("dna_tag", "dna_projected"):
+        stored = await db.fetch(f"SELECT term, facet FROM {table} WHERE version = 'v1'")
+        assert stored
+        assert all(r["facet"] == r["term"].split(".", 1)[0] for r in stored), table
+        assert not {r["facet"] for r in stored} & set(fx.EXTRACTION_LABELS.values()), table
+
+    # The report: the validator counts the rows the two namings disagree on, per tier, as a NOTE
+    # — nothing is wrong with the bundle, and §10 wants the size of the rewrite stated.
+    validation = ImportReport()
+    validator.validate_content(content_db, validation)
+    counted = [
+        f for f in validation.findings
+        if f.rule == "rule1-two-tiers" and "extraction label" in f.message
+    ]
+    assert [f.severity for f in counted] == ["note"]
+    assert counted[0].detail == {
+        "dna_tag": len(labelled),
+        "dna_projected": len([r for r in fx.PROJECTED if r[2] in fx.EXTRACTION_LABELS.values()]),
+    }
+    assert "is imported and the label is not stored" in counted[0].message
+
+
 async def test_the_shared_pairs_stay_distinguishable_across_the_two_tiers(
     db, vocab_dir, content_db
 ):
@@ -433,6 +480,36 @@ async def test_the_corrections_ledger_is_not_duplicated_by_a_re_import(db, bundl
     assert await db.fetchval("SELECT count(*) FROM credit_correction") == 1
     assert (row["title_id"], row["field"], row["new_value"]) == (8, "composer", "Kunihiko Murai")
     assert row["evidence"] == "https://example.invalid/tampopo"
+
+
+async def test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowhere(db, bundle_dir):
+    """§8 stage 3 is M5's, so §10's report may not say the ledger was applied.
+
+    The line read "N credit corrections loaded and re-applied at derive", and grep finds exactly
+    two readers of `credit_correction`: this writer and `backup/movie_data.py`. Five of the
+    shipped ledger's six rows are unreflected in the corpus's own `content.sqlite` either, so
+    nothing upstream pre-applied them. §14.5 is the scar for a derive that does not re-apply
+    them — "787 rows reverted twice" — and a report claiming the application already happens is
+    how that scar gets earned a third time.
+
+    The other half of the repair is a non-event: nothing patches `credit` at import. §8 stage 3
+    owns the application, and a second implementation of it here would be the derive-disagrees-
+    with-the-ledger failure in miniature. [M4.9 finding 32]
+    """
+    report = ImportReport()
+
+    await dna.load_corrections(db, bundle_dir / "artifacts" / "corrections_v1.tsv", report)
+
+    notes = [f for f in report.findings if f.rule == "corrections" and f.severity == "note"]
+    assert len(notes) == 1
+    assert "stored for §8 stage 3 (M5)" in notes[0].message
+    assert "nothing applies them yet" in notes[0].message
+    assert notes[0].detail["applied"] == 0
+    assert "re-applied at derive" not in report.render()
+    assert await db.fetchval("SELECT count(*) FROM credit_correction") == 1
+    assert await db.fetchval("SELECT count(*) FROM credit") == 0, (
+        "the ledger is stored, not applied — nothing here may write a credit row"
+    )
 
 
 # --- every DNA table the §10 manifest names is accounted for -----------------------------

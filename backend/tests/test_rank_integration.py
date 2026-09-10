@@ -682,7 +682,14 @@ def await_free_check_values() -> set[str]:
 @pytest.fixture
 async def tagged(db, board_of):
     """DNA rows on the fitted board, in **both** tiers and overlapping — §4.1 rule 1's
-    "14,181 (title,term) pairs exist in both and must stay distinguishable", in miniature."""
+    "14,181 (title,term) pairs exist in both and must stay distinguishable", in miniature.
+
+    The terms are stored the way the corpus ships them: §4.3's vocabulary id IS `facet.term`,
+    so `dna_tag.term` holds `mood.cosy` whole and `facet` holds the id's own prefix. They were
+    written bare here, which was this repo's spelling and never the bundle's; M4.9 rewrote the
+    predicate to read the shipped id, so a fixture in the old shape would be testing a query
+    nothing can send. [M4.9 finding 2]
+    """
     await db.execute(
         "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 1, 2) "
         "ON CONFLICT DO NOTHING"
@@ -694,17 +701,17 @@ async def tagged(db, board_of):
     )
     await db.executemany(
         "INSERT INTO dna_term (version, term, facet) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        [("v1", "cosy", "mood"), ("v1", "bleak", "mood")],
+        [("v1", "mood.cosy", "mood"), ("v1", "mood.bleak", "mood")],
     )
     await db.executemany(
         "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, n_sources) "
         "VALUES ($1, 'v1', $2, 'mood', 3, 0.2, 1)",
-        [(1, "cosy"), (2, "bleak")],
+        [(1, "mood.cosy"), (2, "mood.bleak")],
     )
     await db.executemany(
         "INSERT INTO dna_projected (title_id, version, term, facet, weight) "
         "VALUES ($1, 'v1', $2, 'mood', 0.1)",
-        [(1, "cosy"), (3, "cosy")],
+        [(1, "mood.cosy"), (3, "mood.cosy")],
     )
     return board_of
 
@@ -755,8 +762,11 @@ async def test_combining_rank_filters_intersects(db, board_of):
 
 
 async def test_a_dna_predicate_matches_bare_and_facet_qualified_alike(db, tagged):
-    """§6.3's own example is written qualified — "show only `mood.cosy`" — and `dna_tag` stores
-    only the bare term, so the qualified form exists at query time or not at all."""
+    """§6.3's own example is written qualified — "show only `mood.cosy`" — and that is the
+    string `dna_tag.term` holds, because §4.3's vocabulary id is `facet.term`. The bare half is
+    what the §6.3 filter placeholder invites a person to type, so both have to select the same
+    titles; a *different* facet in front of the same bare term is a different predicate, not a
+    looser one, which is the assertion at the foot. [M4.9 finding 2]"""
     bare = await read.items(
         db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="cosy")
     )

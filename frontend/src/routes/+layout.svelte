@@ -6,6 +6,12 @@
    * Surface names are normative (§6): Home / Rate / Tonight / Rank / Map / Taste (+ Admin).
    * M0 ships Home; the rest are present as destinations that say what milestone owns them,
    * because a nav that hides half the app teaches the wrong shape.
+   *
+   * §6.7's model rail is mounted HERE, once, for the same reason the account chip is: the
+   * per-user toggle that governs it is in that dropdown, which is on every screen. Mounted on
+   * Home alone it left the three surfaces that write the most model events substituting partial
+   * logs — Rate's per-response echo, Rank's single-element log, Tonight's embedded five
+   * [M4.9 finding 25].
    */
   import '$lib/design.css';
   import { onMount } from 'svelte';
@@ -14,7 +20,9 @@
   import { bootstrap, session, clearUser, landingRoute, refreshUser } from '$lib/session.svelte.js';
   import { post } from '$lib/api.js';
   import { reset as resetRank } from '$lib/rank.svelte.js';
+  import { closeRail, followShowModel, modelRail, toggleRail } from '$lib/rail.svelte.js';
   import AccountChip from '$lib/components/AccountChip.svelte';
+  import ModelRail from '$lib/components/ModelRail.svelte';
   import NavRail from '$lib/components/NavRail.svelte';
 
   let { children } = $props();
@@ -45,6 +53,35 @@
       $page.url.pathname.startsWith('/login') ||
       $page.url.pathname.startsWith('/account/password')
   );
+
+  // §6.7's toggle, read from the preference rather than from a payload. Home derived this
+  // from `hasModelAnnotations(home)` — decision 117's gate asked of the `/api/home` response —
+  // which is a Home fact the shell does not have and the other three surfaces never had. Rank
+  // and Rate already read the preference directly (`rank/+page.svelte:44`,
+  // `rate/+page.svelte:68`); this is that same line once, on the chrome that carries the drawer,
+  // and `session.svelte.js` keeps it current on every route.
+  const showModel = $derived(!!session.user?.show_model);
+
+  // Turning the preference off takes an open drawer with it — `+page.svelte` did this before
+  // the mount moved and it has to survive the move. The rule is in `rail.svelte.js`, where it
+  // is falsifiable without a browser; this is only the wiring.
+  $effect(() => {
+    followShowModel(session.user?.show_model);
+  });
+
+  /** Proposal 118: the rail "must be reachable in two taps" and from a keyboard shortcut. The
+   *  shortcut moved with the drawer — a rail on every surface reached by `m` on one of them is
+   *  finding 25 one layer down. `bare` routes have no shell to mount it in, so it is not a
+   *  surface the drawer is reachable from. */
+  function onRailKey(event) {
+    if (event.key !== 'm' || event.metaKey || event.ctrlKey || event.altKey) return;
+    const el = event.target;
+    if (el instanceof HTMLElement) {
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) return;
+    }
+    toggleRail(showModel && !bare);
+  }
 
   // Routes reachable before there is a signed-in user.
   const PUBLIC = ['/login', '/setup', '/account/password'];
@@ -121,6 +158,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onRailKey} />
+
 <!-- sec-05, and decision 164's consequence: /setup is `bare` (no shell, no nav) AND it is
      now a revisitable admin surface, so the banner has to be renderable outside the shell
      as well as inside it. A snippet rather than two copies: an admin past 24 h who lands on
@@ -178,6 +217,19 @@
           <span class="nobundle data">no bundle imported</span>
         {/if}
       {/if}
+      {#if showModel}
+        <!-- §6.7 calls the rail "the primary M2 debugging instrument" and proposal 118 wants it
+             two taps away. In the header it is two taps from every authed surface, which is
+             what finding 25 asked for; on Home it was two taps from one. -->
+        <button
+          class="btn-ghost railbtn"
+          onclick={() => toggleRail(showModel)}
+          data-testid="model-rail-open"
+        >
+          Model log
+          <span class="data railkey">m</span>
+        </button>
+      {/if}
       <AccountChip onLogout={logout} />
     </header>
     <div class="body">
@@ -188,6 +240,11 @@
       </main>
     </div>
   </div>
+  <!-- The one drawer. Outside `.shell` because it is fixed-position chrome rather than a row in
+       the layout, and inside this branch because `bare` routes have no chip to open it from.
+       `suppressed` is Home's, published into `rail.svelte.js` by `/` — the shell has no Home
+       payload of its own and must not acquire one. -->
+  <ModelRail open={modelRail.open} onClose={closeRail} suppressed={modelRail.suppressed} />
 {/if}
 
 <style>
@@ -245,6 +302,12 @@
     color: var(--ember-lift);
     font-size: 12.5px;
   }
+  .railbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
   .nobundle {
     border: 1px solid var(--ember-edge);
     background: var(--ember-wash);
@@ -271,6 +334,23 @@
     }
     main {
       padding: 14px 14px 24px;
+    }
+    /* The header now carries up to four items on a phone, and four do not fit. Measured on the
+       e2e `phone` project's own device (iPhone 13, 390 px): brand 95 + trigger 96 + chip
+       102-124 + the no-bundle badge's natural 112, against a 390 px row — the document scrolled
+       sideways by 36-59 px, which is 06-responsive's rule and the classic phone failure.
+       `gap: 10px` buys back the 18 px that keeps the ordinary state (a bundle imported, either
+       household name measured) on one 54 px row; `flex-wrap` is what the four-badge state does
+       instead of pushing the page sideways. The keyboard hint goes: it is not a claim worth
+       making on a device with no keyboard. */
+    header {
+      gap: 10px;
+      flex-wrap: wrap;
+      height: auto;
+      min-height: 54px;
+    }
+    .railkey {
+      display: none;
     }
   }
 </style>

@@ -14,10 +14,14 @@
 
 import { get, qs } from '$lib/api.js';
 
-/** Vocabulary v1's eleven facets (§6.8: "a fixed colour per vocabulary facet (11)"). */
+/** Vocabulary v1's eleven facets (§6.8: "a fixed colour per vocabulary facet (11)").
+ *
+ *  These are the SHIPPED ids — the prefix of every term in `dna_vocab/v1`, and since M4.9 what
+ *  `dna_tag.facet` holds too. `characters`, not `character`: the vocabulary file is
+ *  `vocab_characters_v1.tsv`. [M4.9 finding 4] */
 const FACETS = new Set([
   'mood', 'themes', 'pacing', 'structure', 'visual', 'sound',
-  'character', 'place', 'era', 'sensibility', 'register'
+  'characters', 'place', 'era', 'sensibility', 'register'
 ]);
 
 /** An unknown facet gets a neutral. §6.8 spends the ember on selection and primary actions
@@ -30,7 +34,12 @@ export function facetColour(facet) {
 
 /**
  * The shelves half: greeting, banner, six shelves, the degraded state, and — only when the
- * §6.7 toggle is on — `rail` and `suppressed`.
+ * §6.7 toggle is on — every card's `model` block and proposal 28's `suppressed` list.
+ *
+ * No `rail`, whatever the toggle says. §6.7's events ride `/api/model-log` and nothing else:
+ * the drawer is mounted once in `+layout.svelte` and refetches on open, so a copy here would
+ * refresh on Home's cadence for a reader that no longer exists — one drawer, not one per
+ * route, which is the rule `home/shelves.py` now keeps. [M4.9 review cycle 1: M49-HOME-04]
  *
  * Called WITHOUT `q`/`person_id` on purpose. The catalog grid is `/api/titles`, which is the
  * only route carrying M0's genre/decade/seen filters; asking `/api/home` for the grid would
@@ -152,6 +161,13 @@ export function kindsOnShelf(shelf) {
  * The shelf payload speaks `title_id` and a boolean `seen`; the catalog card speaks `id` and a
  * `seen_state` string. One rename, in one place — a second spelling of "seen" in markup is how
  * the seen pill ends up on every card or on none.
+ *
+ * `e_source` and `item_n` travel with `placement` because §8 stage 10's badge is decided on
+ * them, not on it: `PosterCard`'s own comment is the specification ("Off `e_source`/`item_n`,
+ * NOT off `title.placement`"), and dropping them here silently returned the card to the
+ * fallback branch — 111 of the 130 badges Home drew were false. The server moved both out of
+ * the decision-117 `model` block for this; a rename that forgets them undoes that.
+ * [M4.9 finding 18]
  */
 export function toPosterTitle(item) {
   return {
@@ -162,6 +178,8 @@ export function toPosterTitle(item) {
     runtime_min: item.runtime_min,
     poster_path: item.poster_path,
     placement: item.placement,
+    item_n: item.item_n,
+    e_source: item.e_source,
     seen_state: item.seen ? 'seen' : 'unseen'
   };
 }
@@ -209,19 +227,6 @@ export function eventTime(at) {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString(undefined, { hour12: false });
-}
-
-/**
- * Decision 117's gate, asked of a payload rather than of a preference.
- *
- * The server removes `model`, `rail` and `suppressed` when the toggle is off, so their absence
- * — not a local boolean — is what the UI branches on. A client that re-derived them from
- * `session.user.show_model` would render an empty rail for one frame after the toggle flips
- * and before the refetch lands, which is exactly the promise §6.7 makes about numbers not
- * being there.
- */
-export function hasModelAnnotations(payload) {
-  return Array.isArray(payload?.rail);
 }
 
 /**

@@ -86,9 +86,7 @@ export const tonight = $state({
   /** @type {any[]} 54f's sharpen round, carried by the client because §6.2 step 8 mints no
    * session row and therefore no `session_answer` to hold them */
   soloAnswers: [],
-  soloOffset: 0,
-  /** @type {any[]} §6.7's rail, when decision 117's toggle is on */
-  rail: []
+  soloOffset: 0
 });
 
 function fail(err) {
@@ -214,7 +212,6 @@ export function leave() {
   tonight.result = null;
   tonight.progress = [];
   tonight.approved = [];
-  tonight.rail = [];
   tonight.step = 'door';
   tonight.error = '';
 }
@@ -234,12 +231,6 @@ export async function start() {
 
 export async function loadRound(participantId) {
   try {
-    // §6.7's rail is the last ~15 events and never persisted; on ONE DEVICE it outlives the
-    // participant it belongs to. Left standing across §6.2 step 2's hand-off it shows the
-    // incoming guest the previous person's answer values — the exact thing 54c's blindness is
-    // about, on the device the hand-off exists to protect. Cleared with the round, not with
-    // the page.
-    tonight.rail = [];
     tonight.round = await get(`/tonight/seats/${participantId}/round`);
     tonight.step = tonight.round.pair ? 'round' : 'waiting';
   } catch (err) {
@@ -263,7 +254,6 @@ export async function answer(value) {
       latency_ms: Math.round(performance.now() - started)
     });
     tonight.round = next;
-    tonight.rail = next.rail ?? [];
     tonight.step = next.pair ? 'round' : 'waiting';
     tonight.error = '';
     if (!next.pair) await refresh();

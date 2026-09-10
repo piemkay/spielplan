@@ -26,9 +26,14 @@ from spielplan.importer.report import ImportReport
 
 # §6.8: "A fixed colour per vocabulary facet (11)." Shipped with the vocabulary when the
 # bundle carries one; this is the fallback so the app has a palette on day one.
+# `characters`, not `character`: every shipped vocabulary file is `vocab_characters_v1.tsv` and
+# every term prefix is `characters`, so the singular spelled a twelfth facet that no row can ever
+# have and left the real one at the neutral colour. The same misspelling is in six other places
+# and M4.9 moves all seven together -- a palette keyed on a name the data does not use is the
+# defect, not the spelling. [M4.9 finding 4]
 DEFAULT_FACET_COLOURS = {
     "mood": "#c8613a", "themes": "#3f7f6f", "pacing": "#8b6bd6", "structure": "#c9a227",
-    "visual": "#4d86c6", "sound": "#c25f8e", "character": "#5fae7a", "place": "#b98046",
+    "visual": "#4d86c6", "sound": "#c25f8e", "characters": "#5fae7a", "place": "#b98046",
     "era": "#7f7fd6", "sensibility": "#4fa3a3", "register": "#b06a6a",
 }
 
@@ -55,6 +60,31 @@ class Correction(NamedTuple):
     new_value: str | None
     evidence: str | None
     note: str | None
+
+
+def app_facet(term: str, shipped: str) -> str:
+    """The facet this app keys on, for a term the corpus shipped under `shipped`.
+
+    §4.3 gives a vocabulary id as `facet.term` (`characters.amateur_sleuth`), and the corpus
+    files the extraction pass that found the tag under a different name — `character_dynamics`,
+    `mood_tone`, `narrative_themes`. **They are two namings of two different things**: the
+    extraction label says which pass ran, the facet id says which of §6.4's eleven vocabularies
+    the term belongs to. `dna_facet`, `dna_term`, §6.4's axes and §6.8's fixed-colour-per-facet
+    palette all key on the second, so it is the second the app stores.
+
+    One function for the rule because keeping it in three places is how the two vocabularies
+    diverged: `load_vocabulary` derived the facet from the prefix while `load_tags` and
+    `load_projected` copied the shipped column verbatim, and `0004_dna.sql:73-88` gives neither
+    tag table an FK to `dna_facet` to notice — 29,188 of 31,540 `dna_tag` rows and 206,151 of
+    223,136 `dna_projected` rows on the shipped bundle held a label that joined nothing. The
+    extraction label is not lost: `validate.py`'s rule-1 block counts the rows it differs on, so
+    the corpus's own naming survives as a §10 report line rather than as data. [M4.9 finding 1]
+
+    An undotted term keeps the facet it arrived with, because the prefix rule has nothing to say
+    about a vocabulary that is not `facet.term` — the same fallback `load_vocabulary` has always
+    applied to the file's own facet name.
+    """
+    return term.split(".", 1)[0] if "." in term else shipped
 
 
 async def load_vocabulary(
@@ -84,7 +114,7 @@ async def load_vocabulary(
                 term = (row.get("id") or "").strip()
                 if not term:
                     continue
-                facet = term.split(".", 1)[0] if "." in term else file_facet
+                facet = app_facet(term, file_facet)
                 facet_names.add(facet)
                 terms.append((version, term, facet, (row.get("gloss") or "").strip() or None))
 
@@ -299,8 +329,14 @@ async def load_tags(
     rows = [
         # `runs_found` — how many extraction runs turned the tag up — is this schema's
         # `n_sources`: rule 2, "a weight, never a filter". The corpus exports no `provider`
-        # column; a single-provider export leaves it NULL rather than guessing an LLM name.
-        (title_id, version, term, facet, salience, confidence, runs_found)
+        # column at all, so `''` is written rather than NULL: 0018 section 2 makes the column
+        # NOT NULL because a NULL component made `UNIQUE (title_id, version, term, provider)`
+        # match nothing, and "no provider recorded" has to be one value for the arbiter to see
+        # it. §6.6's parallel extraction mode writes a real name here; this is its absence, not
+        # a guess at an LLM's.
+        #
+        # `app_facet` and not the shipped `facet`: see its docstring. [M4.9 finding 1]
+        (title_id, version, term, app_facet(term, facet), salience, confidence, runs_found, "")
         for title_id, term, facet, salience, confidence, runs_found in db.execute(
             "SELECT title_id, term, facet, salience, confidence, runs_found FROM dna_tag"
         )
@@ -309,10 +345,16 @@ async def load_tags(
     # component makes the arbiter index miss every row, so a second import appended the whole
     # tier again. §10 calls a re-import a planned admin event: the tier is replaced instead,
     # and `dna_evidence` follows it through ON DELETE CASCADE.
+    #
+    # The arbiter fires now — 0018 collapses NULL to '' and makes the column NOT NULL — and the
+    # DELETE stays anyway: an upsert would leave behind the rows of a *previous* vocabulary
+    # revision that this bundle no longer ships, and §10 calls a re-import a planned admin event
+    # with a diff report, so replacing the tier is the behaviour that report describes.
     await conn.execute("DELETE FROM dna_tag WHERE version = $1", version)
     await conn.executemany(
-        "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, n_sources) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        "INSERT INTO dna_tag "
+        "(title_id, version, term, facet, salience, confidence, n_sources, provider) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
         rows,
     )
     report.table_counts["loaded:dna_tag"] = len(rows)
@@ -368,7 +410,10 @@ async def load_projected(
         report.fail("rule1-two-tiers", "bundle has no dna_projected table")
         return
     rows = [
-        (title_id, version, term, facet, n_sources, _via(sources))
+        # `app_facet` for the same reason as the extracted tier, and it matters more here: the
+        # projected tier is where 206,151 of 223,136 shipped rows carried the extraction label,
+        # so §6.8's palette and every per-facet aggregate over this table were empty. [finding 1]
+        (title_id, version, term, app_facet(term, facet), n_sources, _via(sources))
         for title_id, term, facet, n_sources, sources in db.execute(
             "SELECT title_id, term, facet, n_sources, sources FROM dna_projected"
         )
@@ -461,7 +506,21 @@ async def load_corrections(conn: asyncpg.Connection, path: Path, report: ImportR
         "VALUES ($1,$2,$3,$4,$5)",
         rows,
     )
-    report.note("corrections", f"{len(rows)} credit corrections loaded and re-applied at derive")
+    # NOT "re-applied at derive", which is what this line claimed and what §14.5 warns about
+    # believing. §8 stage 3 — the derive that would apply them — is M5's, and grep finds exactly
+    # two readers of `credit_correction`: this writer and `backup/movie_data.py`. Five of the
+    # shipped ledger's six rows are unreflected in the corpus's own `content.sqlite`, so nothing
+    # upstream pre-applied them either. Saying so is the whole repair: the rows are stored, and
+    # an operator reading the report learns that no credit on any card reflects them yet.
+    # Import-time patching of `credit` is deliberately not done — §8 stage 3 owns that, and a
+    # second implementation of it here is how a derive silently reverts curated fixes.
+    # [M4.9 finding 32]
+    report.note(
+        "corrections",
+        f"{len(rows)} credit correction(s) stored for §8 stage 3 (M5) — nothing applies them "
+        "yet, so no credit on any card reflects them",
+        corrections=len(rows), applied=0,
+    )
 
 
 def _decade(item: object) -> int | None:

@@ -5,6 +5,11 @@
    * tinted panel derived from the title's own id. It is a placeholder that is stable across
    * reloads, which matters: a card that changes colour every render reads as a bug.
    */
+  // One runtime label, not three. This copy and the title card's had drifted apart — the card
+  // two taps away had no kind branch at all — so the same episode read `24m/ep` here and
+  // `0h 24m` there. [M4.9 finding 37]
+  import { runtimeLabel } from '$lib/rate.svelte.js';
+
   let { title, onSelect } = $props();
 
   // A stable hue per title. FNV-1a over the name, so the same film is the same colour
@@ -19,13 +24,7 @@
   }
 
   const h = $derived(hue(title.name ?? String(title.id)));
-  const minutes = $derived(
-    title.runtime_min
-      ? title.kind === 'series'
-        ? `${title.runtime_min}m/ep`
-        : `${Math.floor(title.runtime_min / 60)}h ${title.runtime_min % 60}m`
-      : null
-  );
+  const minutes = $derived(runtimeLabel(title));
   // Built in JS, not in markup: Svelte collapses the whitespace around an {#if} block, which
   // turned "1995 · 2h 50m" into "1995· 2h 50m".
   const meta = $derived([title.year ?? '—', minutes].filter(Boolean).join(' · '));

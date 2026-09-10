@@ -503,3 +503,117 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     await context.close();
   }
 });
+
+// --- §6.8's palette, where a shelf spends it -------------------------------------------------
+
+/** §4.3: a vocabulary id IS `facet.term`, so a chip carries exactly one dot. */
+const VOCAB_ID = /^[a-z_]+\.[a-z0-9_]+$/;
+/** The defect: `{facet}.{term}` printed over a term that already carries its prefix. */
+const DOUBLED = /^[a-z_]+\.[a-z_]+\./;
+
+test('a shelf term chip prints its term once and wears its facet colour', async ({ page }) => {
+  // The same two rules as the title card's chips (§4.3's id and §6.8's "a fixed colour per
+  // vocabulary facet (11)"), on the second surface that renders them. `ShelfRow` carried its own
+  // copy of both — `{t.facet}.{t.term}` and a key of `t.term` alone — so repairing the card
+  // would have left the shelves printing `narrative_themes.themes.love_romance` in grey.
+  // [M4.9 findings 3, 4 and 8]
+  //
+  // THE SHARED TERMS ARE SUPPLIED, and this is the thing to read before trusting the case.
+  // `why.common_terms` is an INTERSECTION over the cards a section actually returned, and
+  // proposal 28 needs three of them: on `make_bundle.py`'s eight titles no three-member section
+  // shares a term (school_night's three films carry `mood.cosy`, `visual.neon` and
+  // `visual.neon`), so `section.shared_terms` is empty for every shelf this bundle can ship and
+  // the chip never renders. The fixture belongs to M4.8 and this milestone does not build it,
+  // so the row is put into the section from the app's OWN data instead: the payload is the
+  // server's, and `shared_terms` is filled with a term and facet read back from
+  // `/api/titles/{id}` for a card that is genuinely on that shelf, in `WhyTerm`'s own shape.
+  // Nothing here invents a term the corpus does not ship — it supplies the intersection the
+  // fixture is too small to have. Reported to the owner as a fixture gap, not left implicit.
+  //
+  // Films only, which is what Home opens with (decision 18): a section of the kind the screen
+  // is not asking for renders no chip, and the assertion below would time out on a payload that
+  // was correct.
+  const payload = await homePayload(page.request, ['movie']);
+  const sections = payload.shelves.flatMap((shelf) => shelf.sections ?? []);
+
+  let chosen = null;
+  for (const section of sections) {
+    for (const card of section.items ?? []) {
+      const title = await (await page.request.get(`/api/titles/${card.title_id}`)).json();
+      const tag = (title.dna?.extracted ?? [])[0] ?? (title.dna?.projected ?? [])[0];
+      if (tag) {
+        chosen = { kind: section.kind, titleId: card.title_id, tag };
+        break;
+      }
+    }
+    if (chosen) break;
+  }
+  expect(chosen, 'no shipped shelf card carries a DNA row — there is no chip to test').toBeTruthy();
+
+  const home = /\/api\/home\?/;
+  await page.route(home, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const shelf of body.shelves ?? []) {
+      for (const section of shelf.sections ?? []) {
+        if (section.kind !== chosen.kind) continue;
+        if (!(section.items ?? []).some((i) => i.title_id === chosen.titleId)) continue;
+        section.shared_terms = [
+          { term: chosen.tag.term, facet: chosen.tag.facet, tier: 'extracted', role: 'member' }
+        ];
+      }
+    }
+    await route.fulfill({
+      status: response.status(),
+      contentType: 'application/json',
+      body: JSON.stringify(body)
+    });
+  });
+
+  try {
+    await page.goto('/');
+    const chip = page.getByTestId('shelf-term').first();
+    await expect(chip).toBeVisible();
+
+    // The chip's own label, not the whole element: a projected term appends a "· projected"
+    // note in a nested span, which is a tier annotation rather than part of the id. Subtracted
+    // by node rather than by regex, so the assertion does not quietly also accept a chip that
+    // printed the annotation as part of the term.
+    const label = (
+      await chip.evaluate((el) => {
+        const note = el.querySelector('.tier-note')?.textContent ?? '';
+        return (el.textContent ?? '').replace(note, '');
+      })
+    ).trim();
+    expect(label, `shelf chip "${label}" is not a vocabulary id printed once`).toMatch(VOCAB_ID);
+    expect(label, `shelf chip "${label}" prints its facet twice`).not.toMatch(DOUBLED);
+    expect(label, 'the chip is not the term the payload named').toBe(chosen.tag.term);
+
+    // §6.8's identity, spent where the facet used to be spelled out. The declared custom
+    // property is read rather than the computed colour, because the neutral and a facet colour
+    // are both an rgb triple once the cascade is done; the resolved value is read too, so a
+    // `--facet-*` token `design.css` never defines fails here instead of looking correct.
+    const colour = await chip.evaluate((el) => {
+      const declared = el.style.color || '';
+      const named = declared.match(/var\(\s*(--[a-z0-9-]+)\s*\)/);
+      const token = named ? named[1] : '';
+      return {
+        declared,
+        token,
+        value: token
+          ? getComputedStyle(document.documentElement).getPropertyValue(token).trim()
+          : ''
+      };
+    });
+    expect(
+      colour.token,
+      `shelf chip "${label}" was painted with ${colour.declared || 'no colour at all'}`
+    ).toMatch(/^--facet-/);
+    expect(
+      colour.value,
+      `shelf chip "${label}" names ${colour.token}, which design.css does not define`
+    ).not.toBe('');
+  } finally {
+    await page.unroute(home);
+  }
+});
