@@ -24,6 +24,7 @@ prompt, so a failed send is a returned result and never an exception in a lobby.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -40,7 +41,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from spielplan.api.push import device_handle
 from spielplan.core.config import settings
 from spielplan.push import keys
 
@@ -71,6 +71,24 @@ _TTL = 3600
 _TIMEOUT = 10.0
 
 
+def device_handle(endpoint: str) -> str:
+    """A stable, non-reversible name for one push target.
+
+    The endpoint is a bearer capability, so it must not reach a log line, a UI string or an
+    error message. A hash prefix is enough for both jobs it has to do: tell one device apart
+    from another in the account list, and let an operator correlate log lines.
+
+    It lives in the domain package rather than in `api/push.py`, where it was written, because
+    CLAUDE.md puts the rules under `spielplan/` and leaves `api/` deciding HTTP shapes only:
+    naming a device is a rule, the `from spielplan.api.push import device_handle` it replaces was
+    the one import in the codebase pointing the wrong way, and it pulled FastAPI and every router
+    side effect into the worker process through `worker -> sync.playback -> push.send` (arch-02).
+    `api/push.py` imports it from here, so the handle a response carries and the handle a log
+    line carries stay one function.
+    """
+    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:12]
+
+
 class _KeepEndpointsOutOfHttpxLogs(logging.Filter):
     """§4.2's endpoint is a bearer capability, and httpx writes it into the log by itself.
 
@@ -93,8 +111,8 @@ logging.getLogger("httpx").addFilter(_KeepEndpointsOutOfHttpxLogs())
 class SendResult:
     """What became of one device's copy.
 
-    `device` is `api/push.py`'s hash handle, never the endpoint: the endpoint is a bearer
-    capability, and a result object ends up in logs and admin views.
+    `device` is `device_handle`'s hash, never the endpoint: the endpoint is a bearer capability,
+    and a result object ends up in logs and admin views.
     """
 
     device: str
@@ -277,4 +295,4 @@ async def send_to_user(
         return []
 
 
-__all__ = ["SendResult", "send_to_user"]
+__all__ = ["SendResult", "device_handle", "send_to_user"]

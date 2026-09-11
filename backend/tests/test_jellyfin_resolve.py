@@ -116,12 +116,13 @@ async def test_an_unresolvable_item_is_reported_and_creates_nothing(db):
 
 
 async def test_a_null_identity_column_is_filled(db):
+    # Through `upsert_items`, not `upsert_item`: since M4.11 the representative `jellyfin_id` is
+    # elected over the whole page-set rather than per item (§7.1), because one item cannot know
+    # whether it is the only copy. The fill itself is still per item; only the pointer moved.
     await _title(db, 3, "movie", "Paddington 2", 2017, tmdb_id=346648)
-    report = resolve.ResolveReport()
-    await resolve.upsert_item(
-        db, item(Id="jf-3", Name="Paddington 2", ProductionYear=2017,
-                 ProviderIds={"Tmdb": "346648", "Imdb": "tt4468740"}),
-        report,
+    report = await resolve.upsert_items(
+        db, [item(Id="jf-3", Name="Paddington 2", ProductionYear=2017,
+                  ProviderIds={"Tmdb": "346648", "Imdb": "tt4468740"})],
     )
     row = await db.fetchrow("SELECT imdb_id, jellyfin_id FROM title WHERE id = 3")
     assert row["imdb_id"] == "tt4468740"
@@ -173,10 +174,13 @@ async def test_ownership_is_re_derived_not_trusted_stale(db):
 async def test_a_rebuilt_library_relinks_and_says_so(db):
     """Jellyfin item ids change when a library is rebuilt. The current server's id is the
     useful one — the deep link and the Played write both need it — so it is replaced, and the
-    replacement is counted rather than swallowed."""
+    replacement is counted rather than swallowed.
+
+    Asserted through `upsert_items` since M4.11: "the old id is gone from the library" is the
+    only thing that makes this a re-link rather than a second copy, and one item cannot see the
+    library. That is also why the count is trustworthy again (§6.6's sync card)."""
     await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277", jellyfin_id="old-id")
-    report = resolve.ResolveReport()
-    await resolve.upsert_item(db, item(Id="new-id", ProviderIds={"Imdb": "tt0113277"}), report)
+    report = await resolve.upsert_items(db, [item(Id="new-id", ProviderIds={"Imdb": "tt0113277"})])
     assert await db.fetchval("SELECT jellyfin_id FROM title WHERE id = 1") == "new-id"
     assert report.relinked == 1
 
@@ -222,3 +226,137 @@ async def test_a_changed_row_is_still_rewritten(db):
     row = await db.fetchrow("SELECT jellyfin_id, updated_at FROM title WHERE id = 1")
     assert row["jellyfin_id"] == "jf-rebuilt"
     assert row["updated_at"] > before
+
+
+# --- the fallback refuses ambiguity (M4.11, §7.1, finding cs-04) ---------------------------
+
+
+async def test_a_name_matching_two_titles_is_refused_not_guessed(db):
+    """The fourth key is the one §7.1 does not name, and the module docstring already called it
+    "the only one that can be wrong". On the real corpus 2,438 titles share
+    `(kind, lower(name))` and 573 groups still collide once the year is added, so
+    `ORDER BY t.id LIMIT 1` was not a tie-break: it attached the item to whichever row was
+    imported first and then wrote `is_owned`, `owned_checked_at` and the deep link onto it.
+    An arbitrary match is worse than no match, because no match is *reported* --
+    `report.unmatched` is what §7.2's acquisition half consumes at M5, and a wrong match is
+    invisible for ever."""
+    await _title(db, 20, "series", "The Bureau", 2015)
+    await _title(db, 21, "series", "The Bureau", 2015)
+
+    found = await resolve.resolve_title_id(
+        db, item(Type="Series", Name="The Bureau", ProductionYear=2015)
+    )
+    assert found is None
+
+    report = await resolve.upsert_items(
+        db, [item(Type="Series", Name="The Bureau", ProductionYear=2015)]
+    )
+    assert report.unmatched == ["The Bureau"]
+    assert report.matched == 0
+
+
+async def test_an_item_with_no_production_year_never_matches_on_name_alone(db):
+    """`($3::int IS NULL OR t.year = $3)` meant a Jellyfin item whose scraper found no year
+    matched on name alone -- the widest possible version of the key the docstring distrusts
+    most. Refusing it costs nothing a report does not recover: §7.1's three provider keys are
+    unaffected, and an item with neither a provider id nor a year is not identified at all."""
+    await _title(db, 22, "movie", "Tampopo", 1985)
+
+    assert await resolve.resolve_title_id(db, item(Name="Tampopo", ProductionYear=None)) is None
+    report = await resolve.upsert_items(db, [item(Name="Tampopo", ProductionYear=None)])
+    assert report.unmatched == ["Tampopo"]
+    assert await db.fetchval("SELECT is_owned FROM title WHERE id = 22") is False
+
+
+# --- one title, all its copies (M4.11, §7.1, findings 5 and 6) -----------------------------
+
+
+def _copies() -> list[dict]:
+    """One film, two library entries -- the "Movies" and "Movies 4K" household §7.3's conflict
+    rule is written for. Both carry the same ProviderIds because they are the same film."""
+    return [
+        item(Id="jf-1b", ProviderIds={"Imdb": "tt0113277"}),
+        item(Id="jf-1", ProviderIds={"Imdb": "tt0113277"}),
+    ]
+
+
+async def test_every_copy_of_a_title_is_recorded_not_just_the_representative(db):
+    """§7.1 keeps one `jellyfin_id` per title, and that column cannot answer "which items are
+    this film". Without the answer, "not seen" cleared Played on one copy, the other kept the
+    flag, and the next sweep's OR-collapse adopted it back -- §7.3's "app is authoritative for
+    explicit user actions" failing on the library `_collapse`'s own docstring describes."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277")
+    report = await resolve.upsert_items(db, _copies())
+
+    rows = await db.fetch("SELECT jellyfin_id, title_id FROM title_jellyfin_item ORDER BY 1")
+    assert [(r["jellyfin_id"], r["title_id"]) for r in rows] == [("jf-1", 1), ("jf-1b", 1)]
+    # The shape the sweep codes against: every copy, the title set ownership may trust, and the
+    # `kind` decision 210's series guards need without a second query per row.
+    assert report.items == {"jf-1b": 1, "jf-1": 1}
+    assert report.matched_title_ids == {1}
+    assert report.kinds == {1: "movie"}
+    assert report.as_dict()["matched_titles"] == 1
+
+
+async def test_two_copies_of_one_title_are_one_decision_not_two_relinks(db):
+    """Measured: every second live copy was counted as `relinked` and the churn guard was true
+    for every copy but the current pointer, so the "~11,000 dead row versions" arithmetic the
+    guard exists for was silently re-opened for exactly the duplicated titles. The pointer is
+    decided once per sweep now, so an unchanged library writes nothing at all."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277")
+
+    first = await resolve.upsert_items(db, _copies())
+    before = await db.fetchval("SELECT updated_at FROM title WHERE id = 1")
+    second = await resolve.upsert_items(db, _copies())
+    after = await db.fetchval("SELECT updated_at FROM title WHERE id = 1")
+
+    assert (first.relinked, second.relinked) == (0, 0)
+    assert after == before, "a title whose copies did not change must not be rewritten"
+    assert await db.fetchval("SELECT count(*) FROM title_jellyfin_item") == 2
+
+
+async def test_the_representative_is_kept_while_its_copy_is_still_in_the_library(db):
+    """The bug this replaces: `title.jellyfin_id` was written to the copy *this user* played,
+    once per user sweep, in user-id order -- measured `jf-1, jf-1b, jf-1, jf-1b, jf-1, jf-1b`
+    across three sweeps with two members on different copies. `playback.observe` resolves a
+    session against that one column, so the first-listed member's finish prompt was lost
+    permanently. The rule is deterministic and never reads a Played flag."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277", jellyfin_id="jf-1b")
+    played_the_other = [dict(copy, UserData={"Played": copy["Id"] == "jf-1"})
+                        for copy in _copies()]
+
+    report = await resolve.upsert_items(db, played_the_other)
+
+    assert await db.fetchval("SELECT jellyfin_id FROM title WHERE id = 1") == "jf-1b"
+    assert report.relinked == 0
+
+
+async def test_the_representative_falls_to_the_lowest_live_copy_when_its_own_is_gone(db):
+    """A library rebuild changes item ids, and that is the only case §7.1 calls a re-link.
+    Counting it only when the old id is absent from the page-set is what makes `relinked` on
+    §6.6's sync card mean "the library was rebuilt" again rather than "this title has two
+    copies"."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277", jellyfin_id="jf-gone")
+
+    report = await resolve.upsert_items(db, _copies())
+
+    assert await db.fetchval("SELECT jellyfin_id FROM title WHERE id = 1") == "jf-1"
+    assert report.relinked == 1
+
+
+async def test_a_copy_that_left_the_library_is_pruned_only_against_a_read_that_happened(db):
+    """The prune exists because "unseen" must clear Played on every copy, and a dead item id in
+    the map makes that write 404 for ever. It is separated from the pass itself on purpose: a
+    Jellyfin outage or the page cap of step 1b yields an empty or truncated page-set, and a
+    prune that trusted one would delete the map the next real sweep needs -- the same shape as
+    the ownership falsification §7.2 gates on a completed read."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277")
+    await resolve.upsert_items(db, _copies())
+
+    nothing_read = resolve.ResolveReport()
+    assert await resolve.prune_missing_items(db, nothing_read) == 0
+    assert await db.fetchval("SELECT count(*) FROM title_jellyfin_item") == 2
+
+    one_copy_left = await resolve.upsert_items(db, [item(Id="jf-1", ProviderIds={"Imdb": "tt0113277"})])
+    assert await resolve.prune_missing_items(db, one_copy_left) == 1
+    assert await db.fetchval("SELECT jellyfin_id FROM title_jellyfin_item") == "jf-1"

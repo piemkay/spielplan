@@ -167,12 +167,57 @@ async function currentSubscription() {
 }
 
 /**
+ * This browser's own endpoint, or null. §6's preamble, §4.2.
+ *
+ * The one question the account screen could not ask. `GET /api/push/state` answers "which devices
+ * does this member have", and `api/push.py`'s own docstring is explicit that it is "this member's
+ * devices. Never the household's" — so a screen that derived "notifications are on for THIS
+ * device" from that list told a member's second phone that it was already registered, listed the
+ * first phone as if it were itself, and hid the only control that can run
+ * `Notification.requestPermission()` inside a gesture. Only the browser knows whether the browser
+ * holds a subscription, so this is where that fact has to come from. [M4.11 finding 21]
+ */
+export async function localEndpoint() {
+  if (!pushSupported()) return null;
+  const { subscription } = await currentSubscription();
+  return subscription?.endpoint ?? null;
+}
+
+/**
+ * Was this subscription minted against the key the server is signing with now?
+ *
+ * A `PushSubscription` is bound for life to the application server key it was created against, so
+ * a pair regenerated on this server — §3.1's first boot after a restore whose `.env` did not come
+ * back, or `spielplan-secrets reset` — leaves every phone holding a subscription the push service
+ * will refuse to deliver to. Nothing noticed: `enablePush` took whatever `getSubscription()`
+ * returned and `syncSubscription` re-posted the same endpoint on every account-page open, so the
+ * device list read healthy while no notification could arrive. `send.py` cannot repair it either,
+ * deliberately — a key mismatch is a 403 and it does not prune on 403, because a transient
+ * rejection must not delete a live phone.
+ *
+ * **Unknown is treated as a match, never as a mismatch.** `options.applicationServerKey` is absent
+ * on older WebKit and on any test double that does not model it, and acting on that absence would
+ * unsubscribe a working phone on the strength of a field the browser never implemented. The same
+ * goes for a server with no pair at all (`vapidKey` null): there is no key to disagree with.
+ */
+export function keyMatches(subscription, vapidKey) {
+  const held = subscription?.options?.applicationServerKey;
+  if (!held || !vapidKey) return true;
+  const want = applicationServerKey(vapidKey);
+  const have = new Uint8Array(held);
+  return have.length === want.length && want.every((byte, i) => byte === have[i]);
+}
+
+/**
  * Ask for permission and register this device. **Must be called from a click**: §6's preamble
  * notes the permission request has to run inside a user gesture, and on iOS a request outside
  * one is not deferred — it is refused, permanently, for that origin.
  *
  * Returns `{ permission, subscribed }` rather than throwing on a refusal: "no" is an answer,
- * not an error, and §3.1's fifth step completes either way.
+ * not an error, and §3.1's fifth step completes either way. On a success it also returns this
+ * device's own `endpoint` and the server's `device` handle for it, so the caller can say which row
+ * in the member's list is the phone in the member's hand without hashing anything: §2 puts the app
+ * behind one plain-HTTP port, where `crypto.subtle` does not exist.
  *
  * @param {{vapidKey?: string|null}} [options]
  */
@@ -183,8 +228,17 @@ export async function enablePush({ vapidKey = null } = {}) {
   if (answer !== 'granted') return { permission: answer, subscribed: false };
 
   const { registration, subscription } = await currentSubscription();
+  let held = subscription;
+  if (held && !keyMatches(held, vapidKey)) {
+    // A subscription bound to a retired key cannot be repaired, only replaced — `subscribe()`
+    // with a different `applicationServerKey` is an InvalidStateError while the old one is live,
+    // so the old one goes first. This is the act the member just asked for, so it is also the
+    // only moment at which silently dropping a subscription is honest. [M4.11 finding 21]
+    await held.unsubscribe();
+    held = null;
+  }
   const live =
-    subscription ??
+    held ??
     (await registration.pushManager.subscribe({
       // Required by every browser that implements Push: a push may not be silent. It is also
       // the honest description of what this is for — §7.3's prompt is a visible question.
@@ -196,7 +250,13 @@ export async function enablePush({ vapidKey = null } = {}) {
     ...live.toJSON(),
     device_label: deviceLabel()
   });
-  return { permission: 'granted', subscribed: true, subscriptions: state.subscriptions };
+  return {
+    permission: 'granted',
+    subscribed: true,
+    endpoint: live.endpoint,
+    device: state.device,
+    subscriptions: state.subscriptions
+  };
 }
 
 /**
@@ -206,11 +266,21 @@ export async function enablePush({ vapidKey = null } = {}) {
  * back the same endpoint or a fresh one; either way the server row must match what the browser
  * actually has. The route upserts on the endpoint (§4.2's UNIQUE), so calling this on every
  * open is cheap and cannot fan out into duplicate rows — which is exactly why it upserts.
+ *
+ * It no longer re-posts a subscription minted under a key this server has replaced. That re-post
+ * was the thing that made the fault invisible: the row kept coming back fresh on every account-page
+ * open, so the screen said "on" for a device that could not be reached. `{ stale: true }` is the
+ * answer instead, and the screen reads it as off-with-a-reason — the member's own tap is what
+ * replaces the subscription (`enablePush`), because only a tap is the gesture §6's preamble
+ * requires. [M4.11 finding 21]
+ *
+ * @param {{vapidKey?: string|null}} [options]
  */
-export async function syncSubscription() {
+export async function syncSubscription({ vapidKey = null } = {}) {
   if ((await permissionState()) !== 'granted') return null;
   const { subscription } = await currentSubscription();
   if (!subscription) return null;
+  if (!keyMatches(subscription, vapidKey)) return { stale: true, subscriptions: null };
   return post('/push/subscribe', { ...subscription.toJSON(), device_label: deviceLabel() });
 }
 
@@ -218,15 +288,22 @@ export async function syncSubscription() {
  * Turn notifications off for this device: the server row first, then the browser's own
  * subscription. In that order — a browser subscription dropped while the row survives is a
  * target the sender will keep writing to and the push service will keep rejecting.
+ *
+ * `{ removed: false, subscriptions: null }` rather than a bare `null` when this browser holds
+ * nothing to delete. The bare null was indistinguishable from a successful delete that returned no
+ * list, and the caller resolved the ambiguity the worst way available — `state?.subscriptions ?? []`
+ * blanked the device list, so the screen claimed notifications were off for the household while the
+ * member's other phone stayed subscribed and kept receiving them. Two facts, said separately:
+ * whether a row was deleted, and what the member's remaining devices are. [M4.11 finding 21]
  */
 export async function disablePush() {
-  if (!pushSupported()) return null;
+  if (!pushSupported()) return { removed: false, subscriptions: null };
   const { subscription } = await currentSubscription();
-  if (!subscription) return null;
+  if (!subscription) return { removed: false, subscriptions: null };
   const state = await api('/push/subscription', {
     method: 'DELETE',
     body: { endpoint: subscription.endpoint }
   });
   await subscription.unsubscribe();
-  return state;
+  return { removed: true, subscriptions: state?.subscriptions ?? null };
 }

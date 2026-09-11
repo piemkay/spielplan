@@ -77,7 +77,12 @@
     try {
       const res = await post(`/titles/${data.title.id}/state`, { state: next });
       data = { ...data, title: { ...data.title, seen_state: next } };
-      syncNote = res.synced ? 'synced to Jellyfin' : res.reason || '';
+      // The reason wins when there is one, even on a success. Decision 210(a) produces exactly
+      // that pair: marking a series not-seen is app-only — no recursive DELETE goes to the Series
+      // folder — and `seen.set_state` reports it as `synced: true` with the reason
+      // "series unseen is app-only", because the row is settled and nothing is owed. Reading only
+      // `synced` printed "synced to Jellyfin" about a write that was deliberately never sent.
+      syncNote = res.reason || (res.synced ? 'synced to Jellyfin' : '');
       onStateChange?.(data.title.id, next);
     } catch (err) {
       syncNote = `could not save that — ${err.message}`;
@@ -177,6 +182,18 @@
       {/if}
       <a class="btn-ghost" href="/map?title={t.id}">Show on map</a>
     </div>
+    {#if t.kind === 'series' && t.seen_state === 'seen'}
+      <!-- Decision 210(a): a series is app-only in the un-marking direction. Jellyfin stores no
+           Played flag on a Series at all — it computes the folder's from its episodes — so the only
+           way to un-mark one is a recursive DELETE across every episode, which would destroy watch
+           history the app never recorded and cannot put back. The app's own state is authoritative
+           either way (§7.3), and "the surface says so" is the other half of that decision: one
+           quiet line in §6.8's register, where the consequence is, not a dialog in the way. -->
+      <div class="data seriesnote" data-testid="title-series-unseen-note">
+        Marking a series not seen is kept in Spielplan only — Jellyfin is never told to un-play its
+        episodes.
+      </div>
+    {/if}
     {#if syncNote}
       <div class="data syncnote" role="status">{syncNote}</div>
     {/if}
@@ -380,7 +397,8 @@
     background: var(--card);
     margin: 12px 0;
   }
-  .syncnote {
+  .syncnote,
+  .seriesnote {
     margin-top: -4px;
     color: var(--ink-4);
   }

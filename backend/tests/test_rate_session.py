@@ -2505,6 +2505,18 @@ async def test_an_undo_taken_while_the_push_is_in_flight_still_hands_the_played_
     )
     s = await open_session(db, user, mode="sweep")
     title_id = s.current_card["title_id"]
+    # The card is dealt, so this is a prior the retraction is allowed to put back rather than a
+    # change to what the queue serves. `linked_sweep` empties `user_title`, and M4.11's decision 210
+    # makes `seen.retract` refuse a prior of "no row at all": sending Played = false there would
+    # push the app's absence over Jellyfin's history, which is the one row `sync/seen.py`'s own
+    # header says never happens. The window this test is about — the journal row visible while the
+    # push is still on the wire — is unchanged by that, and an explicit prior `unseen` is what a
+    # re-rating of a title the household had marked not-seen actually looks like.
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at) "
+        "VALUES ($1, $2, 'unseen', now(), now())",
+        user, title_id,
+    )
 
     other = await _second_connection(pg_url)
     try:

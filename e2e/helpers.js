@@ -337,30 +337,76 @@ export async function seedFilmLedger(page, rounds = 8) {
  * its seeding returned would fail for a reason that has nothing to do with what it is testing.
  */
 export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
-  await expect
-    .poll(
-      async () => {
-        const res = await page.request.get(`/api/rank?kind=${kind}`, {
-          failOnStatusCode: false
-        });
-        if (!res.ok()) return 0;
-        return (await res.json()).tiers.flatMap((tier) => tier.entries).length;
-      },
-      {
-        // Two ticks, counted the way `waitForPool` counts its own: the sweep is `every=60`, so a
-        // verdict written a moment after one tick waits out the rest of it and lands on the
-        // next, and 120 s is one whole missed tick plus a whole spare one. The fit itself fits
-        // inside the spare one at any fixture scale — finding 9's own measurement puts it at
-        // 0.39 s over 300 titles.
-        message:
-          'no board after 120s: a verdict queues the full refit rather than running it, and ' +
-          'the tier-set-refit sweep runs it every 60 s (worker.py; M4.10 finding 9), so two ' +
-          'ticks have passed - suspect the seeded ledger or a stopped worker',
-        timeout: 120_000,
-        intervals: [2000]
-      }
-    )
-    .toBeGreaterThanOrEqual(atLeast);
+  // Re-cut in M4.11, which is not this helper's milestone and owes the reason. The job this waits
+  // out is `tier-set-refit`, and M4.11 finding 17 is the one that changed what waiting on it means:
+  // `_tick` awaited each due job with nothing around it, so a wedged sweep took the loop offline
+  // permanently, and the repair gives every row a budget — `Job.timeout`, with `timeout=55` on
+  // `tier-set-refit` beside its own `every=60` (`worker.py`). An abandoned sweep now leaves its
+  // unprocessed rows owed and is re-armed by `RETRY_AFTER`, so "the worker is behind" became a
+  // TRANSIENT state where it used to be a permanent one — and a 120 s poll cannot tell a transient
+  // from a seed that queued nothing by looking at an empty board. Hence the split below.
+  //
+  // What the route says about the fit, kept across the poll so the failure can name WHICH of the
+  // states below it is. `fitting` is `ledger_cutpoints.refit_requested_at IS NOT NULL` on the wire
+  // (decision 209, `api/rank.py`), and it is the only thing that tells "the worker owes this
+  // account a fit" from "nothing ever asked for one" — which are opposite repairs and were both
+  // reported as "suspect the seeded ledger or a stopped worker".
+  let owed = null;
+  try {
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.get(`/api/rank?kind=${kind}`, {
+            failOnStatusCode: false
+          });
+          if (!res.ok()) {
+            // Recorded rather than swallowed: this arm returned 0 for a 401 or a 500 too, so a
+            // route that never answered read as a board that was never fitted, for 120 s, under a
+            // message about the worker.
+            owed = `the route answered ${res.status()}`;
+            return 0;
+          }
+          const payload = await res.json();
+          owed = payload.fitting;
+          return payload.tiers.flatMap((tier) => tier.entries).length;
+        },
+        {
+          // Two ticks, counted the way `waitForPool` counts its own: the sweep is `every=60`, so a
+          // verdict written a moment after one tick waits out the rest of it and lands on the
+          // next, and 120 s is one whole missed tick plus a whole spare one. The fit itself fits
+          // inside the spare one at any fixture scale — finding 9's own measurement puts it at
+          // 0.39 s over 300 titles.
+          message:
+            'no board after 120s: §6.3\'s board is every row of `ledger_state`, which a verdict ' +
+            'no longer writes - it queues the full refit and the tier-set-refit sweep runs it ' +
+            'every 60 s (worker.py; M4.10 finding 9)',
+          timeout: 120_000,
+          intervals: [2000]
+        }
+      )
+      .toBeGreaterThanOrEqual(atLeast);
+  } catch (err) {
+    // The three states this can be, told apart rather than listed. A diagnostic that names the
+    // wrong suspects costs more than no diagnostic: it sends the next reader to the worker for a
+    // seed that never wrote an observation, and M4.9/M4.10's version of this message named a
+    // stopped worker and "the seeded ledger" and could not distinguish them.
+    const why =
+      owed === true
+        ? 'a fit IS owed for this account (`fitting: true`), so the queue did its half and the ' +
+          '60 s tier-set-refit sweep has not written `ledger_state` yet - suspect the worker: ' +
+          'stopped, starved behind a longer job in its sequential loop, or abandoned at its own ' +
+          '55 s budget and re-armed (`worker.py::_tick`; M4.11 finding 17)'
+        : owed === false
+          ? 'no fit is owed for this account (`fitting: false`), so NOTHING will arrive however ' +
+            'long this waits. Either the seed wrote no observation at all - ' +
+            '`createMember(..., {reuse: true})` hands a re-run the account it seeded last time, ' +
+            'whose sweep pool is drained, and `_queue_full_refit` is only reached by a write - or ' +
+            'a fit was attempted and raised, and `_tier_set_refits` clears ' +
+            '`refit_requested_at` either way (M4.10 finding 6), so only §5.3\'s nightly pass will ' +
+            'fit it now. Check the worker log for `tier-set refit failed`'
+          : `GET /api/rank never answered with a board: ${owed ?? 'no reading at all'}`;
+    throw new Error(`${err.message}\n\n${why}`);
+  }
 }
 
 /**

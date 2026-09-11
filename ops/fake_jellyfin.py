@@ -55,6 +55,32 @@ ITEMS: list[dict[str, Any]] = [
      "RunTimeTicks": 41 * TICKS_PER_MINUTE, "ProviderIds": {}},
 ]
 
+# Jellyfin never plays a Series: a session on one plays an **Episode**, with its own `Id`, a
+# `SeriesId` for the folder and the season/episode numbers its clients render. The fake used to
+# hand back the Series id itself and emit no `Type` at all, which let the app resolve a session it
+# could never resolve against a real server -- the exact shape `dd05-fake-and-e2e` records, and
+# why §7.3's prompt never armed for the Series partition in the field. Two episodes per series, so
+# that "the last known episode" (decision 210(c)) is a choice rather than a tautology, and the
+# series' own runtime, because `/_test/session` sets a fraction of it and the e2e's 0.96 has to
+# stay past §7.3's 0.9.
+EPISODES: dict[str, list[dict[str, Any]]] = {
+    str(series["Id"]): [
+        {
+            "Id": f"{series['Id']}-e{n}",
+            "Name": f"Episode {n}",
+            "Type": "Episode",
+            "SeriesId": str(series["Id"]),
+            "SeriesName": series["Name"],
+            "ParentIndexNumber": 1,
+            "IndexNumber": n,
+            "RunTimeTicks": int(series["RunTimeTicks"]),
+        }
+        for n in (1, 2)
+    ]
+    for series in ITEMS
+    if series["Type"] == "Series"
+}
+
 USERS: list[dict[str, Any]] = [
     {"Id": "jf-user-patrick", "Name": "patrick", "Policy": {"IsAdministrator": True}},
     {"Id": "jf-user-jenny", "Name": "jenny", "Policy": {"IsAdministrator": False}},
@@ -114,11 +140,14 @@ async def users(x_emby_token: str | None = Header(default=None)) -> list[dict[st
 # the assertion becomes the implementation compared to itself. So the projection is real here.
 DEFAULT_FIELDS = {"Id", "Name", "Type", "ProductionYear", "RunTimeTicks"}
 ITEM_TYPES_ASKED: list[str] = []
+# Recorded for the same reason as ITEM_TYPES_ASKED: a cache is only cached if the second call
+# does not arrive, and that is a fact about requests, not about a dict.
+EPISODES_ASKED: list[str] = []
 
 
 @router.get("/Items")
 async def items(
-    userId: str = Query(...),  # noqa: N803 - Jellyfin's own parameter name
+    userId: str | None = Query(default=None),  # noqa: N803 - Jellyfin's own parameter name
     StartIndex: int = Query(default=0),  # noqa: N803
     Limit: int = Query(default=500),  # noqa: N803
     Recursive: str = Query(default="false"),  # noqa: N803
@@ -127,7 +156,12 @@ async def items(
     x_emby_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _require_api_key(x_emby_token)
-    if userId not in state.played:
+    # The parameter is optional and its absence is not a wildcard: §7.2 re-derives ownership from
+    # the library the *admin key* can see, because item visibility is per-user and the union of two
+    # people's views is not "the household's library". A real server answers a keyless read with no
+    # `UserData` at all, so this one must too -- a fake more permissive than the server it stands in
+    # for is precisely how `dd05-fake-and-e2e` happened. An unknown id that IS given still 404s.
+    if userId is not None and userId not in state.played:
         raise HTTPException(404, "no such user")
 
     # Without Recursive the real server returns the library folders, not the films inside them.
@@ -145,16 +179,44 @@ async def items(
         if not wanted_types or str(item["Type"]).lower() in wanted_types
     ]
 
-    played = state.played[userId]
+    played = state.played[userId] if userId is not None else None
     page = []
     for item in matching[StartIndex : StartIndex + Limit]:
         projected = {k: v for k, v in item.items() if k in DEFAULT_FIELDS or k in fields}
-        if "UserData" in fields:
+        if "UserData" in fields and played is not None:
             projected["UserData"] = {
                 "Played": item["Id"] in played, "PlaybackPositionTicks": 0
             }
         page.append(projected)
     return {"Items": page, "TotalRecordCount": len(matching), "StartIndex": StartIndex}
+
+
+@router.get("/Shows/{series_id}/Episodes")
+async def show_episodes(
+    series_id: str,
+    userId: str | None = Query(default=None),  # noqa: N803
+    x_emby_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Decision 210(c)'s read: which episode is the series' last known one.
+
+    Narrow on purpose -- the same item store, the same 404s, and `UserData` only when a user id is
+    given, exactly as `/Items` above.
+    """
+    _require_api_key(x_emby_token)
+    if series_id not in EPISODES:
+        raise HTTPException(404, "no such series")
+    if userId is not None and userId not in state.played:
+        raise HTTPException(404, "no such user")
+    EPISODES_ASKED.append(series_id)
+    rows = []
+    for episode in EPISODES[series_id]:
+        row = dict(episode)
+        if userId is not None:
+            row["UserData"] = {
+                "Played": episode["Id"] in state.played[userId], "PlaybackPositionTicks": 0
+            }
+        rows.append(row)
+    return {"Items": rows, "TotalRecordCount": len(rows)}
 
 
 @router.get("/Sessions")
@@ -242,10 +304,42 @@ async def force_played(body: PlayedControl) -> dict[str, Any]:
     return {"ok": True, "played": sorted(state.played[body.user_id])}
 
 
+def _now_playing(item: dict[str, Any]) -> dict[str, Any]:
+    """The `NowPlayingItem` a real server would send for this library item.
+
+    Every row carries `Type`, because the app decides what a session *is* from it (§7.3), and a
+    Series row becomes its **last** known episode: decision 210(c) makes a series finish only when
+    the finished episode is the last one the server knows about, and this control surface exists so
+    a test can arm that prompt. `/_test/session`'s request body stays a bare (user, item, fraction)
+    so `e2e/helpers.js` needs no edit for any of it.
+    """
+    if str(item["Type"]) != "Series":
+        return {
+            "Id": str(item["Id"]),
+            "Name": item["Name"],
+            "Type": str(item["Type"]),
+            "RunTimeTicks": int(item["RunTimeTicks"]),
+        }
+    episodes = EPISODES.get(str(item["Id"])) or []
+    if not episodes:
+        raise HTTPException(409, "this fake has no episodes for that series")
+    episode = episodes[-1]
+    return {
+        "Id": episode["Id"],
+        "Name": episode["Name"],
+        "Type": "Episode",
+        "SeriesId": episode["SeriesId"],
+        "SeriesName": episode["SeriesName"],
+        "ParentIndexNumber": episode["ParentIndexNumber"],
+        "IndexNumber": episode["IndexNumber"],
+        "RunTimeTicks": int(episode["RunTimeTicks"]),
+    }
+
+
 @control.post("/session")
 async def force_session(body: SessionControl) -> dict[str, Any]:
-    item = _item(body.item_id)
-    runtime = int(item["RunTimeTicks"])
+    playing = _now_playing(_item(body.item_id))
+    runtime = int(playing["RunTimeTicks"])
     state.sessions = [
         s for s in state.sessions if s["Id"] != body.session_id
     ] + [
@@ -253,10 +347,10 @@ async def force_session(body: SessionControl) -> dict[str, Any]:
             "Id": body.session_id,
             "UserId": body.user_id,
             "NowPlayingItem": {
-                "Id": body.item_id,
-                "Name": item["Name"],
-                "RunTimeTicks": runtime,
-                "UserData": {"Played": body.item_id in state.played.get(body.user_id, set())},
+                **playing,
+                "UserData": {
+                    "Played": playing["Id"] in state.played.get(body.user_id, set())
+                },
             },
             "PlayState": {"PositionTicks": int(runtime * body.fraction)},
         }

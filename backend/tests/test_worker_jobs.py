@@ -17,6 +17,11 @@ observations, where it has to produce the writes the surfaces read.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
+from datetime import datetime, timedelta, timezone
+
 import numpy as np
 import pytest
 
@@ -485,3 +490,386 @@ async def test_one_members_failing_refit_does_not_strand_another_members(
     assert await db.fetchval(
         "SELECT max(tier) FROM ledger_state WHERE user_id = $1 AND kind = 'movie'", ana
     ) <= 3, "Ana's board is still indexed against the seven-level set the fit replaced"
+
+
+# --- M4.11: §5.3's budget, the prune that reaches, and the two failures the log never named ----
+#
+# All five are about the loop rather than about the work: one job that never returns used to be
+# the end of this process as a worker, and the two sweeps it carries could fail completely while
+# writing a log indistinguishable from a quiet, healthy household. [M4.11 findings 9, 17, 21]
+
+# A household afternoon, in the shape `_tick` wants it. A fixed offset rather than a named zone:
+# a Windows checkout has no system tz database, which is what `worker._now_local`'s fallback is
+# for, and `due` reads `.hour` and `.date()` and nothing else.
+NOON = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=2)))
+
+# Far longer than any budget a test declares, so "it stopped" and "it finished" cannot be
+# confused: a job that sleeps this long and a tick that returns in a fraction of it is the whole
+# assertion.
+WEDGED_SECONDS = 30
+
+
+def test_every_job_this_loop_fires_declares_a_budget_that_fits_inside_its_interval():
+    """§5.3 gives every job a budget, and until M4.11 the column was prose.
+
+    Two properties, and the second is the one with teeth. A budget longer than the job's own
+    interval is a budget that cannot be kept: `_tick` awaits due jobs one after another, so such a
+    job can only hold its cadence by eating the slot of everything behind it — and the three
+    60-second rows are what §7.3's prompt timing and §12's M2 exit criterion rest on.
+
+    The backup is checked against the other timeout in the codebase rather than against a number
+    written here. `backup/nightly.DUMP_TIMEOUT_SECONDS` kills a blocked `pg_dump` and deletes the
+    half-written file; a job budget at or under it would fire first, abandon the job while the
+    child process kept running, and make that constant unreachable. The two live in different
+    modules, so nothing but this assertion holds them in order.
+    """
+    from spielplan.backup import nightly
+
+    for job in worker.JOBS:
+        if job.run is None:
+            continue
+        assert job.timeout > 0, f"{job.name} fires with no budget at all"
+        assert job.timeout <= job.every, (
+            f"{job.name}: a {job.timeout}s budget does not fit inside its own {job.every}s "
+            "interval, so keeping its cadence costs every job behind it in the tick"
+        )
+
+    backup = next(job for job in worker.JOBS if job.name == "nightly-backup")
+    assert backup.timeout > nightly.DUMP_TIMEOUT_SECONDS, (
+        f"the backup's {backup.timeout}s budget fires before pg_dump's own "
+        f"{nightly.DUMP_TIMEOUT_SECONDS}s timeout, which leaves the child running and the "
+        "partial file behind"
+    )
+
+
+async def test_a_job_that_never_returns_is_abandoned_at_its_budget_and_the_tick_goes_on(
+    worker_env, db, caplog, monkeypatch
+):
+    """The failure this whole field exists for, met once instead of never.
+
+    `_tick` awaited `job.run()` with nothing around it, so one job that does not return takes the
+    entire worker offline — permanently and invisibly. No finish prompts, no refit, no fold-in, no
+    placement sweep, no nightly dump, not even the heartbeat file the compose healthcheck reads,
+    with the process alive and `docker compose ps` saying Up. It is not hypothetical: the sweep
+    reads the whole library and `all_items` paged for ever against a server that ignores
+    `StartIndex` (`connectors/jellyfin.MAX_PAGES` is the other half of the same finding).
+
+    So the assertions are the three facts an operator needs: the tick came back, the job after the
+    wedged one ran, and both outcomes are in `job_run` — a row that says "abandoned" and names the
+    budget is the difference between a reader who knows and a reader who waits. The log line is
+    asserted too, because §6.6 names the log as the operator's data and an ERROR is what a
+    `docker compose logs` grep finds. [M4.11 finding 17; §5.3, §8]
+    """
+    ran: list[str] = []
+
+    async def never_returns() -> dict[str, object]:
+        await asyncio.sleep(WEDGED_SECONDS)
+        ran.append("wedged")  # unreachable while the budget holds, and that is the point
+        return {"finished": True}
+
+    async def the_next_job() -> dict[str, object]:
+        ran.append("after")
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        worker,
+        "JOBS",
+        (
+            worker.Job("t-wedged", "M0", "test", "ms", never_returns, every=60, timeout=0.1),
+            worker.Job("t-after", "M0", "test", "ms", the_next_job, every=60, timeout=5),
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="spielplan.worker"):
+        started = time.monotonic()
+        await worker._tick(0.0, NOON, {}, {})
+        elapsed = time.monotonic() - started
+
+    assert elapsed < WEDGED_SECONDS / 2, (
+        f"the tick waited {elapsed:.1f}s on a job with a 0.1s budget"
+    )
+    assert ran == ["after"], f"the tick did not get past the job that hung: {ran}"
+
+    rows = {r["name"]: r for r in await db.fetch("SELECT name, ok, detail FROM job_run")}
+    assert set(rows) == {"t-wedged", "t-after"}
+    assert rows["t-wedged"]["ok"] is False
+    assert "0.1s budget" in rows["t-wedged"]["detail"]["error"], rows["t-wedged"]["detail"]
+    assert rows["t-after"]["ok"] is True, "the job behind the wedged one never reported"
+    assert "t-wedged did not finish within its 0.1s budget" in caplog.text, caplog.text
+
+
+async def test_a_subscription_that_never_delivered_is_pruned_by_age_and_a_live_one_is_not(
+    worker_env, db, two_members
+):
+    """§4.2's push targets, pruned by the only clock a never-delivered row has.
+
+    This prune filtered on `last_seen_ok IS NOT NULL`, so the row it exists for was the one row
+    it could never reach: measured before the fix, a 400-day-old subscription with a NULL
+    `last_seen_ok` survived this statement, which is a bearer capability (`push/send.py`) kept for
+    ever for a phone whose browser dropped its `PushSubscription` a year ago.
+
+    Four rows, because `COALESCE` has two directions and only one of them is the bug. The
+    year-old-but-pushed-to-yesterday row is the assertion that matters most: a bare `created_at`
+    filter would delete the household's actual phone.
+
+    What that row cannot say by itself is how it comes to have a `last_seen_ok` at all — while
+    `api/push.py` reset the column on every re-post, an /account open turned this exact row into
+    the first one and the live phone was deleted that night.
+    `test_push.py::test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares_a_live_phone`
+    is that composition, driven through the route; these four are the statement's own arithmetic.
+    [M4.11 finding 21; review cycle 1; §4.2]
+    """
+    patrick = two_members[0]
+    for label, created_days, seen_days in (
+        ("never-delivered-and-old", 400, None),
+        ("never-delivered-and-new", 10, None),
+        ("delivered-and-then-silent", 500, 400),
+        ("old-but-still-delivering", 400, 1),
+    ):
+        await db.execute(
+            "INSERT INTO push_subscription "
+            "  (user_id, device_label, endpoint, p256dh, auth, created_at, last_seen_ok) "
+            "VALUES ($1, $2, $3, 'p256dh', 'auth', "
+            "        now() - ($4::int * interval '1 day'), "
+            "        CASE WHEN $5::int IS NULL THEN NULL "
+            "             ELSE now() - ($5::int * interval '1 day') END)",
+            patrick, label, f"https://push.example.test/{label}", created_days, seen_days,
+        )
+
+    await next(j for j in worker.JOBS if j.name == "push-subscription-prune").run()
+
+    left = {r["device_label"] for r in await db.fetch("SELECT device_label FROM push_subscription")}
+    assert left == {"never-delivered-and-new", "old-but-still-delivering"}, left
+
+
+async def test_a_playback_session_that_matched_no_title_is_named_in_the_log(
+    worker_env, caplog, monkeypatch
+):
+    """§7.3's prompt that never arms, and the one place that could say why.
+
+    `WatchReport.unresolved` has always been filled — a session whose item is in no
+    `title_jellyfin_item` row and whose ProviderIds matched nothing (§7.1) — and it went into
+    `job_run.detail` and no further. A household whose television plays something this app cannot
+    attach to a title simply gets no prompt, and before this line nothing anywhere said so.
+
+    The poll itself is substituted, because the behaviour under test is this loop's logging and
+    not the resolver's: `sync/playback.py` is tested against a real fake Jellyfin in
+    `test_playback_prompt.py`, and driving a genuinely unresolvable session from here would assert
+    the same thing through four more moving parts. [M4.11 finding 9]
+
+    `_last_unresolved` is reset because it is module state that outlives one test: the line is a
+    state change now, so a sibling that named the same stranger first would make this one DEBUG.
+    """
+    from spielplan.sync import playback
+
+    async def poll_with_a_stranger(conn, client=None):
+        return playback.WatchReport(watching=1, unresolved=["jf-who-is-this"])
+
+    monkeypatch.setattr(playback, "poll", poll_with_a_stranger)
+    monkeypatch.setattr(worker, "_last_unresolved", None)
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        detail = await next(j for j in worker.JOBS if j.name == "jellyfin-sessions-poll").run()
+
+    assert detail is not None and detail["unresolved"] == ["jf-who-is-this"]
+    assert "1 session(s) matched no title: jf-who-is-this" in caplog.text, caplog.text
+
+
+async def test_the_same_unresolvable_session_is_named_once_and_not_once_a_minute(
+    worker_env, caplog, monkeypatch
+):
+    """The condition is persistent, so the line has to be a state and not a stream.
+
+    `_observe` re-derives `unresolved` from `/Sessions` on every pass and writes nothing, and
+    `sessions()` filters on nothing but a `NowPlayingItem` — so a film paused at 95% on the
+    living-room client produces the identical line once a minute until that client disconnects.
+    The code's own comment concedes the producing condition is "ordinary on a library this app
+    has not imported", where every finished playback is unresolvable, so the ordinary case IS the
+    repeating case: ~480 identical lines by morning, interleaved with the nightly backup and the
+    refit reports §6.6 promises the operator. That is the arithmetic M4.11 finding 18 (`ops-15`)
+    used to rate-limit the sibling job in this same module, and `DURATION_LOG_THRESHOLD` states
+    the rule for the three 60-second jobs outright.
+
+    A NEW stranger is still loud, which is the half a plain "log it once" would lose.
+    [review cycle 1: m411-rev1-unresolved-session-logs-a-line-a-minute]
+    """
+    from spielplan.sync import playback
+
+    strangers = ["jf-who-is-this"]
+
+    async def poll_with_a_stranger(conn, client=None):
+        return playback.WatchReport(watching=1, unresolved=list(strangers))
+
+    monkeypatch.setattr(playback, "poll", poll_with_a_stranger)
+    monkeypatch.setattr(worker, "_last_unresolved", None)
+    job = next(j for j in worker.JOBS if j.name == "jellyfin-sessions-poll")
+
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        for _ in range(4):
+            await job.run()
+        named = [r for r in caplog.records if "matched no title" in r.getMessage()]
+        assert len(named) == 1, (
+            f"four polls of one paused session put {len(named)} lines in the log the operator is "
+            "asked to read; the set never changed"
+        )
+
+        strangers.append("jf-and-who-is-this")
+        await job.run()
+        named = [r for r in caplog.records if "matched no title" in r.getMessage()]
+        assert len(named) == 2, "a stranger that was not there before is news"
+        assert "jf-and-who-is-this" in named[1].getMessage()
+
+
+async def test_a_sweep_whose_played_writes_all_failed_is_an_error_in_the_log(
+    worker_env, caplog, monkeypatch
+):
+    """The sweep's worst outcome, which used to produce the log of its best one.
+
+    The INFO line fired on `pushed or adopted or needs_relink`. A server below §7.1's pin, a proxy
+    that drops DELETE, a 500 on every write: all of them push nothing, adopt nothing and flag no
+    re-link, so the entire app->Jellyfin direction could be dead for the life of an install while
+    the log read exactly like a quiet household. `push_failed` is counted now, and an ERROR is
+    what makes it findable — §6.6 promises the operator "last syncs", and this is the line that
+    tells them the half that is not working.
+
+    `sync_all` is substituted for the same reason the poll is above: the counters are
+    `test_seen_sync.py`'s to earn against a real fake, and this asserts only that the loop says
+    them out loud. [M4.11 findings 3, 21; §7.3]
+    """
+    from spielplan.sync import seen
+
+    async def a_sweep_that_could_not_write(conn, client=None):
+        report = seen.SyncReport(unchanged=3, push_failed=2, users=["patrick"])
+        report._note_push_error("POST /UserPlayedItems/jf-1 -> 404")
+        return report
+
+    monkeypatch.setattr(seen, "sync_all", a_sweep_that_could_not_write)
+    # Module state that outlives one test: the ERROR is a state change now, so a sibling that
+    # named the same reason first would make this one DEBUG. Same reason as `_last_unresolved`.
+    monkeypatch.setattr(worker, "_push_failure_reported", None)
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        detail = await next(j for j in worker.JOBS if j.name == "jellyfin-seen-sync").run()
+
+    assert detail is not None and detail["push_failed"] == 2
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, f"a sweep that wrote nothing it owed logged no error: {caplog.text}"
+    assert "2 Played write(s) failed" in errors[0].getMessage()
+    assert "-> 404" in errors[0].getMessage()
+    # And the report itself still reaches the INFO line, which is where the counters are read.
+    assert "'push_failed': 2" in caplog.text
+
+
+async def test_a_quiet_healthy_sweep_still_says_nothing(worker_env, caplog, monkeypatch):
+    """The negative case, and the reason the condition above is a list rather than `if True`.
+
+    Widening the log had to stay a widening: §5.3 fires this job every fifteen minutes, so a
+    household where nothing happened must produce no line at all, or the operator's log is 96
+    sweeps a day of nothing and the ERROR above is lost in it.
+    """
+    from spielplan.sync import seen
+
+    async def nothing_to_do(conn, client=None):
+        return seen.SyncReport(unchanged=7, users=["patrick"], completed=["patrick"])
+
+    monkeypatch.setattr(seen, "sync_all", nothing_to_do)
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        await next(j for j in worker.JOBS if j.name == "jellyfin-seen-sync").run()
+
+    assert "jellyfin seen sync" not in caplog.text, caplog.text
+
+
+async def test_the_same_failed_played_write_is_an_error_once_and_not_ninety_six_times_a_day(
+    worker_env, caplog, monkeypatch
+):
+    """The condition this ERROR reports is permanent by construction, so the line has to be a
+    state and not a stream.
+
+    A sweep pushes only rows with `jf_synced_at IS NULL` and `_push` stamps only on success, so a
+    refused write stays owed and is re-attempted -- and re-counted -- every fifteen minutes for the
+    life of the install. The milestone's most-cited cause for it is exactly such a permanent state:
+    a server below §7.1's 10.9 pin has no `/UserPlayedItems` route to take, so `docker compose logs
+    worker` for one day held 96 copies of the same ERROR, interleaved with the nightly backup and
+    the refit reports §6.6 promises the operator. That is the same arithmetic this milestone used
+    three times over to turn a stream back into a state change (`playback._note_unreachable`,
+    `seen._failed_users_logged`, `worker._last_unresolved`), and `_failed_users_logged`'s own
+    comment gives the deciding argument: "the state now has a surface -- §6.6's card names the
+    member -- so the log does not have to repeat it 96 times a day". `push_failed` has that
+    surface too and is one level louder.
+
+    Nothing is hidden by the down-level: the INFO summary carries `push_failed` and its reasons on
+    every single sweep, which the last assertion pins. A reason that was not there before is loud
+    again, which is the half a plain "log it once" would lose.
+    [M4.11 review cycle 2: m411-c2-worker-03; M4.7 ops-15]
+    """
+    from spielplan.sync import seen
+
+    reasons = ["POST /UserPlayedItems/jf-1 -> 404"]
+
+    async def a_sweep_that_could_not_write(conn, client=None):
+        report = seen.SyncReport(unchanged=3, push_failed=len(reasons), users=["patrick"])
+        for reason in reasons:
+            report._note_push_error(reason)
+        return report
+
+    monkeypatch.setattr(seen, "sync_all", a_sweep_that_could_not_write)
+    monkeypatch.setattr(worker, "_push_failure_reported", None)
+    job = next(j for j in worker.JOBS if j.name == "jellyfin-seen-sync")
+
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        for _sweep in range(4):
+            await job.run()
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1, (
+            f"one owed row on a server below the pin put {len(errors)} ERRORs in a single hour of "
+            "the log the operator is asked to read; the reason never changed"
+        )
+        assert caplog.text.count("'push_failed': 1") == 4, (
+            "the figures still reach the INFO summary every sweep -- only the ERROR is rationed"
+        )
+
+        reasons.append("POST /UserPlayedItems/jf-2 -> 500")
+        await job.run()
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 2, "a refusal that was not there before is news"
+        assert "-> 500" in errors[1].getMessage()
+
+
+async def test_a_television_session_whose_series_could_not_be_listed_gets_its_own_sentence(
+    worker_env, caplog, monkeypatch
+):
+    """The other reason a television session arms nothing, and it is not the one the log said.
+
+    `observe` put two different outcomes into one list: a session that resolved to no title, and a
+    session that resolved to a title whose series episode list could not be read (decision 210(c),
+    "undecidable is not yes"). `report.unresolved` is the only thing that leaves the module, and
+    this loop states the first meaning as fact -- "matched no title", with a comment prescribing
+    the repair as "an import or a provider id, not an outage". For the second, every clause of that
+    is false: the title is imported, the ProviderIds matched, and the episode id the operator is
+    handed to paste into Jellyfin resolves there perfectly. The actual cause was written once, at
+    DEBUG, from `sync/playback.py` -- and `worker.py` runs at INFO, so it was not emitted at all.
+
+    Rationed the same way and by its own memo, because the producing condition is a standing proxy
+    rule or a server error: without that this would be 1,440 lines a day.
+    [M4.11 review cycle 2: m411-rev2-pb-02; decision 210(c), ops-15]
+    """
+    from spielplan.sync import playback
+
+    async def poll_with_an_unlistable_series(conn, client=None):
+        return playback.WatchReport(watching=1, undecided=["jf-6-e2"])
+
+    monkeypatch.setattr(playback, "poll", poll_with_an_unlistable_series)
+    monkeypatch.setattr(worker, "_last_unresolved", None)
+    monkeypatch.setattr(worker, "_last_undecided", None)
+    job = next(j for j in worker.JOBS if j.name == "jellyfin-sessions-poll")
+
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        detail = await job.run()
+        assert detail is not None and detail["undecided"] == ["jf-6-e2"]
+        named = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("series could not be listed: jf-6-e2" in line for line in named), named
+        assert not any("matched no title" in line for line in named), (
+            "the session resolved to a title; that sentence sends the operator to import it"
+        )
+
+        await job.run()
+        again = [r for r in caplog.records if "series could not be listed" in r.getMessage()]
+        assert len(again) == 1, "a standing proxy rule is a state, not a line a minute"

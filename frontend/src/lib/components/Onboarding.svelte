@@ -30,6 +30,7 @@
     enablePush,
     installPrompt,
     isStandalone,
+    localEndpoint,
     permissionState,
     platform,
     pushSupported,
@@ -52,22 +53,59 @@
   let busy = $state('');
   let error = $state('');
   let installOutcome = $state('');
+  // This browser's own subscription, and the handle the server gave it. `devices` answers a
+  // different question — `api/push.py`: "this member's devices. Never the household's" — and
+  // deriving "on for this device" from that list is what told every member's SECOND phone it was
+  // already registered, listed the first phone as if it were itself, and hid the enable button in
+  // an unreachable `else`. Only the browser knows what the browser holds. [M4.11 finding 21]
+  let localSub = $state(null);
+  let localDevice = $state(null);
+  // One line about this device's push state that is neither an error nor the state itself: a
+  // subscription bound to a retired VAPID key, or an off switch that found nothing to switch off.
+  let pushNote = $state('');
+  let noteKind = $state('');
 
   const where = $derived(platform({ installPrompt: !!prompt }));
   const pushState = $derived(
     !pushSupported()
       ? 'unsupported'
-      : devices.length > 0
+      : localSub
         ? 'on'
         : perm === 'denied'
           ? 'denied'
           : 'off'
+  );
+  // Deliberately NOT `perm === 'granted'`: granted-with-no-row is exactly the state a device is in
+  // after the 90-day prune (§4.2), and a screen that read permission as registration would show
+  // the off switch for a device the sender can no longer reach.
+
+  /**
+   * Which row in the list is the phone in the member's hand, where that is knowable.
+   *
+   * The server identifies a device by `sha256(endpoint)[:12]` and hands that handle back with every
+   * subscribe, which is the only way this screen can learn it: §2 puts the app behind "one plain
+   * HTTP port", and `crypto.subtle` does not exist outside a secure context, so the browser cannot
+   * hash its own endpoint. Unknown stays unknown — a row is never called somebody else's device on
+   * a guess.
+   */
+  const scopeOf = (device) =>
+    localDevice ? (device.device === localDevice ? 'this' : 'other') : 'unknown';
+  const devicesWhy = $derived(
+    !localSub
+      ? 'None of these is this browser — notifications are per-device, and this one is ' +
+        'not registered yet.'
+      : localDevice
+        ? 'Notifications are per-device. The one you are on is marked; turning them off here ' +
+          'leaves the others on.'
+        : 'Notifications are per-device, and this one is registered too; turning them off ' +
+          'here leaves the others on.'
   );
 
   onMount(() => {
     standalone = isStandalone();
     prompt = installPrompt();
     permissionState().then((answer) => (perm = answer));
+    localEndpoint().then((endpoint) => (localSub = endpoint));
     load();
     return watchInstallPrompt((event) => (prompt = event));
   });
@@ -86,8 +124,21 @@
     // after a reinstall, or a service-worker update that rotated the endpoint. Re-posting is
     // an upsert on the endpoint, so it cannot fan out into duplicate rows.
     try {
-      const synced = await syncSubscription();
-      if (synced) devices = synced.subscriptions;
+      const synced = await syncSubscription({ vapidKey });
+      if (synced?.stale) {
+        // The key this subscription was minted against is not the key this server signs with, so
+        // it is a device the push service will refuse to deliver to — off, with a reason, and the
+        // member's own tap is what replaces it (`enablePush` unsubscribes first).
+        localSub = null;
+        localDevice = null;
+        noteKind = 'stale';
+        pushNote =
+          'This device was registered before the server’s notification key changed, so nothing ' +
+          'can reach it. Turning notifications on again re-registers it.';
+      } else if (synced) {
+        devices = synced.subscriptions;
+        localDevice = synced.device ?? null;
+      }
     } catch {
       // A device that cannot re-register is not an error worth a red box on the account page;
       // the button below is still there and still says what state it is in.
@@ -128,10 +179,19 @@
   async function enable() {
     busy = 'push';
     error = '';
+    pushNote = '';
+    noteKind = '';
     try {
       const result = await enablePush({ vapidKey });
       perm = result.permission === 'unsupported' ? perm : result.permission;
       if (result.subscriptions) devices = result.subscriptions;
+      // From the act itself, not from a re-read: the endpoint is what makes this device "on" and
+      // the handle is what marks its row. A second device that only re-read `/api/push/state`
+      // would still be looking at the first one's row.
+      if (result.endpoint) {
+        localSub = result.endpoint;
+        localDevice = result.device ?? null;
+      }
       // Granted or denied, the member has answered the question.
       await finish();
     } catch (err) {
@@ -147,9 +207,33 @@
   async function disable() {
     busy = 'push';
     error = '';
+    pushNote = '';
+    noteKind = '';
     try {
-      const state = await disablePush();
-      devices = state?.subscriptions ?? [];
+      const result = await disablePush();
+      if (result.removed) {
+        localSub = null;
+        localDevice = null;
+        // The DELETE answers with the member's REMAINING devices, so the other phone's row stays
+        // on screen. `?? []` used to run for every answer, including the one where nothing was
+        // deleted, and blanked a list of devices that were all still subscribed.
+        if (result.subscriptions) devices = result.subscriptions;
+      } else {
+        // The same two fields, because `removed: false` is an answer about this browser and not
+        // just an absence of one: both of `disablePush`'s early returns mean the browser holds no
+        // `PushSubscription`, which is the single fact `localSub` models. Annotating without
+        // clearing left `pushState` on 'on', so the card said "Notifications are on for this
+        // device" directly above "there was nothing to turn off here", kept offering the off
+        // switch, and kept the enable control — the only gesture §6's preamble lets ask for
+        // permission — in the unreachable arm. That is finding 21's own defect, in the branch
+        // written to repair it. [M4.11 finding 21; §4.2]
+        localSub = null;
+        localDevice = null;
+        noteKind = 'nothing-local';
+        pushNote =
+          'This browser holds no notification subscription, so there was nothing to turn off ' +
+          'here. The devices listed below are your other ones.';
+      }
     } catch (err) {
       error = err.message || String(err);
     } finally {
@@ -241,14 +325,6 @@
         Notifications are on for this device. They are best-effort — anything they would have
         told you is also waiting in the app.
       </p>
-      <ul class="list" data-testid="onboarding-devices">
-        {#each devices as device (device.id)}
-          <li data-testid="onboarding-device">
-            <span>{device.device_label ?? 'Unnamed device'}</span>
-            <span class="data">{device.device}</span>
-          </li>
-        {/each}
-      </ul>
       <button
         class="btn-ghost"
         data-testid="onboarding-push-disable"
@@ -264,8 +340,9 @@
       </p>
     {:else}
       <p class="why" data-testid="onboarding-push-state">
-        Off. Turned on, this device gets the “did you finish it?” question when something plays
-        to the end, and an invitation when someone starts a session.
+        Off for this device — each phone or browser asks for itself. Turned on, this one gets the
+        “did you finish it?” question when something plays to the end, and an invitation when
+        someone starts a session.
       </p>
       <button
         class="btn-primary"
@@ -283,6 +360,31 @@
           The in-app prompts work regardless.
         </p>
       {/if}
+    {/if}
+
+    {#if pushNote}
+      <p class="why" data-testid="onboarding-push-note" data-note={noteKind}>{pushNote}</p>
+    {/if}
+
+    <!-- Outside the state branches, on purpose. §6's preamble makes notifications per-device and
+         §4.2 keys the table on the member, so this list belongs to the ACCOUNT and is as worth
+         showing to a device that is off as to one that is on: inside the `on` branch it was
+         invisible to exactly the device that needed it — the member's second phone, which read
+         the list as itself and was offered nothing but an off switch. [M4.11 finding 21] -->
+    {#if devices.length}
+      <ul class="list" data-testid="onboarding-devices">
+        {#each devices as device (device.id)}
+          <li data-testid="onboarding-device" data-device={scopeOf(device)}>
+            <span>
+              {device.device_label ?? 'Unnamed device'}{scopeOf(device) === 'this'
+                ? ' · this device'
+                : ''}
+            </span>
+            <span class="data">{device.device}</span>
+          </li>
+        {/each}
+      </ul>
+      <p class="why" data-testid="onboarding-devices-why">{devicesWhy}</p>
     {/if}
   </div>
 

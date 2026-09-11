@@ -97,8 +97,13 @@ STATE: dict[str, Any] = {
     "tonight_seq": 0,
     "tier_edits": {},
     "rank_comparisons": {},
+    # `server_version` / `server_supported` are §7.1's pin as the real routes now report it: the
+    # probed version and its verdict live beside the URL so the admin card can say that Played
+    # writes are refused without pressing Test. The harness has no Jellyfin to probe, so the pair
+    # stays empty-and-unknown — which is the state a fresh install is in, and the one the card must
+    # render as "nobody has probed" rather than as a refusal. [M4.11 finding 16]
     "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
-                 "linked_users": 0},
+                 "linked_users": 0, "server_version": "", "server_supported": None},
 }
 
 app = FastAPI(title="Spielplan dev harness")
@@ -917,6 +922,10 @@ def put_jellyfin(body: JellyfinSettings) -> dict[str, Any]:
         "configured": bool(body.url) and (bool(body.api_key) or STATE["jellyfin"]["has_api_key"]),
         "library_ids": [],
         "linked_users": 0,
+        # The real PUT probes after saving and returns the pair it stored; nothing here can be
+        # probed, so the stored pair is carried forward rather than invented.
+        "server_version": STATE["jellyfin"]["server_version"],
+        "server_supported": STATE["jellyfin"]["server_supported"],
     }
     return STATE["jellyfin"]
 
@@ -933,13 +942,24 @@ def jellyfin_users() -> list[dict[str, Any]]:
 
 @app.post("/api/admin/connectors/jellyfin/sync")
 def jellyfin_sync() -> dict[str, Any]:
-    return {"pushed": 0, "adopted": 0, "unchanged": 0, "needs_relink": [], "resolve": {},
-            "users": [], "skipped_no_link": True}
+    # Every key `sync.seen.SyncReport.as_dict` emits, in its order. The admin card now renders the
+    # counters that say the app -> Jellyfin direction is dead — `push_failed`, `push_errors`,
+    # `owed_no_token`, `unowned` — and a harness that omitted them would be the one place the client
+    # reads an absence where the app reads a number (decision 209's precedent). The values are the
+    # ones a household with no link really gets: nothing was swept. `failed_users` joins them for
+    # the same reason in the other direction: it is the card's health rule, not a counter it
+    # prints, so an absent key would read as "no member failed" rather than as "the harness cannot
+    # say" — and a stub that always looks healthier than the app is the defect that rule exists to
+    # catch.
+    return {"pushed": 0, "adopted": 0, "unchanged": 0, "needs_relink": [], "owed_unreachable": 0,
+            "owed_no_token": 0, "push_failed": 0, "push_errors": [], "wrote": [], "unowned": 0,
+            "resolve": {}, "users": [], "completed": [], "failed_users": [],
+            "skipped_no_link": True, "already_running": False}
 
 
 @app.post("/api/admin/connectors/jellyfin/poll")
 def jellyfin_poll() -> dict[str, Any]:
-    return {"armed": 0, "already_armed": 0, "watching": 0, "unresolved": [],
+    return {"armed": 0, "already_armed": 0, "watching": 0, "unresolved": [], "undecided": [],
             "skipped_no_link": True}
 
 

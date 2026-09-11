@@ -81,6 +81,28 @@ async function rateSome(page, count = 8) {
     expect(written.ok(), `seeding: POST ${path}`).toBeTruthy();
     if (card.type === 'sweep') rated += 1;
   }
+  // The STATE this function owes its caller, not the number of writes this run made — the rule
+  // `helpers.js::seedFilmLedger` already states over its own loop, and the one assertion this copy
+  // never got. `rated` is legitimately 0 on a re-run: `createMember(..., {reuse: true})` hands back
+  // the account seeded last time, whose sweep pool is drained, and the `break` above is §6.1's
+  // drained state rather than a failure. An account with no rated films at all is a different
+  // thing — it has no board to fit, nothing queued a refit for it, and `waitForBoard` would spend
+  // 120 s blaming a worker for a seed that never happened.
+  //
+  // §5.2's live label count, because it is true the instant this loop ends: `rate/balance.py` reads
+  // `FROM label l`, the rows the verdict writes in its own transaction, while `ledger_state` — every
+  // row of §6.3's board — arrives with the worker's sweep (M4.10 finding 9). [§5.2, §6.1]
+  //
+  // Written in M4.11, which owns neither §6.1 nor §6.3 and owes the reason: this changes no
+  // behaviour and cannot redden a run that would otherwise pass — `waitForBoard(page, {atLeast: 3})`
+  // is the next call in the same `beforeAll`, and zero live labels is precisely the state in which
+  // it spends 120 s and fails anyway. It converts that slow, misattributed red into an immediate
+  // accurate one, which is the same repair M4.11 made to `waitForBoard`'s own message after its
+  // two-phase run landed on it.
+  const balance = await page.request.get('/api/rate');
+  expect(balance.ok(), 'reading the seeded ledger back (§6.1)').toBeTruthy();
+  const labels = (await balance.json()).class_balance.total;
+  expect(labels, 'this account has no rated films, so §6.3 has no board to fit').toBeGreaterThan(0);
   return rated;
 }
 

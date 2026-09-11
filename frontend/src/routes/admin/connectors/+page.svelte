@@ -203,24 +203,123 @@
     </button>
   </div>
 
+  <!-- §7.1's pin, as this install last measured it — without pressing Test. Save and Test both
+       store the probed version and its verdict beside the URL now, so a 10.8 server says so every
+       day rather than only in the minute after a probe. `null` is "nobody has probed yet" and must
+       not read as a refusal: that is the state a fresh install is in. [M4.11 finding 16] -->
+  {#if cfg?.server_version || cfg?.server_supported === false}
+    <div
+      class="data probe"
+      data-server-supported={cfg.server_supported === null || cfg.server_supported === undefined
+        ? 'unknown'
+        : String(cfg.server_supported)}
+    >
+      server version {cfg.server_version || 'not reported'}
+      {#if cfg.server_supported === false}
+        · below the pinned 10.9: the per-user Played route (POST /UserPlayedItems) does not exist
+        on this server, so nothing this app marks can reach Jellyfin. Reads still work.
+      {:else if cfg.server_supported}· Played writes supported{/if}
+    </div>
+  {/if}
+
   {#if probe}
     <div class="data probe" data-probe={probe.ok ? 'ok' : 'fail'}>
       {#if probe.ok}
         {probe.server_name} · {probe.version} · {probe.user_count} users
-        {#if !probe.supported}· below the pinned 10.9 — reads may miss fields{/if}
+        <!-- It was "reads may miss fields", which names the wrong half: by §7.1 and the client's
+             own pin the 10.9-only route is the per-user Played WRITE. Reads degrade; the write does
+             not exist, and an admin who read this line had no way to know the app -> Jellyfin
+             direction was dead. [M4.11 finding 16] -->
+        <!-- `=== false`, not `!supported`: `null` is "this server did not report a version",
+             which `played_write_refusal` does not refuse on and this line must not accuse. A
+             200 with no parseable version — a forward-auth portal, a hardening rule on
+             /System/Info/Public — read as "below the pin" and named no version to check it
+             against. [review cycle 1: m411-rev-jf-04] -->
+        {#if probe.supported === false}· below the pinned 10.9 — the per-user Played write (POST
+          /UserPlayedItems) does not exist here, so seen states cannot reach Jellyfin{/if}
       {:else}
         failed: {probe.error}
       {/if}
     </div>
   {/if}
 
-  {#if syncResult}
-    <div class="data probe" data-sync="done">
+  {#if syncResult?.already_running}
+    <!-- §5.3 fires the sweep every fifteen minutes and this button is the other caller; the
+         advisory lock answers "a sweep is already running" rather than sweeping the same people
+         against two different snapshots. Pressing again once it finishes sweeps for real. -->
+    <div class="data probe" data-sync="already-running">
+      a sweep is already running — this press did nothing. Try again in a moment.
+    </div>
+  {:else if syncResult}
+    <!-- `ok` is a claim about a sweep that RAN, and one state made it a claim about a sweep that
+         did not. §3.3 makes an unreachable Jellyfin a degraded sync rather than a broken app, so
+         `seen.sync_all` returns the report as it stands when `client.all_items(None)` raises — and
+         every counter in it is zero, including `push_failed`. Printed through the rule below that
+         is indistinguishable from the quiet healthy household, which is M4.11 finding 3's own
+         sentence one layer up: that finding separated "owed nothing" from "lost every write" and
+         left "never read the library" reading as the first. Measured: against a media server whose
+         `/Items` refused the sweep's read, this card printed "pushed 0 · adopted 0 · unchanged 0"
+         with `data-sync-health="ok"` while NEITHER direction of §7.3 had run.
+         `users` is the signal because `sync_all` appends to it per linked member inside the loop
+         the failed read returns before — and `skipped_no_link` is what separates it from the
+         household that has no connector or no link at all, which is a legal §3.1 state and not a
+         failure. [§7.3, §3.3, §6.6; M4.11 finding 3]
+
+         `failed_users` is the same fault arriving by the other door, which the rule above missed:
+         the library read is keyless and each member's is not, so a Jellyfin account that was
+         deleted or renamed 404s that member's `/Items` for ever while the household read keeps
+         succeeding. `sync_all` swallows it per member, so `users` is full, every counter is zero
+         and this card printed "pushed 0 · adopted 0 · unchanged 0" in green for a sweep that
+         reconciled nobody. [review cycle 1: seen-02] -->
+    <div
+      class="data probe"
+      data-sync="done"
+      data-sync-health={syncResult.push_failed
+        ? 'failing'
+        : !syncResult.skipped_no_link &&
+            (!syncResult.users?.length || syncResult.failed_users?.length)
+          ? 'unreachable'
+          : 'ok'}
+    >
       pushed {syncResult.pushed} · adopted {syncResult.adopted} · unchanged
       {syncResult.unchanged}
+      {#if !syncResult.skipped_no_link && !syncResult.users?.length}
+        <div class="alert" role="alert" data-sync-unreachable>
+          this sweep never read the library, so no seen state moved in either direction — Jellyfin
+          did not answer. The app keeps working and the next sweep tries again (§3.3).
+        </div>
+      {:else if syncResult.failed_users?.length}
+        <div class="alert" role="alert" data-sync-member-failed={syncResult.failed_users.length}>
+          Jellyfin answered for the library but not for {syncResult.failed_users.join(', ')}, so
+          nothing was reconciled for
+          {syncResult.failed_users.length === 1 ? 'that member' : 'those members'} in either
+          direction. A Jellyfin account that was deleted or renamed stays like this until the
+          mapping is corrected (§3.3).
+        </div>
+      {/if}
       {#if syncResult.needs_relink?.length}· re-link needed: {syncResult.needs_relink.join(', ')}{/if}
+      {#if syncResult.owed_no_token}· {syncResult.owed_no_token} owed write(s) with no stored
+        sign-in{/if}
       {#if syncResult.owed_unreachable}· {syncResult.owed_unreachable} owed write(s) for titles
         no longer in the library{/if}
+      {#if syncResult.unowned}· {syncResult.unowned} title(s) no longer in the library{/if}
+      <!-- A count, not a list. `SyncReport.as_dict` sends `resolve.unmatched` as `len(...)` and the
+           names separately as `unmatched_names`, so `.length` on it was `undefined` and this clause
+           could never render — §7.2's refused matches, which M5's acquisition pipeline consumes,
+           had no surface at all. The vitest beside this file asserted it against a fabricated array,
+           which is the assertion becoming the implementation compared to itself. [§7.2, §6.6] -->
+      {#if syncResult.resolve?.unmatched}· {syncResult.resolve.unmatched} library
+        item(s) matched no title{/if}
+      {#if syncResult.push_failed}
+        <!-- A failure, not a count in a row of counts. This card printed
+             "pushed 0 · adopted 0 · unchanged 87" while every Played write in the sweep was being
+             refused, which reads as a quiet household rather than as a dead direction — the whole
+             of M4.11 finding 3. The reason is the sweep's own first distinct one. -->
+        <div class="alert" role="alert" data-sync-failure={syncResult.push_failed}>
+          {syncResult.push_failed} Played write(s) failed — nothing reached Jellyfin for them.
+          {syncResult.push_errors?.[0] ?? 'no reason was reported'}
+        </div>
+      {/if}
     </div>
   {/if}
 

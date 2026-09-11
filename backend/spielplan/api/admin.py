@@ -25,6 +25,7 @@ and a GET that returns it turns every admin session into a copy of it.
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -36,11 +37,13 @@ from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 from spielplan.api.deps import DB, AdminUser, write_txn
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError
-from spielplan.connectors.registry import load_jellyfin, save_jellyfin
+from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
 from spielplan.core import auth, secrets, webauthn
 from spielplan.core.config import settings
 from spielplan.importer import dna
 from spielplan.sync import playback, seen
+
+log = logging.getLogger("spielplan.api.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -119,6 +122,37 @@ async def _client(conn) -> JellyfinClient:
     return client
 
 
+async def _store_probed_version(conn, cfg: JellyfinConfig) -> JellyfinConfig:
+    """§7.1's pin, stored where the write can read it rather than returned and discarded.
+
+    `MIN_SERVER_VERSION` and the verdict have existed since M1, and the only caller was the test
+    button below — which handed `supported` to the browser, rendered one sentence about reads, and
+    kept nothing. So a 10.8 install passed every visible check while `POST /UserPlayedItems`, the
+    route §7.1 actually pins the version for, 404ed for the life of the household. The verdict lives
+    in the connector's config half (no secret, no migration) and `JellyfinClient.played_write_refusal`
+    is what reads it back; the sweep re-probes at its own head, because an operator upgrades the
+    media server without ever returning to this page.
+
+    Best-effort on purpose. §3.1 makes a half-configured install legal and the admin types the
+    address before pasting the key, so a server that is not up yet must not fail the save — the
+    stored pair simply stays as it was, `server_supported is None` does not refuse a write, and the
+    next sweep or test button fills it in. Saved only when it changed: this row carries the
+    AEAD-sealed credentials, and re-sealing them to store an unchanged version string is work with
+    no reader. [M4.11 finding 16; §7.1, §3.1]
+    """
+    client = registry.make_client(cfg)
+    if client is None:
+        return cfg
+    try:
+        raw, supported = await client.probe_version()
+    except JellyfinError as exc:
+        log.info("jellyfin version not probed on save (%s); the stored verdict stands", exc)
+        return cfg
+    if (raw, supported) == (cfg.server_version, cfg.server_supported):
+        return cfg
+    return await save_jellyfin(conn, server_version=raw, server_supported=supported)
+
+
 @router.get("/connectors/jellyfin")
 async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
     """§6.6's Connectors card, plus the one state it could not previously describe.
@@ -136,13 +170,28 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "library_ids": cfg.library_ids,
         "linked_users": len(cfg.user_tokens),
         "secrets_unreadable": cfg.secrets_unreadable,
+        # §7.1's pin as this install last measured it, so the card can say that Played writes are
+        # refused without the admin pressing Test first — the state a 10.8 server is in every day,
+        # not only in the minute after a probe. `null` is "nobody has probed", which must stay
+        # distinguishable from a stored `false` (`registry.JellyfinConfig`). [M4.11 finding 16]
+        "server_version": cfg.server_version,
+        "server_supported": cfg.server_supported,
     }
 
 
 @router.put("/connectors/jellyfin")
 async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[str, object]:
+    """§6.6's Save. It also probes, because a save is the one moment the credentials are known to
+    be fresh and §7.1's verdict is what gates every later Played write (`_store_probed_version`)."""
     cfg = await save_jellyfin(conn, url=body.url or None, api_key=body.api_key or None)
-    return {"url": cfg.url, "has_api_key": bool(cfg.api_key), "configured": cfg.configured}
+    cfg = await _store_probed_version(conn, cfg)
+    return {
+        "url": cfg.url,
+        "has_api_key": bool(cfg.api_key),
+        "configured": cfg.configured,
+        "server_version": cfg.server_version,
+        "server_supported": cfg.server_supported,
+    }
 
 
 @router.post("/connectors/jellyfin/test")
@@ -151,9 +200,20 @@ async def test_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
     whether it clears that bar rather than only whether the socket opened."""
     client = await _client(conn)
     try:
-        return {"ok": True, **await client.check()}
+        probe = await client.check()
     except JellyfinError as exc:
         return {"ok": False, "error": str(exc), "status": exc.status}
+    # Stored, not only shown. `check` computes the same verdict `_store_probed_version` does and
+    # this route was where it went to die (finding 16). Stored as `check` returns it, `None`
+    # included: `bool()` here turned "the server did not report a version" into "below the pin",
+    # which is a refusal that cannot name the version it refuses and is exactly the pair
+    # `save_jellyfin`'s docstring forbids. [review cycle 1: m411-rev-jf-04]
+    await save_jellyfin(
+        conn,
+        server_version=str(probe.get("version") or ""),
+        server_supported=probe["supported"],
+    )
+    return {"ok": True, **probe}
 
 
 @router.get("/connectors/jellyfin/users")
@@ -487,31 +547,61 @@ async def link_jellyfin(
                 "those Jellyfin credentials belong to a different Jellyfin user",
             )
 
+    # One transaction over the badge and the token, with the connector row locked for the read the
+    # merge is made from. Both halves were needed and neither was there. The sealed `user_tokens`
+    # map is AEAD-encrypted, so the merge happens in Python and cannot be expressed in SQL: on an
+    # autocommit connection two members being linked on two phones each read the same map, each
+    # added one entry, and the second write dropped the first — reproduced against the in-process
+    # fake, where both responses answered `has_token: true / linked` and `GET /api/admin/users`
+    # then showed the second account linked with `has_jellyfin_token: false` and the card counting
+    # one link. And an account that reads "linked" with no token is not a cosmetic loss: it is the
+    # state §7.3's sweep treats as a missing credential, which until this milestone stopped that
+    # member's whole reconciliation at their first owed row for ever.
+    # `load_jellyfin(for_update=True)` argues why the lock is the connector row and not an advisory
+    # key (the secret cannot be merged in SQL, so the row is the seam).
+    #
+    # `app_user` first and the connector row second, which is `seen.unlink`'s order and therefore
+    # `seen.forget_token`'s: the two routes that write this pair are Link and Unlink, they are
+    # adjacent buttons in §6.6's mapping table, and taking the two locks in opposite orders is a
+    # deadlock on the one account both of them name. (`registry.save_jellyfin` does hold the
+    # connector row while it de-links every account on an origin change — §14.3 — so that one save
+    # and a simultaneous link are the residual pair; it is an admin retyping the server address
+    # while another admin links, Postgres detects it rather than hanging, and ordering this route
+    # the other way would trade a plausible collision for a rare one.)
+    #
+    # The `authenticate_by_name` network call stays above this block, where it already was: §3.3
+    # makes Jellyfin's availability the app's problem and never the database's, and holding a row
+    # lock across a sign-in to another server would turn one slow media server into a lock queue.
+    # [M4.11 finding 19; §14.3, §7.3, §3.3]
     try:
-        await conn.execute(
-            "UPDATE app_user SET jellyfin_user_id = $2, jellyfin_link_state = $3 WHERE id = $1",
-            user_id,
-            body.jellyfin_user_id,
-            # A link with no token is real but incomplete: it attributes playback and feeds the
-            # P(seen) prior, and it cannot write Played state until someone signs in (§7.3).
-            "linked" if token else "needs_relink",
-        )
+        async with write_txn(conn):
+            await conn.execute(
+                "UPDATE app_user SET jellyfin_user_id = $2, jellyfin_link_state = $3 "
+                "WHERE id = $1",
+                user_id,
+                body.jellyfin_user_id,
+                # A link with no token is real but incomplete: it attributes playback and feeds the
+                # P(seen) prior, and it cannot write Played state until someone signs in (§7.3).
+                "linked" if token else "needs_relink",
+            )
+            if token:
+                cfg = await load_jellyfin(conn, for_update=True)
+                tokens = dict(cfg.user_tokens)
+                tokens[str(user_id)] = token
+                await save_jellyfin(conn, user_tokens=tokens)
+            else:
+                # A stored token belongs to one Jellyfin identity. Re-pointing this account at a
+                # different Jellyfin user without a new sign-in must drop the old one, or the next
+                # Played write sends the previous user's credential with the new user's id.
+                await seen.forget_token(conn, user_id)
     except asyncpg.UniqueViolationError as exc:
+        # Caught outside the block, because the violation aborts the transaction: the badge and the
+        # token are rolled back together, which is what keeps a refused re-map from leaving a token
+        # stored against a mapping that never happened.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "that Jellyfin user is already linked to another account (§3.3: one-to-one)",
         ) from exc
-
-    if token:
-        cfg = await load_jellyfin(conn)
-        tokens = dict(cfg.user_tokens)
-        tokens[str(user_id)] = token
-        await save_jellyfin(conn, user_tokens=tokens)
-    else:
-        # A stored token belongs to one Jellyfin identity. Re-pointing this account at a
-        # different Jellyfin user without a new sign-in must drop the old one, or the next
-        # Played write sends the previous user's credential with the new user's id.
-        await seen.forget_token(conn, user_id)
 
     return {
         "ok": True,

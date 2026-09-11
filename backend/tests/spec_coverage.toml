@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.10"
+current_milestone = "M4.11"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -474,7 +474,13 @@ milestone = "M1"
 kind = "integration"
 what = "Each app user maps to at most one Jellyfin user and each Jellyfin user to at most one app user — a second link attempt to an already-linked Jellyfin id is refused — the link is optional (unlinked users function normally), and all authentication succeeds while the Jellyfin connector is unreachable or unconfigured."
 why = "§3.3: authentication is never delegated to Jellyfin — the app must work when Jellyfin is down; the link only drives seen-sync, playback attribution and the P(seen) prior."
-tests = ["backend/tests/test_jellyfin_link.py::test_one_jellyfin_user_cannot_be_linked_to_two_accounts", "backend/tests/test_jellyfin_link.py::test_one_account_maps_to_at_most_one_jellyfin_user", "backend/tests/test_jellyfin_link.py::test_a_link_without_credentials_is_real_but_incomplete", "backend/tests/test_jellyfin_link.py::test_linking_with_credentials_stores_that_users_own_token", "backend/tests/test_jellyfin_link.py::test_credentials_for_a_different_jellyfin_user_are_refused", "backend/tests/test_jellyfin_link.py::test_unlinking_leaves_a_working_account", "backend/tests/test_jellyfin_link.py::test_signing_in_works_while_jellyfin_is_unreachable", "backend/tests/test_seen_sync.py::test_an_unlinked_account_keeps_its_own_state", "backend/tests/test_seen_sync.py::test_unlinking_forgets_the_token_and_keeps_the_seen_state", "e2e/specs/08-jellyfin.spec.js::unlinking leaves a working account", "backend/tests/test_jellyfin_link.py::test_re_mapping_without_credentials_drops_the_old_token", "backend/tests/test_connector_registry.py::test_moving_the_server_drops_the_credentials_bound_to_it", "backend/tests/test_connector_registry.py::test_a_same_origin_edit_keeps_them"]
+tests = ["backend/tests/test_jellyfin_link.py::test_one_jellyfin_user_cannot_be_linked_to_two_accounts", "backend/tests/test_jellyfin_link.py::test_one_account_maps_to_at_most_one_jellyfin_user", "backend/tests/test_jellyfin_link.py::test_a_link_without_credentials_is_real_but_incomplete", "backend/tests/test_jellyfin_link.py::test_linking_with_credentials_stores_that_users_own_token", "backend/tests/test_jellyfin_link.py::test_credentials_for_a_different_jellyfin_user_are_refused", "backend/tests/test_jellyfin_link.py::test_unlinking_leaves_a_working_account", "backend/tests/test_jellyfin_link.py::test_signing_in_works_while_jellyfin_is_unreachable", "backend/tests/test_seen_sync.py::test_an_unlinked_account_keeps_its_own_state", "backend/tests/test_seen_sync.py::test_unlinking_forgets_the_token_and_keeps_the_seen_state", "e2e/specs/08-jellyfin.spec.js::unlinking leaves a working account", "backend/tests/test_jellyfin_link.py::test_re_mapping_without_credentials_drops_the_old_token", "backend/tests/test_connector_registry.py::test_moving_the_server_drops_the_credentials_bound_to_it", "backend/tests/test_connector_registry.py::test_moving_the_server_de_links_the_accounts_even_when_the_secret_will_not_open", "backend/tests/test_connector_registry.py::test_a_same_origin_edit_keeps_them", "backend/tests/test_jellyfin_link.py::test_two_members_linked_at_the_same_time_both_keep_their_token"]
+# The concurrent-link test is M4.11's. "Each app user maps to at most one Jellyfin user" was
+# asserted one request at a time, and the route read the connector row, merged its own member
+# into the token map and wrote the whole map back on an autocommitting connection -- so two
+# members linking side by side (§7.3's password entry, which §6.6 puts on one screen) left one
+# of them reading `linked` with no token, which is the one state this row says cannot exist.
+# [M4.11]
 
 [[requirement]]
 id = "map-taste-admin-admin-route-gating-and-reauth"
@@ -492,16 +498,41 @@ milestone = "M1"
 kind = "integration"
 what = "A Jellyfin item whose ProviderIds carry imdb/tmdb/tvdb resolves to a `title` row by `title.id` and fills only NULL identity columns: an existing non-null `imdb_id`/`tmdb_id` is never overwritten, `jellyfin_id` is attached, and an item with no ProviderIds at all still upserts without error and without creating a duplicate title. Two owned titles sharing a `tmdb_id` both survive the upsert (no UNIQUE constraint on `tmdb_id`/`trakt_id`/slug)."
 why = "`imdb_id` is NULL on 21% of titles so it can never be the join key, and 315 duplicate `tmdb_id` values exist legitimately (mostly movie/series pairs) — hence fill-never-clobber and §4.1 rule 6's ban on those UNIQUE constraints."
-tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_kinds", "backend/tests/test_jellyfin_resolve.py::test_a_tmdb_match_is_qualified_by_kind", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_provider_ids_falls_back_to_name_and_year", "backend/tests/test_jellyfin_resolve.py::test_a_null_identity_column_is_filled", "backend/tests/test_jellyfin_resolve.py::test_an_existing_identity_column_is_never_overwritten", "backend/tests/test_jellyfin_resolve.py::test_two_titles_sharing_a_tmdb_id_both_survive_the_upsert", "backend/tests/test_jellyfin_resolve.py::test_an_unresolvable_item_is_reported_and_creates_nothing", "backend/tests/test_jellyfin_resolve.py::test_reimporting_the_same_library_is_idempotent", "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale", "backend/tests/test_seen_sync.py::test_an_unresolvable_jellyfin_item_is_reported_not_invented", "backend/tests/test_jellyfin_resolve.py::test_an_unchanged_row_is_not_rewritten", "backend/tests/test_jellyfin_resolve.py::test_a_changed_row_is_still_rewritten", "backend/tests/test_jellyfin_client.py::test_items_are_requested_recursively", "backend/tests/test_jellyfin_client.py::test_items_are_narrowed_to_movies_and_series", "backend/tests/test_jellyfin_client.py::test_the_field_set_is_actually_requested"]
+tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_kinds", "backend/tests/test_jellyfin_resolve.py::test_a_tmdb_match_is_qualified_by_kind", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_provider_ids_falls_back_to_name_and_year", "backend/tests/test_jellyfin_resolve.py::test_a_null_identity_column_is_filled", "backend/tests/test_jellyfin_resolve.py::test_an_existing_identity_column_is_never_overwritten", "backend/tests/test_jellyfin_resolve.py::test_two_titles_sharing_a_tmdb_id_both_survive_the_upsert", "backend/tests/test_jellyfin_resolve.py::test_an_unresolvable_item_is_reported_and_creates_nothing", "backend/tests/test_jellyfin_resolve.py::test_reimporting_the_same_library_is_idempotent", "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale", "backend/tests/test_seen_sync.py::test_an_unresolvable_jellyfin_item_is_reported_not_invented", "backend/tests/test_jellyfin_resolve.py::test_an_unchanged_row_is_not_rewritten", "backend/tests/test_jellyfin_resolve.py::test_a_changed_row_is_still_rewritten", "backend/tests/test_jellyfin_client.py::test_items_are_requested_recursively", "backend/tests/test_jellyfin_client.py::test_items_are_narrowed_to_movies_and_series", "backend/tests/test_jellyfin_client.py::test_the_field_set_is_actually_requested", "backend/tests/test_jellyfin_resolve.py::test_a_name_matching_two_titles_is_refused_not_guessed", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_production_year_never_matches_on_name_alone", "backend/tests/test_jellyfin_resolve.py::test_two_copies_of_one_title_are_one_decision_not_two_relinks"]
+# The last three are M4.11's, and the first two close a hole in "never clobber" this row could
+# not see: the name-and-year fallback matched on name alone when a year was missing, and picked
+# one row arbitrarily when two titles shared a name -- both of which attach a `jellyfin_id` to
+# the wrong title, after which every later fill is a clobber of a different film's identity.
+# The churn test is the steady state: two copies of one title rewrite no `title` row and report
+# `relinked = 0`, which is what keeps `test_a_changed_row_is_still_rewritten` meaningful now
+# that the pointer left `upsert_item`'s guard. [M4.11]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-playback-arms-prompt-never-writes"
 spec = "§7.3"
 milestone = "M1"
 kind = "integration"
-what = "A Jellyfin session reaching ≥90% playback of a title arms a per-user finish prompt and leaves `user_title.state` untouched; only the user's explicit tap writes `seen`. Repeated polls of `/Sessions` over the same session arm the prompt exactly once, not once per poll."
+what = "A Jellyfin session reaching ≥90% playback of a title arms a per-user finish prompt and leaves `user_title.state` untouched; only the user's explicit tap writes `seen`, and while that prompt is open the 15-minute sweep adopts nothing for that (user, title) — so no sync can close it as answered. Repeated polls of `/Sessions` over the same session arm the prompt exactly once, not once per poll."
 why = "\"Jellyfin playback is a suggestion, never a silent write\" — inferred state must never outrank the person, and rating capture is measured against finished playbacks (§13)."
-tests = ["backend/tests/test_playback_prompt.py::test_a_session_past_the_threshold_arms_a_prompt", "backend/tests/test_playback_prompt.py::test_arming_writes_no_seen_state", "backend/tests/test_playback_prompt.py::test_a_session_below_the_threshold_arms_nothing", "backend/tests/test_playback_prompt.py::test_jellyfins_own_played_flag_arms_below_the_threshold", "backend/tests/test_playback_prompt.py::test_repeated_polls_of_one_viewing_arm_it_once", "backend/tests/test_playback_prompt.py::test_a_second_viewing_while_the_first_is_unanswered_adds_no_card", "backend/tests/test_playback_prompt.py::test_the_poll_reads_sessions_and_arms", "e2e/specs/08-jellyfin.spec.js::the prompt marks nothing until it is tapped", "e2e/specs/08-jellyfin.spec.js::repeated polls of one viewing do not re-arm it", "backend/tests/test_playback_prompt.py::test_the_threshold_is_the_one_the_spec_names", "backend/tests/test_playback_prompt.py::test_the_boundary_is_inclusive", "backend/tests/test_playback_prompt.py::test_a_rewatch_on_the_same_device_asks_again", "backend/tests/test_playback_prompt.py::test_a_title_already_seen_arms_nothing", "backend/tests/test_playback_prompt.py::test_an_open_prompt_closes_when_the_state_arrives_another_way"]
+# The third clause is M4.11's, under decision 211 -- which decision 172(2) had already ruled. The
+# sentence "only the user's explicit tap writes `seen`" was false in the one window where it
+# matters: the sweep's adopt branch writes `seen` from Jellyfin's own Played flag and `pending()`
+# then closes the open prompt as `answered`, measured at one sweep -- so a linked member watching
+# in Jellyfin is never asked, §7.3's "offers the verdict flow" never fires, and `arm` refuses the
+# title on every later viewing because it is already seen. The repair is that the sweep does not
+# ADOPT for a title whose prompt is open, not a fifth `prompt_state` naming the closure: that
+# option was costed and refused, because §13's denominator is `playback_event WHERE finished` and
+# `prompt_state` has no reader outside `sync/playback.py`, so it would have bought a migration for
+# nothing and left the silent write standing. [M4.11, decision 211]
+tests = ["backend/tests/test_playback_prompt.py::test_a_session_past_the_threshold_arms_a_prompt", "backend/tests/test_playback_prompt.py::test_arming_writes_no_seen_state", "backend/tests/test_playback_prompt.py::test_a_session_below_the_threshold_arms_nothing", "backend/tests/test_playback_prompt.py::test_jellyfins_own_played_flag_arms_below_the_threshold", "backend/tests/test_playback_prompt.py::test_repeated_polls_of_one_viewing_arm_it_once", "backend/tests/test_playback_prompt.py::test_a_second_viewing_while_the_first_is_unanswered_adds_no_card", "backend/tests/test_playback_prompt.py::test_the_poll_reads_sessions_and_arms", "e2e/specs/08-jellyfin.spec.js::the prompt marks nothing until it is tapped", "e2e/specs/08-jellyfin.spec.js::repeated polls of one viewing do not re-arm it", "backend/tests/test_playback_prompt.py::test_the_threshold_is_the_one_the_spec_names", "backend/tests/test_playback_prompt.py::test_the_boundary_is_inclusive", "backend/tests/test_playback_prompt.py::test_a_rewatch_in_a_new_viewing_asks_again", "backend/tests/test_playback_prompt.py::test_a_title_already_seen_arms_nothing", "backend/tests/test_playback_prompt.py::test_an_open_prompt_closes_when_the_state_arrives_another_way", "backend/tests/test_seen_sync.py::test_the_sweep_does_not_adopt_while_a_finish_prompt_is_open", "backend/tests/test_playback_prompt.py::test_an_episode_session_arms_the_prompt_for_its_series", "backend/tests/test_playback_prompt.py::test_a_session_on_a_copy_the_sweep_recorded_resolves_through_the_copy_map", "backend/tests/test_playback_prompt.py::test_a_dismissed_viewing_is_not_re_armed_and_sends_no_second_push", "backend/tests/test_playback_prompt.py::test_the_state_write_lands_before_the_prompt_is_consumed"]
+# Five added in M4.11, one per clause the milestone found unasserted. The sweep test is the
+# third clause above and the only one that could not live in `test_playback_prompt.py`: the
+# window is a sweep's adopt branch, not a poll. `test_an_open_prompt_closes_when_the_state
+# _arrives_another_way` keeps its name and its place -- its body was rewritten, because under
+# decision 211 the sweep is no longer one of the ways the state can arrive, so the other way it
+# now simulates is an explicit `seen.set_state`. The rewatch entry above was renamed in the
+# same change, for the reason decision 211's SQL gives: the guard is keyed on the viewing.
+# [M4.11, decisions 210 and 211]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-seen-sync-no-echo-loop"
@@ -510,7 +541,14 @@ milestone = "M1"
 kind = "integration"
 what = "When the app's explicit `seen`/`unseen` action and Jellyfin's Played flag disagree, the app's action wins; the write stamps `jf_synced_at`, and the next 15-minute sync reading back the value the app just wrote produces no further write and no state change. A Jellyfin-side change made after `jf_synced_at` is accepted."
 why = "Two-way sync is new relative to the corpus project's read-only stance; last-writer-wins with app-explicit precedence plus `jf_synced_at` is the stated loop guard."
-tests = ["backend/tests/test_seen_sync.py::test_reading_back_our_own_write_changes_nothing", "backend/tests/test_seen_sync.py::test_a_jellyfin_side_change_after_the_sync_is_accepted", "backend/tests/test_seen_sync.py::test_an_action_taken_while_jellyfin_was_down_is_pushed_by_the_next_sync", "backend/tests/test_seen_sync.py::test_the_first_sync_after_linking_never_erases_jellyfin_history", "backend/tests/test_seen_sync.py::test_the_app_side_write_never_depends_on_jellyfin", "backend/tests/test_seen_sync.py::test_sync_all_runs_every_linked_user_and_reports", "e2e/specs/08-jellyfin.spec.js::a flag set in jellyfin arrives in the app", "e2e/specs/08-jellyfin.spec.js::a second sync reads back our own write and changes nothing", "backend/tests/test_seen_sync.py::test_each_linked_user_syncs_their_own_state", "backend/tests/test_seen_sync.py::test_one_users_action_is_pushed_under_their_own_token", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_cannot_erase_an_explicit_seen", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_marked_in_jellyfin_is_adopted", "backend/tests/test_seen_sync.py::test_an_action_taken_during_the_sweep_is_pushed_not_adopted", "backend/tests/test_seen_sync.py::test_an_owed_write_for_a_vanished_title_is_reported"]
+tests = ["backend/tests/test_seen_sync.py::test_reading_back_our_own_write_changes_nothing", "backend/tests/test_seen_sync.py::test_a_jellyfin_side_change_after_the_sync_is_accepted", "backend/tests/test_seen_sync.py::test_an_action_taken_while_jellyfin_was_down_is_pushed_by_the_next_sync", "backend/tests/test_seen_sync.py::test_the_first_sync_after_linking_never_erases_jellyfin_history", "backend/tests/test_seen_sync.py::test_the_app_side_write_never_depends_on_jellyfin", "backend/tests/test_seen_sync.py::test_sync_all_runs_every_linked_user_and_reports", "e2e/specs/08-jellyfin.spec.js::a flag set in jellyfin arrives in the app", "e2e/specs/08-jellyfin.spec.js::a second sync reads back our own write and changes nothing", "backend/tests/test_seen_sync.py::test_each_linked_user_syncs_their_own_state", "backend/tests/test_seen_sync.py::test_one_users_action_is_pushed_under_their_own_token", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_cannot_erase_an_explicit_seen", "backend/tests/test_seen_sync.py::test_a_duplicate_copy_marked_in_jellyfin_is_adopted", "backend/tests/test_seen_sync.py::test_an_action_taken_during_the_sweep_is_pushed_not_adopted", "backend/tests/test_seen_sync.py::test_an_owed_write_for_a_vanished_title_is_reported", "backend/tests/test_seen_sync.py::test_unseen_clears_every_copy_and_two_sweeps_leave_it_unseen", "backend/tests/test_seen_sync.py::test_the_representative_pointer_survives_six_sweeps_of_two_users_on_two_copies", "backend/tests/test_seen_sync.py::test_a_series_stays_seen_when_a_new_episode_recomputes_the_folder_flag"]
+# The last three are M4.11's, and each is the echo loop this row forbids arriving by a route it
+# did not consider. A second copy of the title keeps Jellyfin's Played flag after `unseen`, so
+# the next sweep adopts it back and the person is reverted within fifteen minutes; the
+# representative pointer followed whichever copy was Played, so it flipped every sweep with two
+# users watching; and a Series folder's computed flag goes false the day a new episode lands,
+# which un-marks a show nobody touched. All three are "reading back our own write changes
+# nothing" -- asserted against one copy and no series, they were not. [M4.11, decision 210]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-seen-write-uses-per-user-token"
@@ -519,16 +557,40 @@ milestone = "M1"
 kind = "backend"
 what = "Setting `seen` in the app issues `POST /UserPlayedItems/{itemId}?userId=` and `unseen` issues `DELETE`, both authenticated with that linked user's own access token and never the admin API key; a 401 on the write marks that link as needing re-link and neither retries with the admin key nor silently drops the write."
 why = "Jellyfin API keys are unscoped and admin-equivalent — there is no read-only variant — so write restraint is enforced by this app's code alone (§14 risk 3); a per-user token can only set its own state."
-tests = ["backend/tests/test_jellyfin_client.py::test_a_played_write_uses_the_users_own_token", "backend/tests/test_jellyfin_client.py::test_the_admin_key_is_refused_on_a_played_write", "backend/tests/test_jellyfin_client.py::test_a_write_with_no_token_never_reaches_the_network", "backend/tests/test_jellyfin_client.py::test_one_users_token_cannot_write_another_users_state", "backend/tests/test_seen_sync.py::test_marking_seen_writes_played_with_the_users_own_token", "backend/tests/test_seen_sync.py::test_marking_unseen_issues_the_delete", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_refuses_the_write_and_asks_for_a_re_link", "backend/tests/test_seen_sync.py::test_a_rejected_token_marks_the_link_and_keeps_the_write_owed", "e2e/specs/08-jellyfin.spec.js::a tap in the app arrives in jellyfin, under the per-user token", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_is_not_promoted_to_linked", "backend/tests/test_seen_sync.py::test_an_unreachable_jellyfin_does_not_promote_a_broken_link"]
+tests = ["backend/tests/test_jellyfin_client.py::test_a_played_write_uses_the_users_own_token", "backend/tests/test_jellyfin_client.py::test_the_admin_key_is_refused_on_a_played_write", "backend/tests/test_jellyfin_client.py::test_a_write_with_no_token_never_reaches_the_network", "backend/tests/test_jellyfin_client.py::test_one_users_token_cannot_write_another_users_state", "backend/tests/test_seen_sync.py::test_marking_seen_writes_played_with_the_users_own_token", "backend/tests/test_seen_sync.py::test_marking_unseen_issues_the_delete", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_refuses_the_write_and_asks_for_a_re_link", "backend/tests/test_seen_sync.py::test_a_rejected_token_marks_the_link_and_keeps_the_write_owed", "e2e/specs/08-jellyfin.spec.js::a tap in the app arrives in jellyfin, under the per-user token", "backend/tests/test_seen_sync.py::test_a_link_with_no_token_is_not_promoted_to_linked", "backend/tests/test_seen_sync.py::test_an_unreachable_jellyfin_does_not_promote_a_broken_link", "backend/tests/test_seen_sync.py::test_a_tokenless_link_adopts_the_whole_library_and_never_stops_at_an_owed_row", "backend/tests/test_jellyfin_client.py::test_a_server_below_the_pin_refuses_the_played_write_by_name"]
+# The last two are M4.11's. "Never retries with the admin key nor silently drops the write" had
+# a third outcome nobody asserted: the sweep abandoned the rest of that member's reconciliation
+# at the first owed row, so a link made without credentials adopted nothing for the life of the
+# install -- refusing the write correctly and losing the read direction with it. The version
+# refusal belongs here for the same reason: on a server below the pin the route does not exist,
+# and a refusal raised locally with no status is what keeps it out of the 401 branch. [M4.11]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-finish-prompt-banner-path"
-spec = "§7.3 (with §12 M1, decision-doc proposal 150)"
+spec = "§7.3 (with §12 M1, decision 212 — which supersedes proposal 150)"
 milestone = "M1"
 kind = "e2e"
-what = "With push undeliverable, an armed finish prompt queues and appears as an in-app card on the user's next app open, naming exactly one title (\"Did you finish X?\"); its first tap writes `seen` for that user, and the card does not reappear on subsequent opens."
+what = "With push undeliverable, an armed finish prompt queues and appears as an in-app card on the user's next app open, naming exactly one title (\"Did you finish X?\"); its first tap writes `seen` for that user, and the card does not reappear on subsequent opens. After that tap the card offers the route into §6.1's queue with that title at its head and the Home shelves it just changed are re-read; a decline writes `unseen` as an explicit action rather than nothing."
 why = "§7.3 names the banner path as the whole M1 behaviour (push waits for M4), and proposal 150 separates this one-title, `seen`-writing prompt from Home's pending-verdicts banner; only a browser can prove the queued prompt surfaces on next open."
-tests = ["e2e/specs/08-jellyfin.spec.js::finishing a title arms a prompt that surfaces on the next app open", "e2e/specs/08-jellyfin.spec.js::the first tap writes seen, and the card does not come back", "backend/tests/test_state_routes.py::test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen", "backend/tests/test_state_routes.py::test_declining_the_prompt_writes_nothing_and_closes_it", "backend/tests/test_state_routes.py::test_answering_a_prompt_twice_is_a_404", "backend/tests/test_playback_prompt.py::test_the_queue_surfaces_the_prompt_and_marks_it_shown", "backend/tests/test_playback_prompt.py::test_an_answered_prompt_does_not_come_back"]
+# The last two clauses are M4.11's. Decision 212 delivers proposal 150's own promise rather than
+# adopting the proposal: §7.3 says the tap "offers the verdict flow" and `FinishPrompt.svelte`
+# offered nothing, and the card was mounted with no props at all -- so the banner the answer just
+# emptied kept the title until the next full load, while the identical write from the title card
+# calls `loadShelves()` and says why. Inline verdict chips were refused: a second observation
+# writer on Home would have no rate session, no card token and no §6.1 block counter. Decision 211
+# makes the other tap a fact -- a "no" wrote nothing, `user_title` stayed empty, and the next sweep
+# adopted Jellyfin's Played flag over the person's answer within fifteen minutes -- which is why
+# `test_declining_the_prompt_writes_nothing_and_closes_it` is renamed to
+# `test_declining_the_prompt_writes_unseen_and_closes_it` and replaced in `tests` by the stage that
+# renames it. [M4.11, decisions 211 and 212]
+tests = ["e2e/specs/08-jellyfin.spec.js::finishing a title arms a prompt that surfaces on the next app open", "e2e/specs/08-jellyfin.spec.js::the first tap writes seen, and the card does not come back", "backend/tests/test_state_routes.py::test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen", "backend/tests/test_state_routes.py::test_declining_the_prompt_writes_unseen_and_closes_it", "backend/tests/test_state_routes.py::test_answering_a_prompt_twice_is_a_404", "backend/tests/test_playback_prompt.py::test_the_queue_surfaces_the_prompt_and_marks_it_shown", "backend/tests/test_playback_prompt.py::test_an_answered_prompt_does_not_come_back", "e2e/specs/08-jellyfin.spec.js::a declined viewing stays declined, and only a new viewing asks again"]
+# The renamed entry and the new e2e case are M4.11's, and no e2e title was added for decision
+# 212: the queue link and the banner re-read are asserted inside `the first tap writes seen, and
+# the card does not come back`, whose body was extended rather than replaced, because the clause
+# is what happens AFTER that tap and a second spec would have had to arm a second prompt to see
+# it. The decline case is the other tap, which decision 211 turned from an absence into a fact;
+# it reads the state route's timestamp rather than the state alone, since §4.2's absent-row
+# default is also `unseen` and would have passed without a row. [M4.11, decisions 211 and 212]
 
 [[requirement]]
 id = "library-rate-undo-block-depth"
@@ -702,7 +764,34 @@ tests = [
     "backend/tests/test_push.py::test_the_endpoint_and_auth_key_never_come_back_out_of_the_api",
     "backend/tests/test_push.py::test_the_endpoint_and_auth_key_never_reach_the_log",
     "e2e/specs/12-onboarding.spec.js::granting push permission registers exactly one device, and re-opening adds none",
+    "backend/tests/test_push.py::test_a_plain_http_endpoint_is_refused_and_stores_nothing",
+    "backend/tests/test_push.py::test_an_endpoint_on_this_machine_or_the_private_network_is_refused",
+    "backend/tests/test_push.py::test_an_endpoint_naming_the_households_own_servers_is_refused",
+    "backend/tests/test_push.py::test_an_ordinary_push_service_endpoint_is_still_stored_exactly_once",
+    "backend/tests/test_worker_jobs.py::test_a_subscription_that_never_delivered_is_pruned_by_age_and_a_live_one_is_not",
+    "backend/tests/test_push.py::test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares_a_live_phone",
+    "backend/tests/test_push.py::test_resubscribing_a_device_that_never_received_a_push_spares_it_too",
 ]
+# The last five are M4.11's. "Stores exactly one row for that (user, endpoint)" never asked what
+# an endpoint is allowed to be, and the sender posts the stored string verbatim with the VAPID
+# JWT attached -- so any member could turn this table into an internal reachability probe
+# against the household's own Jellyfin or this app (§14.3). The prune test is the other end of
+# the row's own lifetime claim: §4.2 prunes on 404/410 at send time and by age otherwise, and
+# the age filter required a `last_seen_ok` the silent subscriptions it exists for never have.
+# [M4.11, §4.2]
+#
+# The sixth is review cycle 1's, and it is a composition test rather than a sixth property: the
+# route's reset and the prune's COALESCE were each defensible alone and together deleted a live
+# phone on the night its owner opened /account. It drives the shipped route and the shipped job
+# in one test because a unit test of either would have stayed green.
+# [review cycle 1: m411-rev1-push-prune-deletes-a-live-device-that-just-re-registered]
+#
+# And the seventh is the other half of that composition, which neither of the two above could
+# see: the first re-posts a row whose `last_seen_ok` is a day old, and the four SQL rows never
+# re-post at all. In between sits the household that has never sent a push -- no Jellyfin link
+# arms no prompt, and the invitation never goes to the host -- whose row is judged by
+# `created_at` for ever, which a re-post did not move either.
+# [review cycle 2: m411-c2-push-01]
 
 [[requirement]]
 id = "library-rate-member-pwa-install-onboarding"
@@ -3249,12 +3338,19 @@ milestone = "M4.8"
 kind = "backend"
 what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds"]
 # The ledger guard is registered here rather than given an eleventh row, and the row it lands on
 # is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
 # run is published, so a count no run produced is the same defect as a silent skip, one document
 # further out. An eleventh row would also flip the published block to 11/11 and make that guard
 # fail on its own registration until the block was re-pasted. [M4.8 review cycle 3: m48-c3-cov-01]
+#
+# `..._counts_the_ids_the_map_actually_holds` joins it for the same reason, one sentence further
+# out: the fenced block was mechanical and the prose beside it was not, so the ledger published
+# "84 ids across twelve pytest files" for a map holding 99 -- five of them registered by a review
+# cycle after the paragraph was written, and nothing compared the two. Decision 184 refuses to
+# invent a count no run produced; this refuses to leave one standing that the map has overtaken,
+# which is the same rule read from the other end. [M4.11 review cycle 2: m411-c2-ledger-02]
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -4056,3 +4152,501 @@ tests = [
 # needs a pool, the migration wait and a signal handler, and UNCONDITIONAL as well as present —
 # behind the migration wait's `else`, or behind `if store.is_empty`, the line would be missing on
 # exactly the boots somebody is reading the log for. [M4.10 cycle 1, m410-rev1]
+
+# --- M4.11: seen states both ways, for a real household ----------------------------------------
+#
+# Seventeen rows written before the code with no `tests` key on any of them, so the red list the
+# gate prints IS the test plan (docs/milestones/M4.11-plan.md) -- M4.10's opening, repeated
+# because it worked. What they measure is one row this map already had: §12's M1 exit criterion,
+# "seen states flow both ways for both users", closed against one member, one copy per title, no
+# series and no second phone. Every row below is a clause of that criterion asserted against the
+# household §3.3 describes instead -- two members, duplicated copies, a running series, two
+# phones each. Decisions 210-212 record the three calls the plan left to the owner, and decision
+# 211 is why the only schema this milestone takes is `0020_jellyfin_items.sql`'s copy set: the
+# plan's fifth `prompt_state` is dropped rather than migrated for.
+#
+# Seven rows this map already had are amended in place ABOVE rather than duplicated here, because
+# each of them is the same clause asserted against the easier household and a second row would
+# have left the easy one standing as a claim about the app: the three §7.3 rows
+# (`...-playback-arms-prompt-never-writes`, `...-seen-sync-no-echo-loop`,
+# `...-seen-write-uses-per-user-token`), §7.1's `...-title-upsert-fill-never-clobber`, the
+# `...-finish-prompt-banner-path` row decision 212 extends, §3.3's
+# `platform-jellyfin-link-optional-one-to-one`, and M2's `library-rate-push-subscription-write`.
+# Two registered names moved with them and are swapped in those rows in the same change, because
+# `test_every_named_test_exists` fails on the gap: `test_declining_the_prompt_writes_nothing_and
+# _closes_it` -> `..._writes_unseen_and_closes_it` (decision 211 makes the old name false) and
+# `test_a_rewatch_on_the_same_device_asks_again` -> `test_a_rewatch_in_a_new_viewing_asks_again`
+# (the dismissal guard is keyed on the viewing, which `0006_jellyfin.sql:29-37` says is the device).
+#
+# No vitest id is named by any of the seventeen, and that is a layer choice rather than a limit --
+# `_vitest_ids()` has read them since M4.9. The two clauses a component test is the cheapest
+# falsifier for, the second phone reading `off` and the series-unseen note, are asserted in the
+# browser instead: the defect in both was a screen derived from the wrong source, and a stub that
+# answers what the test told it to answer cannot say whether a real second phone reads off.
+#
+# CLOSED: all seventeen carry tests, no row carries a waiver, and `current_milestone` was never
+# lowered. Fifteen of the seventeen reach more than one test file and three of those reach the
+# browser as well, which is a property of the clauses rather than of the filing: "seen states flow
+# both ways" is a sentence about a client, a sweep, a worker job and a screen agreeing, and a row
+# that named only the cheapest of them would certify the half a household does not have. Where a
+# crossing is not plain from the row's own `what`, the row argues it in a comment.
+
+[[requirement]]
+id = "jellyfin-sync-a-tokenless-link-still-adopts"
+spec = "§7.3 (per-user token write path) + §3.3 (the link drives the P(seen) prior)"
+milestone = "M4.11"
+kind = "integration"
+what = "A link created without Jellyfin credentials adopts that member's Played flags for the whole library on every sweep, leaves its owed app->Jellyfin writes owed rather than abandoning them, reports the count as `owed_no_token`, and never falls back to the admin key; an owed row does not stop the sweep at any position in `/Items` order."
+why = "§3.3 makes the link's job the P(seen) prior and attribution, which a missing write token does not remove; the previous `break` made one owed row freeze that member's history import for the life of the install."
+tests = [
+    "backend/tests/test_seen_sync.py::test_a_tokenless_link_adopts_the_whole_library_and_never_stops_at_an_owed_row",
+    "backend/tests/test_seen_sync.py::test_a_link_with_no_token_refuses_the_write_and_asks_for_a_re_link",
+]
+
+[[requirement]]
+id = "jellyfin-sync-the-link-badge-follows-the-token-not-the-silence"
+spec = "§7.3 (\"a 401 on write -> re-link prompt\") + §14.3"
+milestone = "M4.11"
+kind = "integration"
+what = "A `needs_relink` link is promoted to `linked` only after a Played write actually succeeded under that user's token; a sweep with nothing to push, a sweep whose owed title has left the library, and a Jellyfin outage all leave the flag standing. Changing the connector's origin sets every linked account to `needs_relink` in the same act that drops the tokens."
+why = "The badge is the only signal §7.3 gives the admin; promotion on the absence of bad news made a revoked token read green, and §14.3's credential drop left the accounts claiming a token they no longer had."
+tests = [
+    "backend/tests/test_seen_sync.py::test_a_clean_sync_clears_a_stale_re_link_flag",
+    "backend/tests/test_seen_sync.py::test_a_link_with_no_token_is_not_promoted_to_linked",
+    "backend/tests/test_seen_sync.py::test_an_unreachable_jellyfin_does_not_promote_a_broken_link",
+    "backend/tests/test_seen_sync.py::test_an_owed_title_that_left_the_library_does_not_promote_the_link",
+    "backend/tests/test_connector_registry.py::test_moving_the_server_drops_the_credentials_bound_to_it", "backend/tests/test_connector_registry.py::test_moving_the_server_de_links_the_accounts_even_when_the_secret_will_not_open",
+    "backend/tests/test_connector_registry.py::test_a_same_origin_edit_keeps_them",
+]
+# `test_a_clean_sync_clears_a_stale_re_link_flag` is an M1 name whose body this milestone
+# rewrote: it used to promote on a sweep that pushed nothing, which is the defect. It stays
+# named here because the clause it guards -- a clean sync DOES clear the flag -- is still the
+# positive half, and the three siblings beside it are the silences that must not clear it.
+# The two registry tests are §14.3's half: the origin change that drops the tokens is the same
+# act that sets the badge, and a same-origin edit is the negative control on it. [M4.11]
+
+[[requirement]]
+id = "jellyfin-sync-a-failed-played-write-is-counted-not-swallowed"
+spec = "§7.3 + §6.6 (admin sync card)"
+milestone = "M4.11"
+kind = "integration"
+what = "A non-401 failure of the Played write -- 404, 500, timeout -- increments `push_failed`, appears in the admin sync report beside pushed/adopted/unchanged, and makes that user's sweep report incomplete; it does not mark the link as needing a re-link. A member whose own `/Items` read fails while the household's succeeds is named in `failed_users` rather than swallowed, and the admin card refuses to call that sweep healthy. A concurrent tap that holds the per-(user, title) lock is owed, not failed: nothing reached the media server, so the counter does not move and the member stays in `completed`. Both lines an operator reads are state changes rather than streams -- the ERROR repeats only when the set of refusals changes, and a version probe blocked while the library read succeeds reports no outage at all, while a real outage is still one WARNING and one recovery INFO however long it lasts."
+why = "§7.3 ties the re-link prompt to a 401 specifically; a missing route or a dead proxy is not a credential problem, and a sweep that reports zero pushes and zero failures is indistinguishable from a healthy one. The per-member read is the same sentence one layer up: the keyless library read and the per-user reads fail independently, so a deleted Jellyfin account left `users` full, every counter zero and the card green for a sweep that reconciled nobody."
+tests = [
+    "backend/tests/test_seen_sync.py::test_a_failed_played_write_is_counted_and_the_sweep_says_it_is_incomplete",
+    "backend/tests/test_seen_sync.py::test_a_server_below_the_pin_counts_a_failed_push_and_never_a_re_link",
+    "backend/tests/test_seen_sync.py::test_a_member_whose_own_reads_fail_is_named_rather_than_swallowed",
+    "backend/tests/test_worker_jobs.py::test_a_sweep_whose_played_writes_all_failed_is_an_error_in_the_log",
+    "backend/tests/test_worker_jobs.py::test_a_quiet_healthy_sweep_still_says_nothing",
+    "backend/tests/test_worker_jobs.py::test_the_same_failed_played_write_is_an_error_once_and_not_ninety_six_times_a_day",
+    "backend/tests/test_seen_sync.py::test_a_tap_holding_the_title_lock_is_owed_and_not_a_failed_played_write",
+    "backend/tests/test_seen_sync.py::test_a_blocked_version_probe_is_not_an_unreachable_jellyfin",
+    "backend/tests/test_static_contracts.py::test_the_sync_health_verdict_refuses_a_sweep_that_reconciled_nobody",
+]
+# The quiet-sweep test is the negative control and is named on purpose: §5.3 fires this job 96
+# times a day, so a log line per sweep buries the one that matters, and a widened condition with
+# no test for what it must still ignore is how that happens. [M4.11]
+#
+# The per-member read failure keeps `push_failed` at zero deliberately, and the test asserts that
+# negative: a read that never happened is not a failed Played write, and collapsing the two would
+# make §6.6's card print "N Played write(s) failed" for a sweep that attempted none. The card's
+# half is asserted in the vitest beside `+page.svelte`, which is where the rule that read the
+# report lives -- the same layer choice the row above makes for the empty-`users` case.
+# [review cycle 1: seen-02]
+#
+# And named, in cycle 2, at the layer this map can hold: this row published "the admin card
+# refuses to call that sweep healthy" and every id under it was a backend one, so renaming the
+# vitest broke no build and the clause read as covered. The vitest cannot be the name -- the
+# plan's risks section forbids a `frontend/src/...` path in a `tests` list and decision 206
+# refused to register one even after M4.9 made them resolve -- so the static guard carries it,
+# pinning the ternary that IS the verdict: the report has no health field, and all three sweeps
+# the rule separates (quiet, unreachable, member lost) arrive with every counter at zero.
+# [review cycle 2: m411-c2-cov-01]
+#
+# Cycle 2 added the three that keep this counter and its log honest in the other direction. A tap
+# holding the per-(user, title) lock is owed and not failed, or a 100 ms race lands in the counter
+# cs-05 built for a permanently broken write direction. The ERROR is a state change, because the
+# condition it reports is permanent by construction -- a refused write stays owed and is
+# re-counted every fifteen minutes -- and the figures still reach the INFO summary every sweep.
+# And the sweep's own ops-15 pair had no test at all: the version probe and the library read are
+# different routes, so a blocked probe set and cleared the outage memo inside one sweep and
+# reported a server that was never down.
+# [review cycle 2: m411-rev2-seen-03, m411-c2-worker-03, m411-rev2-seen-02]
+
+[[requirement]]
+id = "jellyfin-sync-an-explicit-action-survives-a-concurrent-second-one"
+spec = "§7.3 conflict rule"
+milestone = "M4.11"
+kind = "integration"
+what = "Two seen/unseen actions on the same (user, title) issued concurrently leave the app row and Jellyfin's Played flag agreeing on the same value, and the following sweep changes neither."
+why = "§7.3's conflict rule makes the app authoritative for explicit actions; an unserialised push let the database end on the later value and Jellyfin on the earlier one with both stamped as agreed, after which the sweep reverted the person."
+tests = [
+    "backend/tests/test_seen_sync.py::test_two_explicit_actions_at_once_leave_the_app_and_jellyfin_agreeing",
+    "backend/tests/test_seen_sync.py::test_an_action_taken_during_the_sweep_is_pushed_not_adopted",
+    "backend/tests/test_seen_sync.py::test_the_sweep_boundary_ignores_this_processs_clock",
+    "backend/tests/test_static_contracts.py::test_the_sweep_module_reads_its_boundary_from_the_database_and_holds_no_clock",
+]
+# The static guard is named beside the behavioural one because the behavioural one could not
+# fail before this milestone: it patched a `datetime` the sweep module never imported, so it
+# asserted nothing about the clock §7.3's conflict rule compares against. The rewritten body
+# injects the skew at the database seam; the guard is what keeps the module clock-free, which is
+# the only reason the seam stays the only one there is. [M4.11, tq3]
+
+[[requirement]]
+id = "jellyfin-sync-one-title-many-copies-is-one-decision"
+spec = "§7.1 identity + §7.3"
+milestone = "M4.11"
+kind = "integration"
+what = "With two Jellyfin items resolving to one title, `title.jellyfin_id` is stable across sweeps and across users, `unseen` clears Played on every copy so the next sweep does not re-adopt it -- including when one of the copies has left the library, where the dead item id neither aborts the write to the live one nor is pushed at again by the sweep that read the library -- a session on any copy resolves to the title, and a steady-state sweep rewrites no `title` row and reports `relinked = 0`."
+why = "§7.1 attaches one `jellyfin_id` per title while a household's 'Movies' and 'Movies 4K' libraries give it several; a pointer that followed a Played flag flipped every sweep, lost the finish prompt for whichever copy it was not on, and let a duplicate revert an explicit action."
+tests = [
+    "backend/tests/test_seen_sync.py::test_unseen_clears_every_copy_and_two_sweeps_leave_it_unseen",
+    "backend/tests/test_seen_sync.py::test_the_representative_pointer_survives_six_sweeps_of_two_users_on_two_copies",
+    "backend/tests/test_seen_sync.py::test_a_duplicate_copy_cannot_erase_an_explicit_seen",
+    "backend/tests/test_seen_sync.py::test_a_duplicate_copy_marked_in_jellyfin_is_adopted",
+    "backend/tests/test_jellyfin_resolve.py::test_every_copy_of_a_title_is_recorded_not_just_the_representative",
+    "backend/tests/test_jellyfin_resolve.py::test_two_copies_of_one_title_are_one_decision_not_two_relinks",
+    "backend/tests/test_jellyfin_resolve.py::test_the_representative_is_kept_while_its_copy_is_still_in_the_library",
+    "backend/tests/test_jellyfin_resolve.py::test_the_representative_falls_to_the_lowest_live_copy_when_its_own_is_gone",
+    "backend/tests/test_jellyfin_resolve.py::test_a_copy_that_left_the_library_is_pruned_only_against_a_read_that_happened",
+    "backend/tests/test_playback_prompt.py::test_a_session_on_a_copy_the_sweep_recorded_resolves_through_the_copy_map",
+    "backend/tests/test_playback_prompt.py::test_a_session_on_a_copy_no_sweep_has_seen_resolves_through_its_provider_ids",
+    "backend/tests/test_seen_sync.py::test_unseen_clears_the_live_copy_when_the_other_one_left_the_library",
+    "backend/tests/test_seen_sync.py::test_the_copy_map_is_pruned_before_the_sweep_pushes_against_it",
+]
+# Four layers, because the clause is one decision taken in four places: the election that picks
+# the representative (resolve), the sweep that must not follow a Played flag off it, and the
+# `/Sessions` reader that has to find the title from whichever copy the television played. The
+# two session tests are both named because they take different routes -- the copy map a sweep
+# wrote, and ProviderIds when no sweep has run -- and a row that named only one would certify
+# the path a household in mid-link does not have. [M4.11]
+#
+# The last two are the window between a copy leaving the library and the sweep that notices: the
+# map still names the dead id, and `ORDER BY jellyfin_id` puts it first as often as not. One test
+# is the tap in that window -- a 404 on one copy of a multi-copy DELETE must not abort the write
+# to the live one -- and the other is the sweep, which now prunes before the loop instead of
+# after it, so it does not spend a round trip on an id its own read has just dropped.
+# [review cycle 2: m411-rev2-resolve-02]
+
+[[requirement]]
+id = "jellyfin-sync-a-series-is-never-marked-unplayed-recursively"
+spec = "§7.3 + decision 210"
+milestone = "M4.11"
+kind = "integration"
+what = "Marking a series unseen in the app issues no DELETE against the Series item; the app-side state is written and stamped, no sweep re-owes it and no sweep adopts the still-played folder flag back over it, and undoing a verdict on a title with no prior `user_title` row writes nothing to Jellyfin at all."
+why = "Jellyfin's `Folder.MarkUnplayed` resets Played, PlayCount and the resume position on every episode, which the app cannot restore, and §7.3's own table forbids pushing the app's absence over Jellyfin's history (decision 210). The folder therefore stays played by design, so the app-only stamp records a settlement and not an agreement — read as an agreement, the sweep reverted the tap fifteen minutes later (decision 213)."
+tests = [
+    "backend/tests/test_seen_sync.py::test_marking_a_series_unseen_is_app_only_and_is_not_re_owed",
+    "backend/tests/test_seen_sync.py::test_a_series_marked_unseen_in_the_app_is_not_re_adopted_from_the_folder_flag",
+    "backend/tests/test_seen_sync.py::test_a_series_stays_seen_when_a_new_episode_recomputes_the_folder_flag",
+    "backend/tests/test_seen_sync.py::test_a_childless_series_folder_is_never_read_as_played",
+    "backend/tests/test_seen_sync.py::test_retract_puts_back_exactly_the_flag_the_forward_action_set",
+    "e2e/specs/08-jellyfin.spec.js::a declined viewing stays declined, and only a new viewing asks again",
+    "backend/tests/test_static_contracts.py::test_decision_210s_adoption_clause_carries_the_narrowing_213_imposed",
+    "backend/tests/test_static_contracts.py::test_the_decision_210_adoption_guard_catches_each_way_it_was_said",
+]
+# The e2e case is named for one assertion inside it: the fake's write log holds no entry for the
+# series after a decline wrote `unseen`, read through the real HTTP stack rather than a patched
+# client. Decision 210(a) makes the refusal a thing the surface says as well as a thing the code
+# does, and a recursive `MarkUnplayed` is not recoverable, so the negative wants asserting where
+# a real request can send it. [M4.11, decision 210]
+#
+# The re-adoption test is named beside `..._is_app_only_and_is_not_re_owed` rather than folded
+# into it because the two need OPPOSITE fixtures and only one of them is the household's: the
+# app-only test never puts the series in the fake's played set, so Jellyfin agrees with the
+# unseen and the un-marking guard answers it, while a household that finished the show in
+# Jellyfin and then marked it not-seen in the app leaves the folder played for ever by design.
+# A single test cannot be in both states. [review cycle 1: M411-R1-01; decision 213]
+#
+# The two static guards are the register's half of the same rule. This row cites decision 210 in
+# its `spec` key and 210 went on stating 172(4)'s adopt clause unnarrowed for the whole milestone
+# that removed it, so a reader arriving here and following the citation read the loop as owner
+# policy. The guard ties 210's sentence to the branch in `sync/seen.py`: move one and the other
+# fails with it, which is the only order that keeps a numbered decision and its code honest.
+# [review cycle 2: m411-c2-dec-03]
+
+[[requirement]]
+id = "jellyfin-sync-ownership-is-falsified-when-the-library-drops-a-title"
+spec = "§7.2 (\"mark removed titles is_owned = false\")"
+milestone = "M4.11"
+kind = "integration"
+what = "A title removed from Jellyfin becomes `is_owned = false` with a fresh `owned_checked_at` on the next completed sweep and leaves Tonight's pool and the owned Home shelves; a later seen/unseen tap on it is refused as \"not on Jellyfin\" rather than spending a round trip on the dead item id; a sweep that could not read the library un-owns nothing."
+why = "§7.2: 'mark removed titles `is_owned = false` ... re-derived from Jellyfin, never trusted stale'. Nothing wrote false, so a deleted film stayed in the candidate pool with a dead deep link."
+tests = [
+    "backend/tests/test_seen_sync.py::test_a_sweep_that_could_not_read_the_library_un_owns_nothing",
+    "backend/tests/test_seen_sync.py::test_a_title_removed_from_jellyfin_is_no_longer_owned",
+    "backend/tests/test_seen_sync.py::test_a_tap_on_a_title_the_library_dropped_is_refused_rather_than_sent",
+    "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale",
+]
+# The refusal is named FIRST on purpose. This is the most destructive statement the milestone
+# adds -- a bug here un-owns the whole library, empties Tonight's pool and blanks the owned Home
+# shelves -- so the row's falsifier is the sweep that could not finish reading, not the happy
+# path. [M4.11, §7.2]
+#
+# The tap test is here rather than beside the write path because what it asserts is that the
+# prune's conclusion is USED: `push_owed` already carries a purpose-built "not on Jellyfin"
+# refusal and could not reach it, since the refusal is gated on a null `title.jellyfin_id` and
+# nothing clears that pointer. §6.7's rail prints the reason verbatim, so the household read the
+# raw HTTP line instead. [review cycle 1: M411-REV-03]
+
+[[requirement]]
+id = "jellyfin-sync-the-sweep-is-bounded-and-cannot-wedge-the-worker"
+spec = "§5.3 job budgets + §7.1"
+milestone = "M4.11"
+kind = "backend"
+what = "`all_items` stops at the server's own `TotalRecordCount` counted in DISTINCT item ids, raises the moment a full page repeats one it already holds, raises on a short page the server's own count says is short, and raises rather than paging past a hard cap when a server never ends; a job that exceeds its declared budget is abandoned with a logged timeout instead of blocking the tick; and two sweeps of the same user cannot overlap."
+why = "§5.3 gives every job a budget and the `/Sessions` poll a one-minute cadence it cannot hold behind a serial tick; one non-terminating page loop took the whole worker offline with the process still healthy. Counted in rows instead of ids, the count bound turned that hang into something quieter and worse: a proxy caching page one satisfied it with duplicates, so the walk returned a page-one library and §7.2 un-owned the rest."
+tests = [
+    "backend/tests/test_jellyfin_client.py::test_the_walk_stops_at_the_servers_own_total_record_count",
+    "backend/tests/test_jellyfin_client.py::test_a_full_page_that_repeats_one_already_read_raises_instead_of_truncating",
+    "backend/tests/test_jellyfin_client.py::test_the_walk_raises_at_the_hard_page_cap",
+    "backend/tests/test_jellyfin_client.py::test_a_short_page_still_ends_the_walk_when_the_server_does_not_count",
+    "backend/tests/test_jellyfin_client.py::test_a_short_page_the_server_says_is_short_raises_instead_of_truncating",
+    "backend/tests/test_jellyfin_client.py::test_one_row_with_no_id_does_not_make_every_walk_a_truncated_one",
+    "backend/tests/test_worker_jobs.py::test_every_job_this_loop_fires_declares_a_budget_that_fits_inside_its_interval",
+    "backend/tests/test_worker_jobs.py::test_a_job_that_never_returns_is_abandoned_at_its_budget_and_the_tick_goes_on",
+    "backend/tests/test_static_contracts.py::test_the_tick_does_not_argue_its_budget_against_a_healthcheck_the_compose_file_denies",
+    "backend/tests/test_seen_sync.py::test_a_second_sweep_while_one_is_running_does_nothing",
+    "backend/tests/test_jellyfin_link.py::test_sync_now_says_a_sweep_is_already_running_rather_than_starting_a_second",
+]
+# Three independent ways the sweep could take the worker down, so three layers: the page walk
+# that must terminate, the tick that must abandon a job that does not, and the lock that keeps
+# two sweeps of one user from interleaving. The short-page test and the route test both pass
+# against the unfixed code and are named anyway -- the first guards the exit the cap must not
+# break, the second pins the body the admin card prints for a held lock. The repeated-page test
+# is named because the two bounds cover different servers and the count silently covered neither:
+# the cap now answers only the server that never ends, and the honest-count-plus-cached-page-one
+# server -- the one MAX_PAGES was written for -- is caught one page in. The static guard is the
+# fourth layer and the only one that can hold prose: the argument for the timeout claimed a wedged
+# loop leaves "every healthcheck green", which docker-compose.yml denies -- it reads the age of
+# the heartbeat `_tick` touches once per pass, above the job loop -- so a reader sizing these
+# budgets would have concluded that nothing detects a wedged worker at all. [M4.11, §5.3; review
+# cycle 1: m411-rev-jf-01, m411-rev1-tick-comment-claims-a-green-healthcheck]
+#
+# The short page got the same treatment as the repeated one for the same reason and one cycle
+# later: the count was only ever used to stop the walk EARLY, so a page shorter than `Limit`
+# ended it however many rows that same page said were left. The no-Id test beside it is the
+# control on the unit the new raise counts in -- rows kept, never distinct ids, because one
+# corrupt row would otherwise abort every sweep for ever on a healthy server.
+# [review cycle 2: m411-rev2-resolve-01, m411-rev2-jf-01]
+
+[[requirement]]
+id = "jellyfin-sync-the-server-version-gates-the-played-write"
+spec = "§7.1 (\"Pin Jellyfin >= 10.9\")"
+milestone = "M4.11"
+kind = "integration"
+what = "The probed server version and its verdict are stored on the connector and re-read by the sweep; a server below 10.9 refuses the Played write with a reason naming the route and the version, counts it as a failed push, and does not mark the link as needing a re-link; a server that reports no version at all is stored and rendered as unknown rather than as below the pin, and its writes are attempted. The admin copy names the write, not the reads."
+why = "§7.1 pins >= 10.9 because `/UserPlayedItems` is the 10.9 route; an advisory pin let a 10.8 install 404 every write for ever while every visible check passed. The unknown is the same gate misfiring the other way: `/System/Info/Public` is tokenless and is the endpoint hardening guides block, so a 200 with no parseable version made a current server refuse every write locally, for ever, in a message naming no version."
+tests = [
+    "backend/tests/test_jellyfin_client.py::test_the_probe_reports_the_version_and_the_verdict",
+    "backend/tests/test_jellyfin_client.py::test_a_server_that_reports_no_version_is_unknown_and_not_below_the_pin",
+    "backend/tests/test_jellyfin_client.py::test_a_server_below_the_pin_refuses_the_played_write_by_name",
+    "backend/tests/test_connector_registry.py::test_the_probed_version_is_stored_beside_the_url_not_in_the_secret",
+    "backend/tests/test_jellyfin_link.py::test_the_probed_version_and_its_verdict_are_stored_by_save_and_by_test",
+    "backend/tests/test_seen_sync.py::test_a_server_below_the_pin_counts_a_failed_push_and_never_a_re_link",
+    "backend/tests/test_static_contracts.py::test_the_below_pin_copy_names_the_played_write_and_not_the_reads",
+]
+# The chain end to end, because §7.1's pin is only a gate if every link holds: probe, store it
+# beside the url rather than inside the sealed secret, re-read it on both routes that save, and
+# refuse the write with a reason naming the route -- counted as a failed push and never as a
+# credential problem, which is the distinction §7.3 draws. [M4.11]
+#
+# The unknown-version test is parametrized over the three shapes `_request` collapses into `{}`
+# (empty body, unparseable body, no `Version` key) because they are one state with three causes
+# and the old code answered all three with `False`. It asserts the negative -- no refusal --
+# which is the half `played_write_refusal`'s own docstring argues for: a refusal is only ever
+# raised on a version the app can quote. [review cycle 1: m411-rev-jf-04]
+#
+# "The admin copy names the write, not the reads" is this row's last sentence and had no id
+# behind it: `..._refuses_the_played_write_by_name` holds the CONNECTOR's refusal string, which
+# is a different string in a different file and drifts from the card freely. The static guard is
+# the registrable layer for a Svelte-source clause -- M4.9's cold-badge guard is the precedent --
+# and it reads both printings of the sentence, the stored verdict and the fresh probe,
+# because repairing one of them left the other saying "reads may miss fields".
+# [review cycle 2: m411-c2-cov-01]
+
+[[requirement]]
+id = "jellyfin-connector-secrets-are-serialised-and-never-repr"
+spec = "§14.3 + §2 (custody)"
+milestone = "M4.11"
+kind = "integration"
+what = "Two Jellyfin links issued concurrently both store their token and the connector reports both users linked; no dataclass field named `api_key`, `token` or `user_tokens` under `connectors/`, `sync/` or `push/` -- every package a §7.3 or §14.3 credential is carried through -- appears in that object's `repr`."
+why = "§14.3 makes the API key admin-equivalent on the whole media server and the per-user tokens real credentials; a lost token produces an account the admin table calls linked that cannot write, and a default repr copies both into any traceback."
+tests = [
+    "backend/tests/test_connector_registry.py::test_a_for_update_load_locks_the_connector_row",
+    "backend/tests/test_connector_registry.py::test_two_links_at_once_keep_both_tokens",
+    "backend/tests/test_jellyfin_link.py::test_two_members_linked_at_the_same_time_both_keep_their_token",
+    "backend/tests/test_jellyfin_link.py::test_linking_an_account_while_it_is_being_unlinked_does_not_deadlock",
+    "backend/tests/test_connector_registry.py::test_no_connector_credential_survives_a_repr",
+    "backend/tests/test_static_contracts.py::test_no_connector_credential_is_printed_by_a_generated_repr",
+    "backend/tests/test_static_contracts.py::test_the_connector_repr_guard_sees_a_repr_enabled_field_on_a_real_dataclass",
+    "backend/tests/test_static_contracts.py::test_the_connector_repr_guard_catches_each_way_a_field_is_declared",
+]
+# Two halves, and the second is named three times because a repr leak cannot be tested for in
+# general: the dataclass test catches today's three fields by name, the ast sweep catches the
+# next credential field somebody adds, and the parametrized self-test is what keeps the sweep
+# able to fail at all. The deadlock test belongs to the serialisation half: the route now takes
+# `app_user` and then the connector row, which is `seen.unlink`'s order, and the adjacent buttons
+# of §6.6's mapping table name the same account. [M4.11, §14.3]
+#
+# The sweep reads three packages because the rule is about the credential and not about a
+# directory: scoped to `connectors/` it read green while `sync/seen.py`'s `LinkedUser.token` --
+# the only field in the codebase actually named `token`, holding one member's decrypted access
+# token for the whole of their sweep -- sat at default repr one directory over.
+# [review cycle 1: m411-rev-jf-02]
+
+[[requirement]]
+id = "jellyfin-playback-an-episode-session-arms-its-series-prompt"
+spec = "§7.3 + decision 210"
+milestone = "M4.11"
+kind = "integration"
+what = "A `/Sessions` row whose `NowPlayingItem` is an Episode carrying `SeriesId` arms the finish prompt for that series and reports nothing unresolved; the test double emits the Episode shape a real server sends, never the Series folder item. An episode whose series list cannot be read is reported as `undecided` with its own operator sentence, never as a session that matched no title."
+why = "§7.3's prompt is the whole capture path for television, and the fake reported a shape Jellyfin never emits, so the M1 exit criterion and e2e 08 certified a behaviour that existed only against the double (decision 210)."
+tests = [
+    "backend/tests/test_playback_prompt.py::test_an_episode_session_arms_the_prompt_for_its_series",
+    "backend/tests/test_playback_prompt.py::test_a_mid_series_episode_arms_nothing",
+    "backend/tests/test_playback_prompt.py::test_an_episode_whose_series_cannot_be_listed_arms_nothing_and_is_reported",
+    "backend/tests/test_jellyfin_client.py::test_sessions_reduce_to_what_is_playing",
+    "backend/tests/test_jellyfin_client.py::test_the_episode_list_is_read_once_per_series",
+    "backend/tests/test_worker_jobs.py::test_a_playback_session_that_matched_no_title_is_named_in_the_log",
+    "backend/tests/test_worker_jobs.py::test_the_same_unresolvable_session_is_named_once_and_not_once_a_minute",
+    "backend/tests/test_worker_jobs.py::test_a_television_session_whose_series_could_not_be_listed_gets_its_own_sentence",
+    "e2e/specs/08-jellyfin.spec.js::finishing a title arms a prompt that surfaces on the next app open",
+]
+# The e2e case is an M1 title whose body this milestone rewrote rather than replaced: the session
+# it forces is now the Episode shape a real server sends, and it asserts `unresolved == []` --
+# which is the assertion the old double made impossible, since a Series folder item resolved and
+# an Episode did not. That is why the row names it: the browser layer is where the double and the
+# app meet, and the defect was that they agreed on a shape Jellyfin never emits. The worker test
+# is the other side of `unresolved` -- an honest count nobody prints is a count nobody reads.
+# [M4.11, decision 210]
+#
+# The repetition test is the cost of that line, asserted because the producing condition is
+# persistent rather than momentary: `_observe` re-derives `unresolved` every pass and writes
+# nothing, so one paused session put the identical line into the log once a minute -- ops-15's
+# own arithmetic, in the job ops-15 did not cover.
+# [review cycle 1: m411-rev1-unresolved-session-logs-a-line-a-minute]
+#
+# The undecided test is the other half of that same line. `observe` put two outcomes into one
+# list, and the sentence the operator reads asserts the first: "matched no title", whose repair
+# is an import or a provider id. For a session that resolved perfectly and whose series list the
+# server would not give up, every clause of that is false -- so it is its own list, its own
+# sentence, and its own memo. [review cycle 2: m411-rev2-pb-02]
+
+[[requirement]]
+id = "jellyfin-playback-a-dismissed-prompt-stays-dismissed"
+spec = "§7.3 (\"one tap sets seen\") + decision 211"
+milestone = "M4.11"
+kind = "integration"
+what = "Answering a finish prompt 'no' writes `unseen` as an explicit action and leaves the prompt closed for that viewing: later polls of the same Jellyfin session arm nothing and send no further notification, while the same title played again in a new session asks again."
+why = "§7.3 gives one prompt per viewing and `answer`'s own rule says a card that comes back after being dismissed teaches people to ignore the banner; `jf_session_id` is what distinguishes the viewing from the rewatch, and decision 211 makes the decline a fact rather than an absence the next sweep can overwrite with Jellyfin's Played flag."
+tests = [
+    "backend/tests/test_playback_prompt.py::test_a_dismissed_viewing_is_not_re_armed_and_sends_no_second_push",
+    "backend/tests/test_playback_prompt.py::test_answering_no_writes_unseen",
+    "backend/tests/test_state_routes.py::test_declining_the_prompt_writes_unseen_and_closes_it",
+    "backend/tests/test_playback_prompt.py::test_a_rewatch_in_a_new_viewing_asks_again",
+    "e2e/specs/08-jellyfin.spec.js::a declined viewing stays declined, and only a new viewing asks again",
+]
+# The rewatch test is the boundary and is named as carefully as the rule: the dismissal guard is
+# keyed on `jf_session_id`, so it must refuse the viewing and not the (user, title) pair for ever.
+# It passes against the unfixed code by design -- it is the control on a guard that would
+# otherwise be indistinguishable from a ban. Its name changed in this milestone, from
+# `test_a_rewatch_on_the_same_device_asks_again`, because `SessionInfo.Id` is stable per device
+# (`0006_jellyfin.sql:29-37`) and the same-device rewatch is the cost decision 211's SQL takes.
+# [M4.11, decision 211]
+
+[[requirement]]
+id = "jellyfin-playback-the-answer-is-durable-before-the-prompt-is-consumed"
+spec = "§7.3 + §13"
+milestone = "M4.11"
+kind = "integration"
+what = "If the seen write fails while answering a prompt 'yes', the prompt is still open afterwards; a successful answer marks the title seen and closes the prompt exactly once."
+why = "§13 measures rating capture against finished playbacks, so a tap that loses both the state and the question subtracts from the numerator with no trace."
+tests = [
+    "backend/tests/test_playback_prompt.py::test_the_state_write_lands_before_the_prompt_is_consumed",
+    "backend/tests/test_playback_prompt.py::test_an_answer_whose_state_write_fails_leaves_the_prompt_open",
+    "backend/tests/test_playback_prompt.py::test_an_answered_prompt_does_not_come_back",
+    "backend/tests/test_state_routes.py::test_answering_a_prompt_twice_is_a_404",
+]
+# The route test is named beside the three state tests because "closes the prompt exactly once" is
+# a claim about what a second tap gets, and only the route can answer that: §13's denominator is
+# `playback_event WHERE finished`, so a prompt answered twice is a rating the instrument counts
+# twice. The ordering test is the falsifier for the rest -- the write was issued after the prompt
+# was consumed, so a failed write lost both the state and the question with no trace. [M4.11, §13]
+
+[[requirement]]
+id = "push-a-second-device-registers-independently"
+spec = "§4.2 push_subscription + §6 preamble (per-device onboarding)"
+milestone = "M4.11"
+kind = "e2e"
+what = "A member whose account already has a registered device opens the app in a browser holding no push subscription of its own: the onboarding section reads off and offers the enable control, and its disable control is not the only thing on screen; turning notifications off on one device leaves the other device's row intact."
+why = "§6's preamble makes install and notifications per-device, and §4.2 keys the table on the member; reading the member's whole device list as 'this device' meant only the first phone each member registered could ever receive a push."
+tests = [
+    "e2e/specs/12-onboarding.spec.js::a browser holding no subscription of its own reads off and is offered the switch",
+    "e2e/specs/12-onboarding.spec.js::turning notifications off on one device leaves the other one registered",
+]
+# e2e and nothing else, deliberately. The fault is that the screen read the member's device list
+# where it needed this browser's own subscription, and the only layer that holds two genuinely
+# separate browser states is a second browser context. The vitest beside `push.js` asserts the
+# same rule against a stubbed `pushManager` and is the fast local check, not the evidence: a
+# stub that answers `null` because the test said so cannot tell anyone whether a real second
+# phone reads off. [M4.11]
+
+[[requirement]]
+id = "push-a-notification-names-its-kind-and-its-destination"
+spec = "§7.3 prompt + §6.2 step 2 invitation"
+milestone = "M4.11"
+kind = "integration"
+what = "The finish-prompt payload and the Tonight invitation payload each carry a distinct `tag` naming their kind and subject, and a `url` naming the surface that answers them."
+why = "The service worker's tag is a replacement key and its url is where a tap lands; with both omitted a Tonight invitation silently replaced an unread finish prompt and every tap opened Home."
+tests = [
+    "backend/tests/test_playback_prompt.py::test_the_prompt_notification_names_its_kind_and_its_destination",
+    "backend/tests/test_tonight_routes.py::test_the_invitation_names_its_own_replacement_key_and_the_surface_that_answers_it",
+]
+# Both producers, because the defect is a collision between them: the service worker's tag is a
+# replacement key, so a row asserting one payload's tag proves nothing about whether the other
+# silently replaces it. Each test reads the payload the sender was handed, not a fixture.
+# [M4.11]
+
+[[requirement]]
+id = "push-a-subscription-endpoint-is-validated-and-a-silent-one-is-pruned"
+spec = "§4.2 (\"pruned on 404/410\") + §14.3"
+milestone = "M4.11"
+kind = "integration"
+what = "A subscribe request whose endpoint is not https, or whose host is loopback, link-local or private, is refused with a reason and stores nothing; a subscription older than ninety days that never recorded a successful delivery is pruned by the daily sweep."
+why = "§4.2 prunes on 404/410 at send time and by age otherwise, but the age filter required a delivery that had never happened; and the sender posts to the stored endpoint verbatim with the VAPID JWT, which makes an unvalidated endpoint an internal reachability probe (§14.3)."
+tests = [
+    "backend/tests/test_push.py::test_a_plain_http_endpoint_is_refused_and_stores_nothing",
+    "backend/tests/test_push.py::test_an_endpoint_on_this_machine_or_the_private_network_is_refused",
+    "backend/tests/test_push.py::test_an_endpoint_naming_the_households_own_servers_is_refused",
+    "backend/tests/test_push.py::test_an_ordinary_push_service_endpoint_is_still_stored_exactly_once",
+    "backend/tests/test_worker_jobs.py::test_a_subscription_that_never_delivered_is_pruned_by_age_and_a_live_one_is_not",
+    "backend/tests/test_push.py::test_resubscribing_a_device_that_never_received_a_push_spares_it_too",
+]
+# The ordinary-endpoint test is the control on a validator, which is the one kind of change that
+# fails safe by refusing everything: four refusals and no acceptance would read as green while no
+# household could register a phone. The prune test names both rows it separates, because the bug
+# was an age filter that required a delivery which had never happened. [M4.11, §4.2]
+
+[[requirement]]
+id = "platform-domain-packages-never-import-the-api-layer"
+spec = "CLAUDE.md Conventions (rules live in the domain packages; api/ decides only HTTP shapes)"
+milestone = "M4.11"
+kind = "static"
+what = "No module under `spielplan/sync/`, `spielplan/push/` or `spielplan/connectors/` imports `spielplan.api.*`, and importing `spielplan.push.send`, `spielplan.sync.playback` or `spielplan.worker` does not import FastAPI."
+why = "CLAUDE.md puts the rules in the domain packages and leaves `api/` deciding HTTP shapes only; the one inversion pulled FastAPI and every router side effect into the worker and put a cycle one refactor away."
+tests = [
+    "backend/tests/test_static_contracts.py::test_no_domain_package_imports_the_api_layer",
+    "backend/tests/test_static_contracts.py::test_the_api_import_guard_catches_each_spelling",
+    "backend/tests/test_static_contracts.py::test_the_fastapi_probe_sees_a_module_that_does_reach_the_api_layer",
+    "backend/tests/test_push_sender.py::test_naming_a_device_is_a_domain_rule_and_this_module_imports_no_api_layer",
+]
+# The `what` names three modules rather than `spielplan.worker` alone, and that is a measured
+# correction rather than a widening: `worker.py` imports its jobs inside the job bodies, so the
+# worker probe answered False with the inversion still in place and proved nothing. The module
+# the chain actually went through was `spielplan.push.send` (True before the repair, False after,
+# measured 2026-09-10); `spielplan.sync.playback` defers its own import of it and is vacuous
+# today too. All three are pinned because one module-level import added to either deferred link
+# restores the whole chain in a diff that touches neither `push/send.py` nor the guard. The two
+# self-tests are named for the same reason the guard exists: a probe that cannot report True is
+# a green line, not a proof. [M4.11, arch-02]

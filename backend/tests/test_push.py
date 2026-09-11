@@ -4,14 +4,16 @@
 since; M2 owes the write that fills it, because §7.3's "when undeliverable, the prompt queues
 and surfaces as an in-app banner" only means something once there is a deliverable path.
 
-The four properties asserted here are the ones that go wrong quietly rather than loudly:
+The five properties asserted here are the ones that go wrong quietly rather than loudly:
 
   * a device that re-registers must not become two devices (§4.2's UNIQUE endpoint);
   * a subscription is the *member's*, so the other phone in the household never receives it;
   * declining stores nothing and still completes §3.1's fifth step, or the wizard blocks
     forever;
   * the endpoint and the auth key are secrets — a push endpoint is a bearer capability — so
-    they leave neither in a response body nor in a log line.
+    they leave neither in a response body nor in a log line;
+  * and a stored endpoint is an address this backend will POST to, so what the route accepts is
+    what it can be made to reach (§14.3, sec-13).
 
 Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 """
@@ -109,16 +111,82 @@ async def test_resubscribing_the_same_endpoint_updates_the_row_rather_than_addin
     assert row["device_label"] == "Jenny's iPhone"
 
 
-async def test_resubscribing_clears_the_stale_delivery_mark(household, db):
-    """§4.2: subscriptions are "pruned on 404/410 from the push service", and the worker's
-    90-day sweep reads `last_seen_ok`. A device that just re-registered has delivered nothing
-    yet — leaving the old timestamp there would let the sweep delete a live phone."""
+async def test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares_a_live_phone(
+    household, db
+):
+    """§4.2: subscriptions are "pruned on 404/410 from the push service", and the worker's 90-day
+    sweep is the only other thing allowed to take a row.
+
+    The route and the prune are asserted together because neither is wrong on its own. The prune
+    reads `COALESCE(last_seen_ok, created_at)` so that a subscription which never delivered is
+    judged by its own age; the route used to reset `last_seen_ok` to NULL on every re-post, on
+    the reading that a re-registered device has delivered nothing yet. Compose them and an
+    ordinary household loses its phone: `created_at` is never rewritten, `push.js` re-posts the
+    unchanged endpoint on every /account open, and after ninety days of ownership that open put
+    the row back on `created_at` and the 02:00 prune deleted a live device — silently, with the
+    browser still holding a working `PushSubscription`.
+
+    Driven through the shipped route and the shipped job rather than retyped SQL, because the
+    defect is in how the two compose. [review cycle 1:
+    m411-rev1-push-prune-deletes-a-live-device-that-just-re-registered; §4.2]
+    """
+    from spielplan import worker
+
     _admin, _admin_id, member, _member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
-    await db.execute("UPDATE push_subscription SET last_seen_ok = now() - interval '200 days'")
+    # The household's actual phone: subscribed a year ago, pushed to yesterday.
+    await db.execute(
+        "UPDATE push_subscription SET created_at = now() - interval '400 days', "
+        "last_seen_ok = now() - interval '1 day'"
+    )
 
     await member.post("/api/push/subscribe", json=PHONE)
-    assert await db.fetchval("SELECT last_seen_ok FROM push_subscription") is None
+    kept = await db.fetchval("SELECT last_seen_ok FROM push_subscription")
+    assert kept is not None, "the re-post must not erase the only clock that spares this row"
+
+    await worker._prune_dead_push_subscriptions()
+    assert await _count(db) == 1, (
+        "opening /account is not evidence that a phone is dead -- §4.2 lets a 404/410 take a "
+        "device, and this prune take one that has been silent for ninety days, and nothing else"
+    )
+
+
+async def test_resubscribing_a_device_that_never_received_a_push_spares_it_too(household, db):
+    """The other half of the same composition, and the half neither shipped test could see.
+
+    The one above re-posts a row whose `last_seen_ok` is a day old -- the case in which the
+    missing stamp cannot matter -- and `test_worker_jobs.py`'s four rows never re-post at all. In
+    between sits the ordinary household that has simply never sent a push: with no Jellyfin link
+    nothing arms a §7.3 prompt, and §6.2's invitation never goes to the host, so `last_seen_ok`
+    stays NULL for ever and the prune's clock is `created_at`. Neither column moved on a re-post,
+    so `push.js::syncSubscription` could say "push subscription stored" on day 89 and the 02:00
+    prune deleted the row on day 90 -- browser subscription still valid, permission still granted,
+    `send_to_user` returning `[]` in silence from then on. Measured end to end before the fix.
+
+    A conflicting endpoint IS the device: the browser only hands the same `PushSubscription` back
+    while it is live, so a lapsed one would mint a new endpoint and INSERT rather than conflict.
+    Pre-M4.11 this row was unreachable by the DELETE at any age (`last_seen_ok IS NOT NULL`), so
+    the window is this milestone's own to close.
+    [M4.11 review cycle 2: m411-c2-push-01; §4.2]
+    """
+    from spielplan import worker
+
+    _admin, _admin_id, member, _member_id = household
+    await member.post("/api/push/subscribe", json=PHONE)
+    await db.execute(
+        "UPDATE push_subscription SET created_at = now() - interval '91 days', last_seen_ok = NULL"
+    )
+
+    stored = await member.post("/api/push/subscribe", json=PHONE)
+    assert stored.status_code == 201, stored.text
+
+    await worker._prune_dead_push_subscriptions()
+    assert await _count(db) == 1, (
+        "a device that re-registered this morning is not one that has been silent for ninety days"
+    )
+    assert await db.fetchval("SELECT last_seen_ok FROM push_subscription") is None, (
+        "and it is still true that nothing was ever delivered -- that column means a delivery"
+    )
 
 
 async def test_two_devices_for_one_member_are_two_rows(household, db):
@@ -135,6 +203,109 @@ async def test_two_devices_for_one_member_are_two_rows(household, db):
     assert all(s["last_seen_ok"] is None for s in listed)
     assert await db.fetchval("SELECT count(*) FROM push_subscription WHERE user_id = $1",
                              member_id) == 2
+
+
+# --- §14.3 (sec-13): a stored endpoint is a URL this server will later POST to ----------------
+#
+# `push/send.py` sends to the stored string verbatim with the VAPID JWT attached, and until this
+# milestone the whole contract on it was 1..2048 characters. Verified before the fix: a
+# subscription on `http://127.0.0.1:5432/anything` was stored with a 201 and the sender's
+# captured request URL was that endpoint. The method is fixed and the body is ciphertext, so the
+# reachable half is probing rather than a crafted request — §14.3 does not grade that difference.
+
+
+async def test_a_plain_http_endpoint_is_refused_and_stores_nothing(household, db):
+    """The scheme rule is about the *push service*, which is Apple's, Google's or Mozilla's and
+    always https. It says nothing about how the household reaches the app: §2 puts this app
+    behind "one plain-HTTP port", which is the whole reason `send.py::vapid_subject` exists."""
+    _admin, _admin_id, member, _member_id = household
+    refused = await member.post(
+        "/api/push/subscribe", json={**PHONE, "endpoint": "http://push.example.test/f/x"}
+    )
+
+    assert refused.status_code == 422
+    assert "https" in refused.text, "the reason has to be readable by whoever sees the log"
+    assert await _count(db) == 0
+
+
+async def test_an_endpoint_on_this_machine_or_the_private_network_is_refused(household, db):
+    """Each of these is an address the backend can reach and no push service ever has.
+
+    The IPv6 forms are here because `urlsplit` is what strips the brackets and a check written
+    against the raw netloc would pass `[::1]` straight through; the trailing dot because
+    `localhost.` resolves exactly like `localhost` and a bare `==` comparison misses it.
+
+    100.64.0.0/10 is here because it is the one range an enumeration of the obvious ones misses,
+    and it is not obscure: it is RFC 6598 shared address space, which is exactly what Tailscale
+    assigns every node on a tailnet -- the deployment the validator's own docstring names four
+    lines above the check. CVE-2024-4032 took that block out of `ipaddress`'s `is_private` in
+    3.12.4, so a five-way `is_loopback or is_private or is_link_local or is_reserved or
+    is_unspecified` stored `https://100.101.102.103/probe` with a 201 and the sender then issued a
+    signed POST to a household machine. Judged by `is_global` instead, one predicate covers all
+    six. [M4.11 review cycle 2: m411-c2-push-02; §14.3]
+    """
+    _admin, _admin_id, member, _member_id = household
+    for host in (
+        "127.0.0.1", "localhost", "localhost.", "LocalHost", "[::1]",
+        "192.168.1.9", "10.0.0.4", "172.16.4.4", "169.254.169.254", "[fd00::1]", "0.0.0.0",
+        "100.64.0.1", "100.101.102.103",
+    ):
+        refused = await member.post(
+            "/api/push/subscribe", json={**PHONE, "endpoint": f"https://{host}/f/x"}
+        )
+        assert refused.status_code == 422, f"{host}: {refused.text}"
+        assert await _count(db) == 0, f"{host} was stored"
+
+
+async def test_an_endpoint_naming_the_households_own_servers_is_refused(household, db, monkeypatch):
+    """The half that cannot live in the schema, because it needs a database read.
+
+    §3.3's Jellyfin server and the app itself are public names on a real install, so they pass
+    every rule a validator can apply — and neither is ever a push service. The connector row is
+    written here without secrets on purpose: §3.1 makes a boot whose DEK will not open legal, and
+    subscribing a phone must not be the route that discovers it, so the URL is read straight out
+    of `connector_config` rather than through the connector loader.
+    """
+    from spielplan.core.config import settings
+
+    _admin, _admin_id, member, _member_id = household
+    # A dict, not a JSON string: the `db` fixture installs a jsonb codec, so a string parameter
+    # is encoded as a JSON *string* and `config ->> 'url'` then answers NULL — which this route
+    # reads, correctly, as "no connector configured".
+    await db.execute(
+        "INSERT INTO connector_config (name, config) VALUES ('jellyfin', $1::jsonb)",
+        {"url": "https://jellyfin.example.test:8096"},
+    )
+    refused = await member.post(
+        "/api/push/subscribe",
+        json={**PHONE, "endpoint": "https://jellyfin.example.test/Sessions"},
+    )
+    assert refused.status_code == 422, refused.text
+    assert await _count(db) == 0
+
+    monkeypatch.setenv("PUBLIC_URL", "https://spielplan.example.tld")
+    settings.cache_clear()
+    try:
+        ours = await member.post(
+            "/api/push/subscribe",
+            json={**PHONE, "endpoint": "https://spielplan.example.tld/api/push/subscribe"},
+        )
+    finally:
+        settings.cache_clear()
+    assert ours.status_code == 422, ours.text
+    assert await _count(db) == 0
+
+
+async def test_an_ordinary_push_service_endpoint_is_still_stored_exactly_once(household, db):
+    """The negative case, which is the one a rule like this gets wrong: every real browser's
+    endpoint is an https host on somebody else's network, and a household that cannot subscribe
+    gets no §7.3 prompt and no §6.2 invitation on the phone either."""
+    _admin, _admin_id, member, _member_id = household
+    stored = await member.post("/api/push/subscribe", json=PHONE)
+
+    assert stored.status_code == 201, stored.text
+    assert await _count(db) == 1
+    assert await db.fetchval("SELECT endpoint FROM push_subscription") == PHONE["endpoint"]
 
 
 # --- §4.2 / §7.3: the subscription is the member's, never the household's -------------------

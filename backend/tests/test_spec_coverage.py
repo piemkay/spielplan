@@ -39,7 +39,7 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.11 and M4.14 through M4.16 are not in the list yet — each is added
+# "M4.5". M4.14 through M4.16 are not in the list yet — each is added
 # by the milestone that opens it, in one commit with its first row.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
@@ -108,8 +108,27 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # the instrument M4.8 repaired and read the layer M4.9 corrected: the reveal row is measured
 # on the seed list M4.9's loader fills, and the two queue rows read the board its facet work
 # renders. Decisions 199-208 record the calls it needed. See docs/milestones/M4.10-plan.md.
+#
+# M4.11 follows it and takes a §12 row on M4.9's and M4.10's argument rather than M4.6's and
+# M4.7's: the row it repairs is one the table already had. §12's M1 row closes on "seen states
+# flow both ways for both users", and that was asserted against one member, one copy per title,
+# no series and no second phone — not the household §3.3 describes. Against two members, a
+# library holding 'Movies' and 'Movies 4K' copies of one film, and a show whose next season
+# lands: a link made without Jellyfin credentials aborts that member's sweep at its first owed
+# row for the life of the install, so none of their history is ever adopted; a duplicate copy
+# marked Played reverts the explicit "not seen" the person typed; a DELETE against a Series
+# folder is a recursive MarkUnplayed that erases every episode's resume position, and the same
+# computed folder flag un-marks a show the day it grows; a title deleted from the library keeps
+# `is_owned = true` and stays in Tonight's pool; a revoked token is promoted back to "linked"
+# by any sweep with nothing to push, while a 404 on every write reads exactly like a healthy
+# one; and no Episode session arms a finish prompt at all, because the double emitted a shape
+# no server sends. It sits after M4.10 rather than beside it because the one leak from this
+# territory into the rest of the app — the Jellyfin round trip inside the verdict transaction —
+# was M4.10's to move, and both milestones would otherwise edit `rate/session.py`'s push path
+# in the same lines. Decisions 210-212 record the calls it needed; decision 172 had already
+# ruled two of them. See docs/milestones/M4.11-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
-              "M4.12", "M4.13", "M5", "M6", "M7"]
+              "M4.11", "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 
@@ -325,4 +344,70 @@ def test_the_testing_ledger_publishes_the_counts_the_gate_prints():
     assert not drift, (
         "docs/TESTING.md's ledger no longer matches this file's report. Re-paste the block "
         "`pytest backend/tests/test_spec_coverage.py -q -s` prints:\n" + "\n".join(drift)
+    )
+
+
+# The number words the ledger's prose uses. It spells small counts and prints the id total as a
+# figure, which is the house voice; both spellings are read here so the guard rules on the count
+# rather than on how the sentence chose to write it.
+_NUMBER_WORDS = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+    "eighteen", "nineteen", "twenty",
+]
+
+# "-- 84 ids across twelve pytest files and two e2e specs --". One sentence per re-paste: the
+# block is rewritten by the milestone it is re-pasted for rather than appended to, so a second
+# match means two milestones are both claiming it and the reader cannot tell which run produced
+# which figure.
+_LEDGER_ID_COUNT = re.compile(
+    r"(\d+|[A-Za-z]+) ids across (\d+|[A-Za-z]+) pytest files? and (\d+|[A-Za-z]+) e2e specs?"
+)
+
+
+def _spelled(token: str) -> int | None:
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.index(token.lower()) if token.lower() in _NUMBER_WORDS else None
+
+
+def test_the_testing_ledger_counts_the_ids_the_map_actually_holds():
+    """The sibling above holds the fenced block; this holds the sentence beside it.
+
+    Both publish a measurement and only one of them was mechanical, so the prose drifted exactly
+    as the block had before M4.8: `docs/TESTING.md` said "84 ids across twelve pytest files and
+    two e2e specs" for a map that held 89, because five tests were registered by a review cycle
+    after the paragraph was written and nothing compared the two. The failure is the one decision
+    184 legislates against from the other side -- it refuses to invent a count that no run
+    produced, and this refuses to leave one standing that the map has since overtaken -- and it
+    matters because CLAUDE.md sends the next reader to this file "rather than assuming status":
+    an auditor checking whether a review cycle's tests were registered counts the map, reads the
+    ledger, and cannot tell a stale sentence from ids added with no row to hold them.
+
+    Scoped to `current_milestone` because the paragraph is always about the milestone the block
+    was last re-pasted for, and that is what raising `current_milestone` means.
+    [M4.11 review cycle 2: m411-c2-ledger-02]
+    """
+    matches = _LEDGER_ID_COUNT.findall(LEDGER.read_text(encoding="utf-8"))
+    assert len(matches) == 1, (
+        f"docs/TESTING.md publishes {len(matches)} 'N ids across ... pytest files and ... e2e "
+        f"specs' sentences; the block is re-pasted per milestone, so exactly one is owed"
+    )
+    published = [_spelled(token) for token in matches[0]]
+    assert None not in published, (
+        f"a count in that sentence is neither a figure nor a number word: {matches[0]}"
+    )
+
+    ids = {t for r in REQUIREMENTS if r["milestone"] == CURRENT for t in r.get("tests", [])}
+    files = {t.partition("::")[0] for t in ids}
+    held = [
+        len(ids),
+        len({f for f in files if f.startswith("backend/tests/")}),
+        len({f for f in files if f.startswith("e2e/specs/")}),
+    ]
+    assert published == held, (
+        f"docs/TESTING.md's {CURRENT} paragraph publishes "
+        f"{published[0]} ids across {published[1]} pytest files and {published[2]} e2e specs; "
+        f"the map holds {held[0]} distinct ids across {held[1]} pytest files and {held[2]} e2e "
+        "specs. Restate the sentence -- a count nobody re-derived is decision 184's defect."
     )

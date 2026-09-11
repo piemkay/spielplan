@@ -242,8 +242,16 @@
 
 <!-- §7.3: the queued finish prompt, above everything, because it is about the thing that
      just happened in the living room. Proposal 150 keeps it separate from the banner below:
-     one title, armed by playback, and its first tap is what writes `seen`. -->
-<FinishPrompt />
+     one title, armed by playback, and its first tap is what writes `seen`.
+
+     `onAnswered` is decision 212. The prompt's write is the same write the title card makes, and
+     that one has re-read the shelves since M2 for a reason stated twenty lines up: a verdict-less
+     title that just became `seen` belongs in §6.0's banner, and one that stopped being seen leaves
+     it. Mounted with no props, this card emptied its own queue and left the banner below it stale —
+     including the banner it had just added a title to. `loadShelves()` and not `onSeenChange`
+     deliberately: the grid is only on screen under a search or a filter (§6.0's mode machine), and
+     the banner is the population this answer actually moved. -->
+<FinishPrompt onAnswered={loadShelves} />
 
 <div class="head">
   <div class="greetline">

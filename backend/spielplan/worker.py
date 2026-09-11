@@ -76,6 +76,19 @@ class Job:
     # §7.3's one-minute poll must not be moved by an NTP step or a DST transition, and "every 60
     # seconds of uptime" is exactly what it means. [M4.7 ops-03, cs-10; decision 181]
     anchor_hour: int | None = None
+    # §5.3's budget column, in seconds and enforced. `budget` above is the spec's prose and was
+    # the only thing in this dataclass that had ever mentioned time limits; `_tick` awaited each
+    # due job with nothing around it, so a single job that never returned took the whole loop
+    # offline — permanently and invisibly. No prompts, no refit, no fold-in, no nightly dump, the
+    # process alive and `docker compose ps` reporting Up. The one real shape of that is a read
+    # that pages for ever (`connectors/jellyfin.MAX_PAGES` is the other half of the same finding),
+    # and the sweep is the longest-running job in the loop.
+    #
+    # One field, a wait, and a log line. Not a retry policy, not a back-off knob, not a queue:
+    # §5.3's registry *is* the design (§8), and `RETRY_AFTER` below already says when an
+    # abandoned job may be tried again. The per-row numbers are set at the foot of this file
+    # beside the intervals they have to fit inside. [M4.11 finding 17]
+    timeout: float = 300.0
 
 
 async def _prune_expired_sessions() -> None:
@@ -95,15 +108,84 @@ async def _prune_webauthn_challenges() -> None:
         await webauthn.prune_challenges(conn)
 
 
+# The set of Played-write refusals the sweep last shouted about, so the ERROR is a state change
+# and not a stream. Same idiom as `_last_unresolved` below and `seen._failed_users_logged`, and
+# for a condition that is if anything more permanent than either: a sweep pushes only rows with
+# `jf_synced_at IS NULL` and `_push` stamps only on success, so a refused write stays owed and is
+# re-counted every fifteen minutes for the life of the install — which is exactly what a server
+# below §7.1's 10.9 pin does on every single write. `push_failed` and its reasons still reach the
+# INFO summary below on every sweep, so nothing is hidden; what stops repeating is the ERROR, and
+# a reason that was not there before is loud again. [M4.11 review cycle 2: m411-c2-worker-03;
+# M4.7 ops-15]
+_push_failure_reported: frozenset[str] | None = None
+
+
 async def _jellyfin_seen_sync() -> dict[str, object] | None:
-    """§7.3's 15-minute reconciliation, and §5.3's `jellyfin-seen-sync` row."""
+    """§7.3's 15-minute reconciliation, and §5.3's `jellyfin-seen-sync` row.
+
+    The condition on the INFO line used to be `pushed or adopted or needs_relink`, which is
+    silent on exactly the states this milestone gave the report names for: a Played write that
+    404s on every row (a server below §7.1's pin, a proxy that drops DELETE), a member whose link
+    carries no token, a library that dropped titles. All three produce a sweep that pushes
+    nothing and adopts nothing — the same log as a healthy quiet household — so the whole
+    app->Jellyfin direction could be dead for the life of an install with nothing written down
+    anywhere. `job_run.detail` has carried the figures since M4.7, but §6.6 names the log as the
+    operator's data too, and an ERROR is the only line a `docker compose logs` grep finds.
+
+    ERROR on `push_failed` rather than on the reasons alone: the count is the fact an operator
+    acts on ("none of my writes are landing"), and `push_errors` is deduplicated and capped to
+    five by `SyncReport` precisely so it can be printed. Once per set of reasons, not once per
+    sweep — see `_push_failure_reported`. [M4.11 findings 3, 21; §7.2, §7.3]
+    """
+    global _push_failure_reported
+
     from spielplan.sync import seen
 
     async with pool.acquire() as conn:
         report = await seen.sync_all(conn)
-        if report.pushed or report.adopted or report.needs_relink:
+        reasons = frozenset(report.push_errors) if report.push_failed else None
+        if report.push_failed:
+            log.log(
+                logging.ERROR if reasons != _push_failure_reported else logging.DEBUG,
+                "jellyfin seen sync: %d Played write(s) failed and the app->Jellyfin direction "
+                "is incomplete: %s",
+                report.push_failed,
+                "; ".join(report.push_errors) or "no reason recorded",
+            )
+        _push_failure_reported = reasons
+        if (
+            report.pushed
+            or report.adopted
+            or report.needs_relink
+            or report.push_failed
+            or report.owed_no_token
+            or report.unowned
+            # A member whose whole reconciliation raised moves no counter at all, so without this
+            # the loudest thing a half-dead sweep produced was one deduplicated WARNING with no
+            # figures beside it. `failed_users` is what makes the line name whose sweep was lost.
+            # [review cycle 1: seen-02]
+            or report.failed_users
+        ):
             log.info("jellyfin seen sync: %s", report.as_dict())
         return report.as_dict()
+
+
+# The set of unresolvable session items the poll last named out loud, so that line is a state
+# change and not a stream. `sync/playback._unreachable_since` is the same idiom introduced by the
+# same milestone one module over, and the condition here is if anything more persistent than an
+# outage: `_observe` re-derives `unresolved` from `/Sessions` on every pass and writes nothing, so
+# a film paused at 95% on the living-room client keeps producing the identical line once a minute
+# until the client disconnects — ~480 by morning, which is the arithmetic ops-15 used to justify
+# rate-limiting the sibling job. `DURATION_LOG_THRESHOLD` below states the rule this obeys: below
+# a 900 s interval a job is too frequent to narrate per run. [review cycle 1:
+# m411-rev1-unresolved-session-logs-a-line-a-minute; M4.7 ops-07, ops-15]
+_last_unresolved: frozenset[str] | None = None
+
+# And the same for the other reason a television session produces no prompt: an episode whose
+# series list `/Shows/{id}/Episodes` would not give up (decision 210(c)). Two memos rather than
+# one because the two sentences are two different repairs and either can be true without the
+# other. [M4.11 review cycle 2: m411-rev2-pb-02]
+_last_undecided: frozenset[str] | None = None
 
 
 async def _jellyfin_sessions_poll() -> dict[str, object] | None:
@@ -112,12 +194,51 @@ async def _jellyfin_sessions_poll() -> dict[str, object] | None:
     A minute is the useful resolution: the window between crossing 90% and the credits ending
     is minutes long, and a prompt that arrives after the TV is off has missed its moment.
     """
+    global _last_unresolved, _last_undecided
+
     from spielplan.sync import playback
 
     async with pool.acquire() as conn:
         report = await playback.poll(conn)
         if report.armed:
             log.info("armed %d finish prompt(s)", report.armed)
+        unresolved = frozenset(report.unresolved)
+        if report.unresolved:
+            # A session this app could not attach to a title: the item is not in `title_jellyfin_item`
+            # and its ProviderIds matched nothing (§7.1's identity rules). Nothing else surfaces it —
+            # `report.unresolved` went into `job_run.detail` and no further — so the household's
+            # television simply never produced a prompt and no line anywhere said why. INFO because
+            # it is ordinary on a library this app has not imported: the fix is an import or a
+            # provider id, not an outage. [M4.11 finding 9; §7.3]
+            #
+            # And INFO only when the SET changes, DEBUG otherwise, because "ordinary" is exactly
+            # what makes the repetition expensive: the first sighting and the arrival of a new
+            # stranger are what an operator reads, and the 479 identical lines behind them are
+            # what bury the backup and refit reports §6.6 promises them.
+            log.log(
+                logging.INFO if unresolved != _last_unresolved else logging.DEBUG,
+                "playback poll: %d session(s) matched no title: %s",
+                len(report.unresolved), ", ".join(report.unresolved[:10]),
+            )
+        # Cleared when nothing is unresolved, so a stranger that leaves and comes back is news
+        # again rather than being swallowed by a memory of an evening ago.
+        _last_unresolved = unresolved or None
+
+        undecided = frozenset(report.undecided)
+        if report.undecided:
+            # The other reason a television session arms nothing, and it needs its own sentence:
+            # the title IS placed and the episode id resolves in Jellyfin, so "matched no title"
+            # sent the operator after an import or a provider id while the actual fault was a
+            # `/Shows/{id}/Episodes` their proxy blocks or their server errors on. Decision 210(c)
+            # will not guess ("undecidable is not yes"), so this household gets no television
+            # prompt at all until that read works, and this is the only line that says why.
+            # [M4.11 review cycle 2: m411-rev2-pb-02; decision 210(c)]
+            log.log(
+                logging.INFO if undecided != _last_undecided else logging.DEBUG,
+                "playback poll: %d television session(s) whose series could not be listed: %s",
+                len(report.undecided), ", ".join(report.undecided[:10]),
+            )
+        _last_undecided = undecided or None
         return report.as_dict()
 
 
@@ -185,12 +306,42 @@ async def _prune_dead_push_subscriptions() -> None:
 
     The 404/410 half now happens at the moment of the send (`push/send.py`), which is the only
     place those codes are observable. This is the other half: a subscription whose device never
-    came back at all — no delivery, no rejection, ninety days of silence."""
+    came back at all — no delivery, no rejection, ninety days of silence.
+
+    `COALESCE(last_seen_ok, created_at)`, because the row this prune exists for is exactly the one
+    `last_seen_ok IS NOT NULL` excluded: a subscription that never received a single push was
+    never pruned by age at all. Measured: a 400-day-old row with a NULL `last_seen_ok` survived
+    this statement. A device that enabled notifications once, never came back, and whose
+    `PushSubscription` the browser has long since dropped is a bearer capability
+    (`push/send.py`'s docstring) kept for ever.
+
+    The fallback is `created_at` and not `now()`: a row's own age is the only thing a never-
+    delivered subscription can be judged by, and it is still ninety days of silence either way.
+    A delivery moves the clock forward, so a phone that was subscribed a year ago and pushed to
+    yesterday stays — which is the ordinary case and the one a bare `created_at` filter would
+    have deleted. That sentence is only true because `api/push.py`'s re-subscribe leaves
+    `last_seen_ok` where it is: while it reset the column, an /account open on a phone older than
+    ninety days handed this statement a row judged by `created_at` again, and the live device was
+    deleted that same night with no log line anywhere. Which is why there is one now — the three
+    sibling prunes in this module all read their DELETE tag, and a deleted push target is the one
+    that most needs accounting for: §4.2 says only a 404/410 may take a device, and `send_to_user`
+    returns `[]` for a member with no rows without saying so. [M4.11 finding 21; review cycle 1:
+    m411-rev1-push-prune-deletes-a-live-device-that-just-re-registered; §4.2]
+
+    The other half of that composition is that a re-subscribe now stamps `created_at`, so this
+    statement can no longer take a device that came back. It could before: a household that sends
+    no pushes at all — no Jellyfin link arms no §7.3 prompt, and §6.2's invitation never goes to
+    the host — holds every row on the `created_at` clock for ever, and neither column moved when
+    the member re-registered. "Ninety days of silence" above means the device was silent, and a
+    conflicting re-post is the device speaking. [M4.11 review cycle 2: m411-c2-push-01]"""
     async with pool.acquire() as conn:
-        await conn.execute(
+        result = await conn.execute(
             "DELETE FROM push_subscription "
-            "WHERE last_seen_ok IS NOT NULL AND last_seen_ok < now() - interval '90 days'"
+            "WHERE COALESCE(last_seen_ok, created_at) < now() - interval '90 days'"
         )
+        gone = str(result).rsplit(" ", 1)[-1]
+        if gone != "0":
+            log.info("pruned %s push subscription(s) silent for 90 days", gone)
 
 
 # --- M2's nightly passes ---------------------------------------------------------------------
@@ -402,37 +553,64 @@ ANCHOR_LEDGER_REFIT = 4
 ANCHOR_FOLD_IN = 5
 ANCHOR_BACKUP = 6
 
+# Every `timeout` below is a ceiling on one attempt, and every one of them is at or under that
+# job's own interval. That rule is the whole arithmetic: this loop is sequential, so a job allowed
+# to run longer than its own cadence is a job that can only keep its cadence by starving the ones
+# behind it — and the three 60-second rows are what §7.3's prompt timing and §12's M2 exit
+# criterion rest on, so they get 55 s and leave the rest of the minute to the tick. The four
+# millisecond prunes get a minute each, which is two orders of magnitude past any of them and
+# short enough that a lock-blocked DELETE is abandoned inside one tick.
+#
+# The nightly passes get the long budgets §5.3's "seconds"/"minutes" column asks for, sized on the
+# measurements in their own docstrings rather than on the word: both fits are ~1-2 s at M2 scale
+# against 900 s and 600 s here, and the placement sweep runs §8 stages 9-10 over every
+# coordinate-less owned title, which is the one nightly pass whose work grows with an import.
+#
+# `nightly-backup` is the one number that is not free: `backup/nightly.DUMP_TIMEOUT_SECONDS` is
+# 1800 s and is the bound that actually matters for a `pg_dump` blocked behind an import's lock
+# (it kills the child and deletes the `.partial`). A budget at or under that would fire first,
+# abandon the job while the child kept running, and make that constant unreachable — so this one
+# is deliberately larger, with the rotation and the `job_run` write inside the headroom.
+# `test_worker_jobs.py` pins the pair, because the two constants live in different modules.
+# [M4.11 finding 17; §5.3, §2]
+
 JOBS: tuple[Job, ...] = (
-    Job("session-prune", "M0", "hourly", "ms", _prune_expired_sessions, every=3600),
+    Job("session-prune", "M0", "hourly", "ms", _prune_expired_sessions, every=3600,
+        timeout=60),
     Job("push-subscription-prune", "M0", "daily", "ms", _prune_dead_push_subscriptions,
-        every=86400, anchor_hour=ANCHOR_PUSH_PRUNE),
+        every=86400, anchor_hour=ANCHOR_PUSH_PRUNE, timeout=60),
     Job("webauthn-challenge-prune", "M1", "hourly", "ms", _prune_webauthn_challenges,
-        every=3600),
+        every=3600, timeout=60),
     # Not in §5.3's table, and beside the three prunes rather than smuggled in at the end: §5.3
     # predates `job_run`, and a table this loop appends to on every tick is the same kind of thing
     # the three rows above keep bounded. See `JOB_RUN_KEEP_DAYS`. [M4.7 ops-11]
     Job("job-run-prune", "M0", "daily", "ms", _prune_job_runs,
-        every=86400, anchor_hour=ANCHOR_JOB_RUN_PRUNE),
+        every=86400, anchor_hour=ANCHOR_JOB_RUN_PRUNE, timeout=60),
     Job("ledger-incremental", "M2", "every observation", "<50 ms",
         owner="spielplan.ledger.refit"),
     Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400,
-        anchor_hour=ANCHOR_LEDGER_REFIT),
+        anchor_hour=ANCHOR_LEDGER_REFIT, timeout=900),
     Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
-        every=86400, anchor_hour=ANCHOR_FOLD_IN),
+        every=86400, anchor_hour=ANCHOR_FOLD_IN, timeout=600),
     # Not in §5.3's table, and named here rather than smuggled in: §5.3 gives the fold-in a
     # nightly cadence, but §12's M2 exit criterion is about what a person sees *within a
     # sitting*, and every §6.0 shelf orders by a table only the fold-in writes. `foldin.run`
     # documents this tick as the answer to exactly that.
-    Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60),
+    Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60,
+        timeout=55),
     # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
-    Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60),
+    Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60,
+        timeout=55),
     Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title",
         owner="spielplan.placement.tower"),
     Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
-        _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT),
+        _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT,
+        timeout=1800),
     Job("dna-projection", "M5", "acquisition", "<1 s"),
-    Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900),
-    Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60),
+    Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900,
+        timeout=600),
+    Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,
+        timeout=55),
     Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
     # §5.3's ninth row, and the only one this table left out. The work ships —
     # `importer/bundle.py` validates, loads and hot-swaps — but it runs inside
@@ -447,7 +625,7 @@ JOBS: tuple[Job, ...] = (
     # §2's backup, not §5.3's table — see `_nightly_backup`. Budget from the corpus-scale
     # measurement §10 sizes: ~1.15 GB uncompressed, minutes of `pg_dump` on the reference box.
     Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400,
-        anchor_hour=ANCHOR_BACKUP),
+        anchor_hour=ANCHOR_BACKUP, timeout=2100),
 )
 
 # The loop wakes far more often than any job runs; `due` decides what actually fires. A single
@@ -696,7 +874,28 @@ async def _tick(
         run_id = await _record_start(job.name)
         started = loop.time()
         try:
-            detail = await job.run()
+            # §5.3's budget, enforced rather than documented. Awaited bare, one job that never
+            # returns is the end of this process as a worker: the loop is sequential, so a read
+            # that pages for ever or a write blocked on a lock nobody releases takes §7.3's
+            # minute poll, the fold-in tick, both fits, the placement sweep, §2's nightly dump
+            # and even `_touch_heartbeat` with it — with the process alive and no log line ever
+            # written again.
+            #
+            # The heartbeat is the exception and is worth stating precisely, because it is the
+            # only thing that notices: `_touch_heartbeat` runs once per tick, above this loop, so
+            # a wedged job stops it, and `docker-compose.yml`'s worker check reads that file's
+            # age against a 120 s window. `docker compose ps` therefore goes UNHEALTHY about two
+            # minutes in and stays there — a signal, not a recovery, since README says plainly
+            # that "nothing restarts it on that, by design". The same arithmetic says a single
+            # legitimately long job turns the column red for its duration; the budgets below are
+            # sized against the work, not against that window. `Job.timeout` argues the numbers.
+            # [review cycle 1: m411-rev1-tick-comment-claims-a-green-healthcheck]
+            #
+            # `wait_for` cancels the attempt, which is what makes this a bound rather than a
+            # warning: a cancelled job's `async with pool.acquire()` releases its connection and
+            # `seen.sync_all`'s `finally` releases its advisory lock, so the next attempt starts
+            # from a clean seam. [M4.11 finding 17; §5.3, §8]
+            detail = await asyncio.wait_for(job.run(), job.timeout)
         except Exception as exc:
             # One failing job must not take the loop down, and it must not be exiled for a whole
             # interval either: the stamp above said "it just ran", and for a nightly job that
@@ -729,16 +928,29 @@ async def _tick(
             # runs every 60 s because a finish prompt that arrives five minutes late has missed
             # the credits, and a Jellyfin that returned one error must not cost that window.
             # [M4.7 ops-04; cycle 2 finding 4, cycle 3 finding 9]
-            log.exception("job %s failed", job.name)
+            if isinstance(exc, TimeoutError):
+                # The budget above, reported. `log.error` and not `log.exception`: the traceback
+                # of a cancelled wait points at this line and says nothing about the job, while
+                # the two numbers do — the budget is what an operator would change, and the
+                # elapsed time is what tells a genuine abandonment from a `TimeoutError` the job
+                # raised out of its own body (nothing in `JOBS` does today, and the pair in the
+                # line is how a reader would notice if one started). Stamped and re-armed exactly
+                # as a failure, because for this loop it is one. [M4.11 finding 17]
+                log.error(
+                    "job %s did not finish within its %gs budget and was abandoned after %.1fs",
+                    job.name, job.timeout, loop.time() - started,
+                )
+                reason = f"abandoned: no result within this job's {job.timeout:g}s budget"
+            else:
+                log.exception("job %s failed", job.name)
+                reason = f"{type(exc).__name__}: {exc}"
             failed_at = now + (loop.time() - tick_started)
             if job.anchor_hour is None:
                 last_run[job.name] = failed_at - job.every + min(job.every, RETRY_AFTER)
             else:
                 last_run[job.name] = failed_at
                 last_date.pop(job.name, None)
-            await _record_finish(
-                run_id, ok=False, detail={"error": f"{type(exc).__name__}: {exc}"}
-            )
+            await _record_finish(run_id, ok=False, detail={"error": reason})
         else:
             await _record_finish(run_id, ok=True, detail=detail)
             if loud:

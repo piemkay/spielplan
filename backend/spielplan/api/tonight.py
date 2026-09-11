@@ -272,6 +272,15 @@ async def _invite(
     The sender is optional at import time on purpose: it is the half §7.3 dates to "the M4
     stack", and a household whose SECRETS_KEY is unset (§3.1's half-configured boot) must still
     be able to open a room and be joined by code.
+
+    `tag` and `url` are the two fields the service worker cannot invent (syncpush-10). A tag is a
+    replacement key, and with none set every notification the household received took the
+    worker's default and overwrote the previous one whatever it was: a §6.2 invitation silently
+    replaced an unread §7.3 finish prompt, on the phone, where the banner fallback is not the
+    thing the member is looking at. Keying it on the session makes two rooms two notifications
+    and a re-announced room one. `url` is where a tap lands, and §6.2 step 2's answer to an
+    invitation is the lobby, not Home. The service worker stays a dumb renderer and keeps its
+    default for a sender that sets neither.
     """
     try:
         from spielplan.push import send as push_send
@@ -285,7 +294,8 @@ async def _invite(
             await push_send.send_to_user(
                 conn, user_id,
                 {"kind": "tonight.invite", "session_id": session_id, "room_code": room_code,
-                 "title": "Tonight", "body": f"A room is open — {room_code}"},
+                 "title": "Tonight", "body": f"A room is open — {room_code}",
+                 "tag": f"tonight:{session_id}", "url": "/tonight"},
             )
         except Exception:
             # Best-effort: §6's preamble guarantees an in-app equivalent for every push, and

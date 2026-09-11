@@ -26,12 +26,14 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
 import time
 from base64 import urlsafe_b64decode
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import pytest
@@ -43,9 +45,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from spielplan.api.push import device_handle
 from spielplan.core import secrets
 from spielplan.push import keys, send
+from spielplan.push.send import device_handle
 
 PAYLOAD = {"kind": "session-invite", "room": "GOLD-42"}
 
@@ -179,6 +181,21 @@ def _jwt_parts(authorization: str) -> tuple[dict, dict, bytes, bytes]:
 
 async def _count(db) -> int:
     return await db.fetchval("SELECT count(*) FROM push_subscription")
+
+
+def _compact(payload: dict) -> bytes:
+    """The bytes `send_to_user` encrypts: its own `json.dumps(..., separators=(",", ":"))`.
+
+    Spelled here so the record-size assertions below compare against the plaintext the sender
+    actually framed, not against a length this test chose.
+    """
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+def _payload_of(size: int) -> dict:
+    """A payload whose compact JSON encoding is exactly `size` bytes."""
+    envelope = len(_compact({"pad": ""}))
+    return {"pad": "x" * (size - envelope)}
 
 
 # --- §2: the keypair is minted once, at first boot, and sealed like every other secret ---------
@@ -349,12 +366,17 @@ async def test_the_body_is_one_aes128gcm_record_the_subscribed_browser_can_read(
     body = service.request_to(household.phone).content
     assert service.request_to(household.phone).headers["content-encoding"] == "aes128gcm"
     assert len(body[:16]) == 16, "a 16-byte salt"
-    # The declared `rs`, not a comparison that is trivially true: 4096 >= 120 tells you nothing.
-    # A decoder reads records of exactly this size, so the field has to be the size the sender
-    # padded to and the record has to fit inside it.
     assert int.from_bytes(body[16:20], "big") == send._RECORD_SIZE
-    assert len(body) - 21 - len(body[21:86]) <= send._RECORD_SIZE
     assert body[20] == 65, "one uncompressed P-256 point as the key id"
+    # What a record costs, exactly, rather than that it fits: the old `<= _RECORD_SIZE` here was
+    # true with 4,037 bytes to spare for this 59-byte record, so it held for any framing the
+    # sender might have produced (tq2). RFC 8188 §2 says the overhead is one padding delimiter
+    # plus the AES-GCM tag and nothing else, and that number is the only reason `_encrypt`'s
+    # ceiling check can be trusted: if a second delimiter, a length prefix or a second record
+    # ever appeared, the arithmetic at `send.py`'s size check would be wrong by that much and a
+    # payload it accepted would arrive past `rs` — a 201 and a phone that shows nothing.
+    record = body[21 + body[20] :]
+    assert len(record) == len(_compact(PAYLOAD)) + send._PAD_AND_TAG
     assert _decrypt(body, household.phone) == PAYLOAD
 
 
@@ -601,6 +623,38 @@ async def test_a_payload_too_large_for_one_record_is_refused_rather_than_sent(ho
     )
 
 
+async def test_the_largest_payload_that_fits_one_record_is_sent_and_one_byte_more_is_not(
+    household, db
+):
+    """The boundary `send.py`'s size check draws, asserted from both sides (tq2).
+
+    `test_a_payload_too_large_for_one_record_is_refused_rather_than_sent` above proves a 5 KB
+    body is refused, which an off-by-seventeen would also satisfy; the interesting input is the
+    last one that must work. At exactly `_RECORD_SIZE - _PAD_AND_TAG` the record fills `rs` to
+    the byte and a browser still decrypts it, so a ceiling set one byte low silently truncates
+    the household's longest §6.2 invitation, and one byte high puts a body past the `rs` the
+    header declares — which the push service answers 201 to and the phone drops.
+    """
+    fits = _payload_of(send._RECORD_SIZE - send._PAD_AND_TAG)
+    assert len(_compact(fits)) == send._RECORD_SIZE - send._PAD_AND_TAG
+
+    service = _service()
+    results = await send.send_to_user(db, household.jenny, fits, transport=service)
+    assert [r.ok for r in results] == [True, True], "the largest legal payload is a delivery"
+    body = service.request_to(household.phone).content
+    assert len(body[21 + body[20] :]) == send._RECORD_SIZE, "the record fills `rs` exactly"
+    assert _decrypt(body, household.phone) == fits, "and a browser can still read it"
+
+    # One byte more is refused at the seam that owns the rule, by name: `_encrypt` raises before
+    # anything reaches the wire, and `_deliver` turns that into a logged, un-pruned failure.
+    with pytest.raises(ValueError, match="must fit one"):
+        send._encrypt(
+            _compact(_payload_of(send._RECORD_SIZE - send._PAD_AND_TAG + 1)),
+            household.phone.p256dh,
+            keys.b64(household.phone.auth),
+        )
+
+
 async def test_a_compressed_subscription_key_is_refused_rather_than_sent(household, db):
     """RFC 8291 §3.4 assumes the uncompressed point on both sides: the raw point is mixed into
     `key_info`, so a 33-byte compressed one derives an IKM the browser does not, and the phone
@@ -638,3 +692,34 @@ def test_the_vapid_subject_is_one_the_push_service_will_accept():
     assert send.vapid_subject("http://192.168.1.9:8080") == "mailto:admin@192.168.1.9"
     for public_url in ("https://x.test", "http://x.test", "", "not-a-url"):
         assert send.vapid_subject(public_url).startswith(("https://", "mailto:"))
+
+
+# --- CLAUDE.md: the rules live in the domain packages, `api/` decides HTTP shapes -------------
+
+
+def test_naming_a_device_is_a_domain_rule_and_this_module_imports_no_api_layer():
+    """`device_handle` lives here, and nothing under `spielplan/push/` reaches into `api/`.
+
+    It was defined in `api/push.py` and imported back down, which was the only inversion of
+    CLAUDE.md's direction in the codebase (arch-02) and had a cost beyond tidiness: `worker.py`
+    imports `sync.playback`, which imports this module, so every worker process loaded FastAPI
+    and every router's import-time side effects to hash a string. A cycle was one refactor away
+    the moment `api/push.py` wanted a second helper from here.
+
+    The source is parsed rather than `sys.modules` inspected, because by the time this test runs
+    the app fixture has imported `spielplan.api` anyway — a runtime check would pass with the bad
+    import still in the file. `ast.walk` reaches a function-level import too, which is how the
+    same dependency would come back if it came back at all.
+    """
+    assert send.device_handle is device_handle
+    assert device_handle.__module__ == "spielplan.push.send"
+    assert device_handle("https://push.example.test/f/x") != "https://push.example.test/f/x"
+
+    tree = ast.parse(Path(send.__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not {name for name in imported if name.startswith("spielplan.api")}, sorted(imported)

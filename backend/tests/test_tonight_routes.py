@@ -638,10 +638,17 @@ async def test_a_bundle_less_app_says_so_rather_than_erroring(app, db):
 
 
 class _Recorder(httpx.AsyncBaseTransport):
-    """A push service that records who was asked, and can be told to fail."""
+    """A push service that records who was asked, and can be told to fail.
+
+    `payloads` is what the *route* handed the sender, captured by the fixture below rather than
+    read off the wire: on the wire it is one aes128gcm record for a key only the device holds, so
+    decrypting it here would assert that this test can read its own output. `test_push_sender.py`
+    owns the claim that what the sender is handed is what the browser receives.
+    """
 
     def __init__(self, *, raises: Exception | None = None, status: int = 201) -> None:
         self.urls: list[str] = []
+        self.payloads: list[dict] = []
         self.raises = raises
         self.status = status
 
@@ -659,6 +666,7 @@ def recorder(monkeypatch):
     real = send.send_to_user
 
     async def routed(conn, user_id, payload, *, transport=None):
+        made[0].payloads.append(payload)
         return await real(conn, user_id, payload, transport=made[0])
 
     def install(rec: _Recorder) -> _Recorder:
@@ -688,6 +696,40 @@ async def test_opening_a_session_invites_the_other_member_and_nobody_else(
     assert member_device in service.urls, "the other member's phone is the point of the push"
     assert host_device not in service.urls, "the host is holding the phone that opened the room"
     assert room["room_code"], "and the room exists either way"
+
+
+async def test_the_invitation_names_its_own_replacement_key_and_the_surface_that_answers_it(
+    secrets_key, app, db, library, recorder
+):
+    """§6.2 step 2's invitation, as the service worker reads it (syncpush-10).
+
+    A notification tag is a *replacement* key: with none set the worker falls back to its own
+    `'spielplan'` for every sender, so the household's newest notification overwrote the previous
+    one whatever it was — an invitation silently replacing an unread §7.3 finish prompt, on the
+    phone, which is the one place §6's in-app banner is not what the member is looking at. Keying
+    it on the session is what makes two rooms two notifications. And §6.2 step 2's answer to an
+    invitation is the lobby: a tap that lands on Home makes the member go looking for the room
+    they were just told about.
+
+    Asserted against the payload the route handed the sender, and `session_id` against the room
+    the route returned — a literal restated here would pass just as well with the field absent.
+    """
+    host, host_id = await admin_client(app)
+    _member, member_id = await member_client(app, host)
+    await score(db, host_id, library)
+    await score(db, member_id, library)
+    await _register(db, member_id, "https://push.test/member")
+
+    service = recorder(_Recorder())
+    room = await open_room(host)
+
+    assert len(service.payloads) == 1, "one invitation, to the member who was not holding the host's phone"
+    payload = service.payloads[0]
+    assert payload["tag"] == f"tonight:{room['session_id']}"
+    assert payload["url"] == "/tonight"
+    # The kind is the one the frontend switches on; the tag is for the browser, not instead of it.
+    assert payload["kind"] == "tonight.invite"
+    assert room["room_code"] in payload["body"]
 
 
 async def test_a_session_opens_even_when_every_push_fails(

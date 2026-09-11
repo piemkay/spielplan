@@ -51,8 +51,93 @@ FIRST_BOOT = SPECS / "01-first-boot.spec.js"
 JELLYFIN = SPECS / "08-jellyfin.spec.js"
 
 
+E2E_OVERLAY = REPO / "ops" / "compose.e2e.yml"
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _services_whose_code_is_a_bind_mount(compose: str) -> set[str]:
+    """Services in a compose file whose CODE arrives as a mount instead of baked into the image.
+
+    One pattern, because the overlay has one: `- ./ops/fake_jellyfin.py:/ops/...:ro` under a
+    service's `volumes:`. A data directory is not code and is deliberately not matched -- the
+    question this answers is "does a process here have to be restarted for a source edit to take",
+    and only a mounted `.py` makes the answer yes.
+    """
+    found: set[str] = set()
+    service: str | None = None
+    for line in compose.splitlines():
+        if re.match(r"^ {2}[A-Za-z0-9_.-]+:\s*$", line):
+            service = line.strip().rstrip(":")
+        elif service and re.search(r"-\s+\./[^:\s]+\.py:", line):
+            found.add(service)
+    return found
+
+
+def test_the_e2e_reset_restarts_every_service_whose_code_is_a_bind_mount():
+    """A mounted double is only as current as the process that read it.
+
+    `ops/compose.e2e.yml` says of the fake Jellyfin that "the file itself is mounted, so editing
+    the fake does not mean rebuilding an image" -- true, and it is half the rule. uvicorn reads
+    that file once, at process start, and `docker compose up -d` leaves a running container alone
+    because neither its image nor its config changed. So a container started before the edit serves
+    the PREVIOUS double, out of memory, for every later run, and the suite silently measures the
+    double the last session happened to boot.
+
+    Measured, which is why this is a guard and not a note: M4.11 made section 7.2's library read
+    keyless (`client.all_items(None)`) and the fake it replaced declared `userId` required on
+    `/Items`, so against a stale container every sweep answered 422, `seen.sync_all` took section
+    3.3's unreachable path, and `08-jellyfin.spec.js`'s adopt direction failed on a title nothing
+    had adopted -- with the diagnosis three files away from the failure.
+
+    Derived from the overlay rather than naming the service, so the next mounted double is covered
+    by having been added.
+    """
+    mounted = _services_whose_code_is_a_bind_mount(_read(E2E_OVERLAY))
+    assert mounted, (
+        "ops/compose.e2e.yml no longer mounts any source file into a service: this guard is "
+        "reading nothing, and the rule it holds has either moved or stopped applying"
+    )
+    reset = _read(RESET)
+    missing = [
+        name for name in sorted(mounted)
+        if not re.search(rf"'restart',\s*'{re.escape(name)}'", reset)
+    ]
+    assert missing == [], (
+        f"e2e/reset.mjs never restarts {missing}, whose code it bind-mounts: an edit to that "
+        "source reaches the container only when the process is restarted, so the suite would run "
+        "against the previous version of the double"
+    )
+
+
+@pytest.mark.parametrize(
+    "compose, expected",
+    [
+        pytest.param(
+            "services:\n  jellyfin-fake:\n    volumes:\n"
+            "      - ./ops/fake_jellyfin.py:/ops/fake_jellyfin.py:ro\n",
+            {"jellyfin-fake"},
+            id="the overlay's own shape",
+        ),
+        pytest.param(
+            "services:\n  db:\n    volumes:\n      - ./data/pg:/var/lib/postgresql/data\n",
+            set(),
+            id="a data mount is not code",
+        ),
+        pytest.param(
+            "services:\n  backend:\n    build:\n      context: .\n",
+            set(),
+            id="a built image needs no restart for a source edit",
+        ),
+    ],
+)
+def test_the_bind_mount_reader_sees_mounted_code_and_not_mounted_data(compose, expected):
+    """The negative cases are the load-bearing ones: a guard that demanded a restart for every
+    mount would demand one for Postgres's data directory, and a rule that fires on everything is
+    the same as a rule nobody reads."""
+    assert _services_whose_code_is_a_bind_mount(compose) == expected
 
 
 def _span(source: str, index: int, opener: str, closer: str) -> tuple[int, int]:

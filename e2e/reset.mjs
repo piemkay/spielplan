@@ -180,6 +180,30 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
+// And the double, which the line above cannot refresh. `ops/compose.e2e.yml` mounts
+// `ops/fake_jellyfin.py` into this container — "the file itself is mounted, so editing the fake
+// does not mean rebuilding an image" — but uvicorn reads that file once, at process start, and
+// `up -d` leaves a running container alone because neither its image nor its config changed. So a
+// container started before the fake was edited keeps serving the PREVIOUS double out of memory,
+// for every later run, silently: the suite measures the double the last session happened to boot.
+//
+// Measured, and it is why this line exists rather than being a tidy-up. M4.11 made §7.2's library
+// read keyless (`client.all_items(None)` — "the household's library is the admin's view of it
+// rather than the union of two people's"), and the fake it replaced declared `userId` REQUIRED on
+// `/Items`. Against the stale container every sweep answered 422, `seen.sync_all` took §3.3's
+// unreachable path and returned with every counter zero, §6.6's card printed that as a completed
+// sweep, and `08-jellyfin.spec.js`'s adopt direction then failed on a title nothing had adopted —
+// three files down the stateful order, with the diagnosis nowhere near the failure.
+//
+// `restart` and not `up -d`: only a new process re-reads a bind mount. Tolerated when it fails,
+// because the e2e overlay is optional and a stack brought up without it has no such service.
+console.log('restarting the fake Jellyfin so it re-reads ops/fake_jellyfin.py…');
+try {
+  docker([...COMPOSE, 'restart', 'jellyfin-fake']);
+} catch {
+  console.log('  no jellyfin-fake container to restart — continuing');
+}
+
 // Wait for the backend to apply migrations and answer. `health` was built and validated above,
 // before the drop, rather than assembled here from a string this script had never parsed.
 for (let i = 0; i < 60; i++) {

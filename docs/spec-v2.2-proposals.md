@@ -3084,6 +3084,221 @@ truth: the fit is owed, not lost". Decision 206's count of ten coverage rows is 
 
 ---
 
+## Decisions taken (owner, 2026-09-10, as M4.11 opened)
+
+Three, taken as M4.11 opened on the questions `docs/milestones/M4.11-plan.md` put to the owner rather
+than settle inside a diff: what a series means to §7.3, what the 15-minute sweep may do to a title
+whose finish prompt is open, and what the prompt offers after the tap that answers it. None is a
+preference — each changes a user-visible contract or a spec sentence — and two were already
+half-ruled by **decision 172**, taken with the roadmap before this plan was read (the rulings
+168-178 are recorded in full in
+[`docs/milestones/ROADMAP-to-M5.md`](milestones/ROADMAP-to-M5.md)). 172 says the sweep may not close
+an armed prompt, that an app-side `unseen` on a series is never written to Jellyfin, and that a
+computed `Series.Played` may mark but never un-mark; so where the plan recommends a fifth
+`prompt_state` it is overruled, and migration `0020_jellyfin_items.sql` carries `title_jellyfin_item`
+and nothing else. The plan's "the next free number is 167" is stale by forty-three — 167 through 209
+are spoken for, and 172's own "record the whole as decision 167" is the same staleness from the other
+side: the §7.3 amendments it mandates are applied here, under 210 and 211.
+
+This milestone takes a **§12 row**, on M4.9's and M4.10's argument rather than M4.6's and M4.7's:
+what it repairs is a row the table already had. §12's M1 row — "Jellyfin connector + user linking +
+seen-state two-way sync ... | seen states flow both ways for both users" — was closed against a
+one-user, one-copy, movie-only fixture. Against the household §3.3 actually describes, the sweep
+aborts permanently at the first owed row of a tokenless link, reverts an explicit "not seen"
+whenever a duplicate copy is Played, un-marks a series the day its next season lands, never
+falsifies ownership, promotes a revoked token back to "linked", and arms no finish prompt for
+television at all.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 210 | S1 — what does a series mean to §7.3? (a) Does an app-side "not seen" on a `kind='series'` title write to Jellyfin at all? (b) Does "seen" on a series still POST? (c) When is a series "finished" for the finish prompt? | **(a) No.** `kind='series'` never sends DELETE: the app-side state is written, `jf_synced_at` is stamped so the sweep does not re-owe the row, `_push` returns `(True, 'series unseen is app-only')`, and the surface says so. **(b) Yes.** "Seen" still POSTs `/UserPlayedItems/{seriesId}`, so §7.3's plain boolean needs no amendment in the marking direction — only the asymmetry stated. **(c) On the last known episode**, from a cached `GET /Shows/{SeriesId}/Episodes?userId=`. Adoption follows 172(4) as **decision 213** narrows it: over a `user_title` row that already exists a series adopts in neither direction, an absent row is still adopted from Jellyfin's history, and a folder reporting zero children marks nothing. |
+| 211 | S2 — adoption versus an open finish prompt. (A) keep adoption and stop a sync closing a prompt as `answered` by adding a fifth `prompt_state`, `closed_by_sync`; or (B) skip adoption for a title whose prompt is open until it is answered? | **(B)**, which decision 172(2) had already ruled. While a finish prompt for a (user, title) is open the sweep leaves that `user_title` row alone, and only a tap closes the prompt. `closed_by_sync` is dropped entirely — `0005_ledger.sql`'s CHECK is untouched and 0020 carries `title_jellyfin_item` alone. For (B) to mean anything the declining tap writes `unseen` through `seen.set_state` as an explicit user action, so "no" is a fact rather than an absence the next sweep overwrites with Played. |
+| 212 | S3 — §7.3 says the finish prompt "offers the verdict flow" and `FinishPrompt.svelte` offers nothing. Add the affordance (three inline verdict chips, or a link into §6.1's queue), or adopt proposal 150 as a decision and amend the clause? | **Add it, in the queue-link form.** After a "yes" the card offers a route into §6.1's queue with that title at its head — the shape §6.0's banner CTA already uses — and `FinishPrompt` gains an `onAnswered` prop, wired at `frontend/src/routes/+page.svelte:246` to `loadShelves()`, so the banner the answer just emptied is re-read. Inline chips are refused: a second observation writer on Home has no rate session, no card token and no §6.1 block counter. Proposal 150 is superseded rather than adopted. |
+
+### 210. A series is app-only in the un-marking direction, still pushes "seen", and finishes on its last known episode
+
+**What the spec says.** §7.3 makes the app authoritative for explicit user actions and gives the
+mapping as "the plain boolean": `seen` -> Played = true, `unseen` -> Played = false, written with the
+person's own token through `POST/DELETE /UserPlayedItems/{itemId}?userId=`. §7.1's read is narrowed
+to `Movie,Series`, so the item behind a television title is the **Series folder**, and §4.1 rule 5
+gives the app no episode-level row at all — §7.2 acquires "per-show, not per-episode" for the same
+reason. §7.3's second bullet arms "a per-user prompt" at >=90% playback of "a title".
+
+**Why it changes.** A DELETE against a folder is not the inverse of a POST against it. Jellyfin's
+`Folder.MarkUnplayed` queries every recursive non-folder child and calls `MarkUnplayed` on each,
+which zeroes `PlayCount` and `PlaybackPositionTicks` and nulls `LastPlayedDate` — so one tap on a
+control labelled "not seen" erases every episode's resume position and the show's Next Up, in
+another application, under the member's own credentials, with no confirmation and no undo this app
+could offer: it never held that state. Decision 172 reproduced it rather than reasoned it — the write
+path fetches `jellyfin_id` and never `kind`, and marking one series not-seen put exactly one
+`DELETE /UserPlayedItems/{seriesId}` in the fake's write log. The same fact has a second face in the
+adopt direction, because Jellyfin computes a folder's `Played` as `playedCount >= totalCount`: the
+flag moves when nobody acts, so the day season 2 lands the folder reads not-played and the sweep's
+"stamped, and Jellyfin disagrees, therefore a newer human action" branch reverts the `seen` the
+person typed. That branch cannot tell a person from library growth. (c) is the prompt's half of the
+same question: the only Played flag a series carries is that computed folder value, so arming on it
+would arm on library growth — and per-episode arming asks "Did you finish S01E03?" about a thing
+§4.1 rule 5 gives this app no row to hold an opinion in.
+
+**The decision.** Three answers, plus 172's fourth for the direction of adoption, narrowed since
+by decision 213. (a) **No DELETE, ever, for `kind='series'`.** The app-side state is written, `jf_synced_at` is stamped so the sweep
+does not re-owe the row, `_push` returns `(True, 'series unseen is app-only')` without a network
+call, and the surface says what it did and did not do. (b) **"Seen" still POSTs** on the Series item:
+that direction is additive, reversible by the person in Jellyfin's own UI, and "mark every episode
+played" is accepted as the meaning of series-seen — dropping it would make series app-only in both
+directions and force a v2.2 amendment for no gain. (c) **The prompt arms on the last known
+episode**, decided from a cached `GET /Shows/{SeriesId}/Episodes?userId=`; the Series-level Played
+flag is refused because it is the computed value above, and per-episode copy because §4.1 rule 5
+leaves nothing to attach it to. And adoption, per 172(4) as **decision 213** narrows it: the sweep
+adopts Jellyfin-played over an **absent** row, never adopts Jellyfin-not-played over an app `seen`,
+never adopts in either direction over a `user_title` row that already exists — 210(a) is the reason,
+since the app never sent that `unseen` and a folder disagreeing with it is the design rather than
+news — and never adopts `seen` from a folder whose `UserData` reports zero children, the empty stub
+Jellyfin computes as played.
+
+**Cost.** `sync/seen.py::_push` and `::retract` each fetch `kind` alongside `jellyfin_id` and gain
+the guard; `retract` additionally returns before the token lookup when `prior_state is None`, because
+§7.3's absent row is a default and not an assertion worth pushing. The sweep's adopt branch gains the
+series direction rule. `connectors/jellyfin.py::NowPlaying` carries `item_type` and `series_id`,
+`sessions()` fills them, and the client gains the cached episodes call; `ops/fake_jellyfin.py`'s
+`force_session` emits the Episode shape a real server sends, which turns `test_playback_prompt.py`
+and e2e 08 red until the prompt stage lands — the contract working, not flake. Two things the
+household gives up, stated on the surface rather than hidden: a series it marks unseen in the app
+stays played in Jellyfin until somebody un-marks it there, and the two can disagree in the other
+direction after a new season until a tap settles it. §7.3 gains the asymmetry sentence and the
+conflict rule gains the computed-flag clause — 172's mandated amendment, applied under this number.
+Coverage rows `jellyfin-sync-a-series-is-never-marked-unplayed-recursively` and
+`jellyfin-playback-an-episode-session-arms-its-series-prompt` cite this decision, replacing the
+plan's placeholder "decision 167".
+
+### 211. The sweep does not adopt while a prompt is open, and "no" becomes state
+
+**What the spec says.** §7.3: "Jellyfin playback is a suggestion, never a silent write: >=90%
+playback (poll `/Sessions` + `IsPlayed` delta) arms a per-user prompt ... one tap sets `seen` and
+offers the verdict flow." The conflict rule beneath it makes the app's explicit action outrank
+Jellyfin's inferred state, and §13 measures "rating capture > 70% of finished playbacks".
+
+**Why it changes.** The sweep closes the question before the person is asked it. The adopt branch
+writes `seen` from Jellyfin's own Played flag, and `sync/playback.py::pending` then closes every open
+prompt whose title reads `seen` as `'answered'` — so for a linked member watching in Jellyfin the
+banner returns nothing, the verdict flow never fires, and `arm` refuses the title on every later
+viewing because it is already seen. Decision 172 measured the sequence: arm a prompt, run one sweep,
+`pending()` returns `[]` with the row at `'answered'`. The plan recommended (A) — the fifth state,
+and a migration to drop and recreate `0005_ledger.sql`'s CHECK — on the argument that it fixes §13's
+denominator. It does not: that denominator is `playback_event WHERE finished`, and `prompt_state` has
+no reader anywhere outside `sync/playback.py` itself, so (A) buys a migration for nothing while
+keeping the silent write and only naming its closure. The objection to (B) — that an unanswered
+prompt's seen state lags Jellyfin indefinitely — overstates what was measured: it lags one title,
+until a tap, while a card sits on Home. And (B) exposes the real loss on the other tap: after a "no"
+the prompt closes as `'dismissed'`, `user_title` is still empty, and the next sweep adopts Played —
+measured, `{'state': 'seen'}`. The person's answer is overturned in fifteen minutes.
+
+**The decision.** (B), as decision 172(2) had already ruled. While a finish prompt for a
+(user, title) is open — a finished `playback_event` whose `prompt_state` is one of
+`('armed','shown')` — the sweep leaves that `user_title` row alone; only a tap closes the prompt. And
+"no" becomes state: `answer(finished=False)` writes `unseen` through `seen.set_state` as an explicit
+user action, so the decline is a fact under the conflict rule rather than an absence the next sweep
+can overwrite with Jellyfin's Played flag. `closed_by_sync` is dropped entirely — `0005_ledger.sql`'s
+CHECK is untouched, `OPEN_STATES` is unchanged, and migration `0020_jellyfin_items.sql` carries
+`title_jellyfin_item` and nothing else. This is what makes §7.3:315's "never a silent write"
+literally true, in the one window where it matters most.
+
+**Cost.** One guard on the adopt branch and one state write on the decline. `pending()`'s auto-close
+is unchanged in code but can now be reached only by a tap elsewhere — a title-card `set_state` —
+which is why `test_an_open_prompt_closes_when_the_state_arrives_another_way` is rewritten in place
+and **keeps its name**: the "other way" is now a tap on another surface rather than a sync.
+`test_state_routes.py::test_declining_the_prompt_writes_nothing_and_closes_it` is renamed to
+`test_declining_the_prompt_writes_unseen_and_closes_it`, because the old name states the thing this
+decision reverses, and its coverage row `jellyfin-acquisition-eval-finish-prompt-banner-path` is
+edited in the same milestone or `test_every_named_test_exists` fails on the rename. `api/state.py`'s
+route docstring — "'no' closes the prompt and writes nothing at all" — is corrected, and row 41,
+`jellyfin-acquisition-eval-playback-arms-prompt-never-writes`, is reworded to this decision's
+sentence. A movie declined in the prompt now sends `Played = false` to Jellyfin: §7.3's plain boolean
+under the app-authoritative rule, but a write the app did not previously make. §7.3's second bullet
+gains the sentence that a sweep never answers the question it asked.
+
+### 212. The finish prompt hands off to §6.1's queue, and refreshes the banner it just emptied
+
+**What the spec says.** §7.3: "one tap sets `seen` and offers the verdict flow" — the v1.1 §4.1
+capture path, kept. §6.1 owns the rating queue, and §6.0's banner CTA is the shape a handoff into it
+already takes.
+
+**Why it changes.** `FinishPrompt.svelte` offers nothing: the card writes `seen` and disappears, so
+the one moment the household has just told the app it watched something ends on an empty surface. It
+is also mounted with no props at all — `<FinishPrompt />`, `frontend/src/routes/+page.svelte:246` —
+while the identical seen write made from the title card calls `loadShelves()` and says why, so the
+shelves behind the prompt keep the title the answer just moved out of them. Proposal 150 promises
+exactly this and is unadopted: it claims the answered title "leaves a title in the banner's
+population", and that banner is server-rendered from `/api/home`. A shipped coverage row standing on
+an unadopted proposal is the thing to fix either way.
+
+**The decision.** Add the affordance, in the queue-link form. After a "yes" the card offers a route
+into §6.1's queue with that title at its head — §6.0's banner CTA's shape — and `FinishPrompt` gains
+an `onAnswered` prop, wired at `+page.svelte:246` to `loadShelves()`, so the banner it just emptied
+is re-read from the server. Three inline verdict chips are refused: they would put a second
+observation writer on Home with no rate session, no card token and no §6.1 block counter — machinery
+decision 199 and §6.1 keep on the Rate surface, and M4.10 spent a milestone making that path's
+writes happen exactly once under a lock. Proposal 150 is superseded by this decision rather than
+adopted as one.
+
+**Cost.** One prop, one CTA and one call site: no route, no payload field, no new state, and no spec
+amendment — the clause §7.3 already has is the one being honoured. The coverage row
+`jellyfin-acquisition-eval-finish-prompt-banner-path` gains the verdict-affordance and banner-refresh
+assertions, and `e2e/specs/05-milestones.spec.js` holds no placeholder on this surface (checked: no
+jellyfin, prompt or push placeholder assertion in that file), so nothing there is deleted. What the
+link does not do is carry the verdict itself — the person still taps through §6.1's card, which is
+the point of routing them there.
+
+### 213. A computed Series flag never overwrites an app-side row, in either direction
+
+**What the spec says.** §7.3's conflict rule, as decision 210 amended it: a series' Played flag is
+computed rather than asserted, "so it may mark but never un-mark: Jellyfin played over an app
+`unseen` or an absent row is adopted; Jellyfin not-played over an app `seen` is ignored". Decision
+210(a), two bullets above it: for `kind='series'` the app sends no DELETE at all — "the app-side
+state is written, `jf_synced_at` is stamped so the sweep does not re-owe the row, `_push` returns
+`(True, 'series unseen is app-only')` without a network call". Decision 211 makes the declining tap
+one of the writes that produces such a row: "`no` writes `unseen`, both as explicit user actions".
+
+**Why it changes.** The two sentences were written for different questions and compose into a loop
+nobody chose. 210(4)'s adopt clause is inherited verbatim from decision 172(4), which predates
+210(a) and therefore predates the existence of a direction in which the app never writes. Compose
+them and every app-side series `unseen` is reverted by the next sweep: the app stamps
+`jf_synced_at` without sending anything, Jellyfin still computes the folder as played, and the
+sweep's "present + stamped + disagrees" row reads that as a human change made in Jellyfin after the
+agreement — but there was no agreement, only a settlement. Measured in this worktree against the
+real sweep and the in-process fake: mark Severance seen, mark it unseen (write log empty, row
+`unseen`, stamped), run one sweep — `state = 'seen'`, `report.adopted == 1`. The same probe run
+through decision 211's declining tap ends the same way, so the milestone thesis's "stay answered"
+was false for television. There is no in-app remedy: the surface says "Marking a series not seen is
+kept in Spielplan only", and it is, for about fifteen minutes. 210's own Cost paragraph presumes
+otherwise — it gives up "a series it marks unseen in the app stays played **in Jellyfin** until
+somebody un-marks it there", which is a statement about the media server and not about whether the
+app can hold its own row.
+
+**The decision.** For `kind='series'` the sweep never adopts over a `user_title` row that exists,
+in either direction. Un-marking was already refused (210(4)); marking over an app-side `unseen` is
+refused now, for the reason 210(a) created: the app never sent that value, so the folder flag
+disagreeing with it is the design rather than news, and `jf_synced_at` on such a row records a
+settlement rather than an agreement. An **absent** row is still adopted — that is 210(4)'s real
+content and the half §7.3's table calls "an absent row is the default, not an assertion" — so the
+first sweep after linking still imports the household's television history unchanged. The
+alternative, dropping the app-only stamp so the row stays owed instead, was rejected: it re-owes
+the same refusal on every sweep for ever, which is the churn 210(a) added the stamp to stop, and it
+would put an unsettleable debt in `owed_no_token`'s neighbourhood on §6.6's card.
+
+**Cost.** One branch widens in `sync/seen.py`'s adopt path (`if kind == "series" and not jf_seen`
+becomes `if kind == "series"`), and §7.3's conflict-rule sentence gains the third clause. What the
+household gives up is stated where it was already stated: a series marked unseen in the app stays
+played in Jellyfin until somebody un-marks it there, and now the app row survives that
+disagreement instead of losing to it. The coverage row
+`jellyfin-sync-a-series-is-never-marked-unplayed-recursively` gains
+`test_a_series_marked_unseen_in_the_app_is_not_re_adopted_from_the_folder_flag`, which is the case
+`test_marking_a_series_unseen_is_app_only_and_is_not_re_owed` could not reach: its fixture never
+puts the series in the fake's played set, so Jellyfin AGREES with the app's unseen and the
+un-marking guard answers it.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

@@ -6,7 +6,9 @@ Two things a person does, and the boundary between them is the spec's:
   * answering "Did you finish X?" — the *only* way a playback observation becomes state.
 
 Nothing here infers. §7.3's "Jellyfin playback is a suggestion, never a silent write" is a
-rule about who is allowed to write `user_title`, and the answer is: the person.
+rule about who is allowed to write `user_title`, and the answer is: the person. Decision 211 made
+that literal in the one place it was not — a dismissed prompt wrote nothing, and the sweep wrote
+Jellyfin's answer instead — so both taps on the prompt are now explicit actions.
 """
 
 from __future__ import annotations
@@ -82,8 +84,16 @@ async def finish_prompts(user: ActiveUser, conn: DB) -> list[dict]:
 async def answer_finish_prompt(
     event_id: int, body: PromptAnswer, user: ActiveUser, conn: DB
 ) -> dict:
-    """The one tap. 'Yes' writes `seen` and pushes it to Jellyfin; 'no' closes the prompt and
-    writes nothing at all."""
+    """The one tap. 'Yes' writes `seen` and pushes it to Jellyfin; 'no' writes `unseen` and
+    closes the prompt.
+
+    "'No' writes nothing at all" was this route's promise until decision 211, and it was the
+    promise that broke §7.3's own rule: an absent `user_title` row is what the 15-minute sweep
+    adopts Jellyfin's Played flag into, so the state the person declined arrived anyway within the
+    quarter hour. A decline is an explicit action now, which is also what lets the sweep leave an
+    open prompt alone. The reply carries `sync` for both answers, because "marked, but your media
+    server does not know" is a sentence §6.7's rail prints verbatim.
+    """
     client, _cfg = await jellyfin_for(conn)
     result = await playback.answer(
         conn, user_id=user.id, event_id=event_id, finished=body.finished, client=client

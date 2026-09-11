@@ -7,8 +7,12 @@ states and nothing enforces. Each of these reads the artifact and fails if the r
 from __future__ import annotations
 
 import ast
+import dataclasses
+import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
@@ -1477,6 +1481,50 @@ def test_the_worker_healthcheck_guard_accepts_the_shipped_shape():
     assert _inherited_http_healthcheck(_WORKER.format(block=_HEARTBEAT_CHECK)) is None
 
 
+def test_the_tick_does_not_argue_its_budget_against_a_healthcheck_the_compose_file_denies():
+    """CLAUDE.md makes a comment the ARGUMENT for a change, so an argument stated against the
+    wrong failure is a defect in the change.
+
+    `asyncio.wait_for` around `job.run()` was justified by "with the process alive, every
+    healthcheck green and no log line ever written again". The second and third clauses are
+    right; the first is the opposite of what this repo ships. `_touch_heartbeat()` has one call
+    site and it is the first statement of `_tick`, above the job loop, so a job that never
+    returns stops the file's mtime moving -- and `docker-compose.yml`'s worker check reads
+    exactly that age. The column goes unhealthy; it is the one thing that DOES notice. A reader
+    who believed the comment would conclude that nothing detects a wedged worker and that
+    `Job.timeout` is the only defence, which is how a budget gets sized against nothing.
+
+    Three assertions, because the prose is only wrong relative to a mechanism: the check reads
+    the heartbeat, the heartbeat is touched once per tick outside the loop, and the module makes
+    no claim to the contrary. [review cycle 1: m411-rev1-tick-comment-claims-a-green-healthcheck]
+    """
+    source = (REPO / "backend" / "spielplan" / "worker.py").read_text(encoding="utf-8")
+
+    assert _inherited_http_healthcheck(_compose()) is None, (
+        "the worker's compose check no longer reads the heartbeat, so this rule is about nothing"
+    )
+
+    touches = [
+        line
+        for line in source.splitlines()
+        if "_touch_heartbeat()" in line and not line.startswith("def ")
+    ]
+    assert touches == ["    _touch_heartbeat()"], (
+        "the heartbeat is no longer touched exactly once, at the head of `_tick` and outside the "
+        f"job loop -- a wedged job may now leave it moving, and the sentence below changes: {touches}"
+    )
+
+    denied = [
+        phrase
+        for phrase in ("healthcheck green", "healthchecks green", "every healthcheck")
+        if phrase in source
+    ]
+    assert not denied, (
+        "worker.py claims a wedged loop leaves the healthcheck green, which docker-compose.yml "
+        f"denies -- it reads the heartbeat's age and reports the worker unhealthy: {denied}"
+    )
+
+
 def _ignored(dockerignore: str) -> set[str]:
     """The patterns `.dockerignore` actually applies: whole lines, comments and blanks dropped."""
     return {
@@ -1920,11 +1968,11 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
 
 
-# --- §12: the four exit scripts, and the console they print to ----------------------------
+# --- §12: the five exit scripts, and the console they print to ----------------------------
 #
-# §12's M2, M3, M4 and M4.9 rows are measured by hand, by `ops/m*_exit_criterion.py`, and a
-# milestone is closed on what they print and the code they exit with. A verdict that cannot
-# come out `no` is a certificate rather than a measurement, so these read the scripts as
+# §12's M2, M3, M4, M4.9 and M4.11 rows are measured by hand, by `ops/m*_exit_criterion.py`,
+# and a milestone is closed on what they print and the code they exit with. A verdict that
+# cannot come out `no` is a certificate rather than a measurement, so these read the scripts as
 # source: no `check()` whose answer is settled before the run, no dereference of a result the
 # verdict has not been computed from yet, no `main()` ending in a literal, and nothing printed
 # that a Windows console can crash on.
@@ -1937,6 +1985,16 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
 # settled before the run, no terminal constant, and no `rate()` seeding path for the last of
 # them to read, the same exemption `ops/m45_exit_criterion.py` has for writing through the
 # importer rather than through §6.1's routes. [M4.9]
+#
+# `ops/m411_exit_criterion.py` is the fifth, and the number moved to 5 only after every rule
+# here had been read against it and come back empty: no printed literal outside cp850, no
+# `check()` predicate settled before the run, a computed terminal verdict, and no component
+# read with its comments in. It has no `rate()` seeding path for the last rule to exempt --
+# §12's M1 claim is about seen states rather than verdicts, so it seeds through `sync.seen`
+# and `sync.playback`, the two modules whose two-way flow it exists to falsify. The one shape
+# the rules did force on it is its `check()` signature: the verdict is the first positional
+# argument, because a number there is exactly what `_constant_check_predicates` reads as a
+# predicate that cannot fail. [M4.11]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2043,7 +2101,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2123,7 +2181,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2249,7 +2307,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2529,7 +2587,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3157,7 +3215,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 4, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3872,3 +3930,669 @@ def test_the_commit_point_guard_catches_each_way_the_old_reading_was_said(name, 
     observation, not by a vocabulary.
     """
     assert len(_commits_the_block_when_the_counter_rolls(text)) == expected, name
+
+
+# --- M4.11 finding 20 (sec-15): a credential a dataclass prints ---------------------------------
+
+# The packages a §7.3 or §14.3 credential is carried through: the connector that holds the admin
+# key and the token map, the sweep that carries one member's decrypted token across their whole
+# reconciliation, and the sender that holds the VAPID signing key. Scoped to `connectors/` at
+# first, which made the rule about a DIRECTORY rather than about the credential -- and the one
+# field in the whole codebase actually named `token`, `sync/seen.py`'s `LinkedUser.token`, sat
+# outside it at default repr while the guard read green. [review cycle 1: m411-rev-jf-02]
+CREDENTIAL_PACKAGES = tuple(
+    REPO / "backend" / "spielplan" / part for part in ("connectors", "sync", "push")
+)
+
+# §14.3: Jellyfin "API keys are unscoped and admin-equivalent (no read-only variant exists), so the
+# stored connector secret can administer the whole media server"; §7.3's per-user access tokens are
+# one named person's credentials. These are the three names that custody is spelled as in those
+# packages. `base_url` and `url` stay printable on purpose: the server a line is about is what makes
+# the line useful, and hiding it would buy nothing (§7.1 ships it to the browser as a deep link).
+SECRET_FIELD_NAMES = frozenset({"api_key", "token", "user_tokens"})
+
+
+def _dataclass_decorated(node: ast.ClassDef) -> bool:
+    """True when a `@dataclass` decorator generates this class's `__repr__`.
+
+    Matched on the last dotted segment so `@dataclasses.dataclass`, `@dataclass` and
+    `@dataclass(frozen=True)` are one rule. A plain class is not an offence here: it has no
+    generated repr to leak through.
+    """
+    for dec in node.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if ast.unparse(target).split(".")[-1] == "dataclass":
+            return True
+    return False
+
+
+def _secret_fields_at_default_repr(source: str, label: str) -> list[str]:
+    """Every credential-named dataclass field in `source` that the generated repr will print.
+
+    An annotated assignment in a dataclass body is a field, and a field prints unless its default
+    is a `field(..., repr=False)`. Read with `ast` rather than with a regex for the reason
+    `_constant_check_predicates` is: `registry.py` already declares one of these across three
+    lines, and a regex over a package is how a guard ends up asserting only the cases its author
+    had in front of them. `ClassVar` is skipped because it is not a field at all -- flagging it
+    would demand `repr=False` where the syntax does not allow it.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.ClassDef) or not _dataclass_decorated(node):
+            continue
+        for stmt in node.body:
+            if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name):
+                continue
+            if stmt.target.id not in SECRET_FIELD_NAMES:
+                continue
+            if ast.unparse(stmt.annotation).split("[")[0].split(".")[-1] == "ClassVar":
+                continue
+            keywords: dict[str, ast.expr] = {}
+            if isinstance(stmt.value, ast.Call) and ast.unparse(stmt.value.func).endswith("field"):
+                keywords = {kw.arg: kw.value for kw in stmt.value.keywords if kw.arg}
+            hidden = keywords.get("repr")
+            if isinstance(hidden, ast.Constant) and hidden.value is False:
+                continue
+            offenders.append(f"{label}:{stmt.lineno}: {node.name}.{stmt.target.id}")
+    return offenders
+
+
+def test_no_connector_credential_is_printed_by_a_generated_repr():
+    """§14.3 + §2: the connector secret "can administer the whole media server", and a dataclass
+    prints every field it is not told to hide.
+
+    Observed rather than imagined. Before `field(repr=False)` landed, a pytest failure header in
+    this very suite read
+    `JellyfinClient(base_url='http://jellyfin.test', api_key='fake-admin-key', timeout=15.0)`,
+    so one assertion about an unrelated behaviour copied an admin-equivalent key into the terminal,
+    the CI log and whatever an operator pasted into a bug report. `JellyfinConfig` was worse: it
+    carried the key and the whole `user_tokens` map, which §7.3 obtains one person at a time.
+
+    Static because no runtime can hold it. `repr()` is called by the machinery that runs when the
+    code is already failing -- a traceback frame, `logging`'s `%r`, pytest's assertion rewriting --
+    so a behavioural test would have to enumerate every future leak site, while
+    `push/keys.py:50-61` shows the codebase already knows the answer belongs at the declaration
+    ("no accessor and no repr"). Both halves are here on purpose: `dataclasses.fields` reads what
+    the interpreter actually generated for the two shipped classes, and the source sweep is what
+    catches the next dataclass added to the packages.
+
+    The sweep reads three packages and not one. Scoped to `connectors/` it was a rule about a
+    directory, and the review that scoped it that way had already put `token` in the set for "the
+    NEXT credential field" -- while the only field in the codebase that carries that name,
+    `sync/seen.py`'s `LinkedUser.token`, sat one directory over at default repr, holding one
+    member's decrypted §7.3 access token for the whole of their sweep. A credential does not
+    become printable by moving out of `connectors/`. [M4.11 finding 20, sec-15; review cycle 1:
+    m411-rev-jf-02]
+    """
+    from spielplan.connectors.jellyfin import JellyfinClient
+    from spielplan.connectors.registry import JellyfinConfig
+
+    printed: list[str] = []
+    for cls in (JellyfinClient, JellyfinConfig):
+        fields = dataclasses.fields(cls)
+        # A rule that matches on a name has to say the name is still there, or a rename turns it
+        # into a rule about nothing -- the M4.8 lesson about an instrument that widened by
+        # narrowing.
+        assert {f.name for f in fields} & SECRET_FIELD_NAMES, (
+            f"{cls.__name__} declares no field named in {sorted(SECRET_FIELD_NAMES)} any more, so "
+            f"this rule no longer covers the credential it was written for -- rename it here too"
+        )
+        printed += [
+            f"{cls.__name__}.{f.name}"
+            for f in fields
+            if f.name in SECRET_FIELD_NAMES and f.repr
+        ]
+
+    swept = [path for package in CREDENTIAL_PACKAGES for path in sorted(package.glob("*.py"))]
+    for package in CREDENTIAL_PACKAGES:
+        assert sorted(package.glob("*.py")), (
+            f"no module under {package} to sweep: this rule is reading nothing there"
+        )
+    offenders = printed + [
+        site
+        for path in swept
+        for site in _secret_fields_at_default_repr(
+            path.read_text(encoding="utf-8"), f"{path.parent.name}/{path.name}"
+        )
+    ]
+    assert not offenders, (
+        "a connector credential is printed by its own repr, so the next traceback, log line or "
+        "assertion header copies an admin-equivalent key (§14.3) into plain text -- declare it "
+        "`field(repr=False)`:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_connector_repr_guard_sees_a_repr_enabled_field_on_a_real_dataclass():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The runtime half's self-test, built the way the defect was: a credential field declared with
+    nothing said about its repr. Asserted through `dataclasses.fields` so the thing proved is the
+    predicate the guard above runs, and then through `repr()` as well, because the predicate's
+    answer only matters if it tracks what actually gets printed.
+    """
+    @dataclasses.dataclass
+    class Probe:
+        base_url: str
+        api_key: str
+        user_tokens: dict[str, str] = dataclasses.field(default_factory=dict, repr=False)
+
+    leaking = [f.name for f in dataclasses.fields(Probe) if f.name in SECRET_FIELD_NAMES and f.repr]
+    assert leaking == ["api_key"], leaking
+    assert "s3cret" in repr(Probe("http://jellyfin.test", "s3cret")), (
+        "the predicate and the generated repr disagree, so this guard is measuring the wrong thing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The two declarations that shipped, verbatim: `jellyfin.py:97` and `registry.py:49`.
+        ("the annotation with no default", "@dataclass\nclass C:\n    api_key: str\n", 1),
+        ("a plain default", '@dataclass(frozen=True)\nclass C:\n    api_key: str = ""\n', 1),
+        # A `field()` that says everything except the one thing that matters.
+        ("a field call without repr",
+         "@dataclass\nclass C:\n    user_tokens: dict = field(default_factory=dict)\n", 1),
+        ("repr spelled True", "@dataclass\nclass C:\n    token: str = field(repr=True)\n", 1),
+        # Declared across three lines, which is how `registry.py` writes it and why this reads the
+        # tree rather than the line.
+        ("a declaration that wraps",
+         "@dataclasses.dataclass\nclass C:\n    user_tokens: dict[str, str] = field(\n"
+         "        default_factory=dict,\n    )\n", 1),
+        # The repaired shapes, one per spelling in the package.
+        ("the repair", "@dataclass\nclass C:\n    api_key: str = field(repr=False)\n", 0),
+        ("the repair with a default",
+         "@dataclass(frozen=True)\nclass C:\n"
+         "    user_tokens: dict = field(default_factory=dict, repr=False)\n", 0),
+        # What the rule must NOT say. A plain class generates no repr; `base_url` is printable on
+        # purpose; a local variable is not a field; and a `ClassVar` cannot take `repr=False`.
+        ("a class that is not a dataclass", "class C:\n    api_key: str\n", 0),
+        ("the server a log line is about", "@dataclass\nclass C:\n    base_url: str\n", 0),
+        ("a local of the same name", "def f():\n    api_key = 'k'\n    return api_key\n", 0),
+        ("a class variable", "@dataclass\nclass C:\n    api_key: ClassVar[str] = ''\n", 0),
+    ],
+)
+def test_the_connector_repr_guard_catches_each_way_a_field_is_declared(name, source, expected):
+    """And the source half's self-test, offences and negative controls in one list, because this
+    predicate's whole difficulty is that the offending declaration and the repaired one differ by
+    a single keyword argument."""
+    assert len(_secret_fields_at_default_repr(source, "probe.py")) == expected, name
+
+
+# --- M4.11 finding 24 (arch-02): the domain never imports the API layer -------------------------
+
+# CLAUDE.md, Conventions: "Rules live in the domain packages under `backend/spielplan/` (ledger,
+# rate, scoring, placement, home, sync, connectors, importer); `api/` decides only HTTP shapes."
+# Scoped to the three packages this milestone owns rather than to every package under
+# `spielplan/`, so it cannot collide with a wider layering guard another workstream may add -- and
+# because a wider one is a different argument, about modules this milestone has not read.
+DOMAIN_PACKAGES = ("sync", "push", "connectors")
+
+# The chain the inversion was reachable through, pinned at all three links. Exactly one of them is
+# discriminating, and it is not the one the plan names: measured on 2026-09-10 against a tree holding
+# `push/send.py:43`'s `from spielplan.api.push import device_handle`, `spielplan.push.send` answered
+# True while `spielplan.sync.playback` and `spielplan.worker` both answered False -- because
+# `playback.py:167` imports `push.send` inside `_notify` and `worker.py:115` imports `playback`
+# inside the `playback-poll` job body, so the deferred links hid the cost from the process that paid
+# it. The plan's verification line is `spielplan.worker` alone, which would have been a rule that
+# could not fail. The other two stay pinned because the rule is about the worker process, and one
+# module-level import added to either link restores the whole chain in a diff that touches neither
+# `push/send.py` nor this file.
+FASTAPI_FREE_MODULES = ("spielplan.push.send", "spielplan.sync.playback", "spielplan.worker")
+
+
+def _names_the_api_package(dotted: str) -> bool:
+    """Compared on dotted segments, not as a string prefix: `spielplan.api_keys` is not `api`."""
+    return dotted == "spielplan.api" or dotted.startswith("spielplan.api.")
+
+
+def _api_imports(source: str, label: str) -> list[str]:
+    """Every import in `source` that reaches `spielplan.api`, in any of its spellings.
+
+    `test_tonight_combine.py:367-394`'s rule -- only import statements, never prose -- with its
+    parsing done by `ast` instead of by a line prefix. The reason is in the subject: `push/send.py`
+    now quotes `from spielplan.api.push import device_handle` inside `device_handle`'s own
+    docstring to explain why it is gone, and a prefix filter survives that only by the luck of
+    where the line happens to wrap. An `ast` walk cannot see a docstring as an import at all.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            offenders += [
+                f"{label}:{node.lineno}: import {a.name}"
+                for a in node.names
+                if _names_the_api_package(a.name)
+            ]
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = node.module or ""
+        base = module
+        if node.level:
+            # Each of the three packages sits exactly one level below `spielplan`, so a relative
+            # `from ..api import push` names the same module as the absolute spelling: drop the dots
+            # and put the package back. Not a general resolver -- it is exact for this scope, and it
+            # errs towards refusing a module called `api` at any relative depth, which a domain
+            # package has no business with either.
+            base = f"spielplan.{module}" if module else "spielplan"
+        # `from spielplan import api` names the package in the alias rather than in the module,
+        # which is why the aliases are joined on and not only the module itself.
+        dotted = [base, *(f"{base}.{a.name}" for a in node.names)]
+        if any(_names_the_api_package(d) for d in dotted):
+            names = ", ".join(a.name for a in node.names)
+            offenders.append(
+                f"{label}:{node.lineno}: from {'.' * node.level}{module} import {names}"
+            )
+    return offenders
+
+
+def _imports_fastapi(module: str, extra_path: Path | None = None) -> bool:
+    """Does importing `module` in a fresh interpreter pull FastAPI in with it?
+
+    A subprocess because this interpreter cannot answer: the suite's own fixtures build the ASGI
+    app, so `fastapi` is in `sys.modules` long before any test runs. `PYTHONPATH` is set from
+    `REPO` rather than inherited alone, so the answer is about this worktree however pytest was
+    invoked.
+    """
+    env = dict(os.environ)
+    roots = [str(REPO / "backend"), *([str(extra_path)] if extra_path else [])]
+    inherited = [env["PYTHONPATH"]] if env.get("PYTHONPATH") else []
+    env["PYTHONPATH"] = os.pathsep.join([*roots, *inherited])
+    out = subprocess.run(
+        [
+            sys.executable, "-c",
+            f"import sys, importlib; importlib.import_module({module!r}); "
+            "print('fastapi' in sys.modules)",
+        ],
+        capture_output=True, text=True, timeout=300, env=env,
+    )
+    assert out.returncode == 0, f"importing {module} failed:\n{out.stdout}{out.stderr}"
+    return out.stdout.strip().splitlines()[-1] == "True"
+
+
+def test_no_domain_package_imports_the_api_layer():
+    """CLAUDE.md, Conventions: the rules live in the domain packages and `api/` decides only HTTP
+    shapes. `push/send.py:43` read `from spielplan.api.push import device_handle` -- the one import
+    in the codebase pointing the wrong way.
+
+    Two concrete costs, not a tidiness preference. The worker process imported FastAPI and every
+    router side effect along `worker -> sync.playback -> push.send`, for one twelve-character hash
+    of an endpoint; and a cycle was one refactor away, because `api/push.py` is exactly the module
+    that will want `push/` helpers next -- at which point the import already pointing backwards
+    closes the loop, and the failure is an ImportError at boot rather than a review note.
+
+    Static, and with a runtime half, because neither alone is enough. The source scan states the
+    direction for every module in the three packages, including ones nothing imports yet; the
+    subprocess states the consequence, and is the only half that would notice the direction being
+    re-inverted through a module this scan does not read. [M4.11 finding 24, arch-02]
+    """
+    modules: list[Path] = []
+    for name in DOMAIN_PACKAGES:
+        found = sorted((REPO / "backend" / "spielplan" / name).rglob("*.py"))
+        # Per package, not over the total: a rule scoped by directory name goes quiet when one of
+        # those directories is renamed, and seven files out of ten still reads as a healthy sweep.
+        assert found, (
+            f"no module under spielplan/{name}/: this rule is scoped by directory name, so a "
+            f"renamed package silently stops being covered -- name it in DOMAIN_PACKAGES"
+        )
+        modules += found
+    offenders = [
+        site
+        for path in modules
+        for site in _api_imports(
+            path.read_text(encoding="utf-8"),
+            path.relative_to(REPO / "backend" / "spielplan").as_posix(),
+        )
+    ]
+    assert not offenders, (
+        "a domain package imports the API layer, which inverts CLAUDE.md's direction, pulls "
+        "FastAPI and every router side effect into the worker process, and puts a circular import "
+        "one refactor away:\n  " + "\n  ".join(offenders)
+    )
+    pulled = [module for module in FASTAPI_FREE_MODULES if _imports_fastapi(module)]
+    assert not pulled, (
+        "importing these domain modules loads FastAPI, so the worker process pays for the whole "
+        f"HTTP layer it never serves: {pulled}"
+    )
+
+
+def test_the_fastapi_probe_sees_a_module_that_does_reach_the_api_layer(tmp_path):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The subprocess half's self-test. It has to exist here because the shipped tree answers False for
+    all three modules, and because the plan's verification line -- `import spielplan.worker` alone
+    -- answered False before the repair too, which is the one way this rule could have shipped
+    looking green while measuring nothing.
+    """
+    (tmp_path / "probe_api_layer.py").write_text(
+        "from spielplan.api.push import device_handle\n\n__all__ = ['device_handle']\n",
+        encoding="utf-8",
+    )
+    assert _imports_fastapi("probe_api_layer", extra_path=tmp_path), (
+        "a module that imports `spielplan.api.push` does not register as pulling FastAPI, so the "
+        "runtime half of this rule cannot fail and proves nothing"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The import that shipped, verbatim.
+        ("the one that shipped", "from spielplan.api.push import device_handle\n", 1),
+        ("the package itself", "from spielplan.api import push\n", 1),
+        ("the alias spelling", "from spielplan import api\n", 1),
+        ("a plain import", "import spielplan.api.push\n", 1),
+        ("an aliased plain import", "import spielplan.api.deps as deps\n", 1),
+        ("relative, through the parent", "from ..api.push import device_handle\n", 1),
+        ("relative, naming the package", "from .. import api\n", 1),
+        # Inside a function body, which is how the same dependency is usually reintroduced once a
+        # guard exists -- `worker.py` already imports its jobs' modules exactly that way.
+        ("deferred into a job body",
+         "def job():\n    from spielplan.api.push import device_handle\n    return device_handle\n",
+         1),
+        # What the rule must NOT say. The first is the repair; the second is a sibling package whose
+        # name merely starts with the same three letters; the third is the docstring `push/send.py`
+        # now carries, which is why this reads the tree and not the line.
+        ("the repair", "from spielplan.push.send import device_handle\n", 0),
+        ("a package that is not api", "from spielplan.api_keys import mint\n", 0),
+        ("the docstring that explains the repair",
+         '"""It replaces `from spielplan.api.push import device_handle`, which pointed the wrong\n'
+         'way: import spielplan.api.push pulled FastAPI into the worker."""\n', 0),
+        ("a sibling domain import", "from spielplan.core.config import settings\n", 0),
+        ("a relative sibling", "from . import keys\n", 0),
+    ],
+)
+def test_the_api_import_guard_catches_each_spelling(name, source, expected):
+    """Eight offending spellings and five true ones. The aliased, relative and deferred forms are in
+    the list because a rule that only sees `from spielplan.api.x import y` is a rule about the one
+    line of the diff that caused it."""
+    assert len(_api_imports(source, "probe.py")) == expected, name
+
+
+# --- M4.11 finding 25 / tq3: the sweep boundary belongs to the database -------------------------
+
+SEEN = REPO / "backend" / "spielplan" / "sync" / "seen.py"
+
+
+def _datetime_imports(source: str, label: str) -> list[str]:
+    """Every import of the standard-library clock in `source`, at module level or in a function.
+
+    By name and not by use: `datetime` has no business in this module at all, so the import is the
+    earliest and least ambiguous place to catch it. Comments and docstrings are invisible to an
+    `ast` walk, which matters here more than anywhere else in this file -- `seen.py` mentions
+    `datetime` three times in prose, twice to argue why it holds none, so a `"datetime" in source`
+    assertion would fire on the comment explaining the rule it is enforcing.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            offenders += [
+                f"{label}:{node.lineno}: import {a.name}"
+                for a in node.names
+                if a.name == "datetime" or a.name.startswith("datetime.")
+            ]
+            continue
+        if not isinstance(node, ast.ImportFrom) or node.level:
+            continue
+        module = node.module or ""
+        if module == "datetime" or module.startswith("datetime."):
+            names = ", ".join(a.name for a in node.names)
+            offenders.append(f"{label}:{node.lineno}: from {module} import {names}")
+    return offenders
+
+
+def test_the_sweep_module_reads_its_boundary_from_the_database_and_holds_no_clock():
+    """§7.3's conflict rule compares `user_title.jf_synced_at` against the moment the sweep read
+    Jellyfin, and Postgres writes both of those timestamps. A `datetime.now(UTC)` here compares two
+    clocks that agree only by luck -- a container whose time drifts from the database server's then
+    decides, for every linked member, whether an action taken during the sweep is pushed or
+    adopted, which is the direction a person's own tap gets reverted in.
+
+    The companion to `test_seen_sync.py::test_the_sweep_boundary_ignores_this_processs_clock`, which
+    is the behavioural half and was inert for a milestone: it patched `seen.datetime` with
+    `raising=False` on a module that imports no `datetime`, so running its body without the patch
+    gave the identical answer. That test now injects the skew at the real seam (a connection whose
+    `fetchval` answers `'SELECT now()'` ten seconds early); this states the same rule one level up,
+    where a reintroduced import is caught by name before any behaviour depends on it -- and where a
+    future `_note_unreachable` computing its minutes from a wall clock rather than from
+    `time.monotonic` is caught as well. [M4.11 finding 25, tq3]
+    """
+    source = SEEN.read_text(encoding="utf-8")
+    # The anti-vacuity half: the rule is "the boundary comes from the database", which deleting the
+    # read would also satisfy. `SELECT now()` being gone means this rule needs rewriting, not that
+    # the module got cleaner.
+    assert "SELECT now()" in source, (
+        "sync/seen.py no longer reads its sweep boundary with `SELECT now()`, so this rule is "
+        "about a clock nothing consults -- find where the boundary comes from now"
+    )
+    offenders = _datetime_imports(source, "sync/seen.py")
+    assert not offenders, (
+        "sync/seen.py imports a process clock, and §7.3's conflict rule compares its answer "
+        "against timestamps Postgres wrote -- read the boundary with `SELECT now()` and measure "
+        "elapsed time with `time.monotonic`:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_clock_import_guard_reads_the_imports_and_not_the_prose_about_them():
+    """The negative half, measured against the shipped file rather than a fixture, because the naive
+    form of this rule fails on it today: `seen.py` argues in three comments about the `datetime` it
+    does not import, so the one-line substring assertion the plan asked for would have had to strip
+    the comments first. Reading imports is the same rule with nothing to strip."""
+    source = SEEN.read_text(encoding="utf-8")
+    assert "datetime" in source, (
+        "sync/seen.py no longer explains why it holds no datetime, so this negative control is "
+        "measuring nothing -- it exists because the word is in the prose and not in the imports"
+    )
+    assert not _datetime_imports(source, "sync/seen.py")
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        ("the module", "import datetime\n", 1),
+        ("the names", "from datetime import UTC, datetime\n", 1),
+        ("aliased", "import datetime as dt\n", 1),
+        ("a submodule", "from datetime import timezone\n", 1),
+        # Deferred into the function that reads the clock, which is how a module-level ban is
+        # usually worked around.
+        ("deferred into a helper",
+         "async def _boundary(conn):\n    from datetime import UTC, datetime\n"
+         "    return datetime.now(UTC)\n", 1),
+        # What the rule must NOT say. `time.monotonic` is the elapsed-time clock step 3g was written
+        # against on purpose; the prose is the reason the import is absent; and a module whose name
+        # merely contains the word is not the clock.
+        ("the elapsed-time clock", "import time\n\n_since = time.monotonic()\n", 0),
+        ("the comment that argues the rule",
+         "# `time.monotonic`, not a datetime: a module that imports `datetime` invites the next\n"
+         "# reader to take the boundary from this process.\nimport time\n", 0),
+        ("a docstring quoting the banned line",
+         '"""The boundary is `SELECT now()`, never `from datetime import UTC, datetime`."""\n', 0),
+        ("a name that contains the word", "from spielplan.core.datetimes import floor\n", 0),
+    ],
+)
+def test_the_clock_import_guard_catches_each_way_the_clock_returns(name, source, expected):
+    """Five offending spellings and four true ones, the last four being the shapes that made the
+    behavioural test inert in the first place: prose about a clock is not a clock."""
+    assert len(_datetime_imports(source, "probe.py")) == expected, name
+
+
+# --- M4.11 review cycle 2: two §6.6 clauses the map published and no registered suite held -----
+#
+# `jellyfin-sync-a-failed-played-write-is-counted-not-swallowed` ends its `what` with "the admin
+# card refuses to call that sweep healthy", and `jellyfin-sync-the-server-version-gates-the-played-
+# write` ends its with "The admin copy names the write, not the reads." Both sentences are about
+# markup: the health verdict is a ternary over the report and the below-the-pin line is component
+# copy, neither of which the backend strings those rows name can drift with. The vitest beside
+# `+page.svelte` does assert them and cannot be registered -- `docs/milestones/M4.11-plan.md`'s
+# risks section forbids putting a `frontend/src/...` path in a `tests` list, and decision 206
+# refused to register vitest ids even after M4.9 made them resolvable -- so the third layer the
+# house already uses for a Svelte-source clause carries them instead: a static guard, the same
+# choice `test_the_cold_badge_expression_reads_e_source_not_placement` makes for §8's badge.
+# [M4.11 review cycle 2: m411-c2-cov-01]
+
+CONNECTORS_PAGE = FRONTEND / "routes" / "admin" / "connectors" / "+page.svelte"
+
+# The rule, pinned rather than described, because the two ways of weakening it are both the
+# natural thing to write. Keyed on `push_failed` alone it was green for a sweep that never read
+# the library (finding 3); keyed additionally on an empty `users` it was green for a sweep whose
+# library read worked and whose member read 404'd for ever (cycle 1, seen-02). `skipped_no_link`
+# is the negative control inside the expression: §3.1 makes a household with no connector and no
+# link a legal state, and an outage is not what that is.
+_SYNC_HEALTH = (
+    "syncResult.push_failed ? 'failing' "
+    ": !syncResult.skipped_no_link && "
+    "(!syncResult.users?.length || syncResult.failed_users?.length) ? 'unreachable' : 'ok'"
+)
+
+
+def test_the_sync_health_verdict_refuses_a_sweep_that_reconciled_nobody():
+    """§6.6's card is the only place a household ever sees whether §7.3 ran, and `ok` is a claim.
+
+    The backend report has no health field -- `sync_all` returns counters -- so this ternary IS
+    the verdict, and every counter in it reads zero for three different sweeps: the quiet healthy
+    household, the one whose Jellyfin never answered, and the one whose member account was
+    deleted. The first must print green and the other two must not, which is a distinction no
+    test named on the two coverage rows can make: they assert `failed_users` and `push_failed` in
+    the report, one layer below the sentence those rows publish.
+    [M4.11 review cycle 2: m411-c2-cov-01; §6.6, §7.3, §3.3]
+    """
+    page = _src(CONNECTORS_PAGE)
+    found = re.search(r"data-sync-health=\{(?P<expr>.*?)\}\n", page, re.S)
+    assert found, "the sync card no longer publishes a health verdict for anyone to read"
+    assert " ".join(found.group("expr").split()) == _SYNC_HEALTH, (
+        "the sweep health verdict must deny `ok` to a sweep that read nobody -- an empty `users` "
+        "AND a non-empty `failed_users` -- and must still allow it to a household with no link:\n"
+        f"  found:  {' '.join(found.group('expr').split())}\n  wanted: {_SYNC_HEALTH}"
+    )
+
+
+def test_the_below_pin_copy_names_the_played_write_and_not_the_reads():
+    """§7.1's pin is a gate on one route, and the card used to name the wrong half of it.
+
+    The copy said reads "may miss fields", which is the degradation a 10.8 server does NOT have:
+    what it lacks is `POST /UserPlayedItems`, so the app -> Jellyfin direction is dead while every
+    read keeps working. An admin who acted on the old sentence would have gone looking at their
+    metadata. `test_a_server_below_the_pin_refuses_the_played_write_by_name` holds the connector's
+    own refusal string, which is a different string in a different file and drifts from this one
+    freely -- and this sentence is printed twice, once off the stored verdict and once off a fresh
+    probe, so a repair to one of them leaves the other saying whatever it said.
+    [M4.11 review cycle 2: m411-c2-cov-01; §7.1, §6.6]
+    """
+    # Comments stripped for the reason the runtime sweep strips them: this codebase quotes the
+    # wording a surface stopped using in the sentence explaining why it stopped, and both of the
+    # comments above these lines quote "reads may miss fields" to bury it.
+    code = _COMMENTARY.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), _src(CONNECTORS_PAGE))
+    flat = " ".join(code.split())
+    sentences = [flat[m.start():].partition("{")[0] for m in re.finditer(r"below the pinned", flat)]
+    assert len(sentences) == 2, (
+        f"the card prints {len(sentences)} below-the-pin sentences; §7.1's verdict reaches the "
+        "admin twice -- from the stored probe and from a fresh one -- and both are the copy"
+    )
+    silent = [s for s in sentences if "POST /UserPlayedItems" not in s]
+    assert not silent, (
+        "a below-the-pin line has to name the route that is missing, or it accuses the whole "
+        "connector:\n  " + "\n  ".join(silent)
+    )
+    accuses = [s for s in sentences if re.search(r"reads? (?:may|might|can)\b", s, re.I)]
+    assert not accuses, (
+        "the pin gates the Played WRITE; reads degrade nowhere and saying they do sends the "
+        "admin after their metadata:\n  " + "\n  ".join(accuses)
+    )
+
+
+# --- M4.11 review cycle 2: the decision 213 narrowed, left saying what it said ----------------
+#
+# The same shape as the two M4.10 guards above, one milestone on: decision 213 was written
+# because 210(4)'s adopt clause -- inherited verbatim from 172(4), which predates 210(a) and so
+# predates the existence of a direction in which the app never writes -- composed into a loop
+# that reverted every app-side series `unseen` within one sweep. 213 says so and 210 does not.
+# Eight source sites cite a bare "decision 210" (`sync/seen.py`, `connectors/resolve.py`,
+# `connectors/jellyfin.py`, `sync/playback.py`, `spec_coverage.toml`), so a reader following any
+# of them lands on a numbered owner decision arguing for the loop 213 removed -- and the register
+# is the text a later milestone reads BEFORE the code. The file already back-annotates the
+# superseded side everywhere else (proposal 148's "Superseded by decision 166", proposal 54's
+# heading, decision 193's in-place correction); this holds 210 to that practice by name.
+# [M4.11 review cycle 2: m411-c2-dec-03]
+
+# 172's fourth answer, in the two spellings decision 210 uses to inherit it.
+_INHERITS_172_FOUR = r"172(?:'s)?\s*(?:\(\s*4\s*\)|fourth)"
+
+
+def _inherits_172s_adoption_rule_unnarrowed(text: str) -> list[str]:
+    """Every clause in `text` that takes 172(4)'s adoption rule without naming what narrowed it.
+
+    Clause-scoped for the reason the two detectors above are clause-scoped: 213's argument has to
+    be able to quote the rule it narrowed, and 210's own Why paragraph has to be able to describe
+    the adopt direction as the defect it found there -- a ban on the word "adopt" would forbid the
+    register from explaining itself. A clause offends only when it INHERITS the rule, which both
+    shipped statements do by citing 172's fourth answer, and names neither decision 213 nor the
+    narrowing. Stop class `.` and `|`: the sentence and the summary-table cell.
+    """
+    flat = " ".join(text.split())
+    return [
+        m.group(0).strip()
+        for m in re.finditer(rf"[^.|]*{_INHERITS_172_FOUR}[^.|]*", flat)
+        if not re.search(r"\b213\b|narrow", m.group(0), re.I)
+    ]
+
+
+def test_decision_210s_adoption_clause_carries_the_narrowing_213_imposed():
+    """The register kept publishing the adopt loop that decision 213 exists to remove.
+
+    210 states its adoption rule three times -- the summary row, the opening of "The decision",
+    and the clause that spells it out -- and all three inherit 172(4) verbatim: "the sweep adopts
+    Jellyfin-played over an app `unseen` or an absent row". For `kind='series'` the shipped sweep
+    adopts over no existing row at all, in either direction, and §7.3's conflict rule was rewritten
+    to match and cites both numbers. Only the superseded side went unmarked, which is the reader
+    this file already misled once with decision 172's stale "record the whole as decision 167".
+    [M4.11 review cycle 2: m411-c2-dec-03; decisions 210, 213]
+    """
+    offenders = _inherits_172s_adoption_rule_unnarrowed(_decision(210))
+    assert not offenders, (
+        "decision 210 inherits 172(4)'s adopt clause unnarrowed; decision 213 refuses adoption "
+        "over an existing series row in BOTH directions, and a reader arriving by one of the "
+        "code citations reads the loop instead:\n  " + "\n  ".join(offenders)
+    )
+
+    # The other direction: the record is only right while the code still reads this way. 213's
+    # own Cost paragraph names this branch -- `if kind == "series" and not jf_seen` became
+    # `if kind == "series"` -- so if the guard ever comes back, both texts are wrong together.
+    flat = " ".join(SEEN.read_text(encoding="utf-8").split())
+    assert 'if kind == "series": ' in flat, (
+        "the adopt path no longer refuses a series unconditionally; decision 213 is the record of "
+        "that refusal and has to be amended in the same commit that moves it"
+    )
+    assert 'if kind == "series" and not jf_seen' not in flat, (
+        "the adopt path is back to un-marking only, which is 210(4) before decision 213 narrowed "
+        "it -- an app-side series `unseen` is re-adopted from the computed folder flag"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,text,expected",
+    [
+        # The two shipped statements, in the two shapes they shipped in: a table cell and a
+        # sentence inside the argued section.
+        ("the summary row", "| 210 | ... | **(c) On the last known episode**, from a cached "
+                            "`GET /Shows/{SeriesId}/Episodes?userId=`. Adoption follows 172(4): "
+                            "played may mark, not-played may never un-mark, and a folder "
+                            "reporting zero children marks nothing. |", 1),
+        ("the decision paragraph", "And adoption, per 172(4): the sweep adopts Jellyfin-played "
+                                   "over an app `unseen` or an absent row, never adopts "
+                                   "Jellyfin-not-played over an app `seen`", 1),
+        # The argument FOR the rule 210 took has to stay sayable, or the guard bans a citation
+        # rather than a claim -- and 210's Why paragraph names the adopt direction as the defect.
+        ("the correction", "Adoption follows 172(4) as decision 213 narrows it: over a "
+                           "`user_title` row that already exists a series adopts in neither "
+                           "direction", 0),
+        ("the why paragraph", "The same fact has a second face in the adopt direction, because "
+                              "Jellyfin computes a folder's `Played` as `playedCount >= "
+                              "totalCount`", 0),
+    ],
+)
+def test_the_decision_210_adoption_guard_catches_each_way_it_was_said(name, text, expected):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    Four cases: the two wordings that shipped, the correction that must pass, and the sentence in
+    210's own Why paragraph that describes the adopt direction without inheriting its rule.
+    """
+    assert len(_inherits_172s_adoption_rule_unnarrowed(text)) == expected, name

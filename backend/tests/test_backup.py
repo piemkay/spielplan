@@ -103,7 +103,13 @@ BUNDLE_DERIVED = {"artifact_bundle", "title_placement", "title_prior"}
 # joins them for the same reason — §6.6 System reads it to say when last night's dump succeeded on
 # *this* box, and a restore that carried another install's job history would report backups that
 # never happened here.
-APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "job_run"}
+#
+# `title_jellyfin_item` (0020_jellyfin_items.sql) joins them too, and it is the plainest case in
+# the set: the rows are one Jellyfin server's item ids, re-derived by every sweep and never
+# trusted stale (§7.1, §7.2), so carrying them into another install would point that household's
+# titles at items that do not exist there. The archive is the corpus; this is this box's view of
+# its own library. [M4.11]
+APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "job_run", "title_jellyfin_item"}
 
 EXCLUDED = USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
 

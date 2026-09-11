@@ -197,6 +197,7 @@ Two things happen on the way that are easy to miss:
 > M4.8   10/10  covered
 > M4.9   23/23  covered
 > M4.10   10/10  covered
+> M4.11   17/17  covered
   M4.12    1/1   covered
   M4.13    2/2   covered
   M5    0/10  covered
@@ -217,9 +218,92 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.10 is the milestone this block was last re-pasted for, and it has a §12 row (spec line 415) on
-M4.9's argument rather than M4.6's and M4.7's: two rows this table already had, closed against writes
-that had never been made twice at once.** §12's M2 row owns the rating view, the Personal Ledger and
+**M4.11 is the milestone this block was last re-pasted for, and its `17/17` closed the red list it
+opened with.** Seventeen rows were written before the code and `current_milestone` was raised in the
+same change, with no `tests` key on any of them — M4.10's opening repeated because it worked: the
+list that run printed, those seventeen ids, *was* the test plan (`docs/milestones/M4.11-plan.md`).
+All seventeen now name tests that exist — 103 ids across twelve pytest files and two e2e specs — and
+seven rows this table already had were amended in the same change rather than duplicated: the three
+§7.3 M1 rows, the §7.1 upsert row, the banner-path row, §3.3's link row and M2's push-subscription
+row each gained the assertions this milestone's household makes possible, which is the point of
+amending rather than adding — a second row asserting the same clause against a harder fixture leaves
+the easy one standing as a claim about the app. The §12 row it takes is at spec line
+416, on M4.9's and M4.10's argument rather than M4.6's and M4.7's: M1's exit criterion, "seen states
+flow both ways for both users", was closed against one member, one copy per title, no series and no
+second phone — not the household §3.3 describes. Decisions **210-212** are numbered in
+`docs/spec-v2.2-proposals.md`, and two of them were half-ruled already by decision 172, which is why
+the one migration — `0020_jellyfin_items.sql`, the Jellyfin copy set — does not carry the fifth
+`prompt_state` the plan sketched: the sweep stops adopting under an open prompt instead, so there is
+no sync-closed prompt left to label. **No waiver was added and the milestone was not lowered.** No
+count beyond the block above is published here until a run prints one, which is decision 184's rule.
+The id count in this paragraph's first sentence is mechanical as well now:
+`test_the_testing_ledger_counts_the_ids_the_map_actually_holds` re-derives it from the map, because
+it said 84 for a map that already held 99 — five ids added by a review cycle after the sentence was
+written, and an auditor counting the map against it could not tell that from five tests registered
+on no row at all.
+
+**Two registered tests changed name, and both changes were forced by a decision rather than by
+taste.** `test_declining_the_prompt_writes_nothing_and_closes_it` became
+`test_declining_the_prompt_writes_unseen_and_closes_it`, because decision 211 makes the declining tap
+an explicit action: "nothing" was the defect — an empty `user_title` row is what let the next sweep
+adopt Jellyfin's Played flag over the person's answer within fifteen minutes. And
+`test_a_rewatch_on_the_same_device_asks_again` became `test_a_rewatch_in_a_new_viewing_asks_again`,
+which the plan did not foresee: the dismissal guard is keyed on `jf_session_id`, and
+`0006_jellyfin.sql:29-37` records that Jellyfin derives that id from the client and device, so the
+same television's rewatch is the cost the guard takes and the old name asserted the opposite. Four
+tests this map already named were rewritten **in place with their names kept**, because each name
+still describes what its body asserts: `test_an_open_prompt_closes_when_the_state_arrives_another_way`
+(the sweep is no longer one of the ways the state can arrive, so the other way is now an explicit
+`seen.set_state`), `test_a_duplicate_copy_marked_in_jellyfin_is_adopted`,
+`test_retract_puts_back_exactly_the_flag_the_forward_action_set` and
+`test_a_null_identity_column_is_filled`. A fifth, `test_a_clean_sync_clears_a_stale_re_link_flag`,
+was rewritten the same way and is registered here for the first time — it used to promote a link on a
+sweep that pushed nothing, which is the defect the row beside it now names three silences against.
+A rename is the expensive kind of change in this map — it breaks `test_every_named_test_exists` until
+the map follows it, in a file no test stage owns — so the rule the milestone worked to is that a body
+may be rewritten freely and a name only when a decision made the name false.
+
+**The exit criterion is `ops/m411_exit_criterion.py`, and it scored 11/11.** Eleven checks over a
+database it creates and drops, with `ops/fake_jellyfin.py` in-process and the app's own `db/pool.py`:
+the scenario is two members, a duplicated copy and a running series, and the checks are the clauses
+of §12's M1 row read one at a time — an explicit "not seen" surviving two sweeps, a series staying
+seen while its folder flag recomputes, a tokenless link that adopts and stays owed, a revoked token
+that stays `needs_relink`, ownership falsified for a removed title, a pointer stable over six sweeps,
+a 404 on every write counted rather than promoted, an Episode session arming its series prompt, one
+row and one push for a declined viewing, a second device listed by handle, and a distinct tag and url
+on both notifications. The same script scores **1/11** against the pre-milestone backend (M4.10,
+`892c1f2`, with this milestone's `ops/` and migration 0020 alone), which is what makes the eleven
+measurements rather than assertions; the one check that passes both ways says so in its own output,
+because the browser half of the second-device story belongs to `e2e/specs/12-onboarding.spec.js` and
+no browser is faked in an exit script. It is the **fifth** `ops/m*_exit_criterion.py`, so the five
+guards in `test_static_contracts.py` that open with `assert len(EXIT_SCRIPTS) == …` now carry 5 — and
+the number moved only after each of their rules had been read against the new script and come back
+empty, which is the only order in which bumping a tripwire is not the same thing as disarming it. The
+count is deliberately asserted rather than inferred, because a guard that globs its own subjects goes
+quiet when one of them is renamed out of the glob, and the price of that is remembering to move it:
+this milestone paid it late, with all five guards red on the same line for the length of one fix.
+
+**Two of M4.11's e2e edits are in Rank's territory rather than its own, and they are named here
+because nothing else in the diff can name them.** `e2e/helpers.js::waitForBoard` and
+`e2e/specs/13-rank.spec.js::rateSome` belong to §6.1 and §6.3; the milestone's own e2e work is
+`08-jellyfin.spec.js` and `12-onboarding.spec.js`, which its plan names and which its coverage rows
+point at. Neither Rank edit changes what a spec asserts — the poll body, timeout and predicate in
+`waitForBoard` are unchanged and only the thrown message differs, and `rateSome`'s added
+`class_balance.total > 0` fires only where the `waitForBoard` eleven lines later would have spent
+120 s and failed regardless, so it cannot redden a run that would otherwise pass. They are here
+because M4.11's two-phase run hit the old message and it named the wrong suspects: it offered "the
+seeded ledger or a stopped worker" for two states with opposite repairs, and the milestone had just
+made the worker half of that transient — finding 17 put `Job.timeout` on `_tick` with `timeout=55`
+on `tier-set-refit` itself, so an abandoned sweep is now re-armed rather than permanent and cannot
+be read off an empty board. A better diagnostic on somebody else's helper is still somebody else's
+helper, which is why this paragraph exists rather than a coverage row: `test_spec_coverage.py`
+resolves only `backend/tests/**/test_*.py` and `e2e/specs/*.spec.js`, so `e2e/helpers.js` cannot be
+registered, and no static guard reads it. The next Rank milestone owns both files and may lift the
+argument into its own. [M4.10 findings 6 and 9; M4.11 finding 17; decision 209]
+
+**M4.10 shipped before it, and it has a §12 row (spec line 415) on M4.9's argument rather than
+M4.6's and M4.7's: two rows this table already had, closed against writes that had never been made
+twice at once.** §12's M2 row owns the rating view, the Personal Ledger and
 §6.1's prediction reveal; its M3 row owns Rank's tiers and its comparison queue. Both were asserted
 one request at a time, and every Ledger write on either surface was a read, then some work, then a
 write on a connection that autocommits each statement. Measured before the repair: two gathered
@@ -278,7 +362,7 @@ on a young one on 1,065 of 1,723. The number that argues for the retune is the 6
 M4.12's findings 31 and 32.
 
 **M4.9 shipped before it, and unlike M4.6, M4.7 and M4.8 it has a §12 row of its own.** The
-argument is at spec line 426: M0's exit criterion is "bundle imports clean; Library list and title
+argument is at spec line 427: M0's exit criterion is "bundle imports clean; Library list and title
 card render imported titles", and it was closed against a fixture in which the corpus's awkward
 shapes do not occur — so the row existed and was asserted about the wrong artifact. The real export
 ships two department spellings for one job, two facet namings for one vocabulary, and a term id
@@ -373,7 +457,7 @@ is not a suite that failed. If you need a database that outlives its session, gi
 `_p<digits>` and it will survive.
 
 **M4.7 shipped before it, and §12 gained a row for that one.** Decision 181 put that row between
-M4.6 and M5, with the argument at spec line 424: §12 scheduled the product and left the box it runs
+M4.6 and M5, with the argument at spec line 425: §12 scheduled the product and left the box it runs
 in unscheduled, so every §2 promise about required configuration, secrets custody with rotation, a
 nightly dump with rotation 14 and a restore was documented, coverage-mapped, and either
 unimplemented or implemented in a way that failed on the day it was needed. Seventeen rows were

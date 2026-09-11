@@ -2,7 +2,8 @@
 
 `test_seen_sync.py` and `test_playback_prompt.py` prove the behaviour; this proves the route
 contract the front end is written against — the status codes, the shape of the reply, and the
-fact that one person's prompt is not answerable by another over the wire either.
+fact that one person's prompt is not answerable by another over the wire either. Including, since
+decision 211, that *both* taps on the prompt write a state: the card's "no" is an action.
 
 Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 """
@@ -115,13 +116,29 @@ async def test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen(signed_in,
     assert (await client.get("/api/prompts/finish")).json() == []
 
 
-async def test_declining_the_prompt_writes_nothing_and_closes_it(signed_in, db):
+async def test_declining_the_prompt_writes_unseen_and_closes_it(signed_in, db):
+    """Renamed from `..._writes_nothing_and_closes_it` under decision 211, which makes the old
+    name false.
+
+    Over the wire the reply is what the card reads, so both halves are asserted here: the route
+    still answers 200 and the queue still empties, and the state the person declined into is now a
+    row rather than §4.2's default absence — which is what the 15-minute sweep used to overwrite
+    with Jellyfin's Played flag inside the quarter hour. `state` reads `unseen` either way, so the
+    row itself has to be checked for this to assert anything at all.
+    """
     client, user_id = signed_in
     await playback.arm(db, user_id=user_id, title_id=1, session_id="s", progress=0.96)
     queued = (await client.get("/api/prompts/finish")).json()
 
-    await client.post(f"/api/prompts/finish/{queued[0]['id']}", json={"finished": False})
+    declined = await client.post(
+        f"/api/prompts/finish/{queued[0]['id']}", json={"finished": False}
+    )
+    assert declined.status_code == 200
+    assert declined.json()["seen"] is False
     assert (await client.get("/api/titles/1/state")).json()["state"] == "unseen"
+    assert await db.fetchval(
+        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 1", user_id
+    ) == "unseen", "a declined prompt is an explicit action, not an absence (decision 211)"
     assert (await client.get("/api/prompts/finish")).json() == []
 
 

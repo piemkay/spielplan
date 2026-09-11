@@ -116,8 +116,17 @@ ANONYMOUS = frozenset(
 # tests, beside the verdict races in `test_rate_session.py`, therefore make that naming TRUE rather
 # than shrinking the set: it is eight on both sides of M4.10, and the ratchet below has not yet been
 # exercised by a real shrink. Rebuilt from `git show HEAD:` over all 86 test files and e2e specs
-# before this was written: the unnamed set at the M4.9 head is exactly the eight entries below.
+# before this was written: the unnamed set at the M4.9 head is exactly those eight entries.
 # [M4.10 cycle 1, m410-rev1-route-inventory-untested-preamble-arithmetic-is-false]
+#
+# **M4.11 is that first real shrink, and the set below is seven.** Decision 212 gave the finish
+# prompt a handoff and wired `onAnswered` to `loadShelves()`, so `e2e/specs/08-jellyfin.spec.js`
+# now asks §6.0's banner population for its own contents on both sides of the tap -- over HTTP,
+# against the app, with the "before" reading taken from the route precisely because "the element is
+# missing" is a different statement from "the population does not name this title". That is an
+# assertion about what the route does, which is the one thing the entry said was missing, so the
+# entry leaves and the pin follows it down. Worth recording that the ratchet cost nothing to obey
+# here: the shrink was found by the rule rather than by a reader. [M4.11; decision 212]
 UNTESTED = frozenset(
     {
         # M4.14 (bundle import and artifact custody). Its ~127 s POST is the finding that made the
@@ -136,14 +145,15 @@ UNTESTED = frozenset(
         # (`dd-fe-facet-vocabulary-read-has-no-sequence-guard`), which is the bug this route's
         # payload is the input to.
         "/api/facets",
-        # Two Home projections whose domain functions `test_home.py` drives directly — which is
+        # A Home projection whose domain function `test_home.py` drives directly — which is
         # precisely the shape `docs/TESTING.md`'s M3 lesson is about. `/api/home/shelves` has no
-        # client caller at all today (`home.svelte.js` reads `/api/home`). M4.11 is the next plan
-        # to open this path; its ownership finding reads `home/shelves.py:758/814/857`.
-        # `/api/home/pending-verdicts` is driven over HTTP by `test_devstub_contract.py`, against
-        # the *harness* — which is why that file is out of the haystack above: a grep cannot tell
-        # the stub's route from the app's, and the app's is the one still owing an assertion.
-        "/api/home/pending-verdicts",
+        # client caller at all today (`home.svelte.js` reads `/api/home`), so nothing reaches it
+        # over HTTP to assert against; M4.15 owns the client half this payload is the input to.
+        #
+        # `/api/home/pending-verdicts` stood here too until M4.11, and for a reason worth keeping:
+        # `test_devstub_contract.py` drives it against the *harness*, which is why that file is out
+        # of the haystack above — a grep cannot tell the stub's route from the app's. The entry left
+        # when a Playwright spec asked the real one (see the preamble), not when the harness did.
         "/api/home/shelves",
         # M4.12 owns Tonight's lifecycle, and both handlers are in its findings (the undo/escape
         # pair at `play.py:410/436/456`, and escape availability on a finished round). M4.10 must
@@ -258,7 +268,7 @@ def _pattern(path: str, quotes: str) -> re.Pattern[str]:
 
     The match must begin at an opening quote. A route mentioned in prose — `GET
     /api/admin/data/sources` inside a comment — is a reference, not a test of it, and two of the
-    eight entries in UNTESTED are only unnamed because of this clause. Backticks count in
+    seven entries in UNTESTED are only unnamed because of this clause. Backticks count in
     JavaScript, where a template literal is how a parametrised path is written, and do not count in
     Python, where they appear only inside comments and docstrings.
 
@@ -463,8 +473,8 @@ def test_the_untested_set_may_only_shrink():
         "these routes are named by a test now, so they are no longer untested - delete them from "
         f"UNTESTED: {sorted(closed)}"
     )
-    assert len(UNTESTED) == 8, (
-        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 8 - an entry leaves "
+    assert len(UNTESTED) == 7, (
+        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 7 - an entry leaves "
         "when a test names its route, and lowering this number is how that is recorded; raising it "
         "is the edit this rule exists to make argue for itself"
     )
@@ -480,8 +490,10 @@ def test_the_haystack_leaves_out_the_files_that_ask_their_routes_nothing():
     So both names must be real files and must really be absent from the haystack — and
     `HARNESS_ONLY` must still be load-bearing, i.e. name at least one route this app serves. The
     day it names none, the exclusion is hiding nothing and should go rather than sit there as a
-    narrowing nobody can see. Today the one route it names is `/api/home/pending-verdicts`, which
-    is the entry in UNTESTED that says so.
+    narrowing nobody can see. Today the one route it names is `/api/home/pending-verdicts`, and
+    the exclusion is still what makes the difference there: M4.11 took that entry out of UNTESTED
+    on a Playwright spec asking the app, which is exactly the distinction this narrowing draws, so
+    a harness-only namer must still not be able to close an entry on its own.
     """
     tests = REPO / "backend" / "tests"
     hay = _haystacks()
@@ -592,7 +604,11 @@ async def test_a_gated_route_with_no_test_is_invisible_to_rule_1_and_caught_only
     assert leaked in unnamed_paths(application) - UNTESTED, (
         "rule 2 is the only rule that can see an untested route behind a session, and it did not"
     )
-    assert len(UNTESTED | {leaked}) != 8, (
+    # The pinned size, spelled again because this assertion is about the pin rather than about the
+    # set: an excused leak makes the set a size the pin rejects. The two literals therefore move in
+    # the same diff, and M4.11 is where that was learned -- taking one entry out left this one at 8
+    # and the red read as a defect in the shrink rather than as this test's own arithmetic.
+    assert len(UNTESTED | {leaked}) != 7, (
         "excusing it is one line in a frozenset, and the size pin in "
         "`test_the_untested_set_may_only_shrink` is the second line that edit has to defeat"
     )
