@@ -5,7 +5,12 @@
 #   docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db
 #   TEST_DATABASE_URL=postgresql://spielplan:<POSTGRES_PASSWORD>@127.0.0.1:5432/spielplan_test
 #
+# DB_PORT exists so two checkouts of this repository can run their stacks at once -- the roadmap
+# marks four milestone pairs as parallel, and a worktree per lane needs a Postgres per lane or the
+# second one binds a port the first already holds. It defaults to 5432, so every existing command
+# line, .env.test and README line keeps working unchanged. The container side is never
+# parameterised: 5432 is what DATABASE_URL says inside the compose network.
 services:
   db:
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
