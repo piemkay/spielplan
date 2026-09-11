@@ -46,6 +46,10 @@ CI = WORKFLOWS / "ci.yml"
 CORPUS = WORKFLOWS / "real-bundle.yml"
 RUNNER = REPO / "e2e" / "run.mjs"
 RESET = REPO / "e2e" / "reset.mjs"
+# The `.env` reader moved out of reset.mjs when a checkout per lane made
+# run.mjs's and playwright.config.js's hard-coded origin a cross-worktree bug:
+# all three now read the stack's own PUBLIC_URL through this one module.
+ENV_MJS = REPO / "e2e" / "env.mjs"
 SPECS = REPO / "e2e" / "specs"
 FIRST_BOOT = SPECS / "01-first-boot.spec.js"
 JELLYFIN = SPECS / "08-jellyfin.spec.js"
@@ -1414,7 +1418,7 @@ _PARSER_THAT_SHIPPED = r"""function env(key) {
 
 
 def _env_parser(source: str) -> str:
-    """`reset.mjs`'s `env()` as text, to be run rather than read.
+    """`env.mjs`'s `env()` as text, to be run rather than read.
 
     Lifted by bracket matching rather than copied, so the thing under test is the shipped
     function and a later edit to it is what these cases meet. Its body reaches nothing but
@@ -1422,9 +1426,9 @@ def _env_parser(source: str) -> str:
     it -- importing the module instead would run `docker compose` and drop a database.
     """
     start = source.find("function env(")
-    assert start >= 0, "e2e/reset.mjs no longer defines env(): this guard is reading nothing"
+    assert start >= 0, "e2e/env.mjs no longer defines env(): this guard is reading nothing"
     _, end = _span(source, start, "{", "}")
-    assert end > 0, "e2e/reset.mjs's env() has unbalanced braces"
+    assert end > 0, "e2e/env.mjs's env() has unbalanced braces"
     return source[start:end]
 
 
@@ -1451,7 +1455,7 @@ def test_the_reset_parser_reads_the_values_compose_reads(tmp_path, line, key, va
     """The parser and the stack it resets have to agree about what PUBLIC_URL *is*, because the
     guard standing between an operator and their data is a prefix test on what this returns. A
     value compose accepts and this mangles is a refusal that cannot be argued with."""
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
@@ -1471,7 +1475,7 @@ def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
     assert not re.match(r"^https?://(localhost|127\.0\.0\.1)", shipped), (
         "reset.mjs:53's prefix guard would have accepted the mangled value after all"
     )
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 # A wait bound to a name, where the name is later handed to `expect(...).rejects`. Only that
@@ -1645,7 +1649,7 @@ def test_the_reset_parser_resolves_a_key_the_way_the_stack_that_booted_did(tmp_p
         "the stale value would have been refused anyway, so this file cannot show what reading "
         "the first assignment costs"
     )
-    live = _parse_with(_env_parser(_read(RESET)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
+    live = _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
     assert live == "https://spielplan.example"
     assert not _DEV_STACK.match(live), "the guard above `DROP DATABASE` accepts the live value"
 
@@ -2075,3 +2079,30 @@ def test_the_seeding_reach_guard_sees_a_claim_the_spec_directory_contradicts(tex
     11-rate does not have to come back here to be allowed to say so."""
     problems = _seeding_reach_problems(text, copies)
     assert bool(problems) is expected, problems
+
+
+@pytest.mark.parametrize("name", ["run.mjs", "playwright.config.js"])
+def test_the_harness_takes_its_origin_from_the_stack_it_is_driving(name):
+    """Neither may carry a literal origin, because a second checkout is a second stack.
+
+    Both shipped `process.env.BASE_URL ?? 'http://localhost:8080'`, which is correct for one
+    checkout and silently wrong for two: with a worktree per lane, the second suite reset its own
+    database and then drove the FIRST one's application. It reported 8 skipped in phase one --
+    `01-first-boot.spec.js` sees a stack long past first boot and skips, exactly as designed --
+    and 13 phase-two failures against an app on another branch. Nothing in either number said
+    "wrong stack". `reset.mjs` never had the bug: it had always read PUBLIC_URL from the `.env`
+    beside it, which is why it dropped the right database while the suite drove the wrong app.
+    [M4.12, the parallel-lane setup]
+    """
+    source = _read(REPO / "e2e" / name)
+    assert "localhost:8080" not in source, (
+        f"e2e/{name} carries a literal origin; it must resolve one through e2e/env.mjs's "
+        "baseUrl(), which reads the stack's own PUBLIC_URL"
+    )
+    assert "baseUrl(" in source, f"e2e/{name} no longer resolves its origin through env.mjs"
+
+
+def test_the_origin_guard_sees_a_literal_put_back():
+    """The synthetic violation, because a guard with no failing case is a comment."""
+    regressed = "const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';"
+    assert "localhost:8080" in regressed and "baseUrl(" not in regressed

@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { baseUrl } from './env.mjs';
 
 /**
  * End-to-end tests against the real stack.
@@ -28,7 +29,7 @@ import { defineConfig, devices } from '@playwright/test';
 // binds credentials to the origin (§2, §14.4), so a passkey registered from
 // http://127.0.0.1:8080 against an rp_id of `localhost` is refused — correctly, and
 // confusingly. Same host, same port, different origin.
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
+const BASE_URL = baseUrl();
 
 export default defineConfig({
   testDir: './specs',
