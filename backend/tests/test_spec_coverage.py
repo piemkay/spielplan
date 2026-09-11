@@ -127,6 +127,23 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # was M4.10's to move, and both milestones would otherwise edit `rate/session.py`'s push path
 # in the same lines. Decisions 210-212 record the calls it needed; decision 172 had already
 # ruled two of them. See docs/milestones/M4.11-plan.md.
+#
+# M4.13 is the last of that cluster, and what it became is not what the paragraph above parked at
+# M4.9: its three pre-release commits shipped ahead of the milestone out of the same "Start here"
+# table — the zeroed Backbone row (`65614ae`), the 54c pair search (`e87deed`) and β's printed
+# optimum (`c4e74e6`, decision 167) — so what is left is the spine under them, a fit that records
+# the basis it was computed in, where "basis" reads three ways and each is wrong in a way the other
+# two cannot see: the bundle version nobody threads, the tier-set K no column records, and the
+# coordinate a title is fitted at against the one it is served at. It takes no §12 row, for M4.5's
+# and M4.8's reason rather than M4.9's: it ships no surface, its gate is its own exit script (six
+# checks and one report, decision 240), and what it repairs is a row §12 already has — M2's, whose
+# Personal Ledger was closed against a basis the app inferred from whichever `artifact_bundle` row
+# happened to be active rather than one its caller threaded. Decisions 234-241 record the calls it
+# needed, four of them refusals, and its one migration is 0022_model_basis.sql. It sits after M4.12
+# because this list needs a total order and `ROADMAP-to-M5.md`'s table supplies one, NOT because
+# either milestone depends on the other: that table marks the two workable in parallel in both
+# directions, and they were built that way, in two worktrees on two branches.
+# See docs/milestones/M4.13-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}

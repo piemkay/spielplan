@@ -129,14 +129,14 @@ async def materialise_priors(conn, backbone: Backbone, *, bundle_version: str) -
         b_i_values.append(backbone.raw_prior(title_id))
         if c is None:
             b_values.append(None)
-            item_n_values.append(backbone.support(title_id))
+            item_n_values.append(backbone.crowd_support(title_id))
             gates.append(0.0)
             sources.append("none")
             if row["is_owned"]:
                 report.uncoordinated_owned.append(title_id)
         else:
             b_values.append(c.b)
-            item_n_values.append(c.item_n)
+            item_n_values.append(c.crowd_n)
             gates.append(c.gate)
             sources.append(c.e_source)
         report.by_source[sources[-1]] = report.by_source.get(sources[-1], 0) + 1
@@ -187,7 +187,16 @@ async def replace_scores(
     """Rewrite one (user, kind)'s `user_score` rows. `kind` is written into every row.
 
     A refit replaces rather than updates: a title that lost its coordinate must lose its score,
-    and an UPDATE would leave it ranked on a number from a basis that no longer exists.
+    and an UPDATE would leave it ranked on a number from a basis that no longer exists. Measured,
+    the shape is also the cheapest of the three at corpus scale — `ON CONFLICT DO UPDATE` cost
+    14,000 non-HOT updates, 11.2 MB of WAL and 459 ms against 7.7 MB and 264 ms here, because
+    `0009_scoring.sql:40` indexes `score` and HOT is therefore impossible. What the cost is bounded
+    by is `foldin._is_stale`'s debounce, not the statement. [M4.13, perf-04]
+
+    The transaction stays even though `foldin.refit_user` now holds one around this call and
+    `write_fit`: asyncpg nests it as a savepoint, so both readings are true — the DELETE and the
+    INSERT are never separately visible, and the pair is atomic with the fit's own stamp for the
+    caller that needs that. [M4.13, ml08; plan step 20]
     """
     async with conn.transaction():
         await conn.execute("DELETE FROM user_score WHERE user_id = $1 AND kind = $2", user_id, kind)
@@ -434,6 +443,13 @@ def _format_line(b: float, beta: float, gate_value: float) -> str:
 def _format_support(sigma: float | None, item_n: int) -> str:
     # σ renders as an em dash before the Ledger has ever fitted this title, never as 0.00 —
     # which would read as certainty about a title nobody has rated.
+    #
+    # `item_n` here is the CROWD's count, which for a cold-masked row is not the n_t that produced
+    # the `gate` on the line above: this card can now read "gate 0.00" beside "support n=260131",
+    # and that pair is true. It is also the open ask the cold-mask block in `scoring/backbone.py`
+    # records — how §8 stage 10 should describe a title the crowd rated and the corpus did not
+    # place — and surfacing the contradiction is the point: the alternative was printing n=0 for a
+    # film a quarter of a million people have rated. [M4.13 cycle 2, M413-C2-DIM5-01 / DIM5-06]
     shown = f"±{sigma:.2f}" if sigma is not None else "—"
     return f"σ {shown} · support n={item_n}"
 

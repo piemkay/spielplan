@@ -62,6 +62,25 @@ def test_discovery_returns_every_migration_in_filename_order(tmp_path):
     assert all(sql == "SELECT 1;" for _, sql in found)
 
 
+def test_no_migration_line_runs_past_the_house_limit():
+    """CLAUDE.md's 108 columns, over the one file type ruff never reads.
+
+    The rule is honoured in every `.sql` here without anything enforcing it, which is exactly how
+    it stops being honoured: `ruff check .` passes over a 159-character SQL comment, and the one
+    migration a reader cannot fit in a 108-column window is then the newest one. Prose, not DDL --
+    a statement that has to be long is still legal, because this measures COMMENT lines only.
+    The overrun that prompted this was in the block of `0022_model_basis.sql` whose own header
+    announces it was corrected in place. [M4.13 cycle 2, M413-C2-DIM7-03]
+    """
+    over = [
+        f"{path.name}:{i}: {len(line)} chars"
+        for path in sorted(MIGRATIONS.glob("*.sql"))
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if line.lstrip().startswith("--") and len(line) > 108
+    ]
+    assert not over, "migration comment lines past 108 columns: " + "; ".join(over)
+
+
 def test_the_real_migrations_are_discovered_in_order():
     versions = [v for v, _ in migrate.discover(MIGRATIONS)]
     assert versions == [p.stem for p in sorted(MIGRATIONS.glob("*.sql"))]
@@ -422,6 +441,57 @@ def test_rating_source_can_hold_the_terms_each_dataset_ships_with(schema):
     # a table is exactly the edit that quietly rewrites it.
     # `test_the_database_refuses_a_renumbered_rating_source` proves it still bites.
     assert columns["id"]["is_nullable"] == "NO"
+
+
+# --- M4.13's structural sweep (0022) -----------------------------------------------------
+
+
+def test_a_tier_edit_records_the_board_it_was_made_on(schema):
+    """Decision 11 keeps `tier_edit` rows across a tier-set change, so the K has to be in the row.
+
+    `n_levels` arrives by ALTER, which `relations` cannot see -- the same blind spot
+    `test_the_ledger_output_columns_the_rank_board_reads_exist` exists for. Nullable on purpose: a
+    NOT NULL with a default would let a writer that forgets the value record a 7 that looks like a
+    measurement, where a NULL is a row whose board is genuinely unknown. The backfill's arithmetic
+    is asserted where it can be, against rows that were already there:
+    `test_schema_contracts.py::test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set`.
+    """
+    columns = _columns(schema, "tier_edit")
+    assert "n_levels" in columns, "0022 must add tier_edit.n_levels"
+    assert columns["n_levels"]["data_type"] == "smallint"
+    assert columns["n_levels"]["is_nullable"] == "YES"
+
+
+def test_every_observation_table_can_be_searched_by_the_title_it_names(schema):
+    """0022 moved ten foreign keys from CASCADE to RESTRICT, and a RESTRICT check reads the
+    referencing table once per deleted row. Not one of those ten columns led an index -- every
+    index over them starts with a user, session or participant id -- so without these the refusal
+    §10 now gets would be bought with ten sequential scans.
+
+    Asserted here rather than inferred from the migration's text because a `CREATE INDEX` that
+    named a column wrongly would still apply.
+    """
+    wanted = {
+        "verdict": "title_id",
+        "tier_edit": "title_id",
+        "user_title": "title_id",
+        "session_ballot": "title_id",
+        "session_result": "title_id",
+        "session_outcome": "chosen_title_id",
+    }
+    for table, column in wanted.items():
+        leading = [
+            r["indexdef"] for r in schema["indexes"]
+            if r["table_name"] == table and f"({column})" in r["indexdef"]
+        ]
+        assert leading, f"the RESTRICT check on {table}.{column} has no index to read"
+    for table in ("duel", "session_answer"):
+        for column in ("title_a", "title_b"):
+            sided = [
+                r["indexdef"] for r in schema["indexes"]
+                if r["table_name"] == table and f"({column})" in r["indexdef"]
+            ]
+            assert sided, f"{table} carries a title on both sides and {column} has no index"
 
 
 def _facet_backfill_statements() -> list[str]:

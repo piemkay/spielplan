@@ -460,6 +460,17 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     await seedLedger(other.request);
     await other.goto('/');
     await expect(other.getByTestId('home-greeting')).toBeVisible();
+    // AND THEN THE SHELVES, because the greeting is not evidence that they arrived. `+page.svelte`
+    // derives it as `home?.greeting?.text ?? <local band>` and says so in as many words — "only a
+    // placeholder for the frame before `/api/home` lands" — and `ShelfList` renders
+    // `shelves-loading` across that same frame rather than its empty state, which is decision 209's
+    // precedent kept on Home: say "building your shelves", never a bare surface that reads as "you
+    // have nothing". So the greeting and the shell's chrome are both on screen a round trip before
+    // any shelf card is. Every `.count()` in this test reads ONCE and does not retry, so each needs
+    // a gate that means the payload is rendered: `shelves` is that gate — `ShelfList` emits it only
+    // when a section shipped — and it is the one the sibling test above already opens with.
+    // [M4.13; §6.0, decision 209]
+    await expect(other.getByTestId('shelves')).toBeVisible();
     // Two accounts, said out loud. Everything below is about one session not seeing the
     // other's preference, and two contexts signed in as the same person would prove nothing.
     await expect(other.getByTestId('account-chip')).toContainText(SECOND.name);
@@ -482,6 +493,13 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     // The first account turns it on…
     await setShowModel(page, true);
     await page.goto('/');
+    // The same gate, and this is the line the browser gate caught. `model-rail-open` is the SHELL's
+    // button, painted from `/api/auth/me`'s `show_model`; `[data-model-note]` is the PAYLOAD's and
+    // arrives with `/api/home`. So the button being visible says nothing about the notes: in the
+    // failing trace it was painted 17 ms before the Home response, and the non-retrying `count()`
+    // below fired 3 ms inside that window — against a payload that was correct, carried its `model`
+    // block and answered in 8.8 ms. Waiting for the shelves is what puts the two on one clock.
+    await expect(page.getByTestId('shelves')).toBeVisible();
     await expect(page.getByTestId('model-rail-open')).toBeVisible();
     expect(await page.locator('[data-model-note]').count()).toBeGreaterThan(0);
 
@@ -490,6 +508,7 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     // anything more global than that would leak here and nowhere else.
     await other.reload();
     await expect(other.getByTestId('home-greeting')).toBeVisible();
+    await expect(other.getByTestId('shelves')).toBeVisible();   // the greeting is the placeholder
     // Not an equality. Shelf membership is a function of the fold-in tick, which `every=60` in
     // worker.py runs on its own clock, and M4.10's finding 9 moved the first fit off the request
     // onto that sweep -- so this account's shelves legitimately keep arriving while the test

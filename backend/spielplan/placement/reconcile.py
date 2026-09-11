@@ -103,7 +103,7 @@ def warm_title_ids(store: Any) -> list[int]:
     the threshold and the reasoning; here it decides who is excused from the sweep.
 
     Support is not the only test. A row the export flags in `cold_mask` carries no coordinate at
-    all — E is written as zeros — and 1,918 of those ship with `item_n >= WARM_SUPPORT`, so on
+    all — E is written as zeros — and 1,915 of those ship with `item_n >= WARM_SUPPORT`, so on
     support alone they were stamped warm, never given a `title_placement` row, and served at
     `e(t) = 0` for ever. `scoring.backbone.cold_row_mask` is the one definition of that, so the
     loader and this function cannot drift into two.
@@ -173,15 +173,25 @@ def _affected(status: str) -> int:
 # --- who needs placing ------------------------------------------------------------------------
 
 
+# Two questions, and they have to be the same question. This one used to ask only "has this title
+# a `title_placement` row for the active bundle?" while `placement_counts` below — and §12's M2
+# exit criterion, which is one query over `title.placement` — asks "is it still 'unplaced'?". A
+# title in the gap between them is stranded: every nightly sweep skips it because the row exists,
+# every count keeps it because the stamp does not, and `serve.coordinates` ranks it happily without
+# §8 stage 10's badge. An interrupted chunk is exactly how a title got there (see `place_titles`).
+# Re-placing one is idempotent — `_UPSERT` is `ON CONFLICT DO UPDATE` — so the cost of the wider
+# predicate is one forward pass for a title the previous sweep did not finish.
+# [M4.13, ml05; plan step 30]
 _MISSING_SQL = """
 SELECT t.id
   FROM title t
  WHERE t.placement <> 'warm'
    AND ({owned})
-   AND NOT EXISTS (
-         SELECT 1 FROM title_placement p
-          WHERE p.title_id = t.id AND p.bundle_version = $1
-       )
+   AND (t.placement = 'unplaced'
+        OR NOT EXISTS (
+              SELECT 1 FROM title_placement p
+               WHERE p.title_id = t.id AND p.bundle_version = $1
+           ))
  ORDER BY t.id
 """
 
@@ -263,6 +273,13 @@ async def place_titles(
     # contract disagree about at the level of the key grammar.
     hit_somewhere: set[str] = set()
     hit_nowhere: set[str] = set()
+    # The titles whose only gaps are blocks no §8 stage 2 enrichment can fill, and which block(s)
+    # those were. §5.3's promise is that a thin title is "placed, badged, and parked"; step 31
+    # narrows what thin means, so `parked_thin` drops — and a count that drops with no sentence
+    # beside it is indistinguishable from a library that improved. The operator reading §6.6's job
+    # detail is the only person who can tell those apart. [M4.13, cs-21; plan step 31]
+    excused_blocks: set[str] = set()
+    excused_titles = 0
     for start in range(0, len(title_ids), CHUNK):
         chunk = list(title_ids[start:start + CHUNK])
         built = await features.build_vectors(
@@ -293,21 +310,35 @@ async def place_titles(
             places.append(per_title)
             if b.is_thin:
                 parked.append(b)
+            elif b.blocks_dropped or b.blocks_empty:
+                excused_titles += 1
+                excused_blocks.update(b.blocks_dropped)
 
         if not rows:
             continue          # every title in the chunk failed; nothing to badge
-        await conn.executemany(_UPSERT, rows)
         placed_ids = [r[0] for r in rows]
-        # §8 stage 10: "appears in ranking/search/explore with a 'new — model placement, no
-        # crowd data' badge until ratings accrue." `placement = 'cold_tower'` is that badge's
-        # one input; `placement_bundle` is the basis it was computed in.
-        await conn.execute(
-            "UPDATE title SET placement = 'cold_tower', placement_bundle = $2, "
-            "placement_at = now() WHERE id = ANY($1::int[])",
-            placed_ids, bundle_version,
-        )
+        # One transaction per chunk, and not one per sweep. A worker killed between the upsert and
+        # the badge left `title_placement` rows whose titles stayed 'unplaced' — a coordinate with
+        # no placement, which the work list then skipped for ever and §12's count kept holding.
+        # asyncpg nests this as a SAVEPOINT when the importer is already in a transaction, so the
+        # import path is unchanged; on the nightly path it is a real transaction. Per chunk because
+        # all-or-nothing over the sweep would be the worse promise: a corpus-scale run is 28 chunks
+        # of 512, and one bad title must not cost the night's work. The report's counters move
+        # after the commit, so a rolled-back chunk is not counted as placed.
+        # [M4.13, ml05; plan step 30]
+        async with conn.transaction():
+            await conn.executemany(_UPSERT, rows)
+            # §8 stage 10: "appears in ranking/search/explore with a 'new — model placement, no
+            # crowd data' badge until ratings accrue." `placement = 'cold_tower'` is that badge's
+            # one input; `placement_bundle` is the basis it was computed in.
+            await conn.execute(
+                "UPDATE title SET placement = 'cold_tower', placement_bundle = $2, "
+                "placement_at = now() WHERE id = ANY($1::int[])",
+                placed_ids, bundle_version,
+            )
+            parked_now = await _park_thin(conn, parked, len(contract.blocks))
         report.placed += len(placed_ids)
-        report.parked_thin += await _park_thin(conn, parked, len(contract.blocks))
+        report.parked_thin += parked_now
 
     report.build_ms_p50 = _p50(builds)
     report.place_ms_p50 = _p50(places)
@@ -317,6 +348,14 @@ async def place_titles(
     # the operator a report, and because the placements themselves are still the best available:
     # the tower's dropout training saw missing blocks, and refusing to place would leave §12's
     # M2 exit criterion unsatisfiable over a naming disagreement.
+    if excused_titles:
+        report.notes.append(
+            f"{excused_titles} title(s) placed and badged but not parked: their only gaps are "
+            "feature block(s) " + ", ".join(sorted(excused_blocks)) + ", which no §8 stage 2 "
+            "enrichment can fill - a genome unavailable for new titles by construction, an award "
+            "nobody gave, a review-text row the export marks uncovered (§8 stage 9, §5.3)"
+        )
+
     report.blocks_never_hit = sorted(hit_nowhere - hit_somewhere)
     if report.blocks_never_hit:
         report.notes.append(

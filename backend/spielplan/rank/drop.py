@@ -116,8 +116,19 @@ async def _tiers_of(
     Not `ledger_state.tier`: that is the tier as of the last *write*, and decision 11's
     re-initialisation moves the boundaries with no refit, so the stored number and the rendered
     board disagree for exactly as long as the refit is owed — the window this milestone closes.
-    Clamped like `board.build` clamps, because decision 11 keeps `tier_edit` rows across a change
-    in K and the board renders a stale level at the top of the set they now have.
+
+    RE-READ THROUGH `observations.rescale_level`, the same call `read.items` makes, because the
+    refusal and the screen have to be quoting one number. Decision 11 keeps `tier_edit` rows
+    across a change in K and §4.2 never rewrites the stored index, and step 15 made every reader
+    map it by cumulative prior mass against the set it is read in — so the bare clamp that used to
+    stand here became a fourth copy of the arithmetic, one level behind the board. It refused the
+    gesture it exists to protect: an edit at 6 of 7 renders at 11 of 12 once twelve labels are
+    saved, the client can only name neighbours it saw in the tier it rendered, and this function
+    still answered 6, so every drag beside such a title raised "is not in <the eleventh label> any
+    more - reload the board" and reloading never helped. `k_from` is the edit's own `n_levels`;
+    the COALESCE's model
+    branch counts boundaries in TODAY's set and so passes `k_from=None` — already read in this
+    set, not to be mapped twice. [M4.13 cycle 1, M413-REV-01; step 15, dd06]
 
     `ls.observed` for the same reason: §6.3's board is "every **rated** title", so an owned title
     nobody has rated has a coordinate and no place on the tier list — and therefore cannot be a
@@ -129,11 +140,12 @@ async def _tiers_of(
                COALESCE(
                    te.tier,
                    (SELECT count(*) FROM unnest(c.boundaries) AS b WHERE b <= ls.s)
-               ) AS tier
+               ) AS tier,
+               te.n_levels AS assigned_k
         FROM ledger_state ls
         LEFT JOIN ledger_cutpoints c ON c.user_id = ls.user_id AND c.kind = ls.kind
         LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, tier
+            SELECT DISTINCT ON (title_id) title_id, tier, n_levels
             FROM tier_edit WHERE user_id = $1
             ORDER BY title_id, created_at DESC, id DESC
         ) te ON te.title_id = ls.title_id
@@ -143,7 +155,9 @@ async def _tiers_of(
         [int(t) for t in title_ids],
     )
     return {
-        int(r["title_id"]): max(0, min(levels - 1, int(r["tier"])))
+        int(r["title_id"]): observations.rescale_level(
+            int(r["tier"]), k_from=r["assigned_k"], k_to=levels
+        )
         for r in rows
         if r["tier"] is not None
     }

@@ -131,7 +131,8 @@ async def _schema(conn: asyncpg.Connection) -> dict[str, list[tuple]]:
 async def _seed_representative_rows(conn: asyncpg.Connection) -> None:
     """One row in every table the newest migrations rewrite, and no more.
 
-    Chosen by reading the three files rather than by taste: `artifact_bundle` because 0015
+    Chosen by reading the migrations rather than by taste, and the enumeration is the claim:
+    a table named here is a table some migration rewrites. `artifact_bundle` because 0015
     backfills it and then builds a partial unique index over the result; `credit` because 0015
     renames a column it holds data in; `title_language`, `title_country` and
     `display.platform_rating` because 0015 drops and rebuilds their primary keys after adding a
@@ -141,6 +142,21 @@ async def _seed_representative_rows(conn: asyncpg.Connection) -> None:
     key from CASCADE to SET NULL; `app_user` because 0016 replaces its role CHECK and adds two
     NOT NULL columns; `data_encryption_key` and `connector_config` because 0017 indexes the one
     and the other names it.
+
+    0022 is the newest of them and the only one whose statements can fail on *data* rather than
+    only on shape, so it gets the same treatment: `ledger_cutpoints` because it rewrites
+    `cutpoints_length` and adds `cutpoints_ascend` over whatever rows are there; `tier_edit`
+    because it adds `n_levels` and backfills it through the title's kind; `rate_session`,
+    `session_participant`, `verdict` and `duel` because each gains a CHECK an existing row has to
+    satisfy. `ledger_state` and `user_score` get two rows each -- one agreeing with its title's
+    kind, one deliberately disagreeing -- because the composite `(title_id, kind)` foreign key is
+    an ADD CONSTRAINT that validates the rows already present, and the two DELETEs before it are
+    not a cleanup the milestone wanted but what makes the ADD possible: "one pre-existing
+    cross-kind row would make this file fail at startup with nothing an operator could edit"
+    (`0022_model_basis.sql`). The five remaining tables whose title FK 0022 re-declares RESTRICT
+    -- `user_title`, `session_answer`, `session_ballot`, `session_result`, `session_outcome` --
+    are deliberately not seeded: a re-declared foreign key can only fail validation on an orphan
+    row, and the CASCADE it replaces already forbade one. [M4.13 cycle 1, M413-R3]
     """
     await conn.execute(
         "INSERT INTO title (id, kind, name, year) VALUES "
@@ -191,11 +207,70 @@ async def _seed_representative_rows(conn: asyncpg.Connection) -> None:
         "SELECT id, 'movie', $1, 'v20260801' FROM app_user WHERE name = 'mira'",
         b"\x00" * 256,
     )
+    await _seed_rows_0022_rewrites(
+        conn, await conn.fetchval("SELECT id FROM app_user WHERE name = 'mira'")
+    )
     await _seed_dek(conn, "the-only-one", OLD_KEY)
     await conn.execute(
         "INSERT INTO connector_config (name, config, secrets_encrypted, secrets_key_id) "
         "VALUES ('jellyfin', '{\"url\": \"http://jellyfin.test\"}'::jsonb, $1, 'the-only-one')",
         b"a-sealed-blob",
+    )
+
+
+async def _seed_rows_0022_rewrites(conn: asyncpg.Connection, user_id: int) -> None:
+    """The half of the seed 0022 needs, as one household member's rows.
+
+    Twelve labels rather than the default seven, and eleven ascending boundaries under them,
+    because `n_levels` has to come out as something a fallback could not have produced: the
+    backfill reads `cardinality(tier_set)` through the title's kind and writes 7 when there is no
+    row to read, so a seven-label board here would make the two answers indistinguishable.
+
+    The two cross-kind rows are on title 12, which is a series carrying a `kind` of 'movie'. That
+    is not a state the app can be talked into writing today -- it is the state a corpus
+    reclassification leaves behind on an install that predates the composite key, because
+    `importer/load.py`'s `_upsert_titles` sets every mapped column from EXCLUDED and nothing tied
+    the denormalised copy to the title it names.
+    """
+    await conn.execute(
+        "INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set) VALUES "
+        "($1, 'movie', ARRAY[-2.0,-1.5,-1.0,-0.5,0.0,0.5,1.0,1.5,2.0,2.5,3.0], "
+        "ARRAY['1','2','3','4','5','6','7','8','9','10','11','12'])",
+        user_id,
+    )
+    await conn.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 11, 3, 'drag_drop')",
+        user_id,
+    )
+    await conn.execute(
+        "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma) VALUES "
+        "($1, 11, 'movie', 0.42, 0.90), ($1, 12, 'movie', 0.11, 1.10)",
+        user_id,
+    )
+    await conn.execute(
+        "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) VALUES "
+        "($1, 11, 'movie', 'v20260801', 0.61, 0.22), ($1, 12, 'movie', 'v20260801', 0.30, 0.10)",
+        user_id,
+    )
+    # Canonical order and no repeat, which is what `rate_session_kinds_distinct` will validate.
+    await conn.execute(
+        "INSERT INTO rate_session (user_id, kinds) VALUES ($1, ARRAY['movie', 'series'])", user_id
+    )
+    session = await conn.fetchval(
+        "INSERT INTO session (room_code, host_user_id, kind, bundle_version) "
+        "VALUES ('MX-2210', $1, 'movie', 'v20260801') RETURNING id",
+        user_id,
+    )
+    await conn.execute(
+        "INSERT INTO session_participant (session_id, user_id, role, seat) VALUES ($1, $2, "
+        "'host', 1)",
+        session, user_id,
+    )
+    await conn.execute("INSERT INTO verdict (user_id, title_id, value) VALUES ($1, 11, 2)", user_id)
+    await conn.execute(
+        "INSERT INTO duel (user_id, title_a, title_b, outcome, context) "
+        "VALUES ($1, 11, 12, 'A', 'tier_queue')",
+        user_id,
     )
 
 
@@ -336,6 +411,31 @@ async def test_the_backfill_runs_over_the_rows_that_were_already_there(upgrading
     assert await conn.fetchval(
         "SELECT count(*) FROM app_user WHERE password_failed_count = 0"
     ) == 2
+
+    # 0022's two DELETEs, which are the half of that file nothing else can execute. Their own
+    # comment states the stake -- "one pre-existing cross-kind row would make this file fail at
+    # startup with nothing an operator could edit" -- and every other layer applies 0022 to an
+    # empty `ledger_state` and an empty `user_score`, where a DELETE cannot be wrong and the
+    # composite FK it clears the way for validates nothing. `load.py`'s `_upsert_titles` sets
+    # every mapped column from EXCLUDED, `kind` included, so a corpus reclassification is how a
+    # pre-0022 install acquires exactly the row seeded here. [M4.13 cycle 1, M413-R3]
+    async def kinds(table: str) -> set[tuple[int, str]]:
+        return {
+            (r["title_id"], r["kind"])
+            for r in await conn.fetch(f"SELECT title_id, kind FROM {table}")  # noqa: S608
+        }
+
+    assert await kinds("ledger_state") == {(11, "movie")}, (
+        "the row whose kind disagreed with its title's is gone and the agreeing one survives"
+    )
+    assert await kinds("user_score") == {(11, "movie")}
+    # And the backfill, over a row that was already there. One assertion, because what the value
+    # MEANS -- the person's own board rather than the default set, read through the title's kind --
+    # belongs to `test_schema_contracts.py`, whose
+    # `test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set` stages a database
+    # for exactly that; here it is the statement this file makes about every other backfill,
+    # which is that it ran at all over rows it did not create.
+    assert await conn.fetchval("SELECT n_levels FROM tier_edit WHERE title_id = 11") == 12
 
 
 async def test_an_edited_applied_migration_stops_the_upgrade_from_both_entry_points(upgrading):

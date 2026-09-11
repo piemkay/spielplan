@@ -198,8 +198,8 @@ Two things happen on the way that are easy to miss:
 > M4.9   23/23  covered
 > M4.10   10/10  covered
 > M4.11   17/17  covered
-  M4.12    1/1   covered
-  M4.13    2/2   covered
+> M4.12    1/1   covered
+> M4.13   17/17  covered
   M5    0/10  covered
   M6    0/12  covered
   M7    0/1   covered
@@ -218,11 +218,120 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.11 is the milestone this block was last re-pasted for, and its `17/17` closed the red list it
+**M4.13 is the milestone this block was last re-pasted for, and its `17/17` closed the red list it
+opened with.** Fifteen new rows were written before any source edit and `current_milestone` was
+raised in the same change, each naming the exact tests it owes rather than leaving `tests` off —
+M4.9's opening rather than M4.10's and M4.11's, because a row with no tests tells you only that a
+row is bare, while a row naming a test that does not exist yet tells you which stage owes what. That
+list, 77 names across seven files, *was* the test plan (`docs/milestones/M4.13-plan.md`), and it was
+closed by writing those tests under those names: all seventeen rows now name tests that exist —
+**98 ids across seventeen pytest files and zero e2e specs**, the last six added by review cycle 2 —
+five to three rows whose sentences claimed more than their tests held, and one to §10's refusal
+row, whose sentence named a silence the worker does not leave — and the two ledger guards below were red
+for exactly as long as the block above was M4.11's, which is the honest state of an opening rather
+than an omission. What those two publish is a count of rows that NAME tests, not of rows whose tests
+pass, so pasting a `17/17` before the tests existed would have published a number nobody ran, which
+is what decision 184 refuses; they are re-pasted here, last. The zero is the first one this sentence
+has carried: the plan's layer table says "e2e: nothing", because M4.13 ships no surface and there is
+no browser fact for a spec to hold. **No waiver was added and the milestone was not lowered.** The
+one standing M0 waiver, the feature-builder DB role, was re-read rather than skipped: it is about a
+role the compose stack does not create and has nothing to do with this milestone, so it stays as it
+is.
+
+**The milestone is the model basis: a fit that knows the basis it was computed in.** §10 says "no
+process may score or refit with a loaded bundle version different from the active row", and the one
+function that enforces it had no production caller at all — two rows in the map cited its unit tests
+as evidence for a refusal no code could perform. Underneath that, `placement_embeddings` accepts a
+bundle version `standard_embeddings` never passed, so §10 step 3's pre-flip rebuild fitted against
+the OUTGOING bundle and stamped the outgoing version; an active bundle row whose directory is absent
+read as an EMPTY store rather than a broken one, so every board was fitted from zero embeddings and
+stamped as current; the fit and the serve took different coordinates for a third of the covered
+rows; a `tier_edit` kept across a K change carried no record of the K it was written under; a
+verdict recorded during a refit was reverted to the unobserved prior; the 60-second fold-in tick
+rewrote a whole partition every pass; and seven observation tables plus §13's outcome row declared
+ON DELETE CASCADE against §10's promise that observations always survive. M4.13's range in
+`docs/spec-v2.2-proposals.md` is **234-246**: decisions **234-241** taken as the milestone opened,
+exporter asks **242-243**, and decisions **244-246** taken as it closed (the commit split, 0022
+corrected in place, and when the exit criterion is re-run). Four of the opening eight are refusals,
+including the two Backbone-scale questions, which go upstream to the corpus project under §4.1's
+"carried over verbatim" rather than being answered here (decision 236). The one migration is
+**`0022_model_basis.sql`** (decision 239).
+Seven rows the map already had were amended in place rather than duplicated — six gaining a clause
+and the ids that assert it, the seventh only its citation — and the milestone takes
+**no §12 row**: like M4.5 and M4.8 it ships no surface, and what it repairs is a row §12 already
+has — M2's Personal Ledger, closed against a basis the app inferred rather than one it was told.
+
+**Six of the plan's steps were already on main when the milestone opened, and they are named here
+so the next reader does not read six absences as six omissions (decision 241).** Step 12 is the
+cold-mask exclusion (`65614ae`, now `scoring/backbone.py::cold_row_mask`, its coverage row already
+green), step 16 the β copy correction (`c4e74e6`, decision 167, which answered the plan's D1 the
+other way and cancelled its second migration), step 25 `clear_refit_request`'s timestamp predicate
+(M4.10 finding 5), step 29's worker half the per-item isolation in `worker._tier_set_refits` (M4.10
+finding 6), step 33 `model.straddle`'s adjacency clamp (M4.10 finding 13 — so `ledger/model.py`
+takes no edit at all this milestone, which is what makes its numpy-only ast guard safe to land
+early), and step 37 the LIKE escaping now in `db/library.py::_like_needle` (M4.9 finding 12). Each
+was verified in the tree rather than taken from a commit message. One line out of those six was
+genuinely missing at that point and is this milestone's own: the
+`PostgresConnectionError`/`InterfaceError` re-raise, which now sits at `ledger/refit.py:847`,
+`worker.py:493` and `worker.py:621` — three sites, not the two the reconciliation expected, because
+the refit loop's handler had to be widened here as well as read. So the six close with nothing
+dangling. [M4.13 cycle 1, M413-DOC-02]
+
+**Its exit criterion is `ops/m413_exit_criterion.py`, and it is six checks and one report rather
+than the plan's seven checks (decision 240).** The plan's check 4 — the ratio between the two
+weighted halves of §5.1's blend, against a p90 threshold — is D2-gated, and decision 236 sends D2
+upstream, so it becomes a printed report of that distribution and of `max abs(user_score)` for a
+fitted member, with a line naming decision 236 as what it is waiting on. That is M4.8's own
+precedent, taken for the same reason: a check whose predicate is a constant is what
+`test_no_milestone_exit_check_has_a_constant_predicate` exists to fail, and a script that can never
+print green is a gate nobody can pass. It is the **sixth** `ops/m*_exit_criterion.py`, so the five
+guards in `test_static_contracts.py` that open with `assert len(EXIT_SCRIPTS) == …` move to 6 in
+this lane — and to 7 once M4.12's script merges, since both milestones add one.
+
+**It has been RUN, against `CORPUS_BUNDLE_DIR=v20260828`, and it prints
+`6/6 checks passed, plus one report with no verdict`** — so the number below is a measurement
+and not decision 184's invented one. Run again at the end of review cycle 1, because that cycle
+edited three of the six things it measures — `load_cache`, which now compares the CALLER's basis as
+well as the active row; `assert_matches`' request-path callers, which now ask
+`assert_not_broken` beside it; and a fifth caller of `rescale_level` in `rank/drop.py` — and
+decision 246 makes a stage that touches what the script measures re-run it end to end and restate
+every figure in the same change. It printed 6/6 again and the figures below are that second run's;
+one moved, and only because it had been published one digit short (the shrink's mean is 4.9525,
+which the script has always printed as `5.0`). In order: the rebuild's fit is stamped with the bundle it was
+computed in and the first tap after the flip reports `refit = False`; the scoring entrypoint answers
+409 and the refit entrypoint raises, each naming both versions; **0** of the install's 1,288 owned
+titles are served at a zero coordinate, of which 398 carry a cold-masked Backbone row and 375 of
+those ship `item_n >= 90` — that is the population the 182 came out of, and the count is now zero
+over a larger one; 200 tier edits survive both K changes with a mean rendered-tier meaning shift of
+**1.8** points growing to twelve and **5.0** shrinking to four (the plan's simulation read 20.1, and
+its max of 11.0 points for the shrink is reproduced to the decimal); a `DELETE FROM title` against a
+verdict, a duel and a `session_outcome` is refused with all three rows intact while a title carrying
+only derived rows still deletes; and the fitted coordinate equals the served one for all
+**11,934** titles that have one, largest difference exactly **0**. The report prints
+`((1-g)*||e_hat||)/(g*||E||)` over the 208 rows §5.1's middle line applies to at **p10 90.7,
+median 396.1, p90 4,783.0**, and the fitted member's 9,724 owned scores at **-13.73..+25.59** —
+numbers with no verdict beside them, waiting on decision 236.
+
+**The run found two things no reading of the tree had.** The first is an exporter ask and is
+numbered 243: a models-only re-import of v20260828 is REFUSED, because decision 162 requires
+`backbone.npz` to carry a `title_identity` array row-aligned to `title_ids` and `mdc export-bundle`
+writes none — so §10's swap sequence, which is what this whole milestone is about, is unreachable
+with any bundle the corpus has built, and every test of it runs on a fixture written to the
+contract. The script supplies the array from the install's own spine so that check 1 can measure the
+stamp, and says so where it does it. The second was in the script: check 5's first definition of "in
+tension" asked whether the refitted board renders any title at the dropped level, which a
+corpus-scale board cannot satisfy however the rescale behaves — a 7-level history maps to at most 7
+of 12 levels, and 1,288 owned titles the person has never rated cluster their `s` at mu. Measured,
+that definition called 52% of the drop stream tense on a tree where the rescale is working. It now
+asks what the plan's sentence actually says — whether the level is more than one tier from
+everything the kept history can be rendered at — which the clamp fails at 32% and the rescale
+passes at 0%, and the board's own tiers are printed beside it with nothing gated on them.
+
+**M4.11 shipped before it, and its `17/17` closed the red list it
 opened with.** Seventeen rows were written before the code and `current_milestone` was raised in the
 same change, with no `tests` key on any of them — M4.10's opening repeated because it worked: the
 list that run printed, those seventeen ids, *was* the test plan (`docs/milestones/M4.11-plan.md`).
-All seventeen now name tests that exist — 103 ids across twelve pytest files and two e2e specs — and
+All seventeen now name tests that exist, and
 seven rows this table already had were amended in the same change rather than duplicated: the three
 §7.3 M1 rows, the §7.1 upsert row, the banner-path row, §3.3's link row and M2's push-subscription
 row each gained the assertions this milestone's household makes possible, which is the point of
@@ -236,11 +345,11 @@ the one migration — `0020_jellyfin_items.sql`, the Jellyfin copy set — does 
 `prompt_state` the plan sketched: the sweep stops adopting under an open prompt instead, so there is
 no sync-closed prompt left to label. **No waiver was added and the milestone was not lowered.** No
 count beyond the block above is published here until a run prints one, which is decision 184's rule.
-The id count in this paragraph's first sentence is mechanical as well now:
-`test_the_testing_ledger_counts_the_ids_the_map_actually_holds` re-derives it from the map, because
-it said 84 for a map that already held 99 — five ids added by a review cycle after the sentence was
-written, and an auditor counting the map against it could not tell that from five tests registered
-on no row at all.
+The id count that used to stand in this paragraph's first sentence now stands in M4.13's
+block instead: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds` admits exactly one
+such sentence per file and re-derives it from the map, so it is rewritten by the milestone the block
+was last re-pasted for rather than appended to — which is what keeps two milestones from both
+claiming it with figures from different runs.
 
 **Two registered tests changed name, and both changes were forced by a decision rather than by
 taste.** `test_declining_the_prompt_writes_nothing_and_closes_it` became

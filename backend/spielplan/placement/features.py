@@ -40,6 +40,33 @@ import numpy as np
 
 from spielplan.placement.contract import TEXT_BLOCK, Block, ContractError, FeatureContract
 
+# Blocks whose ABSENCE no amount of §8 stage 2 enrichment could fill, so a title short of one is
+# not thin. `is_thin`'s docstring already made this argument for the genome — "unavailable for new
+# titles by construction", so "parking a job for it would be a job that can never finish" — and
+# the argument is not about the genome. It is about what §8 stage 2 *is*: a re-fetch of the content
+# spine. Two more blocks are outside its reach for reasons of their own:
+#
+#   `award`  — the block's source is one COUNT over `award`, so a title nobody nominated drops it.
+#              No fetch makes an awards body give a 1983 film a prize. Measured over the 130 titles
+#              the sweep places on the real bundle: award absent for 40 of them, against §5.3's
+#              statement of the whole backlog as "5 of 19".
+#   review_text — its source is not the database at all. §4.3 puts it in `review_text_emb.npz`
+#              inside the bundle (`text_embeddings` below), so stage 2, which writes DB rows,
+#              cannot reach it from either direction; and a row the corpus itself marks
+#              `covered = False` is a property of the EXPORT, changed only by the next one.
+#
+# Named here and not beside `contract.ZERO_IMPUTED`, which records the *contract's* own
+# preprocessing map (§4.3's "genome zero-imputation"). Enrichability is a property of §8's
+# pipeline, not of the file, and merging the two would make a bundle that stopped declaring the
+# imputation silently re-park 983 columns' worth of absence.
+#
+# What this must NOT reach: a block that produced rows and landed none of the columns the contract
+# declares. §4.3 makes `feature_contract.json` "the **exhaustive** definition of the tower's
+# input", so keys outside it are a grammar disagreement between the builder and the export — and a
+# re-fetch whose keys the contract names is exactly the remedy. `blocks_empty` is untouched below.
+# [M4.13, cs-21; plan step 31; the M4.5 row data-rules-a-feature-block-that-never-hits-is-not-present]
+UNENRICHABLE_BLOCKS: tuple[str, ...] = ("genome", "award", TEXT_BLOCK)
+
 # block name -> feature key -> value, for one title.
 TitleRows = dict[str, dict[str, float]]
 BlockSource = Callable[[Any, Sequence[int], str], Awaitable[dict[int, dict[str, float]]]]
@@ -73,9 +100,15 @@ class BuiltVector:
 
         A zero-imputed genome does **not** make a title thin: §8 stage 9 says the genome is
         "unavailable for new titles by construction", so no amount of §8 stage-2 enrichment
-        would fill it and parking a job for it would be a job that can never finish.
+        would fill it and parking a job for it would be a job that can never finish. That
+        sentence is the rule, and `UNENRICHABLE_BLOCKS` is the set it applies to — the award
+        nobody gave and the review-text row the export marks uncovered are in it for reasons
+        argued where the tuple is declared. The DROPPED list is filtered and `blocks_empty` is
+        not, because the two halves of this docstring pull in opposite directions and both are
+        right. [M4.13, cs-21; plan step 31]
         """
-        return bool(self.blocks_dropped or self.blocks_empty)
+        missing = [b for b in self.blocks_dropped if b not in UNENRICHABLE_BLOCKS]
+        return bool(missing or self.blocks_empty)
 
 
 def build_vector(

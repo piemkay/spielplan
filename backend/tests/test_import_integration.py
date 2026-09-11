@@ -598,8 +598,29 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
     Before the flip matters as much as the recompute. Run after it, a failing rebuild leaves a
     new basis active with every fitted number still expressed in the old one — §10's "garbage
     against a new one", made active and served.
+
+    And what data-01 COST at this seam, which is what the last two statements below add. Step 3
+    built its coordinates with no version threaded, so `placement_embeddings` took its
+    `$2 IS NULL` branch and joined `b.state = 'active'` — the OUTGOING bundle, because the flip is
+    still ahead — and `_write_fit` stamped the outgoing version from `active_bundle_version`.
+    Everything this test already checked was true of that fit: rows existed, stamped with the
+    staged version for the fold-in, and the report named four steps. Measured
+    ||v_step3 - v_correct|| = 0.397 against ||v_correct|| = 0.782, and after the flip `load_cache`
+    refused the fit the rebuild had just made, so the first Rate/Rank tap per (user, kind)
+    refitted on the request path against the still-old in-process Backbone and stamped THAT as
+    the new version.
+
+    The stamp and the cache are the observable consequences, and they are what this test asserts.
+    The basis ITSELF is asserted next door, by
+    `test_model_basis.py::test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version`,
+    because the version reaches the coordinates and the stamp through two independent arguments
+    and a fit can carry the right stamp over the wrong basis. Saying so here rather than leaving
+    this docstring claiming a basis assertion its body does not make.
+    [M4.13, data-01; M4.13 cycle 1, m413-rev1-cov-01]
     """
-    from spielplan.ledger import observations
+    from spielplan.ledger import observations, refit
+    from spielplan.ledger.hyperparams import load as load_hp
+    from spielplan.models.artifacts import ArtifactStore
 
     patrick = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('Patrick', 'admin') RETURNING id"
@@ -629,6 +650,17 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
         "SELECT count(*) FROM user_vector WHERE bundle_version = 'test-v2'"
     ) > 0, "step 1 wrote no fold-in vector against the staged basis"
     assert await db.fetchval("SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick) > 0
+
+    # Step 3's stamp names the bundle its coordinates came from, and the cache therefore ACCEPTS
+    # the fit across the flip rather than refusing it and queueing a refit for every member.
+    stamped = await db.fetchval(
+        "SELECT bundle_version FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", patrick
+    )
+    assert stamped == "test-v2", f"the rebuild's fit claims {stamped!r}, not the staged bundle"
+    hp, _notes = load_hp(ArtifactStore.open(tmp_path / "artifacts" / "test-v2", "test-v2"))
+    assert await refit.load_cache(
+        db, user_id=patrick, kind="movie", hp=hp, lock=False
+    ) is not None, "load_cache refused the fit the rebuild made one statement earlier"
 
 
 async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db, bundle, tmp_path):

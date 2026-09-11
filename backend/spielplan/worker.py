@@ -18,8 +18,11 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
+import asyncpg
+
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
+from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
 
 logging.basicConfig(
@@ -257,15 +260,20 @@ async def _jellyfin_sessions_poll() -> dict[str, object] | None:
 # exempts each job's newest successful row outright, because a daily job whose last success is
 # older than a fortnight is exactly the install whose card and whose schedule need that row most.
 #
-# What it bounds: §5.3's three `every=60` jobs are 4,320 rows a day between them, and until this
-# job existed nothing had ever deleted from the table. [M4.7 ops-11]
+# What it bounds: the four `every=60` jobs are 5,760 rows a day between them, and until this job
+# existed nothing had ever deleted from the table. Four, not the three this sentence was measured
+# against: `ledger-refresh` joined `fold-in-tick`, `tier-set-refit` and `jellyfin-sessions-poll` in
+# the same diff that wrote it, so a third of this table's daily growth arrived unremarked in the
+# one paragraph that sizes the retention. `test_worker_schedule.py` checks the count against the
+# registry now, here and at the three sentences below that repeat it.
+# [M4.7 ops-11; M4.13 cycle 2, M413-D6-04]
 JOB_RUN_KEEP_DAYS = 14
 
 
 async def _prune_job_runs() -> None:
     """The retention `0017_ops.sql` did not come with.
 
-    `_tick` writes a row for every job it fires, including the three that fire every sixty
+    `_tick` writes a row for every job it fires, including the four that fire every sixty
     seconds, and the three prunes beside this one clear sessions, challenges and dead push targets
     while the table this milestone added only ever grew. Both of its readers — §6.6's card and
     this module's own restart seeding — are bounded by name rather than by row count now, so this
@@ -352,7 +360,36 @@ async def _prune_dead_push_subscriptions() -> None:
 
 
 async def _active_store(conn) -> ArtifactStore | None:
+    """The basis every model job in this process fits against, and §10's guard on it.
+
+    Two refusals, asked in this order, and the order is the whole of it.
+
+    `assert_not_broken` first, because it is the only one that can see its state. An
+    `artifact_bundle` row that is active while its directory is gone now loads with that version
+    and `broken = True` (`models/artifacts.py`), so `store.version == active` and the §10
+    comparison below PASSES for an install that cannot produce one coordinate. Before this guard
+    the broken store arrived here as `empty()`, became None, and `_ledger_map_refit` and
+    `_tier_set_refits` fitted every board from `zero_embeddings` under DEFAULTS, pruned and
+    overwrote `ledger_state`, rewrote `ledger_cutpoints`, and stamped `ledger_fit` with the very
+    version whose files are missing - every unrated owned title at s = mu, one score, one tier, one
+    badge, with Home's `user_score` order surviving while the Rank board and the Rate reveal
+    degraded. [M4.13, data-03]
+
+    `assert_matches` second, which is the §10 invariant itself getting its first production caller:
+    "no process may score or refit with a loaded bundle version different from the active row."
+    `refit_all` is reached from here, so this is the Ledger refit's entry as much as the sweep's.
+    The importer's own pre-flip rebuild is §10's one sanctioned exception and has its own positive
+    check (`placement/reconcile.py::assert_staged`), which is why this call does not live inside
+    `refit_all` itself: asserted there, §10's swap sequence would refuse its own step 3.
+
+    Both raise, and that is deliberate: `_tick` logs "job failed" per job and the next tick retries,
+    so a broken install refuses consistently and visibly rather than writing a plausible-looking
+    fit. A truly bundle-less household stays a no-op - no row, no version, None == None - which is
+    §3.1's legal state and the one every job below already handles. [M4.13, arch-03]
+    """
     store = await ArtifactStore.load_active(conn, settings().artifacts_dir)
+    store.assert_not_broken()
+    store.assert_matches(await artifacts.active_bundle_version(conn))
     return None if store.is_empty else store
 
 
@@ -374,13 +411,103 @@ async def _ledger_map_refit() -> dict[str, object] | None:
             log.info("ledger hyperparameters: %s", note)
         # §5.1's basis, composed the one way the whole app must agree on. Passing the placement
         # source alone here fitted every warm title at e = 0 — see `standard_embeddings`.
+        # The version travels with the basis. `store.version` is None on a bundle-less install,
+        # which is dd01's NULL stamp and not a lookup to be filled in: a fit over `zero_embeddings`
+        # is expressed in no bundle's basis, and `load_cache` comparing NULL to NULL is what makes
+        # §3.1's household keep its cached fit across restarts. [M4.13, data-01]
         embeddings = (
-            observations.standard_embeddings(conn, bb.load_for(store)) if store else None
+            observations.standard_embeddings(
+                conn, bb.load_for(store), bundle_version=store.version
+            )
+            if store
+            else None
         )
-        reports = await refit.refit_all(conn, hp, embeddings=embeddings)
+        reports = await refit.refit_all(
+            conn, hp, embeddings=embeddings,
+            bundle_version=store.version if store else None,
+        )
         for r in reports:
             log.info("ledger refit: %s", r.as_dict())
         return {"refits": [r.as_dict() for r in reports]}
+
+
+async def _ledger_refresh_tick() -> dict[str, object] | None:
+    """§5.2's nightly half, asked for inside the sitting it is about.
+
+    Not in §5.3's table, and named here rather than smuggled in - the same shape of addition as
+    `fold-in-tick` below, and for a neighbouring reason. §5.2 gives the fit two cadences, "nightly"
+    and "incrementally on each new observation", and the second one moves `r` and not `v`: the tap
+    re-solves the touched titles' residuals against the cached fit's (mu, v), so every title the
+    person has NOT rated keeps whatever the last full fit said about it. Since M4.10 took the full
+    fit off the request path (finding 9), that fit is the one over the very first verdict.
+
+    Measured on the real bundle after 50 verdicts and ~41 battles per member: the 715 unrated owned
+    movies had sd(s) 0.070 against 2.77-3.27 after a full refit, and their order correlated -0.135
+    with a taste the full refit recovers at +0.57. The nightly then moved 252 and then 724 of 765
+    tier badges at once - the snap §6.3 says the design avoids, delivered by the nightly job instead
+    of by the drag. A full fit costs 0.11-0.14 s per (user, kind) at this scale, so the remedy is
+    simply to ask for it sooner: running a spec cadence more often than the spec asks is a superset
+    of what §5.3 requires, which is the argument `scoring.foldin.run`'s docstring already makes for
+    the fold-in.
+
+    Debounced by WORK rather than by the clock, unlike `fold-in-tick`: `refit.refreshes_owed` fires
+    on `REFRESH_GROWTH` new observations since the last full fit, so a household that is not rating
+    costs one read of `ledger_fit` a minute -- one row per board, two per member -- and a household
+    mid-sitting pays one fit per five taps. The quiet case returns None before it opens the
+    artifact store at all.
+
+    A REFUSAL IS RETRIED HERE, and `_tier_set_refits` below clears its request instead. The
+    difference is that this tick has no request: it reads state rather than a queue, so "do not
+    ask again" would need a column, and this milestone's one migration is spoken for (decision
+    239). What that costs, stated rather than left to be discovered: a board whose fit refuses
+    permanently - a dense block that is not finite is the only way - is re-attempted once a
+    minute at 0.11-0.14 s here and "seconds" at corpus scale, on the loop that also carries
+    §7.3's playback poll. The same board already refuses nightly and on every tier-set sweep, so
+    what is new is the frequency and not the failure, and `log.exception` names it every time -
+    which is the signal M4.11's finding 21 asked for. An attempt bound on `ledger_fit` is the
+    smallest thing that would fix it and is owed to whichever milestone next opens a migration.
+    [M4.13, dd22; plan step 27]
+    """
+    from spielplan.ledger import observations, refit
+    from spielplan.ledger.hyperparams import load as load_hp
+    from spielplan.scoring import backbone as bb
+
+    async with pool.acquire() as conn:
+        owed = await refit.refreshes_owed(conn)
+        if not owed:
+            return None
+        store = await _active_store(conn)
+        hp, _notes = load_hp(store or ArtifactStore.empty())
+        # Same pairing as the nightly pass: whichever bundle built the coordinates is the bundle the
+        # fit is stamped with, and None on a bundle-less install. [M4.13, data-01]
+        embeddings = (
+            observations.standard_embeddings(
+                conn, bb.load_for(store), bundle_version=store.version
+            )
+            if store
+            else None
+        )
+        bundle_version = store.version if store else None
+        done: list[dict[str, object]] = []
+        for user_id, kind, grown in owed:
+            try:
+                report = await refit.refit_user(
+                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings,
+                    bundle_version=bundle_version,
+                )
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
+                # See `_tier_set_refits`: a connection that is gone fails every remaining item the
+                # same way, and an isolated report would say "done" about a tick nobody ran.
+                raise
+            except Exception as exc:
+                log.exception("ledger refresh failed for user %s/%s", user_id, kind)
+                done.append(
+                    refit.RefitReport(user_id=user_id, kind=kind, error=str(exc)).as_dict()
+                )
+            else:
+                done.append({**report.as_dict(), "grown": grown})
+        log.info("ledger refresh: %s", done)
+        return {"refits": done}
 
 
 async def _fold_in_user_vectors() -> dict[str, object] | None:
@@ -417,6 +544,13 @@ async def _fold_in_tick() -> dict[str, object] | None:
     100 labels against 839 titles, and `only_stale=True` skips every user whose label count has
     not moved. `with_priors=False` because `title_prior` is a property of the bundle, not of a
     person, and re-materialising it every minute would be work with no reader.
+
+    The solve was never the cost. `serve.replace_scores` rewrites the whole (user, kind)
+    partition, which is 14,000 DELETEs and 14,000 INSERTs at corpus scale — 325-590 ms and 5-8 MB
+    of WAL per stale pair, once a minute for as long as somebody keeps rating. So the trigger is
+    debounced (`foldin.PAUSE_SECONDS`, `HARD_CAP_SECONDS`) and this job's budget names both halves
+    of what it spends, rather than the "ms" the ridge solve alone would have earned.
+    [M4.13, perf-04; plan step 22]
     """
     from spielplan.scoring import backbone as bb
     from spielplan.scoring import foldin
@@ -472,15 +606,32 @@ async def _tier_set_refits() -> dict[str, object] | None:
             return None
         store = await _active_store(conn)
         hp, _notes = load_hp(store or ArtifactStore.empty())
+        # Same pairing as the nightly pass: whichever bundle built the coordinates is the bundle
+        # the fit is stamped with, and None on a bundle-less install. [M4.13, data-01]
         embeddings = (
-            observations.standard_embeddings(conn, bb.load_for(store)) if store else None
+            observations.standard_embeddings(
+                conn, bb.load_for(store), bundle_version=store.version
+            )
+            if store
+            else None
         )
+        bundle_version = store.version if store else None
         done: list[dict[str, object]] = []
         for user_id, kind, requested_at in owed:
             try:
                 report = await refit.refit_user(
-                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings
+                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings,
+                    bundle_version=bundle_version,
                 )
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
+                # The one failure per-item isolation must not absorb. Finding 6's `except Exception`
+                # is about a fit that fails for a reason inside one person's own data; a connection
+                # that is gone fails every remaining owed row the same way, and this loop would then
+                # clear each request and hand `_tick` a full report of a sweep that serviced nobody.
+                # `_tick` records a job as failed only if it raises, so §6.6's System card would show
+                # green over a night of silently discarded refits. `RETRY_AFTER` decides when the
+                # next attempt runs, with a fresh connection from the pool. [M4.13, plan step 29]
+                raise
             except Exception as exc:
                 log.exception("tier-set refit failed for user %s/%s", user_id, kind)
                 done.append(
@@ -556,7 +707,7 @@ ANCHOR_BACKUP = 6
 # Every `timeout` below is a ceiling on one attempt, and every one of them is at or under that
 # job's own interval. That rule is the whole arithmetic: this loop is sequential, so a job allowed
 # to run longer than its own cadence is a job that can only keep its cadence by starving the ones
-# behind it — and the three 60-second rows are what §7.3's prompt timing and §12's M2 exit
+# behind it — and the four 60-second rows are what §7.3's prompt timing and §12's M2 exit
 # criterion rest on, so they get 55 s and leave the rest of the minute to the tick. The four
 # millisecond prunes get a minute each, which is two orders of magnitude past any of them and
 # short enough that a lock-blocked DELETE is abandoned inside one tick.
@@ -590,14 +741,26 @@ JOBS: tuple[Job, ...] = (
         owner="spielplan.ledger.refit"),
     Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400,
         anchor_hour=ANCHOR_LEDGER_REFIT, timeout=900),
+    # Not in §5.3's table, and beside the row it re-runs rather than at the end: §5.3 gives the full
+    # MAP refit a nightly cadence, and §5.2's other cadence ("incrementally on each new observation")
+    # turns out to reach only the titles the observation touched. The budget is the fit's own,
+    # because the fit is the same one - "seconds", measured at 0.11-0.14 s per (user, kind) here -
+    # and the trigger column says what fires it, which is work and not the clock. See
+    # `_ledger_refresh_tick`. [M4.13, dd22; plan step 27]
+    Job("ledger-refresh", "M2", "5+ observations since the last full fit", "seconds",
+        _ledger_refresh_tick, every=60, timeout=55),
     Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
         every=86400, anchor_hour=ANCHOR_FOLD_IN, timeout=600),
     # Not in §5.3's table, and named here rather than smuggled in: §5.3 gives the fold-in a
     # nightly cadence, but §12's M2 exit criterion is about what a person sees *within a
     # sitting*, and every §6.0 shelf orders by a table only the fold-in writes. `foldin.run`
     # documents this tick as the answer to exactly that.
-    Job("fold-in-tick", "M2", "after each sitting's writes", "ms", _fold_in_tick, every=60,
-        timeout=55),
+    # The budget is two numbers because the job is two costs: `FoldInReport` splits them and this
+    # column says so. "ms" described the ridge solve and nothing else, while the partition rewrite
+    # behind it measured 325-590 ms per stale pair at corpus scale and 0.7-1.5 s for two raters in
+    # one tick. [M4.13, perf-04; plan step 22]
+    Job("fold-in-tick", "M2", "after each sitting's writes", "ms of numpy + s of partition writes",
+        _fold_in_tick, every=60, timeout=55),
     # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
     Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60,
         timeout=55),
@@ -646,7 +809,7 @@ MIGRATION_WAIT_TRIES = 150
 # work without an operator having to restart the worker. [M4.7 ops-04]
 RETRY_AFTER = 300
 
-# Below this interval a job is too frequent to narrate: the three 60-second jobs would put 4320
+# Below this interval a job is too frequent to narrate: the four 60-second jobs would put 5,760
 # INFO lines a day into the log §6.6 asks an operator to read. At 900 s and above the line is the
 # only evidence the job ran at all, and its duration is what 5d's measurement needs. [M4.7 ops-07]
 DURATION_LOG_THRESHOLD = 900

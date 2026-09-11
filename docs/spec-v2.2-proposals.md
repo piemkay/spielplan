@@ -3297,6 +3297,476 @@ disagreement instead of losing to it. The coverage row
 puts the series in the fake's played set, so Jellyfin AGREES with the app's unseen and the
 un-marking guard answers it.
 
+## Decisions taken (owner, 2026-09-11, as M4.13 opened)
+
+Eight, taken under the owner's standing instruction to take each plan's recommended option and record
+it here rather than ask. M4.13 is the model-basis milestone — a fit that knows the basis it was
+computed in — and six of these close the questions `docs/milestones/M4.13-plan.md` §3 left open; the
+other two record what the milestone does not build and what it does not rebuild. M4.12 is being built
+in parallel and holds 214-233, which is why this block starts at 234.
+
+### 234. D1 was answered by decision 167 in the opposite direction; the β flip and its migration are cancelled
+
+**What the spec says.** §5.1: "Blend with the crowd prior at **β = 0.8** (measured optimum; also
+exactly where per-user top-10s stop being the global chart: 12 → 263 distinct titles)."
+`scoring/foldin.py` puts β on the personal side. Which of those two is a measured number and which is
+an orientation is the whole of the question, and decision 167 answered it.
+
+**Why it changes.** It does not — and that is the ruling. The plan's D1 asks for a numbered decision
+that §5.1's β is the CROWD weight, and four pieces of work hang off it: entry 9 flips `foldin`'s
+arithmetic at `:287`/`:311`/`:321`, entry 10 follows it, a second migration rewrites every stored
+`blend_beta` and widens `0009_scoring.sql`'s CHECK, and a coverage row
+`data-rules-the-blend-weight-is-the-crowd-weight` records the result. The plan was drafted before
+decision 167 (2026-09-04, shipped as `c4e74e6`), which ruled the other way in as many words: "No
+migration, no flip, no forced refit." The reason it could is that `_cross_validate` searches and
+serves in one orientation, so every stored value and every ranking a household has seen was already
+right; the inversion reached exactly one place, the constant a member reads on Home. Re-measured
+through this app's own `fit_user` over 150 real raters, held-out Spearman peaks at β_app 0.20
+(+0.4324 against +0.4082 at 0.80) — the corpus's own optimum, reached independently.
+
+**The decision.** No. β stays the personal weight in this codebase. §5.1 gains the complement rule
+β_app = 1 − β_corpus and states the optimum in the app's coordinates as 0.2 — that is decision 167's
+spec half, and decision 177 puts it in M4.16's single pass over the file rather than here. The three
+surgical code corrections are already on main: `home/shelves.py`'s `DEFAULT_BETA` 0.8 → 0.2, §6.0's
+two example strings, and `BETA_MAX = 0.8` re-justified as a floor of one fifth on the crowd prior
+rather than as the measured optimum. M4.13 therefore ships no β migration, no flip of
+`foldin.py:287`/`:311`/`:321`, no change to `0009`'s CHECK, and not the row
+`data-rules-the-blend-weight-is-the-crowd-weight` — the row `c4e74e6` already added,
+`data-rules-the-printed-beta-optimum-is-this-apps-own-coordinate`, is its replacement.
+
+**Cost.** Phase 3 step 16 is void and `NNNN+1_blend_beta.sql` is cancelled, so this milestone writes
+exactly one migration and takes exactly one number. The plan's "fifteen new rows" is still fifteen
+adds, but only because the zeroed-Backbone row already exists in the map (`65614ae`) while the β row
+is dropped from the list. `test_scoring.py`'s two β tests and `test_home.py`'s shelf-caption test are
+not touched: `c4e74e6` already flipped their expectations, and flipping them back is the bug this
+decision refuses.
+
+### 235. The per-user cross-validation stays; the label-count β schedule defers with D2, and only the CV's arithmetic is repaired here
+
+**What the spec says.** §5.1 gives one blend and one constant; §5.2 says every constant in the fit
+comes from `ledger_hyperparams.json`. Neither describes a per-user search, and neither describes a
+schedule.
+
+**Why it changes.** Phase 3 step 17 would replace the per-user (λ, β) search with a shipped
+label-count schedule (crowd 0.90 at 5 labels → 0.80 at ~50 → 0.70 at 80+), demote `_cross_validate`
+to a diagnostic, add `BETA_BY_LABEL_COUNT` and `FOLDIN_LAMBDA` as `Hyperparams` fields, and
+standardise Backbone columns before the ridge. It is marked D1-gated, and D1 went the other way
+(decision 234): entry 10's headline evidence is stated in crowd coordinates against a corpus-shaped
+fixed config, and decision 167's re-measurement through this app's own `fit_user` found the CV
+picking the corpus's optimum by itself. Step 17's second argument is worse placed still. "LAMBDA_GRID
+(1..100) is on an arbitrary scale: warm row norms run 0.006 to 5.4 with support, so XtX has 1-4
+eigenvalues above 100" is the same support-scaling question D2 refers upstream — re-scaling λ's
+meaning before the corpus has said what E's rows mean would bake an answer into the app, against
+§4.1's "carried over verbatim". And this milestone's exit criterion measures neither β nor the
+fold-in's held-out score, which is the plan telling us where step 17 belongs.
+
+**The decision.** Not in M4.13. The schedule, the demotion of `_cross_validate` and the column
+standardisation before the ridge all defer to the milestone that takes D2's answer. What lands here
+is step 18 — the CV's fold-consistent arithmetic: per fold `v_f = fold_in(x[~held], y[~held], lam)`,
+`sd_f = (ref_e @ v_f).std()`, `preds[held] = x[held] @ v_f / sd_f` with zeros when `sd_f < 1e-9`, and
+the `preds.std()` re-standardisation at `foldin.py:284` deleted — plus step 19 (`prior_sd` on an
+empty reference) and the honest yardstick of step 35, so that the next measurement has a reference to
+be read against rather than a number in a vacuum.
+
+**Cost.** `foldin.py` keeps `fold_in`, `_cross_validate`, `BETA_GRID`, `LAMBDA_GRID`, `NOISE_FLOOR`,
+`MIN_LABELS_FOR_CV` and `LOO_BELOW`; step 34 relocates them into `Hyperparams` fields with today's
+values as defaults, so a bundle can move them without a code change and the deferred schedule has
+somewhere to arrive. `cv_rho` is still computed and persisted, and step 35 gives it the bundle's
+cold/ceiling figures and §0's 0.003-0.008 noise floor to be read against. The exporter ask for
+`blend_beta_by_label_count` and `foldin_lambda` is written up beside `b_i_tau`,
+`rate_c_per_sqrt_month` and `gate_k` rather than lost.
+
+### 236. D2, the coordinate scale, goes upstream as a corpus-contract question; the app ships the measurement and rescales nothing
+
+**What the spec says.** §5.1: `e(t) = gate·E[t] + (1−gate)·ê(t)`. §4.1: the artifact is "carried over
+verbatim". §8: the app "does not renormalise the Backbone on its own authority".
+
+**Why it changes.** The two halves of that sum are not on one scale. Measured on the shipped bundle:
+median ‖E‖ 0.184 against median ‖Ê‖ 27.05, and `((1−g)·‖ê‖)/(g·‖E‖)` over the 3,846 thin non-cold
+rows runs p10 83 / median 531 / p90 5,543 — so `gate` weights two incommensurable quantities and the
+cold half decides every thin title's personal term. E itself is support-scaled (norm median 0.043,
+max 127), which is why standardising ⟨v, e⟩ over the reference population puts owned popular titles
+at −15.9. Both readings of that are coherent and the app cannot choose between them: if E is meant to
+be unit-scale item factors the bundle is wrong and an app-side renormalisation is forbidden; if it is
+support-weighted the app must rescale AND re-run M2's held-out measurement, because unit-normalising
+both halves changes the meaning of ⟨v_u, e(t)⟩.
+
+**The decision.** No rescaling. The question goes to the corpus project as a contract question — is E
+meant to be unit-scale item factors or support-weighted? — and the app lands only the MEASUREMENT: a
+helper in `scoring/backbone.py` reporting the `((1−g)·‖ê‖)/(g·‖E‖)` distribution over the rows §5.1's
+middle line applies to, exercised by a backend test on synthetic arrays whose two halves are known.
+`ê` is not scaled before the write in `placement/reconcile.py` under either outcome —
+`title_placement.e_hat` is read by the Ledger and by §6.7's rail too — and `backbone.coordinate`'s
+single blend expression is not changed.
+
+**Cost.** The row `data-rules-the-gate-weights-two-comparable-halves` keeps the plan's `why` verbatim
+and its `what` gains one sentence: the milestone delivers the measurement and its exercise, and the
+comparability threshold itself is blocked on this decision. The plan's "failing assertion" does not
+go into pytest — a red test cannot land in a green build — it becomes the exit criterion's printed
+report (decision 240), and the second clause of the plan's exit criterion is struck as a check. What
+is given up is a number: nobody can say today by how much the two halves ought to move, only that
+they are incommensurable, and the app keeps serving the blend it serves until the corpus answers.
+
+### 237. D3 executes decision 174 rather than re-deciding it: undo hard-deletes, §4.2 says so, and no tombstone column is written
+
+**What the spec says.** §4.2's only append-only sentence is a parenthetical inside the
+`user_title.state` comment, and it is scoped to the seen→unseen flip: "verdict/duel history is
+append-only and survives the flip". Decision 35 supplies the other half — "starting a new block
+commits the previous one".
+
+**Why it changes.** The plan's D3 asks whether undo is a hard delete or a tombstone, and whether
+`verdict`, `duel` and `tier_edit` gain `retracted_at` in this milestone's migration. Decision 174 has
+already answered it: adopt the delete, and amend §4.2 to say so in one sentence "rather than leaving
+a shipped write path resting on a proposal's body". Option (b) is only safe behind a grep-complete
+pass over every observation read in `ledger/observations.py`, `ledger/refit.py` and the §13 hold-out
+queries — 29 read sites across 8 modules, each needing a `retracted_at IS NULL` predicate that
+`load_observations`' own docstring names as "the single most likely regression in this subsystem" —
+and it would move the three DELETEs that a shipped static guard exists to keep deliberate.
+
+**The decision.** Option (a), which decision 174 ruled. Undo hard-DELETEs the `verdict`, `duel` or
+`tier_edit` row it is compensating. §4.2 gains the one sentence decision 174 wrote, naming decision
+35's commit point — a block is committed when the FIRST observation of the next block lands, so the
+fifteenth tap stays undoable until the sixteenth is made; the reach change itself shipped with M4.10
+under decision 199, which explicitly left this §4.2 sentence to M4.13. The coverage row
+`data-rules-verdict-append-only` is re-cited from proposal 35's body to decision 174. No
+`retracted_at` columns, no "AND retracted_at IS NULL" pass over the observation readers, and
+`observations.py:899-903`'s three DELETEs and their static guard at `test_ledger_observations.py:250`
+are untouched.
+
+**Cost.** `0022_model_basis.sql` carries no `retracted_at`, and the retraction record stays where
+`0011_rate.sql`'s own comment already puts it: `rate_observation` keeps the card, the block index and
+the `undone_at` stamp, so §6.7's rail and a later audit can still see what was taken back. What is
+given up is the retracted verdict's VALUE, which `verdict_id ON DELETE SET NULL` drops — decision 174
+names the surgical fix for that (a `value` column on the journal row) and does not spend it here. The
+M2 row keeps its six tests and changes only its citation.
+
+### 238. No fourth `title.placement` state in M4.13; finding 32 stays open and the sweep's scope is not narrowed
+
+**What the spec says.** §5.1's middle line — a title with a Backbone row below `WARM_SUPPORT` is
+served as a blend of both coordinates — and §6.6's placement counters, which report what the sweep
+did. `0003_content.sql` gives `title.placement` three states: `unplaced`, `cold_tower`, `warm`.
+
+**Why it changes.** The plan's D4 asks whether that CHECK gains `'blended'`, with
+`reconcile.place_titles` stamping it for a title carrying a Backbone row below `WARM_SUPPORT`, and
+whether the sweep's scope narrows to match. `backbone.py`'s `ESource` already returns `blended` as a
+serving fact with no persisted counterpart, so the state exists in the reader and not in the writer.
+But `'blended'` is not a schema change alone: it changes what a badge means to a household and what
+§6.6's counters report, and this milestone ships no surface at all (§6's test-layer table says "e2e:
+nothing"). The plan marks no recommendation, and its own exit criterion — seven checks, none of them
+naming a placement state — implies the answer.
+
+**The decision.** No, not in this milestone. §5 item 7 is dropped from `0022`. The sweep's wider scope
+stays exactly as it is — 130 owned titles placed, not 19 — because that is what §5.1's blend requires,
+and the plan forbids narrowing it under either answer. Finding cs-62 is recorded as an open ask for
+the milestone that owns §8 stage 10's badge input and §6.6's counters, together with the split of
+`placement_counts`.
+
+**Cost.** `0003_content.sql`'s placement CHECK is untouched. `reconcile.py:225-232`'s comment stays
+wrong, and this decision says so rather than letting a milestone that is not fixing it pretend
+otherwise. A household reading the counters still cannot tell a blended title from a cold one, which
+is the state of affairs today and is what the open ask buys back. Adding a state whose only consumer
+would be a badge nobody has designed is exactly the speculative half-change CLAUDE.md's surgical-diff
+rule is about.
+
+### 239. One migration, `0022_model_basis.sql`, items 1-6; the reload path clears orphaned `platform_rating` rows
+
+**What the spec says.** §4.2 gives `ledger_cutpoints` "length = |tier set| − 1, ordered ascending" and
+`tier_edit(id, user_id, title_id, tier smallint, via, created_at)`. §10: "Ledger observations always
+survive re-import." §4.1 rule 5: the catalogue is partitioned by kind. `0003:177-184` argues against a
+cross-schema FK from `display.platform_rating`.
+
+**Why it changes.** The plan's §5 lists eight items and two of them are answered elsewhere: item 7 is
+dropped by decision 238 and item 8 by decision 237, while the second migration is cancelled by
+decision 234. What remains are six DDL repairs that each turn a rule the code already relies on into a
+rule the database holds. `0019` is allocated-but-unused, `0021` belongs to M4.12 which is building in
+parallel, so `0022` is this milestone's number and it takes exactly one.
+
+**The decision.** `0022_model_basis.sql` carries items 1-6 and nothing else: `tier_edit.n_levels` with
+a backfill from the user's current `ledger_cutpoints.tier_set` length (7 where no row exists);
+`ON DELETE RESTRICT` re-declared on `verdict.title_id`, `duel.title_a`, `duel.title_b`,
+`tier_edit.title_id`, `user_title.title_id`, `session_answer.title_a`, `session_answer.title_b`,
+`session_ballot.title_id`, `session_result.title_id` and `session_outcome.chosen_title_id`, with the
+derived tables left on CASCADE; the indexes the RESTRICT check will scan; `cutpoints_length` rewritten
+with `cardinality()` plus a `boundaries_ascend` IMMUTABLE sql function that ACCEPTS equal neighbours;
+the three CHECKs that mean their names; and `title_id_kind_key UNIQUE (id, kind)` with composite
+`(title_id, kind)` FKs on `ledger_state` and `user_score`. `display.platform_rating` takes the DELETE
+rather than the comment: `importer/load.py`'s reload path clears rows whose `title_id` no longer
+exists.
+
+**Cost.** `rescale_level` (step 15) reads `tier_edit.n_levels`, so the migration has to be in the tree
+before the coordinate work runs — which is why it is a wave-2 stage and the coordinate stage depends
+on it. The RESTRICT change makes `DELETE FROM title` raise for a title carrying observations, which is
+the point; no code path deletes a title today, so nothing in the app needs to handle the new error,
+and the one path that still succeeds — a title carrying only derived rows — is the path that leaves
+`display.platform_rating` behind. The DELETE rather than the comment because the exit criterion's
+check 6 keeps that success as a pass condition, and `0003:177-184` rules out the FK that would
+otherwise reap the orphan.
+
+### 240. The exit criterion is six checks and one report, not seven checks
+
+**What the spec says.** Nothing directly: this is the milestone's own gate. The precedent is M4.8's,
+which turned M4.5's constant-predicate check into a printed report for the same reason.
+
+**Why it changes.** The plan's exit criterion has seven checks and says "a pass is every line green",
+but check 4 — the `((1−g)·‖ê‖)/(g·‖E‖)` ratio against a p90 ≤ 10 threshold — is D2-gated, and decision
+236 sends D2 upstream. A check whose predicate cannot be evaluated has two shapes and both are already
+legislated against: a constant predicate is what
+`test_no_milestone_exit_check_has_a_constant_predicate` exists to fail, and a script that can never
+print green is a gate the milestone can never pass through.
+
+**The decision.** Six checks and one report. Checks 1, 2, 3, 5, 6 and 7 ship as real checks with real
+predicates. The plan's check 4 becomes a printed REPORT section — the `((1−g)·‖ê‖)/(g·‖E‖)`
+distribution over the thin non-cold rows, and `max abs(user_score)` for a fitted member — printed as
+numbers with no verdict and a line naming decision 236 as what they are waiting on. This is M4.8's own
+precedent, taken for the same reason and in the same words: the script "prints one fewer check and one
+report". Decision 184 refuses to invent a number in the ledger; this refuses to print a verdict on a
+question the app has not been given the authority to answer.
+
+**Cost.** `docs/TESTING.md`'s M4.13 block states the score as N/6 plus one report and names decision
+236 as what the report is owed to, so a later reader does not count six where the plan says seven and
+conclude a check was dropped. The five `len(EXIT_SCRIPTS) == 5` assertions in
+`test_static_contracts.py` become 6 in this lane and must merge to 7 with M4.12's script. What is
+given up is a gate on the scale question: the milestone can pass with the two halves still
+incommensurable, which is exactly what decision 236 says the app has no authority to rule on.
+
+### 241. Six plan steps already on main are reconciled, not rebuilt
+
+**What the spec says.** CLAUDE.md: "Diffs are surgical: every changed line traces to the request."
+
+**Why it changes.** Three of this milestone's findings shipped ahead of it out of the roadmap's "Start
+here" table, and three more were closed by M4.9 and M4.10 after the plan was written. A plan read
+literally would rebuild all six, and re-deriving a shipped fix is how a milestone loses a repair by
+rewriting it slightly differently.
+
+**The decision.** No. Step 12 (the cold-mask exclusion, `65614ae`, now
+`scoring/backbone.py::cold_row_mask` with its coverage row already green), step 16 (the β copy
+correction, `c4e74e6`, decision 167), step 25 (`clear_refit_request`'s timestamp predicate, landed
+with M4.10 finding 5), step 29's worker half (per-item isolation in `worker._tier_set_refits`, M4.10
+finding 6), step 33 (`model.straddle`'s adjacency clamp, M4.10 finding 13 — so `ledger/model.py` takes
+no edit at all here) and step 37 (LIKE escaping, M4.9 finding 12, `db/library.py::_like_needle`) are
+all on main, and each was verified in the tree rather than taken from a commit message:
+`model.straddle`'s docstring now argues adjacency in full, `clear_refit_request` carries
+`AND refit_requested_at <= $3`, and `serve.py` imports `_like_needle` across the module boundary on
+purpose. Exactly one line out of those six was missing when the milestone opened and is therefore
+this milestone's own to write: the `PostgresConnectionError`/`InterfaceError` re-raise (step 29). It
+landed with M4.13, at `ledger/refit.py:847`, `worker.py:493` and `worker.py:621`.
+[status corrected in cycle 1, M413-DOC-02]
+
+**Cost.** `docs/TESTING.md`'s M4.13 block reconciles the plan's forty-two steps against what shipped,
+naming the six, so the next reader auditing the plan against the diff does not read six absences as
+six omissions. `ledger/model.py` appears in no stage's file list, which is also what makes phase 6's
+numpy-only ast guard safe to land early: nothing in this milestone can add an import to the module
+the guard freezes.
+
+---
+
+## Exporter asks (M4.13, 2026-09-11)
+
+Two, and neither is an owner decision: they are questions for the corpus project, written here
+because this is where the decisions that defer to them are numbered. Decisions 235 and 236 both end
+in "the corpus owns this", and an ask with no number is an ask nobody can cite — so they take 242
+and 243, the next numbers in M4.13's range, and sit beside the eight decisions rather than inside
+them. The second one was found by RUNNING the exit criterion rather than by reading anything.
+
+### 242. Seven constants and one checkpoint identity the app is currently supplying for itself
+
+**What the spec says.** §4.3: `ledger_hyperparams.json` is "the tuned constants of the §5.2 recipe
+... re-tunable offline in the corpus project", and it names `b_i prior τ (or its CV grid)` and the
+"σ-inflation rate constant and cap" among them. §5.1 states the evidence gate as
+`gate = n_t / (n_t + k)`, "k ≈ 10". §5.3's nightly row is "Fold-in user vectors, **blend weights per
+label count**". §0 row 1 states a learning curve — "personal signal roughly triples from 5 to 100
+labels" — and a pipeline variance of 0.003–0.008 Spearman. §14 risk 1's mitigation is "expectations
+instrumented, not assumed". §4.3 ships `cold_tower.pt` and `feature_contract.json`, and the latter
+already carries `model_file` and `model_source`.
+
+**Why it changes.** Read off v20260828 while M4.13 was being built: `ledger_hyperparams.json` ships
+nine keys, and `hyperparams.load` returns `source = "bundle"` while twelve fields fall to this app's
+defaults — including two the spec says are shipped. `b_i_tau` has no key in the file at all (the fit
+runs at 1.0). `sigma_inflation.rate_c_per_sqrt_month` is `null` with `provisional: true` and the note
+"no measurement behind the rate yet — tune before use", and M4.13 now honours that by disabling the
+rule, so §5.2's σ-inflation is OFF in every install until the corpus measures a rate. Six more
+numbers were module literals in `scoring/backbone.py`, `scoring/foldin.py` and `home/shelves.py`;
+M4.13 moved them into `Hyperparams` fields with today's values as defaults, so each is now one
+exported key away from being the corpus's number instead of this app's opinion. And
+`user_vector.cv_rho` — a held-out Spearman this app computes per (user, kind) on every nightly pass —
+had no reference value anywhere in the codebase; the bundle's own `cold_eval.json` (cold 0.35225
+against a ceiling of 0.39193, with CIs) was in no file list and read nowhere until M4.13 added it.
+
+**The ask.** Eight items, in the order they cost the app most:
+
+1. **`sigma_inflation.rate_c_per_sqrt_month`, measured.** Until it arrives the rule is disabled by
+   the app rather than run at an invented 0.05 (the flag is read and honoured now, not filed as
+   unused). One number re-enables §5.2's "ambient recalibration rather than chores".
+2. **`b_i_tau`.** §4.3 says it ships and no bundle has ever carried it.
+3. **`gate_k`.** "k ≈ 10" is an approximation in prose; the exported value would make §5.1's gate,
+   §5.3's warm threshold (`k·g/(1−g)`) and §6.0's printed `gate_k` one number. If the tuner also has
+   a value for where "rated (warm)" begins, ship `warm_gate` beside it — `scoring/backbone.py` has
+   said "if the exporter ever ships one, this becomes a read" since M4.5, and now it is a field.
+4. **`foldin_lambda` (or its grid).** The fold-in cross-validates over this app's own
+   (1, 3, 10, 30, 100), chosen here rather than measured anywhere. §4.3's anchor λ is a different
+   quantity in a different objective and borrowing it would be a coincidence dressed as a constant.
+5. **`blend_beta_by_label_count`.** §5.3's own row promises "blend weights per label count"; the app
+   fits one β per (user, kind) by per-user cross-validation and has no schedule. Decision 235 defers
+   the schedule deliberately — if the corpus ships one, the app reads it instead of inventing it.
+   Note the orientation: decision 167 fixes β as the PERSONAL weight, so a corpus figure of 0.8
+   crowd is β_app 0.2 and the export should say which convention it is in.
+6. **§0 row 1's learning curve**, as data rather than prose: expected held-out ρ at each label count
+   (5, 10, 25, 50, 100 …), so `cv_rho` can be read against the reference for the number of labels
+   that person actually has, instead of against one global cold/ceiling pair. It must live under
+   `artifacts/` — decision 162 makes re-imports models-only, so a curve shipped in `content.sqlite`
+   would not survive one. `cold_eval.json` is the natural home.
+7. **Keep shipping `cold_eval.json` and `content_summary.json`.** Both are now in `BUNDLE_FILES` as
+   optional and both are read: the first is the yardstick the boot line and §6.0's gated model block
+   report `cv_rho` against, the second states the corpus's own per-block counts. A bundle without
+   them is older, not broken — but a bundle that drops them takes the only reference value in the
+   install with it.
+8. **A checkpoint identity for the Cold Tower**: the tower's sha256 inside `feature_contract.json`,
+   beside the `model_file` and `model_source` it already carries. The corpus writes
+   `torch.save(model.state_dict())` — a bare mapping of eight tensors with no `version`, no `arch`
+   and no `input_dim` — so §4.3's "the exporter must ship v2" is a check this app cannot perform: it
+   substituted its own 2 and `cold_tower_v2` and then tested those against its own allow-lists.
+   M4.13 makes the assumption visible in the import report rather than tightening it into a refusal
+   that would reject every bundle produced so far. A sha256 in the contract turns it back into a
+   check, and it costs the exporter one line.
+
+**Cost.** Nothing app-side for items 1–6: `Hyperparams` already has a field for each, with today's
+value as its default and its own validation (`from_mapping` refuses a boolean where a number is
+required, refuses a grid that is not a list of numbers, and refuses a `blend_beta_max` above the
+ceiling `0009_scoring.sql` CHECKs), so an exported key lands the moment it is written. What is given
+up until then is stated rather than hidden: σ-inflation does not run, `b_i_tau` is 1.0, and every
+constant the bundle omits is named in the boot log's "bundle omits N constant(s)" note. Item 8 needs
+one field in `feature_contract.json` and would let `placement/tower.py` replace a note with a guard.
+
+### 243. `backbone.npz` must carry `title_identity` on a model bundle, or §10's swap is unreachable
+
+**What the spec says.** §10's swap sequence is "validate -> stage -> recompute the rebuild set
+against the staged bundle -> transactionally flip", and decision 162 already settled the
+requirement: "the model bundle carries an identity column row-aligned to its title ids so a
+corpus-side re-identification is caught rather than trusted".
+
+**Why it changes.** Nothing about the decision changes; what changed is that it has now been *run*.
+`ops/m413_exit_criterion.py` built a models-only second bundle out of v20260828 — the only kind of
+bundle decision 162 says will ever arrive again — and `validate_for_install` refused it:
+
+> `backbone.npz` ships no `title_identity` array — decision 162 requires an identity column
+> row-aligned to `title_ids` on a models-only bundle, which carries no spine of its own, so a
+> corpus-side re-identification would be trusted rather than caught
+
+The refusal is correct and `importer/validate.py` says in as many words that "no bundle the corpus
+has ever built carries the array (`mdc export-bundle` does not write it)". The consequence had not
+been stated anywhere: **no bundle the corpus has built can be re-imported as a model bundle**, so
+§10's swap sequence — the sequence this whole milestone is about — is unreachable on real data
+until the exporter writes one array. Every test of that path runs on `make_bundle.py`, which writes
+the array because the fixture was built to the contract.
+
+**The ask.** `mdc export-bundle` writes `title_identity` into `backbone.npz`, row-aligned to
+`title_ids`, in the two spellings `importer/validate.py` parses: `imdb:<imdb_id>` where the row has
+an `imdb_id`, `tmdb:<tmdb_id>:<kind>` where it does not. Measured on v20260828: 2,139 of the 14,397
+backbone rows carry no `imdb_id` and none carries neither id, so both spellings are needed and the
+array is complete. It is one `np.savez` key.
+
+**Cost.** Nothing app-side — the reader, the refusal and its tests already exist. Until it ships,
+the exit criterion supplies the array itself from the install's own spine (the corpus's rows,
+carried over verbatim at the seed) so that check 1 can measure the thing it is for, and says so
+where it does it: `ops/m413_exit_criterion.py::stage_models_only`. That is a harness doing the
+exporter's one line, and it is the only fact in that script the corpus did not provide. An operator
+re-importing models on a real install gets the refusal, which is the right answer — a model bundle
+whose rows cannot be tied to the install's titles would re-express every score against whichever
+films the corpus has since merged.
+
+## Decisions taken (owner, 2026-09-11, as M4.13 closed)
+
+Three more, taken under the same standing instruction and recorded here for the same reason decisions
+240 and 241 are: they rule on how this milestone is CLOSED rather than on what it builds, and an
+unnumbered ruling is one no commit body, migration header or coverage row can cite. They take 244-246,
+the last of M4.13's range.
+
+### 244. The lane-harness changes are a separate commit, ordered before `feat(M4.13)`
+
+**What the spec says.** CLAUDE.md: "Diffs are surgical: every changed line traces to the request", and
+commits carry a `feat(M2):`-style milestone prefix.
+
+**Why it changes.** This worktree carries two lanes. One is the milestone: the basis a fit is computed
+in, §10's invariant, "basis" widened from the bundle to bundle + K + coordinate, and the jobs that
+lost work. The other is the harness the lane ran on, and it is defined by its CAUSE rather than by a
+directory: the roadmap's parallel milestone pairs put a checkout and a stack per worktree on one box,
+so every harness that had hard-coded a value which is now per-checkout — the origin, the published
+database port, the fake Jellyfin's published control port — drove or dropped another lane's stack.
+`e2e/` is where that happened first, not where it stops. Nine files. Six resolve the origin and the
+two ports: `e2e/env.mjs`, `e2e/run.mjs`, `e2e/reset.mjs`, `e2e/helpers.js`,
+`e2e/playwright.config.js` and `ops/compose.e2e.yml`. The seventh is
+`backend/tests/test_harness_contracts.py`, whose guards READ those files — it repoints them at
+`env.mjs` and adds the unused-import guard the extraction earned — and which therefore has to move
+in the SAME commit or the `chore` commit is red on its own. The last two are
+`backend/tests/test_backup.py` and `backend/tests/test_restore_drill.py`, which pick the
+`postgres:16` container by the port `TEST_DATABASE_URL` names instead of by being the only one, and
+address a container-run `pg_dump` from inside it: three stacks answered `docker ps`, the old "exactly
+one or nothing" rule matched none, and §2's backup and restore drill skipped in all three
+checkouts at once — silently, which a summary line reads as a pass. None of the nine traces to a
+numbered defect in the plan.
+
+**The decision.** They stay in the worktree and ship as their own `chore(e2e):` commit, ordered BEFORE
+the `feat(M4.13):` commit, named in no M4.13 coverage row and in no sentence of `docs/TESTING.md`'s
+M4.13 block. `frontend/src/routes/admin/data/+page.svelte` is the explicit exception and stays inside
+the milestone: its added block is data-03's "bundle directory missing" line, it cites
+`[M4.13, data-03]`, and it is the only frontend line this milestone owns.
+
+**Cost.** Two commits where a reader might expect one, and a `chore` commit that carries no milestone
+prefix — which is the point: a prefix would claim the harness for a milestone whose plan never asked
+for it. What is given up is the convenience of one commit; what is bought is that the milestone's diff
+is exactly the milestone. The nine are enumerated rather than described because the enumeration is
+what a commit is cut along, and `test_static_contracts.py`'s
+`test_decision_244_names_every_file_the_parallel_lane_harness_repair_touched` holds it against the
+tree: the two backend-test files are where the cost of getting it wrong is highest, since they carry
+M0's and M4.7's backup and restore exit criteria and a `git revert` of the milestone commit would
+re-break §2's drill on any multi-worktree box — as a silent skip.
+[M4.13 review cycle 2: M413-C2-DIM7-01]
+
+### 245. `0022_model_basis.sql` is corrected in place or not at all; M4.13 takes exactly one number
+
+**What the spec says.** CLAUDE.md: "Never edit an applied migration (`backend/migrations/NNNN_*.sql` —
+sha256-checksummed; a mismatch is a hard startup error). Add a new numbered file." Decision 239 already
+settled that M4.13 ships one migration, items 1-6.
+
+**Why it changes.** The rule protects migrations that have been APPLIED — a checksum mismatch against a
+durable database is a hard startup error. `0022_model_basis.sql` is untracked, was written by this
+milestone, and has been applied to no durable database, so the hazard the rule guards against does not
+exist for it yet. Meanwhile 0019 was allocated to M4.10 and left unused and 0021 belongs to M4.12,
+which is being reviewed in a sibling worktree right now: a second number taken here is a number that
+lane cannot have.
+
+**The decision.** Corrected in place, announced loudly in the stage report AND in the file's own header
+comment, with `backend/tests/test_migrations.py`, `test_schema_contracts.py` and the PGlite schema
+tests re-run immediately afterwards. No second migration number is taken by this milestone under any
+finding; a defect too large to correct in place is a defect for the next milestone's number, not for
+0023 opened here.
+
+**Cost.** A reviewer reading the file cannot assume its bytes are the bytes an earlier stage reviewed,
+which is why the announcement is required in two places rather than one. Against that: the checksum
+table stays dense, and M4.12's 0021 is not stepped on.
+
+### 246. The exit criterion is not re-run unless a stage changes what it measures
+
+**What the spec says.** `docs/TESTING.md` publishes the milestone's measured numbers, and CLAUDE.md
+sends the next reader there "rather than assuming status". Decision 240 fixes the script's shape at six
+checks and one report.
+
+**Why it changes.** `ops/m413_exit_criterion.py` builds a full install out of `v20260828`, stages a
+models-only second bundle, and runs six checks against a live Postgres; it has been run and it prints
+`6/6`. Re-running it after every cycle-1 stage would cost minutes per stage and re-measure inputs no
+stage touched — and a number restated from a stale run is worse than one not restated at all.
+
+**The decision.** No — unless a stage actually edits something the script measures: the `ledger_fit`
+version stamp, `assert_matches` and its three callers, the broken-store refusal, `rescale_level` /
+`tier_edit.n_levels`, the RESTRICT foreign keys, or `standard_embeddings`-versus-`serve.coordinates`
+equality. If one does, THAT stage re-runs the script end to end and restates every number
+`docs/TESTING.md`'s M4.13 measurement paragraph publishes, in the same change.
+
+**Cost.** The published numbers are a point-in-time measurement rather than a continuous one, and the
+list above is the contract that says when the point moves. A stage that edits one of those six objects
+and does not re-run has published a number about code that no longer exists, which is the failure this
+decision exists to make nameable.
+
 ---
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)

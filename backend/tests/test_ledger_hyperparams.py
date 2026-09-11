@@ -21,6 +21,7 @@ import dataclasses
 import json
 import shutil
 import types
+from pathlib import Path
 
 import httpx
 import pytest
@@ -114,6 +115,28 @@ def test_an_unknown_constant_is_reported_rather_than_dropped():
         ({"tie_prior_delta0": 1.0}, "probability"),
         ({"margin_form": "margin^2"}, "margin_form"),
         ({"sigma_inflation_cap": -3}, "sigma_inflation_cap"),
+        # M4.13's block, refused on the same principle. `warm_gate` is a probability because
+        # WARM_SUPPORT is k*g/(1-g) - at 1.0 that is a zero-divide and above it every title is
+        # warm; `blend_beta_max` has a ceiling because `0009_scoring.sql` CHECKs the column at
+        # 0.8 and a migration cannot be edited, so a bundle raising it would fail the nightly
+        # fit's INSERT rather than serve anything; and a grid is the only sequence-valued
+        # constant here, so a scalar would reach numpy inside `_cross_validate` instead.
+        ({"gate_k": 0}, "positive number"),
+        ({"warm_gate": 1.0}, "probability"),
+        ({"warm_gate": 0}, "probability"),
+        ({"blend_beta_max": 0.9}, "ceiling"),
+        ({"min_labels_for_cv": 0}, "positive integer"),
+        ({"loo_below_labels": 2.5}, "positive integer"),
+        ({"blend_beta_grid": 0.5}, "non-empty list"),
+        ({"foldin_lambda_grid": []}, "non-empty list"),
+        ({"blend_beta_grid": [0.1, "half"]}, "non-negative numbers"),
+        ({"foldin_lambda_grid": [1.0, -3.0]}, "non-negative numbers"),
+        # Both solver knobs are strictly positive by construction: a tolerance of 0 or below
+        # declares every Newton solve converged, and `model.fit`'s `while eta >= hp.lr_min` does
+        # not terminate at 0 once the halving reaches 0.0. [M4.13 cycle 1, M413-R1-HP-03]
+        ({"newton_tol": -5.0}, "positive number"),
+        ({"newton_tol": 0}, "positive number"),
+        ({"lr_min": -1.0}, "positive number"),
     ],
 )
 def test_a_nonsensical_constant_is_refused_at_the_boundary(payload, message):
@@ -302,12 +325,19 @@ def test_no_shipped_key_disappears_without_a_word(tmp_path):
 
 
 def test_an_unmeasured_constant_falls_back_instead_of_refusing_the_bundle():
-    """The shipped σ-inflation rate is JSON null — the corpus saying it has no measurement yet.
-    Passing None through would trip the positivity check and refuse a merely incomplete
-    bundle; §3.1 makes a documented default the answer, and the note says which."""
-    hp, notes = from_mapping({"sigma_inflation": {"rate_c_per_sqrt_month": None}})
-    assert hp.sigma_inflation_c == DEFAULTS.sigma_inflation_c
-    assert any("unmeasured" in n for n in notes)
+    """JSON null is the corpus saying it has no measurement yet. Passing None through would trip
+    the positivity check and refuse a merely incomplete bundle; §3.1 makes a documented default the
+    answer, and the note says which.
+
+    The σ-inflation RATE used to be this test's example and is now the one exception, because the
+    rule it feeds has an off switch and nothing else here does: a null λ_bt still has to be some
+    number for the objective to be written down, so there the default is the only answer
+    (`test_a_null_sigma_inflation_rate_disables_the_inflation_and_notes_it` owns the other half).
+    [M4.13 step 34b]
+    """
+    hp, notes = from_mapping({"bt_weight_lam_bt": None, "learning_rate": None})
+    assert (hp.lambda_bt, hp.lr) == (DEFAULTS.lambda_bt, DEFAULTS.lr)
+    assert sum("unmeasured" in n for n in notes) == 2
 
 
 def test_the_provenance_string_is_not_read_as_a_constant(tmp_path):
@@ -316,6 +346,229 @@ def test_the_provenance_string_is_not_read_as_a_constant(tmp_path):
     hp, notes = from_mapping(_shipped(tmp_path))
     assert hp.source == "bundle"
     assert any("'source' is provenance" in n for n in notes)
+
+
+# --- what the bundle says it has not measured -------------------------------------------------
+#
+# §4.3 ships nine constants and the shipped file leaves one of them null with `provisional: true`
+# and the note "no measurement behind the rate yet - tune before use". This app read the flag,
+# filed it as deliberately unused, and ran σ-inflation at its own 0.05 anyway: a default is a
+# number somebody measured somewhere, and a null is the corpus saying nobody has.
+# [M4.13 step 34b, cs-40]
+
+
+def test_a_null_sigma_inflation_rate_disables_the_inflation_and_notes_it():
+    """The shipped case, and the whole of it: rate null -> c = 0.0, loudly, and §5.2's rule then
+    reports itself off rather than running at a rate this file invented.
+
+    `model.inflate_sigma` is asserted here too, because "disabled" is a claim about the fit and not
+    about the constant: at c = 0 the growth term is zero and the function returns σ unchanged, so
+    no title's σ moves with neglect and none of it needs a second code path.
+    """
+    import numpy as np
+
+    from spielplan.ledger import model
+
+    hp, notes = from_mapping({"sigma_inflation": {"rate_c_per_sqrt_month": None}})
+    assert hp.sigma_inflation_c == 0.0, "a null rate must not become this app's own 0.05"
+    loud = [n for n in notes if "SIGMA-INFLATION DISABLED" in n]
+    assert loud, f"the disabling has to be loud, not a footnote: {notes}"
+    assert "rate_c_per_sqrt_month" in notes[0], "the note must name the key the corpus must fix"
+
+    sigma = np.array([0.31, 0.48])
+    prior = np.array([0.90, 0.90])
+    neglected = np.array([60.0, 360.0])          # five and thirty years untouched
+    held = model.inflate_sigma(sigma, prior, neglected, hp)
+    assert held == pytest.approx(sigma), "c = 0 must leave every σ exactly where the fit put it"
+    # And the control: the default rate still inflates, so this test cannot pass by the mechanism
+    # being broken for everybody.
+    grown = model.inflate_sigma(sigma, prior, neglected, DEFAULTS)
+    assert grown[1] > sigma[1] and DEFAULTS.sigma_inflation_c == 0.05
+
+
+def test_a_provisional_constant_disables_its_rule_rather_than_falling_back():
+    """The flag alone is enough, even beside a number: `provisional: true` is the corpus saying
+    the value it shipped is not a measurement, and the value is the thing this app must not use.
+
+    Also the negative: `provisional: false` is a corpus that HAS measured the rate, and then the
+    shipped number is exactly what §5.2 asks this app to run at.
+    """
+    hp, notes = from_mapping(
+        {"sigma_inflation": {"rate_c_per_sqrt_month": 0.07, "provisional": True}}
+    )
+    assert hp.sigma_inflation_c == 0.0, "a provisional rate is not a rate"
+    assert any("SIGMA-INFLATION DISABLED" in n for n in notes), notes
+    assert any(hp_module.PROVISIONAL_KEY in n for n in notes), (
+        "a flag that changes the fit may not be read silently"
+    )
+
+    measured, _notes = from_mapping(
+        {"sigma_inflation": {"rate_c_per_sqrt_month": 0.07, "provisional": False}}
+    )
+    assert measured.sigma_inflation_c == 0.07
+
+    # Refused rather than coerced, for `_BOOLEAN`'s reason: a string is truthy, so `"false"` would
+    # disable the rule the corpus had just said was measured.
+    with pytest.raises(ValueError, match="must be a boolean"):
+        from_mapping({"sigma_inflation": {"provisional": "false"}})
+
+
+def test_from_mapping_refuses_a_boolean_where_a_number_is_required():
+    """`bool` is an `int` subclass, and three checks here asked `isinstance(v, int | float)`.
+
+    `{"anchor_ridge_lambda": true, "steps": true}` therefore arrived as λ = 1.0 with one step, under
+    `source = "bundle"` and an `hp_digest` that looks like any other - a fit nobody could explain,
+    from a file nobody would suspect, because the report said the constants came from the bundle and
+    they did. This module's comment on `margin_weighting` shows the intent it already had: a
+    mistyped constant is refused, never coerced. [M4.13 step 34a, ml10]
+
+    Step 34a enumerated THREE checks and there are four numeric gates plus two fields that were in
+    no list at all, so the same `true` still got through in three places. `newton_tol = True` is
+    1.0, which declares §5.2's Newton cutpoint solve converged on its first step for every
+    household; `lr_min = True` is a step-size floor of 1, so the line search takes one halving and
+    stops; `sigma_inflation_cap = True` caps every inflated sigma at 1.0 instead of at the title's
+    own prior sigma - [0.31, 0.48] at 60 and 360 months comes out [0.4649, 1.0] where the sentinel
+    gives [0.4649, 0.9]. The defect id is the class (`ml10-hyperparams-accept-booleans-as-numbers`),
+    not the three instances that were listed. [M4.13 cycle 1, M413-R1-HP-03]
+    """
+    for payload, message in (
+        ({"anchor_ridge_lambda": True}, "positive number"),      # the _POSITIVE loop
+        ({"steps": True}, "positive integer"),                   # the step count
+        ({"newton_max_iter": True}, "positive integer"),         # the solver's iteration cap
+        ({"min_labels_for_cv": True}, "positive integer"),        # M4.13's own new count
+        ({"gate_k": True}, "positive number"),
+        ({"blend_beta_grid": [0.0, True]}, "non-negative numbers"),
+        ({"margin_weight_form": True}, "margin_form"),
+        # The three the enumeration missed: two fields in no check list, and the fourth gate.
+        ({"newton_tol": True}, "positive number"),
+        ({"lr_min": True}, "positive number"),
+        ({"sigma_inflation_cap": True}, "sigma_inflation_cap"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            from_mapping(payload)
+    # The one place a boolean IS the type, so the refusals above are about the mismatch and not
+    # about booleans.
+    assert from_mapping({"margin_weighting": False})[0].margin_weighting is False
+
+
+def test_the_digest_is_the_same_for_twelve_and_twelve_point_zero():
+    """JSON has one number type and this file has two. `digest()` hashed `json.dumps`, which wrote
+    `12` for the int and `12.0` for the float - two digests for one set of constants, and
+    `ledger_fit.hp_digest` is a precondition rather than a hint, so every cached fit in the install
+    was discarded over a spelling nobody could see. [M4.13 step 34c]
+    """
+    for field, spellings in (
+        ("steps", (12, 12.0)),
+        ("newton_max_iter", (50, 50.0)),
+        ("sigma_inflation_grace_months", (12, 12.0)),
+        ("min_labels_for_cv", (5, 5.0)),
+    ):
+        digests = {dataclasses.replace(DEFAULTS, **{field: v}).digest() for v in spellings}
+        assert len(digests) == 1, f"{field}: int and float spellings produced {digests}"
+    # A list and a tuple of the same grid are the same constants too - `from_mapping` normalises to
+    # a tuple, and this is what makes that normalisation matter rather than decorate.
+    as_list = dataclasses.replace(DEFAULTS, blend_beta_grid=list(DEFAULTS.blend_beta_grid))
+    assert as_list.digest() == DEFAULTS.digest()
+    # And the digest still MOVES for a real change, or the two assertions above are satisfied by a
+    # constant function.
+    assert dataclasses.replace(DEFAULTS, steps=13).digest() != DEFAULTS.digest()
+
+
+# --- the constants that lived in three other modules -------------------------------------------
+
+
+def test_the_foldin_grid_the_gate_k_and_the_warm_threshold_are_bundle_constants():
+    """§5.2: "every constant comes from `ledger_hyperparams.json`" - which is a rule about where
+    the number LIVES, and eight of them lived elsewhere.
+
+    `scoring/backbone.py` owned the evidence gate's k and the warm threshold; `scoring/foldin.py`
+    owned β's ceiling and grid, λ's grid, §0's noise floor and the two label counts that decide
+    whether to cross-validate at all. A corpus-side re-tune of any of them could not reach this
+    app: `from_mapping` would have called every one an unknown hyperparameter and applied none.
+    Today's values are the defaults, so nothing served moves. [M4.13 step 34d, dd14]
+    """
+    from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    assert (DEFAULTS.gate_k, DEFAULTS.warm_gate) == (10.0, 0.9)
+    assert DEFAULTS.blend_beta_max == 0.8
+    assert DEFAULTS.blend_beta_grid == tuple(i / 10 for i in range(11))
+    assert DEFAULTS.foldin_lambda_grid == (1.0, 3.0, 10.0, 30.0, 100.0)
+    assert (DEFAULTS.rho_noise_floor, DEFAULTS.min_labels_for_cv, DEFAULTS.loo_below_labels) == (
+        0.008, 5, 25
+    )
+
+    # The modules read the field rather than carrying a copy of its value.
+    assert (DEFAULTS.gate_k, DEFAULTS.warm_gate) == (bb.EVIDENCE_K, bb.WARM_GATE)
+    assert DEFAULTS.gate_k * DEFAULTS.warm_gate / (1.0 - DEFAULTS.warm_gate) == bb.WARM_SUPPORT
+    # 90 plus one ulp, because it is computed and not written (`test_scoring.py` records the same).
+    assert bb.WARM_SUPPORT > 90.0 and bb.WARM_SUPPORT - 90.0 < 1e-9
+    assert DEFAULTS.blend_beta_max == foldin.BETA_MAX
+    assert DEFAULTS.blend_beta_grid == foldin.BETA_GRID
+    assert DEFAULTS.foldin_lambda_grid == foldin.LAMBDA_GRID
+    assert DEFAULTS.rho_noise_floor == foldin.NOISE_FLOOR
+    assert DEFAULTS.min_labels_for_cv == foldin.MIN_LABELS_FOR_CV
+    assert DEFAULTS.loo_below_labels == foldin.LOO_BELOW
+
+    # A bundle that ships one of these names is parsed and range-checked into the field. It is
+    # NOT yet served with: this comment claimed it was, and the claim was wrong in both halves.
+    # `DEFAULTS = Hyperparams()` is the dataclass's own default instance, so a new process after
+    # §10's restart re-binds 10.0 no matter what the bundle says, and no function in
+    # `scoring/foldin.py` takes an `hp` at all. What the module does instead is SAY so, once per
+    # re-tuned constant, because a knob that is accepted in silence is this file's own named
+    # defect ("exactly the kind of thing that looks like it is working").
+    # [M4.13 cycle 2, M413-C2-DIM-HP-01]
+    tuned, notes = from_mapping({"gate_k": 12.0, "blend_beta_grid": [0.0, 0.25, 0.5]})
+    assert tuned.gate_k == 12.0 and tuned.blend_beta_grid == (0.0, 0.25, 0.5)
+    assert not [n for n in notes if "unknown hyperparameter" in n], notes
+    assert bb.EVIDENCE_K == DEFAULTS.gate_k == 10.0, (
+        "the serving constant is an import-time binding of the DEFAULT, not of the loaded bundle"
+    )
+    assert bb.gate(30) == pytest.approx(0.75), "and the gate is computed with that same 10.0"
+    named = [n for n in notes if "NOT YET APPLIED" in n]
+    assert sorted(n.split("'")[1] for n in named) == ["blend_beta_grid", "gate_k"], named
+    assert all("scoring." in n for n in named), (
+        "the note has to name the reader that is still on the default, or it is not actionable"
+    )
+    assert all(n.isascii() for n in named), "an import report is read on a cp1252 console"
+    # Every one of the eight, so a later milestone that threads one has exactly one list to edit.
+    _, every = from_mapping({k: getattr(DEFAULTS, k) for k in hp_module._PARSED_NOT_THREADED})
+    assert len([n for n in every if "NOT YET APPLIED" in n]) == 8, every
+    # And a constant that DOES reach its reader must not be labelled: `lambda_ridge` is model.py's.
+    _, ledger_side = from_mapping({"anchor_ridge_lambda": 2.5})
+    assert not [n for n in ledger_side if "NOT YET APPLIED" in n], ledger_side
+    # Each of the eight changes a fit, so each belongs in the digest `ledger_fit` compares.
+    for field, value in (
+        ("gate_k", 12.0), ("warm_gate", 0.8), ("blend_beta_max", 0.5),
+        ("blend_beta_grid", (0.0, 0.5)), ("foldin_lambda_grid", (2.0,)),
+        ("rho_noise_floor", 0.004), ("min_labels_for_cv", 8), ("loo_below_labels", 40),
+    ):
+        assert dataclasses.replace(DEFAULTS, **{field: value}).digest() != DEFAULTS.digest(), field
+
+
+def test_the_model_line_reads_the_gate_k_the_scoring_stack_reads():
+    """§6.0's why-numbers print `gate_k`, which IS §5.1's evidence k - and it was the literal 10,
+    twice, in `home/shelves.py`, beside a `gate` the same cards report out of `title_prior`.
+
+    Two spellings of one quantity: a re-tuned k would have moved every gate on every card and left
+    both why-lines naming the old number, on the one surface whose rule is that a shelf cannot say
+    why it exists unless the why is true. The source scan is the assertion, because the defect is
+    not a wrong value today - the literal WAS 10 - but a second place to change. [M4.13 step 34d]
+    """
+    from spielplan.home import shelves
+    from spielplan.scoring import backbone as bb
+
+    source = Path(shelves.__file__).read_text(encoding="utf-8")
+    assert '"gate_k": 10' not in source, "the literal is back; §6.0's k has two spellings again"
+    assert source.count('"gate_k": DEFAULTS.gate_k') == 2, (
+        "both why-number dicts - `top_of_ledger` and `new_in_library` - read the field"
+    )
+    assert DEFAULTS.gate_k == bb.EVIDENCE_K
+    # And the gate the cards carry is computed from that same k, so the printed number describes
+    # the printed gate.
+    assert bb.gate(DEFAULTS.gate_k) == pytest.approx(0.5), (
+        "gate(k) = 0.5 by construction; if this moves, `gate_k` is not the gate's k"
+    )
 
 
 # --- read once at boot, refused loudly ---------------------------------------------------------

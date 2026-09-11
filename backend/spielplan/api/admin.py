@@ -657,6 +657,7 @@ JOB_NAMES: tuple[str, ...] = (
     "webauthn-challenge-prune",
     "job-run-prune",
     "ledger-map-refit",
+    "ledger-refresh",
     "fold-in-user-vectors",
     "fold-in-tick",
     "tier-set-refit",

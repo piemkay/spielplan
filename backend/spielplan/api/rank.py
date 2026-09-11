@@ -50,12 +50,14 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
+from spielplan.api.artifacts import RESTART_REQUIRED, RESTORE_REQUIRED
 from spielplan.api.deps import DB, ActiveUser, write_txn
 from spielplan.core.config import settings
 from spielplan.db import library
 from spielplan.home import rail
 from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
+from spielplan.models import artifacts
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
 
@@ -201,8 +203,60 @@ def _hyperparams(request: Request) -> Hyperparams:
     return hp
 
 
+async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
+    """§10's invariant on the Rank request path. One sentence of reasoning, in
+    `api/rate.py::_assert_active_basis`, which states it at length; this is the same guard on the
+    same window, and both refusals carry `api/artifacts.py::RESTART_REQUIRED` verbatim so the two
+    surfaces and the import screen say one thing.
+
+    At the top of the route, before `drop_rules.drop` and before the answer is written: M4.10
+    finding 8 measured what a refusal raised after a durable write costs (a 500 over a row the
+    person cannot take back, and a retry that wrote a second one). [M4.13, arch-03, data-01]
+
+    Both arms, for the reason `api/rate.py` gives at length: a broken install's store carries the
+    active version, so the comparison above passes and only the flag can refuse it. Drop and queue
+    answer fit exactly as verdict and duel do. [M4.13 cycle 1]
+    """
+    store = getattr(request.app.state, "artifacts", None)
+    if store is None:
+        return
+    try:
+        store.assert_matches(await artifacts.active_bundle_version(conn))
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_swapped", "message": RESTART_REQUIRED},
+        ) from exc
+    try:
+        store.assert_not_broken()
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_broken", "message": RESTORE_REQUIRED},
+        ) from exc
+
+
+def _basis(request: Request):
+    """Which bundle this process is fitting in. See `api/rate.py::_basis`: the route's guard
+    compares it to the active row before the write, and `refit.update_incrementally` re-asks after
+    the board lock, because a tap can wait out the import that flips it. [M4.13 cycle 1]"""
+    store = getattr(request.app.state, "artifacts", None)
+    return refit.BASIS_UNSTATED if store is None else store.version
+
+
 def _embeddings(request: Request, conn: asyncpg.Connection):
-    return observations.standard_embeddings(conn, getattr(request.app.state, "backbone", None))
+    """§5.1's coordinate source, with the version that describes it. See
+    `api/rate.py::_embeddings`: the Backbone this process pinned at boot and the
+    `title_placement` rows the cold half reads have to be the same bundle, and the `ledger_fit`
+    stamp the fit earns has to name it. [M4.13, data-01]"""
+    store = getattr(request.app.state, "artifacts", None)
+    return observations.standard_embeddings(
+        conn,
+        getattr(request.app.state, "backbone", None),
+        bundle_version=None if store is None else store.version,
+    )
 
 
 def _filters(
@@ -372,6 +426,7 @@ async def drop(
     would silently clear on every drop — the client would have to choose between showing a
     board it did not ask for and making a second request for one it already had.
     """
+    await _assert_active_basis(request, conn)
     hp = _hyperparams(request)
     # Built before the write, not only for the answer: decision 204 makes "was a filter on?" an
     # input to what the drop records, because the client computes `above`/`below` from the board
@@ -405,7 +460,7 @@ async def drop(
     touched = {body.title_id} | {t for t in (body.above, body.below) if t is not None}
     ledger = await refit.update_incrementally_reporting(
         conn, user_id=user.id, kind=result.kind, title_ids=sorted(touched), hp=hp,
-        embeddings=_embeddings(request, conn),
+        embeddings=_embeddings(request, conn), bundle_version=_basis(request),
     )
     return await _payload(
         conn, user=user, kind=result.kind, hp=hp, filters=filters,
@@ -497,6 +552,7 @@ async def answer(
     defect. The count has moved by the time the loser wakes, so the 409 does not depend on the
     fit being inside. [M4.10 finding 1]
     """
+    await _assert_active_basis(request, conn)
     hp = _hyperparams(request)
     sealed = _unseal(body.pair, user_id=user.id)
     kind = str(sealed["k"])
@@ -539,7 +595,7 @@ async def answer(
         # invited a retry that wrote another. [M4.10 finding 8]
         ledger = await refit.update_incrementally_reporting(
             conn, user_id=user.id, kind=kind, title_ids=list(write.title_ids), hp=hp,
-            embeddings=_embeddings(request, conn),
+            embeddings=_embeddings(request, conn), bundle_version=_basis(request),
         )
     names = await read.names_for(conn, list(write.title_ids))
     # `duel_line` elides a name too long for §6.7's 400 rather than refusing it (`home/rail.py`'s

@@ -18,7 +18,13 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import inspect
+import io
+import struct
 import time
+import zipfile
+import zlib
+from collections.abc import Sequence
 
 import asyncpg
 import numpy as np
@@ -39,8 +45,9 @@ MOVIES = (1, 2, 3, 4, 5, 8)
 SERIES = (6, 7)
 
 # The two coordinates the app computes rather than imports (§5.3 placement reconciliation).
-# Title 8 has no Backbone row at all; title 5 has one with n_t = 6, which is the only row thin
-# enough for the gate to leave real weight on the Cold Tower.
+# Title 8's row carries no coordinate — `cold_mask` flags it, so the basis excludes it (cs-01) —
+# and title 5 has one with n_t = 6, which is the only row thin enough for the gate to leave real
+# weight on the Cold Tower.
 COLD_PLACEMENTS = {8: 0.41, 5: 0.69}
 
 
@@ -129,6 +136,35 @@ async def place(conn, title_id: int, b_hat: float, *, bundle: str = BUNDLE) -> N
     )
 
 
+def basis(rows: Sequence[tuple[int, int, float]], *, mu: float = 0.1) -> bb.Backbone:
+    """A Backbone built in memory from (title_id, item_n, ||E||) triples.
+
+    Constructed rather than loaded because the point of the blend measurement is that the two
+    halves have KNOWN norms: `make_bundle`'s E is realistic and therefore unusable as a ruler.
+    `row_of` is filled for every row on purpose — including a zero-norm one, which `Backbone.open`
+    would have excluded (cs-01, the cold mask) — because `blend_ratios` takes whatever Backbone it
+    is handed and must report a pair it cannot divide rather than raise inside a report.
+    """
+    e = np.zeros((len(rows), 64))
+    for i, (title_id, _n, norm) in enumerate(rows):
+        direction = np.random.default_rng(777 + title_id).standard_normal(64)
+        e[i] = direction / np.linalg.norm(direction) * norm
+    return bb.Backbone(
+        version="synthetic",
+        title_ids=np.asarray([r[0] for r in rows], dtype=np.int64),
+        E=e,
+        b_i=np.zeros(len(rows)),
+        item_n=np.asarray([r[1] for r in rows], dtype=np.int64),
+        mu=mu,
+        row_of={int(r[0]): i for i, r in enumerate(rows)},
+    )
+
+
+def cold_at(title_id: int, norm: float) -> np.ndarray:
+    """A stand-in ê of known norm, so the ratio the report prints can be written out by hand."""
+    return cold_vector(title_id) * norm
+
+
 def synth(n_titles: int, n_labels: int, *, seed: int, prior_signal: float = 0.0):
     """A synthetic (coords, reference, labels) triple with a controllable signal split.
 
@@ -180,19 +216,36 @@ def test_the_backbone_loads_the_shipped_bundle_and_indexes_it_by_title_id(backbo
 
     The id mapping is NOT in §4.3 — it names no alignment between a row of E and a row of
     `title` — so the loader requires the `title_id` array the fixture ships and says so. Title 8
-    has no Backbone row on purpose: that is normal (§8 stage 10), not an error.
+    has no coordinate on purpose: that is normal (§8 stage 10), not an error. Since M4.13 it is
+    the corpus's own way of having none — a row in the file that `cold_mask` flags (cs-01) —
+    rather than an absent row, so `n_rows` counts eight while the index answers for seven, and
+    the three accessors below say the same thing about it either way.
     """
     assert not backbone.is_empty
-    assert backbone.n_rows == 7
+    assert backbone.n_rows == 8
     assert backbone.mu == pytest.approx(0.12, abs=1e-6)
     for title_id in (1, 2, 3, 4, 5, 6, 7):
         assert backbone.row(title_id) is not None
         assert backbone.support(title_id) == SUPPORT[title_id]
         assert backbone.embedding(title_id).shape == (64,)
     assert backbone.row(8) is None
+    # Not `SUPPORT[8]` read off the file: `item_n` ships 900 for that row (fx.COLD_BACKBONE_ROWS)
+    # and the support the app can use is nothing, which is the pair cs-01 is about.
     assert backbone.support(8) == 0
     assert backbone.embedding(8) is None
     assert backbone.raw_prior(8) is None
+    # And the OTHER accessor, which is the half cs-01 took with it by accident. §4.3 ships
+    # `item_n` as "the per-title support counts" and glosses it "(the §5.1 gate input)"; those are
+    # one number only while every row carries a coordinate, and excluding the flagged rows is
+    # exactly what stopped them being one. `support()` is the gate's, `crowd_support()` is the
+    # crowd's, and the crowd's is what §6.1's P(seen) and §8 stage 10's badge payload read out of
+    # `title_prior.item_n`. [M4.13 cycle 2, M413-C2-DIM5-01]
+    assert backbone.crowd_support(8) == fx.COLD_BACKBONE_ROWS[8] == 900
+    for title_id in (1, 2, 3, 4, 5, 6, 7):
+        assert backbone.crowd_support(title_id) == SUPPORT[title_id], (
+            "the two accessors have to stay one number for every row that has a coordinate"
+        )
+    assert backbone.crowd_support(9999) == 0, "a title with no row in the file has no count"
 
 
 def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_path):
@@ -229,6 +282,100 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
         bb.Backbone.open(write(**{k: v for k, v in good.items() if k != "title_ids"}))
 
 
+def test_a_truncated_backbone_npz_raises_backbone_error_rather_than_a_zip_error(tmp_path):
+    """§3.1 keeps a half-configured boot legal, and `app.py:256-260` is how: it catches
+    `BackboneError`, logs it, and serves with `Backbone.empty()` so the admin can reach the Data
+    tab and re-import. That guard caught nothing for the most likely corruption there is.
+
+    `np.load` raises `zipfile.BadZipFile` for a truncated or half-copied archive and `ValueError`
+    for a file that is not an npz at all — neither is a `RuntimeError`, so an interrupted copy into
+    `/data/artifacts` took the lifespan down and left no surface to fix the bundle from. Measured
+    before the fix: a file cut at 50%, 97% and 2% all raised `BadZipFile` past the guard.
+
+    The third case is the one a single `try` around the open would still have missed: `NpzFile`
+    re-reads the member on every subscript, so a valid archive with one corrupt member fails at
+    whichever read touches it — here `cold_mask`, which is read after every shape check has passed.
+
+    ZERO BYTES IS ITS OWN DEPTH, and it is the depth a ladder of fractions cannot reach. `docker
+    cp`, `scp` and a restore all create the destination and truncate it before writing, so an
+    interrupted copy spends its first instant at exactly 0 — and `np.load` answers that one file
+    length with `EOFError` from its own empty-magic check, not `BadZipFile`. It is not an
+    `OSError`, a `ValueError` or a `RuntimeError`, so it went past `_reading` and past `app.py`'s
+    lifespan guard alike; 2% of this fixture is ~77 bytes, which is already a `BadZipFile`.
+    `ArtifactStore.open` does not save it either: `present` is `.exists()`, and an empty file
+    exists. [M4.13 cycle 1, M413-R1-HP-02]
+
+    AND THE ARCHIVE IS DEFLATED, which is what the corrupt-member case above could not see: it is
+    built with `zipfile.ZipFile(path, "w")`, whose default is ZIP_STORED, and every member of the
+    corpus's own `backbone.npz` is `compress_type 8`. Damage IN PLACE inside a deflate stream --
+    a bad sector, a resumed copy that leaves the file its right length -- fails inside zlib before
+    the CRC that would have made it a `BadZipFile` is computed, and `zlib.error` subclasses
+    `Exception` directly rather than `OSError`, `ValueError` or `RuntimeError`. So the last arm
+    below is the corrupt-member case again in the one compression mode the corpus actually ships,
+    and the damage is deterministic rather than sampled: 0xFF opens a deflate block with BTYPE 3,
+    which is reserved. [M4.13 cycle 2, M413-C2-DIM-BB-02]
+    """
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    arrays = {
+        "title_ids": np.arange(1, 5, dtype=np.int32),
+        "E": np.random.default_rng(9).standard_normal((4, 64)).astype(np.float32),
+        "b_i": np.zeros(4, dtype=np.float32),
+        "item_n": np.array([500, 900, 4, 200], dtype=np.int32),
+        "mu": np.float32(0.1),
+        "cold_mask": np.zeros(4, dtype=bool),
+    }
+    path = root / "backbone.npz"
+    np.savez(path, **arrays)
+    whole = path.read_bytes()
+    assert not bb.Backbone.open(ArtifactStore.open(root, "whole")).is_empty
+
+    # Truncated, at four depths: the guard must not depend on where the copy stopped, and 0.0 is
+    # where every interrupted copy starts.
+    for fraction in (0.0, 0.02, 0.5, 0.97):
+        path.write_bytes(whole[: int(len(whole) * fraction)])
+        assert ArtifactStore.open(root, f"cut-{fraction}").present["backbone.npz"], (
+            "a zero-byte member is PRESENT, which is why `Backbone.open`'s early return misses it"
+        )
+        with pytest.raises(bb.BackboneError, match="could not be read"):
+            bb.Backbone.open(ArtifactStore.open(root, f"cut-{fraction}"))
+
+    # Not an archive at all — what a failed download leaves behind.
+    path.write_bytes(b"<html>504 Gateway Time-out</html>")
+    with pytest.raises(bb.BackboneError, match="could not be read"):
+        bb.Backbone.open(ArtifactStore.open(root, "not-a-zip"))
+
+    # A valid archive with one corrupt member, read after the shape checks have all passed.
+    def member(array: np.ndarray) -> bytes:
+        buffer = io.BytesIO()
+        np.lib.format.write_array(buffer, np.asarray(array), allow_pickle=False)
+        return buffer.getvalue()
+
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, array in arrays.items():
+            raw = member(array)
+            archive.writestr(f"{name}.npy", raw[: len(raw) // 2] if name == "cold_mask" else raw)
+    with pytest.raises(bb.BackboneError, match="cold_mask"):
+        bb.Backbone.open(ArtifactStore.open(root, "half-a-mask"))
+
+    # The same archive in the corpus's own compression mode, damaged in place rather than cut.
+    np.savez_compressed(path, **arrays)
+    with zipfile.ZipFile(path) as archive:
+        assert {i.compress_type for i in archive.infolist()} == {zipfile.ZIP_DEFLATED}
+        info = archive.getinfo("cold_mask.npy")
+    raw = bytearray(path.read_bytes())
+    name_len, extra_len = struct.unpack("<HH", raw[info.header_offset + 26:info.header_offset + 30])
+    start = info.header_offset + 30 + name_len + extra_len
+    raw[start:start + info.compress_size] = b"\xff" * info.compress_size
+    path.write_bytes(bytes(raw))
+    with pytest.raises(bb.BackboneError, match="cold_mask"):
+        bb.Backbone.open(ArtifactStore.open(root, "deflate-damaged"))
+
+    # And it is the class `app.py`'s lifespan actually catches, which is the whole point.
+    assert issubclass(bb.BackboneError, RuntimeError)
+    assert not issubclass(zlib.error, RuntimeError | OSError | ValueError)
+
+
 def test_a_zeroed_backbone_row_is_not_a_warm_title(tmp_path):
     """cs-01. §5.1's e(t) branch, §4.3's backbone.npz, §12's M2 exit criterion.
 
@@ -236,7 +383,7 @@ def test_a_zeroed_backbone_row_is_not_a_warm_title(tmp_path):
     v20260828 does exactly that: `cold_mask` is true on 2,879 of 14,397 rows, E is written as
     zeros for all of them, and the coordinate the corpus actually has for them lives in
     `E_hat`/`b_hat`. Read as coordinates those rows are worse than absent ones — the personal
-    term is exactly zero for every user for ever, 1,918 of them carry `item_n >= WARM_SUPPORT`
+    term is exactly zero for every user for ever, 1,915 of them carry `item_n >= WARM_SUPPORT`
     so the sweep is told to skip them, and §12's M2 criterion counts them as coordinated
     because `e_source` is not 'none'.
 
@@ -342,6 +489,157 @@ def test_a_title_with_neither_a_row_nor_a_placement_has_no_coordinate(backbone):
     ranked on an invented number, so there is no coordinate to rank it with."""
     assert bb.coordinate(8, backbone, None) is None
     assert bb.coordinate(999, backbone, None) is None
+
+
+def test_a_title_at_item_n_thirty_weights_its_two_halves_three_to_one(backbone):
+    """§5.1's middle line at the one support where the weights are round numbers.
+
+    `gate = n_t/(n_t + k)` is 30/40 = 0.75 exactly, so e(t) is three parts Backbone row to one
+    part Cold Tower placement — and "exactly" is the assertion, not "approximately": 0.75 and
+    0.25 are both representable, so a blend that agrees to six decimals and not to the last bit
+    has had something else done to it. Title 4 carries item_n = 30 in the shipped fixture.
+
+    The same title on the FIT path is `test_ledger_observations.py`'s
+    `test_the_fitted_coordinate_equals_the_served_coordinate_for_every_title`, which is the half
+    that could not have been asserted before dd02: `standard_embeddings` composed its two sources
+    as a precedence chain, so this title was fitted at its raw E while being served at this blend.
+    """
+    assert SUPPORT[4] == 30, "the fixture moved; this test is about the 3:1 gate"
+    e_hat, b_hat = cold_vector(4), 0.55
+    c = bb.coordinate(4, backbone, (e_hat, b_hat))
+
+    assert c.e_source == "blended"
+    assert c.gate == 0.75 and c.item_n == 30
+    assert c.gate / (1.0 - c.gate) == 3.0, "three parts crowd to one part tower"
+
+    e_row = backbone.embedding(4).astype(np.float64)
+    assert np.array_equal(c.e, 0.75 * e_row + 0.25 * e_hat), (
+        "e(t) is not exactly the 3:1 blend of the two halves"
+    )
+    assert c.b == pytest.approx(0.75 * backbone.raw_prior(4) + 0.25 * b_hat)
+
+
+def test_the_blend_report_names_the_ratio_of_the_two_weighted_halves_on_known_arrays():
+    """cs-02 / dd15, decision 236. The measurement, on arrays whose two halves are known.
+
+    Every row here has ||E|| = 0.2 and every placement ||ê|| = 50, so
+    ((1-g)*||ê||)/(g*||E||) is a closed form per support and this test can write it out: at
+    n_t = 6 the gate is 0.375 and the ratio 416.7, at 30 it is 0.75 and 83.3, at 55 it is 0.846
+    and 45.5. The shipped bundle's own distribution over the 3,860 rows §5.1's middle line
+    applies to is p10 82.5 / median 525.8 / p90 5,498.9, which these are a miniature of. 3,860 and
+    not the 3,846 with `item_n < 90`: `WARM_SUPPORT` is computed and lands one ulp above 90, so
+    the 14 non-cold rows at exactly 90 fall on the BLEND side -- the same ulp the `edge` assertion
+    sixty lines below pins, and the population the helper actually walks.
+    [M4.13 cycle 2, M413-C2-DIM5-03]
+
+    There is no failing assertion about the SCALE, and that is decision 236 rather than timidity:
+    whether the two halves should be brought within an order of magnitude of each other, and by
+    which rescaling, is the corpus's contract question (§4.1 carries the artifact over verbatim).
+    The app ships the number so the answer arrives with evidence behind it, and
+    `ops/m413_exit_criterion.py` prints it against the real bundle with no verdict attached.
+    """
+    warm_norm, cold_norm = 0.2, 50.0
+    supports = (6, 30, 55)
+    back = basis([(t, n, warm_norm) for t, n in zip((1, 2, 3), supports, strict=True)])
+    placements = {t: (cold_at(t, cold_norm), 0.0) for t in (1, 2, 3)}
+
+    report = bb.blend_ratios(back, placements)
+    assert (report.n_offered, report.n_measured) == (3, 3)
+    assert (report.n_warm, report.n_no_row, report.n_degenerate) == (0, 0, 0)
+
+    expected = sorted(
+        ((1.0 - bb.gate(n)) * cold_norm) / (bb.gate(n) * warm_norm) for n in supports
+    )
+    assert sorted(report.ratios) == pytest.approx(expected)
+    assert report.median == pytest.approx(((1 - 0.75) * cold_norm) / (0.75 * warm_norm))
+    assert report.median == pytest.approx(83.3333, abs=1e-3)
+    assert report.p10 <= report.median <= report.p90
+
+    # The whole point of the number: the cold half outweighs the warm one by two orders of
+    # magnitude at every gate the spec's own k produces, so "gate" is not weighting a blend.
+    assert min(report.ratios) > 10.0
+    assert report.as_dict()["measured"] == 3
+
+
+def test_the_blend_report_counts_only_the_rows_the_middle_line_of_the_blend_applies_to():
+    """§5.1 is three lines and only the middle one has two halves to compare.
+
+    A row at or above WARM_SUPPORT is the FIRST line (E outright, gate >= 0.9); a title with no
+    Backbone row is the THIRD (gate exactly 0, both terms the Cold Tower's); a pair with a zero on
+    one side of the division has no ratio at all. Folding those into the measured set would let
+    "the blend is balanced" and "there was nothing to blend" print the same number — which is how
+    a measurement becomes a reassurance.
+    """
+    back = basis([
+        (1, 89, 0.2),     # below the threshold: the middle line, and the only measured row
+        (2, 91, 0.2),     # above it: warm, §5.1's first line
+        (3, 4218, 0.2),   # far above it: warm
+        (4, 0, 0.2),      # a coordinate with no crowd rating at all: g = 0, no ratio exists
+        (5, 30, 0.0),     # a zeroed row (cs-01) left in the index: nothing to divide by
+    ])
+    placements = {t: (cold_at(t, 50.0), 0.0) for t in (1, 2, 3, 4, 5, 99)}
+
+    report = bb.blend_ratios(back, placements)
+    assert report.n_offered == 6
+    assert report.n_measured == 1
+    assert report.n_warm == 2
+    assert report.n_no_row == 1, "title 99 has no row, so there is no warm half to compare"
+    assert report.n_degenerate == 2
+    assert report.ratios.size == 1
+    assert report.ratios[0] == pytest.approx(
+        ((1 - bb.gate(89)) * 50.0) / (bb.gate(89) * 0.2)
+    )
+
+    # Nothing measured is None and not 0.0: a percentile of an empty set is not a small number.
+    empty = bb.blend_ratios(back, {2: (cold_at(2, 50.0), 0.0)})
+    assert empty.n_measured == 0 and empty.median is None and empty.p90 is None
+
+    # WARM_SUPPORT is computed (k*g/(1-g)) rather than written, so it is 90 + 1 ulp, and a title
+    # with exactly 90 crowd ratings therefore falls on the BLEND side of the threshold — here and
+    # in `placement.warm_title_ids`, which compares the same way. Recorded rather than rounded off:
+    # the two readers agree, which is the property that matters.
+    #
+    # It is also what makes every published count of this helper's population a count at
+    # WARM_SUPPORT and never at a literal 90. The two differ by the 17 rows v20260828 ships at
+    # exactly 90 (14 of them non-cold), which is the whole of 3,860 against the 3,846 this file's
+    # docstrings used to print. [M4.13 cycle 2, M413-C2-DIM5-03]
+    assert bb.WARM_SUPPORT > 90 and bb.WARM_SUPPORT - 90.0 < 1e-9
+    edge = bb.blend_ratios(basis([(7, 90, 0.2)]), {7: (cold_at(7, 50.0), 0.0)})
+    assert (edge.n_measured, edge.n_warm) == (1, 0)
+
+
+def test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_open():
+    """Decision 236: the app measures and rescales nothing, and that has to be checkable.
+
+    Two halves of one claim. Numerically, e(t) is exactly `g*E + (1-g)*ê` over arrays whose norms
+    are two orders of magnitude apart — a coordinate whose own norm is dominated by the cold half,
+    which is the state the measurement exists to report. Statically, `coordinate`'s single blend
+    expression contains no normalisation, because the plausible repair (divide ê by its norm, or by
+    E's median row norm) is one line and would land exactly there. Asserted on the source rather
+    than inferred from an output, since a rescaling that cancelled on this fixture would pass the
+    numbers and still have moved every household's ranking.
+    """
+    back = basis([(1, 30, 0.2)])
+    e_hat = cold_at(1, 50.0)
+    c = bb.coordinate(1, back, (e_hat, 0.0))
+
+    assert np.array_equal(c.e, 0.75 * back.E[0] + 0.25 * e_hat)
+    assert np.linalg.norm(back.E[0]) == pytest.approx(0.2)
+    assert np.linalg.norm(e_hat) == pytest.approx(50.0)
+    # Unscaled, so the cold quarter is ~83x the warm three-quarters and the blend's own norm says
+    # so. A normalised ê would have put this near 1.0 and hidden the finding inside a plausible
+    # number.
+    assert np.linalg.norm(c.e) == pytest.approx(np.linalg.norm(0.25 * e_hat), rel=0.02)
+
+    source = inspect.getsource(bb.coordinate)
+    assert "g * e_warm + (1.0 - g) * e_cold" in source, (
+        "§5.1's blend is one expression; a second spelling of it is a second definition"
+    )
+    for spelling in ("linalg.norm", "normalize", "/ scale", "* scale"):
+        assert spelling not in source, (
+            f"{spelling!r} in coordinate(): decision 236 leaves the rescaling upstream, and the "
+            "measurement in blend_ratios() is what the answer is owed"
+        )
 
 
 def test_zero_labels_give_beta_zero_and_the_bare_crowd_prior():
@@ -755,8 +1053,12 @@ async def test_a_clamped_blend_weight_is_storable_and_anything_above_it_is_not(d
     fit = foldin.fit_user(labels, coords, reference, seed=4)
     assert fit.beta == pytest.approx(foldin.BETA_MAX) and fit.beta_clamped
 
+    # `updated_at` is the caller's since M4.13's step 21 — the moment the labels were read, which
+    # only the caller knows — so it is read here the way `refit_user` reads it rather than
+    # defaulted, and this test is about the CHECK on the column beside it.
     await foldin.write_fit(
-        db, user_id=world["patrick"], kind="movie", bundle_version=BUNDLE, fit=fit
+        db, user_id=world["patrick"], kind="movie", bundle_version=BUNDLE, fit=fit,
+        updated_at=await db.fetchval("SELECT clock_timestamp()"),
     )
     stored = await db.fetchval(
         "SELECT blend_beta FROM user_vector WHERE user_id = $1 AND kind = 'movie'",
@@ -787,6 +1089,22 @@ async def test_a_refit_rewrites_the_scores_and_leaves_the_observations_alone(db,
             "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, $3)",
             world["patrick"], title_id, value,
         )
+    # The tick is debounced since M4.13's step 22: §12 M2 asks for a personal ranking "after a
+    # sitting", so a label written this instant is deliberately not refit yet. Moving the whole
+    # timeline back by the pause is what waiting it out looks like without spending thirty seconds
+    # here — both stamps shift by the same interval, so the ORDER of the two clocks, which is what
+    # staleness is actually about, is untouched. [M4.13, perf-04]
+    shift = foldin.PAUSE_SECONDS + 10
+    await db.execute(
+        "UPDATE verdict SET created_at = created_at - ($2::int * interval '1 second') "
+        " WHERE user_id = $1",
+        world["patrick"], shift,
+    )
+    await db.execute(
+        "UPDATE user_vector SET updated_at = updated_at - ($2::int * interval '1 second') "
+        " WHERE user_id = $1",
+        world["patrick"], shift,
+    )
     report = await foldin.run(db, backbone, bundle_version=BUNDLE, only_stale=True)
 
     assert (world["patrick"], "movie") in report.refit

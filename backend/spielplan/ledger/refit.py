@@ -34,6 +34,15 @@ top of every §6.0 shelf, for as long as it takes someone to notice. Nothing her
 non-finite `s` or `σ`: the fit is checked before the transaction opens, and the incremental
 path queues a full refit rather than persisting one.
 
+HOW OFTEN THE NIGHTLY ROW ACTUALLY RUNS. §5.2's two cadences are "nightly" and "on each new
+observation", and the second one moves r and not v: `_update_incrementally` re-solves the touched
+titles' residuals against the cached fit's (mu, v), so every title the person has not rated keeps
+whatever the last FULL fit said about it. After M4.10 that fit is the one over the very first
+verdict, so a whole evening's board can rest on n = 1 and the nightly then moves hundreds of tier
+badges at once - the snap §6.3 says the design avoids, delivered by the job that exists to prevent
+it. `refreshes_owed` and the worker's `ledger-refresh` tick are the answer: the same full fit, asked
+for more often than §5.3's table asks, which is a superset of the cadence and not a change to it.
+
 WHAT THE REQUEST PATH IS ALLOWED TO COST. §5.3 budgets the incremental row at "<50 ms" and the
 full fit at "seconds", so the <50 ms path must never reach for the seconds one. It used to, on
 every cache miss: the fit was run inline, measured at 0.39 s over 300 titles and 33.4 s over
@@ -57,10 +66,12 @@ from typing import Any
 import asyncpg
 import numpy as np
 
+from spielplan.db.library import household_ids
 from spielplan.ledger import model, observations
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.model import EMBED_DIM, ObservationSet
 from spielplan.ledger.observations import EmbeddingSource, zero_embeddings
+from spielplan.models import artifacts
 
 log = logging.getLogger("spielplan.ledger.refit")
 
@@ -74,6 +85,30 @@ DAYS_PER_MONTH = 365.2425 / 12.0
 # claim that the rows in the delta came from one.
 QUEUED = "queued"
 
+# The namespace half of this module's advisory lock. A *name* hashed by the server rather than a
+# literal, because the name is what the reader of either call site needs; it never travels, since
+# both the fit and the tap that waits on it compute `hashtext` inside the same cluster.
+#
+# A different lock space from `api/deps.py`'s `write_txn`, whose single-argument
+# `hashtext(...)::bigint` form Postgres keeps separate from the (int, int) pairs the domain
+# packages take (`tonight/play.py`'s `_FINISH_LOCK`) — so a name there cannot collide with a number
+# here, which is exactly what `write_txn`'s docstring says of the trade. [M4.13, data-05]
+LEDGER_LOCK = "spielplan.ledger"
+
+# How much work has to have accumulated on top of a full fit before the `ledger-refresh` tick runs
+# another. Five, because §5.2's incremental row is not a second model — it re-solves the touched
+# titles' residuals against the last full fit's (mu, v) — so the rest of the library keeps whatever
+# that fit said about it. Measured after 50 verdicts and ~41 battles per member on the real bundle:
+# the 715 unrated owned movies had sd(s) 0.070 against 2.77-3.27 after a full refit and their order
+# correlated -0.135 with a taste the full refit recovers at +0.57. The nightly then moved 252 and
+# 724 of 765 tier badges at once, which is the snap §6.3 says the design avoids. Against that, a
+# full fit costs 0.11-0.14 s per (user, kind) at this scale, so five is chosen low: it is about one
+# §6.1 block's worth of taps, which is the grain a person experiences the board at -- of the taps
+# this predicate can SEE, which is the qualification `refreshes_owed` states below: a §6.1 block
+# alternates sweep and battle (`rate/session.py`), and only the sweep half lands on a title the
+# person has not rated before. [M4.13, dd22; cycle 2, M413-D6-03]
+REFRESH_GROWTH = 5
+
 # What the routers report when the delta carries no fit. It has to survive being read as the
 # tail of the clients' refused line ("ledger update refused - ..."), so it says what is true of
 # both queueing branches: the cached fit was missing or came back non-finite, and a full one is
@@ -84,6 +119,25 @@ QUEUED_REASON = "a full refit is queued; there was no usable cached fit to updat
 # Where the full fit stops being quiet. §5.3's "seconds" is a budget, not a promise, and
 # `model.fit`'s dense inverse is cubic in the observed count.
 LOUD_FIT_TITLES = 2000
+
+
+class _BasisUnstated:
+    """"The caller did not say which basis it holds", which `None` cannot mean.
+
+    §3.1's bundle-less install has no bundle, and `None` is its honest answer — `assert_matches`
+    passes on `None == None` for exactly that reason. So the absence of a claim needs a value of
+    its own, or the two would be one, and every caller that simply does not know (a unit test
+    handing `zero_embeddings`, `rate/session.py`'s preview read) would be refused as though it
+    were serving a bundle-less install against a fitted one. [M4.13 cycle 1, finding 15]
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - a debugging aid, not behaviour
+        return "BASIS_UNSTATED"
+
+
+BASIS_UNSTATED = _BasisUnstated()
 
 
 class RefitRefused(Exception):
@@ -233,26 +287,87 @@ def _unpack_theta(theta: np.ndarray) -> tuple[float, np.ndarray, np.ndarray, np.
 
 
 async def active_bundle_version(conn: asyncpg.Connection) -> str | None:
-    return await conn.fetchval("SELECT version FROM artifact_bundle WHERE state = 'active'")
+    """Delegates to `models.artifacts.active_bundle_version`, which is now the one resolver.
+
+    Kept as a name because `load_cache` below, `api/home.py` and this module's own callers all
+    reach the question through it, and because the two uses of "the active bundle version" inside
+    this file answer DIFFERENT questions that happened to share a call: the stamp on a fit must
+    describe the basis the fit was computed IN (threaded by the caller), while the comparison in
+    `load_cache` must describe the basis the app is SERVING (this row). Conflating them is data-01.
+    [M4.13, arch-03]
+    """
+    return await artifacts.active_bundle_version(conn)
 
 
 async def load_cache(
-    conn: asyncpg.Connection, *, user_id: int, kind: str, hp: Hyperparams, lock: bool = True
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    hp: Hyperparams,
+    lock: bool = True,
+    bundle_version: str | None | _BasisUnstated = BASIS_UNSTATED,
 ) -> FitCache | None:
     """The cached nightly fit, or None when it must not be trusted.
 
-    Two preconditions, and both are correctness rather than freshness. §4.3: "every constant
-    comes from `ledger_hyperparams.json`" — a cache built under other constants is *wrong*, so
-    `hp_digest` is compared, not logged. §10: "everything expressed in the old Backbone's basis
-    is garbage against a new one" — so a fit whose bundle is no longer the active one is not
-    stale either, and returning it would put a title's coordinate in a basis nobody uses.
+    THREE preconditions, and all three are correctness rather than freshness. §4.3: "every
+    constant comes from `ledger_hyperparams.json`" — a cache built under other constants is
+    *wrong*, so `hp_digest` is compared, not logged. §10: "everything expressed in the old
+    Backbone's basis is garbage against a new one" — so a fit whose bundle is no longer the active
+    one is not stale either, and returning it would put a title's coordinate in a basis nobody
+    uses. And K: the cut-points in this blob index a tier set of a particular length, so a fit
+    whose K no longer matches `ledger_cutpoints.tier_set` is not merely out of date, it MEANS
+    something else.
+
+    §10'S HALF IS TWO QUESTIONS AND USED TO BE ONE. The active row says which basis the household
+    SERVES; `bundle_version` says which basis the caller is holding, and those diverge for the
+    whole of an import. `importer/bundle.py` runs the §10 rebuild and the flip inside one
+    transaction, and `refit_user` takes the board's `pg_advisory_xact_lock` inside it — so a tap
+    that arrives mid-import blocks on that lock until the flip COMMITS, and wakes to find the
+    staged stamps and the new active row visible in the same instant. It had passed
+    `_assert_active_basis` before the wait; this process still holds the outgoing Backbone until
+    §10's restart. Comparing the stamp to the active row alone, that cache came back accepted and
+    the tap solved a residual with outgoing coordinates against a v expressed in the incoming
+    basis — data-01's mixed-basis write, arriving through the lock step 24 added. Measured on the
+    fixture at |Δs| = 0.038 for one title, and inherited: the accepted branch's UPDATE names eight
+    columns and `bundle_version` is not one of them, so the polluted residual sits under the
+    incoming stamp until the next full refit. So the caller's basis is compared too, and a
+    disagreement takes the same branch a missing cache takes — `_queue_full_refit` and QUEUED,
+    which loses no tap. `BASIS_UNSTATED` for a caller that does not know one, which is not the
+    same as `None`. [M4.13 cycle 1, finding 15; §10, data-01]
+
+    K is the one of the three that had no guard, and decision 11 is why it needs one: a tier-set
+    change keeps the `tier_edit` rows and queues a refit, so between the PUT and the 60 s sweep
+    every drop went through `_update_incrementally` at `cache.n_levels` from the OLD set.
+    Reproduced twice: growing 7 -> 12, a drop into tier 7 of 12 was clamped to 6 of 7 and written
+    as `ledger_state.tier = 4` while the displayed K = 12 boundaries give 8 - Home showing T4 and
+    Rank T7 for one title; shrinking to 3, a drop to the TOP of 3 was fitted as level 2 of 7 and s
+    fell from 0.3588 to -0.1133 where a correct K = 3 refit gives 1.1933. Refused HERE and not by a
+    `DELETE FROM ledger_fit` inside `save_tier_set`, deliberately and not both: one statement of a
+    precondition beside the two it belongs with, in the function that already has to read the tier
+    set, rather than a second write on the settings path that a future caller of `save_tier_set`
+    could forget. [M4.13, ml01; decision 11]
+
+    A miss is cheap by design: M4.10 took the full refit off the tap path, so the caller queues it
+    (`_queue_full_refit`) and returns `fit_source = QUEUED`. Nothing here puts §5.3's "seconds" row
+    back inside its "<50 ms" one.
 
     `FOR UPDATE` because two observations for one person must serialise: §6.1's block counter
     and decision 35's Undo depth are both defined over a sequence, not over a race.
     """
     row = await conn.fetchrow(
-        "SELECT * FROM ledger_fit WHERE user_id = $1 AND kind = $2"
-        + (" FOR UPDATE" if lock else ""),
+        # The tier set comes from the same round trip as the fit, and by LEFT JOIN because a fit
+        # can exist with no cut-point row at all (a bundle-less first fit writes `ledger_fit`
+        # before anyone has saved a set): a NULL `n_levels` means "nobody has stated a K", which
+        # is not a disagreement and must not invalidate the cache.
+        """
+        SELECT f.*, array_length(c.tier_set, 1) AS n_levels
+          FROM ledger_fit f
+          LEFT JOIN ledger_cutpoints c
+                 ON c.user_id = f.user_id AND c.kind = f.kind
+         WHERE f.user_id = $1 AND f.kind = $2
+        """
+        + (" FOR UPDATE OF f" if lock else ""),
         user_id,
         kind,
     )
@@ -275,7 +390,30 @@ async def load_cache(
             active,
         )
         return None
+    if not isinstance(bundle_version, _BasisUnstated) and row["bundle_version"] != bundle_version:
+        # A WARNING and not an info: the row above it is the ordinary post-import state every
+        # household passes through, while this one means a caller woke up in a world whose active
+        # row it no longer matches — §10's restart is owed and somebody is still tapping.
+        log.warning(
+            "ledger_fit for user %d/%s is in bundle %r, this process holds %r - queueing a refit "
+            "rather than mixing bases",
+            user_id,
+            kind,
+            row["bundle_version"],
+            bundle_version,
+        )
+        return None
     mu, v, gamma, cuts, log_nu = _unpack_theta(_unnpy(row["theta"]))
+    n_levels = row["n_levels"]
+    if n_levels is not None and int(cuts.size) + 1 != int(n_levels):
+        log.info(
+            "ledger_fit for user %d/%s holds %d tier level(s), the tier set has %d - refitting",
+            user_id,
+            kind,
+            int(cuts.size) + 1,
+            int(n_levels),
+        )
+        return None
     return FitCache(
         user_id=user_id,
         kind=kind,
@@ -320,6 +458,91 @@ def _months_since(stamps: Sequence[datetime | None], now: datetime) -> np.ndarra
     return out
 
 
+async def _take_board_lock(conn: asyncpg.Connection, *, user_id: int, kind: str) -> None:
+    """Serialise the two jobs of this module against each other, for one board.
+
+    One lock per BOARD and not per person: §4.1 rule 5 keeps the two kinds apart everywhere else,
+    and somebody rating films while their series fit runs has nothing to wait for. `kind` enters the
+    key as a bit, so the pair is (namespace, user_id * 2 + is_series) and no two boards share a
+    number.
+
+    `pg_advisory_xact_lock` rather than a row lock, because the thing being serialised is not a row:
+    it is "the whole of one fit against the whole of one tap", which spans `load_observations`,
+    seconds of numpy and three writes. It is released with the transaction whichever way that ends,
+    so a refused fit cannot leave the board locked. [M4.13, data-05; plan step 24]
+    """
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext($1), ($2::bigint * 2 + ($3 = 'series')::int)::int)",
+        LEDGER_LOCK,
+        user_id,
+        kind,
+    )
+
+
+async def refreshes_owed(
+    conn: asyncpg.Connection, *, growth: int = REFRESH_GROWTH
+) -> list[tuple[int, str, int]]:
+    """The boards whose fit is older than the observations standing on it: (user, kind, grown).
+
+    §5.2 says "refit nightly (full-history MAP; seconds at this scale) and incrementally on each
+    new observation", and the two halves are "the same model at two resolutions" (this module's
+    own opening). What the shipped incremental path cannot do at any resolution is move `v`: it
+    re-solves the touched titles' residuals against the cached fit's (mu, v), so every title the
+    person has NOT rated keeps the estimate the first full fit made — which, on the real path after
+    M4.10, is the fit over the single first verdict. `REFRESH_GROWTH` carries the measurement.
+
+    A tick rather than a nightly-only pass is the same argument `scoring.foldin.run` already makes
+    for `user_score`: running a spec cadence more often than the spec asks is a superset of what
+    §5.3 requires, and §12's M2 exit criterion is a claim about what a person sees *within* a
+    sitting. The full fit is the one §5.3 budgets at "seconds"; this only changes how often it is
+    asked for.
+
+    THE BASELINE IS ALREADY IN THE ROW, which is why this needs no column. §5.2 defines the CDF
+    reference as "the empirical CDF of the user's own fitted s values", so `ledger_fit.cdf_reference`
+    is the observed block AT THE LAST FULL FIT — and the incremental path does not rewrite it
+    (`_update_incrementally`'s UPDATE names eight columns and this is not one of them, because the
+    reference is "the same definition, one night stale" by design). `n_observed` is the live count,
+    which `_merge_cache` grows per newly rated title. The difference is therefore exactly "how many
+    titles the person has rated since the fit this board rests on", read off state that already
+    means that.
+
+    WHAT IT COUNTS IS NEW TITLES, NOT NEW OBSERVATIONS, and that is a hole in the trigger rather
+    than in the implementation -- plan step 27 specifies "whose `n_observed` has grown by at least
+    5 since the last full fit" and this is that, faithfully. Both sides of the subtraction count
+    TITLES: `Observations.n` is `title_ids.size` and `_merge_cache` reaches `n_observed += 1` only
+    on the branch that inserts a title the cache did not have. So three kinds of evening move `v`
+    for the full fit and move this predicate not at all:
+
+      * a §4.2 supersede -- `load_observations` deliberately loads "every verdict row, superseded
+        and live alike", so a re-rating is an ADDITIONAL ordinal row in the likelihood;
+      * a §6.1 battle, which by construction pairs two titles the person has already rated the
+        same way, so it can never reach the insert branch -- and "battle" is a whole session mode,
+        not an incidental card;
+      * a tier edit on a title that is already observed.
+
+    A member who spends an evening changing their mind and fighting duels therefore keeps the
+    board the last full fit gave them until the nightly, which is the 24-hour snap §6.3 says the
+    design avoids and the thing dd22 exists to close for the newly-rated arm. Widening the
+    predicate means counting OBSERVATIONS (verdict + duel + tier_edit rows since `fitted_at`) or
+    firing on `max(observation.created_at) > ledger_fit.fitted_at` the way `foldin._is_stale`
+    already does -- a different trigger, and the owner's call rather than this cycle's. Recorded
+    here, and asserted by
+    `test_worker_jobs.py::test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_trigger`
+    so the limit is a measured property and not a thing to be rediscovered.
+    [M4.13, dd22; cycle 2, M413-D6-03]
+    """
+    rows = await conn.fetch(
+        "SELECT user_id, kind, n_observed, cdf_reference FROM ledger_fit "
+        " WHERE fit_source = 'incremental' ORDER BY user_id, kind"
+    )
+    owed: list[tuple[int, str, int]] = []
+    for row in rows:
+        grown = int(row["n_observed"]) - int(_unnpy(row["cdf_reference"]).size)
+        if grown >= growth:
+            owed.append((int(row["user_id"]), str(row["kind"]), grown))
+    return owed
+
+
 # --- the nightly job -----------------------------------------------------------------------------
 
 
@@ -330,9 +553,66 @@ async def refit_user(
     kind: str,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
+    bundle_version: str | None = None,
     now: datetime | None = None,
 ) -> RefitReport:
-    """§5.3's "Ledger full MAP refit + cutpoints + σ", for one (user, kind)."""
+    """§5.3's "Ledger full MAP refit + cutpoints + σ", for one (user, kind).
+
+    `bundle_version` is the basis `embeddings` was built from, and it is what the fit is stamped
+    with. It is the caller's to supply because the caller is the only frame that knows: §10's step
+    3 holds the STAGED version while the active row is still the outgoing one, the worker holds
+    `store.version`, the request path holds `app.state.artifacts.version`. None means "no bundle",
+    which is §3.1's install and dd01's NULL stamp - not "look it up", because looking it up is
+    precisely the bug. [M4.13, data-01]
+
+    THE READ AND THE WRITE ARE ONE TRANSACTION, AND THE LOCK IS ABOVE BOTH. `load_observations` used
+    to run outside any transaction and before any lock while the write opened seconds later with
+    `prune = True`, so a verdict recorded in between was reverted to the unobserved prior - measured
+    at `s -0.5504 observed=True` -> `s -0.0004 observed=False`, with the title dropped from the
+    cached `title_ids` so the next tap could not find it either. `load_cache`'s `FOR UPDATE`
+    serialised taps against each other and nothing against this. A tap arriving mid-fit now WAITS
+    the seconds §5.3 budgets this row at and then solves against a cache that exists, which is the
+    one outcome in which neither observation is lost. `refit_all` keeps its per-user loop, so one
+    held lock is one board's wait and not the household's.
+
+    READ COMMITTED is deliberate (the plan: "do not move to SERIALIZABLE"): the snapshot is not the
+    mechanism. A verdict committed after `load_observations` read is still outside this fit either
+    way - what the lock buys is that the TAP which will pick it up runs afterwards rather than
+    underneath. The importer calls this inside its own transaction, so during a re-import the lock
+    is held to the end of it; that is correct rather than unfortunate, because what a tap would be
+    racing there is a change of basis that would discard it (§10 already tells the operator to
+    restart both processes around one). [M4.13, data-05; plan step 24]
+    """
+    async with conn.transaction():
+        await _take_board_lock(conn, user_id=user_id, kind=kind)
+        return await _refit_user(
+            conn,
+            user_id=user_id,
+            kind=kind,
+            hp=hp,
+            embeddings=embeddings,
+            bundle_version=bundle_version,
+            now=now,
+        )
+
+
+async def _refit_user(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    hp: Hyperparams,
+    embeddings: EmbeddingSource | None,
+    bundle_version: str | None,
+    now: datetime | None,
+) -> RefitReport:
+    """`refit_user`'s body, with its transaction and its lock already held by the caller.
+
+    Split out rather than indented under an `async with`, which is the shape `update_incrementally`
+    and `_update_incrementally` already have in this file for the same reason: the public name owns
+    the transaction, the private one owns the work, and the inner `conn.transaction()` blocks below
+    become savepoints inside it.
+    """
     embeddings = embeddings or zero_embeddings
     now = now or datetime.now(UTC)
     started = time.perf_counter()
@@ -353,6 +633,51 @@ async def refit_user(
     if obs.is_empty():
         # Nothing to fit. Writing 900 identical rows at s = 0 would be inventing a ranking out
         # of a prior and calling it the person's taste; §6.0's shelves are better empty.
+        #
+        # "Better empty" is what this branch SAID while leaving the board exactly as it was.
+        # Reproduced on a household whose every observation had been undone: nightly with zero
+        # observations left `fitted = False`, `ledger_state` at 6 rows with one still
+        # `observed = True`, the learned cutpoints in place and the `ledger_fit` cache holding the
+        # old `n_observed` - which `load_cache` then accepted, so the next first tap started its
+        # incremental solve from residuals for verdicts that no longer exist. Decision 35's Undo
+        # and decision 174's hard-DELETE are exactly how a person reaches this state, so it is
+        # not hypothetical.
+        #
+        # Emptied rather than zeroed, in one transaction: `_write_state`'s prune path already
+        # knows how to clear a board (it is the same DELETE the fitted path runs before it
+        # writes), `ledger_fit` goes because a cache of a fit over nothing is not a cache, and
+        # `ledger_cutpoints` keeps decision 11's `tier_set` while its boundaries go back to
+        # `initial_cutpoints(K)` - the prior, which is the only honest answer once the labels that
+        # moved them are gone, and which keeps `cutpoints_length`'s CHECK satisfied.
+        # [M4.13, ml02; plan step 26]
+        async with conn.transaction():
+            await _write_state(
+                conn,
+                user_id=user_id,
+                kind=kind,
+                title_ids=np.zeros(0, dtype=np.int64),
+                s=np.zeros(0),
+                sigma=np.zeros(0),
+                sigma_prior=np.zeros(0),
+                sigma_eff=np.zeros(0),
+                cdf=np.zeros(0),
+                tier=np.zeros(0, dtype=np.int64),
+                straddle=np.zeros(0, dtype=np.int64),
+                observed=np.zeros(0, dtype=bool),
+                stamps=[],
+                fit_source="nightly",
+                prune=True,
+            )
+            await conn.execute(
+                "DELETE FROM ledger_fit WHERE user_id = $1 AND kind = $2", user_id, kind
+            )
+            await conn.execute(
+                "UPDATE ledger_cutpoints SET boundaries = $3::float8[], updated_at = now() "
+                "WHERE user_id = $1 AND kind = $2",
+                user_id,
+                kind,
+                [float(c) for c in model.initial_cutpoints(len(loaded.tier_set))],
+            )
         report.seconds = time.perf_counter() - started
         return report
 
@@ -433,7 +758,14 @@ async def refit_user(
             report.rejected_nonfinite,
         )
 
-    bundle = await active_bundle_version(conn)
+    # NOT `active_bundle_version(conn)`. The stamp answers "which basis is this fit expressed
+    # in?" and the answer is the one the embeddings were built from; the active row answers "which
+    # basis is the app serving?" and the two differ for the whole of §10's pre-flip rebuild, which
+    # is the one caller this stamp exists for. Stamped with the active row, step 3's fit claimed
+    # the outgoing bundle, `load_cache` refused it after the flip, and the first tap per
+    # (user, kind) re-fitted on the request path against the old in-process Backbone and stamped
+    # THAT as the new version. [M4.13, data-01]
+    bundle = bundle_version
     async with conn.transaction():
         # A COMPARE-AND-SET ON THE TIER SET, because the fit read it minutes ago and §5.3 gives
         # itself "seconds" to run. Decision 11 makes the set a per-user preference with a control
@@ -513,28 +845,57 @@ async def refit_all(
     hp: Hyperparams,
     *,
     embeddings: EmbeddingSource | None = None,
+    bundle_version: str | None = None,
     now: datetime | None = None,
 ) -> list[RefitReport]:
-    """§5.3's nightly row, over the household. One person's bad fit must not stop the others'."""
+    """§5.3's nightly row, over the household. One person's bad fit must not stop the others'.
+
+    `bundle_version` travels with `embeddings` and describes the same bundle: they are the two
+    halves of one basis, and a caller that passes one without the other has produced a fit whose
+    stamp does not describe its own coordinates. See `refit_user`. [M4.13, data-01]
+    """
     reports: list[RefitReport] = []
-    users = await conn.fetch("SELECT id FROM app_user WHERE is_active ORDER BY id")
-    for row in users:
+    # The same household the fold-in fits, through the same helper: this pass read `is_active` and
+    # `scoring/foldin.run` read `role IN ('admin', 'member')`, so a deactivated account was skipped
+    # here and re-folded there every sixty seconds. [M4.13, ml04; plan step 23; decision 166]
+    for user_id in await household_ids(conn):
         for kind in observations.KINDS:
             try:
                 reports.append(
                     await refit_user(
                         conn,
-                        user_id=int(row["id"]),
+                        user_id=user_id,
                         kind=kind,
                         hp=hp,
                         embeddings=embeddings,
+                        bundle_version=bundle_version,
                         now=now,
                     )
                 )
-            except (RefitRefused, ValueError) as exc:
-                log.exception("refit failed for user %s/%s", row["id"], kind)
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
+                # The one failure that must NOT be isolated. The connection is unusable, so every
+                # remaining (user, kind) would fail the same way and the job would hand `_tick` a
+                # full report of a night nobody ran - one dead connection becoming a fortnight of
+                # silently skipped fits, since `_tick` only records a job as failed if it raises.
+                # Re-raised rather than logged: the next tick acquires a fresh connection from the
+                # pool and `RETRY_AFTER` decides when. [M4.13, plan step 29]
+                raise
+            except Exception as exc:
+                # Widened from `(RefitRefused, ValueError)`, and NOT for the reason the finding
+                # gave: `np.linalg.LinAlgError` IS a `ValueError`, so a singular matrix was already
+                # isolated by the narrow clause (probed: `report.error = 'Singular matrix'` with the
+                # other member fitted). That claim is refuted and is not a reason to widen anything.
+                # What actually aborted the loop is everything else a real night can raise - an
+                # asyncpg `DataError` from a row the schema admits and numpy does not, a lock
+                # timeout raised behind an import, a `MemoryError` in `_laplace`'s dense
+                # (p+n)x(p+n) inverse - and "One person's bad fit must not stop the others'" is a
+                # claim about failures, not about exception classes. The transaction stays INSIDE
+                # `refit_user`, so an isolated failure cannot leak a partial write.
+                # `asyncio.CancelledError` is a `BaseException` and still passes through, which is
+                # what lets `_tick` abandon this job at its budget. [M4.13, plan step 29]
+                log.exception("refit failed for user %s/%s", user_id, kind)
                 reports.append(
-                    RefitReport(user_id=int(row["id"]), kind=kind, error=str(exc))
+                    RefitReport(user_id=user_id, kind=kind, error=str(exc))
                 )
     return reports
 
@@ -683,11 +1044,15 @@ async def _load_local(
     The mean is what makes the restricted problem the *same* problem: §4.3's `margin_form` is
     "margin/mean(margin)", and a mean taken over four local duels is a different weighting from
     the one the nightly fit used. One indexed aggregate is cheaper than being subtly wrong.
+
+    Every row carries its `created_at`, because §5.2's freshness clock belongs to the OBSERVATION
+    and this path used to read it off the wall clock instead. See `_update_incrementally`.
+    [M4.13, ml06; plan step 28]
     """
     ids = list(title_ids)
     verdicts = await conn.fetch(
         """
-        SELECT v.title_id, v.value FROM verdict v JOIN title t ON t.id = v.title_id
+        SELECT v.title_id, v.value, v.created_at FROM verdict v JOIN title t ON t.id = v.title_id
         WHERE v.user_id = $1 AND t.kind = $2 AND NOT v.is_reask AND v.title_id = ANY($3::int[])
         ORDER BY v.id
         """,
@@ -697,7 +1062,8 @@ async def _load_local(
     )
     tier_edits = await conn.fetch(
         """
-        SELECT e.title_id, e.tier FROM tier_edit e JOIN title t ON t.id = e.title_id
+        SELECT e.title_id, e.tier, e.n_levels, e.created_at
+        FROM tier_edit e JOIN title t ON t.id = e.title_id
         WHERE e.user_id = $1 AND t.kind = $2 AND e.title_id = ANY($3::int[])
         ORDER BY e.id
         """,
@@ -707,7 +1073,7 @@ async def _load_local(
     )
     duels = await conn.fetch(
         """
-        SELECT d.title_a, d.title_b, d.outcome, d.margin
+        SELECT d.title_a, d.title_b, d.outcome, d.margin, d.created_at
         FROM duel d JOIN title ta ON ta.id = d.title_a JOIN title tb ON tb.id = d.title_b
         WHERE d.user_id = $1 AND ta.kind = $2 AND tb.kind = $2
           AND d.selection <> $4 AND NOT d.is_reask
@@ -835,6 +1201,7 @@ async def update_incrementally_reporting(
     title_ids: Sequence[int],
     hp: Hyperparams,
     embeddings: EmbeddingSource | None,
+    bundle_version: str | None | _BasisUnstated = BASIS_UNSTATED,
 ) -> dict[str, Any] | None:
     """§5.3's "<50 ms" row, run after the person's write has committed.
 
@@ -857,6 +1224,7 @@ async def update_incrementally_reporting(
             title_ids=list(title_ids),
             hp=hp,
             embeddings=embeddings,
+            bundle_version=bundle_version,
         )
     except (RefitRefused, ValueError) as exc:
         log.warning("incremental update refused for user %d/%s: %s", user_id, kind, exc)
@@ -892,6 +1260,7 @@ async def update_incrementally(
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
     now: datetime | None = None,
+    bundle_version: str | None | _BasisUnstated = BASIS_UNSTATED,
 ) -> Delta:
     """§5.3's "<50 ms" row: re-place the one or two titles an observation touched.
 
@@ -899,11 +1268,19 @@ async def update_incrementally(
     call serves a write and decision 35's undo: after either, the truth is in the tables and
     this solves for it.
 
-    Two preconditions the caller owns, because checking either would cost a query inside a
+    One precondition the caller still owns, because checking it would cost a query inside a
     50 ms budget to catch a mistake the caller cannot make by accident: every title in
     `title_ids` is of `kind` (`Write.kind` comes from `observations.kind_of`, so a write path
-    gets this right by construction), and `embeddings` is the source the cached fit was built
-    with — v lives in that basis, and nothing in the database records which one it was.
+    gets this right by construction).
+
+    THE OTHER ONE IS NO LONGER A PRECONDITION, IT IS AN ARGUMENT. `embeddings` is the source the
+    cached fit was built with — v lives in that basis — and this used to be a sentence in a
+    docstring, unchecked, because nothing in the database recorded which basis a caller held.
+    `bundle_version` is that record, threaded from the route that pinned the Backbone: it names
+    the basis `embeddings` is expressed in, `load_cache` refuses a fit stamped with any other,
+    and a caller that cannot name one passes `BASIS_UNSTATED` and gets the old reading. It is
+    stated here rather than inferred because the inference is wrong for the seconds that matter:
+    see `load_cache`. [M4.13 cycle 1, finding 15]
 
     The whole update is one transaction. §6.1's block counter and decision 35's Undo depth are
     defined over a *sequence* of observations, so two taps by one person must serialise —
@@ -919,6 +1296,7 @@ async def update_incrementally(
             hp=hp,
             embeddings=embeddings,
             now=now,
+            bundle_version=bundle_version,
         )
 
 
@@ -931,13 +1309,27 @@ async def _update_incrementally(
     hp: Hyperparams,
     embeddings: EmbeddingSource | None,
     now: datetime | None,
+    bundle_version: str | None | _BasisUnstated = BASIS_UNSTATED,
 ) -> Delta:
     embeddings = embeddings or zero_embeddings
     now = now or datetime.now(UTC)
     started = time.perf_counter()
     targets = [int(t) for t in dict.fromkeys(title_ids)]
 
-    cache = await load_cache(conn, user_id=user_id, kind=kind, hp=hp)
+    # BEFORE `load_cache`, and the order is the whole of it. `load_cache` takes `FOR UPDATE` on the
+    # `ledger_fit` row; a tap that held that row lock while queueing behind this advisory lock would
+    # be waiting for a fit whose own last statement is an UPDATE of that same row, which is a
+    # deadlock this file can write in one line and Postgres would have to break. Taken here, the tap
+    # waits the seconds §5.3 gives the full fit and then reads a cache the fit has committed --
+    # rather than solving against the one it is replacing and being pruned away by it (data-05,
+    # argued at `refit_user`). [M4.13, data-05; plan step 24]
+    await _take_board_lock(conn, user_id=user_id, kind=kind)
+    # AFTER the lock, and `bundle_version` is why that placement is load-bearing rather than
+    # incidental: the tap's route checked §10's invariant before it queued here, and what it waited
+    # out may have been the import that flipped it. This read is the re-check. [M4.13 cycle 1]
+    cache = await load_cache(
+        conn, user_id=user_id, kind=kind, hp=hp, bundle_version=bundle_version
+    )
     if cache is None:
         # Finding 9. The observation is already committed by the caller, so there is nothing to
         # save by fitting now — and the fit is §5.3's "seconds" row running inside its "<50 ms"
@@ -982,7 +1374,30 @@ async def _update_incrementally(
     n_levels = cache.n_levels
     for row in tier_edits:
         ord_index.append(position[int(row["title_id"])])
-        ord_level.append(min(max(int(row["tier"]), 0), n_levels - 1))
+        # The same reading as `observations.load_observations`: decision 11 keeps a `tier_edit`
+        # row across a change in K, and `n_levels` is the set the index was chosen under, so the
+        # level is mapped by cumulative prior mass and clamped only as the helper's last step.
+        # This copy used to clamp, and silently — a drop into tier 7 of a set of 12 became level 6
+        # of 7 on the interactive path with no line anywhere. There is no log line here now and
+        # that is deliberate, for the reason `observations.py` gives beside the warning it does
+        # carry: the fit is where the WHOLE history passes through, and this path sees one or two
+        # rows per tap, so a count is only meaningful at the other end.
+        #
+        # It is not because the rescale here is a no-op, which this comment used to claim.
+        # `load_cache`'s K precondition compares the FIT's K against TODAY's tier set and says
+        # nothing about `tier_edit.n_levels`, which is the K the individual edit was written
+        # under -- and nothing ever rewrites that column, so after the 60 s sweep has refitted at
+        # the new K `load_cache` ACCEPTS and rows carrying the old K flow through this loop. That
+        # is the whole reason 0022 added the column, and it is exactly what
+        # `test_the_loader_the_incremental_path_and_the_board_rescale_through_one_helper` measures:
+        # level 6 written under K=7 reads as 11 against a cache at K=12. A reader who took "the
+        # identity" at face value would delete this call and restore the silent clamp step 15
+        # removed. [M4.13, ml01 and dd06; cycle 2, M413-C2-DIM5-02]
+        ord_level.append(
+            observations.rescale_level(
+                int(row["tier"]), k_from=row["n_levels"], k_to=n_levels
+            )
+        )
         ord_arm.append(observations.ARM_TIER)
     margins = np.asarray(
         [hp.margin_hesitant if row["margin"] is None else float(row["margin"]) for row in duels]
@@ -1056,21 +1471,42 @@ async def _update_incrementally(
             micros=int((time.perf_counter() - started) * 1e6),
         )
 
-    # Just observed, so no freshness inflation applies; the call is kept rather than assumed so
-    # the two paths agree by construction if §5.2's rule ever gains a term.
-    sigma_eff = model.inflate_sigma(sigma, sigma_prior, np.zeros(len(targets)), hp)
+    # §5.2's freshness clock belongs to the OBSERVATION, not to the tick that reads it. "Just
+    # observed, so no freshness inflation applies" was true of the arm this path was written for and
+    # false of the one decision 35 added: `update_incrementally` serves an undo with the same call,
+    # and after undoing a re-rating what remains is the older verdict. Stamped from the wall clock,
+    # a 400-day-old verdict was restamped as if it had just been made - reproduced as
+    # `last_observed_at 2025-07-30` with `sigma_eff 1.4276` becoming `2026-09-03` with
+    # `sigma_eff == sigma`, i.e. §5.2's inflation silently switched off by the act of retracting
+    # something. `touched` was already derived from the rows; this derives the clock from the same
+    # pass, as `max(created_at)` over the rows that touch the title, which is the definition
+    # `load_observations` uses for the nightly path. The two paths now agree by construction rather
+    # than by resemblance. [M4.13, ml06; plan step 28]
+    last_at: dict[int, datetime] = {}
+
+    def _touch(title_id: int, at: datetime) -> None:
+        current = last_at.get(title_id)
+        if current is None or at > current:
+            last_at[title_id] = at
+
+    for row in verdicts:
+        _touch(int(row["title_id"]), row["created_at"])
+    for row in tier_edits:
+        _touch(int(row["title_id"]), row["created_at"])
+    for row in duels:
+        _touch(int(row["title_a"]), row["created_at"])
+        _touch(int(row["title_b"]), row["created_at"])
+    observed = np.array([t in last_at for t in targets])
+    # None where the title has no live observation left, which is what an undone block looks like
+    # and is the same absence the nightly path writes for a title nobody has rated.
+    stamps: list[datetime | None] = [last_at.get(t) for t in targets]
+
+    sigma_eff = model.inflate_sigma(sigma, sigma_prior, _months_since(stamps, now), hp)
     # §5.2's CDF against the cached reference: the same definition, one night stale. Rebuilding
     # it per observation is O(library) and is what the nightly job is for.
     cdf = model.empirical_cdf(cache.cdf_reference, s)
     tier = model.tier_of(s, cache.cuts)
     straddle = model.straddle(s, sigma_eff, cache.cuts, hp)
-    touched = {int(row["title_id"]) for row in verdicts} | {
-        int(row["title_id"]) for row in tier_edits
-    }
-    for row in duels:
-        touched.add(int(row["title_a"]))
-        touched.add(int(row["title_b"]))
-    observed = np.array([t in touched for t in targets])
 
     async with conn.transaction():
         await _write_state(
@@ -1086,7 +1522,7 @@ async def _update_incrementally(
             tier=tier,
             straddle=straddle,
             observed=observed,
-            stamps=[now if o else None for o in observed],
+            stamps=stamps,
             fit_source="incremental",
         )
         _merge_cache(cache, targets, r_local[block], sigma, sigma_prior,
@@ -1260,6 +1696,7 @@ async def read_board(
 
 
 __all__ = [
+    "BASIS_UNSTATED",
     "DAYS_PER_MONTH",
     "LOUD_FIT_TITLES",
     "QUEUED",

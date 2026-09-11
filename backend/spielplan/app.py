@@ -263,6 +263,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.hyperparams = hp
             for note in notes:
                 log.info("hyperparameters: %s", note)
+            # THE YARDSTICK, ONCE, BESIDE THE CONSTANTS IT IS READ WITH. Spec section 14's first
+            # risk states its own mitigation as "expectations instrumented, not assumed", and
+            # `user_vector.cv_rho` was neither: the fold-in computes a held-out Spearman per
+            # (user, kind), stores it, and nothing in the app knew what a good one looks like. The
+            # corpus ships the reference - `cold_eval.json`'s cold and ceiling figures - and this
+            # is the process's one statement of it, at INFO like the constants above and for the
+            # same reason: section 10 makes a bundle swap a restart, so the pair is a boot fact
+            # and an operator reading `cv_rho` in a later log line has the scale in the same file.
+            # The floor comes from `hp`, not from DEFAULTS, so a bundle that re-tunes the tie band
+            # is reported with its own. [M4.13 step 35, cs-31]
+            yardstick = app.state.artifacts.cold_eval()
+            if yardstick is not None:
+                log.info("fold-in rho reads against cold_eval.json: %s",
+                         yardstick.line(floor=hp.rho_noise_floor))
+            elif not app.state.artifacts.is_empty:
+                log.info(
+                    "bundle %s ships no cold_eval.json - a fitted cv_rho has no reference value "
+                    "in this install (spec section 0 row 1, section 14 risk 1)",
+                    app.state.artifacts.version,
+                )
         except (ValueError, OSError):
             # `log.exception` so the key is named twice: once in the message the operator greps
             # for and once in the traceback that says which check refused it.
@@ -350,7 +370,17 @@ def create_app() -> FastAPI:
             content={
                 "ok": db_ok,
                 "role": cfg.role,
-                "bundle": store.version,          # null is a legal, reported state (§3.1)
+                # WHAT THIS PROCESS LOADED, which for a broken store is nothing. `is_empty`
+                # rather than `.version`, because data-03 made those two answers differ: an
+                # active row whose directory is gone loads carrying that row's version (so the
+                # fit it refuses to make would have been stamped honestly) with `is_empty` still
+                # True. Reading `.version` here therefore started reporting a bundle the process
+                # cannot open one file of, on the one probe that is unauthenticated -- while
+                # §6.6's Data tab, which owns this distinction, reports `loaded: null` beside
+                # `active` and `broken` for the same store. Same vocabulary in both places: null
+                # is a legal, reported state (§3.1), and "loaded nothing" is what it means.
+                # [M4.13, data-03; cycle 2, M413-C2-D1-03]
+                "bundle": None if store.is_empty else store.version,
                 "public_url": cfg.public_url,
             },
         )

@@ -400,8 +400,12 @@ def _timestamp(value: object) -> datetime | None:
 
 
 # §10: "Ledger *observations* always survive re-import (they reference `title.id` and
-# vocabulary-independent facts)." `verdict`, `duel`, `tier_edit` and `user_title` all reference
-# `title(id) ON DELETE CASCADE`, so a re-import must never DELETE a title row — it upserts.
+# vocabulary-independent facts)." `verdict`, `duel`, `tier_edit` and `user_title` reference
+# `title(id) ON DELETE RESTRICT` since 0022_model_basis (plan §5 item 2, decision 239), so a
+# re-import that deleted a title row would be REFUSED by the database and take the whole import
+# down with it — it upserts. Until 0022 those four were ON DELETE CASCADE and the same delete was
+# silent, which is why this convention was the only thing standing between a re-import and an
+# erased Ledger; the migration made the convention enforceable rather than optional.
 # Everything else in MAPPINGS is derived content and is replaced wholesale, children first.
 _TITLE_TARGET = "title"
 
@@ -413,6 +417,27 @@ def _split(target: str) -> tuple[str, str]:
 async def _clear(conn: asyncpg.Connection, target: str) -> None:
     schema, table = _split(target)
     await conn.execute(f'DELETE FROM {schema}."{table}"')
+
+
+async def _reap_display_orphans(conn: asyncpg.Connection) -> None:
+    """Clear `display.platform_rating` rows whose title is no longer in the catalogue.
+
+    `0003:177-184` denies this table a foreign key on purpose -- "display rows must never make the
+    feature builder's planner touch this schema" (rule 3) -- so the database cannot clean up after
+    a title that goes away, and 0022_model_basis deliberately did not add the cross-schema FK
+    either. Something still has to: a title carrying only derived rows still deletes (that is the
+    other half of 0022's RESTRICT), and it leaves its display row behind as an orphan pointing at
+    an id the catalogue no longer has, which the §6.0 card would then caption with a number for a
+    film nobody owns.
+
+    The reload path is the one place that can see the id set change, and §10 calls a re-import "a
+    planned admin event with a diff report" -- so this runs once per import rather than on any read
+    path. `NOT IN` is safe here because `title.id` is a NOT NULL primary key: the sub-select cannot
+    produce the NULL that would make the predicate match nothing. [decision 239]
+    """
+    await conn.execute(
+        "DELETE FROM display.platform_rating WHERE title_id NOT IN (SELECT id FROM title)"
+    )
 
 
 async def _copy(conn: asyncpg.Connection, tmap: TableMap, db: sqlite3.Connection) -> int:
@@ -584,7 +609,8 @@ async def load_content(
 
     # Three passes, because FK order runs one way for deletes and the other for inserts:
     #   1. clear every derived table, children first,
-    #   2. upsert `title` — never delete it, or ON DELETE CASCADE takes the Ledger with it,
+    #   2. upsert `title` — never delete it: since 0022 the observation tables' RESTRICT would
+    #      refuse the delete and fail the import (before it, CASCADE took the Ledger silently),
     #   3. refill the derived tables in declaration order, parents before children.
     for tmap in reversed(usable):
         if tmap.target != _TITLE_TARGET:
@@ -597,6 +623,11 @@ async def load_content(
     for tmap in usable:
         if tmap.target != _TITLE_TARGET:
             report.table_counts[f"loaded:{tmap.target}"] = await _copy(conn, tmap, db)
+
+    # After the refill, because what is being reaped is a row the bundle just wrote for a title
+    # this install no longer has -- and unconditionally, because a bundle that ships no
+    # `platform_rating` table at all leaves the old rows in place for pass 1 to have skipped.
+    await _reap_display_orphans(conn)
 
     await _resolve_ml_links(conn, report)
 

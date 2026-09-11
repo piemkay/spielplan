@@ -151,6 +151,34 @@ async def test_health_answers_200_and_the_body_its_three_consumers_read(app):
     }
 
 
+async def test_health_reports_a_broken_install_as_no_loaded_bundle_rather_than_as_its_version(
+    app, tmp_path
+):
+    """data-03's third state, on the one probe nobody has to authenticate to read.
+
+    `load_active` carries a broken install's version on purpose -- that is what makes the fit it
+    refuses to make stamp honestly, and it is why `assert_matches` cannot see the state at all.
+    Reading `.version` here therefore turned "no bundle" into the name of a bundle this process
+    cannot open one file of, for an operator whose model jobs are all refusing. `is_empty` is the
+    question the probe is actually asking, and it is the same vocabulary §6.6's Data tab uses:
+    `loaded: null` beside `active` and `broken`. [M4.13 cycle 2, M413-C2-D1-03]
+    """
+    from spielplan.models.artifacts import ArtifactStore
+
+    client = app()
+    broken = ArtifactStore(version="gone-v1", root=tmp_path / "artifacts" / "gone-v1", broken=True)
+    assert broken.is_empty, "a broken store still renders the no-bundle surfaces (section 3.1)"
+    client._transport.app.state.artifacts = broken
+
+    body = (await client.get("/api/health")).json()
+    assert body["bundle"] is None, (
+        "the unauthenticated probe named a bundle whose directory is gone"
+    )
+    assert set(body) == {"ok", "role", "bundle", "public_url"}, (
+        "the broken state is reported through the field that already means it, not a new one"
+    )
+
+
 async def test_health_answers_503_when_the_database_is_unreachable(app, monkeypatch):
     """The finding as the operator meets it: Docker, CI and the e2e harness all said healthy.
 

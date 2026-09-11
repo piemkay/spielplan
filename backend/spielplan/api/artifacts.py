@@ -18,6 +18,40 @@ from spielplan.importer import bundle as bundle_import
 
 router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 
+# §10's step 5, in the operator's words: the one place the 409 and the import RESPONSE share.
+#
+# The import response has said this since M0 and nothing enforced it. M4.13 gave the invariant
+# production callers (`models/artifacts.py::assert_matches`), and the refusal they raise has to say
+# the same sentence the import said - a member seeing "restart backend and worker" on a 409 and an
+# admin reading a different phrasing on the import screen would be two descriptions of one state,
+# which is how an operator comes to believe they are two. Imported by `api/rate.py` and
+# `api/rank.py` rather than re-typed; the constant lives here because this is the module that
+# already owned the sentence. [M4.13, data-01 mitigation correction]
+#
+# IT IS NOT THE ONLY PLACE THE WORDS APPEAR, AND SAYING SO IS THE POINT. This comment claimed to be
+# the one place and was wrong about the one screen it is about: `BundleImport.svelte` hard-codes
+# the sentence instead of rendering the `note` this module already sends it, and `ops/devstub.py`
+# carries a harness copy. So an edit here moves the 409 and the response and neither of those. The
+# importer's swap note used to be a fourth, DIFFERENT phrasing rendered as a finding on that same
+# screen - two descriptions of one state, on one page - and it no longer states the clause at all.
+# The remaining duplicate is the client's, which is the client's to remove.
+# [M4.13 cycle 1, m413-c1-dim1-restart-sentence-written-in-three-places]
+RESTART_REQUIRED = (
+    "restart backend and worker — no process may score or refit with a loaded "
+    "bundle version different from the active row"
+)
+
+# The other refusal §10's invariant needs, and it is a different instruction: a broken install's
+# files are gone, so restarting this process changes nothing. `assert_not_broken` raises it inside
+# the app with `store.root` attached (the operator needs the path); this is the member's half of
+# the same state, and it names the restore. Beside `RESTART_REQUIRED` because the two sentences are
+# the two halves of one §10 clause and a reader has to be able to see they are different.
+# [M4.13 cycle 1, m413-c1-dim1-broken-bundle-refusal-is-worker-only]
+RESTORE_REQUIRED = (
+    "the active bundle's files are missing - restore /data/artifacts or import the bundle "
+    "again; no process may score or refit in a basis whose files are gone"
+)
+
 
 class BundleRef(BaseModel):
     path: str | None = None      # defaults to /data/import
@@ -70,6 +104,15 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
         # §10's invariant, surfaced: "no process may score or refit with a loaded bundle
         # version different from the active row."
         "restart_required": active != store.version,
+        # The third state this pair could not express. `active != store.version` is False when the
+        # active row's DIRECTORY is gone, because `load_active` now carries that row's version with
+        # `broken = True` - correctly, so the fit is stamped honestly - and `loaded` above is None
+        # because `is_empty` stays True. An operator reading this page would then see an active
+        # bundle, no loaded bundle and no restart required, which describes nothing. The only other
+        # report of this state is one ERROR line at boot, and §6.6 makes the Data tab the place an
+        # operator finds out. [M4.13, data-03]
+        "broken": store.broken,
+        "missing_path": str(store.root) if store.broken else None,
         "import_dir": str(settings().import_dir),
         "rebuild_set": list(bundle_import.REBUILD_SET),
     }
@@ -106,6 +149,5 @@ async def import_bundle(body: BundleRef, conn: DB, _: AdminUser) -> dict[str, An
         "text": report.render(),
         # §10 swap sequence step 5. Said plainly because the operator has to do it.
         "restart_required": True,
-        "note": "restart backend and worker — no process may score or refit with a loaded "
-                "bundle version different from the active row",
+        "note": RESTART_REQUIRED,
     }

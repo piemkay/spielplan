@@ -20,8 +20,18 @@ WHAT P(SEEN) IS, AND WHAT IT IS NOT
 It is a five-feature logistic over signals this app already holds, and it exists to *order a
 queue*. It never enters `score_u(t)` and it is not a model feature: §4.1 rule 3 keeps the
 display schema away from the feature builder, and nothing here reads it. `title_prior.item_n`
-is the sanctioned popularity quantity — §4.3 ships it as "the §5.1 gate input" and §5.1 already
-uses it — so the popularity term is a crowd *support count*, never a crowd *score*.
+is the sanctioned popularity quantity — §4.3 ships it as "the per-title support counts" — so
+the popularity term is a crowd *support count*, never a crowd *score*.
+
+That sentence used to rest on §4.3's parenthetical instead ("the §5.1 gate input"), and for one
+milestone it was false here. The gloss holds only while every row carries a coordinate: M4.13
+excluded `cold_mask` rows from the basis, so a title the crowd rated 260,131 times has n_t = 0
+because there is nothing for the gate to weight — and `serve.materialise_priors` wrote that 0
+into this column for 2,879 rows of v20260828, 375 of the owned ones shipping `item_n >= 90`.
+At weight 2.0 through `log1p(n)/log1p(1e5)` that is the whole of the crowd term, so the sweep
+ordered the most-watched films in the catalogue as if nobody had ever seen them. The column now
+carries `Backbone.crowd_support`, which is the file's own count for every row, and
+`title_prior.gate` carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01]
 
 The weights are a stated prior, not a fit. There is no labelled data to fit them on until the
 surface runs; the surface then generates exactly that label, because a verdict means seen and

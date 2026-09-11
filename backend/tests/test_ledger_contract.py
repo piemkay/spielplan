@@ -28,6 +28,8 @@ shut and can hand back a direction that is not a descent direction.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -158,21 +160,46 @@ def test_no_other_starting_point_finds_a_lower_objective(fits):
     `test_the_optimum_is_unique_from_any_start` could not do this before: it passed an
     identical copy of the observations and `fit` took no start point, so the "two very
     different starting points" it named were never exercised.
+
+    That comparison is one-sided -- no other start does BETTER -- and `fit` is deterministic, so
+    a `fit` that threw `z0`/`r0` away would satisfy it by returning the same number twice. The
+    start therefore has to be read back out of an answer before the comparison means anything,
+    and the zero-budget fit is where it is read: `_minimise` iterates `range(1, limit + 1)`, so
+    with both counts at zero each stage hands back the point it was given and `mu` IS `mu0`.
+    Spied against a `fit` that discards its start arguments, that reports mu = 0.0 on all forty
+    boards. The objective cannot do this job: the supplied start moves it by more than 1e-6 on
+    only 3 of the 40 and by nothing at all on 7, while the fitted s differs on 38 -- the two that
+    match are the boards with no ordinal observation, where the answer is the prior mode and the
+    start is genuinely irrelevant. Which is why this asserts the plumbing and leaves the
+    comparison below one-sided rather than inventing a tolerance for it.
+    [M4.13 cycle 2, m413-c2-cov-01]
     """
     rng = np.random.default_rng(99)
-    worse = []
+    # A budget of nothing, which `hyperparams.load` would refuse (`steps` is a positive int) and
+    # nothing fits under: it exists to make one question answerable, "did the start arrive".
+    idle = dataclasses.replace(DEFAULTS, newton_max_iter=0, steps=0)
+    worse, unread = [], []
     for i, (obs, f) in enumerate(fits[:40]):
         lay = model._Layout(obs.n, obs.n_levels)
         cuts = np.sort(rng.normal(scale=1.5, size=lay.n_cuts))
         gamma = np.sort(rng.normal(scale=1.5, size=2))
         if not model.feasible(gamma, cuts):
             continue
-        z0 = model._pack(
-            float(rng.normal()), rng.normal(size=64) / 20.0, gamma, cuts, float(rng.normal())
-        )
-        other = model.fit(obs, DEFAULTS, z0=z0, r0=rng.normal(size=obs.n) / 20.0)
+        mu0 = float(rng.normal())
+        v0 = rng.normal(size=64) / 20.0
+        z0 = model._pack(mu0, v0, gamma, cuts, float(rng.normal()))
+        r0 = rng.normal(size=obs.n) / 20.0
+
+        idled = model.fit(obs, idle, z0=z0, r0=r0)
+        if idled.mu != mu0 or not np.array_equal(idled.s, mu0 + obs.embeddings @ v0 + r0):
+            unread.append(
+                f"board {i}: started at mu={mu0!r}, a fit of no steps reports {idled.mu!r}"
+            )
+
+        other = model.fit(obs, DEFAULTS, z0=z0, r0=r0)
         if other.objective < f.objective - 1e-6 * max(1.0, abs(f.objective)):
             worse.append(f"board {i}: default {f.objective:.6f} vs {other.objective:.6f}")
+    assert not unread, f"fit did not start where it was told to: {unread[:4]}"
     assert not worse, f"a different start found a better optimum: {worse[:4]}"
 
 

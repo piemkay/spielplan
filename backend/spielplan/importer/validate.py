@@ -725,11 +725,17 @@ def _validate_model_artifacts(
     except Exception as exc:                                       # noqa: BLE001
         report.fail("cold-tower", f"cold_tower.pt is unreadable: {exc}")
     else:
+        # `tower.notes` rides in the same line rather than a second finding: it qualifies this
+        # claim (the version in it was assumed from the tensor names, not read off the file), and
+        # a qualification in a separate note is one an operator can read without the claim.
+        # [M4.13 step 36, cs-54]
         report.note(
             "cold-tower",
             f"cold_tower.pt loads as {tower.arch} v{tower.version}: {tower.input_dim} input "
-            f"columns -> {tower.embed_dim}-d, matching the contract",
+            f"columns -> {tower.embed_dim}-d, matching the contract"
+            + "".join(f"; {note}" for note in tower.notes),
             input_dim=tower.input_dim, embed_dim=tower.embed_dim, arch=tower.arch,
+            assumed=list(tower.notes),
         )
 
 

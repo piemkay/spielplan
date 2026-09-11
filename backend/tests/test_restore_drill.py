@@ -50,7 +50,7 @@ from spielplan.core import secrets as sec
 from spielplan.core import secrets_cli
 from spielplan.core.config import settings
 from spielplan.db import migrate
-from tests.test_backup import _client, _drop, _recreate, _sibling
+from tests.test_backup import _client, _drop, _inside_the_container, _recreate, _sibling
 
 ADMIN_PASSWORD = "an-admin-password"
 MEMBER_PASSWORD = "a-member-password"
@@ -76,7 +76,9 @@ def _restore(dump: Path, database_url: str, *, clean: bool) -> subprocess.Comple
     argv = [*_client("pg_restore")]
     if clean:
         argv += ["--clean", "--if-exists"]
-    argv += ["--no-owner", "--dbname", database_url]
+    # Addressed for whichever pg_restore `_client` resolved: a container-run one cannot see
+    # this host's published port, and a host-run one must not be handed the container's.
+    argv += ["--no-owner", "--dbname", _inside_the_container(database_url)]
     with dump.open("rb") as handle:
         return subprocess.run(argv, stdin=handle, capture_output=True, timeout=600, check=False)
 
@@ -89,6 +91,9 @@ async def _boot(monkeypatch, database_url: str, data_dir: Path):
     against a database the first one never saw, or about a boot under a different key. Yields a
     client factory, so one test can hold an admin session and two member sessions at once.
     """
+    # NOT translated: this is the APP's connection, made from this host by asyncpg, and
+    # 127.0.0.1:5432 from here is a different checkout's database entirely. Only the DSN handed
+    # to a container-run pg_dump is addressed from inside; see _inside_the_container.
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     settings.cache_clear()
@@ -217,7 +222,9 @@ async def installed(secrets_key, db, pg_url, tmp_path, monkeypatch):
 
     monkeypatch.setattr(nightly, "PG_DUMP", _client("pg_dump"))
     dump = tmp_path / nightly.dump_name(datetime.now(UTC))
-    assert nightly.dump(pg_url, dump) > 0
+    # Addressed for whichever pg_dump `_client` resolved: the container cannot see this
+    # host's published port. See `_inside_the_container`.
+    assert nightly.dump(_inside_the_container(pg_url), dump) > 0
 
     return {
         "dump": dump,

@@ -82,6 +82,18 @@
           to load {state.active}: docker compose restart backend worker
         </div>
       {/if}
+      {#if state.broken}
+        <!-- The third state `restart_required` cannot express, and the one an operator has to
+             act on fastest: the active row names a bundle whose directory is not there. The
+             backend carries that row's version so every fit is stamped honestly, which also
+             makes `active != loaded` false - so without this line the page reads "a bundle is
+             active, none is loaded, no restart needed", and the only other report of it is one
+             ERROR line at boot. §6.6 makes this page the operator's data. [M4.13, data-03] -->
+        <div class="warn data">
+          bundle directory missing: {state.missing_path} — the model jobs refuse rather than
+          refitting in a zero basis; restore the directory or import {state.active} again
+        </div>
+      {/if}
       {#if state.loaded?.missing_required?.length}
         <div class="warn data">missing required: {state.loaded.missing_required.join(', ')}</div>
       {/if}

@@ -22,6 +22,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
 import numpy as np
 import pytest
 
@@ -82,6 +83,29 @@ async def two_members(db):
             )
         )
     return rows
+
+
+async def _wait_out_the_pause(conn, user_id: int) -> None:
+    """Make the fold-in tick's debounce window have elapsed, without sleeping through it.
+
+    `foldin._is_stale` refits only a pair that moved AND settled (`foldin.PAUSE_SECONDS`), so a
+    test that rates and ticks in the same millisecond is asking for the one thing the debounce
+    exists to refuse. Both clocks shift by the same interval, so every ordering between them --
+    which is all `_is_stale` compares -- is preserved. [M4.13, perf-04; plan step 22]
+    """
+    from spielplan.scoring import foldin
+
+    shift = foldin.PAUSE_SECONDS + 10
+    await conn.execute(
+        "UPDATE verdict SET created_at = created_at - ($2::int * interval '1 second') "
+        " WHERE user_id = $1",
+        user_id, shift,
+    )
+    await conn.execute(
+        "UPDATE user_vector SET updated_at = updated_at - ($2::int * interval '1 second') "
+        " WHERE user_id = $1",
+        user_id, shift,
+    )
 
 
 # --- the bundle-less household (§3.1) ---------------------------------------------------------
@@ -275,6 +299,14 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     # ranking the shelves read cannot notice that, it is not personal.
     for title_id, value in ((1, 0), (2, 0), (3, 0), (4, 2), (5, 2)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
+    # The sitting has to be OVER. The tick is debounced since M4.13's step 22 — §12 M2's sentence
+    # is "after a sitting", and a partition rewritten every sixty seconds while somebody is still
+    # rating is 14,000 deletes and 14,000 inserts nobody reads — so a label written this instant is
+    # deliberately not refit. Moving both stamps back by the same interval is what waiting the
+    # pause out looks like without spending it: the ORDER of the two clocks, which is what
+    # staleness is about, is untouched. The first sitting above needs nothing, because a member who
+    # has never been fitted is stale whatever the clocks say. [M4.13, perf-04]
+    await _wait_out_the_pause(db, patrick)
     await next(j for j in worker.JOBS if j.name == "fold-in-tick").run()
 
     after = await db.fetch(
@@ -873,3 +905,417 @@ async def test_a_television_session_whose_series_could_not_be_listed_gets_its_ow
         await job.run()
         again = [r for r in caplog.records if "series could not be listed" in r.getMessage()]
         assert len(again) == 1, "a standing proxy rule is a state, not a line a minute"
+
+
+# --- M4.13: the tick's budget names the two costs it actually pays -----------------------------
+
+
+async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db):
+    """§5.3's budget column is the number a job is held to, and this job's said "ms".
+
+    The ridge solve earns that word -- 6-7 ms for 100 labels -- but `serve.replace_scores` behind
+    it rewrites the whole (user, kind) partition: 14,000 DELETEs and 14,000 INSERTs, 325-590 ms
+    and 5-8 MB of WAL per stale pair measured at corpus scale, 0.7-1.5 s for two raters in one
+    tick. A reader holding that against "ms" cannot tell a job inside its budget from one four
+    orders outside it, so `FoldInReport` splits the two halves and the registry names both.
+
+    The split is asserted as an ORDERING, not against a literal: on this fixture both numbers are
+    tiny (eight titles), and what has to stay true is which half grows -- four round trips and a
+    partition rewrite against two numpy calls. Measured here: see the assertion messages, which
+    print what this run actually spent. [M4.13, perf-04; plan step 22]
+    """
+    from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    store, patrick = rated
+    # The import itself ran a full fold-in (§10 step 1), so these pairs are fitted and the
+    # verdicts the fixture records afterwards are seconds old: the tick declines them, which is
+    # the debounce doing its job rather than a broken fixture. The sitting is over here.
+    await _wait_out_the_pause(db, patrick)
+    job = next(j for j in worker.JOBS if j.name == "fold-in-tick")
+    assert job.budget != "ms", "the budget is still the solve's word for the whole job"
+    for half in ("numpy", "write"):
+        assert half in job.budget, f"the budget names no {half} half: {job.budget!r}"
+    assert job.budget.isascii(), "a cp1252 console reads this column"
+
+    detail = await job.run()
+    assert detail is not None and detail["refit"], "nothing was refit, so nothing was measured"
+    assert set(detail) >= {"ms", "numpy_ms", "db_ms"}, sorted(detail)
+
+    # Again, unrounded, because `as_dict` rounds to a tenth of a millisecond and the fit over
+    # seven labels lands under that. `only_stale=False` so the debounce is not what is being
+    # measured: this is the cost of a pass that does the work, not of one that declines to.
+    report = await foldin.run(
+        db, bb.load_for(store), bundle_version="test-v1", only_stale=False, with_priors=False
+    )
+    assert report.numpy_ms > 0.0, "the fit itself was not timed at all"
+    assert report.db_ms > report.numpy_ms, (
+        f"Postgres is the cheaper half here: numpy {report.numpy_ms:.3f} ms against db "
+        f"{report.db_ms:.3f} ms -- the budget string is then naming the wrong cost"
+    )
+    assert report.ms + 1.0 >= report.numpy_ms + report.db_ms, (
+        f"the two halves ({report.numpy_ms:.3f} + {report.db_ms:.3f} ms) exceed the pass they "
+        f"are halves of ({report.ms:.3f} ms)"
+    )
+
+
+# --- M4.13: the board a sitting leaves behind, and the loop that finishes it ---------------------
+#
+# §5.2 gives the fit two cadences, "nightly" and "incrementally on each new observation", and this
+# module's own docstring calls them "the same model at two resolutions, not two models". The
+# resolution the incremental row cannot reach is `v`: it re-solves the TOUCHED titles' residuals
+# against the cached fit's (mu, v), so every title the person has not rated keeps whatever the last
+# full fit said about it - and after M4.10 took the full fit off the tap path, that fit is the one
+# over the single first verdict. Measured on the real bundle after 50 verdicts and ~41 battles per
+# member: the 715 unrated owned movies had sd(s) 0.070 against 2.77-3.27 after a full refit, and
+# their order correlated -0.135 with a taste the full refit recovers at +0.57. The nightly then
+# moved 252 and then 724 of 765 tier badges at once, which is the snap §6.3 says the design avoids,
+# delivered by the job that exists to prevent it. [M4.13, dd22; plan step 27]
+
+# Enough generated owned movies that "the spread over the unrated library" is a measurement rather
+# than an anecdote. `make_bundle`'s own parameter, drawn entirely from the authored vocabulary, so
+# the contract and the tower are the ones the rest of the suite loads.
+POOL_TITLES = 40
+
+# The first tap, then six more, which is one past `REFRESH_GROWTH` rather than exactly on it: a
+# fixture sitting on the threshold would pass whatever the constant meant. The authored movies are
+# 1-5 and 8 (6 and 7 are the two series) and `POOL_ID_BASE` is 1001, so the last one is a pool
+# title - which also makes the sitting reach past the eight titles every other test rates.
+FIRST_TAP = (1, 2)
+THE_REST = ((2, 2), (3, 1), (4, 0), (5, 1), (8, 2), (1001, 0))
+
+
+@pytest.fixture
+async def sitting(db, worker_env, two_members):
+    """One member's evening, through the real request path: (patrick, hp, embeddings).
+
+    The first tap is the one M4.10 made a *queue* rather than a fit, so the 60 s `tier-set-refit`
+    sweep is what produces the only full fit this board has ever had - at n = 1. Six taps then land
+    on top of it, which is what an ordinary sitting looks like from `ledger_fit`'s point of view.
+    """
+    from spielplan.scoring import backbone as bb
+
+    root = fx.make_bundle(worker_env / "bundle", pool_titles=POOL_TITLES)
+    report = await bundle_import.import_bundle(
+        db, bundle_import.Bundle.open(root), worker_env / "data" / "artifacts"
+    )
+    assert report.ok, report.render()
+    store = ArtifactStore.open(worker_env / "data" / "artifacts" / "test-v1", "test-v1")
+    patrick = two_members[0]
+    hp, _notes = load_hp(store)
+    emb = observations.standard_embeddings(db, bb.load_for(store), bundle_version="test-v1")
+
+    async def tap(title_id: int, value: int):
+        await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
+        return await refit.update_incrementally(
+            db, user_id=patrick, kind="movie", title_ids=[title_id], hp=hp, embeddings=emb
+        )
+
+    first = await tap(*FIRST_TAP)
+    assert first.fit_source == refit.QUEUED, (
+        "the first tap fitted inline, so M4.10's queue is gone and this fixture is not the real path"
+    )
+    await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
+    for title_id, value in THE_REST:
+        assert (await tap(title_id, value)).fit_source == "incremental"
+    return patrick, hp, emb
+
+
+def _refresh_job():
+    return next(j for j in worker.JOBS if j.name == "ledger-refresh")
+
+
+async def test_a_sittings_worth_of_verdicts_returns_the_board_to_a_full_fit_within_one_tick(
+    sitting, db
+):
+    """§12's M2 criterion is about what a person sees within a sitting, and `fit_source` is the
+    honest name for what they are looking at.
+
+    The budget is what makes a tick possible at all: §5.3 gives the full fit "seconds" and it
+    measures 0.11-0.14 s per (user, kind) at this scale, so asking for it once a minute while
+    somebody is rating is cheaper than the `user_score` partition rewrite the fold-in tick beside it
+    already pays. §5.3's nightly row is untouched - this is the same job at a cadence §5.3 permits
+    because more often than nightly is a superset of nightly, which is the argument
+    `scoring.foldin.run` makes for the fold-in.
+    """
+    patrick, _hp, _emb = sitting
+    before = await db.fetchrow(
+        "SELECT fit_source, n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'",
+        patrick,
+    )
+    assert before["fit_source"] == "incremental"
+    assert before["n_observed"] == 1 + len(THE_REST)
+
+    owed = await refit.refreshes_owed(db)
+    assert owed == [(patrick, "movie", len(THE_REST))], owed
+
+    job = _refresh_job()
+    assert job.every == 60 and 0 < job.timeout <= job.every, (
+        "a tick that cannot finish inside its own interval eats the slot of every job behind it"
+    )
+    detail = await job.run()
+
+    assert detail is not None, "the tick reported nothing about work it was owed"
+    assert [r["kind"] for r in detail["refits"]] == ["movie"], detail
+    done = detail["refits"][0]
+    assert done["error"] is None and done["fitted"] is True, done
+    assert done["n_observed"] == 1 + len(THE_REST)
+    assert done["grown"] == len(THE_REST), "the tick does not report the work it was called for"
+
+    after = await db.fetchrow(
+        "SELECT fit_source, n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'",
+        patrick,
+    )
+    assert after["fit_source"] == "nightly", (
+        "the board is still resting on the residual solve, so the nightly job will do the whole "
+        "move at once"
+    )
+    assert await refit.refreshes_owed(db) == [], (
+        "the tick left the same work owed, so it refits the same board every sixty seconds"
+    )
+    assert await _refresh_job().run() is None, "a quiet household is not a no-op"
+
+
+async def test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_trigger(
+    sitting, db
+):
+    """The other half of a §6.1 sitting, and the limit of the trigger this milestone chose.
+
+    `refreshes_owed` compares `ledger_fit.n_observed` against `cdf_reference.size`, and BOTH count
+    TITLES: `_merge_cache` increments `n_observed` only on the branch that inserts a title the
+    cache did not already hold. A §4.2 supersede is an additional ordinal row in the likelihood
+    (`load_observations` loads superseded verdicts on purpose) and a §6.1 battle pairs two titles
+    the person has already rated the same way, so neither can reach that branch -- and "battle" is
+    one of `rate/session.MODES`, a whole sitting a member can choose. Both move `v` for the full
+    fit and neither moves the predicate, so an evening spent changing one's mind keeps the board
+    the previous full fit produced until the nightly.
+
+    Asserted rather than left to be rediscovered, because the registered pair above only ever
+    exercises the newly-rated arm (`THE_REST` is six DISTINCT ids) and this is the sentence that
+    keeps the row's "a sitting's worth of verdicts" honest about which sitting. Widening the
+    trigger to count OBSERVATIONS, or to fire on `max(created_at) > fitted_at` the way
+    `foldin._is_stale` does, is a different trigger and the owner's call; `refreshes_owed`'s
+    docstring records both options. [M4.13 cycle 2, M413-D6-03]
+    """
+    patrick, hp, emb = sitting
+    assert await refit.refreshes_owed(db) == [(patrick, "movie", len(THE_REST))]
+    await _refresh_job().run()
+    assert await refit.refreshes_owed(db) == [], "the tick did not clear the work it was owed"
+
+    rated = [FIRST_TAP[0], *(t for t, _ in THE_REST)]
+    before = await db.fetchval(
+        "SELECT n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", patrick
+    )
+
+    # Every one of them a title the board already holds: re-rate all seven, then fight duels
+    # between them. Nothing here is a new title, and nothing here is invisible to the full fit.
+    for title_id in rated:
+        await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=1)
+        await refit.update_incrementally(
+            db, user_id=patrick, kind="movie", title_ids=[title_id], hp=hp, embeddings=emb
+        )
+    for a, b in zip(rated, rated[1:], strict=False):
+        await observations.record_duel(
+            db, user_id=patrick, title_a=a, title_b=b, outcome="A",
+            context="profile_battle", decisive=False, hp=hp,
+        )
+        await refit.update_incrementally(
+            db, user_id=patrick, kind="movie", title_ids=[a, b], hp=hp, embeddings=emb
+        )
+
+    assert await db.fetchval(
+        "SELECT count(*) FROM verdict WHERE user_id = $1 AND superseded_by IS NOT NULL", patrick
+    ) == len(rated), "the re-ratings did not supersede, so this measures nothing"
+    assert await db.fetchval("SELECT count(*) FROM duel WHERE user_id = $1", patrick) > 0
+
+    after = await db.fetchrow(
+        "SELECT fit_source, n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'",
+        patrick,
+    )
+    assert after["n_observed"] == before, (
+        "n_observed counts TITLES, so a re-rating or a duel cannot move it - if this changed, the "
+        "trigger has been widened and `refreshes_owed`'s docstring is owed the correction"
+    )
+    assert after["fit_source"] == "incremental"
+    assert await refit.refreshes_owed(db) == [], (
+        "the known limit: an evening of re-ratings and battles owes no refresh until the nightly"
+    )
+    assert await _refresh_job().run() is None
+
+
+async def test_the_board_spreads_unrated_titles_rather_than_holding_the_first_taps_estimate(
+    sitting, db
+):
+    """The measurement, not the bookkeeping: what the person's board actually says.
+
+    `s` for an unrated title is `mu + <v, e>` (§5.2: "no r, so s = mu + <v, e>"), so the spread over
+    the unrated library is a direct reading of how much the 64-d vector has learned. Fitted over one
+    verdict it has learned almost nothing, and the incremental path cannot change that however many
+    taps follow - every row below was written by that one fit and not one of them moved during the
+    sitting, which the `fit_source` assertion pins before anything else.
+
+    The numbers are printed rather than asserted against a literal: the DIRECTION is the claim (a
+    board that tells unrated titles apart, and an order that is not the one an n = 1 fit produced),
+    and a threshold tuned on a fixture bundle is a threshold that means nothing on the real one.
+    """
+    patrick, _hp, _emb = sitting
+
+    async def unrated():
+        return await db.fetch(
+            "SELECT title_id, s, tier, fit_source FROM ledger_state "
+            " WHERE user_id = $1 AND kind = 'movie' AND NOT observed ORDER BY title_id",
+            patrick,
+        )
+
+    held = await unrated()
+    assert len(held) >= 20, (
+        f"only {len(held)} unrated owned movies: the pool did not import, so a spread over them "
+        "measures nothing"
+    )
+    assert {r["fit_source"] for r in held} == {"nightly"}, (
+        "an unrated title's row moved during the sitting, so the premise of this test is wrong"
+    )
+    before = np.asarray([float(r["s"]) for r in held])
+    order_before = [r["title_id"] for r in sorted(held, key=lambda r: (-float(r["s"]), r["title_id"]))]
+
+    await _refresh_job().run()
+
+    fresh = await unrated()
+    after = np.asarray([float(r["s"]) for r in fresh])
+    order_after = [r["title_id"] for r in sorted(fresh, key=lambda r: (-float(r["s"]), r["title_id"]))]
+    print(
+        f"unrated owned movies: {len(before)}; sd(s) {float(before.std()):.4f} on the one-verdict "
+        f"fit -> {float(after.std()):.4f} after the tick; distinct tiers "
+        f"{len({r['tier'] for r in held})} -> {len({r['tier'] for r in fresh})}"
+    )
+
+    assert len(after) == len(before)
+    assert float(after.std()) > float(before.std()), (
+        f"the refitted board is no more spread than the one-verdict one: {float(before.std()):.4f} "
+        f"-> {float(after.std()):.4f}"
+    )
+    assert len({round(float(x), 9) for x in after}) > 1, (
+        "every unrated title came out at the same score, which is a degenerate fit"
+    )
+    assert order_after != order_before, (
+        "the board the person reads is in exactly the order the single first verdict put it in"
+    )
+    assert {r["fit_source"] for r in fresh} == {"nightly"}
+
+
+async def test_refit_all_isolates_a_failure_that_is_not_a_value_error(
+    rated, db, two_members, monkeypatch
+):
+    """"One person's bad fit must not stop the others'" is a claim about failures, not classes.
+
+    The clause was `(RefitRefused, ValueError)`, and the finding's reason for widening it - a
+    singular matrix escaping - is REFUTED: `np.linalg.LinAlgError` IS a `ValueError`, and probed
+    against the narrow clause the report carried `error = 'Singular matrix'` with the other member
+    fitted. What actually aborted the night is everything else: an asyncpg `DataError` from a row
+    the schema admits and numpy does not, a lock timeout raised behind an import, a `MemoryError` in
+    `_laplace`'s dense (p+n)x(p+n) inverse - which is the one injected here, because it is the only
+    one of the three whose cause is the library size §5.3 budgets for.
+
+    The refusal is injected at `_refit_user`, i.e. inside the transaction `refit_user` opens, so the
+    test also says that an isolated failure cannot leak a partial write. [M4.13, plan step 29]
+    """
+    store, patrick = rated
+    ana = two_members[1]
+    for title_id, value in ((1, 2), (2, 0), (3, 1), (6, 2), (7, 0)):
+        await observations.record_verdict(db, user_id=ana, title_id=title_id, value=value)
+    hp, _notes = load_hp(store)
+
+    real = refit._refit_user
+
+    async def out_of_memory_for_patrick(conn, *, user_id, kind, **kwargs):
+        if user_id == patrick:
+            raise MemoryError("Unable to allocate 14.1 GiB for the dense (p+n)x(p+n) inverse")
+        return await real(conn, user_id=user_id, kind=kind, **kwargs)
+
+    monkeypatch.setattr(refit, "_refit_user", out_of_memory_for_patrick)
+    reports = await refit.refit_all(db, hp)
+
+    assert len(reports) == 4, f"the loop visited {len(reports)} of 4 (user, kind) pairs"
+    failed = [r for r in reports if r.error]
+    assert {r.user_id for r in failed} == {patrick} and len(failed) == 2
+    assert "dense" in failed[0].error, failed[0].error
+    ana_reports = [r for r in reports if r.user_id == ana]
+    assert all(r.error is None for r in ana_reports), ana_reports
+    assert next(r for r in ana_reports if r.kind == "movie").fitted, (
+        "Ana's fit has to have actually run, not merely been reached"
+    )
+    assert await db.fetchval(
+        "SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick
+    ) == 0, "the member whose fit raised has board rows, so a partial write escaped"
+
+
+async def test_a_dead_connection_stops_the_ledger_refresh_tick_rather_than_reporting_a_skip(
+    sitting, db, monkeypatch
+):
+    """The third copy of step 29's shape, which had the shape and no guard.
+
+    `_ledger_refresh_tick` re-raises `PostgresConnectionError`/`InterfaceError` and isolates every
+    other exception into a `RefitReport(error=...)`, exactly as `refit.refit_all` and
+    `worker._tier_set_refits` do -- and those two are named by
+    `test_a_dead_connection_stops_the_night_rather_than_being_reported_as_a_skip` below while this
+    one was named nowhere. The only three references to this job in the suite run it on a happy
+    path and on the empty queue, so folding the three copies together, or dropping the asyncpg arm
+    because "log.exception covers it", passed the whole suite.
+
+    What it costs here is smaller than in the other two loops and worth stating so the next reader
+    does not over-correct: this tick reads state rather than a queue and clears nothing, so the
+    work is still owed sixty seconds later. What is lost is the report -- `_tick` records a job as
+    failed only when it raises, so §6.6's System card would read green for a minute of fits that
+    did not happen, and `RETRY_AFTER` would never be consulted. [M4.13 cycle 2, M413-D6-05]
+    """
+    patrick, _hp, _emb = sitting
+    assert await refit.refreshes_owed(db), "nothing is owed, so the tick returns before it can raise"
+
+    async def the_interface_is_closed(conn, **kwargs):
+        raise asyncpg.InterfaceError("cannot perform operation: another operation is in progress")
+
+    monkeypatch.setattr(refit, "refit_user", the_interface_is_closed)
+    with pytest.raises(asyncpg.InterfaceError):
+        await _refresh_job().run()
+
+    assert await refit.refreshes_owed(db) == [(patrick, "movie", len(THE_REST))], (
+        "the tick reported work on a connection it could not do it with"
+    )
+
+
+async def test_a_dead_connection_stops_the_night_rather_than_being_reported_as_a_skip(
+    rated, db, monkeypatch
+):
+    """The one failure the widened clause must NOT swallow, on both loops that widened.
+
+    A connection that is gone fails every remaining (user, kind) the same way, so an isolated
+    report would hand `_tick` a full account of a night nobody ran - and `_tick` records a job as
+    failed only when it raises, so §6.6's System card would show green. `RETRY_AFTER` then decides
+    when the next tick tries with a fresh connection from the pool. [M4.13, plan step 29]
+    """
+    from spielplan.rank import tiers
+
+    store, patrick = rated
+    hp, _notes = load_hp(store)
+
+    async def the_connection_is_gone(conn, *, user_id, kind, **kwargs):
+        raise asyncpg.PostgresConnectionError(
+            "terminating connection due to administrator command"
+        )
+
+    monkeypatch.setattr(refit, "_refit_user", the_connection_is_gone)
+    with pytest.raises(asyncpg.PostgresConnectionError):
+        await refit.refit_all(db, hp)
+
+    # The same shape in the sweep beside it, which catches `Exception` per item for finding 6.
+    async def the_interface_is_closed(conn, **kwargs):
+        raise asyncpg.InterfaceError("cannot perform operation: another operation is in progress")
+
+    await tiers.save_tier_set(db, user_id=patrick, tier_set=["bad", "ok", "good"])
+    assert await tiers.refits_owed(db), "nothing is owed, so the sweep returns before it can raise"
+    monkeypatch.setattr(refit, "refit_user", the_interface_is_closed)
+    with pytest.raises(asyncpg.InterfaceError):
+        await (next(j for j in worker.JOBS if j.name == "tier-set-refit").run())
+    assert await tiers.refits_owed(db), (
+        "the sweep cleared a request it never serviced, on a connection it could not service it with"
+    )

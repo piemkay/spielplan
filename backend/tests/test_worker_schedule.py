@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -86,12 +87,48 @@ def test_only_the_elapsed_jobs_are_due():
     # The minute-interval jobs, and only those. `tier-set-refit` joined them at M3: decision 11
     # adds a second trigger for §5.3's nightly fit, and a person who just changed their tier set
     # should not spend a day looking at equal-mass quantiles instead of fitted cutpoints.
-    minutely = {"jellyfin-sessions-poll", "fold-in-tick", "tier-set-refit"}
+    # `ledger-refresh` joined them at M4.13 and is a *third* trigger for the same fit: the
+    # incremental path moves r and not v, so the rest of the library holds the first tap's estimate
+    # until a full fit runs. [M4.13, dd22; plan step 27]
+    minutely = {"jellyfin-sessions-poll", "fold-in-tick", "tier-set-refit", "ledger-refresh"}
     at_90s = {job.name for job in worker.due(now=90.0, last_run=last)}
     assert at_90s == minutely
 
     at_1000s = {job.name for job in worker.due(now=1000.0, last_run=last)}
     assert at_1000s == minutely | {"jellyfin-seen-sync"}
+
+
+def test_every_sentence_that_counts_the_minutely_jobs_counts_the_registry():
+    """Four comments size `job_run` retention, the per-job timeout budget and the INFO threshold
+    off "the three 60-second jobs". Registering `ledger-refresh` at `every=60` made them four and
+    moved the daily row total from 4,320 to 5,760, and the source kept the old number in all four
+    places while THIS file's sibling comment was updated -- so the arithmetic behind
+    `JOB_RUN_KEEP_DAYS`, the 55 s budgets and `DURATION_LOG_THRESHOLD` reads a third low.
+
+    A count in a comment is a measurement (CLAUDE.md), so it is checked against the registry
+    rather than against a constant: the next job registered at sixty seconds fails this test in
+    the same four places, which is where the sentences are. 4,320 is deliberately not searched
+    for -- `86400 / TICK_SECONDS` is also 4,320 and those two comments are still right.
+    [M4.13 cycle 2, M413-D6-04]
+    """
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven"}
+    minutely = [job for job in worker.JOBS if job.every == 60]
+    expected = words[len(minutely)]
+    source = Path(worker.__file__).read_text(encoding="utf-8")
+
+    counted = re.findall(
+        r"(\w+) (?:`every=60` jobs|60-second rows|60-second jobs|that fire every sixty)", source
+    )
+    assert len(counted) == 4, (
+        f"the sentences that count the minutely jobs moved; found {counted}"
+    )
+    assert set(counted) == {expected}, (
+        f"{len(minutely)} jobs run every 60 s ({sorted(j.name for j in minutely)}), "
+        f"and the source says {sorted(set(counted))}"
+    )
+    assert f"{len(minutely) * 1440:,}" in source, (
+        "the rows-a-day and lines-a-day figures are the count times 1,440 and have to move with it"
+    )
 
 
 def test_a_job_awaiting_its_milestone_is_never_due():

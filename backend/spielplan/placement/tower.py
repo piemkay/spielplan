@@ -67,6 +67,14 @@ class Tower:
     version: int
     sha256: str
     module: Any = field(repr=False)
+    # WHAT WAS ASSUMED RATHER THAN CHECKED. §4.3 says "the exporter must ship v2" and `_load`
+    # below enforced that against values it had just substituted itself, so the check could not
+    # fail on the format the corpus actually ships. The assumption is real and it is also
+    # reasonable - the tensor names ARE the architecture contract for a bare `state_dict` - but an
+    # assumption presented as an enforced constraint is the one thing it must not be. Carried on
+    # the Tower so `load_tower`'s log line and the import report can both say it, because §10
+    # makes the import report the place an operator reads a bundle's claims. [M4.13 step 36, cs-54]
+    notes: tuple[str, ...] = ()
 
     def place(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """(N, input_dim) float32 in; (N, 64) float32 coordinates and (N,) float64 priors out.
@@ -139,8 +147,9 @@ def load_tower(store: Any, contract: FeatureContract) -> Tower:
     tower = _load(path, contract)
     _CACHE[key] = tower
     log.info(
-        "cold tower loaded: arch=%s input_dim=%d embed_dim=%d threads=%d sha256=%s",
+        "cold tower loaded: arch=%s input_dim=%d embed_dim=%d threads=%d sha256=%s%s",
         tower.arch, tower.input_dim, tower.embed_dim, tower_threads(), tower.sha256[:12],
+        "".join(f"; {note}" for note in tower.notes),
     )
     return tower
 
@@ -188,6 +197,25 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
             f"are shaped for {shape_input}/{shape_embed}; the file states one fact twice"
         )
 
+    # DECLARED, OR ASSUMED AND SAID SO. A bare `state_dict` carries no `version` and no `arch`,
+    # and the two lines below used to substitute this app's own 2 and 'cold_tower_v2' and then
+    # check those substituted values against this app's own allow-lists - so on every bundle the
+    # corpus has ever produced, §4.3's "the exporter must ship v2" was enforced against the
+    # defaults rather than against the file, while the error strings presented it as enforcing the
+    # spec. It is NOT tightened into a refusal: that would refuse every shipped bundle, and the
+    # one guard that does bite on this format - the input-width cross-check against the feature
+    # contract below - is the one that matters, because a width mismatch places the whole library
+    # at plausible wrong coordinates. So the assumption is recorded and travels to the import
+    # report, and the exporter is asked for a checkpoint identity (the tower's sha256 inside
+    # `feature_contract.json`, which already names `model_file` and `model_source`).
+    # [M4.13 step 36, cs-54]
+    notes: list[str] = []
+    if not wrapped:
+        notes.append(
+            f"{path.name} declares no version or architecture; assumed v{SUPPORTED_VERSIONS[0]} "
+            f"{ARCHITECTURES[0]} from its tensor names - the corpus ships a bare state_dict, so "
+            "this is an assumption and not a check (section 4.3)"
+        )
     version = int(checkpoint.get("version", 2)) if wrapped else 2
     if version not in SUPPORTED_VERSIONS:
         raise TowerError(
@@ -219,7 +247,7 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
         )
     return Tower(
         input_dim=input_dim, embed_dim=embed_dim, arch=arch, version=version,
-        sha256=sha, module=module,
+        sha256=sha, module=module, notes=tuple(notes),
     )
 
 

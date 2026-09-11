@@ -208,18 +208,19 @@ def test_a_duel_couples_its_pair_and_leaves_the_shared_location_alone():
 
 # --- convexity, and what it buys ------------------------------------------------------------
 
-
-def test_the_optimum_is_unique_from_any_start():
-    """§5.2's objective is jointly convex, so there is one minimiser. Two very different
-    starting points must reach it — which is also what makes "any divergence is a step-size
-    failure, never a landscape failure" a checkable statement rather than a claim."""
-    _truth, obs = synth(n=25, n_duels=40, seed=2)
-    a = model.fit(obs, DEFAULTS)
-
-    shifted = dataclasses.replace(obs)
-    b = model.fit(shifted, dataclasses.replace(DEFAULTS, lr=0.5))
-    assert np.allclose(a.s, b.s, atol=1e-3)
-    assert abs(a.objective - b.objective) < 1e-6
+# [M4.13 finding 29] `test_the_optimum_is_unique_from_any_start` stood here and could not fail.
+# It called `dataclasses.replace(obs)` — the same observations, not a different start — and never
+# passed `fit()`'s `z0`/`r0`, so both calls arrived at `z0=None, r0=None`; spied, a `fit` that
+# discarded its start arguments altogether left the test green. The honest version varies the
+# start over a distribution of households and lives at
+# `test_ledger_contract.py::test_no_other_starting_point_finds_a_lower_objective`, which no
+# coverage row named until this milestone registered it.
+#
+# [M4.13 cycle 2, m413-c2-cov-01] That replacement did pass `z0`/`r0` and still did not survive the
+# same spy, because its comparison is one-sided: a start that is discarded cannot find a LOWER
+# objective. Registering it here as "the honest version" claimed a property it did not yet have,
+# so it now reads its own start back out of a zero-budget fit before comparing, and the spy that
+# condemned the test deleted here turns it red.
 
 
 def test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one():
@@ -235,8 +236,32 @@ def test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one():
     v and the prior on r shrink differently against different scales, so two titles inside one
     class can swap by a hair. That is the priors trading off, not the link failing, and
     pretending otherwise would be a test asserting the wrong invariant.
+
+    [M4.13 finding 29] Three things were wrong with how that was asserted, and each hid the
+    next. `synth`'s verdict thresholds are fixed at -0.4 and 0.4 while its latent is
+    N(0.300, 0.281), so level 0 is 0.77% of labels (46 of 6000 over 200 draws) and the fixture
+    drew none at n = 30: the labels were 15 "fine" and 15 "liked", and the disliked class this
+    claim is *about* did not exist. The `if a.size and b.size` guard made that silent rather
+    than loud, and the loop `for low in (0, 1): for high in (low + 1, 2)` visited (1, 2) twice.
+    What was left compared `s[a].max() < s[b].max()`, which a single high-class title on top
+    satisfies: an injected fit placing all 15 level-1 titles above 14 of 15 level-2 titles
+    passed it. So the labels below cover all three classes, the precondition is asserted instead
+    of skipped past, and the comparison is max against MIN — measured to hold with a margin of
+    0.42 on the loose fit and 0.41 on the tight one, which is the claim §5.2 actually makes and
+    not a tolerance that was widened until it passed.
     """
-    _truth, obs = synth(n=30, n_duels=0, seed=8)
+    truth, base = synth(n=30, n_duels=0, seed=8)
+    # The person who uses all three buttons. Labelling by terciles of the latent keeps the labels
+    # monotone in the quantity being fitted — all the monotone-link claim needs — while giving the
+    # disliked class the members synth's fixed cutpoints essentially never produce.
+    held = truth[base.ord_index]
+    level = np.searchsorted(np.quantile(held, [1 / 3, 2 / 3]), held, side="right")
+    obs = dataclasses.replace(base, ord_level=level.astype(np.int64))
+    counts = np.bincount(obs.ord_level, minlength=3)
+    assert counts.min() >= 5, (
+        f"the fixture must label titles into all three verdict classes, not two: {counts.tolist()}"
+    )
+
     loose = model.fit(obs, dataclasses.replace(DEFAULTS, cutpoint_prior_precision=0.01))
     tight = model.fit(obs, dataclasses.replace(DEFAULTS, cutpoint_prior_precision=50.0))
 
@@ -244,14 +269,13 @@ def test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one():
         "the fixture must actually move the thresholds"
     )
     for fitted in (loose, tight):
-        for low in (0, 1):
-            for high in (low + 1, 2):
-                a = obs.ord_index[obs.ord_level == low]
-                b = obs.ord_index[obs.ord_level == high]
-                if a.size and b.size:
-                    assert fitted.s[a].max() < fitted.s[b].max(), (
-                        f"class {low} reached above class {high}"
-                    )
+        for low, high in ((0, 1), (0, 2), (1, 2)):
+            a = obs.ord_index[obs.ord_level == low]
+            b = obs.ord_index[obs.ord_level == high]
+            assert fitted.s[a].max() < fitted.s[b].min(), (
+                f"class {low} reached above class {high}: max(s | {low}) = "
+                f"{fitted.s[a].max():.3f} >= min(s | {high}) = {fitted.s[b].min():.3f}"
+            )
     # …and within a class, the ordering barely moves: the priors, not the link.
     assert spearman(loose.s, tight.s) > 0.99
 

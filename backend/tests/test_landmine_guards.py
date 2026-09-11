@@ -1188,3 +1188,107 @@ def test_the_posterior_guard_does_not_flag_legitimate_usage():
         "    phase_locked boolean,\n    mu_unused text\n);"
     )
     assert not _fairness_ledger("-- fairness_ledger omitted in v1 (§4.2)")
+
+
+# --- §10: observations survive a re-import, so nothing deletes a title ------------------
+
+# `DELETE FROM title`, in the spellings Postgres accepts: any case, whitespace or a newline
+# between the keywords, the optional `ONLY`, an optional schema qualifier and optional double
+# quotes. The trailing lookahead is the point of the pattern rather than a detail of it --
+# `title_placement`, `title_prior`, `title_alias`, `title_genre`, `title_meta` and
+# `title_jellyfin_item` are DERIVED tables that §10's rebuild is supposed to clear, and a guard
+# that flagged `DELETE FROM title_meta` would be deleted in a week and take the real rule with it.
+#
+# A comment naming the statement is flagged too, deliberately: a package file that needs to
+# explain how it would delete a title is already making the argument this forbids, and rewording
+# a comment is cheaper than the alternative failure.
+TITLE_DELETE = re.compile(
+    r"delete\s+from\s+(?:only\s+)?(?:\w+\s*\.\s*)?\"?title\"?(?![\w\"])",
+    re.IGNORECASE,
+)
+
+
+def _title_deletes(text: str) -> list[str]:
+    return [m.group(0) for m in TITLE_DELETE.finditer(text)]
+
+
+def _functions_deleting_titles() -> set[tuple[str, str]]:
+    """(module path, enclosing function) for every package line that deletes from `title`.
+
+    The shape `test_ledger_observations.py::_functions_containing` establishes, with the line
+    number taken from the match offset rather than from a per-line scan so that a statement
+    wrapped across two lines -- which is how every long query in this package is written -- still
+    reports the function it sits in. Naming the function is the whole value of a source guard:
+    the failure has to tell the next person where the landmine is.
+    """
+    hits: set[tuple[str, str]] = set()
+    for path in sorted(PACKAGE.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        rel = path.relative_to(PACKAGE.parent).as_posix()
+        matches = list(TITLE_DELETE.finditer(source))
+        if not matches:
+            continue
+        tree = ast.parse(source)
+        for match in matches:
+            line = source.count("\n", 0, match.start()) + 1
+            enclosing = "<module>"
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and (
+                    node.lineno <= line <= (node.end_lineno or node.lineno)
+                ):
+                    enclosing = node.name
+            hits.add((rel, enclosing))
+    return hits
+
+
+def test_no_package_file_deletes_from_the_title_table():
+    """§10: "Ledger observations always survive re-import". §4.2's append-only rule, §7.2.
+
+    0022_model_basis.sql re-declares `verdict.title_id`, `duel.title_a/b`, `tier_edit.title_id`,
+    `user_title.title_id` and the §13 session columns as ON DELETE RESTRICT, so the database now
+    refuses the delete at runtime. That FK is the refusal; this is the guard that keeps the
+    statement from being written in the first place, and the two are not redundant: the FK fails
+    an admin action that has already shipped, while this fails the review that would have shipped
+    it. Seven observation tables and the §13 outcome row -- eight tables, ten foreign-key columns
+    -- carried ON DELETE CASCADE, so the survival guarantee rested on the convention that no code
+    deletes a title, and taste data is the one thing this app cannot re-derive.
+
+    The derived tables are a different matter and are not covered here: clearing `title_meta` or
+    `title_jellyfin_item` is what a re-import is for.
+    """
+    found = _functions_deleting_titles()
+    assert not found, (
+        "§10 says Ledger observations always survive re-import, so no package file may delete a "
+        f"title row; these do: {sorted(found)}. Retire the title through display state or a "
+        "placement flag instead, and leave the observations that name it where they are."
+    )
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        'await conn.execute("DELETE FROM title WHERE id = $1", title_id)',
+        "delete from title",
+        'await conn.execute(\n    """\n    DELETE\n      FROM title\n     WHERE id = $1\n    """\n)',
+        "DELETE FROM public.title AS t",
+        'DELETE FROM "title" WHERE id = 1',
+        "DELETE FROM ONLY title",
+    ],
+)
+def test_the_title_delete_guard_catches_a_synthetic_violation(snippet):
+    """A guard that cannot fail reads as coverage while providing none."""
+    assert _title_deletes(snippet), f"guard missed: {snippet!r}"
+
+
+def test_the_title_delete_guard_does_not_fire_on_a_derived_table():
+    """The word boundary, proved: every `title_*` table in the schema is a legal DELETE target."""
+    for legal in (
+        'await conn.execute("DELETE FROM title_placement")',
+        "DELETE FROM title_prior WHERE title_id = $1",
+        "DELETE FROM title_meta",
+        "DELETE FROM title_alias",
+        "DELETE FROM title_genre",
+        "DELETE FROM title_jellyfin_item WHERE title_id = $1",
+        "DELETE FROM titles",
+    ):
+        assert not _title_deletes(legal), f"guard over-reached: {legal!r}"

@@ -52,10 +52,26 @@ def test_open_reads_the_manifest_and_the_vocabulary_version(artifacts):
     assert set(store.manifest["fitted_cuts"]) == {str(i) for i in fx.RATING_SOURCE_IDS}
 
 
+# M4.13 added `cold_eval.json` and `content_summary.json` to `BUNDLE_FILES` - the corpus ships
+# both, §4.3 calls that list exhaustive, and until then nothing could read the one reference value
+# the bundle carries for `user_vector.cv_rho`. `make_bundle.py` writes neither, and deliberately
+# stays that way here: the corpus-shaped fixture is M4.8's train, `e2e/run.mjs` does not rebuild
+# `data/import`, and both files are optional precisely because a bundle without them is older
+# rather than broken. Named rather than counted, so the next file added to either side fails this
+# test instead of widening a tolerance. [M4.13 step 35, cs-31]
+NOT_IN_THE_FIXTURE = frozenset({"cold_eval.json", "content_summary.json"})
+
+
 def test_presence_map_covers_every_declared_bundle_file(artifacts):
     store = ArtifactStore.open(artifacts, "test-v1")
     assert set(store.present) == set(BUNDLE_FILES)
-    assert all(store.present.values()), "the fixture is meant to be a complete §4.3 bundle"
+    absent = {name for name, there in store.present.items() if not there}
+    assert absent == NOT_IN_THE_FIXTURE, (
+        f"the fixture is meant to be a complete §4.3 bundle apart from {sorted(NOT_IN_THE_FIXTURE)}"
+    )
+    assert not (NOT_IN_THE_FIXTURE & {n for n, req in BUNDLE_FILES.items() if req}), (
+        "a file the fixture does not ship may not be a REQUIRED one"
+    )
 
     # The absent branch, against a real absence rather than whatever the fixture happens not to
     # ship. It asserted `backbone.npz is False` until M2 gave the fixture a Backbone — at which
@@ -155,3 +171,37 @@ def test_a_jsonb_column_handed_back_as_text_still_yields_the_count(artifacts, tm
     assert _as_mapping(raw)["tables"]["title"] == len(fx.TITLES)
     assert _as_mapping("not json") == {}
     assert _as_mapping(None) == {}
+
+
+# --- §6.6's Data tab, §6.0's Home and /api/config all read the yardstick through summary() -----
+
+
+def test_a_yardstick_that_is_not_utf8_degrades_to_none_rather_than_500ing_three_surfaces(
+    artifacts,
+):
+    """`ColdEval.from_mapping` promises it "never raises: a malformed yardstick must not take a
+    boot or a shelf with it", and every malformed SHAPE honours that - an empty file, a JSON
+    array, a truncated object and NUL bytes all come back as `cold_eval: None`. A malformed
+    ENCODING did not: `json()` reads with `encoding="utf-8"` and strict errors, so one cp1252
+    byte in a hand-written note raised `UnicodeDecodeError`, which is a `ValueError` and not a
+    `json.JSONDecodeError` and so escaped the catch.
+
+    Three surfaces, not one, and none of them is the boot: `api/home.py`'s `cold_eval_of` on
+    every GET /api/home, §6.6's Data tab through `summary()`, and `/api/library/config`, which
+    is the unauthenticated route the shell bootstraps from. Nothing upstream decodes this file -
+    `importer/validate.py` tests `(root / name).exists()` and nothing else - so validation,
+    staging and the flip all pass and the first read is a request. The exception is raised before
+    `self._cache[key] = parsed`, so it is not even memoised: every request pays it again.
+    [M4.13 cycle 2, M413-C2-DIM-CE-03]
+    """
+    good = {"cold": {"spearman": 0.35}, "ceiling": {"spearman": 0.39}}
+    (artifacts / "cold_eval.json").write_text(json.dumps(good), encoding="utf-8")
+    assert ArtifactStore.open(artifacts, "yard-ok").summary()["cold_eval"] is not None
+
+    # A note typed in a cp1252 editor, and a Windows editor's UTF-16 BOM: neither is UTF-8.
+    latin1 = b'{"cold": {"spearman": 0.35}, "ceiling": {"spearman": 0.39}, "note": "caf\xe9"}'
+    for payload in (latin1, json.dumps(good).encode("utf-16")):
+        (artifacts / "cold_eval.json").write_bytes(payload)
+        store = ArtifactStore.open(artifacts, "yard-bad")
+        assert store.summary()["cold_eval"] is None
+        assert store.cold_eval() is None

@@ -25,11 +25,13 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from spielplan.api.artifacts import RESTART_REQUIRED, RESTORE_REQUIRED
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
-from spielplan.ledger import hyperparams, observations
+from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import EmbeddingSource
+from spielplan.models import artifacts
 from spielplan.rate import session
 
 log = logging.getLogger("spielplan.api.rate")
@@ -114,13 +116,101 @@ def _hyperparams(request: Request) -> Hyperparams:
     return hp
 
 
+async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
+    """§10's invariant, on the request path: 409 rather than a fit in a basis nobody serves.
+
+    "No process may score or refit with a loaded bundle version different from the active row."
+    This process pins its store and its Backbone at boot (`app.py`), and §10's swap sequence ends
+    in "restart backend and worker" precisely because nothing in a running process can re-pin
+    them - so between the flip and the restart `app.state.backbone` is the OUTGOING basis while
+    every `title_placement` row, every `user_vector` and every `ledger_fit` stamp the flip made
+    visible is the incoming one. Left unguarded, the first tap per (user, kind) ran a full MAP fit
+    over half-and-half coordinates and stamped it with the NEW version, which `load_cache` then
+    trusted until the next nightly: measured ||v_tap - v_correct|| = 0.643 against
+    ||v_correct|| = 0.782.
+
+    There was no 409 to raise; this is where it is minted, and it carries
+    `api/artifacts.py::RESTART_REQUIRED` verbatim so the sentence the import screen showed the
+    admin is the sentence the refusal shows. 409 and not 503: the conflict is between two
+    versions of the world, the state is recoverable by the restart the message names, and §3.1's
+    genuinely bundle-less install is unaffected because None == None.
+
+    Called at the TOP of every route that fits, before `_resume` and before any write. §6.1's
+    anchoring rule and M4.10 finding 8 both forbid the other placement: a refusal raised after
+    `record_verdict` has committed loses the tap and invites a retry that writes a second row.
+    [M4.13, arch-03, data-01]
+
+    AND THE SECOND ARM, WHICH THE VERSION COMPARISON CANNOT SEE. `load_active` carries a broken
+    install's own version so its stamp is honest, and that is precisely what makes `assert_matches`
+    PASS for a store that cannot produce one coordinate -- the trap
+    `test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag` exists to
+    name. data-03 wired the refusal into the worker and nowhere else, so on a broken install every
+    model job refused while these five routes kept fitting: `hyperparams.load` returns DEFAULTS for
+    an empty store, its digest equals the stamped one whenever the bundle shipped no
+    `ledger_hyperparams.json`, `load_cache` therefore accepted a fit computed in a REAL basis, and
+    the tap rewrote `ledger_state` against `e = 0` -- measured on the fixture at s 1.5735/1.5699
+    healthy against 0.8001/0.8001 broken, two rated titles collapsed onto one number. Refused here
+    rather than queued, because §10's invariant is "score OR refit" and the reveal this route
+    carries is a score; refused before the write, so the tap is declined and never lost; and
+    `is_empty` still reads True, so §3.1's SURFACES keep rendering their no-bundle state, which is
+    the line `models/artifacts.py::is_empty` draws. A different sentence from the swap's, because
+    restarting this process would fix nothing: the files are gone.
+    [M4.13 cycle 1, m413-c1-dim1-broken-bundle-refusal-is-worker-only]
+    """
+    store = getattr(request.app.state, "artifacts", None)
+    if store is None:
+        return
+    try:
+        store.assert_matches(await artifacts.active_bundle_version(conn))
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_swapped", "message": RESTART_REQUIRED},
+        ) from exc
+    try:
+        store.assert_not_broken()
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_broken", "message": RESTORE_REQUIRED},
+        ) from exc
+
+
+def _basis(request: Request) -> Any:
+    """Which bundle THIS PROCESS is fitting in — the other half of `_embeddings`, stated.
+
+    `_assert_active_basis` above compares it to the active row at the top of the route; this hands
+    the same version to the fit, which re-asks after it has taken the board lock. The two are not
+    one check: a tap that waits out an import passed the first and would fail the second, and the
+    seconds between them are exactly when §10's flip becomes visible. `refit.BASIS_UNSTATED` when
+    this process has no store at all, which is not §3.1's bundle-less install (`None`) but "there
+    is nothing here to compare" — the state a test app or a boot without artifacts is in.
+    [M4.13 cycle 1, finding 15]
+    """
+    store = getattr(request.app.state, "artifacts", None)
+    return refit.BASIS_UNSTATED if store is None else store.version
+
+
 def _embeddings(request: Request, conn: asyncpg.Connection) -> EmbeddingSource:
     """§5.1's coordinate source: the warm Backbone row first, the Cold Tower placement second.
 
     One definition, in `observations.standard_embeddings`, because the nightly job and §10's
     rebuild both got this wrong by passing the placement source alone.
+
+    The version travels with the two sources it describes: `app.state.artifacts.version` is the
+    bundle whose Backbone `app.state.backbone` holds, so the `title_placement` rows read for the
+    cold half are the same bundle's and the `ledger_fit` stamp this source's fit earns says so.
+    `_assert_active_basis` has already refused the case where that version is not the active row.
+    [M4.13, data-01]
     """
-    return observations.standard_embeddings(conn, getattr(request.app.state, "backbone", None))
+    store = getattr(request.app.state, "artifacts", None)
+    return observations.standard_embeddings(
+        conn,
+        getattr(request.app.state, "backbone", None),
+        bundle_version=None if store is None else store.version,
+    )
 
 
 async def _jellyfin(conn: asyncpg.Connection) -> session.Jellyfin:
@@ -205,6 +295,7 @@ async def verdict(
     (Cosley 2003) expressed as a route: the card carried no belief, the answer to the card
     carries it.
     """
+    await _assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_verdict(
@@ -214,6 +305,7 @@ async def verdict(
             value=body.value,
             hp=_hyperparams(request),
             embeddings=_embeddings(request, conn),
+            bundle_version=_basis(request),
             jf=await _jellyfin(conn),
             latency_ms=body.latency_ms,
             head=body.head,
@@ -262,6 +354,7 @@ async def skip(body: CardBody, conn: DB, user: ActiveUser) -> dict[str, Any]:
 @router.post("/duel")
 async def duel(body: DuelBody, conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     """§6.1's battle answer, `Tie` included — one duel row, never a dropped one."""
+    await _assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_duel(
@@ -272,6 +365,7 @@ async def duel(body: DuelBody, conn: DB, user: ActiveUser, request: Request) -> 
             decisive=body.decisive,
             hp=_hyperparams(request),
             embeddings=_embeddings(request, conn),
+            bundle_version=_basis(request),
             latency_ms=body.latency_ms,
             head=body.head,
         )
@@ -302,6 +396,7 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     """Decision 35. Refused at the block boundary with a reason, never silently no-opped — the
     chip has to be able to disable visibly, and `GET /api/rate` carries the same
     `undo.available` flag so it can do that before the tap."""
+    await _assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.undo(
@@ -309,6 +404,7 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
             s,
             hp=_hyperparams(request),
             embeddings=_embeddings(request, conn),
+            bundle_version=_basis(request),
             jf=await _jellyfin(conn),
         )
     except session.UndoUnavailable as exc:

@@ -1209,12 +1209,19 @@ async def record_verdict(
     value: int,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
+    bundle_version: Any = refit.BASIS_UNSTATED,
     jf: Jellyfin | None = None,
     latency_ms: int | None = None,
     rng: Any = None,
     head: Sequence[int] = (),
 ) -> Outcome:
-    """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`"."""
+    """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`".
+
+    `bundle_version` travels beside `embeddings` and says which basis it is expressed in, because
+    the two are one fact and `refit.load_cache` has to be able to check it. See
+    `refit.update_incrementally`: the route pins both at boot and the tap can outlive the flip.
+    [M4.13 cycle 1, finding 15]
+    """
     card = _take_card(s, card_token, want="sweep")
     if value not in (0, 1, 2):
         raise ValueError(f"verdict value must be 0, 1 or 2, not {value!r}")
@@ -1277,6 +1284,7 @@ async def record_verdict(
         title_ids=write.title_ids,
         hp=hp,
         embeddings=embeddings,
+        bundle_version=bundle_version,
     )
     # §6.7's line is composed here, one statement after the millisecond count it quotes and
     # while the answered card and the label are still in hand. It REPLACES `write.log` on this
@@ -1390,6 +1398,7 @@ async def record_duel(
     hp: Hyperparams,
     decisive: bool | None = None,
     embeddings: EmbeddingSource | None = None,
+    bundle_version: Any = refit.BASIS_UNSTATED,
     latency_ms: int | None = None,
     rng: Any = None,
     head: Sequence[int] = (),
@@ -1442,6 +1451,7 @@ async def record_duel(
         title_ids=write.title_ids,
         hp=hp,
         embeddings=embeddings,
+        bundle_version=bundle_version,
     )
     s = await ensure_card(conn, s, rng=rng, head=head)
     return Outcome(session=s, log=(write.log,), ledger=ledger)
@@ -1656,6 +1666,7 @@ async def undo(
     *,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
+    bundle_version: Any = refit.BASIS_UNSTATED,
     jf: Jellyfin | None = None,
 ) -> Outcome:
     """Pop the most recent observation of any kind and put the card that produced it back.
@@ -1762,6 +1773,7 @@ async def undo(
             title_ids=title_ids,
             hp=hp,
             embeddings=embeddings,
+            bundle_version=bundle_version,
         )
     lines = [undone.log] if undone is not None else [f"undo: {kind_of} — nothing to retract"]
     return Outcome(session=s, log=tuple(lines), ledger=ledger, undone=kind_of)

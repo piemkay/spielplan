@@ -1968,7 +1968,7 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
 
 
-# --- §12: the five exit scripts, and the console they print to ----------------------------
+# --- §12: the six exit scripts, and the console they print to -----------------------------
 #
 # §12's M2, M3, M4, M4.9 and M4.11 rows are measured by hand, by `ops/m*_exit_criterion.py`,
 # and a milestone is closed on what they print and the code they exit with. A verdict that
@@ -1995,6 +1995,21 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
 # the rules did force on it is its `check()` signature: the verdict is the first positional
 # argument, because a number there is exactly what `_constant_check_predicates` reads as a
 # predicate that cannot fail. [M4.11]
+#
+# `ops/m413_exit_criterion.py` is the SIXTH, and 5 became 6 in the five places below only after
+# every rule here had been read against it: no printed literal outside cp850 (and it escapes what
+# it did not author twice over -- the importer's em-dashed finding messages AND the 104 corpus
+# title names of v20260828 that leave the code page, because three of its checks name a title), no
+# `check()` predicate settled before the run, a computed terminal verdict, no component read at
+# all, nothing that can fail between its CREATE DATABASE and the block whose finally drops it, an
+# `except Exception` around the measurement that reports rather than propagates, and both arms on
+# every numbered heading it prints. It has no `rate()` seeding path for that rule to exempt: it
+# seeds through `observations.record_verdict` and the importer, which is
+# `ops/m45_exit_criterion.py`'s own exemption and for the same reason -- what it measures is the
+# basis a fit is computed in, not the route that records a tap. THE HAND-MERGE LANDS ON 7: M4.12
+# is adding `ops/m412_exit_criterion.py` in a parallel worktree and bumps these same five
+# assertions to 6 for its own script, so whichever of the two merges second resolves them to 7
+# rather than taking one side. [M4.13]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2101,7 +2116,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2181,7 +2196,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2307,7 +2322,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2587,7 +2602,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3215,7 +3230,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -4596,3 +4611,165 @@ def test_the_decision_210_adoption_guard_catches_each_way_it_was_said(name, text
     210's own Why paragraph that describes the adopt direction without inheriting its rule.
     """
     assert len(_inherits_172s_adoption_rule_unnarrowed(text)) == expected, name
+
+
+# --- M4.13 review cycle 2: two records that outlive the run they describe ----------------------
+#
+# Both guards below hold a sentence rather than a symbol, which is the shape the decision guards
+# above already have: the register and `docs/TESTING.md` are what a later milestone reads BEFORE
+# the code, and CLAUDE.md sends the next reader to the ledger "rather than assuming status". One
+# holds decision 244's enumeration of the harness lane against the files that lane actually
+# touched; the other holds the one figure `ops/m413_exit_criterion.py` publishes as measured and
+# does not compute.
+
+TESTING_LEDGER = REPO / "docs" / "TESTING.md"
+M413_SCRIPT = REPO / "ops" / "m413_exit_criterion.py"
+
+# The two symbols the parallel-lane harness repair introduced, and the only mechanical handle on
+# a lane whose definition is a cause rather than a directory. `env.mjs` is the module e2e's
+# origin and its two published ports are resolved through; `_inside_the_container` is the DSN
+# rewrite a container-run `pg_dump` needs the moment a worktree publishes something other than
+# 5432. Neither existed before the roadmap put a stack per worktree on one box, so a file naming
+# one is a file that lane touched -- which is what decision 244's enumeration has to keep up
+# with, because the enumeration is what the commit split is cut along.
+LANE_MARKERS = ("env.mjs", "_inside_the_container")
+
+
+def _decision_section(number: int) -> str:
+    """One decision's argued section, for a decision the register gives no summary row.
+
+    `_decision` reads the table cell as well, because the misnaming it was written for was in
+    both halves and a reader cites whichever they opened. That table answers proposals; 244-246
+    rule on how a milestone is CLOSED and answer none, so asserting a row here would be asserting
+    a row nobody owes.
+    """
+    body = REGISTER.read_text(encoding="utf-8")
+    heads = list(re.finditer(r"^### (\d+)\. ", body, re.M))
+    start = next(m for m in heads if m.group(1) == str(number))
+    after = [m.start() for m in heads if m.start() > start.start()]
+    return body[start.start(): after[0] if after else len(body)]
+
+
+def _lane_files() -> list[str]:
+    """Every file in the tree that names one of the lane's two symbols."""
+    roots = [
+        *(REPO / "e2e").glob("*.mjs"),
+        *(REPO / "e2e").glob("*.js"),
+        *(REPO / "backend" / "tests").glob("*.py"),
+        *(REPO / "backend" / "spielplan").rglob("*.py"),
+        *(REPO / "ops").glob("*.py"),
+        *(REPO / "ops").glob("*.yml"),
+    ]
+    return sorted(
+        path.relative_to(REPO).as_posix()
+        for path in roots
+        # This file names both markers in order to look for them, exactly as the retired-claim
+        # sweep above states the phrases it forbids.
+        if path != Path(__file__).resolve()
+        and any(marker in path.read_text(encoding="utf-8") for marker in LANE_MARKERS)
+    )
+
+
+def _unnamed_in(text: str, files: list[str]) -> list[str]:
+    """The files `text` does not name in backticks -- the register's own citation form."""
+    return [name for name in files if f"`{name}`" not in text]
+
+
+def test_decision_244_names_every_file_the_parallel_lane_harness_repair_touched():
+    """The commit split is cut along a list, so a file the list forgets lands in the other commit.
+
+    Decision 244 partitions this worktree's diff in two: a `chore(e2e):` commit for the harness
+    the lane ran on and `feat(M4.13):` for the milestone, with one named frontend exception ruled
+    INSIDE. It enumerated six files under `e2e/` and `ops/`, and three more carry the same repair:
+    `test_harness_contracts.py`, whose guards READ `e2e/env.mjs` and would leave the chore commit
+    red on its own if they stayed behind, and `test_backup.py` with `test_restore_drill.py`, which
+    pick the postgres:16 container by the port TEST_DATABASE_URL names. Under the literal list
+    those three ship inside `feat(M4.13):` -- with no plan step, no coverage row and no decision
+    behind them, over two files that hold M0's and M4.7's backup and restore exit criteria, whose
+    failure mode when they break is a SILENT SKIP that a summary line reads as a pass.
+    [M4.13 review cycle 2: M413-C2-DIM7-01; decision 244]
+    """
+    missing = _unnamed_in(_decision_section(244), _lane_files())
+    assert not missing, (
+        "decision 244 enumerates the harness lane and these files carry it without being named, "
+        "so the commit split puts them in feat(M4.13):\n  " + "\n  ".join(missing)
+    )
+
+
+def test_the_lane_guard_sees_a_file_the_register_does_not_name():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The synthetic violation is the state that shipped: a list naming the e2e half and neither
+    backend file. The second case is the direction that keeps the guard from reading as coverage
+    -- a complete list reports nothing.
+    """
+    lane = ["backend/tests/test_backup.py", "e2e/helpers.js"]
+    six = "the harness the lane ran on -- `e2e/helpers.js`, `e2e/run.mjs`"
+    assert _unnamed_in(six, lane) == ["backend/tests/test_backup.py"]
+    assert _unnamed_in(six + " and `backend/tests/test_backup.py`", lane) == []
+
+
+def _tense_under_the_clamp(drops: int, k_fitted: int, k_to: int) -> int:
+    """Check 5's control: drops landing more than one tier from anything the clamp can render.
+
+    The script measures the RESCALE and prints it; the clamp is what that number is compared
+    against, and nothing computes it -- so this is the only place it exists as arithmetic rather
+    than as a remembered figure inside a docstring that says "Measured". Under the bare clamp a
+    K-level history keeps its raw indices, so it reaches 0..k_fitted-1 and nothing above.
+    """
+    stream = [round(i * (k_to - 1) / (drops - 1)) for i in range(drops)]
+    return sum(
+        1 for level in stream if min(abs(level - reached) for reached in range(k_fitted)) > 1
+    )
+
+
+def test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give():
+    """A figure published as measured that the instrument producing it cannot produce.
+
+    Check 5's docstring and the ledger's M4.13 paragraph both carry the clamp's tension rate as
+    the control the rescale's 0/60 is read against. Recomputed from the script's own `DROPS`,
+    `K_FITTED` and `K_GROWN` it is 19/60, not the 20/60 that shipped -- the signature of a
+    hand-run probe over `range(1, DROPS + 1)` that was never re-derived from the stream the
+    script builds. Decision 246 makes the ledger's paragraph the record of what the script
+    measured, so a figure in it that nobody can reproduce leaves the next agent restating a
+    number it cannot derive or reporting a discrepancy that is not one. Both publications are
+    held here, because correcting one of the two is how they came apart.
+    [M4.13 review cycle 2: M413-C2-DIM5-05]
+    """
+    source = M413_SCRIPT.read_text(encoding="utf-8")
+    # The two expressions the control models, asserted present rather than lifted: a second
+    # spelling of either is what `_meaning`'s docstring refuses, so this fails loudly if the
+    # stream or the predicate moves instead of quietly measuring a simulation nobody runs.
+    assert "drops = [round(i * (k_to - 1) / (DROPS - 1)) for i in range(DROPS)]" in source
+    assert "if min(abs(level - reached) for reached in reachable) > 1" in source
+    drops = int(re.search(r"^DROPS = (\d+)$", source, re.M).group(1))
+    k_fitted, k_grown = (
+        int(v)
+        for v in re.search(
+            r"^K_FITTED, K_GROWN, K_SHRUNK = (\d+), (\d+), \d+$", source, re.M
+        ).groups()
+    )
+    tense = _tense_under_the_clamp(drops, k_fitted, k_grown)
+    # The script's own formatting, so the figures held here are the ones a run would print.
+    published = f"{tense}/{drops} ({100 * tense / drops:.0f}%)"
+    assert f"the clamp reports {published}" in source, (
+        "ops/m413_exit_criterion.py's check 5 publishes a clamp control its own constants do "
+        f"not give: DROPS = {drops}, K {k_fitted} -> {k_grown} is {published}"
+    )
+    ledger = TESTING_LEDGER.read_text(encoding="utf-8")
+    assert f"the clamp fails at {100 * tense / drops:.0f}%" in ledger, (
+        "docs/TESTING.md's M4.13 measurement paragraph publishes a clamp control the script's "
+        f"own constants do not give: it is {published}"
+    )
+
+
+def test_the_clamp_control_arithmetic_moves_when_the_simulation_does():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    A control that returns one number whatever it is asked is not a control. Three streams: the
+    one check 5 runs, a history that already spans the new set, and the shrink direction, where
+    nothing the drop stream can produce is out of the clamp's reach.
+    """
+    assert _tense_under_the_clamp(60, 7, 12) == 19
+    assert _tense_under_the_clamp(60, 12, 12) == 0
+    assert _tense_under_the_clamp(60, 7, 4) == 0

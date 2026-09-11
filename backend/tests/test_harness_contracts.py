@@ -46,6 +46,10 @@ CI = WORKFLOWS / "ci.yml"
 CORPUS = WORKFLOWS / "real-bundle.yml"
 RUNNER = REPO / "e2e" / "run.mjs"
 RESET = REPO / "e2e" / "reset.mjs"
+# The `.env` reader moved out of reset.mjs when a checkout per lane made
+# run.mjs's and playwright.config.js's hard-coded origin a cross-worktree bug:
+# all three now read the stack's own PUBLIC_URL through this one module.
+ENV_MJS = REPO / "e2e" / "env.mjs"
 SPECS = REPO / "e2e" / "specs"
 FIRST_BOOT = SPECS / "01-first-boot.spec.js"
 JELLYFIN = SPECS / "08-jellyfin.spec.js"
@@ -1414,7 +1418,7 @@ _PARSER_THAT_SHIPPED = r"""function env(key) {
 
 
 def _env_parser(source: str) -> str:
-    """`reset.mjs`'s `env()` as text, to be run rather than read.
+    """`env.mjs`'s `env()` as text, to be run rather than read.
 
     Lifted by bracket matching rather than copied, so the thing under test is the shipped
     function and a later edit to it is what these cases meet. Its body reaches nothing but
@@ -1422,9 +1426,9 @@ def _env_parser(source: str) -> str:
     it -- importing the module instead would run `docker compose` and drop a database.
     """
     start = source.find("function env(")
-    assert start >= 0, "e2e/reset.mjs no longer defines env(): this guard is reading nothing"
+    assert start >= 0, "e2e/env.mjs no longer defines env(): this guard is reading nothing"
     _, end = _span(source, start, "{", "}")
-    assert end > 0, "e2e/reset.mjs's env() has unbalanced braces"
+    assert end > 0, "e2e/env.mjs's env() has unbalanced braces"
     return source[start:end]
 
 
@@ -1451,7 +1455,7 @@ def test_the_reset_parser_reads_the_values_compose_reads(tmp_path, line, key, va
     """The parser and the stack it resets have to agree about what PUBLIC_URL *is*, because the
     guard standing between an operator and their data is a prefix test on what this returns. A
     value compose accepts and this mangles is a refusal that cannot be argued with."""
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
@@ -1471,7 +1475,7 @@ def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
     assert not re.match(r"^https?://(localhost|127\.0\.0\.1)", shipped), (
         "reset.mjs:53's prefix guard would have accepted the mangled value after all"
     )
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 # A wait bound to a name, where the name is later handed to `expect(...).rejects`. Only that
@@ -1645,7 +1649,7 @@ def test_the_reset_parser_resolves_a_key_the_way_the_stack_that_booted_did(tmp_p
         "the stale value would have been refused anyway, so this file cannot show what reading "
         "the first assignment costs"
     )
-    live = _parse_with(_env_parser(_read(RESET)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
+    live = _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
     assert live == "https://spielplan.example"
     assert not _DEV_STACK.match(live), "the guard above `DROP DATABASE` accepts the live value"
 
@@ -2075,3 +2079,138 @@ def test_the_seeding_reach_guard_sees_a_claim_the_spec_directory_contradicts(tex
     11-rate does not have to come back here to be allowed to say so."""
     problems = _seeding_reach_problems(text, copies)
     assert bool(problems) is expected, problems
+
+
+@pytest.mark.parametrize("name", ["run.mjs", "playwright.config.js"])
+def test_the_harness_takes_its_origin_from_the_stack_it_is_driving(name):
+    """Neither may carry a literal origin, because a second checkout is a second stack.
+
+    Both shipped `process.env.BASE_URL ?? 'http://localhost:8080'`, which is correct for one
+    checkout and silently wrong for two: with a worktree per lane, the second suite reset its own
+    database and then drove the FIRST one's application. It reported 8 skipped in phase one --
+    `01-first-boot.spec.js` sees a stack long past first boot and skips, exactly as designed --
+    and 13 phase-two failures against an app on another branch. Nothing in either number said
+    "wrong stack". `reset.mjs` never had the bug: it had always read PUBLIC_URL from the `.env`
+    beside it, which is why it dropped the right database while the suite drove the wrong app.
+    [M4.12, the parallel-lane setup]
+    """
+    source = _read(REPO / "e2e" / name)
+    assert "localhost:8080" not in source, (
+        f"e2e/{name} carries a literal origin; it must resolve one through e2e/env.mjs's "
+        "baseUrl(), which reads the stack's own PUBLIC_URL"
+    )
+    assert "baseUrl(" in source, f"e2e/{name} no longer resolves its origin through env.mjs"
+
+
+def test_the_origin_guard_sees_a_literal_put_back():
+    """The synthetic violation, because a guard with no failing case is a comment."""
+    regressed = "const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';"
+    assert "localhost:8080" in regressed and "baseUrl(" not in regressed
+
+
+def test_the_harness_reaches_the_fake_jellyfin_on_the_port_its_own_stack_published():
+    """The third address of the same class, and the one the browser gate found rather than this
+    file.
+
+    `ops/compose.e2e.yml` publishes the fake on `${JELLYFIN_FAKE_PORT:-8096}` so a lane per
+    worktree can hold a stack each; inside the compose network it stays `jellyfin-fake:8096` for
+    both, which is why only the published half may be parameterised. `e2e/helpers.js` kept
+    `http://127.0.0.1:8096`, so the suite set Played on the OTHER lane's fake and the app swept
+    its own: §7.3's adopt direction had nothing to adopt, `seen.sync_all` returned healthy with
+    every counter zero -- which was the truth -- and "a flag set in jellyfin arrives in the app"
+    failed on a seen-state nobody had set. Measured on the M4.12 gate: the fake on 8096 held
+    `jf-1` played with no tokens and no writes, the fake on 8097 held the member's token and no
+    Played flag.
+    """
+    source = _read(HELPERS)
+    assert "127.0.0.1:8096" not in source, (
+        "e2e/helpers.js carries a literal control address; the fake's published port is "
+        "JELLYFIN_FAKE_PORT and must be resolved through e2e/env.mjs's env()"
+    )
+    assert "JELLYFIN_FAKE_PORT" in source, (
+        "e2e/helpers.js no longer reads the port ops/compose.e2e.yml publishes the fake on"
+    )
+    # The service name is the half that must NOT move: it is the compose network's, identical in
+    # every lane, and a checkout that parameterised it would be testing a topology nobody ships.
+    assert "jellyfin-fake:8096" in source
+
+
+def test_the_fake_jellyfin_port_guard_sees_the_constant_that_shipped():
+    """The synthetic violation, for `test_the_origin_guard_sees_a_literal_put_back`'s reason."""
+    regressed = "  control: process.env.FAKE_JELLYFIN_CONTROL ?? 'http://127.0.0.1:8096',"
+    assert "127.0.0.1:8096" in regressed and "JELLYFIN_FAKE_PORT" not in regressed
+
+
+# The one directory in this repository no linter reaches. `backend/pyproject.toml` selects ruff's
+# "F" family, so an unused import is a build-breaking defect in `backend/` and -- through the root
+# `ruff.toml` that widens the scope -- in `ops/` too; `e2e/` has no eslint config anywhere, no lint
+# script in its `package.json`, and `npm --prefix frontend run check` is svelte-check pointed at
+# `frontend/`. The gap is not hypothetical: lifting `env()` out of `reset.mjs` into `env.mjs` left
+# `existsSync` and `readFileSync` on reset.mjs's `node:fs` line, where the deleted body had been
+# their only caller, and every gate this project runs stayed green over a file that reads no file
+# importing two file readers.
+#
+# What the leftovers cost is not tidiness. A module's named imports are the plainest statement it
+# makes about what it does, and the ones an extraction abandons state where the code USED to be:
+# a reader asking which module reads the stack's `.env` -- the question one statement above `DROP
+# DATABASE` turns on -- finds a true-looking answer on the wrong file's line 12. Half-done is the
+# specific risk of the lane-harness lane, which ships as its own commit (decision 244) and is
+# therefore the one diff here that no reviewer reads beside the milestone it travels with.
+# [M4.13 review cycle 1, M413-LINT-06]
+_NAMED_IMPORT = re.compile(r"^import\s*\{([^}]*)\}\s*from\s*'[^']*';", re.MULTILINE)
+
+
+def _unused_named_imports(source: str) -> list[str]:
+    """Every name a module binds on an import line and never mentions again.
+
+    Text, like every other reader in this file, and anchored on the statement shape rather than on
+    a list of names, so a module that acquires an import is covered without coming back here. The
+    import statements are cut out of the haystack before the search because a binding site is not
+    a use of the binding. What the fidelity stops at is a comment: a name argued about in prose
+    and used in no expression reads as used, which is the cheap direction to be wrong in -- this
+    guard exists to catch the abandoned half of a move, and the move deletes the prose with the
+    code.
+    """
+    bindings: list[str] = []
+    for match in _NAMED_IMPORT.finditer(source):
+        for binding in match.group(1).split(","):
+            # `{ a as b }` binds b; the harness uses no aliases today, and the guard should not be
+            # the reason the first one is a false failure.
+            name = binding.strip().split(" as ")[-1].strip()
+            if name:
+                bindings.append(name)
+    body = _NAMED_IMPORT.sub("", source)
+    return [name for name in bindings if not re.search(rf"\b{re.escape(name)}\b", body)]
+
+
+@pytest.mark.parametrize(
+    "name", ["env.mjs", "reset.mjs", "run.mjs", "helpers.js", "playwright.config.js"]
+)
+def test_the_harness_imports_only_what_it_uses(name):
+    """All five, not just the file the extraction touched: the defect is a property of moving code
+    between these modules, and they move code between each other every time a lane needs a value
+    all of them read."""
+    unused = _unused_named_imports(_read(REPO / "e2e" / name))
+    assert unused == [], (
+        f"e2e/{name} imports {', '.join(unused)} and uses none of them -- e2e/ is the one "
+        "directory no linter reaches, so nothing else will say so"
+    )
+
+
+def test_the_unused_import_guard_sees_the_extraction_that_shipped():
+    """The synthetic violation, for `test_the_origin_guard_sees_a_literal_put_back`'s reason, and
+    it is reset.mjs's own line 12 over the body the extraction left behind: the case the guard was
+    written for is the case it is fed. The second assertion is the direction that keeps it from
+    reading as coverage -- the trimmed import is silent."""
+    regressed = (
+        "import { execFileSync } from 'node:child_process';\n"
+        "import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';\n"
+        "import { env } from './env.mjs';\n"
+        "const publicUrl = env('PUBLIC_URL');\n"
+        "execFileSync('docker', ['compose', 'stop']);\n"
+        "mkdirSync(artifacts, { recursive: true });\n"
+        "for (const entry of readdirSync(artifacts)) rmSync(entry);\n"
+    )
+    assert _unused_named_imports(regressed) == ["existsSync", "readFileSync"]
+    trimmed = regressed.replace("existsSync, ", "").replace("readFileSync, ", "")
+    assert _unused_named_imports(trimmed) == []

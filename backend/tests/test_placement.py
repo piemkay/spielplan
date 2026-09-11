@@ -463,7 +463,7 @@ def test_nothing_in_the_placer_reaches_for_a_gpu(bundle_root):
 async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(db, tmp_path):
     """cs-01, the half a loader test cannot show: what the sweep is handed.
 
-    `classify_warm` stamps exactly `warm_title_ids`, and the shipped bundle carries 1,918 rows
+    `classify_warm` stamps exactly `warm_title_ids`, and the shipped bundle carries 1,915 rows
     that clear `WARM_SUPPORT` while carrying no coordinate at all — E written as zeros, the real
     one kept in `E_hat`. On support alone they were stamped warm, which is the flag
     `titles_needing_placement` reads to decide who is already covered, so the sweep that exists
@@ -471,9 +471,14 @@ async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(
     be demoted, not merely left out of the new list: §10's "everything expressed in the old
     Backbone's basis is garbage against a new one" is the same argument.
 
-    The npz is written here rather than taken from `make_bundle.py`: the corpus-shaped fixture
-    (a title with `cold_mask` set, a zeroed `E` row and a non-zero `E_hat`) is M4.8's, and the
-    M4.13 plan says outright that it must not be duplicated in a second fixture.
+    The npz is written here rather than taken from `make_bundle.py` because this test needs the
+    two exclusions side by side — a flagged row ABOVE `WARM_SUPPORT` and a thin one below it —
+    and the shared fixture has one of each across different titles, so a demote count of 2 there
+    would not distinguish them. The shared fixture does carry the row — the plan's §8 obliges this
+    milestone to add it there, and
+    `test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower` drives that one
+    through the real importer — so this is the same rule stated at three rows, not a second bundle
+    builder. [M4.13 cycle 1, M413-REV-02]
     """
     root = tmp_path / "artifacts"
     root.mkdir()
@@ -519,6 +524,77 @@ async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(
         db, bundle_version="cold-v1", scope="owned_missing"
     )
     assert needing == [2, 3]
+
+
+async def test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower(db, placed):
+    """cs-01 composed, on the one bundle the importer, the devstub and the e2e stack all build.
+
+    The two tests above hand `Backbone.open` and `classify_warm` an npz written in `tmp_path`, so
+    they prove the loader reads `cold_mask` and the sweep acts on it -- and nothing about the two
+    halves meeting. A flagged row has to survive `import_bundle` -> `classify_warm` ->
+    `titles_needing_placement` -> `place_titles` -> `serve.coordinates` as ONE path, and until this
+    test no layer in CI drove that: `make_bundle.py` shipped `cold_mask` as all-False and `E_hat` as
+    E itself, so every array in the shared fixture agreed with a reader that ignored the mask.
+    The M4.13 plan's section 8 is explicit that the row belongs here rather than in a third npz --
+    "If M4.8 has not yet added a fixture title with `cold_mask` set, a zeroed `E` row and a non-zero
+    `E_hat`, this milestone adds exactly that row there".
+
+    `item_n` above `WARM_SUPPORT` is the whole trap, which is why it is asserted rather than
+    assumed: 1,915 of the shipped bundle's 2,879 flagged rows clear it, and on support alone every
+    one of them was stamped warm, excused from the sweep that exists to give it a coordinate, and
+    served at e(t) = 0 for ever. [M4.13 cycle 1, M413-REV-02]
+    """
+    store, _report = placed
+
+    # The fixture first: what follows is a claim about the pipeline only if the row is really in
+    # the file the whole suite builds from.
+    npz = store.npz("backbone.npz")
+    flagged = [int(t) for t, cold in zip(npz["title_ids"], npz["cold_mask"], strict=True) if cold]
+    assert flagged == [8], "the shared fixture ships no cold_mask row for the pipeline to carry"
+    (cold_title,) = flagged
+    row = npz["title_ids"].tolist().index(cold_title)
+    assert not npz["E"][row].any(), "the export writes zeros for a flagged row, not a coordinate"
+    assert np.linalg.norm(npz["E_hat"][row]) > 0, "and keeps the real one in E_hat (decision 236)"
+    assert int(npz["item_n"][row]) >= backbone.WARM_SUPPORT, (
+        "a flagged row under the threshold would be excused by the support test anyway, and the "
+        "mask would be carrying nothing"
+    )
+
+    assert cold_title not in reconcile.warm_title_ids(store), "flagged, so not warm on support"
+    assert await db.fetchval(
+        "SELECT placement FROM title WHERE id = $1", cold_title
+    ) == "cold_tower"
+    assert await db.fetchval(
+        "SELECT count(*) FROM title_placement WHERE title_id = $1 AND bundle_version = 'test-v1'",
+        cold_title,
+    ) == 1, "the sweep it was excused from is the sweep that gives it its only coordinate"
+
+    bb = backbone.load_for(store)
+    assert bb.row(cold_title) is None and bb.support(cold_title) == 0
+    served = (await serve.coordinates(db, bb, bundle_version="test-v1"))[cold_title]
+    assert served.e_source == "cold_tower" and served.gate == 0.0
+    assert np.linalg.norm(served.e) > 0, (
+        "the pure cold limit, not the zeros the export shipped -- a title served at e(t) = 0 while "
+        "reported coordinated is what section 12's M2 criterion counts as covered"
+    )
+
+    # AND THE CROWD STILL RATED IT. Excluding the row is a statement about the COORDINATE, and it
+    # cost `support()` and the gate their input on purpose. It must not cost the crowd's count its
+    # readers: `title_prior.item_n` is what section 6.1's P(seen) weights at 2.0 through
+    # log1p(n)/log1p(1e5) and what section 8 stage 10's card payload carries, and writing 0 there
+    # told the Rate sweep that one of the most-rated titles in the file was one nobody has seen.
+    # The two quantities are separate objects now and this is where they meet: `gate` is 0 in the
+    # same row, so nothing that wants the evidence gate has to read the popularity column.
+    # [M4.13 cycle 2, M413-C2-DIM5-01]
+    shipped = int(npz["item_n"][row])
+    assert bb.crowd_support(cold_title) == shipped
+    assert served.crowd_n == shipped and served.item_n == 0
+    prior = await db.fetchrow(
+        "SELECT item_n, gate, e_source FROM title_prior WHERE title_id = $1", cold_title
+    )
+    assert (prior["item_n"], prior["gate"], prior["e_source"]) == (shipped, 0.0, "cold_tower"), (
+        "the popularity column carries the file's own count and the gate column carries the gate"
+    )
 
 
 async def test_a_title_with_no_keywords_and_no_dna_row_still_gets_a_coordinate(db, placed):
@@ -607,7 +683,8 @@ async def test_a_low_support_title_is_served_as_a_genuine_blend_of_both_coordina
     low-support title ever acquires the ê the arithmetic needs.
 
     Title 5 has `item_n = 6`, so gate = 6/16 = 0.375 and 62.5% of its coordinate is the tower's.
-    Title 1 has 4218, so it is warm and takes E outright. Title 8 has no Backbone row at all.
+    Title 1 has 4218, so it is warm and takes E outright. Title 8's row is flagged in `cold_mask`,
+    so it has no coordinate to blend and takes the tower's outright.
     """
     store, _report = placed
     bb = backbone.load_for(store)
@@ -631,6 +708,61 @@ async def test_a_low_support_title_is_served_as_a_genuine_blend_of_both_coordina
     assert coords[1].e_source == "backbone"
     np.testing.assert_allclose(coords[1].e, bb.embedding(1), rtol=1e-6)
     assert coords[8].e_source == "cold_tower"
+
+
+async def test_the_cold_tower_coordinate_is_written_unscaled(db, placed):
+    """cs-02 / dd15, decision 236. What the sweep stores is what the tower produced, bit for bit.
+
+    §5.1's middle line only means "a blend" while its two halves are comparable, and on the shipped
+    bundle they are not: over the 3,860 rows the line applies to -- a real Backbone row below
+    WARM_SUPPORT -- median ||E|| is 0.0152 against median ||E_hat|| 20.47, so
+    ((1-g)*||ê||)/(g*||E||) runs p10 82.5 / median 525.8 / p90 5,498.9 and the cold half decides
+    every thin title's personal term. Every population is named because the figures this replaces
+    were taken over two different ones: 0.184 was a median over `item_n >= 90` INCLUDING the cold
+    rows whose E is zeros (0.3835 over rows that carry a coordinate), and 3,846 was a literal cut
+    at 90 where `WARM_SUPPORT` is one ulp above it. [M4.13 cycle 2, M413-C2-DIM5-03] Decision 236 sends the
+    rescaling upstream — whether E is unit-scale item factors or support-weighted is the corpus's
+    contract (§4.1 carries the artifact over verbatim) — so the app measures and scales nothing.
+
+    This is the negative half of that ruling, asserted where the scaling would be cheapest to slip
+    in: `reconcile.place_titles` writes `e_hat[i].astype(np.float32).tobytes()`, and one `/
+    np.linalg.norm(...)` there would silently move three readers at once — §5.2's fit, §5.1's
+    serving path, and §6.7's rail — with every stored row still looking plausible. So the tower is
+    re-run over the same built vector and the bytes are compared, rather than the norms being
+    sanity-checked into a range.
+    """
+    store, _report = placed
+    contract = FeatureContract.from_store(store)
+    cold = tower.load_tower(store, contract)
+    stored = {
+        int(r["title_id"]): (backbone.unpack_vec(r["e_hat"]), float(r["b_hat"]))
+        for r in await db.fetch("SELECT title_id, e_hat, b_hat FROM title_placement")
+    }
+    assert stored, "the sweep placed nothing, so there is no write to check"
+
+    ids = sorted(stored)
+    built = await features.build_vectors(db, store, contract, ids, vocab_version="v1")
+    assert [b.title_id for b in built] == ids
+    e_hat, b_hat = cold.place(np.stack([b.vec for b in built]))
+
+    for index, title_id in enumerate(ids):
+        # The float32 round trip is the convention (0008: "64 x float32 LE"), and it is the ONLY
+        # transformation between the tower's output and the row.
+        assert np.array_equal(stored[title_id][0], backbone.unpack_vec(
+            e_hat[index].astype(np.float32).tobytes()
+        )), f"title {title_id}'s stored e_hat is not the tower's own output"
+        assert stored[title_id][1] == pytest.approx(float(b_hat[index]), abs=1e-6)
+
+    # And the norms are the tower's, not 1.0 and not the Backbone's: the imbalance the measurement
+    # exists to report is IN the stored rows, which is what makes the report about production data.
+    norms = {t: float(np.linalg.norm(stored[t][0])) for t in ids}
+    assert not any(abs(n - 1.0) < 1e-6 for n in norms.values()), (
+        f"a stored e_hat has unit norm: something normalised it on the way in ({norms})"
+    )
+    bb_backbone = backbone.load_for(store)
+    report = backbone.blend_ratios(bb_backbone, {t: stored[t] for t in ids})
+    print(f"\nblend ratio over the swept rows: {report.as_dict()}")
+    assert report.n_measured >= 1, "no thin row was placed, so the blend has nothing to weigh"
 
 
 async def test_a_thin_title_is_placed_badged_and_parked_and_a_complete_one_is_not(db, placed):
@@ -1005,7 +1137,13 @@ def test_an_uncovered_review_text_row_is_not_a_present_block(bundle_root):
     The shipped bundle sets `covered` False on 6,010 of its 14,397 rows and leaves their `emb`
     as float noise near 1e-16. Reading those rows anyway fed the tower a block of zeros while
     reporting it present — so §5.3's badge stayed off and §8 stage 2 parked nothing for 42% of
-    the corpus. An uncovered row is not a row; the block drops, and the title is thin.
+    the corpus. An uncovered row is not a row; the block drops, and the drop is recorded.
+
+    The title below is thin for its eight OTHER absent blocks and not for this one. M4.13's
+    step 31 took `review_text` out of the thinness verdict, because the block's source is the
+    bundle's own npz and no §8 stage 2 re-fetch can write into it; not present and not thin are
+    compatible, and `test_an_uncovered_review_text_row_is_recorded_but_parks_no_job` is the
+    other half. [M4.13, cs-21]
     """
     artifacts = bundle_root / "artifacts"
     with np.load(artifacts / "review_text_emb.npz", allow_pickle=False) as npz:
@@ -1322,3 +1460,277 @@ async def test_the_rebuild_refuses_a_bundle_that_was_never_staged(db, placed, tm
     fake = ArtifactStore.open(store.root, "never-imported")
     with pytest.raises(RuntimeError, match="staged"):
         await reconcile.run_rebuild(db, fake, "never-imported")
+
+
+# --- M4.13: thinness is a claim about what enrichment can fix, and the chunk is one transaction -
+#     (data-rules-the-sweep-parks-only-jobs-that-can-be-finished)
+#
+# Two findings that look like one and are not. cs-21 NARROWS what thin means: `is_thin` counted
+# any dropped block, so 46 of the 130 titles the sweep places were thin against §5.3's stated 5 -
+# 40 of them for having won no awards, which is an acquisition job that can never close.
+# `data-rules-a-feature-block-that-never-hits-is-not-present` (M4.5) WIDENS it: a block whose keys
+# all miss the contract is thin even though nothing about the title is absent. Both are right, and
+# the pair is what these tests hold apart. ml05 is the other half: the sweep's three statements per
+# chunk were not transactional and its work list keyed on `title_placement` while §12 keys on
+# `title.placement`, so an interrupted chunk left a title permanently outside the count.
+# [M4.13, cs-21 and ml05; plan steps 30 and 31]
+
+
+class _KilledBeforeTheBadge:
+    """`conn` with one chunk's badge UPDATE replaced by a raise.
+
+    The window ml05 reproduced is a worker killed between `executemany(_UPSERT)` and the
+    `UPDATE title SET placement = 'cold_tower'` that follows it, which no test can produce with a
+    signal. What it can produce is that statement failing, which opens the same window from the
+    other side: every module in this package takes `conn: Any` and routes every statement through
+    it, so the sweep can be handed a connection one of whose statements does not work.
+
+    Only the badge, and only from the `after`-th chunk on, so the chunk before it is the control:
+    a sweep that wrote nothing at all would pass an atomicity test for the wrong reason.
+    """
+
+    def __init__(self, conn, *, after: int):
+        self._conn = conn
+        self._after = after
+        self.badges = 0
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    async def execute(self, sql, *args, **kwargs):
+        if "placement = 'cold_tower'" in sql:
+            self.badges += 1
+            if self.badges >= self._after:
+                raise RuntimeError("the worker was killed before it could badge the chunk")
+        return await self._conn.execute(sql, *args, **kwargs)
+
+
+def test_a_block_whose_keys_all_miss_the_contract_is_still_thin():
+    """The two rules, on one title, at the same block.
+
+    §5.3's backlog is "thin ones (2 lack keywords, 3 lack any DNA row)" - five titles out of
+    nineteen - and `is_thin` returned True for 46 of 130 because it counted every dropped block.
+    The award block's source is one COUNT over `award`, so a title nobody nominated drops it; §8
+    stage 2 is a *fetch*, and no fetch makes an awards body give a 1983 film a prize. That is the
+    argument `features.py` already makes two lines above for the genome, and `UNENRICHABLE_BLOCKS`
+    is it written down once.
+
+    What the same narrowing must not reach: a block that produced rows and landed none of the
+    columns the contract declares. §4.3 makes `feature_contract.json` "the **exhaustive**
+    definition of the tower's input", so those keys are a grammar disagreement between the builder
+    and the export - and that IS fixable, by a re-fetch whose keys the contract names. `award` is
+    deliberately the block used for both halves here, because a rule keyed on the block NAME would
+    pass the first assertion and fail this one.
+    """
+    contract = FeatureContract.load(_contract_doc())
+    text = np.zeros(contract.text_dims, dtype=np.float32)
+    complete = {b.name: {b.names[0]: 1.0} for b in contract.blocks}
+    assert not features.build_vector(contract, 1, complete, text).is_thin, (
+        "a title with every block populated is thin, so this fixture cannot tell the rules apart"
+    )
+
+    absent = features.build_vector(
+        contract, 1, {k: v for k, v in complete.items() if k != "award"}, text
+    )
+    assert absent.blocks_dropped == ("award",) and absent.blocks_empty == ()
+    assert not absent.is_thin, "an award nobody gave is a job §8 stage 2 can never finish"
+
+    all_miss = features.build_vector(contract, 1, {**complete, "award": {"won": 1.0}}, text)
+    assert all_miss.blocks_dropped == (), "nothing about this title is absent"
+    assert all_miss.blocks_empty == ("award",)
+    assert all_miss.unmapped == {"award": 1}
+    assert all_miss.is_thin, (
+        "a block keyed `won` against `award:won` columns is a grammar the contract does not "
+        "declare, and §8 stage 2's re-fetch is the remedy"
+    )
+
+    # The genome reaches `blocks_imputed` rather than `blocks_dropped` when the contract declares
+    # its zero-imputation, so it was already excused - and it is in the tuple anyway, because the
+    # verdict must not depend on which of the two lists a block lands in. A bundle that stopped
+    # recording the imputation would otherwise silently re-park 983 columns' worth of absence.
+    no_genome = features.build_vector(
+        contract, 1, {k: v for k, v in complete.items() if k != "genome"}, text
+    )
+    assert no_genome.blocks_imputed == ("genome",) and no_genome.blocks_dropped == ()
+    assert not no_genome.is_thin
+    assert "genome" in features.UNENRICHABLE_BLOCKS
+
+
+async def test_a_title_whose_only_gap_is_an_award_it_never_won_is_not_parked(
+    db, spine, bundle_root
+):
+    """§5.3: "thin ones ... are still placed, badged, and parked as acquisition jobs for M5
+    enrichment." Placed and badged is unchanged; the parking is what narrows.
+
+    Measured over the 130 titles the sweep places on the real bundle: award absent 40, review_text
+    uncovered 27, dna_x 11, dna_p 4, keyword 2 - 46 thin, and §5.3 states the whole backlog as 5 of
+    19. Forty of those jobs waited at stage 2 for an enrichment that cannot arrive, on the board
+    §8.4's flywheel reads.
+
+    `THIN_TITLE` is in the same sweep and still parks, which is what keeps this from passing as
+    "park nothing".
+    """
+    await db.execute("DELETE FROM award WHERE title_id = $1", FULL_TITLE)
+    _store, report = await _sweep(db, bundle_root)
+
+    placed = await db.fetchrow(
+        """
+        SELECT t.placement, p.blocks_dropped, p.blocks_empty, p.blocks_imputed
+          FROM title t JOIN title_placement p ON p.title_id = t.id
+         WHERE t.id = $1 AND p.bundle_version = 'test-v1'
+        """,
+        FULL_TITLE,
+    )
+    assert placed is not None, "the title was not placed at all, so nothing below means anything"
+    # §8 stage 10's badge input, unchanged: the title is ready, visible and rankable.
+    assert placed["placement"] == "cold_tower"
+    assert placed["blocks_dropped"] == ["award"], placed["blocks_dropped"]
+    assert placed["blocks_empty"] == []
+    assert await db.fetchval(
+        "SELECT count(*) FROM acquisition_job WHERE title_id = $1", FULL_TITLE
+    ) == 0, "an award nobody gave parked a stage-2 job that can never close"
+
+    assert await db.fetchval(
+        "SELECT count(*) FROM acquisition_job WHERE title_id = $1", THIN_TITLE
+    ) == 1, "the title that lacks keywords and DNA still parks, or this asserts nothing"
+    assert (report.placed, report.parked_thin) == (2, 1), report.as_dict()
+
+
+async def test_an_uncovered_review_text_row_is_recorded_but_parks_no_job(db, spine, tmp_path):
+    """`covered = False` is a property of the EXPORT, not of this install.
+
+    The review-text block's source is not the database at all: it is `review_text_emb.npz` inside
+    the bundle (§4.3, `features.text_embeddings`). §8 stage 2 writes database rows, so it cannot
+    reach the block either way - and for a row the corpus itself marks uncovered, with `emb` at
+    float noise near 1e-16, the only thing that changes the answer is the next export. The shipped
+    bundle sets the flag False on 6,010 of 14,397 rows.
+
+    `test_an_uncovered_review_text_row_is_not_a_present_block` is the other half and still holds:
+    the block is not *present*, its 64 columns stay zero, and the drop is recorded. Not present and
+    not thin are compatible.
+    """
+    root = _make_bundle(tmp_path / "uncovered")
+    artifacts = root / "artifacts"
+    with np.load(artifacts / "review_text_emb.npz", allow_pickle=False) as npz:
+        arrays = {k: npz[k] for k in npz.files}
+    covered = arrays["covered"].copy()
+    covered[arrays["title_ids"] == FULL_TITLE] = False
+    np.savez(artifacts / "review_text_emb.npz", **{**arrays, "covered": covered})
+
+    _store, report = await _sweep(db, root)
+
+    placed = await db.fetchrow(
+        "SELECT blocks_dropped, blocks_present FROM title_placement"
+        " WHERE title_id = $1 AND bundle_version = 'test-v1'",
+        FULL_TITLE,
+    )
+    assert placed is not None
+    assert placed["blocks_dropped"] == ["review_text"], placed["blocks_dropped"]
+    assert "review_text" not in placed["blocks_present"]
+    assert await db.fetchval(
+        "SELECT placement FROM title WHERE id = $1", FULL_TITLE
+    ) == "cold_tower"
+    assert await db.fetchval(
+        "SELECT count(*) FROM acquisition_job WHERE title_id = $1", FULL_TITLE
+    ) == 0, "a row the corpus marks uncovered parked a job only a new bundle could close"
+    assert (report.placed, report.parked_thin) == (2, 1), report.as_dict()
+
+
+async def test_the_report_still_names_the_blocks_a_placed_title_dropped(db, spine, bundle_root):
+    """Only the verdict changes. The facts stay where §5.3's badge and §8.4's flywheel read them.
+
+    `title_placement.blocks_dropped` is the persisted record and is untouched - 0015_seed wrote
+    those columns precisely so a block that filled every column it had and a block that hit none
+    of them stop producing identical rows. And the run-level report names the narrowing out loud,
+    because `parked_thin` dropping is otherwise indistinguishable from a library that improved:
+    the operator reading §6.6's job detail is the only person who can tell a backlog that shrank
+    because titles were enriched from one that shrank because the rule moved.
+    """
+    await db.execute("DELETE FROM award WHERE title_id = $1", FULL_TITLE)
+    _store, report = await _sweep(db, bundle_root)
+
+    persisted = {
+        r["title_id"]: r["blocks_dropped"]
+        for r in await db.fetch("SELECT title_id, blocks_dropped FROM title_placement")
+    }
+    assert "award" in persisted[FULL_TITLE], persisted
+    assert "award" in persisted[THIN_TITLE] and "review_text" in persisted[THIN_TITLE]
+
+    note = next((n for n in report.notes if "not parked" in n), None)
+    assert note is not None, report.notes
+    assert "1 title(s)" in note and "award" in note, note
+    assert note.isprintable(), note
+
+    # The one report that does still exist for a thin title names every gap, enrichable or not:
+    # the reason line is what the §8.4 board shows, and a stage-2 fetch that knows the title also
+    # lacks an award it will not find is better informed than one that does not.
+    job = await db.fetchrow("SELECT reason, detail FROM acquisition_job WHERE title_id = $1",
+                            THIN_TITLE)
+    assert "award" in job["reason"] and "review_text" in job["reason"], job["reason"]
+    assert "award" in job["detail"]["blocks_dropped"]
+
+
+async def test_each_sweep_chunk_is_one_transaction(db, spine, bundle_root, monkeypatch):
+    """ml05, reproduced: a chunk that dies after its upsert used to leave a coordinate behind.
+
+    `title_placement` row written, `title.placement` still `'unplaced'`, and `_MISSING_SQL` keyed
+    on `NOT EXISTS (title_placement ...)` - so the work list never revisited the title while
+    `placement_counts` kept counting it as unplaced. §12's M2 query never reaches 0, and
+    `serve.coordinates` ranks the title perfectly happily without its badge.
+
+    One title per chunk here, so the first chunk is the control: per-chunk atomicity means the
+    completed chunk survives. All-or-nothing over the whole sweep would be a different (and
+    worse) promise - a corpus-scale sweep is 28 chunks of 512 and one bad title must not cost
+    the night.
+    """
+    monkeypatch.setattr(reconcile, "CHUNK", 1)
+    store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
+    conn = _KilledBeforeTheBadge(db, after=2)
+
+    with pytest.raises(RuntimeError, match="killed"):
+        await reconcile.reconcile(conn, store, scope="owned_missing")
+    assert conn.badges == 2, "the second chunk has to have been reached, not the first"
+
+    # The chunk that finished: placed, badged, parked.
+    assert await db.fetchval("SELECT placement FROM title WHERE id = $1", THIN_TITLE) == "cold_tower"
+    assert await db.fetchval(
+        "SELECT count(*) FROM title_placement WHERE title_id = $1", THIN_TITLE
+    ) == 1
+    assert await db.fetchval(
+        "SELECT count(*) FROM acquisition_job WHERE title_id = $1", THIN_TITLE
+    ) == 1
+
+    # The chunk that died: nothing at all, which is the only state §12's count can read.
+    assert await db.fetchval("SELECT placement FROM title WHERE id = $1", FULL_TITLE) == "unplaced"
+    assert await db.fetchval(
+        "SELECT count(*) FROM title_placement WHERE title_id = $1", FULL_TITLE
+    ) == 0, "the upsert outlived the badge, so this title has a coordinate and no placement"
+
+
+async def test_a_title_with_a_placement_row_and_no_stamp_is_re_swept(db, spine, bundle_root):
+    """The work list and §12's count have to mean the same thing.
+
+    `_MISSING_SQL` asked "has this title a `title_placement` row for the active bundle?" while
+    `placement_counts` - and §12's M2 exit criterion - ask "is `title.placement` still
+    'unplaced'?". A title in the gap between those two questions is stranded for ever: every
+    nightly sweep skips it and every count keeps it. The upsert is `ON CONFLICT DO UPDATE`, so
+    re-placing one is idempotent and costs a forward pass.
+    """
+    _store, first = await _sweep(db, bundle_root)
+    assert (first.considered, first.placed) == (2, 2), first.as_dict()
+
+    # Exactly the state the previous test's interrupted chunk used to leave behind.
+    await db.execute(
+        "UPDATE title SET placement = 'unplaced', placement_bundle = NULL WHERE id = $1",
+        FULL_TITLE,
+    )
+    assert await reconcile.titles_needing_placement(
+        db, bundle_version="test-v1", scope="owned_missing"
+    ) == [FULL_TITLE], "the sweep's work list cannot see a title §12's count is still holding"
+
+    _store, again = await _sweep(db, bundle_root)
+    assert (again.considered, again.placed) == (1, 1), again.as_dict()
+    assert await db.fetchval("SELECT placement FROM title WHERE id = $1", FULL_TITLE) == "cold_tower"
+    counts = await reconcile.placement_counts(db, bundle_version="test-v1")
+    assert counts["owned_unplaced"] == 0, counts
+    assert counts["placement_rows"] == 2, counts

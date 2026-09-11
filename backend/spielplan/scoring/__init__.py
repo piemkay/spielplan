@@ -2,7 +2,11 @@
 
 Three modules, split by what they are allowed to touch:
 
-* `backbone` — the frozen basis from `backbone.npz` and the per-title coordinate. numpy only.
+* `backbone` — the frozen basis from `backbone.npz` and the per-title coordinate. numpy, plus
+              `ledger.hyperparams.DEFAULTS` for §5.1's gate k and the warm gate, which §4.3 puts
+              in `ledger_hyperparams.json` and this module may not re-spell as literals
+              (M4.13 step 34d). That leaf imports nothing first-party, which is what keeps the
+              `ledger -> scoring -> ledger` path from being a cycle.
 * `foldin`   — the 64-d user fold-in and the per-label-count blend weight (§5.3, nightly).
 * `serve`    — the materialised `title_prior` / `user_score` rows, the ranked read, and the
                §6.0 model line. All the SQL lives here.

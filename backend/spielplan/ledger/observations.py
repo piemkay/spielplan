@@ -28,12 +28,19 @@ WRITING (`record_*`) is append-only. §4.2: a re-rating INSERTs a new row and st
 the only code allowed to DELETE a verdict or a duel is `undo` below — decision 35's
 block-scoped journal, which needs compensating writes rather than a `lastAction` variable.
 
-The embedding source is injected. §5.1 says a title's coordinate is its Backbone row when it
-has one and the Cold Tower's placement when it does not, but *which* is a question about
-artifacts and the placement pipeline, and the Ledger must not learn the answer: it takes a
-callable and gets back 64-d rows plus a mask. §3.1 makes a bundle-less household legal, so
-`zero_embeddings` is a real mode and not a stub — with e = 0 the model degenerates to
-s = μ + r and still ranks everything the person has rated.
+The embedding source is injected. WHERE a coordinate comes from — which bundle, which tower run,
+whether the Cold Tower has placed a title yet — is a question about artifacts and the placement
+pipeline, and `load_observations` must not learn the answer: it takes a callable and gets back
+64-d rows plus a mask. §3.1 makes a bundle-less household legal, so `zero_embeddings` is a real
+mode and not a stub — with e = 0 the model degenerates to s = μ + r and still ranks everything
+the person has rated.
+
+WHAT the coordinate IS, though, is §5.1's and not this module's to compose. `standard_embeddings`
+below therefore calls `scoring.backbone.coordinate` per title rather than layering two sources
+behind `chain`: §5.1's `e(t) = gate·E[t] + (1-gate)·ê(t)` is one expression with two limits, and a
+precedence chain silently implements a third thing — the warm row outright for any title with a
+row, at any support. That is the seam held and the arithmetic shared, which is the only
+combination in which the fit and the serving path cannot disagree. [M4.13, dd02]
 """
 
 from __future__ import annotations
@@ -49,7 +56,15 @@ import asyncpg
 import numpy as np
 
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.model import EMBED_DIM, OUT_A, OUT_B, OUT_TIE, ObservationSet
+from spielplan.ledger.model import (
+    EMBED_DIM,
+    MEASURED_TIER_SHARES,
+    OUT_A,
+    OUT_B,
+    OUT_TIE,
+    ObservationSet,
+)
+from spielplan.scoring import backbone as scoring_backbone
 
 log = logging.getLogger("spielplan.ledger.observations")
 
@@ -106,33 +121,65 @@ def placement_embeddings(
     """
 
     async def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
-        ids = list(title_ids)
+        ids = [int(t) for t in title_ids]
         matrix = np.zeros((len(ids), EMBED_DIM))
         embedded = np.zeros(len(ids), dtype=bool)
         if not ids:
             return matrix, embedded
-        # §10: "everything expressed in the old Backbone's basis is garbage against a new one."
-        # A placement from another bundle is not stale, it is meaningless, so it is not read.
-        found = await conn.fetch(
-            """
-            SELECT p.title_id, p.e_hat
-            FROM title_placement p
-            JOIN artifact_bundle b ON b.version = p.bundle_version
-            WHERE p.title_id = ANY($1::int[])
-              AND ($2::text IS NULL OR p.bundle_version = $2)
-              AND ($2::text IS NOT NULL OR b.state = 'active')
-            """,
-            ids,
-            bundle_version,
-        )
-        position = {tid: i for i, tid in enumerate(ids)}
-        for row in found:
-            i = position[row["title_id"]]
-            matrix[i] = np.frombuffer(row["e_hat"], dtype="<f4").astype(float)
-            embedded[i] = True
+        placed = await _placement_pairs(conn, ids, bundle_version=bundle_version)
+        for i, title_id in enumerate(ids):
+            pair = placed.get(title_id)
+            if pair is not None:
+                matrix[i] = pair[0]
+                embedded[i] = True
         return matrix, embedded
 
     return rows
+
+
+async def _placement_pairs(
+    conn: asyncpg.Connection, title_ids: Sequence[int], *, bundle_version: str | None
+) -> dict[int, tuple[np.ndarray, float]]:
+    """The Cold Tower's (ê, b̂) for these ids, in one basis — `serve.placements`' shape.
+
+    One statement of "which placement", because `placement_embeddings` and `standard_embeddings`
+    answering that question two ways is how the fit and the serving path came to disagree about a
+    third of the bundle's covered rows. b̂ travels with ê because §5.1's blend needs both halves
+    of the pair and a source that returned only the embedding could not form b(t) at all.
+    """
+    ids = [int(t) for t in title_ids]
+    if not ids:
+        return {}
+    # §10: "everything expressed in the old Backbone's basis is garbage against a new one."
+    # A placement from another bundle is not stale, it is meaningless, so it is not read.
+    #
+    # `$2 IS NULL` is THE BUNDLE-LESS PATH and nothing else. It joins whichever row is active
+    # at the moment of the read, which is the only answer available to a caller that has no
+    # version to give - a bundle-less install, or a test source. Every caller that HAS one
+    # passes it, because during §10's pre-flip rebuild the active row is the OUTGOING bundle:
+    # the fallback taken by accident there is exactly data-01, a step-3 fit built from the old
+    # basis and stamped with the old version (measured ||v_step3 - v_correct|| = 0.397 against
+    # ||v_correct|| = 0.782). The branch stays a fallback rather than becoming a required
+    # argument so that §3.1's bundle-less household keeps working. [M4.13, data-01]
+    found = await conn.fetch(
+        """
+        SELECT p.title_id, p.e_hat, p.b_hat
+        FROM title_placement p
+        JOIN artifact_bundle b ON b.version = p.bundle_version
+        WHERE p.title_id = ANY($1::int[])
+          AND ($2::text IS NULL OR p.bundle_version = $2)
+          AND ($2::text IS NOT NULL OR b.state = 'active')
+        """,
+        ids,
+        bundle_version,
+    )
+    # 0008's bytea convention has exactly one pair of readers (`scoring.backbone.pack_vec` /
+    # `unpack_vec`) so that `title_placement.e_hat` and `user_vector.vec` cannot drift into two
+    # conventions; this module used to spell the `frombuffer` out by hand.
+    return {
+        int(r["title_id"]): (scoring_backbone.unpack_vec(r["e_hat"]), float(r["b_hat"]))
+        for r in found
+    }
 
 
 def chain(*sources: EmbeddingSource) -> EmbeddingSource:
@@ -199,9 +246,10 @@ def backbone_embeddings(backbone: Any) -> EmbeddingSource:
     return rows
 
 
-def standard_embeddings(conn: Any, backbone: Any = None) -> EmbeddingSource:
-    """§5.1's coordinate for every title, in the one order the whole app must agree on:
-    the warm Backbone row first, the Cold Tower placement second.
+def standard_embeddings(
+    conn: Any, backbone: Any = None, *, bundle_version: str | None = None
+) -> EmbeddingSource:
+    """§5.1's coordinate for every title — `scoring.backbone.coordinate`, per title, nothing else.
 
     THIS FUNCTION EXISTS BECAUSE THE COMPOSITION WAS GOT WRONG. The nightly `ledger-map-refit`
     and §10's rebuild step 3 both passed `placement_embeddings` alone. `classify_warm` writes no
@@ -216,12 +264,82 @@ def standard_embeddings(conn: Any, backbone: Any = None) -> EmbeddingSource:
 
     The precondition was documented in four places and honoured in one. One function now, so a
     caller cannot get it wrong by omission.
+
+    AND IT WAS A PRECEDENCE CHAIN, WHICH IS NOT §5.1. `chain` says "the first source that has a
+    row for a title wins" and `Backbone.embedding` returns `E[row]` for ANY covered title
+    regardless of `item_n`, so the placement source was consulted only for titles with no
+    Backbone row AT ALL — while `serve.coordinates`, the fold-in and serving path, blends. §5.1's
+    middle line is exactly the set the two disagreed on: 3,860 of the real bundle's 14,397 rows
+    (27%) carry a real Backbone row below WARM_SUPPORT, and on the fixture the fitted and the
+    served coordinate differ by ||Δe|| = 1.94 at item_n 6, 0.72 at 30, 0.40 at 55. §6.1's
+    held-out instrument was therefore measuring a `v` the serving path does not use.
+
+    Both of those numbers were restated in cycle 2 and neither moved a line of code. 3,860, not
+    4,807: `item_n < WARM_SUPPORT` counts 4,824 rows and 964 of them are cold-masked, so they have
+    no Backbone row for the precedence chain to have preferred and the two sources could not
+    disagree about them at all. And 1.94/0.72/0.40, not 1.81/0.72/0.35: the first triple came from
+    an ad-hoc probe, while `COLD_PLACEMENTS`, `cold_vector` and `placed_vector` -- the fixture the
+    registered test measures against -- were written in the same diff that published it, so the
+    docstring copied the plan instead of the fixture and its sibling in
+    `test_ledger_observations.py` carried the current pair from the day it was written.
+    [M4.13 cycle 2, M413-C2-DIM5-03 and M413-C2-DIM5-04] So the composition is replaced by
+    the one expression `backbone.coordinate` already writes, and `embedded` is "this title has a
+    coordinate at all" — `coordinate() is not None`, which is §12's M2 criterion spelled the same
+    way in both places.
+
+    `backbone_embeddings`, `placement_embeddings` and `chain` stay: §3.1's bundle-less install
+    has no basis to blend and the unit tests of the seam need one source at a time. WARM_SUPPORT
+    is not lowered and no low-support title is stamped warm here — that would move the placement
+    sweep's scope, which is a different finding.
+
+    The `ledger -> scoring` import is new and it closes no cycle — but not for the reason first
+    given here, which step 34d falsified in the same diff that wrote it. `backbone.py` does NOT
+    import only numpy: it takes `ledger.hyperparams.DEFAULTS` at module level for `EVIDENCE_K` and
+    `WARM_GATE`, and so does `foldin.py`, so `scoring -> ledger` is two edges and `backbone.py`
+    is on one of them. The property that actually terminates the path is narrower and worth
+    naming: `ledger/hyperparams.py` imports nothing first-party and `ledger/__init__.py` imports
+    no submodule, so `ledger.observations -> scoring.backbone -> ledger.hyperparams` ends in a
+    module that is a docstring and some numbers. Any `spielplan.scoring` import added to
+    `hyperparams.py` closes it — plausible, since step 34d has just made that file the home of the
+    constants `scoring/` reads — and a cycle here surfaces as an ImportError in `app.py`'s
+    lifespan, a boot failure rather than a red test. So it is asserted rather than argued:
+    `test_layering_guards.py::test_the_hyperparams_leaf_imports_nothing_but_the_standard_library`.
+    `ledger/model.py` stays numpy-only — the coordinate is assembled here, before `model.fit`
+    ever sees it. [M4.13 cycle 1, M413-REV-03]
+
+    `bundle_version` is the OTHER half of "which basis is this", and it was unthreadable:
+    `placement_embeddings` has taken it since M2 and this function never passed it, so §10's
+    pre-flip rebuild - the one caller for which the active row is the WRONG answer - silently read
+    its placements from the outgoing bundle. Keyword-only and defaulted, so the bundle-less and
+    test callers keep the active-row fallback; every caller that knows the version now states it,
+    and `backbone` and `bundle_version` must describe the SAME bundle or the two halves of the
+    blend disagree about the basis title by title. [M4.13, data-01 and dd02]
     """
-    sources: list[EmbeddingSource] = []
-    if backbone is not None and not getattr(backbone, "is_empty", True):
-        sources.append(backbone_embeddings(backbone))
-    sources.append(placement_embeddings(conn))
-    return chain(*sources)
+    # `Backbone.empty()` rather than a branch: a store with no basis has no rows, so every
+    # lookup misses and `coordinate` takes its own gate-0 limit — which is precisely what
+    # `placement_embeddings` alone used to return, reached through the expression instead of
+    # around it.
+    basis = (
+        backbone
+        if backbone is not None and not getattr(backbone, "is_empty", True)
+        else scoring_backbone.Backbone.empty()
+    )
+
+    async def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+        ids = [int(t) for t in title_ids]
+        matrix = np.zeros((len(ids), EMBED_DIM))
+        embedded = np.zeros(len(ids), dtype=bool)
+        if not ids:
+            return matrix, embedded
+        placed = await _placement_pairs(conn, ids, bundle_version=bundle_version)
+        for i, title_id in enumerate(ids):
+            coordinate = scoring_backbone.coordinate(title_id, basis, placed.get(title_id))
+            if coordinate is not None:
+                matrix[i] = coordinate.e
+                embedded[i] = True
+        return matrix, embedded
+
+    return rows
 
 
 async def resolve_embeddings(
@@ -294,6 +412,73 @@ async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> t
     return tuple(configured) if configured else DEFAULT_TIER_SET
 
 
+# --- decision 11: a tier level outlives the tier set it was written in -----------------------
+
+
+def _tier_shares(k: int) -> np.ndarray:
+    """§6.3's measured level shares at K = 7, equal mass at any other K.
+
+    The same rule `model.initial_cutpoints` applies, and deliberately a second spelling of those
+    two lines rather than a new public function in `ledger/model.py`: that module is numpy-only by
+    contract, takes no edit this milestone, and `test_layering_guards.py` now states the contract
+    as an ast guard. There is no measurement for a set nobody has used, so equal mass is not a
+    default but the honest answer — which is what `initial_cutpoints` says, in those words.
+    """
+    shares = MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k
+    return np.asarray(shares, dtype=float)
+
+
+def rescale_level(level: int, *, k_from: int | None, k_to: int) -> int:
+    """Decision 11's tier level, read in the tier set it is being rendered against.
+
+    Decision 11 keeps `tier_edit` rows across a change in K — "tier *edits* are observations and
+    survive the change, tier *boundaries* do not" — and §4.2 makes the table append-only, so the
+    stored `tier` is never rewritten. What was missing is the other half of that statement: an
+    index means nothing without the set it indexes. Every reader took the raw integer, so growing
+    7 -> 12 left every S edit rendered at level 6 of 12 (mid-board), emptied the top five model
+    tiers and put 36 of 60 later drops into tension; shrinking 7 -> 4 clamped B..S into the top
+    tier, 280 of 320 titles. Simulated meaning shift 20.1 mean / 41.8 max percentile points.
+
+    So a level is mapped by CUMULATIVE PRIOR MASS: it names a band of the population under the set
+    it was written in, and it is re-read as the band holding that band's midpoint under the set it
+    is read in. Measured against the alternative, a proportional-index map
+    (`round(level * (k_to - 1) / (k_from - 1))`): mass shift 3.0 mean / 11 max percentile points
+    and 0 of 60 later drops in tension, against 8.9 / 14.7 and 19 of 60. The midpoint rather than
+    either edge, because a band's edges belong to its neighbours as much as to it.
+
+    THE CLAMP IS THE LAST STEP, AND THAT IS THE POINT. Three call sites each clamped instead of
+    mapping — `load_observations` loudly, `refit._update_incrementally` silently, `rank/board.py`
+    once at the edge — and the clamp is not itself the defect: `model.py:222-227` already clips a
+    level it is handed, and a clamped level fed to `model.fit` produces a bit-identical fit
+    (objective 548.719904 either way). The defect is that clamping was ALL they did. Here the mass
+    map runs first and the clamp only catches what the column can hold but no set can index:
+    `tier_edit.tier` is a bare `smallint` with no CHECK against the set (§4.2 calls it "an index
+    into the user's configured tier set" and 0005 cannot express that).
+
+    `k_from is None` is the honest reading of a row whose board is unknown — 0022 made `n_levels`
+    nullable precisely so a NULL is not a 7 pretending to be a measurement — and of
+    `rank/board.py`, which holds a rendered level and the current set and nothing else. Unknown
+    means "read as written", which is what every reader did before, clamp included.
+
+    `k_from == k_to` short-circuits an identity the arithmetic already produces (a band's midpoint
+    lies strictly inside that band, so it maps to itself for every K from 2 to 20 — asserted);
+    dropping the branch changes no answer, only the per-row cost of a board read.
+    """
+    if k_to < 1:
+        raise ValueError(f"a tier set has at least one level, not {k_to}")
+    if k_from is None or int(k_from) < 2 or int(k_from) == int(k_to):
+        return min(max(int(level), 0), k_to - 1)
+    cum_from = np.cumsum(_tier_shares(int(k_from)))
+    cum_to = np.cumsum(_tier_shares(int(k_to)))
+    band = min(max(int(level), 0), int(k_from) - 1)
+    low = 0.0 if band == 0 else float(cum_from[band - 1])
+    mass = 0.5 * (low + float(cum_from[band]))
+    # `side="right"` because the bands are half-open [low, high): a midpoint landing exactly on a
+    # boundary belongs to the band above it, which is also what keeps the map monotone.
+    mapped = int(np.searchsorted(cum_to, mass, side="right"))
+    return min(max(mapped, 0), k_to - 1)
+
+
 async def load_observations(
     conn: asyncpg.Connection,
     *,
@@ -339,7 +524,7 @@ async def load_observations(
     # edit, so every row counts, exactly as for verdicts.
     tier_edits = await conn.fetch(
         """
-        SELECT e.title_id, e.tier, e.created_at
+        SELECT e.title_id, e.tier, e.n_levels, e.created_at
         FROM tier_edit e
         JOIN title t ON t.id = e.title_id
         WHERE e.user_id = $1 AND t.kind = $2
@@ -417,21 +602,27 @@ async def load_observations(
         ord_arm.append(ARM_VERDICT)
         _touch(row["title_id"], row["created_at"])
 
-    clamped = 0
+    rescaled = 0
     for row in tier_edits:
-        level = int(row["tier"])
-        if not 0 <= level < n_levels:
-            # A household that shrinks its tier set leaves rows above K−1 behind. Clamping
-            # keeps them meaning "the top tier they had" rather than crashing the nightly job
-            # or, worse, indexing a cutpoint that does not exist.
-            clamped += 1
-            level = min(max(level, 0), n_levels - 1)
+        # A household that changes its tier set keeps these rows (decision 11), and the index in
+        # them means nothing without the set it was written against, which `n_levels` now records.
+        # `rescale_level` maps by cumulative prior mass and clamps only as its last step; THIS is
+        # the one warning among the three call sites, because the fit is where the whole history
+        # passes through while the other two see one or two rows at a time.
+        written = int(row["tier"])
+        level = rescale_level(written, k_from=row["n_levels"], k_to=n_levels)
+        if level != written:
+            rescaled += 1
         ord_index.append(position[row["title_id"]])
         ord_level.append(level)
         ord_arm.append(ARM_TIER)
         _touch(row["title_id"], row["created_at"])
-    if clamped:
-        log.warning("clamped %d tier edit(s) outside 0..%d", clamped, n_levels - 1)
+    if rescaled:
+        log.warning(
+            "rescaled %d tier edit(s) into the %d-level set they are now read against",
+            rescaled,
+            n_levels,
+        )
 
     duel_a: list[int] = []
     duel_b: list[int] = []
@@ -759,12 +950,19 @@ async def record_tier_edit(
     if not 0 <= tier < len(tier_set):
         raise ValueError(f"tier {tier} is outside the configured set {tier_set}")
 
+    # `n_levels` is the K this index was chosen under, and it is written here because here is the
+    # only place that knows it: decision 11 keeps the row across a tier-set change, so without the
+    # column every later reader has to assume the set it happens to be holding. Not derived at read
+    # time from `created_at` against a history of tier-set changes, because no such history exists
+    # — `ledger_cutpoints.tier_set` is overwritten in place by `save_tier_set`. [M4.13, dd06]
     row_id = await conn.fetchval(
-        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1,$2,$3,$4) RETURNING id",
+        "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
+        "VALUES ($1,$2,$3,$4,$5) RETURNING id",
         user_id,
         title_id,
         tier,
         via,
+        len(tier_set),
     )
     return Write(
         arm="tier_edit",
@@ -979,6 +1177,12 @@ __all__ = [
     "record_not_seen",
     "record_tier_edit",
     "record_verdict",
+    # Four readers outside this module reach it by name (`rank/read.py`, `rank/board.py`,
+    # `rank/drop.py`, `home/shelves.py`), which is the whole point of there being one of it: the
+    # loader, the incremental path, the board, the shelf caption and the drop's neighbour check
+    # read a stored tier level through the same function or they disagree about what it says — and
+    # the one that did not was the one that refused the drag. [M4.13, dd06; cycle 1, M413-REV-01]
+    "rescale_level",
     "resolve_embeddings",
     "tier_set_of",
     "undo",

@@ -26,6 +26,7 @@ TEST_DATABASE_URL while the two above must not.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -175,3 +176,92 @@ async def test_a_boot_that_applies_migrations_still_names_every_version(
     applied = [m for m in _spielplan_lines(caplog) if m.startswith("applied migrations: ")]
     assert applied, "a boot that applied the whole schema said nothing about it"
     assert "0001_system" in applied[0] and "0017_ops" in applied[0]
+
+# --- the yardstick the fold-in's rho is read against -------------------------------------------
+#
+# §14's first risk states its own mitigation as "expectations instrumented, not assumed", and
+# `user_vector.cv_rho` was neither: the fold-in computes a held-out Spearman per (user, kind),
+# stores it, and nothing in the app knew what a good one looked like. The corpus ships the
+# reference in `cold_eval.json` - cold 0.35225 against a ceiling of 0.39193 on v20260828 - and it
+# was in no file list and read nowhere. The boot says it once, beside the constants, because §10
+# makes a bundle swap a restart and the pair is therefore a property of the process.
+# [M4.13 step 35, cs-31]
+
+COLD_EVAL = {
+    "cold": {"spearman": 0.35225, "alpha": 0.4, "alpha0_spearman": 0.33, "partial_personal": 0.67},
+    "ceiling": {"spearman": 0.39193, "alpha": 0.4, "alpha0_spearman": 0.36,
+                "partial_personal": 1.0},
+    "hybrid": {"spearman": 0.37},
+    "cold:tunedblend_vs_prior": {"delta": 0.0191, "ci95": [0.0043, 0.0339]},
+    "n_test": 1876,
+}
+
+
+async def _stage_active_bundle(db, tmp_path: Path, *, version: str, files: dict) -> None:
+    """A bundle directory and the `artifact_bundle` row that makes it active.
+
+    Hand-written rather than built with `make_bundle`, because what is under test is one log line
+    about one file: a real fixture bundle would drag torch and a minute of import through a test
+    whose subject is a string. `ArtifactStore.open` needs no manifest to read this file.
+    """
+    root = tmp_path / "artifacts" / version
+    root.mkdir(parents=True)
+    for name, payload in files.items():
+        (root / name).write_text(json.dumps(payload), encoding="utf-8")
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state) "
+        "VALUES ($1, '{}'::jsonb, 'active')",
+        version,
+    )
+
+
+async def test_the_boot_states_the_reference_a_fitted_rho_is_read_against(
+    db, pg_url, tmp_path, caplog
+):
+    """The numbers, the interval and the noise floor, in one line an operator can grep.
+
+    The floor is printed because it is what makes a difference a difference: at §0's measured
+    pipeline variance (0.003-0.008 Spearman) a rho of 0.355 against the corpus's 0.35225 is a tie,
+    and a log line that named the two numbers without the band would invite exactly the reading
+    this milestone exists to prevent.
+    """
+    await _stage_active_bundle(db, tmp_path, version="yard-v1", files={"cold_eval.json": COLD_EVAL})
+
+    with caplog.at_level(logging.INFO, logger="spielplan"):
+        await _boot(pg_url, tmp_path)
+
+    lines = [m for m in _spielplan_lines(caplog) if "cold_eval.json" in m]
+    assert lines, (
+        "the boot read the bundle and said nothing about the one reference value in it: "
+        f"{_spielplan_lines(caplog)}"
+    )
+    line = lines[0]
+    assert "0.35225" in line and "0.39193" in line, f"neither figure is in the line: {line}"
+    assert "0.0043" in line and "0.0339" in line, f"the interval is missing: {line}"
+    assert "0.008" in line, f"the noise floor is what makes a difference real: {line}"
+    assert line.isascii(), f"a Windows cp1252 console cannot print this line: {line!r}"
+
+
+async def test_a_bundle_with_no_cold_eval_says_so_rather_than_saying_nothing(
+    db, pg_url, tmp_path, caplog
+):
+    """The other arm, and the reason it exists: "instrumented, not assumed" fails the same way in
+    both directions. A bundle predating `cold_eval.json` is legal - the file is optional in
+    `BUNDLE_FILES` - and an install with no reference must say that, or an operator reading a
+    `cv_rho` later cannot tell a missing yardstick from a silent one.
+
+    A bundle-LESS install says nothing here, deliberately: the lifespan's "no artifact bundle
+    active" line already covers it, and §3.1's first-week household does not need a second line
+    about a file in a bundle it has not imported.
+    """
+    await _stage_active_bundle(
+        db, tmp_path, version="yard-v2", files={"manifest.json": {"vocabulary_version": "v1"}}
+    )
+
+    with caplog.at_level(logging.INFO, logger="spielplan"):
+        await _boot(pg_url, tmp_path)
+
+    assert any(
+        "ships no cold_eval.json" in m and "yard-v2" in m for m in _spielplan_lines(caplog)
+    ), f"the absent reference is not reported: {_spielplan_lines(caplog)}"
+

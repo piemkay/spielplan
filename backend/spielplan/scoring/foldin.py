@@ -59,22 +59,40 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 
-from spielplan.db.library import KINDS, Kind
+from spielplan.db.library import KINDS, Kind, household_ids
+from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 from spielplan.scoring import serve
 from spielplan.scoring.backbone import EMBED_DIM, Backbone, Coordinate, pack_vec
 
 log = logging.getLogger("spielplan.scoring.foldin")
 
+# EVERY CONSTANT IN THIS BLOCK IS A `Hyperparams` FIELD NOW, and the values are unchanged. §5.2
+# says "every constant comes from `ledger_hyperparams.json`" and `ledger/hyperparams.py` states
+# the rule it enforces: "this is the only module in the package allowed to contain a tuning
+# number". Six of them sat here as literals, so the corpus project could not re-tune the fold-in
+# at all - the grids below are cross-validated per user, but WHICH grid, the noise floor they are
+# read against and the label counts that decide whether to search at all were this file's private
+# opinion. They are defaults there now; the names and the comments stay here, because the reason
+# a number is what it is belongs next to the code that spends it. [M4.13 step 34d, dd14]
+#
+# What that bought is ONE home and a range check, not yet a delivery path: every name below binds
+# `DEFAULTS.<field>` at import, no function in this module takes an `hp`, and §10's restart
+# re-evaluates the same dataclass defaults. A bundle that re-tunes `blend_beta_max` or either grid
+# is parsed, validated, digested and then not used here; `hyperparams._PARSED_NOT_THREADED` says
+# so in the import report rather than leaving the knob looking applied.
+# [M4.13 cycle 2, M413-C2-DIM-HP-01]
+#
 # The floor on the crowd prior, not the optimum: β is the personal weight (decision 167), so
 # clamping it at 0.8 is the statement that the crowd keeps at least a fifth of every blend.
 # §5.1's own optimum, converted into these coordinates, is 0.2 — see the header.
-BETA_MAX = 0.8
-BETA_GRID: tuple[float, ...] = tuple(i / 10 for i in range(11))
+BETA_MAX = DEFAULTS.blend_beta_max
+BETA_GRID: tuple[float, ...] = DEFAULTS.blend_beta_grid
 
 # §5.1's ceiling is storable as itself. It was not always: 0009's CHECK compared a `real`
 # column against the numeric literal 0.8, which Postgres resolves through float8 where
@@ -88,16 +106,33 @@ BETA_GRID: tuple[float, ...] = tuple(i / 10 for i in range(11))
 # different quantity in a different objective, so borrowing it would be a coincidence dressed as
 # a constant. This grid is cross-validated per user instead; if the corpus tuner ever prints a
 # fold-in λ, this loop becomes a read.
-LAMBDA_GRID: tuple[float, ...] = (1.0, 3.0, 10.0, 30.0, 100.0)
+LAMBDA_GRID: tuple[float, ...] = DEFAULTS.foldin_lambda_grid
 
 # §0: "pipeline variance 0.003–0.008 Spearman; anything smaller is a tie." A tie must not buy
 # personalisation, so an improvement inside the noise floor leaves β at 0.
-NOISE_FLOOR = 0.008
+NOISE_FLOOR = DEFAULTS.rho_noise_floor
 
 # §0/§6.1: "personal signal roughly triples from 5 to 100 labels" — below five, a fitted β is
 # noise wearing a number.
-MIN_LABELS_FOR_CV = 5
-LOO_BELOW = 25            # leave-one-out under this many labels, 5 folds at or above it
+MIN_LABELS_FOR_CV = DEFAULTS.min_labels_for_cv
+LOO_BELOW = DEFAULTS.loo_below_labels   # leave-one-out under this many, 5 folds at or above
+
+# THE DEBOUNCE, IN SECONDS. §5.3 gives the fold-in a nightly cadence and §12's M2 exit criterion
+# asks for visibly personal rankings "after a sitting" — so the tick's job is to answer once the
+# sitting is over, not to repaint the partition while it is still going on. Measured at 14k
+# titles, the old trigger (any label newer than the fit) rewrote all 14,000 rows on every 60 s
+# tick for as long as someone kept rating: 5-8 MB of WAL a minute for a table nobody was reading
+# between taps. `PAUSE_SECONDS` is what "after" means here, and `HARD_CAP_SECONDS` is the promise
+# to the person who never stops: at worst one rewrite every five minutes, so <= 12 per rater-hour
+# rather than 60, and still inside the sitting.
+#
+# Frequency is the only lever there is. The write SHAPE was measured and is already the best of
+# the three: `ON CONFLICT DO UPDATE` produced 14,000 non-HOT updates, 11.2 MB of WAL and 459 ms
+# against DELETE+INSERT's 7.7 MB and 264 ms (`0009_scoring.sql:40` indexes `score`, so HOT is
+# impossible), and an epsilon filter is moot because 13,965 of 14,000 scores move after one more
+# verdict. [M4.13, perf-04; plan step 22]
+PAUSE_SECONDS = 30
+HARD_CAP_SECONDS = 300
 
 # §4.2: verdict value 0 disliked / 1 ok / 2 liked. The regression target is the raw verdict, not
 # the Ledger's fitted `s`: anchoring on `s` would make the nightly pass order-dependent and, at
@@ -142,6 +177,16 @@ class FoldInReport:
     clamped: list[tuple[int, str]] = field(default_factory=list)
     priors: serve.PriorReport | None = None
     ms: float = 0.0
+    # One number was hiding two costs that differ by three orders of magnitude, and the job
+    # registry inherited the confusion: the fit is a closed-form 64-d ridge solve, 6-7 ms for 100
+    # labels, while `serve.replace_scores` rewrites the whole (user, kind) partition — 14,000
+    # DELETEs and 14,000 INSERTs, 325-590 ms and 5-8 MB of WAL per stale pair measured at corpus
+    # scale, 0.7-1.5 s for two raters in one tick. A tick reporting one `ms` cannot be read
+    # against a budget, and `worker.JOBS` called the whole job "ms" because of it. Split here and
+    # named there. [M4.13, perf-04-foldin-tick-rewrites-the-whole-user-score-partition-every-minute;
+    # plan step 22]
+    numpy_ms: float = 0.0
+    db_ms: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -151,6 +196,8 @@ class FoldInReport:
             "clamped": [[u, k] for u, k in self.clamped],
             "priors": self.priors.as_dict() if self.priors else None,
             "ms": round(self.ms, 1),
+            "numpy_ms": round(self.numpy_ms, 1),
+            "db_ms": round(self.db_ms, 1),
         }
 
 
@@ -227,7 +274,15 @@ def fit_user(
     """
     ref_e, ref_b = _reference_arrays(reference)
     prior_mean = float(ref_b.mean()) if ref_b.size else 0.0
-    prior_sd = float(ref_b.std())
+    # The same guard the mean one line up already carries, and it is not symmetry for its own
+    # sake: `np.std` over an empty array is NaN, and the `< 1e-9` test below does NOT catch that
+    # — NaN < 1e-9 is False — so the NaN was stored in `user_vector.prior_sd` and divided into
+    # every score of the kind. A kind with no coordinated titles is an ordinary state here, not a
+    # corrupt one (a fresh household, a bundle-less one, §3.1's empty artifact store), and it
+    # announced itself as three numpy "Degrees of freedom <= 0" warnings per user per tick in the
+    # worker log. An empty population standardises nothing: the scale is 1 and the crowd half is
+    # the raw prior. [M4.13, dd16-empty-reference-writes-nan-prior-sd; plan step 19]
+    prior_sd = float(ref_b.std()) if ref_b.size else 1.0
     if prior_sd < 1e-9:                      # one title, or a flat crowd: the prior orders nothing
         prior_sd = 1.0
 
@@ -253,7 +308,9 @@ def fit_user(
 
     lam, beta, cv_rho, folds = LAMBDA_GRID[-1], 0.0, 0.0, 0
     if n >= MIN_LABELS_FOR_CV:
-        lam, beta, cv_rho, folds = _cross_validate(x, y, y_raw, z_prior, seed=seed)
+        # `ref_e` travels into the search because the search has to standardise the way serving
+        # does; see `_cross_validate`. [M4.13, plan step 18]
+        lam, beta, cv_rho, folds = _cross_validate(x, y, y_raw, z_prior, ref_e, seed=seed)
 
     beta_clamped = beta > BETA_MAX
     beta = min(beta, BETA_MAX)
@@ -278,13 +335,28 @@ def fit_user(
 
 
 def _cross_validate(
-    x: np.ndarray, y: np.ndarray, y_raw: np.ndarray, z_prior: np.ndarray, *, seed: int
+    x: np.ndarray, y: np.ndarray, y_raw: np.ndarray, z_prior: np.ndarray, ref_e: np.ndarray,
+    *, seed: int
 ) -> tuple[float, float, float, int]:
     """Choose (λ, β) by held-out Spearman against the user's own labels.
 
     β = 0 does not depend on λ — the prior-only blend never touches the fold-in — so all five
     λ rows must agree there. They are asserted to, because disagreement is a fold bug and a
     fold bug otherwise shows up as a slightly-too-good β.
+
+    STANDARDISED OVER THE REFERENCE, FOLD BY FOLD, BECAUSE SERVING IS. `fit_user` divides the
+    full-data `v` by the sd of ⟨v, e⟩ over the whole reference population (`cf_sd`), so the β
+    chosen here is the β in effect only if this search's personal half sits on that same scale.
+    It did not: the held-out predictions were standardised over the LABELLED rows, and a labelled
+    row's norm runs with its crowd support (0.006 to 5.4 on the real basis), so the served
+    personal half had a spread of 0.04x to 5.18x what this table assumed. Two things were wrong
+    with that and the smaller one is the loud one: the β printed on §6.0's why-line and §6.7's
+    rail was not the weight doing the blending. The larger one is that a grid scored on the wrong
+    scale selects a different point on itself — measured on `test_foldin_jobs.py`'s own case, the
+    labelled-row spelling picks β 0.5 where the serving scale picks 0.4, which is outside §0's
+    0.008 tie band. So each fold's own `v_f` takes the serve-time divisor and nothing is
+    re-standardised afterwards. [M4.13, dd14-per-user-cv-beta-loses-to-crowd-at-small-n and
+    ml03-foldin-beta-chosen-on-one-scale-served-on-another; plan step 18]
     """
     n = x.shape[0]
     fold = _fold_assignment(n, seed)
@@ -293,14 +365,18 @@ def _cross_validate(
     table: dict[tuple[float, float], float] = {}
     rho_at_zero: list[float] = []
     for lam in LAMBDA_GRID:
-        preds = np.zeros(n)
+        z_cf = np.zeros(n)
         for f in range(n_folds):
             held = fold == f
             if held.all():
                 continue
-            preds[held] = x[held] @ fold_in(x[~held], y[~held], lam)
-        sd = preds.std()
-        z_cf = preds / sd if sd > 1e-9 else np.zeros(n)
+            v_f = fold_in(x[~held], y[~held], lam)
+            # `fit_user`'s own expression for `cf_sd`, including its answer when the reference
+            # orders nothing: a fold that cannot be put on the serving scale contributes zeros
+            # rather than a NaN, which also keeps β = 0's row identical across λ below.
+            sd_f = float((ref_e @ v_f).std()) if ref_e.size else 0.0
+            if sd_f >= 1e-9:
+                z_cf[held] = x[held] @ v_f / sd_f
         for beta in BETA_GRID:
             table[(lam, beta)] = spearman((1.0 - beta) * z_prior + beta * z_cf, y_raw)
         rho_at_zero.append(table[(lam, 0.0)])
@@ -363,33 +439,66 @@ async def live_labels(conn, *, user_id: int, kind: Kind) -> list[tuple[int, int]
     return [(int(r["title_id"]), int(r["value"])) for r in rows]
 
 
-async def write_fit(conn, *, user_id: int, kind: Kind, bundle_version: str, fit: Fit) -> None:
-    """One `user_vector` row per (user, kind). Written even for a zero-label fit."""
+async def write_fit(
+    conn, *, user_id: int, kind: Kind, bundle_version: str, fit: Fit, updated_at: datetime
+) -> None:
+    """One `user_vector` row per (user, kind). Written even for a zero-label fit.
+
+    `updated_at` is the caller's, not `now()`, and the parameter is required because there is
+    exactly one honest value for it: the moment the labels this fit saw were read. Stamped with
+    `now()` here, the column meant "when the write landed", and `_is_stale` reads it as "the
+    labels this fit saw" — two different instants with the whole fit in between. See `refit_user`.
+    [M4.13, dd16-rerating-in-refit-window-never-becomes-stale; plan step 21]
+    """
     await conn.execute(
         """
         INSERT INTO user_vector (user_id, kind, purpose, vec, blend_beta, label_count, mu,
                                  prior_mean, prior_sd, cf_sd, foldin_lambda, cv_rho,
                                  bundle_version, updated_at)
-        VALUES ($1, $2, 'foldin', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+        VALUES ($1, $2, 'foldin', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (user_id, kind, purpose) DO UPDATE
            SET vec = EXCLUDED.vec, blend_beta = EXCLUDED.blend_beta,
                label_count = EXCLUDED.label_count, mu = EXCLUDED.mu,
                prior_mean = EXCLUDED.prior_mean, prior_sd = EXCLUDED.prior_sd,
                cf_sd = EXCLUDED.cf_sd, foldin_lambda = EXCLUDED.foldin_lambda,
                cv_rho = EXCLUDED.cv_rho, bundle_version = EXCLUDED.bundle_version,
-               updated_at = now()
+               updated_at = EXCLUDED.updated_at
         """,
         user_id, kind, pack_vec(fit.v), fit.beta, fit.label_count, fit.mu,
         fit.prior_mean, fit.prior_sd, fit.cf_sd, fit.lam, fit.cv_rho, bundle_version,
+        updated_at,
     )
 
 
 async def refit_user(
-    conn, backbone: Backbone, *, user_id: int, kind: Kind, bundle_version: str
+    conn, backbone: Backbone, *, user_id: int, kind: Kind, bundle_version: str,
+    report: FoldInReport | None = None,
 ) -> Fit:
-    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set."""
+    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set.
+
+    `report`, when given, collects the two halves of what this pass costs — see `FoldInReport`.
+    Optional because only `run` reports a tick; a caller that just wants the fit is not made to
+    carry a timing object to get one.
+    """
+    entered = time.perf_counter()
     coords = await serve.coordinates(conn, backbone, bundle_version=bundle_version, kind=kind)
     reference = list(coords.values())
+    # THE FIT'S CLOCK, READ BEFORE THE LABELS. `user_vector.updated_at` is read by `_is_stale` as
+    # "the labels this fit saw", so it has to be an instant no label this fit saw can be newer
+    # than. Stamped at write time instead, a re-rating that committed after the read and before
+    # the write was invisible for ever: §4.2 makes changing your mind an INSERT and `LIVE_LABEL_SQL`
+    # takes the newest row per title, so the label COUNT does not move — and the new verdict's
+    # `created_at` sat before the fit's `updated_at`, which is exactly the comparison that decides
+    # staleness. Every later tick then reported that person fresh, indefinitely.
+    #
+    # `clock_timestamp()`, not `now()`: `now()` is the transaction's start, and this function runs
+    # inside the importer's transaction on §10's rebuild path, where that is minutes early. The
+    # two seconds cover a verdict whose transaction began before this read and committed after it
+    # — a window `read committed` makes real and cheap to over-cover, since a false positive costs
+    # one bounded refit on the next tick and a false negative costs the fit for ever. Deliberately
+    # not a serializable transaction around the whole refit: §5.3's "seconds" pass must not take a
+    # conflict-abort risk on the tap path's writes. [M4.13, dd16; plan step 21]
+    fitted_at = await conn.fetchval("SELECT clock_timestamp() - interval '2 seconds'")
     labels = await live_labels(conn, user_id=user_id, kind=kind)
     # Seeded from the identity of the fit, so a refit of the same (user, kind, basis) draws the
     # same folds and the §6.7 log line means the same thing twice.
@@ -404,7 +513,11 @@ async def refit_user(
         hashlib.sha256(f"{user_id}|{kind}|{bundle_version}".encode()).digest()[:4], "big"
     )
 
+    numpy_started = time.perf_counter()
     fit = fit_user(labels, coords, reference, seed=seed)
+    rows = score_many(fit, reference)
+    numpy_ms = (time.perf_counter() - numpy_started) * 1000.0
+
     if fit.beta_clamped:
         log.warning(
             "user %s/%s: cross-validation wanted β above the ceiling; clamped to %.2f "
@@ -417,11 +530,27 @@ async def refit_user(
             user_id, kind, fit.dropped,
         )
 
-    await write_fit(conn, user_id=user_id, kind=kind, bundle_version=bundle_version, fit=fit)
-    await serve.replace_scores(
-        conn, user_id=user_id, kind=kind, bundle_version=bundle_version,
-        rows=score_many(fit, reference),
-    )
+    # ONE TRANSACTION, because the two writes are one fact. `write_fit` alone said "this person is
+    # fitted, as of `fitted_at`" and `replace_scores` alone is what every §6.0 shelf reads: when
+    # the second failed and the first had committed, `user_vector.updated_at` was newer than every
+    # label, so `_is_stale` reported fresh and the ranked sections returned EMPTY until the nightly
+    # pass — up to 24 hours, with no error anywhere. Reproduced with `label_count = 3` against zero
+    # `user_score` rows. `replace_scores` keeps its own `conn.transaction()`, which asyncpg nests as
+    # a savepoint inside this one. [M4.13, ml08-foldin-partial-write-masks-staleness; plan step 20]
+    async with conn.transaction():
+        await write_fit(
+            conn, user_id=user_id, kind=kind, bundle_version=bundle_version, fit=fit,
+            updated_at=fitted_at,
+        )
+        await serve.replace_scores(
+            conn, user_id=user_id, kind=kind, bundle_version=bundle_version, rows=rows,
+        )
+    if report is not None:
+        # Everything in this function that is not the two numpy calls above is Postgres: the
+        # coordinate read, the clock, the labels, the fit's own row and the partition rewrite.
+        # The two log calls between them are microseconds.
+        report.numpy_ms += numpy_ms
+        report.db_ms += (time.perf_counter() - entered) * 1000.0 - numpy_ms
     return fit
 
 
@@ -438,8 +567,10 @@ async def run(
     §5.3 says the fold-in is nightly. M2's exit criterion is about what a person sees after a
     sitting of 50–100 verdicts, and a strictly nightly job cannot answer the same evening — so
     the nightly pass runs everything (`only_stale=False`, `with_priors=True`) and a short tick
-    runs `only_stale=True`, refitting only what moved. Running a millisecond job more often is a
-    superset of the spec's cadence, not a change to it.
+    runs `only_stale=True`, refitting only what moved *and has settled* — see `_is_stale`, which
+    holds the rewrite back until the person has paused, because "after a sitting" is what §12 M2
+    asks for and a repaint per minute during one is work nobody reads. Running a millisecond job
+    more often is a superset of the spec's cadence, not a change to it.
 
     Ordering inside the nightly pass matters: priors first, refits second. A prior materialised
     before the night's placements would leave freshly placed titles at `e_source = 'none'` and
@@ -450,9 +581,12 @@ async def run(
     if with_priors:
         report.priors = await serve.materialise_priors(conn, backbone, bundle_version=bundle_version)
 
-    users = await conn.fetch("SELECT id FROM app_user WHERE role IN ('admin', 'member') ORDER BY id")
-    for row in users:
-        user_id = int(row["id"])
+    # §5.3's other nightly pass fits the same people, through the same helper. This query read
+    # `role IN ('admin', 'member')` while `refit.refit_all` read `is_active`, so a deactivated
+    # account was skipped by the Ledger and re-folded and re-scored here on every 60 s tick —
+    # paying the whole partition rewrite for nobody, and producing `user_score` rows for a person
+    # who cannot sign in. [M4.13, ml04-foldin-and-ledger-disagree-about-the-household; step 23]
+    for user_id in await household_ids(conn):
         for kind in KINDS:
             if only_stale and not await _is_stale(
                 conn, user_id=user_id, kind=kind, bundle_version=bundle_version
@@ -460,7 +594,8 @@ async def run(
                 report.skipped += 1
                 continue
             fit = await refit_user(
-                conn, backbone, user_id=user_id, kind=kind, bundle_version=bundle_version
+                conn, backbone, user_id=user_id, kind=kind, bundle_version=bundle_version,
+                report=report,
             )
             report.refit.append((user_id, kind))
             report.scores_written += 1
@@ -486,23 +621,48 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     It is deliberately not a trigger for what a *placement* changes — a title that gained a
     coordinate today moves nobody's labels — so the nightly `only_stale=False` pass is what
     picks those up, and this says so rather than pretending to cover it.
+
+    AND THE TRIGGER IS DEBOUNCED, because §12's sentence is "after a sitting". Something having
+    moved is necessary and no longer sufficient: the person must have put the phone down for
+    `PAUSE_SECONDS`, or the fit must have gone `HARD_CAP_SECONDS` without being redone. Without
+    that, every tick inside a sitting rewrote all 14,000 rows of the partition — see the
+    constants for the measurement. Two things the debounce deliberately does not delay: a fit in
+    another basis and a person never fitted at all, both of which return above, because §10's
+    invariant and §6.0's zero-verdict fallback are correctness and this is only cost.
+
+    Every clock here is Postgres's own — `now()` inside these two queries, `verdict.created_at`
+    from `now()`, `user_vector.updated_at` from `refit_user`'s `clock_timestamp()` read — so this
+    is not the cross-clock comparison §7.3's sweep got wrong. `now()` is the transaction's start,
+    which is the statement's own clock for the tick (it holds no transaction) and would be stale
+    for a caller that wrapped this in one — in that direction only, i.e. declining a refit rather
+    than repeating one, which is the safe way for a cost guard to be wrong. The FIT's clock is
+    `clock_timestamp()` for the opposite reason: being early there loses work.
+    [M4.13, perf-04; plan step 22]
     """
     row = await conn.fetchrow(
-        "SELECT label_count, bundle_version, updated_at FROM user_vector "
-        "WHERE user_id = $1 AND kind = $2 AND purpose = 'foldin'",
-        user_id, kind,
+        "SELECT label_count, bundle_version, updated_at, "
+        "       now() - updated_at > ($3::int * interval '1 second') AS past_cap "
+        "  FROM user_vector WHERE user_id = $1 AND kind = $2 AND purpose = 'foldin'",
+        user_id, kind, HARD_CAP_SECONDS,
     )
     if row is None or row["bundle_version"] != bundle_version:
         return True
     live = await conn.fetchrow(
         """
         WITH label AS ({LIVE_LABEL})
-        SELECT count(*) AS n, max(l.created_at) AS newest
+        SELECT count(*) AS n, max(l.created_at) AS newest,
+               max(l.created_at) < now() - ($3::int * interval '1 second') AS paused
           FROM label l JOIN title t ON t.id = l.title_id WHERE t.kind = $2
         """.replace("{LIVE_LABEL}", LIVE_LABEL_SQL),
-        user_id, kind,
+        user_id, kind, PAUSE_SECONDS,
     )
-    if int(live["n"] or 0) != int(row["label_count"] or 0):
-        return True
     newest = live["newest"]
-    return newest is not None and newest > row["updated_at"]
+    moved = int(live["n"] or 0) != int(row["label_count"] or 0) or (
+        newest is not None and newest > row["updated_at"]
+    )
+    if not moved:
+        return False
+    # `newest is None` is the count arm with every label gone (decision 174's Undo hard-DELETEs):
+    # there is nothing to wait for, so the board is rewritten at once. `paused` is NULL in exactly
+    # that case, which is why it is not asked to carry it.
+    return newest is None or bool(live["paused"]) or bool(row["past_cap"])

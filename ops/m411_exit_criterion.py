@@ -257,12 +257,16 @@ class Household:
         tokens: set[str] | None = None,
     ) -> None:
         conn = self.conn
-        # `title` cascades to user_title, user_score and title_jellyfin_item; the rest is named
-        # because nothing cascades to it.
+        # `title` cascades to user_score and title_jellyfin_item; the rest is named because nothing
+        # cascades to it. `user_title` moved to that second list with 0022_model_basis: §10's
+        # "Ledger observations always survive re-import" is now a RESTRICT, so the sweep's own
+        # seen/unseen rows refuse the reset they used to be swept away by -- which would have made
+        # every check after the first fail on a fixture, not on the milestone. [M4.13 plan §5 item 2]
         await conn.execute("DELETE FROM playback_event")
         await conn.execute("DELETE FROM push_subscription")
         await conn.execute("DELETE FROM session_participant")
         await conn.execute("DELETE FROM session")
+        await conn.execute("DELETE FROM user_title")
         await conn.execute("DELETE FROM title")
         for title_id, kind, name, year, imdb, tmdb, runtime in TITLES:
             await conn.execute(

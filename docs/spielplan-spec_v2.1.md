@@ -121,6 +121,12 @@ duel(id, user_id, title_a, title_b, outcome, margin NULL, context, created_at)
     -- context: profile_battle | tier_queue | tier_insert
 tier_edit(id, user_id, title_id, tier smallint, via, created_at)
     -- via: drag_drop | explicit  — an OBSERVATION into the Ledger (§5.2)
+    -- verdict, duel and tier_edit are append-only for every write path but one:
+    --   decision 35's block-scoped Undo hard-DELETEs the verdict, duel or tier_edit
+    --   row it is compensating and `rate_observation` keeps the card rather than the
+    --   row, which it may because a block is committed when the FIRST observation of
+    --   the next block lands — so an observation retracted inside its own block of
+    --   15 never became history.  (decisions 174, 199, 35)
 ledger_state(user_id, title_id, s float, sigma float, tier smallint, updated_at)
     -- nightly MAP output; displayed 0..1 via posterior CDF (the "relative
     --   0..1 weight" the owner asked for)

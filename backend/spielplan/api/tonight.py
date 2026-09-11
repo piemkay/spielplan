@@ -47,6 +47,7 @@ from spielplan.core.config import settings
 from spielplan.db import pool as db_pool
 from spielplan.home import rail
 from spielplan.ledger import hyperparams
+from spielplan.models import artifacts
 from spielplan.tonight import ballot as ballot_rules
 from spielplan.tonight import channel as channel_rules
 from spielplan.tonight import combine as combine_rules
@@ -132,7 +133,16 @@ def _z(request: Request) -> float:
 
 
 async def _bundle_version(conn: asyncpg.Connection) -> str:
-    version = await conn.fetchval("SELECT version FROM artifact_bundle WHERE state = 'active'")
+    """The active bundle, or §3.1's refusal. The READ is `artifacts.active_bundle_version` now.
+
+    It used to spell the SELECT out here, which made this the fourth definition of "the active
+    bundle version" in the app (`app.py`'s boot pin, `refit.active_bundle_version`,
+    `api/home.py::_bundle` and this) - four places that can answer one question differently in the
+    window §10 opens between the flip and the restart. What stays is the part that is this
+    surface's own: a Tonight round cannot rank without a basis, so None is a 409 here where Home
+    renders a no-bundle state instead. [M4.13, arch-03]
+    """
+    version = await artifacts.active_bundle_version(conn)
     if version is None:
         # §3.1: a bundle-less app is a legal state, and artifact-dependent surfaces render an
         # explicit "no bundle imported" state rather than erroring.

@@ -35,7 +35,7 @@ import numpy as np
 
 from spielplan.db.library import RankFilters, rank_filters
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.observations import DEFAULT_TIER_SET, HELD_OUT
+from spielplan.ledger.observations import DEFAULT_TIER_SET, HELD_OUT, rescale_level
 from spielplan.rank import board, queue
 
 log = logging.getLogger("spielplan.rank.read")
@@ -102,14 +102,20 @@ async def items(
     rows = await conn.fetch(
         f"""
         SELECT ls.title_id, t.name, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
-               te.tier AS assigned_tier
+               te.tier AS assigned_tier, te.n_levels AS assigned_k,
+               -- The K the drop is being READ against, in the same round trip as the drop: a
+               -- rescale that depends on a second call is a rescale a caller can forget, and this
+               -- file already argues (see `Cutpoints.refit_owed`) that a board read does not get a
+               -- second query for one scalar. It is uncorrelated, so it runs once.
+               (SELECT cardinality(c.tier_set) FROM ledger_cutpoints c
+                 WHERE c.user_id = {user} AND c.kind = ${len(args) + 2}) AS tier_set_k
         FROM ledger_state ls
         JOIN title t ON t.id = ls.title_id
         -- The person's latest drop per title, in one pass over their own `tier_edit` rows.
         -- A correlated subquery would re-run per row of a board that can be 839 long, against
         -- an index keyed (user_id, created_at) that cannot answer "this title's latest".
         LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, tier
+            SELECT DISTINCT ON (title_id) title_id, tier, n_levels
             FROM tier_edit
             WHERE user_id = {user}
             ORDER BY title_id, created_at DESC, id DESC
@@ -122,13 +128,27 @@ async def items(
         user_id,
         kind,
     )
+    # Decision 11 and §4.2: the stored index is never rewritten, so it is RE-READ here against the
+    # set this person has now. One helper, the same one the fit and the board call, because the
+    # bucket, the badge and the fit disagreeing about which tier a drop names was the defect —
+    # three clamps in three files, one of them silent. `tier_set_k` is NULL when nobody has been
+    # fitted yet, which is the same state `cutpoints_of` answers with §6.3's prior shape, so the
+    # fallback is the same length. [M4.13, dd06]
     return [
         board.Item(
             title_id=int(r["title_id"]),
             name=str(r["name"]),
             s=float(r["s"]),
             sigma=float(r["sigma"]),
-            assigned_tier=None if r["assigned_tier"] is None else int(r["assigned_tier"]),
+            assigned_tier=(
+                None
+                if r["assigned_tier"] is None
+                else rescale_level(
+                    int(r["assigned_tier"]),
+                    k_from=r["assigned_k"],
+                    k_to=int(r["tier_set_k"] or len(DEFAULT_TIER_SET)),
+                )
+            ),
         )
         for r in rows
     ]

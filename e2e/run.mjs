@@ -10,6 +10,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { baseUrl } from './env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -40,7 +41,7 @@ if (first.status !== 0) process.exit(first.status ?? 1);
 console.log('\n── restarting so the imported bundle is loaded (§10) ──');
 execFileSync('docker', [...COMPOSE, 'restart', 'backend', 'worker'], { cwd: ROOT, stdio: 'inherit' });
 
-const base = process.env.BASE_URL ?? 'http://localhost:8080';
+const base = baseUrl();
 // 60 attempts, and the bound stays explicit: a fixture bundle is loaded within a few of them,
 // and if a real corpus bundle ever needs longer the number is raised here with a comment rather
 // than by letting the loop run until something else gives up. Each attempt now carries its own

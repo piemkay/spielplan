@@ -23,7 +23,7 @@ from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
 from spielplan.db import library
 from spielplan.home import rail, shelves
-from spielplan.ledger import refit
+from spielplan.models import artifacts
 
 log = logging.getLogger("spielplan.api.home")
 
@@ -81,8 +81,14 @@ async def _bundle(request: Request, conn: asyncpg.Connection) -> str | None:
     matters is the one those rows were written against — which is the row in `artifact_bundle`,
     not whatever the store happened to open at boot. They agree in normal operation; when they
     disagree, the store is the stale one.
+
+    Through `models.artifacts.active_bundle_version`, which is THE resolver as of M4.13 (it was
+    four reads). This function keeps its own name because it is not the same question: it adds
+    the store fallback below, which no other caller wants - Home is §3.1's no-bundle surface and
+    has to name a version even on an install whose `artifact_bundle` row has not landed yet,
+    where every other caller of the resolver wants None to mean None. [M4.13, arch-03]
     """
-    active = await refit.active_bundle_version(conn)
+    active = await artifacts.active_bundle_version(conn)
     if active is not None:
         return active
     store = getattr(request.app.state, "artifacts", None)
@@ -124,6 +130,12 @@ async def home(
         person_id=person_id,
         limit=limit,
         offset=offset,
+        # The bundle's own evaluation of the cold path, from the store this process loaded -
+        # `shelves.fit_yardstick` reads the fold-in's cv_rho against it, inside the gated `model`
+        # block. From the STORE and not from `_bundle` above, because this is a file in the bundle
+        # directory rather than a row: on a swap the directory this process opened is the one whose
+        # numbers its scores were computed with. [M4.13 step 35]
+        cold_eval=artifacts.cold_eval_of(getattr(request.app.state, "artifacts", None)),
     )
     _report_build("/api/home", payload, (perf_counter() - started) * 1000.0)
     return rail.redact(payload, show_model=rail.visible_to(user))

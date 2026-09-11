@@ -36,8 +36,9 @@ import pytest
 from spielplan.core.config import settings
 from spielplan.home import rail, shelves
 from spielplan.home import why as why_mod
-from spielplan.ledger import refit
+from spielplan.ledger import model, refit
 from spielplan.ledger.hyperparams import DEFAULTS
+from spielplan.rank import read
 
 BUNDLE = "test-home-v1"
 VOCAB = "v1"
@@ -505,11 +506,14 @@ async def test_a_shelf_that_cannot_justify_itself_is_absent_not_empty(world):
 
 async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_support(world):
     """§6.0 row 6's why is "placed by the Cold Tower — no crowd data yet", and proposal 33 says
-    what makes that checkable: `item_n`, §5.1's gate input.
+    what makes that checkable: `item_n`, the count of crowd ratings behind a title. (Not
+    "§5.1's gate input", which is the same number only while every row carries a coordinate --
+    a cold-masked row has crowd support and no n_t, and `title_prior.gate` is the column that
+    carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01])
 
-    Title 1007 is `warm` with n_t = 4213 (gate 0.998). A shelf that selected on recency alone,
-    or on `placement` without asking what the model actually has, would show it under a claim
-    of no crowd data.
+    Title 1007 is `warm` with 4,213 crowd ratings (gate 0.998). A shelf that selected on recency
+    alone, or on `placement` without asking what the model actually has, would show it under a
+    claim of no crowd data.
     """
     payload = await world.home()
     for base in BASES:
@@ -525,7 +529,9 @@ async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_suppor
             support = await world.db.fetchval(
                 "SELECT item_n FROM title_prior WHERE title_id = $1", card["title_id"]
             )
-            assert support == 0, f"{card['title_id']} claims no crowd data but has n_t={support}"
+            assert support == 0, (
+                f"{card['title_id']} claims no crowd data but the crowd rated it {support} times"
+            )
 
 
 async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
@@ -692,6 +698,53 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
         f"the refit fitted the anchor into F itself (tier {model_after}), so the headline would "
         "read F whichever column it took — this assertion has stopped being falsifiable"
     )
+
+
+async def test_the_anchor_headline_names_the_tier_rank_renders_after_a_k_change(world):
+    """dd06, across two surfaces. §6.0 row 1's verb is "you PUT", so the headline is a quotation
+    of where §6.3 renders the title — and a quotation that names a different tier is a bug the
+    person can see without leaving the app.
+
+    Decision 11 keeps the `tier_edit` row across a change in K and §4.2 never rewrites it, so the
+    stored index has to be re-read against the set it is being shown in. Both surfaces used to
+    CLAMP, which agreed by accident: a drop into tier 6 of 7 read as tier 6 of 12 on Home and on
+    Rank alike — mid-board, with the top five tiers empty. M4.13 maps it by cumulative prior mass
+    through one helper, and the assertion that matters is that it is the SAME helper: mapping on
+    the Rank side alone would have left Home quoting a tier Rank no longer shows, which is ml01's
+    measured symptom ("Home showing T4 and Rank T7 for one title") reached from the other side.
+    """
+    labels = [f"T{i}" for i in range(12)]
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
+        "VALUES ($1, 1000, 6, 'drag_drop', 7)",
+        world.patrick,
+    )
+    before = world.section(await world.home(), "because_anchor", "movie")
+    assert before["anchor"]["tier"] == "S", "the drop is into the top tier of the default set"
+
+    await world.db.execute(
+        """
+        INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set)
+        VALUES ($1, 'movie', $2::float8[], $3::text[])
+        ON CONFLICT (user_id, kind) DO UPDATE
+            SET boundaries = EXCLUDED.boundaries, tier_set = EXCLUDED.tier_set
+        """,
+        world.patrick,
+        [float(b) for b in model.initial_cutpoints(len(labels))],
+        labels,
+    )
+
+    film = world.section(await world.home(), "because_anchor", "movie")
+    assert film is not None, "growing the tier set suppressed shelf 1"
+    assert film["anchor"]["tier"] == "T11", "Home is still reading the raw index of the old board"
+    assert film["title"] == "Because you put Home Film 1000 in T11", film["title"]
+
+    # And Rank agrees, which is the half neither surface could assert on its own.
+    rows = {
+        row.title_id: row
+        for row in await read.items(world.db, user_id=world.patrick, kind="movie")
+    }
+    assert rows[1000].assigned_tier == 11, "the two surfaces disagree about the person's own drop"
 
 
 # --- library-rate-cold-badge-follows-crowd-support-not-placement -------------------------------
@@ -1200,6 +1253,84 @@ async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
                 # are what a shelf card IS, not an annotation about the model.
                 assert card["rank"] >= 1
                 assert "seen" in card and "tier" in card
+
+
+async def test_the_gated_model_block_reads_the_fold_ins_rho_against_the_bundles_own_figures(
+    world,
+):
+    """§14 risk 1's mitigation is "expectations instrumented, not assumed", and `user_vector.cv_rho`
+    was neither: the fold-in stores a held-out Spearman per (user, kind) and nothing in the app knew
+    what a good one looked like. The corpus ships the reference - `cold_eval.json`, cold 0.35225
+    against a ceiling of 0.39193 - in a file that was in no list and read nowhere.
+
+    Three properties, and the middle one is the reason the other two are not enough:
+
+    * the figures travel WITH the rho, so the number is never printed alone;
+    * §0's pipeline variance (0.003-0.008 Spearman) is applied, so 0.355 against the corpus's
+      0.35225 reads as a TIE and not as a win - the series row here is 0.00275 ahead, which a
+      comparison without the floor would report as better than the corpus;
+    * it is inside `model`, which decision 117's gate deletes wholesale. §6.0 mandates β on the
+      why-line and on the title card, which is why those two are ungated; a held-out correlation is
+      in neither sentence, and `rail.py` warns that a builder inventing a new top-level numeric
+      block does not inherit the gate.
+
+    [M4.13 step 35, cs-31]
+    """
+    from spielplan.models.artifacts import ColdEval
+
+    yardstick = ColdEval(
+        cold=0.35225, ceiling=0.39193, hybrid=0.37, delta=0.0191, ci95=(0.0043, 0.0339),
+        n_test=1876,
+    )
+    # One rho clear of the floor, one inside it. Both are real `user_vector` rows: the world seeds
+    # a fitted profile per kind and `cv_rho` is the column the nightly pass writes.
+    for kind, rho in (("movie", 0.41), ("series", 0.355)):
+        assert await world.db.fetchval(
+            "UPDATE user_vector SET cv_rho = $3 WHERE user_id = $1 AND kind = $2 "
+            "AND purpose = 'foldin' RETURNING cv_rho",
+            world.patrick, kind, rho,
+        ) == pytest.approx(rho), "the world no longer seeds a fitted profile for this kind"
+
+    payload = await shelves.build_home(
+        world.db, user=_Anon(world.patrick), kinds=["movie", "series"], bundle_version=BUNDLE,
+        now_local=datetime.now(UTC), cold_eval=yardstick,
+    )
+    fit = {row["kind"]: row for row in payload["model"]["fit"]}
+    assert set(fit) == {"movie", "series"}
+    for row in fit.values():
+        assert (row["cold"], row["ceiling"]) == (0.35225, 0.39193)
+        assert row["ci95"] == [0.0043, 0.0339] and row["n_test"] == 1876
+        assert row["noise_floor"] == DEFAULTS.rho_noise_floor
+
+    assert fit["movie"]["cv_rho"] == pytest.approx(0.41, abs=1e-6)
+    assert fit["movie"]["reads"] == "above cold"
+    assert fit["movie"]["vs_cold"] == pytest.approx(0.0578, abs=1e-4)
+    assert fit["movie"]["vs_ceiling"] == pytest.approx(0.0181, abs=1e-4)
+
+    assert fit["series"]["cv_rho"] == pytest.approx(0.355, abs=1e-6)
+    assert fit["series"]["reads"] == "tie", (
+        "0.355 is 0.00275 above the corpus's cold path and §0 calls anything under 0.008 a tie; "
+        "reporting it as a win is the comparison this whole block exists to make honest"
+    )
+
+    # The gate, asserted the way the toggle test asserts it: the whole payload is walked.
+    assert model_keys_in(rail.redact(payload, show_model=False)) == []
+    assert "fit" not in rail.redact(payload, show_model=False).get("model", {})
+
+
+async def test_with_no_bundle_reference_the_rho_is_not_printed_at_all(world):
+    """The defect was a number with nothing to read it against, so the fallback is silence rather
+    than a bare rho. A bundle older than `cold_eval.json` is legal (the file is optional in
+    `BUNDLE_FILES`), and on that install the fold-in's quality is in the logs and the table where it
+    always was - it is the *comparison* that cannot be made, and a payload that printed one half of
+    it would be inviting the reader to supply the other from memory. [M4.13 step 35]
+    """
+    payload = await shelves.build_home(
+        world.db, user=_Anon(world.patrick), kinds=["movie"], bundle_version=BUNDLE,
+        now_local=datetime.now(UTC),
+    )
+    assert payload["model"]["fit"] is None
+    assert payload["model"]["sections_ms"], "the block's other annotation is untouched"
 
 
 async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(world):

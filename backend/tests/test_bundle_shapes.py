@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from spielplan.importer import bundle as bundle_import
 from tests.fixtures import make_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -238,6 +239,70 @@ def test_the_shipped_checkpoint_embeds_at_the_dimension_every_consumer_assumes(s
     assert head[0] == EMBED_DIM, (
         f"the shipped tower emits {head[0]}-d embeddings and this app is built for {EMBED_DIM}"
     )
+
+
+# --- cold_eval.json: the one reference value the bundle ships ----------------------------------
+
+
+def test_the_shipped_cold_eval_carries_the_arms_the_app_reads(shipped, built):
+    """§14 risk 1's mitigation is "expectations instrumented, not assumed", and until M4.13 this
+    file was in no list and read nowhere: `user_vector.cv_rho` is a held-out Spearman per
+    (user, kind) with no reference value anywhere in the app, while the corpus had measured the
+    cold path (0.35225) against the warm ceiling (0.39193) and shipped both.
+
+    `models/artifacts.ColdEval` now reads it, so the keys it reaches for are pinned HERE rather
+    than against a hand-written fixture - that is this file's whole argument, and it applies with
+    more force to a file the fixture does not write at all. Note what is therefore NOT asserted:
+    the fixture ships no `cold_eval.json`, so there is no fixture-versus-shipped comparison to
+    make. The file is optional in `BUNDLE_FILES` for exactly that reason, and the absent case has
+    its own tests (`test_boot_logging.py`, `test_home.py`). [M4.13 step 35, cs-31]
+    """
+    ours = shipped["json"]["artifacts/cold_eval.json"]
+    assert {"cold", "ceiling"} <= set(ours["keys"]), (
+        f"ColdEval reads the cold and ceiling arms and the shipped file has {sorted(ours['keys'])}"
+    )
+    for arm in ("cold", "ceiling", "hybrid"):
+        assert "spearman" in ours[f"{arm}.keys"], f"{arm} carries no spearman"
+    assert "cold:tunedblend_vs_prior" in ours["keys"]
+    assert set(ours["cold:tunedblend_vs_prior.keys"]) == {"ci95", "delta"}, (
+        "the interval ColdEval reports beside the two figures"
+    )
+    assert ours["n_test.type"] == "int"
+    assert "artifacts/cold_eval.json" not in built["json"], (
+        "the fixture now writes cold_eval.json - compare it to the shipped shape here, and say so "
+        "loudly: e2e/run.mjs does not rebuild data/import"
+    )
+
+
+def test_the_cold_tower_report_line_says_the_version_was_assumed(bundle_root):
+    """§4.3: "the earlier `cold_tower` run is superseded - the exporter must ship v2", and
+    `tower.py` checked that against values it had substituted itself.
+
+    The corpus writes `torch.save(model.state_dict())`: a bare mapping of eight tensors with no
+    `version`, no `arch` and no `input_dim`. The loader filled in its own 2 and 'cold_tower_v2' and
+    then tested those against its own allow-lists, so the guard could not fail on any bundle that
+    has ever been produced while the error string presented it as enforcing the spec. It is
+    deliberately NOT tightened into a refusal - that would refuse every shipped bundle - so what
+    changes is that the assumption is visible where an operator reads a bundle's claims, which §10
+    makes the import report. The guard that does bite on this format is the input-width cross-check
+    against `feature_contract.json`, and it is untouched. [M4.13 step 36, cs-54]
+    """
+    report = bundle_import.validate(bundle_import.Bundle.open(bundle_root))
+    notes = [f for f in report.findings if f.rule == "cold-tower"]
+    assert notes, f"the tower was not constructed at all: {report.render()}"
+    line = notes[0].message
+    assert "assumed v2" in line, f"the report states the version as read rather than assumed: {line}"
+    assert "bare state_dict" in line and "not a check" in line, line
+    assert notes[0].detail["assumed"], "the assumption has to be machine-readable too"
+    assert line.isascii(), f"an import report line a cp1252 console cannot print: {line!r}"
+    # The tower itself carries it, which is what makes the log line and the report line one fact.
+    from spielplan.models.artifacts import ArtifactStore
+    from spielplan.placement.contract import FeatureContract
+    from spielplan.placement.tower import load_tower
+
+    store = ArtifactStore.open(bundle_root / "artifacts", "shapes-v1")
+    contract = FeatureContract.from_store(store)
+    assert any("assumed v2" in note for note in load_tower(store, contract).notes)
 
 
 # --- the curated ledgers ---------------------------------------------------------------------
@@ -464,6 +529,8 @@ def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
         "artifacts/corrections_v1.tsv",
         "artifacts/ledger_hyperparams.json",
         "artifacts/seed_list.json",
+        # M4.13: the only reference value in the bundle for a number the app computes itself.
+        "artifacts/cold_eval.json",
     ):
         assert required in files, f"{required} is absent from the manifest"
 

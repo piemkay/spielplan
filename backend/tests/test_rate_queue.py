@@ -42,9 +42,13 @@ from spielplan.rate import balance, battle, queue, reask
 
 # --- the world ------------------------------------------------------------------------------
 
-# Eight owned films and two series. `item_n` is the §5.1 gate input and P(seen)'s popularity
-# term; the eight values are distinct and far apart so "ordered by P(seen)" and "ordered by id"
-# are never the same list, which is what makes an ordering assertion able to fail.
+# Eight owned films and two series. `item_n` is the crowd's rating count — P(seen)'s popularity
+# term, and §5.1's gate input as well for every row that carries a coordinate, which is every row
+# this fixture writes by hand. The eight values are distinct and far apart so "ordered by P(seen)"
+# and "ordered by id" are never the same list, which is what makes an ordering assertion able to
+# fail. The one row where the two quantities come apart is the cold-masked one, and
+# `test_a_cold_masked_titles_crowd_count_still_reaches_the_popularity_term` below builds it.
+# [M4.13 cycle 2, M413-C2-DIM5-01]
 ITEM_N = {1: 180_000, 2: 42_000, 3: 9_000, 4: 3_000, 5: 300, 6: 12_000, 7: 25_000, 8: 900}
 YEARS = {1: 1995, 2: 2010, 3: 1982, 4: 1994, 5: 2021, 6: 2016, 7: 1999, 8: 1975}
 # Deliberately NOT id order and NOT popularity order: "ordered by seed position" then has to be
@@ -98,6 +102,11 @@ async def make_world(db, *, with_priors=True, seed=True):
 @pytest.fixture
 async def world(db):
     return await make_world(db)
+
+
+def _age(title_id: int) -> float:
+    """The age term the fixture implies, shared by `expected_p` and the crowd-term test below."""
+    return min(1.0, max(0.0, (datetime.now(UTC).year - YEARS[title_id]) / queue.AGE_SATURATION_YEARS))
 
 
 def expected_p(
@@ -178,6 +187,58 @@ async def test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending
     for card in cards:
         # Postgres ordered and Python explained; this is the check that they agree.
         assert card.p_seen == pytest.approx(expected_p(card.title_id), abs=1e-9)
+
+
+async def test_a_cold_masked_titles_crowd_count_still_reaches_the_popularity_term(db, world):
+    """The reader cs-01 moved without naming it. §6.1's "popularity", off `title_prior.item_n`.
+
+    A `cold_mask` row is excluded from the basis, so §5.1's n_t is 0 for it and its gate is 0 --
+    correctly, there is no coordinate for the gate to weight. `title_prior.item_n` is a different
+    quantity with the same name: §4.3's per-title support count, which §6.1 weights at 2.0
+    through log1p(n)/log1p(1e5) and §8 stage 10's badge payload carries. Writing the gate's 0
+    into it moved the logit by the full 2.0 at the largest flagged row of v20260828 (260,131
+    crowd ratings) and by 0.99 at the flagged set's median support of 299 -- so with nothing else
+    firing, P(seen) fell from 0.45 to 0.10 and the sweep offered the most-watched film in the
+    catalogue as one the household has probably never seen.
+
+    Seeded as `serve.materialise_priors` now writes such a row -- the count, gate 0.0, e_source
+    'cold_tower' -- rather than through a bundle, because what is under test is the READER: every
+    fixture in this file hand-writes `title_prior` with `gate = n/(n+10)`, so until now the queue
+    had never met a row where the two disagreed. `test_placement.py::
+    test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower` pins the writer.
+    [M4.13 cycle 2, M413-C2-DIM5-01]
+    """
+    patrick = world["patrick"]
+    # Title 7 is the best-supported film outside the seed list, so the queue's first card is a
+    # claim about the popularity term and not about seed position.
+    await db.execute(
+        "UPDATE title_prior SET gate = 0.0, e_source = 'cold_tower' WHERE title_id = 7"
+    )
+    await rate_all(db, patrick, [t for t, _ in SEED])
+
+    cards = await queue.next_sweep_cards(
+        db, user_id=patrick, kinds=["movie"], limit=8, rng=random.Random(0)
+    )
+    card = next(c for c in cards if c.title_id == 7)
+    assert card.source == "p_seen"
+    assert card.p_seen == pytest.approx(expected_p(7), abs=1e-9), (
+        "the gate is 0 for this row and the popularity term must not read the gate"
+    )
+    # The term itself, against the one a zeroed column would have produced. 2.0 logits is the
+    # whole weight, so the difference is the difference between offering the card and burying it.
+    crowd = math.log1p(ITEM_N[7]) / math.log1p(queue.CROWD_SATURATION)
+    blind = queue.p_seen(queue.Features(crowd=0.0, owned=True, age=_age(7)))
+    assert card.p_seen == pytest.approx(
+        queue.p_seen(queue.Features(crowd=crowd, owned=True, age=_age(7))), abs=1e-9
+    )
+    assert card.p_seen - blind > 0.2, (
+        f"the popularity term contributed {card.p_seen - blind:.4f} for a title with "
+        f"{ITEM_N[7]:,} crowd ratings"
+    )
+    order = [c.title_id for c in cards]
+    assert order.index(7) < order.index(5), (
+        "the film with 25,000 crowd ratings is queued behind the one with 300"
+    )
 
 
 async def test_p_seen_moves_the_queue_when_a_signal_moves(db, world):

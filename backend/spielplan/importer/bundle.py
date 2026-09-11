@@ -103,8 +103,21 @@ async def _rebuild_blend_weights(conn: Any, _store: Any, version: str) -> dict[s
     }
 
 
-async def _rebuild_ledger_refit(conn: Any, store: Any, _version: str) -> dict[str, Any]:
-    """§10 step 3: "a **full** Personal Ledger MAP refit" — full history, every user and kind."""
+async def _rebuild_ledger_refit(conn: Any, store: Any, version: str) -> dict[str, Any]:
+    """§10 step 3: "a **full** Personal Ledger MAP refit" — full history, every user and kind.
+
+    `version` is the STAGED bundle, and this function is the reason it is threaded at all. It
+    ignored the argument entirely: `standard_embeddings` passed no version, so
+    `placement_embeddings` took its `$2 IS NULL` branch and joined `b.state = 'active'` - which
+    during a pre-flip rebuild is the OUTGOING bundle - and `refit_all` stamped the fit from
+    `active_bundle_version`, the outgoing version again. So §10's one step whose whole purpose is
+    to re-express every fitted number in the NEW basis read the old placements and claimed the old
+    version. Measured ||v_step3 - v_correct|| = 0.397 against ||v_correct|| = 0.782; and after the
+    flip `load_cache` refused that fit on both its version and its digest, so the first tap per
+    (user, kind) re-fitted on the request path against the still-old in-process Backbone and
+    stamped THAT mixed-basis fit with the new version, which `load_cache` then trusted until the
+    next nightly (||v_tap - v_correct|| = 0.643). One name, used twice. [M4.13, data-01]
+    """
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.scoring import backbone as bb
@@ -113,8 +126,18 @@ async def _rebuild_ledger_refit(conn: Any, store: Any, _version: str) -> dict[st
     # Against the STAGED bundle's Backbone, not the active one: §10's whole point is that the
     # two bases are incompatible, and this refit exists to move every fitted number into the new
     # one. The placement source alone would fit every warm title at e = 0.
+    #
+    # All three statements of "which basis" now name one bundle - the Backbone `load_for(store)`
+    # opens, the `title_placement` rows `bundle_version` selects, and the `ledger_fit` stamp - and
+    # `run_rebuild` has already refused a store that is not the staged row (`assert_staged`), so
+    # `store.version == version` here.
     reports = await refit.refit_all(
-        conn, hp, embeddings=observations.standard_embeddings(conn, bb.load_for(store))
+        conn,
+        hp,
+        embeddings=observations.standard_embeddings(
+            conn, bb.load_for(store), bundle_version=version
+        ),
+        bundle_version=version,
     )
     return {"fits": [r.as_dict() for r in reports]}
 
@@ -727,10 +750,17 @@ async def import_bundle(
                     "WHERE version = $1",
                     bundle.version,
                 )
+                # The flip, and NOT a second phrasing of §10 step 5. This note is rendered as a
+                # finding on the same import screen that also shows the restart sentence, so the
+                # two stood two elements apart saying the same thing in different words - the
+                # drift `api/artifacts.py::RESTART_REQUIRED` was extracted to prevent, inside the
+                # screen it was extracted for. The instruction is stated once, there; the importer
+                # cannot quote it without inverting `importer -> api`, so it points instead.
+                # [M4.13 cycle 1, m413-c1-dim1-restart-sentence-written-in-three-places]
                 report.note(
                     "swap",
-                    "artifact_bundle flipped to active — restart backend and worker; "
-                    "no process may score or refit with a different loaded version",
+                    "artifact_bundle flipped to active — every fitted number is expressed in "
+                    "this basis from now on; this import's note carries the restart it needs",
                 )
                 # The other web-process model write §6.7 has never narrated. `bundle_swap` has
                 # been in `EVENT_KINDS` and worn a `ModelRail` colour rule since M2 with no

@@ -221,11 +221,28 @@ AXES = {
 }
 
 # §5.1's gate input, n_t. Deliberately spread: title 1 is well covered, title 8 has nothing, so
-# gate = n/(n+10) has a value near 1, a value near 0, and something in between.
+# gate = n/(n+10) has a value near 1, a value near 0, and something in between. Title 8's own
+# Backbone row carries `COLD_BACKBONE_ROWS[8]` instead — a flagged row's crowd count is real
+# where its coordinate is not — and the 0 here is what the generated pool inherits, which is what
+# keeps one title in eight out of the basis altogether.
 ITEM_SUPPORT = {1: 4218, 2: 900, 3: 120, 4: 30, 5: 6, 6: 240, 7: 55, 8: 0}
-# Titles the Backbone actually has a row for. Title 8 is deliberately absent: §5.1's cold
-# branch has to be reachable, and §12's M2 exit criterion is about exactly those titles.
-BACKBONE_TITLES = (1, 2, 3, 4, 5, 6, 7)
+# Titles the Backbone has a ROW for, which §4.3 does not make the same thing as the titles it
+# carries a coordinate for. Title 8's row is the flagged one below, so it is excluded from the
+# basis exactly as an absent row would be: §5.1's cold branch stays reachable and §12's M2 exit
+# criterion is still about those titles, while the file now has the shape the corpus's file has.
+BACKBONE_TITLES = (1, 2, 3, 4, 5, 6, 7, 8)
+
+# The rows the export flags in `cold_mask`: title id -> the crowd count the FILE carries for it.
+# v20260828 flags 2,879 of 14,397 rows — E is written as zeros for every one of them and the
+# coordinate the corpus does have lives in `E_hat`/`b_hat` — and 1,915 of those clear
+# `scoring.backbone.WARM_SUPPORT` (90), which is the whole of cs-01: on support alone they were
+# stamped warm, excused from the Cold Tower sweep that exists to give them a coordinate, and
+# served at e(t) = 0 for ever. So the count here is deliberately ABOVE the threshold and
+# deliberately not `ITEM_SUPPORT[8]`; a fixture where the two agreed would be passed by a reader
+# that ignores the mask entirely, which is the reader this repository shipped. The row lives here
+# rather than in a second npz because the M4.13 plan's §8 says it must.
+# [M4.13 cycle 1, M413-REV-02]
+COLD_BACKBONE_ROWS = {8: 900}
 
 EMBED_DIM = 64
 REVIEW_SVD_DIMS = 256
@@ -866,19 +883,52 @@ def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
     # `title_ids`, plural — the name the corpus ships. The app demanded `title_id` and would
     # have found nothing in a real bundle.
     ids = np.array(rows.backbone_titles, dtype=np.int32)
-    e = rng.normal(scale=0.35, size=(ids.size, EMBED_DIM)).astype(np.float32)
+    cold = np.isin(ids, np.array(sorted(COLD_BACKBONE_ROWS), dtype=np.int32))
+
+    # The drawn rows are the ones that HAVE a coordinate, and the flagged rows are spliced in as
+    # zeros — which is what the export writes for them, and the reason `cold_mask` is not a
+    # courtesy: zeros read as a coordinate to anything that takes E at face value. Sizing the
+    # draws to `~cold` rather than to `ids` is what keeps every other row of E, b_i and b_hat —
+    # and every array drawn after them, down to `content_X` — bit for bit what they were before
+    # a flagged row existed. A generator whose stream moves when a row is added makes "the fit
+    # changed" and "the fixture was drawn differently" look the same, which is the one thing the
+    # seeded generator is here to prevent.
+    kept = int((~cold).sum())
+    e = np.zeros((ids.size, EMBED_DIM), dtype=np.float32)
+    e[~cold] = rng.normal(scale=0.35, size=(kept, EMBED_DIM)).astype(np.float32)
+    b_i = np.zeros(ids.size, dtype=np.float32)
+    b_i[~cold] = rng.normal(scale=0.6, size=kept).astype(np.float32)
+    b_hat = np.zeros(ids.size, dtype=np.float32)
+    b_hat[~cold] = rng.normal(scale=0.6, size=kept).astype(np.float32)
+
+    # `E_hat` is a different array from E and sits at the corpus's scale (median ||E_hat|| 27.05
+    # over every row against a median ||E|| of 0.3835 over the rows that carry a coordinate at
+    # all; x10 puts this fixture's ~2.8 near 28). It was E itself, which made the
+    # one array that holds a flagged row's real coordinate indistinguishable from the array that
+    # by construction does not hold it. Nothing in the app reads E_hat — decision 236 sends the
+    # scale question upstream — so what matters is that the two are distinct and differently
+    # scaled, not the ratio they land at. The flagged rows draw theirs from a generator of their
+    # own, for the reason above: `rng` must not be asked for anything on their account.
+    cold_rng = np.random.default_rng(20260911)
+    e_hat = (e * 10.0).astype(np.float32)
+    e_hat[cold] = cold_rng.normal(scale=3.5, size=(int(cold.sum()), EMBED_DIM)).astype(np.float32)
+    b_hat[cold] = cold_rng.normal(scale=0.6, size=int(cold.sum())).astype(np.float32)
+
     np.savez(
         root / "backbone.npz",
         title_ids=ids,
         title_identity=_identity_tokens(ids, rows.titles),
         E=e,
         E_full=e,
-        E_hat=e,
-        b_i=rng.normal(scale=0.6, size=ids.size).astype(np.float32),
-        b_hat=rng.normal(scale=0.6, size=ids.size).astype(np.float32),
-        cold_mask=np.zeros(ids.size, dtype=bool),
+        E_hat=e_hat,
+        b_i=b_i,
+        b_hat=b_hat,
+        cold_mask=cold,
         mu=np.float32(0.12),
-        item_n=np.array([rows.item_support[i] for i in ids], dtype=np.int32),
+        item_n=np.array(
+            [COLD_BACKBONE_ROWS.get(int(i), rows.item_support[int(i)]) for i in ids],
+            dtype=np.int32,
+        ),
     )
 
     text_ids = np.array([1, 2, 5], dtype=np.int32)      # the titles _write_reviews gives text

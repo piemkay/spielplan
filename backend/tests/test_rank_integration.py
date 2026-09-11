@@ -464,8 +464,210 @@ async def test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count(db, bo
     assert placed[1].assigned_tier == placed[1].tier
 
 
+async def test_a_tier_set_change_invalidates_the_fit_rather_than_leaving_the_old_k(db, board_of):
+    """ml01. `load_cache` checked `hp_digest` and `bundle_version` and not K.
+
+    All three are correctness rather than freshness: the cut-points packed into `theta` index a
+    tier set of a particular LENGTH, so a fit whose K no longer matches `ledger_cutpoints.tier_set`
+    does not merely lag, it means something else. Decision 11 keeps the `tier_edit` rows and queues
+    a refit, so between the settings PUT and the 60 s sweep every drop went through
+    `_update_incrementally` at `cache.n_levels` from the OLD set. Reproduced twice: growing 7 -> 12,
+    a drop into tier 7 of 12 was clamped to 6 of 7 and written as `ledger_state.tier = 4` while the
+    displayed K = 12 boundaries give 8 — Home showing T4 and Rank T7 for one title; shrinking to 3,
+    a drop to the TOP of 3 was fitted as level 2 of 7 and s fell from 0.3588 to -0.1133 where a
+    correct K = 3 refit gives 1.1933.
+
+    Refused in `load_cache` and NOT by a `DELETE FROM ledger_fit` inside `save_tier_set`: one
+    statement of the precondition beside the two it belongs with, in the function that already has
+    to read the tier set, rather than a second write on the settings path a future caller could
+    forget. The miss is cheap because M4.10 took the full fit off the tap path (decision 209), so
+    what the person's next tap gets is a queued refit and not a four-second request.
+    """
+    assert await refit.load_cache(db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False)
+
+    # A relabel at the same K invalidates nothing: the boundaries still mean what they meant.
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=list("ABCDEFG"))
+    kept = await refit.load_cache(db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False)
+    assert kept is not None and kept.n_levels == 7, "a relabel is not a change of basis"
+
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
+    assert await refit.load_cache(
+        db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False
+    ) is None, "a fit at the old K is not stale, it means something else"
+
+    # So the next tap queues rather than fitting at the old K — and the row is still there to be
+    # re-fitted, because the refusal is a read-side precondition and not a delete.
+    await db.execute(
+        "UPDATE ledger_cutpoints SET refit_requested_at = NULL WHERE user_id = $1", board_of
+    )
+    await observations.record_verdict(db, user_id=board_of, title_id=7, value=2)
+    delta = await refit.update_incrementally(
+        db, user_id=board_of, kind="movie", title_ids=[7], hp=DEFAULTS,
+        embeddings=fixture_embeddings,
+    )
+    assert (delta.fit_source, delta.refit, delta.rows) == (refit.QUEUED, True, ())
+    assert await db.fetchval(
+        "SELECT refit_requested_at FROM ledger_cutpoints WHERE user_id=$1 AND kind='movie'",
+        board_of,
+    ) is not None
+    assert await db.fetchval("SELECT count(*) FROM ledger_fit WHERE user_id=$1", board_of) == 1
+
+    report = await fitted(db, board_of)
+    assert report.fitted and len(report.cutpoints) == 11
+    refitted = await refit.load_cache(db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False)
+    assert refitted is not None and refitted.n_levels == 12
+
+
+async def test_the_loader_the_incremental_path_and_the_board_rescale_through_one_helper(
+    db, board_of
+):
+    """dd06's other half: bucket, badge and fit agree about which tier a drop names.
+
+    The clamp existed in three places — `load_observations` (counted and warned),
+    `refit._update_incrementally` (silent) and `rank/board.py` (once, at the edge) — and all three
+    are now one call of `observations.rescale_level`. A drop into the top tier of 7 followed by a
+    12-label set has to read as the top tier of TWELVE everywhere: the fit's ordinal arm, the
+    `ledger_state` row the nightly writes, and the bucket the board renders it in.
+
+    The incremental half needs a control, because level 6 is a legal index in a 12-level set and a
+    path that ignored `n_levels` would still produce a number. So the same incremental update is run
+    twice from the same deterministic cache — §5.2's "same observations, same constants, same fit"
+    is what makes the restore exact — once with the row's real `n_levels = 7` and once with it
+    rewritten to 12, i.e. claiming the drop was made on today's board. The second reading puts a
+    loved title mid-board, so s must come out LOWER: that difference is the column feeding the fit.
+
+    AND THE RESCALE ON THAT PATH IS NOT THE IDENTITY, which `_update_incrementally`'s own comment
+    used to say it was. `load_cache`'s K precondition compares the FIT's K against today's tier
+    set, never against `tier_edit.n_levels`, and nothing rewrites that column after the row is
+    written - so once the 60 s sweep has refitted at the new K the cache is ACCEPTED and every
+    preserved old-K row rescales through this loop. Asserted on the arithmetic as well as on the
+    two scores, because the score comparison is what an edit acting on the false comment breaks
+    and the arithmetic is what says why. [M4.13 cycle 2, M413-C2-DIM5-02]
+    """
+    assert observations.rescale_level(6, k_from=7, k_to=12) == 11, (
+        "the rescale a preserved tier_edit row takes on the incremental path is not the identity"
+    )
+    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    assert await db.fetchval(
+        "SELECT n_levels FROM tier_edit WHERE user_id=$1 AND title_id=1", board_of
+    ) == 7
+
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
+    report = await fitted(db, board_of)
+    assert report.fitted and report.n_tier_edits == 1
+
+    # The fit's own reading, off the loader.
+    loaded = await observations.load_observations(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    levels = [
+        int(level)
+        for level, arm in zip(loaded.obs.ord_level, loaded.obs.ord_arm, strict=True)
+        if int(arm) == observations.ARM_TIER
+    ]
+    assert levels == [11], "the loader still reads the drop as level 6 of a 12-level set"
+
+    # The board's: same number, as the bucket AND as the badge's assigned tier.
+    rendered, cuts, _rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    assert len(cuts.tier_set) == 12
+    placed = {entry.title_id: entry for tier in rendered for entry in tier.entries}
+    assert placed[1].assigned_tier == 11
+    assert placed[1].tier == 11, "the bucket and the badge disagree about the drop"
+
+    # And the incremental path's, against a control that lies about the board it was made on.
+    async def incremental_s() -> float:
+        await refit.update_incrementally(
+            db, user_id=board_of, kind="movie", title_ids=[1], hp=DEFAULTS,
+            embeddings=fixture_embeddings,
+        )
+        return float(
+            await db.fetchval(
+                "SELECT s FROM ledger_state WHERE user_id=$1 AND kind='movie' AND title_id=1",
+                board_of,
+            )
+        )
+
+    honest = await incremental_s()
+    await fitted(db, board_of)          # deterministic full fit: the cache is back where it was
+    await db.execute(
+        "UPDATE tier_edit SET n_levels = 12 WHERE user_id = $1 AND title_id = 1", board_of
+    )
+    lying = await incremental_s()
+    print(f"\nincremental s for the dropped title: {honest:.4f} read at 11, {lying:.4f} read at 6")
+    assert honest > lying, (
+        "the incremental path is not reading the K the edit was written under: a top-tier drop and "
+        "a mid-board one produced the same score"
+    )
+
+
+async def test_a_drop_beside_a_pre_k_change_neighbour_is_checked_at_the_rendered_tier(
+    db, board_of
+):
+    """The refusal reads the same level the board renders — the fourth reader, not a fourth clamp.
+
+    `drop._tiers_of` resolves each named neighbour so a duel is never written against a title that
+    has moved (finding 18), and its whole premise is that the caller's `above`/`below` come off a
+    rendered board: "a refusal derived from any other number would refuse legitimate drags". Step
+    15 moved the rendered number to `rescale_level` in `read.items` and left `_tiers_of` on the old
+    clamp, so the two disagreed for exactly the rows decision 11 preserves. An edit at 6 of 7
+    renders at 11 of 12 after the person saves twelve labels, and the check still answered 6:
+    dragging anything beside that title raised "not in T11 any more - reload the board", on every
+    attempt, for ever, because reloading re-renders 11. Measured here rather than argued, because
+    the numbers only diverge once K changes — at a single K the clamp and the map agree, which is
+    why the existing refusal test never saw it. [M4.13 cycle 1, M413-REV-01]
+    """
+    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
+    assert (await fitted(db, board_of)).fitted
+
+    rendered, _cuts, _rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    at = {entry.title_id: tier.index for tier in rendered for entry in tier.entries}
+    assert at[1] == 11, "the board no longer renders the pre-K-change edit where this test assumes"
+
+    # The drag the person can actually make: title 2 into the tier the board shows title 1 in.
+    result = await drop.drop(db, user_id=board_of, title_id=2, tier=at[1], above=1)
+    assert result.neighbour_duels == 1, "the neighbour duel §6.3 asks for was not written"
+    assert await db.fetchval(
+        "SELECT count(*) FROM duel WHERE user_id=$1 AND context='tier_insert' "
+        "AND title_a = 1 AND title_b = 2",
+        board_of,
+    ) == 1
+
+    # And the mirror: the stale level is not a legal place to name that neighbour either. Only an
+    # API call can send it — `neighboursIn` names titles out of the row it rendered — but the
+    # duels are append-only and un-undoable, so the check has to refuse it rather than store a
+    # placement against a title that is in no such tier on any screen.
+    with pytest.raises(drop.DropRefused, match="not in T6 any more"):
+        await drop.drop(db, user_id=board_of, title_id=3, tier=6, above=1)
+
+
+@pytest.fixture
+async def another_request(db, pg_url):
+    """A second connection, because a settings PUT is a different request from the sweep's fit.
+
+    It became load-bearing at M4.13. Step 24 opens `refit_user`'s transaction BEFORE it reads, so a
+    writer sharing the fit's connection is now inside the fit's transaction and a refused fit rolls
+    that writer's work back with everything else. That is correct where it happens in production -
+    the importer calls the refit inside its own transaction on purpose, so a failed rebuild takes
+    the whole import down - and it is not a model of somebody pressing a settings control while a
+    worker fits. `test_worker_jobs.py` already spells the same race with two connections and says
+    why: "a settings save is a different request". [M4.13, data-05; plan step 24]
+    """
+    import json as _json
+
+    import asyncpg
+
+    conn = await asyncpg.connect(pg_url)
+    for typename in ("json", "jsonb"):
+        await conn.set_type_codec(
+            typename, encoder=_json.dumps, decoder=_json.loads, schema="pg_catalog"
+        )
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
 async def test_a_refit_cannot_overwrite_a_tier_set_it_did_not_fit_against(
-    db, board_of, monkeypatch
+    db, board_of, monkeypatch, another_request
 ):
     """Finding 5 / decision 11. The fit reads the tier set once, at the top, and used to write it
     back unconditionally at the bottom — so a PUT that landed in between was reverted by a fit
@@ -482,12 +684,14 @@ async def test_a_refit_cannot_overwrite_a_tier_set_it_did_not_fit_against(
 
     async def racing(conn, **kwargs):
         loaded = await real(conn, **kwargs)
-        # The person's second PUT, landing after the fit has read its tier set. One connection,
-        # so this is sequential rather than concurrent — what is under test is the
-        # read-modify-write, and no lock helps a writer that never re-reads.
+        # The person's second PUT, landing after the fit has read its tier set. On its own
+        # connection, because that is what it is: a request, arriving while a worker fits. What is
+        # under test is the read-modify-write, and no lock helps a writer that never re-reads —
+        # but the PUT does have to reach the row, and since M4.13's step 24 a save issued on the
+        # fit's own connection joins the fit's transaction and dies with its refusal.
         if kwargs["kind"] == "movie" and len(loaded.tier_set) == 5:
             await tiers.save_tier_set(
-                conn, user_id=board_of, tier_set=[f"L{i}" for i in range(9)]
+                another_request, user_id=board_of, tier_set=[f"L{i}" for i in range(9)]
             )
         return loaded
 

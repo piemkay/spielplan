@@ -44,6 +44,24 @@ import asyncpg
 from spielplan.db import library
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
+
+# The two imports this package takes from `ledger/`, and the reason the two constants above
+# (`DEFAULT_TIER_SET`, `tier_set_of`) are still spelled locally while these are not: those restate
+# one line of §4.2, and these are a MEASURED mapping and a TUNED constant. Shelf 1's headline and
+# §6.3's board have to name the same tier for the same drop — that identity is the whole of §6.0
+# row 1's verb — so they read the stored level through the same function or they disagree the moment
+# K changes. [M4.13, dd06]
+#
+# `DEFAULTS` for the same reason one level up: §6.0's why-numbers print `gate_k`, which IS §5.1's
+# evidence k, and §5.2 puts every tuned number in `ledger_hyperparams.json`. It was a literal 10
+# twice in this file, beside a gate the cards report from `title_prior`. [M4.13 step 34d]
+from spielplan.ledger.hyperparams import DEFAULTS
+from spielplan.ledger.observations import rescale_level
+
+# The type the one caller passes, and the bundle's own reading of the cold path. See
+# `fit_yardstick` below: this module prints the fold-in's rho, so this module is where the
+# reference value it is read against has to arrive. [M4.13 step 35]
+from spielplan.models.artifacts import ColdEval
 from spielplan.scoring import serve
 
 # §6.0 / proposal 32: "The partition control is labelled **Films / Series** (not Movie / TV)".
@@ -377,6 +395,42 @@ async def beta_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple
     return 0.0, False
 
 
+async def fit_yardstick(
+    conn: asyncpg.Connection, *, user_id: int, kinds: Sequence[str], cold_eval: ColdEval | None
+) -> list[dict[str, Any]] | None:
+    """Each kind's fitted `cv_rho`, beside the figures the bundle itself measured.
+
+    THE POINT IS THE REFERENCE, NOT THE NUMBER. `scoring/foldin.py` persists a held-out Spearman
+    per (user, kind) and nothing could say whether 0.21 was a bad fit or a hard kind: the corpus
+    ships cold 0.35225 against a ceiling of 0.39193 and the app read neither. So this returns None
+    rather than a bare rho when the bundle ships no `cold_eval.json` - printing the number with
+    nothing to compare it to is the defect, not a smaller version of it. §0's pipeline variance is
+    applied inside `read_against`, so a 0.004 lead reads as "tie" and not as a win.
+
+    INSIDE THE GATED `model` BLOCK, because this is an annotation about this viewer's fit rather
+    than a number the ordering used. §6.0 mandates β on the why-line and on the title card's model
+    line, which is why those two are ungated (decision 117's one exception); a held-out
+    correlation is not in that sentence, and `rail.py` warns that "a builder that invents a new
+    top-level numeric block does not inherit the gate". `build_home` therefore puts it under
+    `model`, where `rail.redact` deletes it wholesale with everything else.
+
+    One `user_vector` row per kind, on its primary key, in a payload whose shelf builders already
+    read that row per shelf through `beta_of`. [M4.13 step 35, cs-31]
+    """
+    if cold_eval is None:
+        return None
+    rows: list[dict[str, Any]] = []
+    for kind in kinds:
+        fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
+        rho = None if fit is None else _float(fit["cv_rho"])
+        rows.append({
+            "kind": kind,
+            "label_count": None if fit is None else fit["label_count"],
+            **cold_eval.read_against(rho, floor=DEFAULTS.rho_noise_floor),
+        })
+    return rows
+
+
 def _float(value: Any) -> float | None:
     return None if value is None else float(value)
 
@@ -555,12 +609,15 @@ async def because_anchor(
     # range check below is about the FIT, not about the drop. [M4.9 finding 16, decision 187]
     anchor = await conn.fetchrow(
         """
-        SELECT t.id, t.name, ls.tier AS model_tier, COALESCE(te.tier, ls.tier) AS tier
+        SELECT t.id, t.name, ls.tier AS model_tier, COALESCE(te.tier, ls.tier) AS tier,
+               -- NULL whenever the tier comes from the fit rather than from a drop, which is
+               -- exactly when there is no earlier board to map from. [M4.13, dd06]
+               CASE WHEN te.tier IS NULL THEN NULL ELSE te.n_levels END AS assigned_k
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
           LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, tier
+              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
                 FROM tier_edit
                WHERE user_id = $1
                ORDER BY title_id, created_at DESC, id DESC
@@ -587,15 +644,21 @@ async def because_anchor(
         return None, Suppressed(
             sid, kind, f"anchor tier index {model_index} is outside the tier set"
         )
-    # CLAMPED, not suppressed, and only for the ASSIGNED tier. Decision 11 keeps `tier_edit` rows
+    # RESCALED, not suppressed, and only for the ASSIGNED tier. Decision 11 keeps `tier_edit` rows
     # across a change in K, so a drop into a level that no longer exists is a state this shelf is
-    # guaranteed to meet — and `rank/board.py:203-213` already answers it by clamping into the
-    # current set rather than by dropping the title, because the edit is still an observation
-    # that says "the top tier they had". Suppressing shelf 1 over it would take the whole shelf
-    # down for the one person who uses drag-and-drop most. The FIT is checked above instead: a
-    # model tier outside the set means the refit and the cutpoints disagree, which is a bug
-    # rather than a state, and no clamp should paper over it. [decision 11, M4.9 finding 16]
-    index = max(0, min(len(tier_set) - 1, int(anchor["tier"])))
+    # guaranteed to meet — and the answer is the one `rank/read.py` and `rank/board.py` give,
+    # through the same helper, because §6.0 row 1's verb ("you PUT it there") makes the headline a
+    # quotation of what §6.3 renders. Until M4.13 both surfaces CLAMPED, so both named tier 6 of a
+    # grown 12-level set: agreeing, and wrong. Mapping on one side only would have been worse than
+    # either — Home saying "in T6" while Rank showed T11 is ml01's own measured symptom, and it is
+    # this line that would have produced it. Suppressing shelf 1 over a stale level would take the
+    # whole shelf down for the one person who uses drag-and-drop most. The FIT is checked above
+    # instead: a model tier outside the set means the refit and the cutpoints disagree, which is a
+    # bug rather than a state, and no clamp should paper over it.
+    # [decision 11, M4.9 finding 16, M4.13 dd06]
+    index = rescale_level(
+        int(anchor["tier"]), k_from=anchor["assigned_k"], k_to=len(tier_set)
+    )
 
     pool = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version)
     pair = await why_mod.best_pair(
@@ -694,7 +757,12 @@ async def top_of_ledger(
         why=why,
         why_numbers={"beta": beta, "beta_fitted": bool(ranked["fitted"]),
                      "beta_optimum": DEFAULT_BETA, "label_count": ranked["label_count"],
-                     "gate_k": 10},
+                     # §5.1's evidence k, from the field the gate itself reads
+                     # (`scoring.backbone.EVIDENCE_K` is the same object). It was the literal 10
+                     # here and again below, which is one quantity under three spellings: a
+                     # re-tuned k would have moved the gate the cards report and left this
+                     # why-line naming the old one. [M4.13 step 34d]
+                     "gate_k": DEFAULTS.gate_k},
         caption=(
             None if personalised
             else f"§5.1's measured optimum is β {DEFAULT_BETA:.2f}; this profile is not there yet"
@@ -953,10 +1021,13 @@ async def new_in_library(
     Ordered by recency rather than by score, which is why it is the one shelf that still ships
     for a user with no verdicts (proposal 20 suppresses "every score-ordered shelf").
 
-    THE CLAIM IS CHECKABLE, and proposal 33 says what makes it so: `item_n` — §5.1's gate input,
-    the count of crowd ratings behind a title. The predicate is BOTH `title.placement =
-    'cold_tower'` (§8 stage 10's badge) and a prior that is not `backbone`/`blended` (§5.1's
-    evidence gate saying the same thing from the model's side). A title with crowd support is
+    THE CLAIM IS CHECKABLE, and proposal 33 says what makes it so: `item_n` — the count of crowd
+    ratings behind a title, as §4.3 ships it. (Not "§5.1's gate input", which is the same number
+    only while every row carries a coordinate: a cold-masked row has crowd support and no n_t,
+    and `title_prior.gate` is the column that carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01])
+    The predicate is BOTH `title.placement = 'cold_tower'` (§8 stage 10's badge) and a prior that
+    is not `backbone`/`blended` (§5.1's evidence gate saying the same thing from the model's
+    side). A title with crowd support is
     warm and must not be here, whichever of the two writers ran last.
     """
     sid = "new_in_library"
@@ -977,7 +1048,7 @@ async def new_in_library(
         heading=KIND_HEADINGS[kind],
         title="New in the library",
         why="placed by the Cold Tower — no crowd data yet",
-        why_numbers={"gate_k": 10},
+        why_numbers={"gate_k": DEFAULTS.gate_k},     # see `top_of_ledger` - one field, one k
         items=await _cards(conn, rows, ctx=ctx, named_terms=[], beta=beta, tier_set=tier_set),
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
@@ -1096,8 +1167,13 @@ async def build_home(
     person_id: int | None = None,
     limit: int = 60,
     offset: int = 0,
+    cold_eval: ColdEval | None = None,
 ) -> dict[str, Any]:
     """The whole §6.0 Home payload, ungated. `rail.redact` applies decision 117 afterwards.
+
+    `cold_eval` is the active bundle's own evaluation of the cold path, from the store the route
+    holds; None on a bundle-less install and on any bundle older than that file. See
+    `fit_yardstick`.
 
     THE MODE IS THE SERVER'S. §6.0: "Search or an active person-filter switches Home into the
     catalog grid; clearing it returns the shelves." Computing it here rather than in the client
@@ -1181,7 +1257,14 @@ async def build_home(
     # INSIDE `model`, so decision 117's gate removes it with everything else it removes. This is
     # the only top-level annotation Home's payload carries and it exists so `api/home.py` can
     # write one measurement line without re-timing what `build_shelves` already timed.
-    payload["model"] = {"sections_ms": timings_of(shelves, dropped)}
+    payload["model"] = {
+        "sections_ms": timings_of(shelves, dropped),
+        # The fold-in's own quality number with something to read it against, per kind. None
+        # when the bundle ships no reference - see `fit_yardstick`. [M4.13 step 35]
+        "fit": await fit_yardstick(
+            conn, user_id=user.id, kinds=chosen, cold_eval=cold_eval
+        ),
+    }
     return payload
 
 

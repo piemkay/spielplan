@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.11"
+current_milestone = "M4.13"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -68,9 +68,22 @@ id = "jellyfin-acquisition-eval-bundle-swap-and-active-version-invariant"
 spec = "§10 swap sequence"
 milestone = "M0"
 kind = "integration"
-what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding."
+what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding, and the refusal is performed by production code rather than by the invariant's own unit test: the worker's model jobs raise rather than writing, so the tick advances nothing and records a failed `job_run` whose error names both versions, retried on the next tick, and the scoring and refit entrypoints answer 409 with the restart-required wording."
 why = "§10's invariant: everything expressed in the old Backbone's basis is garbage against a new one, so a half-swapped state must be unreachable and a stale in-process bundle must be fatal, not silent."
-tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs"]
+tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs", "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing", "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording"]
+# The last sentence is M4.13's, and it was in this row from the start with nothing in the app
+# able to perform it: `assert_matches` is the one enforcement point §10's invariant names, its
+# module docstring said "called by the scoring/refit entrypoints", and a grep over
+# `backend/spielplan` found no caller at all -- so this row and the empty-store row below both
+# cited a unit test as evidence that a stale process refuses. The two added ids are the two
+# places the refusal has to happen to be worth anything: a worker job that advances nothing,
+# and a request that answers 409 with the sentence `api/artifacts.py` already prints.
+# Review cycle 2 corrected the word both rows used for the worker half. `_active_store` raises, so
+# `_tick` records a FAILED `job_run` and three of the jobs reaching it tick every 60 seconds --
+# during section 10's normal window the model jobs read red on section 6.6's System card, which is
+# a different operator signal from the "logged no-op" the rows promised, and this milestone spends
+# "no-op" four lines from the raise on the bundle-less branch instead. [M4.13, arch-03 and tq1;
+# review cycle 2: M413-C2-D1-04]
 
 [[requirement]]
 id = "platform-backup-rotation-and-ciphertext"
@@ -372,9 +385,16 @@ id = "data-rules-empty-artifact-store-legal"
 spec = "§4.3, §3.1"
 milestone = "M0"
 kind = "integration"
-what = "Booting with no active artifact_bundle row — or with an active row whose directory is absent — leaves the app serving setup, auth and Library, and artifact-dependent endpoints return their documented no-bundle state rather than raising."
+what = "Booting with no active artifact_bundle row — or with an active row whose directory is absent — leaves the app serving setup, auth and Library, and artifact-dependent endpoints return their documented no-bundle state rather than raising. Those two are not one state: no row at all is an EMPTY store and legal, while an active row whose directory is absent is a BROKEN install, so the boot and the no-bundle surfaces still happen while the model jobs refuse that bundle on a flag of its own and the admin bundle state names the missing path."
 why = "§4.3/§3.1: an empty store is legal and a bundle-less app is a defined state, not an error path."
-tests = ["e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so", "e2e/specs/01-first-boot.spec.js::Home renders the no-bundle state rather than an error", "backend/tests/test_artifact_store.py::test_empty_store_is_legal_and_says_so", "backend/tests/test_artifact_store.py::test_empty_store_refuses_to_hand_out_paths", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_scoring_with_no_bundle_at_all"]
+tests = ["e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so", "e2e/specs/01-first-boot.spec.js::Home renders the no-bundle state rather than an error", "backend/tests/test_artifact_store.py::test_empty_store_is_legal_and_says_so", "backend/tests/test_artifact_store.py::test_empty_store_refuses_to_hand_out_paths", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_scoring_with_no_bundle_at_all", "backend/tests/test_model_basis.py::test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag", "backend/tests/test_model_basis.py::test_the_admin_bundle_state_reports_broken_and_names_the_missing_path"]
+# The added sentence splits a state this row had been carrying as one. `load_active` logged "a
+# broken install, not an empty one" for an active row whose directory is gone and then returned
+# `empty()`, which the worker mapped to None and fitted every board from `zero_embeddings` under
+# DEFAULTS -- stamped with the active version, so `load_cache` then trusted the zero basis. The
+# broken flag is a SECOND guard rather than a version comparison: once `load_active` carries the
+# row's own version, `store.version == active_version` and the §10 invariant passes for a broken
+# install, which is exactly why the refusal cannot rest on it. [M4.13, data-03]
 
 [[requirement]]
 id = "library-rate-catalog-filters"
@@ -631,7 +651,7 @@ id = "jellyfin-acquisition-eval-reimport-rebuild-set"
 spec = "§10 rebuild set (with decision-doc proposals 141, 111)"
 milestone = "M2"
 kind = "integration"
-what = "A re-import against a different Backbone recomputes exactly four things and nothing else: user fold-in vectors, per-label-count blend weights, a full Ledger MAP refit, and Cold Tower re-placement of every app-acquired title using feature vectors rebuilt from the staged bundle's contract (whose column set may differ). Every `verdict`, `duel` and `tier_edit` row survives the re-import unchanged."
+what = "A re-import against a different Backbone recomputes exactly four things and nothing else: user fold-in vectors, per-label-count blend weights, a full Ledger MAP refit, and Cold Tower re-placement of every app-acquired title using feature vectors rebuilt from the staged bundle's contract (whose column set may differ). Every `verdict`, `duel` and `tier_edit` row survives the re-import unchanged. The rebuild is computed in the STAGED bundle's basis and stamped with the staged version, so every fitted (user, kind) carries it and `load_cache` returns a `FitCache` after the flip rather than refusing the fit the rebuild just made."
 why = "Ledger observations reference `title.id` and vocabulary-independent facts so they survive, while anything expressed in the old basis does not; the v1 Map is a deterministic axis scatter with no rebuild step, so its presence in the recompute set is a bug."
 tests = [
     "backend/tests/test_placement.py::test_a_reimport_runs_exactly_the_four_rebuild_steps_and_no_map_rebuild",
@@ -639,7 +659,25 @@ tests = [
     "backend/tests/test_placement.py::test_verdicts_duels_and_tier_edits_survive_a_reimport_unchanged",
     "backend/tests/test_placement.py::test_the_rebuild_refuses_a_bundle_that_was_never_staged",
     "backend/tests/test_import_integration.py::test_the_import_recomputes_the_rebuild_set_before_it_flips",
+    "backend/tests/test_model_basis.py::test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a_models_only_reimport",
+    "backend/tests/test_model_basis.py::test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version",
 ]
+# The staged-basis sentence is M4.13's. §10 step 3 ran before the flip and built its coordinates
+# with no version threaded, so `placement_embeddings` took its `b.state = 'active'` branch -- the
+# OUTGOING bundle -- and `_write_fit` stamped the outgoing version from `active_bundle_version`.
+# Measured ||v_step3 - v_correct|| = 0.397 against ||v_correct|| = 0.782. After the flip
+# `load_cache` refused both rows, so the first tap per (user, kind) refitted on the request path
+# against the old in-process Backbone and stamped THAT as the new version. This row already
+# asserted the rebuild happens; what it did not assert is the basis it happens in.
+# [M4.13, data-01]
+#
+# The basis and the stamp are two INDEPENDENT arguments -- `_rebuild_ledger_refit` passes the
+# staged version to `standard_embeddings` for the coordinates and to `refit_all` for the stamp --
+# so the two ids above that end at a stamp or at `load_cache` cannot fail on a basis regression:
+# dropping the version from the embeddings call alone leaves both of them green (probed).
+# `test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version` is therefore
+# listed too, and it is the id that carries the first half of this row's staged-basis sentence.
+# [M4.13 cycle 1, m413-rev1-cov-01]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-silent-reask-stream"
@@ -679,8 +717,14 @@ id = "data-rules-verdict-append-only"
 spec = "§4.2 verdict"
 milestone = "M2"
 kind = "integration"
-what = "Re-rating a title inserts a new verdict row and stamps superseded_by on the previous one rather than mutating it, the nightly refit's observation set contains both rows, and outside the block-scoped Undo journal (decision 35) no write path updates a verdict's value or deletes a verdict row."
+what = "Re-rating a title inserts a new verdict row and stamps superseded_by on the previous one rather than mutating it, the nightly refit's observation set contains both rows, and outside the block-scoped Undo journal (decision 174: Undo hard-DELETEs the row it compensates, within the block decision 35 scopes it to) no write path updates a verdict's value or deletes a verdict row."
 why = "a rewatch re-rating is a new ordinal observation (drift signal for free), not a correction of the old one."
+# The citation moved and nothing else did. This row rested on proposal 35's body for a rule
+# proposal 35 does not state: 35 rules the DEPTH of Undo and its commit point, and says nothing
+# about delete versus tombstone, which is why decision 174 was owed and taken. Decision 237
+# executes it here rather than re-deciding it, so there is no `retracted_at` column, no
+# `AND retracted_at IS NULL` pass over the observation readers, and no change to the six tests
+# or to the static guard at test_ledger_observations.py:250. [M4.13, decisions 174 and 237]
 tests = [
     "backend/tests/test_ledger_observations.py::test_a_re_rating_inserts_a_row_and_stamps_the_old_one_rather_than_mutating_it",
     "backend/tests/test_ledger_observations.py::test_the_fit_sees_both_the_superseded_verdict_and_the_live_one",
@@ -711,9 +755,15 @@ id = "data-rules-ledger-hyperparams-from-bundle"
 spec = "§4.3 ledger_hyperparams.json"
 milestone = "M2"
 kind = "backend"
-what = "Refitting the Ledger against a ledger_hyperparams.json with altered constants (ridge λ, λ_bt, step count, learning rate, margin-weight form, tie prior δ₀, b_i prior τ, σ-inflation rate and cap) changes the fit for every one of them, and bundle validation accepts a bundle that ships no per-user cutpoints and no per-arm sensitivities."
+what = "Refitting the Ledger against a ledger_hyperparams.json with altered constants (ridge λ, λ_bt, step count, learning rate, margin-weight form, tie prior δ₀, b_i prior τ, σ-inflation rate and cap) changes the fit for every one of them, and bundle validation accepts a bundle that ships no per-user cutpoints and no per-arm sensitivities. A constant the bundle ships null, or marks provisional, disables the rule that reads it rather than falling back to a literal the app chose for itself."
 why = "§4.3 ships those constants for offline re-tuning and deliberately withholds the per-user quantities, which are fitted in-app."
-tests = ["backend/tests/test_ledger_hyperparams.py::test_a_bundle_constant_replaces_the_default", "backend/tests/test_ledger_hyperparams.py::test_per_user_keys_are_ignored_and_reported", "backend/tests/test_ledger_hyperparams.py::test_the_fixture_ships_no_per_user_constants", "backend/tests/test_ledger_hyperparams.py::test_a_bundle_that_omits_everything_still_fits", "backend/tests/test_ledger_hyperparams.py::test_a_nonsensical_constant_is_refused_at_the_boundary", "backend/tests/test_ledger_hyperparams.py::test_the_digest_changes_with_any_constant_that_changes_a_fit", "backend/tests/test_ledger_model.py::test_every_shipped_constant_changes_the_fit", "backend/tests/test_ledger_model.py::test_the_solver_constants_reach_the_work_not_the_answer", "backend/tests/test_ledger_model.py::test_turning_margin_weighting_off_flattens_the_toggle", "backend/tests/test_ledger_model.py::test_sigma_inflates_with_the_square_root_of_neglect_and_stops_at_the_prior"]
+tests = ["backend/tests/test_ledger_hyperparams.py::test_a_bundle_constant_replaces_the_default", "backend/tests/test_ledger_hyperparams.py::test_per_user_keys_are_ignored_and_reported", "backend/tests/test_ledger_hyperparams.py::test_the_fixture_ships_no_per_user_constants", "backend/tests/test_ledger_hyperparams.py::test_a_bundle_that_omits_everything_still_fits", "backend/tests/test_ledger_hyperparams.py::test_a_nonsensical_constant_is_refused_at_the_boundary", "backend/tests/test_ledger_hyperparams.py::test_the_digest_changes_with_any_constant_that_changes_a_fit", "backend/tests/test_ledger_model.py::test_every_shipped_constant_changes_the_fit", "backend/tests/test_ledger_model.py::test_the_solver_constants_reach_the_work_not_the_answer", "backend/tests/test_ledger_model.py::test_turning_margin_weighting_off_flattens_the_toggle", "backend/tests/test_ledger_model.py::test_sigma_inflates_with_the_square_root_of_neglect_and_stops_at_the_prior", "backend/tests/test_ledger_hyperparams.py::test_a_null_sigma_inflation_rate_disables_the_inflation_and_notes_it", "backend/tests/test_ledger_hyperparams.py::test_a_provisional_constant_disables_its_rule_rather_than_falling_back"]
+# The second sentence is M4.13's. This row asserted that a constant the bundle CHANGES reaches
+# the fit, and the shipped bundle's awkward case is the opposite one: `rate_c_per_sqrt_month` is
+# null with `provisional: true` and the note "no measurement behind the rate yet -- tune before
+# use", and the app recorded the flag as deliberately unused and then ran sigma-inflation at its
+# own 0.05. A default is a number somebody measured somewhere; a null is the bundle saying nobody
+# has. [M4.13, decision 239's sibling finding set]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-cpu-job-budgets"
@@ -1069,7 +1119,7 @@ id = "jellyfin-acquisition-eval-placement-vector-from-feature-contract"
 spec = "§8 stage 9 + §4.3 + §5.3 reconciliation"
 milestone = "M2"
 kind = "backend"
-what = "The placement feature vector is built from `feature_contract.json` and nothing else: the nine content blocks in the declared order and sizes (6,435 columns), then review-text columns 0..63 of the SVD embedding multiplied by the contract's frozen `text_scale`; the genome block is zero-imputed and absent blocks are dropped rather than defaulted. A title with no keywords and no DNA row still yields a vector and a coordinate."
+what = "The placement feature vector is built from `feature_contract.json` and nothing else: the nine content blocks in the declared order and sizes (6,435 columns), then review-text columns 0..63 of the SVD embedding multiplied by the contract's frozen `text_scale`; the genome block is zero-imputed and absent blocks are dropped rather than defaulted. A title with no keywords and no DNA row still yields a vector and a coordinate. A title whose Backbone row is numerically zero is placed rather than called warm, a title with a real row below `WARM_SUPPORT` is served as a genuine blend of both coordinates with the scale of the two halves reported rather than assumed, and a title complete except for a block no enrichment could ever fill is placed and badged but not parked."
 why = "The contract is the exhaustive definition of the tower's input and records all placement-time preprocessing; the tower's dropout training anticipates absent blocks, and M2's exit criterion is that every owned title has a coordinate (19 such titles arrive with the bundle, 3 with no DNA row)."
 tests = [
     "backend/tests/test_placement.py::test_the_shipped_bundle_ships_a_contract_that_matches_its_own_tower",
@@ -1084,7 +1134,31 @@ tests = [
     "backend/tests/test_placement.py::test_the_vector_is_built_from_the_database_through_the_contracts_own_columns",
     "backend/tests/test_placement.py::test_reconciliation_is_idempotent",
     "backend/tests/test_placement.py::test_a_bundle_with_no_backbone_row_for_a_title_never_calls_it_warm",
+    "backend/tests/test_placement.py::test_a_title_whose_only_gap_is_an_award_it_never_won_is_not_parked",
+    "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm",
+    "backend/tests/test_placement.py::test_the_cold_tower_coordinate_is_written_unscaled",
 ]
+# Three clauses added, and all three are this row's own subject asserted against the corpus
+# rather than the fixture. `test_a_low_support_title_is_served_as_a_genuine_blend_of_both
+# _coordinates` passed while the blend was not one: over the thin non-cold rows median ||E|| is
+# 0.0152 against median ||E_hat|| 20.47, so the cold half decided every thin title's personal
+# term (decision 236 sends the rescaling upstream and keeps the measurement here). `test_a_bundle_with_no_backbone_row_for_a
+# _title_never_calls_it_warm` was true of an ABSENT row and false of a zeroed one, which is what
+# 2,879 cold_mask rows ship. And `test_a_thin_title_is_placed_badged_and_parked_and_a_complete
+# _one_is_not` had no case for the thin title whose gap no enrichment can close -- 40 of the 46
+# were thin for having won no awards. All three names are kept, and NONE of the three bodies
+# changed: each case turned out to be a different subject from its host. The zeroed row needs an
+# npz the no-backbone test does not write (a FLAGGED row above WARM_SUPPORT, not an absent one).
+# Decision 236 sends the rescaling upstream, so the blend test cannot assert a comparability the
+# app deliberately does not create, and what shipped instead is that ruling's negative half --
+# nothing rescales on the way in -- which is an assertion about the WRITE and not about the blend.
+# And the award gap is the sweep's park decision, which took its own name. The cases landed in
+# siblings written beside them, and the two that live in their own M4.13 rows are listed here as
+# well -- the zeroed-row clause on
+# `test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm`, "the scale of the two
+# halves reported rather than assumed" on `test_the_cold_tower_coordinate_is_written_unscaled` --
+# because a clause whose only carrier sits in another row is prose no id in THIS row can fail on.
+# [M4.13, cs-01, cs-02, cs-21; M4.13 cycle 1, m413-rev1-cov-02]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes"
@@ -1116,7 +1190,7 @@ id = "data-rules-cutpoints-tier-set-per-user"
 spec = "§4.2 ledger_cutpoints (decision 11)"
 milestone = "M3"
 kind = "integration"
-what = "ledger_cutpoints is keyed (user_id, kind) and enforces length(boundaries) = length(tier_set) − 1; saving a new tier set for one user re-initialises that user's boundaries to the equal-mass quantiles of their own fitted s for the new K, queues a refit for that user alone, and leaves their tier_edit rows and every other user's cutpoints untouched."
+what = "ledger_cutpoints is keyed (user_id, kind) and enforces length(boundaries) = length(tier_set) − 1; saving a new tier set for one user re-initialises that user's boundaries to the equal-mass quantiles of their own fitted s for the new K, queues a refit for that user alone, and leaves their tier_edit rows and every other user's cutpoints untouched. The change invalidates the fit rather than leaving the board rendered at the old K, and a kept tier_edit row keeps its MEANING and not merely its row: it is re-read at the level holding the same prior mass under the new tier set."
 why = "decision 11: the tier set is a per-user preference; a change in K invalidates boundaries but never observations, and the authored F3/D7/C15/B25/A25/A+17/S8 shape is defined only for K=7."
 tests = [
     "backend/tests/test_rank_integration.py::test_ledger_cutpoints_is_keyed_by_user_and_kind",
@@ -1125,7 +1199,17 @@ tests = [
     "backend/tests/test_rank_integration.py::test_saving_a_new_tier_set_queues_a_refit_for_that_user_alone",
     "backend/tests/test_rank_integration.py::test_one_persons_tier_set_never_touches_anothers",
     "backend/tests/test_migrations.py::test_a_tier_set_change_has_somewhere_to_record_the_refit_it_owes",
+    "backend/tests/test_ledger_observations.py::test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve",
+    "backend/tests/test_rank_integration.py::test_a_tier_set_change_invalidates_the_fit_rather_than_leaving_the_old_k",
 ]
+# The meaning sentence is M4.13's, and it is where dd06 and ml01 asked to be registered. This row
+# already said the tier_edit rows are kept (decision 11), which is the half that was true; no
+# column recorded the K they were written under, so every reader used the raw index and `load_cache`
+# validated `hp_digest` and `bundle_version` and not K. Growing 7->12, a drop into tier 7 of 12 was
+# clamped to 6 of 7 and rendered at T4 on Home against T7 on Rank; shrinking to 3, a drop at the
+# TOP was fitted as level 2 of 7 and s fell from 0.3588 to -0.1133 where a correct K=3 refit gives
+# 1.1933. Simulated meaning shift 20-28 percentile points against 3.0 for a mass-preserving
+# rescale. [M4.13, ml01 and dd06]
 
 [[requirement]]
 id = "tonight-rank-straddle-equals-eligible"
@@ -2787,9 +2871,9 @@ id = "data-rules-a-zeroed-backbone-row-is-not-a-warm-title"
 spec = "§5.1 (the e(t) branch); §4.3 backbone.npz; §12 M2 exit criterion"
 milestone = "M4.13"
 kind = "backend"
-what = "A backbone.npz row flagged by cold_mask — or numerically zero where no cold_mask ships — is treated as absent: it is excluded from row_of, never stamped warm, never excused from the Cold Tower sweep, and its coordinate is the pure cold limit with e_source 'cold_tower'. The count is reported in the load notes. No owned title is served with e(t) = 0 while being reported warm."
-why = "The bundle ships E = 0 for all 2,879 cold_mask rows and their real coordinate in E_hat/b_hat; the app reads neither, so 1,918 titles (182 owned) got a Backbone row of zeros, no placement, e_source 'backbone' and gate ~1.0 — a personal term of exactly zero for every user for ever, counted as coordinated by M2's criterion."
-tests = ["backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title", "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm"]
+what = "A backbone.npz row flagged by cold_mask — or numerically zero where no cold_mask ships — is treated as absent: it is excluded from row_of, never stamped warm, never excused from the Cold Tower sweep, and its coordinate is the pure cold limit with e_source 'cold_tower'. The count is reported in the load notes. No owned title is served with e(t) = 0 while being reported warm. The exclusion costs the gate its input and nothing else: the crowd's own rating count for that row still reaches title_prior.item_n, so §6.1's P(seen) popularity term and §8 stage 10's badge payload read the file's figure while title_prior.gate carries the 0."
+why = "The bundle ships E = 0 for all 2,879 cold_mask rows and their real coordinate in E_hat/b_hat; the app reads neither, so 1,915 titles (182 owned) got a Backbone row of zeros, no placement, e_source 'backbone' and gate ~1.0 — a personal term of exactly zero for every user for ever, counted as coordinated by M2's criterion. Excluding the row then wrote 0 into title_prior.item_n for all 2,879 (398 owned in the reference install, 375 shipping item_n >= 90), which §6.1 weights at 2.0 through log1p(n)/log1p(1e5): measured on the fixture, P(seen) for a 25,000-rating film fell from 0.68 to 0.27, so the sweep offered the best-known titles in the catalogue as ones the household has probably never seen."
+tests = ["backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title", "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm", "backend/tests/test_placement.py::test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower", "backend/tests/test_rate_queue.py::test_a_cold_masked_titles_crowd_count_still_reaches_the_popularity_term"]
 
 [[requirement]]
 id = "tonight-rank-selection-is-affordable-at-real-pool-size"
@@ -3391,9 +3475,9 @@ id = "platform-exit-scripts-can-report-their-own-failure"
 spec = "§12 M2/M3/M4 exit criteria; §13"
 milestone = "M4.8"
 kind = "static"
-what = "No milestone exit script contains a check whose predicate is a constant; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script."
-why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal."
-tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure"]
+what = "No milestone exit script contains a check whose predicate is a constant; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and a figure a script's docstring publishes as measured is one the script's own constants give, so the M4.13 script's clamp control is recomputed from DROPS, K_FITTED and K_GROWN and held against both that docstring and the paragraph docs/TESTING.md publishes it in."
+why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal. M4.13 review cycle 2 found the same class in a docstring rather than in a predicate: check 5 of `ops/m413_exit_criterion.py` said \"Measured that way the clamp reports 20/60 (33%)\", and the clamp is the one quantity in that check nothing computes -- the run measures the rescale. The stream the check builds, `round(i * (k_to - 1) / (DROPS - 1))` over `range(DROPS)`, puts 19 of 60 drops out of a 7-level history's reach, not 20; the published pair is what a probe over `range(1, DROPS + 1)` gives. It changed no verdict -- both sit inside the plan's 30-60% band -- but decision 246 makes `docs/TESTING.md`'s M4.13 paragraph the record of what the script measured, and the one figure in it nobody could reproduce was the one never re-derived from the code that shipped."
+tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give", "backend/tests/test_static_contracts.py::test_the_clamp_control_arithmetic_moves_when_the_simulation_does"]
 # Decision 184: M4.5's published "18/18" counted two of these constants, so the count no longer
 # describes what the script prints. It is restated in words in docs/TESTING.md's ledger and
 # corrected by a real run against a real bundle, not by a number nobody measured.
@@ -4650,3 +4734,288 @@ tests = [
 # restores the whole chain in a diff that touches neither `push/send.py` nor the guard. The two
 # self-tests are named for the same reason the guard exists: a probe that cannot report True is
 # a green line, not a proof. [M4.11, arch-02]
+
+# --- M4.13: the model basis (decisions 234-241; docs/milestones/M4.13-plan.md) --------------
+#
+# One milestone because one numeric object: `ledger/`, `scoring/` and `placement/` are the only
+# packages that compute a coordinate, fit a vector or write a tier, and every row below is the
+# same defect at a different scale -- a fit that does not record the basis it was computed in.
+# "Basis" reads three ways and each is wrong in a way the other two cannot see: the bundle
+# version (threaded by nobody, so §10 step 3 fitted the OUTGOING bundle and stamped it), the
+# tier-set size K (kept across a change by decision 11 with no column recording it), and the
+# coordinate a title is actually served at (a precedence chain on the fit path against §5.1's
+# blend on the serving path, on 33% of the real bundle's covered rows). Split across milestones,
+# two of them contend for the same four functions -- `observations.standard_embeddings`,
+# `refit.load_cache`, `refit.refit_user`, `backbone.coordinate` -- and the second to land rebases
+# onto a file it did not read. The schema trio rides here because a migration number is a
+# serialised resource and every table it touches is one these rows already own.
+#
+# Every row below is written BEFORE the code it covers and NAMES THE EXACT TESTS IT OWES rather
+# than leaving `tests` off: M4.9's opening, which this milestone repeats for M4.9's reason. The
+# gate then fails on a test that does not exist yet, so the red list says which stage still owes
+# what instead of only how many rows are bare, and a stage cannot quietly satisfy a row by
+# pointing it at some test that happens to exist already. That red list IS this milestone's test
+# plan: it is closed by writing those tests under those names, never by a waiver, never by
+# renaming a row's test, and never by lowering `current_milestone`. `docs/TESTING.md`'s ledger
+# block is re-pasted once, when the last of them is green.
+#
+# Five names below already exist and are registered rather than written, which costs the gate
+# nothing and closes a real gap: `test_ledger_contract.py`'s four contract assertions and
+# `test_ledger_model.py::test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one` were
+# named by no row at all, so the file that states what §5.2's fit must BE could have been deleted
+# without breaking a gate. They sit on the incremental-board row because that is the row whose
+# `what` says the tick produces a full fit, and "a full fit" is exactly what those five define.
+#
+# Two M4.13 rows are already green and sit in the pre-release cluster above rather than here --
+# the zeroed-Backbone row (65614ae) and the printed-beta row (c4e74e6, decision 167), both
+# shipped ahead of this milestone out of ROADMAP-to-M5.md's "Start here" table. Seven rows this map
+# already had are amended in place ABOVE rather than duplicated here, for the reason M4.11's
+# banner gives: each is the same clause asserted against the fixture instead of the corpus, and a
+# second row would leave the easy one standing as a claim about the app. Six of the seven gain a
+# clause and the ids that assert it; the seventh, `data-rules-verdict-append-only`, changes only
+# its citation, because decision 237 executes decision 174 rather than re-deciding it. No row below is an e2e
+# row, which is a layer choice the plan states -- this milestone ships no surface, and a spec in
+# `05-milestones` would be a placeholder for a screen nobody is building.
+
+[[requirement]]
+id = "data-rules-a-fit-is-stamped-with-the-basis-it-was-computed-in"
+spec = "§10 (recompute against the staged bundle; the active-version invariant); §5.2"
+milestone = "M4.13"
+kind = "integration"
+what = "Every embedding source and every fit stamp carries the bundle version its caller holds, never the row that happens to be active: §10 step 3 builds coordinates from the STAGED bundle and stamps ledger_fit with the staged version, so after the flip load_cache returns that fit rather than refusing it and the first tap refits nothing. The tap states its basis too, so one that woke up holding the outgoing bundle queues a full refit instead of updating the staged fit, and leaves ledger_state where it was. A models-only re-import leaves every fitted (user, kind) stamped with the version its basis actually came from."
+why = "placement_embeddings accepts a bundle_version that standard_embeddings never passed, so the pre-flip rebuild fitted against the OUTGOING bundle's placements and stamped the outgoing version — measured ||v_step3 - v_correct|| = 0.397 against ||v_correct|| = 0.782 — and the first post-flip tap then re-stamped an old-Backbone fit as the new version, which load_cache trusted until the next nightly."
+tests = [
+    "backend/tests/test_model_basis.py::test_standard_embeddings_reads_the_placements_of_the_version_it_was_given",
+    "backend/tests/test_model_basis.py::test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version",
+    "backend/tests/test_model_basis.py::test_the_cache_accepts_the_staged_fit_after_the_flip_and_the_first_tap_refits_nothing",
+    "backend/tests/test_model_basis.py::test_a_tap_holding_the_outgoing_basis_queues_rather_than_updating_the_staged_fit",
+    "backend/tests/test_model_basis.py::test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a_models_only_reimport",
+    "backend/tests/test_model_basis.py::test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as_the_bundle_less_path",
+]
+
+[[requirement]]
+id = "data-rules-section-10-invariant-has-production-callers"
+spec = "§10 (\"no process may score or refit with a loaded bundle version different from the active row\")"
+milestone = "M4.13"
+kind = "integration"
+what = "ArtifactStore.assert_matches is called from the worker's model jobs and the scoring/refit request entrypoints: a process whose loaded bundle differs from the artifact_bundle active row refuses — the worker job raises rather than writing, so the tick advances nothing and records a failed job_run whose error names both versions, retried on the next tick; the request returns 409 carrying the restart-required wording — and every read path reports one version. A truly bundle-less install (None == None) is unaffected."
+why = "The invariant's one enforcement point had no production caller and its own module docstring claimed the scoring/refit entrypoints called it; two coverage rows cited its unit tests as evidence for a refusal no code could perform."
+tests = [
+    "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing",
+    "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording",
+    "backend/tests/test_model_basis.py::test_the_refit_entrypoint_refuses_a_stale_bundle_and_names_both_versions",
+    "backend/tests/test_model_basis.py::test_a_bundle_less_install_passes_the_invariant_rather_than_refusing",
+    "backend/tests/test_model_basis.py::test_every_read_path_reports_the_one_active_version",
+    "backend/tests/test_model_basis.py::test_assert_matches_is_called_from_the_entrypoints_its_docstring_names",
+    "backend/tests/test_model_basis.py::test_the_coverage_rows_name_the_operator_signal_the_worker_actually_leaves",
+    "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load",
+]
+
+[[requirement]]
+id = "data-rules-a-broken-basis-refuses-rather-than-fits-at-zero"
+spec = "§10 invariant; §3.1 (a bundle-less boot is legal); §5.2"
+milestone = "M4.13"
+kind = "integration"
+what = "An active artifact_bundle row whose directory is absent is a broken install, not an empty one: the model jobs refuse and write nothing, the five fitting routes answer 409 naming the restore before any row is written, ledger_fit.fitted_at does not advance, refits_owed() still holds the request, and the admin bundle state reports broken with the missing path. A refit over an empty observation set empties the board it can no longer justify — no ledger_state rows, no ledger_fit row, cutpoints back at initial_cutpoints(K) — rather than leaving one fitted on retracted data. A backbone.npz that is truncated or half-copied raises BackboneError — at zero bytes, which is where every interrupted copy starts, as well as part-way through — so app.py's lifespan guard catches it and the boot the admin needs in order to fix the bundle still happens."
+why = "load_active returned the EMPTY store for a broken install, so the worker fitted every board with zero_embeddings under DEFAULTS, stamped it with the active version, and load_cache accepted the zero-basis cache; and refit_user's is_empty() branch returned before any write, leaving observed=True rows and learned cutpoints behind. Separately backbone.open indexed the npz arrays with no try, so a truncated file raised zipfile.BadZipFile past a guard that catches only BackboneError and took the boot down with it."
+tests = [
+    "backend/tests/test_model_basis.py::test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag",
+    "backend/tests/test_model_basis.py::test_the_model_jobs_refuse_a_broken_bundle_and_leave_ledger_fit_where_it_was",
+    "backend/tests/test_model_basis.py::test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothing",
+    "backend/tests/test_model_basis.py::test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement",
+    "backend/tests/test_model_basis.py::test_a_refused_job_leaves_the_refit_owed_rather_than_swallowing_it",
+    "backend/tests/test_model_basis.py::test_the_admin_bundle_state_reports_broken_and_names_the_missing_path",
+    "backend/tests/test_model_basis.py::test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot_justify",
+    "backend/tests/test_scoring.py::test_a_truncated_backbone_npz_raises_backbone_error_rather_than_a_zip_error",
+]
+
+[[requirement]]
+id = "data-rules-the-ledger-fits-the-coordinate-it-serves"
+spec = "§5.1 (e(t) and the gate); §5.2 (the MAP fit takes §5.1's coordinates)"
+milestone = "M4.13"
+kind = "integration"
+what = "standard_embeddings returns §5.1's coordinate for every title — E outright for a warm one, gate·E + (1-gate)·ê for a title with a Backbone row below WARM_SUPPORT, ê for one with no row — and equals serve.coordinates()[t].e for every title. A title with item_n = 30 and a placement yields 0.75·E + 0.25·ê on both paths."
+why = "standard_embeddings composed the two sources as a precedence chain, so any title with a Backbone row took raw E regardless of support while the serving path blended: 33% of the real bundle's covered rows, fitted and served from different inputs, with §6.1's held-out instrument measuring a v the serving path does not use."
+tests = [
+    "backend/tests/test_ledger_observations.py::test_a_warm_title_is_fitted_at_its_backbone_row_outright",
+    "backend/tests/test_ledger_observations.py::test_a_thin_title_is_fitted_at_the_blend_rather_than_at_its_raw_backbone_row",
+    "backend/tests/test_ledger_observations.py::test_a_title_with_no_backbone_row_is_fitted_at_its_placement_alone",
+    "backend/tests/test_ledger_observations.py::test_the_fitted_coordinate_equals_the_served_coordinate_for_every_title",
+    "backend/tests/test_scoring.py::test_a_title_at_item_n_thirty_weights_its_two_halves_three_to_one",
+]
+
+[[requirement]]
+id = "data-rules-the-gate-weights-two-comparable-halves"
+spec = "§5.1 (e(t) = gate·E[t] + (1-gate)·ê(t)); §4.3; decision 236"
+milestone = "M4.13"
+kind = "backend"
+what = "The app measures, rather than assumes, what §5.1's gate is weighting: a helper reports the ((1-g)·||ê||)/(g·||E||) distribution over the rows the middle line of §5.1 applies to and the range of a fitted member's owned user_score, the measurement is exercised against synthetic arrays whose two halves are known, and ops/m413_exit_criterion.py prints both against the shipped bundle. Whether the two weighted halves are brought within one order of magnitude of each other — and by which rescaling — is decision 236's upstream contract question, and nothing in the app rescales E or ê before it is answered."
+why = "Measured on the shipped bundle over the 3,860 thin non-cold rows the blend applies to (a real Backbone row below WARM_SUPPORT, which is one ulp above 90): median ||E|| 0.0152 against median ||E_hat|| 20.47, and ((1-g)·||ê||)/(g·||E||) runs p10 82.5 / median 525.8 / p90 5,499 — so 'gate' weights two incommensurable quantities and the cold half decides every thin title's personal term. E itself is support-scaled (norm median 0.043, max 127), so standardising ⟨v,e⟩ over the reference population puts owned popular titles at -15.9."
+tests = [
+    "backend/tests/test_scoring.py::test_the_blend_report_names_the_ratio_of_the_two_weighted_halves_on_known_arrays",
+    "backend/tests/test_scoring.py::test_the_blend_report_counts_only_the_rows_the_middle_line_of_the_blend_applies_to",
+    "backend/tests/test_scoring.py::test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_open",
+    "backend/tests/test_placement.py::test_the_cold_tower_coordinate_is_written_unscaled",
+]
+
+[[requirement]]
+id = "data-rules-a-tier-edit-carries-the-k-it-was-written-under"
+spec = "§4.2 tier_edit; §5.2 arm 3; decision 11"
+milestone = "M4.13"
+kind = "integration"
+what = "tier_edit records the tier-set size it was written under, and one rescale_level helper — mapping by cumulative prior mass, clamping only as its last step — is what the loader, the incremental path, the board and the drop's neighbour check all call, so bucket, badge, fit and refusal agree. Dropping a title into tier 6 of 7 and then saving 12 labels renders it at tier 11, not 6; saving 4 labels puts an S edit in tier 3 and a B edit in tier 1. A drop beside that title is accepted at the tier the board renders it in and refused at the stale one. A tier-set change invalidates ledger_fit rather than leaving the board at the old K."
+why = "Decision 11 keeps tier_edit rows across a K change and no column recorded the K, so every reader used the raw index: 7->12 left every loved title mid-board, emptied the top five tiers and put 36 of 60 later drops into tension; 7->4 collapsed 280 of 320 titles into the top tier. Simulated meaning shift 20-28 percentile points against 3.0 for a mass-preserving rescale. The clamp existed in three places, one of them silent."
+tests = [
+    "backend/tests/test_ledger_observations.py::test_a_tier_edit_records_the_tier_set_size_it_was_written_under",
+    "backend/tests/test_ledger_observations.py::test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last",
+    "backend/tests/test_ledger_observations.py::test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve",
+    "backend/tests/test_ledger_observations.py::test_shrinking_to_four_labels_keeps_an_s_edit_above_a_b_edit",
+    "backend/tests/test_rank_integration.py::test_a_tier_set_change_invalidates_the_fit_rather_than_leaving_the_old_k",
+    "backend/tests/test_rank_integration.py::test_the_loader_the_incremental_path_and_the_board_rescale_through_one_helper",
+    "backend/tests/test_rank_integration.py::test_a_drop_beside_a_pre_k_change_neighbour_is_checked_at_the_rendered_tier",
+    "backend/tests/test_schema_contracts.py::test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set",
+]
+
+[[requirement]]
+id = "data-rules-a-fold-in-cannot-lose-the-work-it-fitted"
+spec = "§5.3 (nightly refit vs the <50 ms incremental path); §6.3 (\"placement never snaps back\"); §5.2 (freshness)"
+milestone = "M4.13"
+kind = "integration"
+what = "A verdict recorded while a refit is running is not discarded: the tap waits on the same advisory lock the fit holds and survives into ledger_state and ledger_fit.title_ids. A tier-set change made during the sweep's fit is not cleared. A fold-in whose score write fails leaves no user_vector row, so the next tick reports stale. A re-rating that commits inside the fit window is picked up by the next tick rather than waiting for the nightly. And an undo leaves the surviving observation's freshness clock where the observation put it, rather than restamping a 400-day-old verdict as if it had been made now."
+why = "refit_user read observations unlocked and outside any transaction and wrote seconds later, reverting a concurrently recorded verdict to the unobserved prior; clear_refit_request had no timestamp predicate; write_fit and replace_scores were two transactions; a §4.2 supersede leaves the label count unchanged with created_at before updated_at, so _is_stale reported fresh for ever; and undo derived its touched set from the rows but its stamps from the wall clock, so last_observed_at 2025-07-30 with sigma_eff 1.4276 became 2026-09-03 with sigma_eff == sigma."
+tests = [
+    "backend/tests/test_foldin_jobs.py::test_a_verdict_recorded_during_a_refit_survives_into_the_fit_that_follows",
+    "backend/tests/test_foldin_jobs.py::test_the_tap_waits_on_the_lock_the_fit_holds_rather_than_racing_it",
+    "backend/tests/test_foldin_jobs.py::test_a_tier_set_change_made_during_the_sweeps_fit_is_not_cleared",
+    "backend/tests/test_foldin_jobs.py::test_a_fold_in_whose_score_write_fails_leaves_no_user_vector_row",
+    "backend/tests/test_foldin_jobs.py::test_a_re_rating_committed_inside_the_fit_window_is_picked_up_by_the_next_tick",
+    "backend/tests/test_ledger_observations.py::test_an_undo_leaves_the_freshness_clock_where_the_observation_put_it",
+]
+
+[[requirement]]
+id = "data-rules-the-incremental-board-does-not-hold-a-one-verdict-fit"
+spec = "§5.2 (\"refit nightly … and incrementally on each new observation\"); §6.3"
+milestone = "M4.13"
+kind = "integration"
+what = "After a sitting's worth of verdicts on titles the person had not rated before, the Ledger's fit_source returns to a full fit within one worker tick, and the spread of s over UNRATED titles exceeds a flat board rather than holding the first tap's one-observation estimate; the nightly then moves a few dozen tier badges, not hundreds. The trigger counts TITLES, so a sitting of re-ratings and battles is a measured LIMIT rather than a claim: it owes no refresh until the nightly, and the test that says so is what keeps the sentence above honest about which sitting. The fit that tick produces is the fit §5.2 specifies: finite everywhere, cutpoints ordered, the reported objective the objective of the reported parameters, no other starting point finding a lower one, and no threshold ever placing a disliked title above a liked one."
+why = "The incremental path runs a full refit only on the very first verdict, at n = 1, and every later tap re-solves residuals against that fit's mu and v: measured, 715 unrated owned movies had sd(s) 0.070 against 2.77 after a refit and correlated -0.135 with a taste the refit recovers at +0.57, so the nightly moved 252 and then 724 of 765 badges at once — the snap §6.3 says the design avoids. The four assertions that state what that fit must be live in test_ledger_contract.py, a file named by zero coverage rows, and §5.2's headline threshold claim was equally unregistered and could not fail."
+tests = [
+    "backend/tests/test_worker_jobs.py::test_a_sittings_worth_of_verdicts_returns_the_board_to_a_full_fit_within_one_tick",
+    "backend/tests/test_worker_jobs.py::test_the_board_spreads_unrated_titles_rather_than_holding_the_first_taps_estimate",
+    "backend/tests/test_worker_jobs.py::test_a_dead_connection_stops_the_ledger_refresh_tick_rather_than_reporting_a_skip",
+    "backend/tests/test_worker_jobs.py::test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_trigger",
+    "backend/tests/test_ledger_contract.py::test_no_board_produces_a_number_that_is_not_a_number",
+    "backend/tests/test_ledger_contract.py::test_every_board_returns_ordered_cutpoints",
+    "backend/tests/test_ledger_contract.py::test_the_reported_objective_is_the_objective_of_the_reported_parameters",
+    "backend/tests/test_ledger_contract.py::test_no_other_starting_point_finds_a_lower_objective",
+    "backend/tests/test_ledger_model.py::test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one",
+]
+
+[[requirement]]
+id = "data-rules-the-fold-in-tick-is-debounced"
+spec = "§5.3 (\"Fold-in user vectors … nightly — seconds\"); §12 M2"
+milestone = "M4.13"
+kind = "integration"
+what = "A verdict recorded seconds ago does not trigger a partition rewrite on the next tick: with a fresh label the tick reports no refit, and after the debounce window (or the hard cap) exactly one refit runs and writes one partition. A refit with unchanged labels writes zero rows. The job registry's budget string names what is measured."
+why = "Measured at 14k titles the tick deleted and re-inserted the whole (user, kind) partition every 60 s during a sitting — 5-8 MB WAL and 325-590 ms per rater-minute, 0.7-1.5 s for two raters — against a job table that calls it 'ms'. The write-shape alternatives measured worse (ON CONFLICT: 11.2 MB WAL, 459 ms, 14,000 non-HOT updates), so frequency is the only lever."
+tests = [
+    "backend/tests/test_foldin_jobs.py::test_a_label_recorded_seconds_ago_does_not_rewrite_a_partition_on_the_next_tick",
+    "backend/tests/test_foldin_jobs.py::test_the_debounce_window_lets_exactly_one_refit_through_and_it_writes_one_partition",
+    "backend/tests/test_foldin_jobs.py::test_the_hard_cap_forces_a_refit_for_a_member_who_never_stops_rating",
+    "backend/tests/test_foldin_jobs.py::test_a_refit_with_unchanged_labels_writes_no_rows",
+    "backend/tests/test_worker_jobs.py::test_the_fold_in_budget_string_names_what_the_tick_measures",
+]
+
+[[requirement]]
+id = "data-rules-observations-survive-a-title-delete"
+spec = "§10 (\"Ledger observations always survive re-import\"); §4.2 (append-only); §7.2"
+milestone = "M4.13"
+kind = "integration"
+what = "Deleting a title that carries observations raises a foreign-key violation rather than succeeding: the verdict, duel, tier_edit, user_title and §13 session rows are all still there afterwards. A title carrying only derived rows still deletes. A source guard fails if any package file gains a `DELETE FROM title`."
+why = "Seven observation tables and the §13 outcome row — eight tables, ten foreign-key columns — declared ON DELETE CASCADE, so §10's survival guarantee was kept only by the convention that no code deletes a title. The first admin action that removes a mis-matched or rolled-back acquisition would erase every member's verdicts on it with no error and no log line, and taste data is the one thing this app cannot re-derive."
+tests = [
+    "backend/tests/test_schema_contracts.py::test_deleting_a_title_that_carries_observations_is_refused",
+    "backend/tests/test_schema_contracts.py::test_every_observation_row_survives_the_refused_delete",
+    "backend/tests/test_schema_contracts.py::test_every_observation_foreign_key_is_declared_restrict_by_name",
+    "backend/tests/test_schema_contracts.py::test_a_title_carrying_only_derived_rows_still_deletes",
+    "backend/tests/test_landmine_guards.py::test_no_package_file_deletes_from_the_title_table",
+]
+
+[[requirement]]
+id = "data-rules-schema-checks-say-what-their-names-say"
+spec = "§4.2 (ledger_cutpoints \"length = |tier set| - 1, ordered ascending\"); §4.1 rule 5; §6.1; §6.2 step 2"
+milestone = "M4.13"
+kind = "integration"
+what = "ledger_cutpoints refuses an empty or one-level tier set and refuses descending boundaries while still accepting coincident ones; rate_session refuses a duplicated kind; session_participant refuses a seat below 1; a verdict cannot supersede or re-ask itself; and a ledger_state or user_score row whose kind disagrees with its title's is refused by the database. The migration that installs that last refusal applies over an install that already carries such a row: the upgrade drill seeds one of each into both tables and the upgrade deletes the disagreeing row and keeps the agreeing one, rather than failing its ADD CONSTRAINT at a boot the operator cannot edit past."
+why = "array_length('{}', 1) is NULL, so cutpoints_length passed for exactly the degenerate rows it exists to refuse, and §4.2's 'ordered ascending' had no constraint at all; the kinds CHECK accepted ['movie','movie']; seat accepted -3; a verdict superseded itself; and 0009's own comment says §4.1 rule 5 'lives in the data' while nothing tied the denormalised kind to the title's."
+tests = [
+    "backend/tests/test_schema_contracts.py::test_cutpoints_refuse_an_empty_or_one_level_tier_set",
+    "backend/tests/test_schema_contracts.py::test_cutpoints_refuse_descending_boundaries_and_accept_coincident_ones",
+    "backend/tests/test_schema_contracts.py::test_a_rate_session_cannot_name_one_kind_twice",
+    "backend/tests/test_schema_contracts.py::test_a_session_seat_below_one_is_refused",
+    "backend/tests/test_schema_contracts.py::test_a_verdict_can_neither_supersede_nor_re_ask_itself",
+    "backend/tests/test_schema_contracts.py::test_a_ledger_state_row_whose_kind_disagrees_with_its_title_is_refused",
+    "backend/tests/test_schema_contracts.py::test_a_user_score_row_whose_kind_disagrees_with_its_title_is_refused",
+    "backend/tests/test_upgrade_drill.py::test_the_backfill_runs_over_the_rows_that_were_already_there",
+]
+
+[[requirement]]
+id = "data-rules-hyperparameters-are-read-not-invented"
+spec = "§4.3 ledger_hyperparams.json; §5.2 (\"every constant comes from ledger_hyperparams.json\")"
+milestone = "M4.13"
+kind = "backend"
+what = "A constant the bundle marks provisional or ships as null disables the rule that reads it rather than being replaced by a literal — a null σ-inflation rate produces no live inflation and a loud note. from_mapping refuses a boolean where a number is required — at every numeric gate, including sigma_inflation_cap and the two solver knobs (newton_tol, lr_min) that were in no check list at all. digest(12) equals digest(12.0). The fold-in grid, the evidence gate k and the warm threshold are Hyperparams fields with today's values as defaults, and the §6.0 gate_k is read from the same place the scoring stack reads it."
+why = "The shipped file says rate_c_per_sqrt_month null, provisional true, 'no measurement behind the rate yet — tune before use'; the app read the flag, recorded it as deliberately unused, and ran the mechanism at its own 0.05. bool is an int subclass, so {\"steps\": true} became one step under source='bundle' with a legitimate-looking digest. Twelve constants fell to defaults while the fold-in, the gate and Tonight were unreachable from the bundle at all."
+tests = [
+    "backend/tests/test_ledger_hyperparams.py::test_a_null_sigma_inflation_rate_disables_the_inflation_and_notes_it",
+    "backend/tests/test_ledger_hyperparams.py::test_a_provisional_constant_disables_its_rule_rather_than_falling_back",
+    "backend/tests/test_ledger_hyperparams.py::test_from_mapping_refuses_a_boolean_where_a_number_is_required",
+    "backend/tests/test_ledger_hyperparams.py::test_the_digest_is_the_same_for_twelve_and_twelve_point_zero",
+    "backend/tests/test_ledger_hyperparams.py::test_the_foldin_grid_the_gate_k_and_the_warm_threshold_are_bundle_constants",
+    "backend/tests/test_ledger_hyperparams.py::test_the_model_line_reads_the_gate_k_the_scoring_stack_reads",
+]
+
+[[requirement]]
+id = "data-rules-the-sweep-parks-only-jobs-that-can-be-finished"
+spec = "§5.3 row 5 (\"thin ones … parked as acquisition jobs\"); §12 M2"
+milestone = "M4.13"
+kind = "integration"
+what = "A title complete except for a block no stage-2 enrichment could fill — an award nobody gave it, an uncovered review-text row — is placed and badged but not parked, while both facts are still recorded in title_placement and named in the report. Each chunk of the nightly sweep is one transaction, and a title with a placement row but no placement stamp is re-swept rather than stranded outside §12's count."
+why = "is_thin counted any dropped block, so 46 of the 130 placed titles were thin against §5.3's stated 5 — 40 of them for having won no awards, a job that can never close. features.py already argues the right rule two lines above for the genome. Separately the chunk's three statements were not transactional and the work list keyed on title_placement while §12 keys on title.placement, so an interrupted sweep left titles permanently unplaced."
+tests = [
+    "backend/tests/test_placement.py::test_a_title_whose_only_gap_is_an_award_it_never_won_is_not_parked",
+    "backend/tests/test_placement.py::test_an_uncovered_review_text_row_is_recorded_but_parks_no_job",
+    "backend/tests/test_placement.py::test_a_block_whose_keys_all_miss_the_contract_is_still_thin",
+    "backend/tests/test_placement.py::test_the_report_still_names_the_blocks_a_placed_title_dropped",
+    "backend/tests/test_placement.py::test_each_sweep_chunk_is_one_transaction",
+    "backend/tests/test_placement.py::test_a_title_with_a_placement_row_and_no_stamp_is_re_swept",
+]
+
+[[requirement]]
+id = "data-rules-the-household-is-one-predicate"
+spec = "§3.1 (roles; decision 166); §5.3 (both nightly passes); §6.0"
+milestone = "M4.13"
+kind = "integration"
+what = "The Ledger's nightly refit and the fold-in fit the same set of accounts — active, role admin or member — and that is the same predicate the Home partner query already spells."
+why = "foldin.run iterated role IN ('admin','member') and refit_all iterated is_active, so a deactivated account was skipped by one and re-folded and re-scored by the other on every 60 s tick, paying a full partition rewrite for nobody. Decision 166 settles the other half: a guest is a session seat with no account, so there is nothing else the two passes could disagree about."
+tests = [
+    "backend/tests/test_foldin_jobs.py::test_the_nightly_refit_and_the_fold_in_fit_the_same_accounts",
+    "backend/tests/test_foldin_jobs.py::test_a_deactivated_account_is_folded_in_by_neither_pass",
+    "backend/tests/test_foldin_jobs.py::test_the_household_predicate_is_the_one_the_home_partner_query_spells",
+]
+
+[[requirement]]
+id = "data-rules-ledger-model-is-numpy-only"
+spec = "CLAUDE.md Conventions; §5.2 (the fit is a pure function of observations and constants)"
+milestone = "M4.13"
+kind = "static"
+what = "An ast guard over ledger/model.py asserts its imports are a subset of {numpy, dataclasses, typing, math, __future__, spielplan.ledger.hyperparams}, and its own self-tests confirm the guard rejects asyncpg, torch, datetime, time, spielplan.db.pool and spielplan.ledger.refit. A second guard asserts the other direction: ledger/hyperparams.py and ledger/__init__.py import nothing first-party, which is what keeps the new ledger -> scoring.backbone -> ledger.hyperparams path from being a cycle."
+why = "The contract holds today and no test stated it, so a stray clock import for freshness or a torch import for a solver would pass the whole suite; the guard is the cheapest way to keep the numeric core free of a DB or clock dependency while it is being worked on."
+tests = [
+    "backend/tests/test_layering_guards.py::test_the_ledger_model_imports_nothing_but_numpy_and_its_own_constants",
+    "backend/tests/test_layering_guards.py::test_the_guard_rejects_a_database_import",
+    "backend/tests/test_layering_guards.py::test_the_guard_rejects_a_clock_import",
+    "backend/tests/test_layering_guards.py::test_the_guard_rejects_a_torch_import",
+    "backend/tests/test_layering_guards.py::test_the_guard_rejects_an_import_of_the_refit_module",
+    "backend/tests/test_layering_guards.py::test_the_hyperparams_leaf_imports_nothing_but_the_standard_library",
+]

@@ -70,6 +70,36 @@ def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
     return chosen
 
 
+async def household_ids(conn: asyncpg.Connection) -> list[int]:
+    """The household, as §5.3's two nightly passes both have to mean it: active, admin or member.
+
+    One predicate in one place because two passes over the same people disagreed about who they
+    are. `scoring/foldin.run` spelled `role IN ('admin', 'member')` and `ledger/refit.refit_all`
+    spelled `is_active`, so a deactivated account got no Ledger and a fresh `user_vector` plus a
+    full `user_score` partition rewrite on every 60 s tick — the fold-in paying its most expensive
+    write for somebody who cannot sign in. `home/shelves.partner_for` already spells the
+    intersection (`u.is_active AND u.role IN ('admin', 'member')`), which is what makes this the
+    household rather than a third opinion about it; it stays an inline clause there because §6.0's
+    partner is one row of a co-seen ranking and not an id list.
+
+    Here rather than in either domain package for `db/dna_terms`' reason: importing one domain
+    package from the other for a shared fragment is worse coupling than a shared module underneath
+    both, and `scoring` already imports this module for `KINDS`.
+
+    **Both halves are load-bearing, even though the schema now enforces one of them.** Decision
+    166 settles what a guest is — a Tonight session seat with no account and no profile — and
+    M4.6's `0016_users.sql` narrowed `app_user.role` to two values accordingly, so the role clause
+    matches every row today. It is spelled anyway: the household is "the accounts a person signs
+    in with", the clause is what `partner_for` and §6.0 already read, and a predicate that is
+    true by a CHECK in another file is not the same statement as a predicate that is true by
+    accident. [M4.13, ml04-foldin-and-ledger-disagree-about-the-household; decision 166; §3.1]
+    """
+    rows = await conn.fetch(
+        "SELECT id FROM app_user WHERE is_active AND role IN ('admin', 'member') ORDER BY id"
+    )
+    return [int(r["id"]) for r in rows]
+
+
 def _filters(
     *,
     kinds: Sequence[str],

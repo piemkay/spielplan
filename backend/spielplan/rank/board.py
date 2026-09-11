@@ -47,6 +47,13 @@ import numpy as np
 from spielplan.ledger import model
 from spielplan.ledger.hyperparams import Hyperparams
 
+# `rescale_level` and nothing else. It is pure arithmetic over §6.3's measured level shares, so
+# this module still opens no connection and reads no clock; it is imported rather than re-spelled
+# because the clamp below used to be the third independent copy of one rule, and a board whose
+# bucket and whose badge disagree about the assigned tier is worse than the crash it replaced.
+# [M4.13 step 15, dd06]
+from spielplan.ledger.observations import rescale_level
+
 
 @dataclass(frozen=True)
 class Item:
@@ -206,10 +213,23 @@ def build(
         # about which tier the person assigned, and two clamps in two places is how they stop
         # agreeing. Clamping rather than dropping keeps decision 11's promise — the edit is
         # still an observation, still says "the top tier they had", exactly as the fit reads it.
+        #
+        # Through `rescale_level` with `k_from=None`, which is the helper's clamp and only its
+        # clamp. An `Item` carries a level and nothing about the set it was chosen under, so
+        # "unknown board" is the honest argument — `read.items` has already mapped the stored
+        # index by cumulative prior mass against the person's current K, using the same helper,
+        # and what reaches here is what the column can hold but no set can index. Not a fourth
+        # copy of the arithmetic, and not a re-map either: mapping twice would move a level the
+        # query already moved. [M4.13 step 15, dd06]
         item = (
             raw
             if raw.assigned_tier is None
-            else replace(raw, assigned_tier=max(0, min(len(labels) - 1, int(raw.assigned_tier))))
+            else replace(
+                raw,
+                assigned_tier=rescale_level(
+                    int(raw.assigned_tier), k_from=None, k_to=len(labels)
+                ),
+            )
         )
         model_tier = int(model.tier_of(np.array([item.s]), cuts)[0])
         model_tiers[item.title_id] = model_tier
