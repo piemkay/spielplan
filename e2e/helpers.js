@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { env } from './env.mjs';
 
 /** Credentials the suite creates and reuses. Never a real account. */
 export const ADMIN = { name: 'e2e-admin', password: 'e2e-first-boot-pw' };
@@ -111,8 +112,15 @@ export async function kindIsOn(page, label) {
 export const JELLYFIN = {
   // as the backend container sees it
   url: process.env.FAKE_JELLYFIN_URL ?? 'http://jellyfin-fake:8096',
-  // as this test process sees it
-  control: process.env.FAKE_JELLYFIN_CONTROL ?? 'http://127.0.0.1:8096',
+  // As this test process sees it — the PUBLISHED port, which `ops/compose.e2e.yml` parameterises
+  // as `${JELLYFIN_FAKE_PORT:-8096}` so a checkout per lane can hold a stack each. A constant
+  // here was the fourth address of that class and the only one that WROTE: M4.12's gate reset
+  // and played titles into the primary worktree's fake on 8096 while its own app read 8097, so
+  // the sweep truthfully reported a library in which nothing had been played. `url` above stays
+  // a constant on purpose — it is the compose network's service name, identical in every lane.
+  control:
+    process.env.FAKE_JELLYFIN_CONTROL ??
+    `http://127.0.0.1:${env('JELLYFIN_FAKE_PORT') ?? '8096'}`,
   apiKey: process.env.FAKE_JELLYFIN_API_KEY ?? 'e2e-jellyfin-key',
   password: process.env.FAKE_JELLYFIN_PASSWORD ?? 'e2e-jellyfin-password',
   // The fake's own users, fixed in ops/fake_jellyfin.py.

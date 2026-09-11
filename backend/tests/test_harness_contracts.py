@@ -2106,3 +2106,36 @@ def test_the_origin_guard_sees_a_literal_put_back():
     """The synthetic violation, because a guard with no failing case is a comment."""
     regressed = "const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';"
     assert "localhost:8080" in regressed and "baseUrl(" not in regressed
+
+
+def test_the_harness_reaches_the_fake_jellyfin_on_the_port_its_own_stack_published():
+    """The third address of the same class, and the one the browser gate found rather than this
+    file.
+
+    `ops/compose.e2e.yml` publishes the fake on `${JELLYFIN_FAKE_PORT:-8096}` so a lane per
+    worktree can hold a stack each; inside the compose network it stays `jellyfin-fake:8096` for
+    both, which is why only the published half may be parameterised. `e2e/helpers.js` kept
+    `http://127.0.0.1:8096`, so the suite set Played on the OTHER lane's fake and the app swept
+    its own: §7.3's adopt direction had nothing to adopt, `seen.sync_all` returned healthy with
+    every counter zero -- which was the truth -- and "a flag set in jellyfin arrives in the app"
+    failed on a seen-state nobody had set. Measured on the M4.12 gate: the fake on 8096 held
+    `jf-1` played with no tokens and no writes, the fake on 8097 held the member's token and no
+    Played flag.
+    """
+    source = _read(HELPERS)
+    assert "127.0.0.1:8096" not in source, (
+        "e2e/helpers.js carries a literal control address; the fake's published port is "
+        "JELLYFIN_FAKE_PORT and must be resolved through e2e/env.mjs's env()"
+    )
+    assert "JELLYFIN_FAKE_PORT" in source, (
+        "e2e/helpers.js no longer reads the port ops/compose.e2e.yml publishes the fake on"
+    )
+    # The service name is the half that must NOT move: it is the compose network's, identical in
+    # every lane, and a checkout that parameterised it would be testing a topology nobody ships.
+    assert "jellyfin-fake:8096" in source
+
+
+def test_the_fake_jellyfin_port_guard_sees_the_constant_that_shipped():
+    """The synthetic violation, for `test_the_origin_guard_sees_a_literal_put_back`'s reason."""
+    regressed = "  control: process.env.FAKE_JELLYFIN_CONTROL ?? 'http://127.0.0.1:8096',"
+    assert "127.0.0.1:8096" in regressed and "JELLYFIN_FAKE_PORT" not in regressed
