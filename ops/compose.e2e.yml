@@ -12,7 +12,10 @@
 services:
   db:
     ports:
-      - "127.0.0.1:5432:5432"
+      # Re-declared because this overlay REPLACES the dev overlay's list for the same service,
+      # so a constant here silently overrode DB_PORT and two stacks fought for 5432. Same
+      # default, same reason; see ops/compose.dev.yml.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
 
   jellyfin-fake:
     # Reuses the backend image purely for its Python + FastAPI + uvicorn; the file itself is
