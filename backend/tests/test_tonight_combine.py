@@ -409,3 +409,218 @@ def test_the_wildcard_carries_its_honest_label():
     # §6.8's register: it names the cost to the person, in their words, and does not hedge.
     assert "usual" in C.WILDCARD_LABEL
     assert not any(w in C.WILDCARD_LABEL.lower() for w in ("explor", "epsilon", "random"))
+
+
+# --- M4.12: the split branch, repaired -----------------------------------------------------
+#
+# EVERY TEST BELOW IS GREEN ON A BRANCH THAT CANNOT EXECUTE ON THE SHIPPED BUNDLE, and saying so
+# is part of the coverage. Decision 173 ships no `dna_axis_weight` rows, so `tonight/dna.axes_for`
+# returns {}, `contested_facet` iterates zero axes and returns None, and no real evening reaches
+# any of this. The axes here are hand-seeded, which makes these statements about the RULE and
+# never about what a household will see this month; §14 risk 6's split rate reads a permanent 0
+# until proposal 140's corpus work lands, which is a different repository. The repairs land now so
+# that the day the axes arrive the branch is not four defects deep. [M4.12 findings 21-24]
+
+# One authored axis with two poles and nothing else, so a title's position is exactly the sign of
+# the term it carries and the arithmetic in each fixture can be read off the page.
+PACE = {"pace": {"slow": -1.0, "fast": 1.0}}
+# Two people pulling opposite ways on it, which is all `contested_facet` asks for.
+PULLING_APART = [{"slow": 1.0}, {"fast": 1.0}]
+
+
+def _split(dna, per, *, top):
+    """A two-member evening that agrees on the ranking and diverges on `top` in the Ledger.
+
+    D carries the split rather than `divergent_answers`, so the fixtures below can hold the group
+    order fixed and vary only the DNA - mean minus min of [0.7, 0.1] is 0.30, comfortably over the
+    0.20 threshold.
+    """
+    return C.combine(
+        per_participant={10: per, 20: per},
+        member_ledger={top: [0.7, 0.1], **{t: [0.5, 0.5] for t in per if t != top}},
+        tilts=PULLING_APART, dna=dna, axes=PACE,
+    )
+
+
+def test_a_neutral_leader_still_gets_the_counterweight_the_split_promises():
+    """40.6% of the real corpus carries no DNA at all, so the title the zeroed ranking leads with
+    routinely has no position on the contested axis - and the reservation was keyed off *its*
+    pole. Every product against 0.0 is 0.0, so the opposite set came out empty, the spanning test
+    failed too, and the else branch dropped the copy and shipped the zeroed ranking bare: 31.8% of
+    splits that HAD a counterweight, silenced by a property of one title. [finding 21]
+
+    Title 1 leads and sits off the axis; the pool holds two slow titles and two fast ones, so
+    there is plainly something on both sides for the slate to say "one of each" about.
+    """
+    dna = {1: {}, 2: {"slow": 1.0}, 3: {"slow": 0.9}, 4: {"fast": 1.0}, 5: {"fast": 0.8}}
+    slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.40, 5: 0.30}, top=1)
+
+    assert C.axis_position(dna[1], PACE["pace"]) == 0.0, "the fixture's leader is off the axis"
+    assert slate.contested == "pace", "the pool has both poles, so the split is surfaceable"
+    assert slate.conflict is not None, "§0: a surfaced split must never ship bare"
+    poles = [C.axis_position(dna[t], PACE["pace"]) for t in slate.finalists]
+    assert any(p < 0 for p in poles) and any(p > 0 for p in poles), (
+        "the slate must hold one of each, not merely say so"
+    )
+    assert slate.reserved == 2, "the highest-scoring title on the far side, not merely one of them"
+
+
+def test_a_pool_with_no_counterweight_ships_the_ranking_its_scores_show():
+    """The else branch is the honest one - a library with nothing on the other pole cannot be
+    promised one - but it shipped `adjusted_order[:3]`. Nothing is surfaced there, so the three
+    cards were drawn from a ranking the household is never shown, under no copy explaining why: a
+    rank-5 title on the slate with a rank-3 title beneath it as a runner-up. [finding 21, second
+    half]
+
+    Every title here leans slow; their positions still differ (mixed vectors), so zeroing genuinely
+    reorders the pool and the two rankings disagree about the top three.
+    """
+    dna = {
+        1: {"slow": 1.0}, 2: {"slow": 1.0, "fast": 0.5}, 3: {"slow": 1.0, "fast": 0.8},
+        4: {"slow": 1.0, "fast": 0.2}, 5: {"slow": 1.0, "fast": 0.9},
+    }
+    per = {1: 0.90, 2: 0.70, 3: 0.55, 4: 0.80, 5: 0.50}
+    assert all(C.axis_position(v, PACE["pace"]) < 0 for v in dna.values()), (
+        "the fixture is only meaningful while the far pole is genuinely empty"
+    )
+    adjusted = C.ranked(
+        C.zeroed(C.group_scores({10: per, 20: per}), facet="pace", dna=dna, axes=PACE)
+    )
+    assert [t for t, _ in adjusted[:3]] != [1, 4, 2], "the two rankings have to disagree"
+
+    slate = _split(dna, per, top=1)
+    assert slate.contested is None and slate.conflict is None
+    assert slate.finalists == [1, 4, 2], "the top three by the group score the reveal displays"
+    assert slate.reserved is None
+
+
+def test_a_split_over_two_candidates_returns_a_slate_rather_than_raising():
+    """`next(t for t, _ in adjusted_order if t not in finalists)` had no default, and on a pool of
+    exactly two the free slots have consumed both. The unhandled StopIteration fires inside
+    `play.finish`, which runs inside the answer handler - a 500 on the last answer of the evening.
+
+    It was unreachable only because a round over two candidates could never end (finding 6), so
+    decision 215's small-pool fix would have turned one silent hang into one outage. Two finalists
+    spanning the axis is a complete slate over a pool of two, not an error. [finding 22]
+    """
+    dna = {1: {"slow": 1.0}, 2: {"fast": 1.0}}
+    slate = C.combine(
+        per_participant={10: {1: 0.9, 2: 0.1}, 20: {1: 0.1, 2: 0.9}},
+        member_ledger={1: [0.5, 0.5], 2: [0.5, 0.5]},
+        tilts=PULLING_APART, dna=dna, axes=PACE,
+    )
+    assert slate.contested == "pace", "the two answers were opposite, so the split is real"
+    assert slate.finalists == [1, 2], "both candidates, spanning the axis, and no third to find"
+    assert slate.wildcard is None, "nothing is left outside the finalists to explore towards"
+    assert [r["rank"] for r in slate.rows] == [1, 2]
+
+
+def test_neither_free_finalist_on_the_reference_pole_reserves_slot_two_as_well():
+    """Repairing the neutral leader does not finish the job: with the reference pole taken from
+    the first free finalist that carries one, 219 of 1,971 random pools still came out
+    [neutral, neutral, one pole] - one titled card under copy promising one of each.
+
+    §6.2 fixes that sentence verbatim and `copy.SPLIT_LINE` keeps it out of the model's reach, and
+    dropping `contested` is finding 21 again. So the slate is made true instead: slot 2 takes the
+    best title on the reference pole and slot 3 the best on the opposite one. Exactly three
+    finalists still - 54d fixes the count. [decision 221]
+    """
+    dna = {1: {}, 2: {}, 3: {"slow": 1.0}, 4: {"fast": 1.0}, 5: {"fast": 0.5}}
+    slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.60, 4: 0.50, 5: 0.40}, top=1)
+
+    assert slate.contested == "pace"
+    assert len(slate.finalists) == C.FINALISTS, "still three; no fourth is appended"
+    poles = [C.axis_position(dna[t], PACE["pace"]) for t in slate.finalists]
+    assert sorted((p > 0) - (p < 0) for p in poles) == [-1, 0, 1], (
+        f"one of each beside the neutral leader, not {slate.finalists} at poles {poles}"
+    )
+    assert slate.finalists[0] == 1, "the zeroed leader keeps slot 1"
+    assert slate.finalists[1] == 4, "slot 2: the best title on the reference pole"
+    assert slate.finalists[2] == 3, "slot 3: the best title on the opposite pole"
+    assert slate.reserved == 3, "the counterweight is the far-pole card, and only that one"
+
+
+def test_the_wildcard_comes_from_the_ranking_the_finalists_came_from():
+    """A surfaced split rebuilds the finalists from the zeroed ranking and then drew §6.4's
+    exploratory pick from the unzeroed one - two rankings deciding one slate. [finding 23]
+
+    The fixture makes them disagree where it is decidable. Titles 8 and 9 are mirror images about
+    the finalists' DNA centre, so `wildcard_from`'s distance is bit-for-bit equal for both and the
+    tie falls to whichever the ranking it was handed puts first. The group score prefers 9; the
+    zeroed score prefers 8, because 9 sits on the pole whose influence the zeroing removed. An
+    honest "step outside your usual" is the one the slate's own ranking names.
+    """
+    dna = {1: {"slow": 1.0}, 2: {}, 3: {"fast": 1.0}, 8: {"slow": 0.6}, 9: {"fast": 0.6}}
+    per = {3: 0.95, 2: 0.85, 1: 0.60, 9: 0.52, 8: 0.50}
+    slate = _split(dna, per, top=3)
+    assert slate.contested == "pace" and slate.finalists == [3, 2, 1]
+
+    centre = {}
+    for t in slate.finalists:
+        for term, value in dna[t].items():
+            centre[term] = centre.get(term, 0.0) + value / len(slate.finalists)
+
+    def distance(title_id):
+        vec = dna[title_id]
+        return sum((vec.get(x, 0.0) - centre.get(x, 0.0)) ** 2 for x in set(vec) | set(centre))
+
+    assert distance(8) == distance(9), "the fixture is only decidable while the distances tie"
+    assert C.ranked(C.group_scores({10: per, 20: per}))[3][0] == 9, "the group score prefers 9"
+    assert slate.wildcard == 8, (
+        "the wildcard was drawn from the unzeroed ranking the finalists did not come from"
+    )
+
+
+def test_the_persisted_ranks_read_in_slate_order_on_a_surfaced_split():
+    """`ballot.slate_of` and `result.slate` both ORDER BY rank, and on a surfaced split the
+    finalists are no longer a prefix of the group-score order - the reservation reaches down the
+    ranking for the counterweight. Stamping the group-score rank therefore listed the wildcard
+    above one of the three finalists, on the ballot and on the reveal. [finding 23]
+
+    `session_result_rank` is UNIQUE (session_id, rank) over a NOT NULL smallint CHECK (rank >= 1),
+    so the reordering has to stay a permutation of 1..n rather than a re-labelling of some of it.
+    """
+    dna = {t: {"slow": 1.0} for t in (1, 2, 3, 4)} | {5: {"fast": 1.0}}
+    slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.80, 5: 0.30}, top=1)
+
+    assert slate.contested == "pace" and slate.finalists == [1, 2, 5]
+    assert [t for t, _ in slate.ranked][:3] == [1, 2, 3], (
+        "the fixture is only meaningful while the reservation reaches past the group's top three"
+    )
+    by_rank = {r["rank"]: r for r in slate.rows}
+    assert [r["rank"] for r in slate.rows] == sorted(by_rank), "the rows come out in rank order"
+    assert sorted(by_rank) == list(range(1, len(slate.rows) + 1)), "a permutation of 1..n"
+    assert [by_rank[i]["title_id"] for i in (1, 2, 3)] == slate.finalists
+    last_finalist = max(r["rank"] for r in slate.rows if r["slot"] == C.SLOT_FINALIST)
+    wildcard_rank = next(r["rank"] for r in slate.rows if r["slot"] == C.SLOT_WILDCARD)
+    assert last_finalist < wildcard_rank, "the wildcard reads after all three finalists"
+    assert by_rank[3]["group_score"] == pytest.approx(0.30), (
+        "the score on the row stays the plain average; only the reading order moved"
+    )
+
+
+def test_exactly_the_reserved_finalist_is_labelled_as_such():
+    """54d: the third slot is reserved for the opposite-pole title "**labelled as such**". Which
+    of the three cards that is was computable and stated nowhere - no `reserved` or `opposite`
+    anywhere in the router, the domain package or the Tonight page - so a household told "here's
+    one of each" could not see which card was the other side of the split. [decision 220]
+
+    One row, not two: under decision 221 slot 2 can be placed by construction as well, and
+    labelling both tells the person nothing about which is which. The counterweight is the card
+    the copy is about.
+    """
+    dna = {t: {"slow": 1.0} for t in (1, 2, 3, 4)} | {5: {"fast": 1.0}}
+    slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.80, 5: 0.30}, top=1)
+    assert slate.reserved == 5
+    assert [r["title_id"] for r in slate.rows if r["reserved"]] == [5]
+
+    per = {1: 0.9, 2: 0.8, 3: 0.7, 4: 0.6}
+    quiet = C.combine(
+        per_participant={10: per, 20: per},
+        member_ledger={t: [0.5, 0.5] for t in per},
+        dna=dna, axes=PACE,
+    )
+    assert quiet.contested is None and quiet.reserved is None
+    assert not any(r["reserved"] for r in quiet.rows), (
+        "no reservation happened, so no card claims to be the far side of anything"
+    )

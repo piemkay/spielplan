@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -119,24 +120,64 @@ EXCLUDED = USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
 
 @functools.lru_cache(maxsize=1)
 def _postgres_container() -> str | None:
-    """The one running postgres:16 container, if there is exactly one.
+    """The running postgres:16 container that publishes TEST_DATABASE_URL's own port.
 
     The app image carries `postgresql-client-16` (ops/backend.Dockerfile) so the worker can run
     §2's dump; a development box need not, and this one does not. The database behind
-    TEST_DATABASE_URL *is* that container, and inside it 127.0.0.1:5432 names the same server the
-    URL does — so the same binary, reached through `docker exec`, dumps the same database.
-    Exactly one match or nothing: guessing which of several servers to dump would turn a wrong
-    answer into a green test.
+    TEST_DATABASE_URL *is* that container, and inside it 5432 names the same server the URL does —
+    so the same binary, reached through `docker exec`, dumps the same database.
+
+    Identified by published port rather than by being the only one. The rule this replaces was
+    "exactly one match or nothing", on the sound ground that guessing which of several servers to
+    dump would turn a wrong answer into a green test — and then the roadmap's parallel milestone
+    pairs put a stack per worktree on the box, three postgres:16 containers answered `docker ps`,
+    and every test in this file and in test_restore_drill.py skipped. Silently: a skip reads as a
+    pass in the summary line, so §2's backup and restore drill went unexercised in all three
+    checkouts at once. The port is not a guess. TEST_DATABASE_URL names one server, one container
+    publishes that host port, and if none does there is nothing to dump through.
     """
+    url = os.environ.get("TEST_DATABASE_URL") or ""
+    port = urlsplit(url).port or 5432
     try:
         done = subprocess.run(
-            ["docker", "ps", "--filter", "ancestor=postgres:16", "--format", "{{.Names}}"],
+            ["docker", "ps", "--filter", "ancestor=postgres:16",
+             "--format", "{{.Names}}	{{.Ports}}"],
             capture_output=True, text=True, timeout=60, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    names = [name for name in done.stdout.split() if name]
-    return names[0] if done.returncode == 0 and len(names) == 1 else None
+    if done.returncode != 0:
+        return None
+    # `0.0.0.0:5433->5432/tcp` and `127.0.0.1:5433->5432/tcp` both mean "this one". Match the host
+    # port immediately before the arrow, so a container whose CONTAINER port happens to be the
+    # number we want cannot answer for one that does not publish it.
+    hits = [
+        name for name, _, ports in (line.partition("	") for line in done.stdout.splitlines())
+        if name and re.search(rf":{port}->\d+/tcp", ports)
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _inside_the_container(url: str) -> str:
+    """The same database, addressed from inside the container rather than from this host.
+
+    `_client` may resolve to `docker exec <container> pg_dump`, and that process is not on this
+    host: TEST_DATABASE_URL's published port is a mapping the container itself cannot see. It
+    worked while every checkout published 5432, because the two numbers were the same number by
+    coincidence. A worktree whose stack publishes 5433 sends `pg_dump` a DSN naming a port
+    nothing inside the container is listening on, and the dump fails with "connection refused" —
+    which reads as a broken backup rather than as a harness addressing the wrong side of a port
+    mapping.
+
+    Rewritten only for the container path: with a pg_dump on PATH the DSN is this host's and
+    correct as it stands.
+    """
+    if not _postgres_container() or shutil.which("pg_dump"):
+        return url
+    parts = urlsplit(url)
+    userinfo = parts.netloc.rpartition("@")[0]
+    return urlunsplit(parts._replace(netloc=f"{userinfo}@127.0.0.1:5432" if userinfo
+                                     else "127.0.0.1:5432"))
 
 
 def _client(binary: str) -> tuple[str, ...]:
@@ -150,7 +191,8 @@ def _client(binary: str) -> tuple[str, ...]:
         # stand-in that dropped it would exercise a path production does not have.
         return ("docker", "exec", "-i", "-e", "PGPASSWORD", container, binary)
     pytest.skip(
-        f"{binary} is not on PATH and no single postgres:16 container is running: "
+        f"{binary} is not on PATH and no postgres:16 container publishes "
+        f"TEST_DATABASE_URL's port: "
         f"the nightly dump (spec section 2) cannot be exercised without the {binary} binary"
     )
 
@@ -207,7 +249,8 @@ def backup_env(pg_url, tmp_path, monkeypatch):
     clock is `run()`'s one argument, and these tests hand it `datetime.now(UTC)` because a
     household on UTC is the case where nothing about the date basis is interesting.
     """
-    monkeypatch.setenv("DATABASE_URL", pg_url)
+    # The worker's DATABASE_URL, addressed for whichever pg_dump `_client` resolved.
+    monkeypatch.setenv("DATABASE_URL", _inside_the_container(pg_url))
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(nightly, "PG_DUMP", _client("pg_dump"))
     settings.cache_clear()
@@ -825,7 +868,7 @@ async def test_a_dump_restored_without_secrets_key_leaves_connector_config_undec
 
     report = await nightly.run(datetime.now(UTC))
     with report.path.open("rb") as fh:
-        _run([*_client("pg_restore"), "--dbname", blank_url], stdin=fh)
+        _run([*_client("pg_restore"), "--dbname", _inside_the_container(blank_url)], stdin=fh)
 
     conn = await asyncpg.connect(blank_url)
     try:

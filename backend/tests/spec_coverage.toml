@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.11"
+current_milestone = "M4.12"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -1143,6 +1143,13 @@ why = "One predicate doing both jobs; the prototype badged at σ>0.13 and queued
 # `straddle_z` is NOT retuned here — decision 205 leaves 175's retune and Tonight's borrowed z to
 # M4.12. [M4.10 finding 13, rrh-straddle-names-non-adjacent-tier-and-prefers-downward]
 #
+# M4.12 took that retune (decision 214): `straddle_z` is 0.15 and is a badge constant only, and
+# §6.2's round has BOUNDARY_Z of its own. The identity this row states was true and empty at 1.0 —
+# a fitted board badged 120 of 120, so "becomes queue-eligible" named every title and the queue's
+# 70% boundary arm drew from the same set its 20% exploration arm does. The last clause is
+# unchanged: the constant is still read from ledger_hyperparams.json, and the corpus does not ship
+# it yet (proposal 157), so the retuned default is what every box runs on.
+#
 # `test_restricting_the_named_tier_does_not_narrow_the_straddling_set` passes on both sides of that
 # fix by design, and is registered anyway: this row's first clause is the identity between the
 # badged set and the queue pool, which is precisely what restricting the named tier could have
@@ -1156,6 +1163,7 @@ tests = [
     "backend/tests/test_ledger_model.py::test_a_straddle_never_names_a_tier_that_is_not_adjacent",
     "backend/tests/test_ledger_model.py::test_a_posterior_reaching_both_neighbours_names_the_nearer_cut",
     "backend/tests/test_ledger_model.py::test_restricting_the_named_tier_does_not_narrow_the_straddling_set",
+    "backend/tests/test_rank_board.py::test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board",
 ]
 
 [[requirement]]
@@ -1485,7 +1493,7 @@ kind = "backend"
 what = "One pair in ten is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; pair selection and the per-participant stopping rule produce identical choices and stop points whether those answers are present or removed, and round evaluation reads only those rows."
 why = "§13's non-negotiable guard: adaptively-selected pairs inflate reliability, and a stopping rule cannot share data with its own evaluation."
 tests = [
-    "backend/tests/test_tonight_round.py::test_every_tenth_pair_is_the_uniform_hold_out",
+    "backend/tests/test_tonight_round.py::test_one_pair_in_ten_is_the_uniform_hold_out_and_it_is_a_rate_not_a_slot",
     "backend/tests/test_tonight_round.py::test_the_round_replays_identically_with_the_hold_out_answers_removed",
     "backend/tests/test_tonight_round.py::test_a_hold_out_answer_still_counts_toward_the_cap",
     "backend/tests/test_tonight_integration.py::test_the_shortlist_is_identical_with_the_held_out_answers_removed",
@@ -1540,15 +1548,31 @@ id = "tonight-rank-holdout-one-in-ten"
 spec = "§6.2 step 4 (rewritten, 54b)"
 milestone = "M4"
 kind = "backend"
-what = "Every tenth pair a participant is served is drawn uniformly at random from the candidate pool and stored with selection='uniform_holdout'; replaying the round with those answers removed produces the identical shortlist and the identical stopping point."
+what = "A pair a participant is served is drawn uniformly at random from the candidate pool at a rate of one in ten - a rate, not a fixed slot schedule, so a round ended by the escape still carries hold-outs - and stored with selection='uniform_holdout'. The draw is sealed: the pair and its card token are identical on every read of that seat's round at that answer count, and a token minted for that seat and count names that pair and no other. Replaying the round with the hold-out answers removed produces the identical shortlist and the identical stopping point."
 why = "§13's uniform-random guard is non-negotiable — adaptive pairs inflate reliability, and a stopping rule that shares data with its own evaluation looks confident whether or not it is right."
 tests = [
-    "backend/tests/test_tonight_round.py::test_every_tenth_pair_is_the_uniform_hold_out",
+    "backend/tests/test_tonight_round.py::test_one_pair_in_ten_is_the_uniform_hold_out_and_it_is_a_rate_not_a_slot",
     "backend/tests/test_tonight_round.py::test_the_hold_out_pair_is_drawn_uniformly_from_the_whole_pool",
     "backend/tests/test_tonight_round.py::test_the_hold_out_arm_never_receives_a_fallback",
     "backend/tests/test_tonight_round.py::test_the_round_replays_identically_with_the_hold_out_answers_removed",
     "backend/tests/test_tonight_integration.py::test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt",
     "backend/tests/test_tonight_integration.py::test_the_shortlist_is_identical_with_the_held_out_answers_removed",
+    # M4.12: the two seal tests, and the reason this row's own `what` had to be restated. It said
+    # "every tenth pair", which is the implementation the build shipped rather than 54b's rate --
+    # so the row asserted the defect, and the escaped round's empty stream was invisible to it
+    # (finding 30). The draw's stability is the other half the row never asked for: nothing here
+    # named the card TOKEN, and twelve of them were mintable for one seat at one count (finding
+    # 28). Both halves now live in `tonight-rank-holdout-is-sealed-and-is-a-rate` as well, which is
+    # where the measurement of each is argued (decision 223).
+    "backend/tests/test_tonight_integration.py::test_twelve_reads_of_the_arms_card_return_one_pair_and_one_token",
+    "backend/tests/test_tonight_integration.py::test_the_card_a_phone_stashed_is_the_card_the_undo_re_issues",
+    # And the negative the seal is only half of. 54f's solo round is stateless, so the client
+    # hands its own answers back -- and a body that accepted a `selection` field would let a
+    # phone move one of them into or out of §13's admissible stream, which is the same defect
+    # as a mintable token arriving by another door. `SoloAnswer` has no such field and this
+    # pins that it never gains one. Registered here rather than under M4.12's own seal row
+    # because the requirement it holds is this row's sentence, not that row's repair.
+    "backend/tests/test_tonight_routes.py::test_the_arm_is_still_the_servers_and_never_the_clients",
 ]
 
 [[requirement]]
@@ -1609,8 +1633,17 @@ id = "tonight-rank-escape-from-pair-six"
 spec = "§6.2 step 4 (rewritten, 54c; schema 54g)"
 milestone = "M4"
 kind = "backend"
-what = "The round state reports the 'just pick for us' escape as unavailable through pair 5 and available from pair 6 onward; invoking it before pair 6 is rejected, and invoking it from pair 6 ends that participant's round immediately on what is known, still yielding a shortlist, with session_participant.ended_by='escape'."
+what = "The round state reports the 'just pick for us' escape as unavailable through pair 5 and available from pair 6 onward; invoking it before pair 6 is rejected, and invoking it from pair 6 ends that participant's round immediately on what is known, still yielding a shortlist, with session_participant.ended_by='escape'. Once the seat has ended - by convergence, by the cap or by the escape itself - the state reports the escape as unavailable rather than offering a control the route refuses."
 why = "Neither cap nor escape is a failure state, but the escape must not be reachable before the round has learned anything, and §14 risk 6 wants the rate at which it fires."
+# The last sentence of the `what` was added when this milestone opened and nothing held it: the flag
+# was `answered_count` alone, so a seat that had converged, hit the cap or taken the escape itself
+# still advertised a control the route answers with `round_over`. The test list is unchanged because
+# the test that owes it is the one already named -- `test_the_state_reports_when_the_escape_becomes_
+# available` asserted both of its halves under `if answered >= ESCAPE_FROM_PAIR - 1`, which a round
+# that ended before pair five satisfied by never evaluating them. Strengthened in place: the pool is
+# widened so pair five is genuinely reached, the count is asserted rather than hoped for, and the
+# seat is then escaped and the flag read again beside `round.escape_available(answered)`, which still
+# says yes -- so the assertion is about `ended_by` rather than about the count. [M4.12 finding 9]
 tests = [
     "backend/tests/test_tonight_round.py::test_the_escape_is_unavailable_through_pair_five_and_available_from_pair_six",
     "backend/tests/test_tonight_round.py::test_an_early_escape_is_refused_rather_than_quietly_ignored",
@@ -1625,8 +1658,15 @@ milestone = "M4"
 kind = "backend"
 what = "A participant's round ends when the leading candidates' intervals have separated from the rest, and otherwise at a hard cap of 20 pairs; two participants in one session may stop at different pair counts, and session_participant.ended_by records 'converged' or 'cap' accordingly."
 why = "Dynamic per-participant length is the substance of decision 54; §14 risk 6 requires the rate at which the cap fires to be recoverable."
+# "and otherwise at a hard cap" was the whole clause and only the cap half was reachable: with the
+# round borrowing §6.3's straddle_z, `converged` fired 0 times in 20 simulated evenings at the
+# shipped owned-pool scale, so "dynamic per-participant length" was a fixed length of 20 and §14
+# risk 6's rate of each ending had one entry. The hand-built boards below each arrange their own
+# answer, which is why none of them could see it; `..._converges_rather_than_always_reaching_the_
+# cap` is the same claim on a pool shaped like the shipped one. [M4.12 finding 31, decision 214]
 tests = [
     "backend/tests/test_tonight_round.py::test_a_round_over_a_resolved_pool_converges_rather_than_running_to_the_cap",
+    "backend/tests/test_tonight_round.py::test_a_round_over_a_realistic_pool_converges_rather_than_always_reaching_the_cap",
     "backend/tests/test_tonight_round.py::test_a_round_that_cannot_resolve_ends_at_the_hard_cap_of_twenty",
     "backend/tests/test_tonight_round.py::test_convergence_beats_the_cap_when_both_would_fire",
     "backend/tests/test_tonight_round.py::test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking",
@@ -1642,8 +1682,18 @@ id = "tonight-rank-split-reserves-third-slot"
 spec = "§6.2 step 5 (rewritten, 54d)"
 milestone = "M4"
 kind = "backend"
-what = "When answers diverge on the leading candidates or D ≥ 0.20, the contested facet is zeroed rather than averaged in scoring, and the third finalist slot holds the highest-scoring title on the opposite pole of that facet — replacing the third-ranked title, not appended alongside it."
+what = "When answers diverge on the leading candidates or D ≥ 0.20, the contested facet is zeroed rather than averaged in scoring, and the third finalist slot holds the highest-scoring title on the opposite pole of that facet — replacing the third-ranked title, not appended alongside it — and that finalist is labelled as the reserved one, on the stored row and on the reveal. When neither free finalist carries the reference pole, slot two is reserved for the best title on that pole as well, so the slate holds one of each rather than two neutral cards and one."
 why = "Zeroing removes an influence and cannot by itself produce an alternative; the prototype printed 'one of each' over a plain top-3 that could land wholly on one pole."
+# M4.12 AMENDED THE `what` TWICE, AND BOTH CLAUSES WERE ALREADY 54d's. "**labelled as such**" is in
+# the spec sentence this row quotes and nothing carried it: `combine` gave the reserved title
+# `SLOT_FINALIST` like the other two and no string `reserved` or `opposite` existed between the rule
+# and the screen, so a household told "here's one of each" could not see which card was the other
+# side. It ships as `session_result.reserved` (migration 0021, decision 220) rather than as a fourth
+# `slot` value, because a slot would turn every `slot IN ('finalist','wildcard')` filter into a
+# place to forget a finalist. The second clause is decision 221: with the reference pole repaired
+# (finding 21), 219 of 1,971 random pools still produced [neutral, neutral, one pole], and §6.2
+# fixes the "one of each" copy verbatim, so the slate is made true instead of the sentence reworded.
+# Still exactly three finalists either way.
 tests = [
     "backend/tests/test_tonight_combine.py::test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole",
     "backend/tests/test_tonight_combine.py::test_the_reserved_slot_replaces_the_third_rather_than_being_appended",
@@ -1651,6 +1701,10 @@ tests = [
     "backend/tests/test_tonight_combine.py::test_the_contested_facet_needs_two_people_pulling_opposite_ways",
     "backend/tests/test_tonight_combine.py::test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one",
     "backend/tests/test_tonight_combine.py::test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole",
+    "backend/tests/test_tonight_combine.py::test_neither_free_finalist_on_the_reference_pole_reserves_slot_two_as_well",
+    "backend/tests/test_tonight_combine.py::test_exactly_the_reserved_finalist_is_labelled_as_such",
+    "backend/tests/test_schema_contracts.py::test_a_slate_row_is_not_reserved_until_something_reserves_it",
+    "backend/tests/test_schema_contracts.py::test_the_reserved_finalist_is_the_one_the_stored_slate_labels",
 ]
 
 [[requirement]]
@@ -1719,7 +1773,13 @@ milestone = "M4"
 kind = "e2e"
 what = "The reveal renders the 'VOTES REVEALED TOGETHER' beat before the winner appears, and the winner card carries the approval share as a data-voice count, one match line per participant — including the honest negative and 'no profile yet' for a profile-less guest — the budget-fit line, runners-up, the wildcard strip, and Play on Jellyfin as the primary CTA."
 why = "The prototype's result screen showed none of the share, match lines, runners-up or wildcard, and this is the terminal screen the whole round exists to produce."
-tests = ["e2e/specs/15-tonight-group.spec.js::the reveal beat precedes the winner, and the card carries its whole inventory", "backend/tests/test_tonight_integration.py::test_the_approval_share_is_approvals_over_participants_and_is_persisted", "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries", "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something", "backend/tests/test_tonight_routes.py::test_the_wildcard_card_carries_the_label_it_is_honest_about"]
+# The last test is arch-06's own clause, and the one after it is what the lift left behind: the
+# statement was carried over unfiltered, so the reveal selected every `session_result` row of the
+# session -- the POOL, since `combine.sequence` is a permutation of every candidate -- joined to
+# `title` and carrying `per_user_match` jsonb, and discarded all but four in Python. 696 rows for
+# four cards on the shipped owned pool, and two readers of one table disagreeing about where the
+# filter lives (`ballot.slate_of` has always had it in SQL). [M4.12 cycle 1, M412-RESULT-4]
+tests = ["e2e/specs/15-tonight-group.spec.js::the reveal beat precedes the winner, and the card carries its whole inventory", "backend/tests/test_tonight_integration.py::test_the_approval_share_is_approvals_over_participants_and_is_persisted", "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries", "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something", "backend/tests/test_tonight_routes.py::test_the_wildcard_card_carries_the_label_it_is_honest_about", "backend/tests/test_tonight_integration.py::test_the_reveal_is_assembled_where_the_other_tonight_rules_are", "backend/tests/test_tonight_integration.py::test_the_reveal_reads_the_slate_rather_than_the_whole_pool"]
 
 [[requirement]]
 id = "tonight-rank-solo-lands-on-picks"
@@ -1728,7 +1788,13 @@ milestone = "M4"
 kind = "e2e"
 what = "Solo opens directly on three picks and a wildcard ranked by the personal Ledger with no tilt, with no pair round and no ballot anywhere in the flow; 'sharpen this' runs the adaptive round and re-ranks in place, after which the provenance line reads 'tilted by your N answers' instead of 'unseen first'."
 why = "The fastest path to a film must not be slower than browsing Home, and with one participant approval share is not a measurement."
-tests = ["e2e/specs/14-tonight.spec.js::solo lands on three picks and a wildcard with no round and no ballot", "e2e/specs/14-tonight.spec.js::every solo pick carries a why and a budget-fit line", "e2e/specs/14-tonight.spec.js::the provenance line names the budget and the filter", "e2e/specs/14-tonight.spec.js::sharpen runs the round in place and says so in the provenance line", "e2e/specs/14-tonight.spec.js::reshuffle walks the ranking and asks nothing", "backend/tests/test_tonight_integration.py::test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first", "backend/tests/test_tonight_integration.py::test_sharpening_re_ranks_in_place_and_changes_the_provenance_line", "backend/tests/test_tonight_integration.py::test_solo_leaves_no_session_row_and_publishes_no_room"]
+# M4.12 findings 35, 36 and 37. The row's own words were already the requirement -- "lands
+# directly on three picks", "reshuffle walks the ranking", "tilted by your N answers" -- and each
+# of the three was held by a test that could not fail on it: the door's cost was never measured,
+# the walk was measured on a six-film pool where the off-by-one happens to work, and the
+# provenance count was asserted against the number sent rather than the number that counted. The
+# four added here are the ones that can fail on each clause.
+tests = ["e2e/specs/14-tonight.spec.js::solo lands on three picks and a wildcard with no round and no ballot", "e2e/specs/14-tonight.spec.js::every solo pick carries a why and a budget-fit line", "e2e/specs/14-tonight.spec.js::the provenance line names the budget and the filter", "e2e/specs/14-tonight.spec.js::sharpen runs the round in place and says so in the provenance line", "e2e/specs/14-tonight.spec.js::reshuffle walks the ranking and asks nothing", "backend/tests/test_tonight_integration.py::test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first", "backend/tests/test_tonight_integration.py::test_sharpening_re_ranks_in_place_and_changes_the_provenance_line", "backend/tests/test_tonight_integration.py::test_solo_leaves_no_session_row_and_publishes_no_room", "backend/tests/test_tonight_integration.py::test_the_solo_door_lands_on_picks_without_running_the_pair_search", "backend/tests/test_tonight_integration.py::test_reshuffle_moves_the_picks_on_a_four_title_pool", "backend/tests/test_tonight_integration.py::test_the_provenance_line_counts_the_answers_the_replay_counted", "backend/tests/test_tonight_integration.py::test_an_answer_inside_the_pool_still_counts"]
 
 [[requirement]]
 id = "tonight-rank-guest-not-borrowed-ledger"
@@ -1752,16 +1818,17 @@ tests = [
 # The map is a contract, not a ceiling (docs/TESTING.md). §12's M4 row names eight things and
 # the eighteen rows above cover four of them: the round, the combine, the ballot and solo.
 # Nothing covered the candidate pool the round reads, the lobby, open-rooms discovery, push
-# join, the guest hand-off or the TV route — six clauses of the same sentence. These are those,
-# plus the §4.2 session tables no row named and the two measured levers (§0 rows 3 and 4) that
-# survive the deleted mood round.
+# join or the guest hand-off — five clauses of the same sentence. (It was six: decision 165
+# retires the TV route, so that clause and its row are gone rather than uncovered -- see the
+# note where the row stood.) These are those, plus the §4.2 session tables no row named and
+# the two measured levers (§0 rows 3 and 4) that survive the deleted mood round.
 
 [[requirement]]
 id = "tonight-rank-pool-filters-owned-kind-budget-rewatch"
 spec = "§6.2 steps 1 and 3 (session controls; candidate pool) + §4.1 rule 5"
 milestone = "M4"
 kind = "integration"
-what = "The candidate pool is exactly the owned titles of the session's kind that pass the runtime budget and the rewatch setting: an unowned title and a series in a film session never appear in the pool, in any pair served, or among the finalists; the budget is soft — a title is admitted up to budget + 40 min and none past it — and an admitted title over the budget carries 'runs N min over' with N its runtime minus the budget in whole minutes; with the rewatch toggle in its default position a title every seated member has seen is excluded and a title one of two members has not seen is kept."
+what = "The candidate pool is exactly the owned titles of the session's kind that pass the runtime budget and the rewatch setting: an unowned title and a series in a film session never appear in the pool, in any pair served, or among the finalists; the budget is soft — a title is admitted up to budget + 40 min and none past it — and an admitted title over the budget carries 'runs N min over' with N its runtime minus the budget in whole minutes; on a series session the bound is applied to the show's per-episode runtime and every label that states a number says so ('fits your 60 min per episode'); with the rewatch toggle in its default position a title every seated member has seen is excluded and a title one of two members has not seen is kept."
 why = "§4.1 rule 5 binds every ranking surface and Tonight ends in Play on Jellyfin, so an unowned or wrong-kind title is an evening the household cannot watch; the '+40 with a label' grace and the *every*-participant quantifier are the two places a plausible implementation silently gets it wrong in the direction nobody notices."
 tests = [
     "backend/tests/test_tonight_integration.py::test_the_pool_holds_only_owned_titles_of_the_sessions_kind",
@@ -1776,7 +1843,27 @@ tests = [
     "backend/tests/test_tonight_pool.py::test_a_title_of_unknown_runtime_is_admitted_rather_than_dropped",
     "backend/tests/test_tonight_pool.py::test_a_candidate_carries_its_own_over_budget_label",
     "backend/tests/test_tonight_pool.py::test_the_budget_filter_drops_only_what_it_must",
+    "backend/tests/test_tonight_pool.py::test_a_series_label_says_which_minutes_it_is_counting",
+    "backend/tests/test_tonight_pool.py::test_a_series_candidate_is_stamped_with_the_qualifier_and_a_film_is_not",
+    "backend/tests/test_tonight_integration.py::test_a_series_session_says_its_budget_is_per_episode",
+    "frontend/src/routes/tonight/tonight-page.test.js::says the number it is setting is per episode once the kind is series",
 ]
+# M4.12 finding 40 / decision 219, amending §6.2 step 1 in 54h. The ARITHMETIC does not move and
+# was never wrong: `title.runtime_min` is minutes per episode for a series, so the bound was
+# always per-episode. What was wrong is that nothing said so, on a slider the household reads as
+# the evening's length -- measured against the shipped bundle the series pool is 121 of 121 owned
+# titles at budget 60, 130 and 200 alike, and 104 candidates carried "fits your 60 min", one of
+# them a 24 min/ep show with 293 episodes. The three backend tests below are the label on both
+# branches, the stamp travelling with the candidate, and the whole thing through the query.
+#
+# And the slider itself, which the decision named "every label" and the first pass did not reach:
+# the two labels it did name report the number AFTER the household has set it, so the one row
+# where the misreading starts was the one row still reading "60 min" under the Series pill. It is
+# a rendering fact -- the store holds the kind and the number and neither knows they are drawn
+# together -- so the vitest id is beside the backend ones rather than instead of any (decision
+# 226), and the browser asserts the pair in `the session controls sit before the fork and apply
+# to both doors`. [M4.12 review cycle 2: M412-FE-5]
+
 
 [[requirement]]
 id = "tonight-rank-pool-order-plain-average"
@@ -1847,15 +1934,33 @@ milestone = "M4"
 kind = "e2e"
 what = "A member with the app already open is shown a newly opened session, and a seated lobby is shown an arriving participant, without a reload and without the client polling for it; following that banner seats the member in the session it names."
 why = "§6's preamble makes push best-effort, so the in-app banner is the channel that has to work on the iPhone that never delivers a notification; a lobby that needs a refresh to show an arrival is one a household talks over instead of using."
-tests = ["e2e/specs/15-tonight-group.spec.js::a room one member opens appears on the other device, live, with a tappable seat", "backend/tests/test_tonight_channel.py::test_a_household_frame_reaches_every_device", "backend/tests/test_tonight_channel.py::test_a_session_frame_reaches_only_the_room_it_is_about", "backend/tests/test_tonight_channel.py::test_a_device_that_stopped_answering_does_not_stop_the_others", "backend/tests/test_tonight_channel.py::test_a_frame_is_encoded_for_the_wire_before_it_is_sent", "backend/tests/test_tonight_channel.py::test_every_frame_the_hub_sends_survives_json_dumps", "backend/tests/test_tonight_channel.py::test_one_socket_that_never_finishes_writing_does_not_hold_the_others", "backend/tests/test_tonight_channel.py::test_a_slow_socket_costs_the_others_nothing"]
+# M4.12 adds the two tests this row's `why` was already arguing for and nothing held. "A lobby that
+# needs a refresh to show an arrival is one a household talks over" has two failure modes beyond the
+# ones above: the hub dropped a device it had given up on WITHOUT closing the socket, and the
+# client's only re-read path is `onclose` -- so that phone stayed connected and deaf for the rest of
+# the evening, which is the stall test's own scenario continued one step; and every Tonight write
+# awaited the fan-out inside the request, so the device that was live cost the device that answered
+# up to SEND_TIMEOUT. Live for the household and live for whoever is looking at it are the same
+# clause, and both halves are now asserted. [M4.12 finding 17; decision 225]
+tests = ["e2e/specs/15-tonight-group.spec.js::a room one member opens appears on the other device, live, with a tappable seat", "backend/tests/test_tonight_channel.py::test_a_household_frame_reaches_every_device", "backend/tests/test_tonight_channel.py::test_a_session_frame_reaches_only_the_room_it_is_about", "backend/tests/test_tonight_channel.py::test_a_device_that_stopped_answering_does_not_stop_the_others", "backend/tests/test_tonight_channel.py::test_a_frame_is_encoded_for_the_wire_before_it_is_sent", "backend/tests/test_tonight_channel.py::test_every_frame_the_hub_sends_survives_json_dumps", "backend/tests/test_tonight_channel.py::test_one_socket_that_never_finishes_writing_does_not_hold_the_others", "backend/tests/test_tonight_channel.py::test_a_slow_socket_costs_the_others_nothing", "backend/tests/test_tonight_channel.py::test_a_device_the_hub_gives_up_on_is_closed_and_not_only_forgotten", "backend/tests/test_tonight_channel.py::test_a_phone_that_never_takes_a_frame_does_not_delay_the_write"]
 
 [[requirement]]
 id = "tonight-rank-guest-hand-off-sequential-and-blind"
 spec = "§6.2 step 2 (\"Guests use the initiator's phone after the initiator finishes\") + step 4 (blind by construction)"
 milestone = "M4"
 kind = "e2e"
-what = "A guest seat cannot be opened for answering until the initiator's round has ended, and a second guest's round is refused while the first guest's is unfinished — the turns are sequential on the one device. When the phone passes, the incoming round renders none of the previous participant's pairs, answers or progress, and no control on that screen, browser back and in-round history entries included, reaches them."
+what = "A guest seat cannot be opened for answering until the initiator's round has ended, and a second guest's round is refused while the first guest's is unfinished — the turns are sequential on the one device. When the phone passes, the incoming round renders none of the previous participant's pairs, answers or progress, and no control on that screen, browser back and in-round history entries included, reaches them. The same hand-off carries the BALLOT: once the initiator has submitted, the guest's approval ballot opens on that phone with none of the previous person's selections showing, and the reveal appears only after every seat has submitted."
 why = "On one shared device blindness is not protected by the transport — the previous person's answers have already been delivered to that client — so the hand-off is the only place it can be enforced, or lost."
+# The `what` gained its last sentence at M4.12 (the BALLOT hand-off, and the reveal that waits
+# on it), and the test list did not have to move: the named Playwright case is the same one,
+# extended through the guest's ballot to the reveal rather than duplicated into a second file.
+# Two further claims of this row were held by nothing until M4.12 either, both inside that test
+# and both about the Undo on the incoming screen: it was clicked under `.catch(() => false)`, so
+# a screen with no Undo at all skipped the click and passed, and the only assertion after it was
+# a NEGATIVE -- the host's count unchanged -- which a screen that wrote nowhere satisfies. The
+# positive half is now there beside it: the guest's own count is 0, because at their pair 1 the
+# undo has nothing of theirs to take back. The frame half of "which seat this device is
+# playing" is not this row's; it has its own at M4.12. [M4.12 findings 13, 46]
 tests = ["e2e/specs/14-tonight.spec.js::the guest hand-off clears the screen and offers nothing early", "backend/tests/test_tonight_integration.py::test_a_guest_cannot_answer_before_the_initiator_has_finished", "backend/tests/test_tonight_integration.py::test_only_one_guest_turn_is_open_at_a_time", "backend/tests/test_tonight_integration.py::test_undo_reaches_only_your_own_last_live_answer", "backend/tests/test_tonight_routes.py::test_a_host_may_take_a_guests_turn", "backend/tests/test_tonight_routes.py::test_a_member_seat_is_never_writable_by_the_host"]
 
 [[requirement]]
@@ -1881,10 +1986,13 @@ id = "tonight-rank-push-join-is-best-effort"
 spec = "§6.2 step 2 (push to members' phones) + §6 preamble + §12 M4 (\"push join\") + §7.3"
 milestone = "M4"
 kind = "integration"
-what = "Opening a session sends a web-push invitation to each invited member's own push_subscription rows and to no other member's, and an armed §7.3 finish prompt is delivered the same way; a member with no subscription, or whose send fails, is still reachable by room code, open-rooms list and in-app banner, and no send outcome prevents a session being created, joined or started."
+what = "Opening a session sends a web-push invitation to each invited member's own push_subscription rows and to no other member's, and an armed §7.3 finish prompt is delivered the same way; a member with no subscription, or whose send fails, is still reachable by room code, open-rooms list and in-app banner, and no send outcome prevents a session being created, joined or started — nor delays it, because the invitation is dispatched to a background task holding a connection of its own rather than awaited into the response, and that task is bounded, so endpoints that never answer give the pooled connection back instead of holding one of ten for as long as the sender's own per-device timeouts allow."
 why = "§7.3 dates the push half of the finish prompt to 'the M4 stack' and §6's preamble makes push best-effort with an in-app equivalent for every prompt — a lobby that blocks on a delivery receipt breaks on exactly the iPhone the constraint was written about."
 tests = [
     "backend/tests/test_tonight_routes.py::test_opening_a_session_invites_the_other_member_and_nobody_else",
+    "backend/tests/test_tonight_routes.py::test_opening_a_room_returns_before_the_invitation_is_delivered",
+    "backend/tests/test_tonight_routes.py::test_a_hanging_invitation_gives_its_pooled_connection_back",
+    "backend/tests/test_tonight_integration.py::test_the_invitation_asks_every_member_even_when_one_send_fails",
     "backend/tests/test_tonight_routes.py::test_a_session_opens_even_when_every_push_fails",
     "backend/tests/test_tonight_routes.py::test_a_member_with_no_phone_is_still_reachable",
     "backend/tests/test_tonight_routes.py::test_an_armed_finish_prompt_is_pushed_to_that_member_alone",
@@ -1928,7 +2036,38 @@ tests = [
     "backend/tests/test_tonight_tilt.py::test_the_tilt_raises_candidates_that_look_like_what_was_chosen",
     "backend/tests/test_tonight_tilt.py::test_the_tilt_round_trips_through_json",
     "backend/tests/test_tonight_integration.py::test_an_answer_moves_the_participants_tilt",
+    "backend/tests/test_tonight_tilt.py::test_an_untagged_candidate_is_a_zero_rather_than_the_pools_anti_title",
+    "backend/tests/test_tonight_tilt.py::test_a_term_the_rejected_title_does_not_carry_is_absent_rather_than_fabricated",
+    "backend/tests/test_tonight_tilt.py::test_one_answer_reaches_the_tilt_the_same_way_whichever_caller_applies_it",
+    "backend/tests/test_tonight_tilt.py::test_an_answer_naming_a_title_that_has_left_the_pool_moves_nothing",
+    "backend/tests/test_tonight_tilt.py::test_an_answer_naming_one_title_twice_is_not_two_candidates",
+    "backend/tests/test_tonight_tilt.py::test_the_frame_counts_an_absent_term_as_a_zero_and_centred_gives_it_no_coordinate",
+    "backend/tests/test_tonight_integration.py::test_an_answer_naming_one_title_twice_is_not_a_comparison",
 ]
+# M4.12 cycle 1. Two more, and they are the two halves decision 218 left facing each other.
+# M412-SOLO-04: `applies` is spelled as membership, which one title named twice satisfies -- so
+# solo counted such an answer into "tilted by your N answers" over a delta of exactly zero, while
+# `round.replay`'s identically-spelled guard let the belief move most of a standard deviation on a
+# comparison that compares nothing. D3-04: `frame` reads an absent term as a zero and `centred`
+# now gives it no coordinate at all, which are answers to two different questions (the pool's
+# distribution against one candidate's position) and were left as two unreconciled sentences four
+# lines apart -- with nothing pinning the first, because the toy pool carries every term on every
+# title, so applying `centred`'s rule to `frame` left this module green.
+# M4.12 decision 218 and finding 27. "Taken relative to the mean DNA vector of that session's own
+# candidate pool" was true of a tagged candidate and false of an untagged one: `centred` read an
+# absent term as 0.0 and then centred it, so a title with no DNA -- 32% of the shipped library --
+# became the pool's anti-title on every term, and they all became the SAME anti-title, so they
+# rose or fell as a block by about 0.44 sd of the score spread. Every fixture in the file was
+# symmetric, which cancels it exactly, and the toy pools read 0.0 while the corpus did not.
+#
+# The integration test is named above and is unchanged in name only: it asserted
+# `isinstance(after, dict)`, which is true of the empty dict -- a registered test that passed on a
+# tilt that had not moved. It is directional now (the chosen title outranks the rejected one under
+# the resulting tilt, and the opposite answer is the exact negation). The last two tests are the
+# one-helper repair from finding 37, which is the same claim on the other side: an answer §10 took
+# out of the pool must not reach the tilt either, and three copies of the dispatch had already
+# drifted about whether it did.
+
 
 [[requirement]]
 id = "tonight-rank-no-within-evening-reranking"
@@ -2042,14 +2181,17 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_reshuffle_walks_the_ranking_rather_than_redrawing",
 ]
 
-[[requirement]]
-id = "tonight-rank-tv-kiosk-route"
-spec = "§6.2 step 8 v2.1 numbering (TV kiosk route) + §12 M4 (\"+ TV route\")"
-milestone = "M4"
-kind = "e2e"
-what = "/tv accepts a room code, attaches to that session, and renders the three states the spec names — lobby, progress, result — advancing as the session advances; before the reveal it shows no participant's answers, votes or approvals and no winner."
-why = "§12's M4 row scopes the TV route into this milestone, and the TV is the one screen everybody in the room can see — so the blind rule has to hold there before it is worth anything on the phones."
-tests = ["e2e/specs/16-tonight-tv.spec.js::the TV attaches by room code and shows the lobby", "e2e/specs/16-tonight-tv.spec.js::the TV takes the code from the URL, because a television has no keyboard", "e2e/specs/16-tonight-tv.spec.js::the TV shows progress and no answers while the round runs", "e2e/specs/16-tonight-tv.spec.js::the TV shows the winner only once the ballot has closed", "e2e/specs/16-tonight-tv.spec.js::a code that names no live room is refused rather than showing an empty room"]
+# `tonight-rank-tv-kiosk-route` stood here. DELETED, not waived, and with the surface itself:
+# decision 165 answers "does anything about a Tonight session render on the TV?" with no —
+# everything is on the phone, results included, and the projector plays the film. A waiver would
+# have said the requirement still stands and is untested; what happened is that §6.2 step 8's
+# kiosk route stopped being a requirement, so the kiosk route's own directory under
+# `frontend/src/routes/`, `e2e/specs/16-tonight-tv.spec.js` and this block go together in one
+# change — each was the others' red gate, since the row named five tests in a file that had to
+# go. §6.2 step 8, §1's diagram, §3.2's shared/TV PIN rationale, §6.2 step 2's join channels
+# and §12's M4 "(+ TV route)" are struck in the same milestone. What is KEPT is the room-code
+# join path, which phones use, and `ballot.tally`'s blindness guard, whose other callers are
+# the session WebSocket and any later reader. [decision 165; M4.12 decision 224, finding 43]
 
 [[requirement]]
 id = "tonight-rank-split-threshold-and-silence-below"
@@ -2385,6 +2527,28 @@ tests = [
     "backend/tests/test_dna_import.py::test_the_shared_pairs_stay_distinguishable_across_the_two_tiers",
     "backend/tests/test_dna_import.py::test_loading_the_dna_layer_twice_does_not_duplicate_it",
     "backend/tests/test_bundle_validation.py::test_a_vocabulary_directory_without_the_corpus_term_files_is_refused",
+    # M4.12 / decision 173: the axis artifact was the LAST file this row's own `what` was
+    # wrong about. `_load_axes` read `dna_vocab/<v>/axes/`, which §6.4 never named and the
+    # export does not ship -- so the one artifact of the naming layer that was still being
+    # looked for at a path the bundle does not contain was the one this row was written to
+    # catch, and nothing here reached it. The five below close both clauses at once: the
+    # file beside the vocabulary TSVs is the one that loads, a stem the vocabulary does not
+    # know is REPORTED rather than reaching `dna_axis`'s foreign key mid-transaction, and a
+    # bundle with no axis artifact at all is loaded with a note saying what its absence
+    # costs -- which is §6.4's Map and §6.2 step 5's split surfacing, not the Map alone.
+    "backend/tests/test_dna_import.py::test_an_axis_tsv_beside_the_vocabulary_files_is_the_one_that_loads",
+    "backend/tests/test_dna_import.py::test_an_axis_named_for_something_that_is_not_a_facet_is_reported_rather_than_raised",
+    "backend/tests/test_dna_import.py::test_the_pacing_coordinates_file_is_not_read_as_an_axis_definition",
+    "backend/tests/test_dna_import.py::test_a_bundle_with_no_axis_artifact_loads_and_the_report_says_what_is_off",
+    "backend/tests/test_dna_import.py::test_the_data_card_names_the_paths_the_axis_loader_actually_reads",
+    # M4.12 cycle 1, D3-01 / decision 227: the rule those five enforce was written down nowhere
+    # normative. §6.4 named no filename and decision 173's own sketch names another one
+    # (`axis_<facet>_v1.tsv`, which this loader reads as a facet called `axis_mood_v1` and warns
+    # about), so a corpus authored from the spec or the register would import zero `dna_axis` rows
+    # and leave §6.2 step 5's split dark, while the app told the operator the file was misnamed.
+    # §6.4 now states `<facet>.tsv`, and the last test holds that sentence against the loader and
+    # the fixture bundle rather than restating it.
+    "backend/tests/test_dna_import.py::test_the_spec_states_the_axis_filename_rule_the_loader_enforces",
 ]
 
 [[requirement]]
@@ -2796,9 +2960,14 @@ id = "tonight-rank-selection-is-affordable-at-real-pool-size"
 spec = "§6 preamble (<1.5 s per battle); §6.2 step 4 (rewritten, 54c)"
 milestone = "M4.12"
 kind = "backend"
-what = "The fast pair evaluator returns the same expected-straddler value as the reference scalar implementation — exactly, not within a tolerance, over boards with mixed variances and replayed answers as well as fresh ones — and `select` serves the same pair as the scalar argmin over all three searches, the `asked` filter and the DNA-axis tie-break. A first pair for a guest seat over 716 candidates at the shipped prior, and the straddler-against-anyone fallback over 696 reached with every between-straddler pair already answered, each complete in under 0.5 s."
+what = "The fast pair evaluator returns the same expected-straddler value as the reference scalar implementation — exactly, not within a tolerance, over boards with mixed variances and replayed answers as well as fresh ones — and `select` serves the same pair as the scalar argmin over all three searches, the `asked` filter and the DNA-axis tie-break. A first pair for a guest seat over 716 candidates at the shipped prior, and the straddler-against-anyone fallback over 696 reached with every between-straddler pair already answered, each complete in under 0.5 s. The block evaluates the error function three times per pair and not four, which is the sharing the module's own performance note claims."
 why = "§6 budgets 1.5 s per battle; the real owned pool is 696 titles and the shipped search costs 36 s for a member and 126 s for a guest seat. Every pool in the suite is 4-6 titles, so nothing in CI could see it — and an optimisation that changes which pair 54c's rule picks is a rule change, so equivalence is asserted first and speed second. Decision 168 rules out the K-nearest-straddler bound and names the guest prior and the fallback arm as the boards the guard must use."
-tests = ["backend/tests/test_tonight_round.py::test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly", "backend/tests/test_tonight_round.py::test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing", "backend/tests/test_tonight_round.py::test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves", "backend/tests/test_tonight_round.py::test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget", "backend/tests/test_tonight_round.py::test_the_costlier_fallback_arm_is_inside_the_budget_too"]
+# The fifth is the module's own performance record rather than a threshold: the block comment above
+# `_Board` concludes "three `erf` and three `exp` per pair" from a sharing of `Phi(t)` the code did
+# not implement, so the search ran four passes over the one function that is a Python-level loop.
+# Nothing a household can see failed -- which is why it is a test and not a measurement, and it is
+# the same drift cycle 1 repaired for `BOUNDARY_Z`. [M4.12 cycle 2, M412-RND-03]
+tests = ["backend/tests/test_tonight_round.py::test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly", "backend/tests/test_tonight_round.py::test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing", "backend/tests/test_tonight_round.py::test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves", "backend/tests/test_tonight_round.py::test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget", "backend/tests/test_tonight_round.py::test_the_costlier_fallback_arm_is_inside_the_budget_too", "backend/tests/test_tonight_round.py::test_the_pair_search_evaluates_the_error_function_three_times_per_pair"]
 
 [[requirement]]
 id = "data-rules-the-printed-beta-optimum-is-this-apps-own-coordinate"
@@ -3338,12 +3507,19 @@ milestone = "M4.8"
 kind = "backend"
 what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take"]
 # The ledger guard is registered here rather than given an eleventh row, and the row it lands on
 # is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
 # run is published, so a count no run produced is the same defect as a silent skip, one document
 # further out. An eleventh row would also flip the published block to 11/11 and make that guard
 # fail on its own registration until the block was re-pasted. [M4.8 review cycle 3: m48-c3-cov-01]
+#
+# The third lands here for the same two reasons, and it is that same silent skip taken literally:
+# M4.12's paragraph published "it takes the last `pytest.skip` out of a registered test" over a
+# tree in which four registered tests still skip, none of them Tonight's. All four are argued and
+# belong to M4.7 and M4.8, so the repair is the sentence, not the rule -- and the guard reads the
+# qualifier out of the prose, so a maintainer who widens the wording gets the wider rule with it.
+# [M4.12 review cycle 2: M412-C2-LEDGER-01]
 #
 # `..._counts_the_ids_the_map_actually_holds` joins it for the same reason, one sentence further
 # out: the fenced block was mechanical and the prose beside it was not, so the ledger published
@@ -3391,21 +3567,35 @@ id = "platform-exit-scripts-can-report-their-own-failure"
 spec = "§12 M2/M3/M4 exit criteria; §13"
 milestone = "M4.8"
 kind = "static"
-what = "No milestone exit script contains a check whose predicate is a constant; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script."
-why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal."
-tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure"]
+what = "No milestone exit script contains a check whose predicate is a constant; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and the M4.12 script's small-pool check reads the state its seat reads left behind, with no read of a settling route after them."
+why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal. M4.12 review cycle 2 found the same family one layer in, in a check rather than in a verdict: check 8 of the M4.12 script grades decision 215's clause -- a pool of two or three candidates reaches the ballot rather than waiting silently -- and on such a pool only the round read can end a seat, because there is no pair to answer and the escape is refused below pair six. It issued one more GET of the session AFTER its loop of seat reads, and every read of the session, the ballot and the result calls `play.settle`: so the trailing GET moved the room itself, the verdict came back 'ballot' whichever way the round read behaved, and the detail line the check prints -- that 'voting' is the silent wait this milestone closed -- named the one thing it could not see. No client produces that order either, which is M412-PLAY-4's defect read from the other end: `refresh()` GETs the session and only then calls `loadRound`."
+tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_small_pool_check_grades_the_state_the_seat_reads_left", "backend/tests/test_static_contracts.py::test_the_settling_read_guard_catches_a_trailing_session_get"]
 # Decision 184: M4.5's published "18/18" counted two of these constants, so the count no longer
 # describes what the script prints. It is restated in words in docs/TESTING.md's ledger and
 # corrected by a real run against a real bundle, not by a number nobody measured.
+#
+# The last two guards land here rather than on M4.12's own decision 215 row, because what they
+# hold is a property of the INSTRUMENT: a check whose verdict does not depend on the behaviour it
+# is labelled with is this row's defect one layer in, and the row for the rule already names the
+# tests that grade the rule. [M4.12 review cycle 2: M412-GATE-8]
 
 [[requirement]]
 id = "platform-e2e-scaffolding-cannot-manufacture-a-verdict"
 spec = "§10 (the swap sequence and the reset that precedes it); §12 (the browser suite is the evidence)"
 milestone = "M4.8"
 kind = "static"
-what = "e2e/reset.mjs reads a `.env` value the way `docker compose` reads it — the trailing ` #` comment cut first, then one matching pair of quotes stripped — and the LAST assignment of a key winning, as it does for compose's dotenv and for python-dotenv — so every line of that file compose accepts reaches the PUBLIC_URL guard as the value the stack booted on, quoted or exported or commented or assigned twice or all four; and no browser spec leaves a wait whose REJECTION is the expected outcome unattached across an await, where the wait timing out before its handler arrives is an unhandled rejection rather than a passing assertion; and the shared seeding helper says of itself only what the tree gives it -- the 60 s fold-in tick is cited to the module that registers it rather than to a §5.3 table whose fold-in row reads nightly, and every spec still declaring a private copy of the createMember/signInAsMember pair is named there rather than covered by a claim that a repair made in the helper is a repair everywhere."
+what = "e2e/reset.mjs reads a `.env` value the way `docker compose` reads it — the trailing ` #` comment cut first, then one matching pair of quotes stripped — and the LAST assignment of a key winning, as it does for compose's dotenv and for python-dotenv — so every line of that file compose accepts reaches the PUBLIC_URL guard as the value the stack booted on, quoted or exported or commented or assigned twice or all four; and no browser spec leaves a wait whose REJECTION is the expected outcome unattached across an await, where the wait timing out before its handler arrives is an unhandled rejection rather than a passing assertion; and the shared seeding helper says of itself only what the tree gives it -- the 60 s fold-in tick is cited to the module that registers it rather than to a §5.3 table whose fold-in row reads nightly, and every spec still declaring a private copy of the createMember/signInAsMember pair is named there rather than covered by a claim that a repair made in the helper is a repair everywhere; and neither the project matrix's own reasoning nor the allowance that holds it names a spec file `e2e/specs` does not have."
 why = "Review cycle 1 found both in this milestone's own new code, and both invert what the harness reports. The parser tested the whole right-hand side for quoting before cutting the comment, so `PUBLIC_URL=\"http://localhost:8080\" # dev` matched neither arm and the value arrived with its quotes still on: measured, the prefix guard one line above a `DROP DATABASE` then refused a development stack as not one, blaming the operator's value rather than the reader, and the e2e gate could not be run at all. 14-tonight's stray-write watcher created its `waitForRequest` and attached `.rejects` only after the Undo click it was racing, so a click slower than the 2 s window rejects with nothing listening and Playwright's worker fails whichever test is running with `Timeout 2000ms exceeded` against no assertion — on a run in which nothing was written to the host's seat. Review cycle 2 found the same reader returning at the FIRST line that mentions a key while every reader in compose's chain builds a map in file order: a `.env` with a second PUBLIC_URL appended under the first — the shape appending produces — boots the stack on the second and cleared the prefix guard on the first, deciding \"development stack\" one statement above `DROP DATABASE` from a line the stack is not running on. Review cycle 3: the wait guard was anchored on the literal receiver `page.`, so the rule this row states for every browser spec was enforced on sixteen of the eighteen -- 15-tonight-group.spec.js:31-33 binds its two pages as `a` and `b` and already carries the read-side twin of 14-tonight's negative at :177, and 18-system.spec.js:46,52 binds `admin` and already calls `admin.waitForResponse(`. The widened receiver reports nothing across all eighteen shipped specs; a computed receiver is still missed and no spec writes one. Review cycle 3 found the same shape twice more in this milestone's own new text, in the file five specs seed through. waitForPool's rewritten timeout message printed `§5.3 folds in every 60 s`, and §5.3's jobs table gives the fold-in a nightly cadence: worker.py:384-388 says so over the registration in as many words and registers fold-in-user-vectors at every=86400 two lines above the tick, so the message named the wrong one of two registered jobs whose cadences differ by a factor of 1440, and sent the reader of a 120 s timeout to a table against which its arithmetic cannot be checked -- the ceiling with no derivation behind it that the rewrite existed to remove. And signInAsMember's new comment claimed decision 186 had left one seeding path and that a repair made there is a repair everywhere, while 11-rate.spec.js:209-230 still declares a copy of the pair that decision 186's own Cost paragraph keeps deliberately -- and this milestone's `reuse` is the standing counterexample, having landed in the helper without reaching 11-rate, which still mints a member per run. [M4.8 review cycle 3: m48-c3-foldin-citation, m48-c3-one-path-overclaim]"
-tests = ["backend/tests/test_harness_contracts.py::test_the_reset_parser_reads_the_values_compose_reads", "backend/tests/test_harness_contracts.py::test_the_reset_parser_harness_sees_the_order_that_shipped", "backend/tests/test_harness_contracts.py::test_the_reset_parser_resolves_a_key_the_way_the_stack_that_booted_did", "backend/tests/test_harness_contracts.py::test_no_wait_whose_rejection_is_expected_is_attached_after_an_await", "backend/tests/test_harness_contracts.py::test_the_unattached_rejection_guard_sees_a_wait_that_can_out_run_its_handler", "backend/tests/test_harness_contracts.py::test_no_fold_in_cadence_is_attributed_to_a_section_that_does_not_give_it", "backend/tests/test_harness_contracts.py::test_the_fold_in_citation_guard_sees_a_cadence_the_section_does_not_give", "backend/tests/test_harness_contracts.py::test_the_shared_seeding_helper_names_every_private_copy_of_its_pair", "backend/tests/test_harness_contracts.py::test_the_seeding_reach_guard_sees_a_claim_the_spec_directory_contradicts"]
+tests = ["backend/tests/test_harness_contracts.py::test_the_reset_parser_reads_the_values_compose_reads", "backend/tests/test_harness_contracts.py::test_the_reset_parser_harness_sees_the_order_that_shipped", "backend/tests/test_harness_contracts.py::test_the_reset_parser_resolves_a_key_the_way_the_stack_that_booted_did", "backend/tests/test_harness_contracts.py::test_no_wait_whose_rejection_is_expected_is_attached_after_an_await", "backend/tests/test_harness_contracts.py::test_the_unattached_rejection_guard_sees_a_wait_that_can_out_run_its_handler", "backend/tests/test_harness_contracts.py::test_no_fold_in_cadence_is_attributed_to_a_section_that_does_not_give_it", "backend/tests/test_harness_contracts.py::test_the_fold_in_citation_guard_sees_a_cadence_the_section_does_not_give", "backend/tests/test_harness_contracts.py::test_the_shared_seeding_helper_names_every_private_copy_of_its_pair", "backend/tests/test_harness_contracts.py::test_the_seeding_reach_guard_sees_a_claim_the_spec_directory_contradicts", "backend/tests/test_harness_contracts.py::test_the_harness_names_no_spec_file_that_does_not_exist", "backend/tests/test_harness_contracts.py::test_the_spec_name_guard_sees_a_comment_that_outlived_its_file"]
+# Review cycle 1 of M4.12 found the same class in the prose that funds the project matrix. Decision
+# 165 retires the TV client, so its route, its spec and its coverage row went in one change -- and
+# `playwright.config.js:77` went on giving "16-tonight-tv is a television" as one of the two reasons
+# the phone project's `testMatch` is shaped the way it is. That comment is what a maintainer reads
+# when deciding whether a new Tonight spec belongs on the phone, and the exit criterion's own grep
+# cannot see it: it reads `frontend/src`, `e2e/specs`, `backend/tests` and `docs` for a route
+# literal, and the config is in none of them. The guard is stated over the directory rather than
+# over that name, and it holds the allowance set in this file to the same rule.
+# [M4.12 review cycle 1: M412-FE-4]
 # The parser is EXECUTED rather than read, which no other guard in that file does: what it got
 # wrong is an order of operations, and a text guard for that could only restate the fixed regex
 # and compare it with itself. `node` is the runtime that runs `e2e/reset.mjs`, so the skip when
@@ -4650,3 +4840,588 @@ tests = [
 # restores the whole chain in a diff that touches neither `push/send.py` nor the guard. The two
 # self-tests are named for the same reason the guard exists: a probe that cannot report True is
 # a green line, not a proof. [M4.11, arch-02]
+
+
+# --- M4.12: Tonight - lifecycle, selector and the phone (decisions 214-226; M4.12-plan.md) ---
+#
+# Seventeen rows, written before the code with no `tests` key on any of them: the red list the
+# gate prints when `current_milestone` becomes "M4.12" IS the test plan, the way M4.10's and
+# M4.11's openings were. The eighteenth is above, in the pre-release block — the vectorised pair
+# search shipped ahead of this milestone under the roadmap's "Start here" table, so the row it
+# already carries is not repeated here.
+
+[[requirement]]
+id = "tonight-rank-the-boundary-is-tonights-own-constant"
+spec = "§6.2 step 4 (rewritten, 54c; the ~10 candidate votes sentence); §6.3 (the A/S badge); decisions 175 and 205"
+milestone = "M4.12"
+kind = "backend"
+what = "Tonight's round tests the shortlist boundary against its own BOUNDARY_Z beside CAP_PAIRS and never reads §6.3's straddle_z: a round over a realistic pool reports 'converged' rather than always reaching the cap, the median round is close to §6.2's ~10 candidate votes, and no route passes a z drawn from ledger_hyperparams into the round. At the shipped straddle_z the A/S badge is a minority of a fitted board rather than all of it, and the queue's boundary and exploration arms draw from different sets."
+why = "The two surfaces measure straddling against different scales - a Ledger posterior in logit units against learned cutpoints, and a §5.1 score standardised to unit variance against the rank-3/4 cut - so one sigma multiple cannot calibrate both and sharing it made one a no-op. At z = 1.0 `converged` was dead code and a board nobody has rated badged 600 of 600; the constant is the controlling variable, not the prior, whose measured pool variance of 0.76-0.88 makes prior_var 1.0 correct by construction."
+# prior_var is NOT narrowed and finding 32 is recorded as refuted, which is a claim the row has to
+# carry evidence for or somebody re-derives it: at the borrowed threshold a quarter of the prior
+# converges exactly as often as the full one (zero in twenty), and at the round's own threshold it
+# converges LESS, because the boundary tightens as fast as the intervals do. [decision 214]
+#
+# "AT THE SHIPPED straddle_z" is the clause the board test alone cannot close: it builds its own
+# board and passes `DEFAULTS`, so it is a statement about the constant in `hyperparams.py` and not
+# about the number a booted stack badges with. The corpus ships neither §6.3 threshold (proposal
+# 157), which leaves `make_bundle.py`'s literal the only `straddle_z` `npm --prefix e2e run fresh`
+# and `ops/devstub.py` ever load -- and it stayed at the retired 1.0, so decision 214 was inert on
+# every stack this repository can boot while this row read as covered. The last test
+# is the one that ties the two halves together. [M4.12 cycle 1, M412-RND-01]
+#
+# And the paragraph beside the constant is held to the harness that produced it. The tests above
+# assert the ARGUMENT at whichever parameters make each point, so a record that is merely
+# approximate survives them -- two of the four ranges written next to BOUNDARY_Z did not
+# reproduce, and the prior docstring quoted a pair no pool size produces. A comment that says "do
+# not narrow this without a new measurement" is the evidence the next person re-derives against,
+# so the sweep it quotes is run rather than remembered. [M4.12 cycle 1, M412-RND-02]
+tests = [
+    "backend/tests/test_tonight_round.py::test_the_round_reads_its_own_boundary_and_no_route_hands_it_one",
+    "backend/tests/test_tonight_round.py::test_a_round_over_a_realistic_pool_converges_rather_than_always_reaching_the_cap",
+    "backend/tests/test_tonight_round.py::test_the_badge_threshold_and_the_rounds_boundary_cannot_be_one_constant",
+    "backend/tests/test_tonight_round.py::test_narrowing_the_prior_does_not_make_a_round_converge",
+    "backend/tests/test_tonight_round.py::test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way",
+    "backend/tests/test_tonight_round.py::test_a_non_positive_straddle_threshold_would_end_every_round_before_it_started",
+    "backend/tests/test_rank_board.py::test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board",
+    "backend/tests/test_bundle_shapes.py::test_the_declared_exception_carries_the_thresholds_the_app_actually_ships",
+]
+
+[[requirement]]
+id = "tonight-lifecycle-settles-from-a-read"
+spec = "§6.2 steps 5-6 (rewritten, 54e)"
+milestone = "M4.12"
+kind = "integration"
+what = "When every seat has ended and the combine has not run — because it failed once, or because the last write never reached it — the next GET of the session, the ballot or the result moves the room to 'ballot' and returns the slate; no route calls play.finish directly."
+why = "The transition lived only inside the answer handler, so one transient failure left the evening in 'voting' for ever with the data intact and unreachable. A rule with no home has no caller other than a phone's POST — a read, a sweep or any later reader had nothing to call."
+# The rule is `play.settle`; the three reads that call it are the lobby, the ballot and the
+# result. The route tests are the ones that can fail on the clause's own words — `_announce`
+# was the combine's only caller, so what had to change was which handlers reach the rule —
+# and the source read is the half that keeps a second route from growing its own combine.
+tests = [
+    "backend/tests/test_tonight_routes.py::test_a_combine_that_failed_once_is_finished_by_the_next_lobby_read",
+    "backend/tests/test_tonight_routes.py::test_a_stuck_rooms_ballot_read_returns_the_slate_rather_than_an_empty_one",
+    "backend/tests/test_tonight_routes.py::test_a_stuck_rooms_result_read_lets_the_evening_finish",
+    "backend/tests/test_tonight_routes.py::test_no_route_calls_the_combine_directly",
+    "backend/tests/test_tonight_integration.py::test_a_room_whose_every_seat_has_finished_is_settled_by_a_read",
+    "backend/tests/test_tonight_integration.py::test_settling_a_room_twice_leaves_the_one_slate",
+    "backend/tests/test_tonight_integration.py::test_a_room_that_is_still_answering_is_not_settled_by_a_read",
+]
+
+[[requirement]]
+id = "tonight-a-seat-that-can-never-be-asked-ends-itself"
+spec = "§6.2 steps 3-4 (54c); 54d (three finalists and a wildcard); decision 215"
+milestone = "M4.12"
+kind = "integration"
+what = "A seat whose replay reports a stop reason with no pair to serve is ended with that reason rather than left with ended_by NULL: a pool of three candidates and a seat with no scores in the frozen snapshot both reach 'ballot' instead of waiting for ever — including through the routes, where the read that ends the last seat is the only thing that can move the room and nothing else re-reads the session afterwards."
+why = "boundary() returns None at or below the shortlist size, so such a round converges at zero answers; _end was reachable only from an answer (needs a pair) or the escape (refused below five answers), so everyone_finished stayed false and no route could close the room."
+# Both routes into the dead end, because they arrive for different reasons and a fix for one
+# would not have closed the other: a seat outside the frozen snapshot (finding 5's leftovers,
+# constructed here rather than raced for) and a pool too small to have a shortlist boundary at
+# all (decision 215, parametrised over exactly two and exactly three candidates). Each ends with
+# `settle` returning True, so the assertion is the evening finishing rather than a column
+# changing value. The third test is what the repair costs: ending a seat from a READ makes
+# `state_for` a second writer of `ended_by`, and §14 risk 6 reads that column as the rate at
+# which each of the three endings fires — so the first ending recorded has to be the one that
+# stands, or a household's escape is counted as a convergence.
+#
+# The fourth is the SECOND thing that repair costs, and it is a different race from the third: not
+# a competing ending but a moved count. The read's replay is off the loop in the same diff, so an
+# undo commits between the answers it read and the ending it writes, and a reason stamped from the
+# round the seat has already left ends somebody who is playing again -- on a card whose pair is
+# suppressed by the stop reason and never by `ended_by`, so that seat then answers 409 `round_over`
+# over a live pair until a frame drags the room to the ballot. The write paths pass `_end`'s
+# `when_answered` for exactly this; the read is the caller that did not.
+# [M4.12 cycle 1, M412-CONC-01]
+#
+# AND THE FIFTH IS THE ROUTE, because the four above it end the seat by calling `play.state_for`
+# and then settle the room by calling `play.settle` themselves -- an order no client produces. The
+# round read was the one handler that called neither, and on a pool this size it is the only thing
+# that can end a seat at all: so the device that read the LAST un-ended seat left the room in
+# `voting` with every seat `converged` and woke nobody, and the client's only GET of the session
+# runs BEFORE its round read inside the same `refresh()`. A green domain test and a hung household,
+# which is what "tested through the surface the row names" is for. [M4.12 cycle 2, M412-PLAY-4]
+tests = [
+    "backend/tests/test_tonight_integration.py::test_a_seat_that_can_never_be_asked_ends_itself",
+    "backend/tests/test_tonight_integration.py::test_a_pool_too_small_for_a_round_reaches_the_ballot",
+    "backend/tests/test_tonight_integration.py::test_the_first_ending_recorded_is_the_one_that_stands",
+    "backend/tests/test_tonight_integration.py::test_an_undo_during_a_read_of_the_round_leaves_the_seat_playing",
+    "backend/tests/test_tonight_routes.py::test_a_three_candidate_evening_reaches_the_ballot_from_the_round_read",
+]
+
+[[requirement]]
+id = "tonight-a-join-and-a-start-do-not-both-win"
+spec = "§6.2 step 2 (\"Anyone who joins before you start is in\")"
+milestone = "M4.12"
+kind = "integration"
+what = "Two concurrent operations on one room — a member's join and the host's start — leave exactly one outcome standing: either the member is seated and appears in the frozen pool snapshot, or the join is refused with 'started'. A seat never exists outside the snapshot the round was built from."
+why = "start read the seats and built the pool outside any transaction and flipped the state last, while join consulted a session row read before its own retry loop — so on a real library the admit window was the whole pool build, tens of seconds wide."
+# Two real connections and a pool query slowed to the plan's own 0.6 s, because in sequence
+# either order is correct and that is why the suite was green. The second test is the claim's
+# own hazard rather than the defect's: `start` refuses an unrankable pool AFTER it has claimed
+# the room, and a room left in 'voting' with no snapshot would be this defect again — so the
+# refusal rolls the claim back and the join waiting behind it is admitted.
+tests = [
+    "backend/tests/test_tonight_integration.py::test_a_join_and_a_start_do_not_both_win",
+    "backend/tests/test_tonight_integration.py::test_a_refused_start_leaves_the_room_open_and_joinable",
+]
+
+[[requirement]]
+id = "tonight-the-host-can-end-a-started-room"
+spec = "§6.2 step 2 (open-rooms list visible to every household device); §14 risk 6"
+milestone = "M4.12"
+kind = "integration"
+what = "The host — and only the host — can end a started room; the room leaves every member's open-rooms list, its state is 'abandoned' with ended_at set, and every session_answer row survives. A member's seat in that room no longer answers a round."
+why = "The abandon clause took rooms in state 'open' only and no route, sweep or timeout could end a started one, so every other lifecycle defect became permanent and recovery meant SQL against the session table. §14 risk 6 wants the votes kept, so it is not a delete."
+# Through the routes with two real cookie jars, because every clause of the `what` is about what a
+# household RECEIVES rather than about what a rule returns: the host check is the route's (the same
+# one `start` makes of the same column), the list is §6.2 step 2's every-household-device list read
+# with each cookie in turn, and "no longer answers a round" was a 200 carrying a pair and a fresh
+# card token on a room the host had just closed -- which is why that test takes its card BEFORE the
+# end and then posts it.
+#
+# The fourth test covers finding 8 as well as this row's last sentence, and they are the same
+# statement at two layers: `play._participant` selected the session's state and never its
+# `ended_at`, so one refusal in the read that `state_for`, `record_answer`, `retract` and `escape`
+# all share covers the round, the answer and the undo at once.
+#
+# The fifth is the guard the control needs rather than a clause of the requirement, and it is in
+# this row because it is what keeps the row's own promise honest: `end_session` takes the live
+# session row `FOR UPDATE` before `set_state`, so a second tap on End -- or an End from a lobby
+# whose room has since reached its reveal -- is refused instead of rewriting `state` over
+# `resolved` and leaving §14 risk 6's outcome row hanging off an evening recorded as abandoned.
+# No migration: 0013's `session_ended_states` CHECK already ties `ended_at` to `abandoned`.
+# [decision 169; findings 7 and 8]
+#
+# The sixth is the other ordering, which that row lock does not reach: `play.finish` moved the room
+# on with a bare `set_state(..., 'ballot')`, and `set_state` writes `ended_at = NULL` for every
+# state that is not an ended one -- the only write in the backend that can take a session from an
+# ended state back to a live one. It contends with `end_session` on nothing (an advisory lock
+# against a row lock), and the window is the whole combine, so an End committing inside it was
+# silently undone and this row's own `what` -- "'abandoned' with ended_at set" -- became false on
+# the one control a stuck room has. [M4.12 cycle 1, M412-PLAY-1]
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_host_can_end_a_started_room_and_a_member_cannot",
+    "backend/tests/test_tonight_integration.py::test_the_room_the_host_ended_leaves_every_households_open_rooms_list",
+    "backend/tests/test_tonight_integration.py::test_the_votes_survive_the_room_the_host_ended",
+    "backend/tests/test_tonight_integration.py::test_a_seat_in_an_ended_room_is_refused_rather_than_served_a_round",
+    "backend/tests/test_tonight_integration.py::test_ending_a_room_the_household_already_resolved_is_refused",
+    "backend/tests/test_tonight_integration.py::test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_it",
+]
+
+[[requirement]]
+id = "tonight-answer-and-undo-serialise-on-the-seat"
+spec = "§6.2 (54c/54e: a mis-tap is otherwise permanent); §6 preamble (\"undo everywhere\"); §13 (single-use seal)"
+milestone = "M4.12"
+kind = "integration"
+what = "Two answers gathered on one card token yield exactly one 200 and one 409 stale_pair, one session_answer row and answered_count 1 — never a bare constraint violation. An undo gathered with an answer leaves max(seq) and the live rows consistent, and the seat keeps playing afterwards."
+why = "The seq guard was read outside the transaction that inserts, so both racers passed and the loser hit 0014's partial unique index — which app.py's _conflict answers 409 'conflict: session_answer_seq', a status the client re-reads on but carrying the name of a database object where the round's contract defines a reason, over a card that no longer exists and a seq that has been reused. retract recomputed answered_count from the rows surviving its own tombstone, so an interleaved answer left the counter behind the highest live seq and every later tap collided with it for ever, on a round no re-read can advance."
+# Two real connections, the snapshot read slowed, and the proof of the race is the MECHANISM: one
+# of the two writers' `FOR UPDATE OF p` reads is held for the whole of the other's transaction,
+# which an assertion on the outcome alone could not tell from the two calls having run in
+# sequence. Running in sequence is how all three of these defects stayed green for a milestone.
+#
+# The last two rows are the repair's own parts rather than the defect's. The seq minting is what
+# stops `answered_count` and the row's identity being one number, so the undo's replacement answer
+# takes a fresh seq above the tombstone §14 risk 6 keeps; and `_set_answered`'s guard is the
+# statement-level refusal that keeps the counter from claiming answers that have no rows — the
+# disagreement the wedge was made of — rather than trusting two callers to, which is `_end`'s
+# argument applied to the other column.
+tests = [
+    "backend/tests/test_tonight_integration.py::test_two_answers_on_one_card_are_one_200_and_one_409",
+    "backend/tests/test_tonight_integration.py::test_an_undo_gathered_with_an_answer_leaves_the_seat_playing",
+    "backend/tests/test_tonight_integration.py::test_a_replacement_answer_takes_a_fresh_seq_rather_than_the_tombstones",
+    "backend/tests/test_tonight_integration.py::test_the_counter_cannot_be_moved_past_the_rows_it_counts",
+    "backend/tests/test_static_contracts.py::test_the_uniqueness_seam_the_tonight_comments_point_at_answers_409",
+    "backend/tests/test_static_contracts.py::test_no_tonight_paragraph_answers_a_lost_uniqueness_race_with_a_500",
+    "backend/tests/test_static_contracts.py::test_the_lost_race_guard_catches_each_way_it_was_said",
+    "backend/tests/test_static_contracts.py::test_no_backend_comment_cites_the_tonight_client_by_line_number",
+    "backend/tests/test_static_contracts.py::test_every_tonight_client_function_the_backend_cites_exists",
+]
+# M4.12 cycle 1. The repairs above are unchanged; what the last five hold is the RECORD of them,
+# which this codebase makes load-bearing. M412-CONC-02: nine comments and this row's own `why`
+# said the loser of these races got a 500, and M4.7's `_conflict` has answered 409 with the
+# constraint's name since it shipped -- with a test whose docstring says it exists so M4.10 and
+# M4.12 can point at it. The guard reads the seam off `app.py` first, so it cannot outlive its own
+# premise, and its self-test carries the three wordings that shipped plus the two sentences that
+# must stay sayable. M412-CONC-03: the same paragraphs cited the client by line number, taken from
+# the plan and stale by two commits before the diff that rewrote that module from 490 lines to 774
+# -- all four pointed at a brace or a comment fragment. A function name is checkable, so the
+# second pair forbids the coordinate and then checks the names.
+
+[[requirement]]
+id = "tonight-a-double-submitted-ballot-is-not-an-outage"
+spec = "§6.2 step 6 (rewritten, 54e: the approval ballot; a re-submit replaces)"
+milestone = "M4.12"
+kind = "integration"
+what = "Two concurrent ballot submissions from one participant both succeed, leaving exactly one row per slate title with the later approvals; neither raises a unique violation. A re-submit racing the reveal either lands before the tally or is refused with 'not_ballot', so the stored approval share is always the share of the ballot rows that survived."
+why = "submit was a DELETE-then-INSERT with no lock, so a double tap on the one moment 54e makes social showed the name of a database index — app.py's _conflict answers 409 'conflict: session_ballot_one_per_title' — and took that whole submission down with it, since the DELETE and every INSERT are one transaction."
+# Which of the two submissions commits last is the race's to decide, so the assertion is that the
+# rows are one of the two ballots entire and never a mixture — the advisory lock makes the loser
+# replace the whole ballot rather than merge into it, which `ON CONFLICT ... DO UPDATE` would not
+# have given. `test_resolving_twice_returns_the_same_outcome` covers the idempotence at the other
+# end of the same beat and is registered under §13's own row.
+#
+# The second test is the other writer on that beat, which the per-participant lock does not meet:
+# `submit`'s state question was a check-then-act on an autocommit connection and `resolve` counted
+# the approvals outside any transaction, so a changed-mind re-submit could commit between the tally
+# and the row it is stored as -- leaving §13's share describing a ballot §14 risk 6's own rows
+# contradict. The assertion is the agreement of the two rather than which order won.
+# [M4.12 cycle 2, M412-CONC-04]
+tests = [
+    "backend/tests/test_tonight_integration.py::test_two_ballot_submissions_from_one_seat_are_both_recorded",
+    "backend/tests/test_tonight_integration.py::test_a_re_submitted_ballot_cannot_land_after_the_outcome_is_stored",
+]
+
+[[requirement]]
+id = "tonight-a-guest-seat-reaches-the-reveal"
+spec = "§6.2 step 2 (guests use the initiator's phone) + step 6 (rewritten, 54e); decision 166"
+milestone = "M4.12"
+kind = "e2e"
+what = "A room with one guest seat completes: the host answers, hands the phone for the guest's round, then hands it again for the guest's ballot, and the reveal appears once every seat has submitted. The incoming guest's approval selections start empty and none of the previous person's are visible."
+why = "submitted_count counts guest seats, so a room with any guest could never reach the reveal — the ballot Submit was bound to the viewer's own seat and a guest seat carries user_id NULL. The backend already permitted the write; only the control was missing, and clearing the selections on hand-off is what keeps 54e blind on the one device the hand-off exists to protect."
+# The Playwright test is the EXISTING guest hand-off case extended through to the reveal rather
+# than a second file: the specs are filename-ordered and single-worker, and the room this claim
+# needs is the room that test already opens. It is the only layer that can fail on the clause,
+# because what was missing was a control -- the write it makes has been permitted since M4 and
+# an API test of it passes on a build where no screen can reach it.
+#
+# The vitest ids are supporting evidence and never the whole of a row (decision 226): they hold
+# the rules a browser can only observe through their consequences -- which seat is offered, when
+# the ballot is finished, and that the ticks are dropped at the moment the phone changes hands.
+# The last of those is the half the fix itself could have broken, since `approved` lives in the
+# client and nothing had ever sent it anywhere.
+#
+# And one of them holds the binding itself. Restoring the pre-milestone `submitBallot(me?.
+# participant_id)` at the click handler left the whole frontend suite green: the page tests
+# asserted the control was DRAWN and the store tests called `submitBallot` with an explicit
+# argument, so the only falsifier in the repository was the Playwright case above -- which is the
+# right layer for the claim and the wrong one to be alone with it, since a refactor of the ballot
+# block passes every gate a frontend change actually runs.
+# [M4.12 review cycle 2: M412-FE-6]
+tests = [
+    "e2e/specs/14-tonight.spec.js::the guest hand-off clears the screen and offers nothing early",
+    "frontend/src/routes/tonight/tonight-page.test.js::draws the guest's turn inside the ballot, where the phone actually changes hands",
+    "frontend/src/routes/tonight/tonight-page.test.js::opens the guest's ballot blind, on the seat the phone is now holding",
+    "frontend/src/routes/tonight/tonight-page.test.js::writes the ballot to the seat this phone is holding, not to the seat that owns it",
+    "frontend/src/lib/tonight.svelte.test.js::clears the previous person's ticks when the phone changes hands",
+    "frontend/src/lib/tonight.svelte.test.js::does not finish the ballot on a phone that still holds a guest vote",
+    "frontend/src/lib/tonight.svelte.test.js::stops offering a seat once this phone has voted for it",
+    "frontend/src/lib/tonight.svelte.test.js::keeps the ballot open when the guest voted first and the phone's owner has not",
+]
+
+[[requirement]]
+id = "tonight-the-device-remembers-which-seat-it-is-playing"
+spec = "§6.2 step 2 (guest hand-off, sequential turns); §6.2 rewrite step 2 (the session channel); decision 226"
+milestone = "M4.12"
+kind = "e2e"
+what = "While a guest's turn is on the initiator's phone, a household frame from another device — another room opened elsewhere — does not replace the guest's round with the host's seat, and the guest's pair is still on screen afterwards."
+why = "refresh() re-read the viewer's own seat on every rooms.changed / lobby / reveal frame and on every socket reconnect, which a screen lock is enough to cause; nothing recorded which seat the device was acting for, so the one surface pass-the-phone exists for had no representation."
+# What the Playwright test asserts is the RE-READ and not the screen: the clobber happened
+# inside the handler that read the frame, so the falsifiable claim is which seat this device
+# asks about next, and a screen assertion alone would settle against the old DOM a beat before
+# the replacement arrived. The frame is produced by a second household device opening a room of
+# its own, which is the ordinary event rather than a contrived one -- and no single context can
+# send itself a household frame about a room it is not in, which is why this needs a browser and
+# a second cookie at once.
+#
+# The vitest ids carry the rule's three other directions, which a browser cannot reach cheaply:
+# the fall-back when nothing is on screen, the hand-BACK once the held seat has ended, and 54c's
+# escape, which re-reads the seat it just ended rather than the phone owner's. [decision 226]
+tests = [
+    "e2e/specs/14-tonight.spec.js::a household frame does not take the guest off the phone",
+    "frontend/src/lib/tonight.svelte.test.js::keeps a guest's round on screen when a household frame re-reads the room",
+    "frontend/src/lib/tonight.svelte.test.js::falls back to this device's own seat when nothing is on screen",
+    "frontend/src/lib/tonight.svelte.test.js::hands the phone back to its owner once the seat it was playing has ended",
+    "frontend/src/lib/tonight.svelte.test.js::leaves the escaped seat on screen rather than the phone owner's round",
+    "frontend/src/lib/tonight.svelte.test.js::forgets the seat and the ballots it cast when the device steps out",
+]
+
+[[requirement]]
+id = "tonight-rank-holdout-is-sealed-and-is-a-rate"
+spec = "54b (§6.2 step 4 rewritten); §13 (uniform-random guard); decision 223"
+milestone = "M4.12"
+kind = "integration"
+what = "The hold-out pair for a given seat and answer count is the same pair and the same card token on every read of the round, and a token minted for that seat and count names that pair and no other; the arm fires at the 1-in-10 rate rather than on fixed slots, so a round ended by the escape at pair six still carries hold-outs."
+why = "The draw used a per-request SystemRandom and nothing persisted it — twelve reads produced twelve different 'uniform-random' pairs and every minted token was accepted, making §13's only admissible stream client-selectable. And a slot schedule gives an escaped round zero hold-out rows, so exactly the evenings a household cuts short contribute nothing."
+# Through the routes for the seal, because the TOKEN is what made the stream choosable and only the
+# route mints one: `play.state_for` would show the pair moving and not that twelve valid cards
+# existed for one seat at one count. Pure for the rate, because "one in ten" is a claim about a
+# population of seats and 2000 keys cost a millisecond where a started room costs seconds. The
+# escaped-round half of the `what` is asserted there too, over the seats whose arm fires inside
+# 54c's first five pairs: an integration test cannot choose a seat's draw, and 12% of seats draw
+# nothing inside a whole round, so waiting for one would be a coin flip dressed as a measurement.
+# `..._in_a_second_process` is the property that makes the rate re-derivable at all, and it is the
+# solo caller that needs it: 54f mints no row, so the arm of an answer the client is holding is
+# computed again on every request, across restarts (decision 223).
+tests = [
+    "backend/tests/test_tonight_integration.py::test_twelve_reads_of_the_arms_card_return_one_pair_and_one_token",
+    "backend/tests/test_tonight_integration.py::test_the_card_a_phone_stashed_is_the_card_the_undo_re_issues",
+    "backend/tests/test_tonight_integration.py::test_the_arm_a_seat_is_served_is_the_one_the_rule_draws_for_that_seat",
+    "backend/tests/test_tonight_round.py::test_one_pair_in_ten_is_the_uniform_hold_out_and_it_is_a_rate_not_a_slot",
+    "backend/tests/test_tonight_round.py::test_the_arm_is_the_same_answer_in_a_second_process",
+    "backend/tests/test_tonight_routes.py::test_a_solo_answer_is_classified_the_same_way_on_every_request",
+    "backend/tests/test_tonight_routes.py::test_solos_held_out_pair_is_still_held_out_when_it_comes_back",
+]
+
+[[requirement]]
+id = "tonight-a-neutral-leader-does-not-silence-the-split"
+spec = "§6.2 step 5 (rewritten, 54d); §0 (\"a surfaced split must never ship bare\"); decision 221"
+milestone = "M4.12"
+kind = "backend"
+what = "When the leading finalist carries no term on the contested axis but the pool holds titles on both poles, the split is still surfaced with a reserved opposite-pole finalist; when the pool genuinely has nothing on the other pole, the slate is the plain top three by group score with no contested facet, and a split over a two-candidate pool returns a slate rather than raising."
+why = "The reservation was keyed off the leader's own pole, so a neutral leader emptied the opposite set, dropped the copy and shipped the zeroed ranking anyway — 31.8% of counterweighted splits silenced, on a corpus where 40.6% of titles carry no DNA. The two-candidate case reached a next() with no default, which would 500 the last answer of an evening the moment the small-pool deadlock is fixed."
+# All three are pure, with hand-seeded axes, and that is the honest limit of what they say:
+# decision 173 ships no `dna_axis_weight` rows, so `contested_facet` iterates zero axes and this
+# whole branch is unreachable on release data. A green split test is a statement about the RULE and
+# not about what a household sees this month — the test module's own section comment says so, so a
+# later reader does not mistake coverage here for evidence that §6.2 step 5 fires.
+#
+# The two-candidate test belongs with the neutral leader rather than with the small-pool row
+# (`tonight-a-seat-that-can-never-be-asked-ends-itself`) because the two halves are one change by
+# the plan's own ordering: the deadlock is what kept the missing `next()` default unreachable, so
+# closing the deadlock without the default turns a silent hang into a 500 on the last answer.
+tests = [
+    "backend/tests/test_tonight_combine.py::test_a_neutral_leader_still_gets_the_counterweight_the_split_promises",
+    "backend/tests/test_tonight_combine.py::test_a_pool_with_no_counterweight_ships_the_ranking_its_scores_show",
+    "backend/tests/test_tonight_combine.py::test_a_split_over_two_candidates_returns_a_slate_rather_than_raising",
+]
+
+[[requirement]]
+id = "tonight-a-split-slate-reads-in-slate-order"
+spec = "§6.2 step 6 (\"one wildcard — a step outside your usual, honestly labelled\"); §6.4"
+milestone = "M4.12"
+kind = "backend"
+what = "On a surfaced split the wildcard is drawn from the ranking the finalists were drawn from rather than from the group-score order the reservation overrode, and the persisted ranks order the three finalists ahead of the wildcard — in the rows `play.finish` stores, not only in the computed slate."
+why = "The split branch rebuilt the finalists from the zeroed order but drew the wildcard and stamped every rank from the unzeroed one, so the second-highest-scoring title in the pool could be shown as the exploratory pick and sorted above two finalists on the ballot."
+# THE `what` IS NARROWER THAN THE PLAN'S FINDING, DELIBERATELY. Finding 23 is written as "the
+# candidate displaced by the reservation is never labelled 'a step outside your usual'", and
+# drawing the wildcard from `adjusted_order` does not guarantee that: the displaced candidate is in
+# `wildcard_from`'s candidate set under either ranking, and the choice is by DNA distance from the
+# finalists' centre, not by rank. What the repair does guarantee is the property the defect was
+# really about — one ranking decides the whole slate — so that is what the row claims and what the
+# test measures. Asserting the stronger sentence would have needed a fixture engineered to make it
+# true rather than one that distinguishes the two rankings.
+#
+# The first test's fixture is the only decidable shape: two tail candidates that are mirror images
+# about the finalists' DNA centre tie bit-for-bit on distance, so the tie falls to whichever
+# ranking `wildcard_from` was handed. Hand-seeded axes again, so the same limit applies as above —
+# decision 173 keeps this branch off release data.
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_wildcard_comes_from_the_ranking_the_finalists_came_from",
+    "backend/tests/test_tonight_combine.py::test_the_persisted_ranks_read_in_slate_order_on_a_surfaced_split",
+    "backend/tests/test_schema_contracts.py::test_the_reserved_finalist_is_the_one_the_stored_slate_labels",
+]
+
+[[requirement]]
+id = "tonight-the-selector-does-not-block-the-household"
+spec = "§6 preamble (<1.5 s per battle, next card preloaded); §2 (4 vCPU reference box)"
+milestone = "M4.12"
+kind = "integration"
+what = "An answer in flight does not delay an unrelated read: while one seat's POST /answer is being served, another cookie's GET /api/tonight/rooms returns promptly, and one answer performs one pool-snapshot read and one replay rather than two of each."
+why = "The replay is pure CPU on the event loop and ran inside the answer transaction, so one participant's tap froze the other phone, the hub and the healthcheck for its whole duration and held the row lock for the search — and the route then paid for the whole round a second time to build the next card."
+# Both halves are asserted through the routes, because both are claims about a request: the
+# blocking one is only visible when a second cookie's read is in flight against the same process,
+# and the double work is the HANDLER's, not the rule's -- `record_answer` and `state_for` are each
+# correct on their own. The instrument is a patched replay rather than the real selector's duration
+# (a fixture pool replays in microseconds and the shipped 696-title pool is the owner's under
+# decision 183), and the two assertions are mechanisms rather than thresholds: a coroutine submitted
+# to the loop from inside the search either runs or cannot run at all, and the decodes and replays
+# are counted. `_the_combine_does_not_hold_the_loop_either` covers `finish`, which replays once per
+# seat on the answer that ends the room; `_an_undo_during_the_search_leaves_the_seat_playing` covers
+# the hazard the repair introduces, since moving the replay out of the transaction is what lets a
+# second write for the seat commit before the ending its replay decided on;
+# `_the_card_a_tap_hands_back_is_the_one_the_round_would_have_served` is the equivalence guard on
+# having stopped re-reading -- it passes against the old code by construction, which is why the four
+# above it are the ones that fail there. [M4.12 findings 2, 3]
+#
+# Threading MOVES a cost; the last test removes one. `finish` reads `played.beliefs` and nothing
+# else, yet replayed with `select` at its default, so every seat that ended at 54c's escape paid
+# for a full pair search whose result is discarded -- 95-101 ms per such seat at 696 candidates, on
+# the answer that finishes the room. It runs the same combine twice, with the flag forced back on
+# the second time, because an assertion that no search ran is worth nothing on a fixture that had
+# no boundary left to search. [M4.12 cycle 1, M412-PLAY-2]
+tests = [
+  "backend/tests/test_tonight_integration.py::test_the_selector_does_not_block_the_household",
+  "backend/tests/test_tonight_integration.py::test_one_tap_reads_the_frozen_pool_once_and_runs_the_round_once",
+  "backend/tests/test_tonight_integration.py::test_the_combine_does_not_hold_the_loop_either",
+  "backend/tests/test_tonight_integration.py::test_the_combine_does_not_search_for_a_pair_it_will_never_show",
+  "backend/tests/test_tonight_integration.py::test_an_undo_during_the_search_leaves_the_seat_playing",
+  "backend/tests/test_tonight_integration.py::test_the_card_a_tap_hands_back_is_the_one_the_round_would_have_served",
+]
+
+[[requirement]]
+id = "tonight-the-channel-is-behind-the-dependency-graph"
+spec = "§3.1 (first-login lock); §3.2 (every route behind a session); §6.2 step 2 (the live lobby); decision 225"
+milestone = "M4.12"
+kind = "integration"
+what = "The session WebSocket's gate is declared rather than written out: its dependant tree resolves `deps.active_user_ws`, so a sweep over the graph can see that §3.1 applies here, and resolves no `deps.db`, so a phone watching the lobby all evening holds none of the pool's ten connections. On the wire the refusals are what they already were and stay asserted as the regression guard they now are: an anonymous socket and a socket whose account is locked to a password change are both closed with 1008, and an ordinary member is served. The gate's own acquire is bounded, so a handshake against an exhausted pool is closed with 1011 and a log line naming size and idle rather than left pending with nothing sent."
+why = "The route opened the cookie itself and closed the locked caller by hand (decision 179), so §3.1's lock was real but undeclared: `test_api_gating.py`'s sweep - what is behind `active_user`, subtracted from what is behind `current_user` - could see neither side of it, and the route inventory classified the socket as anonymous. And it awaited its first two sends inside an acquired connection, so ten stalled sockets pinned the whole ten-connection pool and the entire backend stopped answering."
+# Five tests; four of them split two clauses deliberately: the two live ones assert what a caller
+# receives, and the two static ones assert that the gate is where a sweep can find it. That second
+# half is the requirement's real content — decision 179 already wrote the `must_change_password`
+# check out by hand inside the route, so the locked socket was refused for a milestone while being
+# invisible to `test_api_gating.py`'s subtraction and classified as anonymous by the route
+# inventory. Hence the gating test keeps the refusals (it gained the anonymous half, since a
+# dependency that asked only about the lock would serve a caller with no cookie) and the dependant
+# walk carries the declaration, including the negative half decision 225 turns on: the route must
+# NOT resolve `deps.db`, because a yield dependency on a socket is held for the whole evening.
+# The pool is measured as the pool and as what a household notices, one test, two readings.
+#
+# The fifth holds this row's own prose, and it is here because the row got that history wrong on
+# the way in: the `why` said the lock had never been enforced, ten lines above the comment that
+# says decision 179 enforced it. Read alone the row then credited M4.12 with a refusal M4.6
+# shipped, and invited a later reader to drop the dependant walk as duplicated by the gating test
+# - taking decision 225's only assertion with it while the row stayed green. The map settles the
+# question against itself: M0's `platform-forced-first-login-change` has named the same gating
+# test as ITS evidence since before this socket had a second gate to argue about.
+# [M4.12 review cycle 1: M412-API-03]
+#
+# The sixth is what the self-acquire cost: `deps.db` bounds its acquire at `_ACQUIRE_TIMEOUT_S` and
+# spends a docstring on why, and the socket gate decision 225 added was the one acquire in that file
+# that did not. It resolves before `websocket.accept()`, so a saturated pool left the handshake
+# pending with no frame, no close, no log line and no bound while every HTTP surface answered 503 in
+# ten seconds -- and the client schedules its reconnect from `onclose` alone, so the backoff can
+# never fire for a handshake that never resolves. [M4.12 cycle 2, M412-API2-01]
+tests = [
+    "backend/tests/test_tonight_channel.py::test_the_channel_is_behind_the_dependency_graph_and_never_behind_deps_db",
+    "backend/tests/test_tonight_channel.py::test_a_handshake_on_an_exhausted_pool_is_closed_rather_than_left_hanging",
+    "backend/tests/test_tonight_channel.py::test_phones_watching_the_lobby_hold_none_of_the_pools_connections",
+    "backend/tests/test_api_gating.py::test_the_tonight_channel_refuses_a_locked_account",
+    "backend/tests/test_api_gating.py::test_the_forced_change_gate_covers_every_authenticated_route_but_four",
+    "backend/tests/test_static_contracts.py::test_no_row_calls_decision_179s_socket_refusal_m4_12s_own_defect",
+]
+
+[[requirement]]
+id = "tonight-solo-does-not-run-a-round-nobody-asked-for"
+spec = "§6.2 step 8 (rewritten, 54f: \"the fastest path to a film must not be slower than browsing Home\")"
+milestone = "M4.12"
+kind = "integration"
+what = "The solo door and the reshuffle control return three picks and a wildcard with no next pair and without running the pair selection; only an explicit sharpen returns a pair. Reshuffle walks the ranking on a four-title pool — two consecutive presses do not return the same three titles — and every title in a seven-title pool is reachable as a pick. On the surface the same control is a browse gesture wherever it is pressed: from inside the sharpen round it lands back on the picks with the sharpen control still offered rather than reporting a round that is out of questions, its walk never asks the route for an offset the route refuses, and a refused press does not move it; and the line decision 222 renders when the walk comes back round is shown to a household in a browser."
+why = "picks() replayed and selected unconditionally, so a screen that never draws the pair paid for the whole search on every tap and every reshuffle. And the walk's modulus was the pool size minus one, so a four-title pool returned the identical picks for ever while reporting that it had wrapped."
+# TWO CLAIMS, MEASURED TWO WAYS, because they fail differently. The cost is a CALL COUNT and not
+# a clock: the fixture pool is six films and is fast under either implementation, so a timing
+# threshold here would measure the machine rather than the rule -- the plan's own numbers (0.677 s
+# at 200 candidates) come from a pool no integration fixture is going to build. The walk is
+# arithmetic over the whole range `SoloBody.offset` admits, on the two pool sizes that expose the
+# modulus: four, where every offset returned the same three titles, and seven, where the
+# last-ranked title was unreachable by any number of presses.
+#
+# The fourth test is the precision the flag invites someone to get wrong: `sharpen` skips the
+# SELECTION and never the replay, because 54f's "re-ranks in place" is the whole of the sharpen
+# control and the re-ranking is the posterior. The route test is here rather than only the rule
+# tests because `sharpen` is a field on the wire and `solo.picks` cannot see whether it arrived.
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_solo_door_lands_on_picks_without_running_the_pair_search",
+    "backend/tests/test_tonight_integration.py::test_reshuffle_does_not_run_the_pair_search_either",
+    "backend/tests/test_tonight_integration.py::test_only_an_explicit_sharpen_draws_a_pair",
+    "backend/tests/test_tonight_integration.py::test_the_replay_still_runs_when_the_door_does_not_select",
+    "backend/tests/test_tonight_integration.py::test_reshuffle_moves_the_picks_on_a_four_title_pool",
+    "backend/tests/test_tonight_integration.py::test_every_title_in_a_seven_title_pool_is_reachable_as_a_pick",
+    "backend/tests/test_tonight_routes.py::test_the_solo_door_draws_no_pair_and_an_explicit_sharpen_does",
+    "backend/tests/test_static_contracts.py::test_the_reshuffle_wrapped_line_is_rendered_where_decision_222_says_it_is",
+    "e2e/specs/14-tonight.spec.js::sharpen runs the round in place and says so in the provenance line",
+    "e2e/specs/14-tonight.spec.js::reshuffle walks the ranking and asks nothing",
+    "frontend/src/routes/tonight/tonight-page.test.js::comes back to the picks rather than reporting a round that is out of questions",
+    "frontend/src/lib/tonight.svelte.test.js::does not advance the walk when the reshuffle it asked for was refused",
+    "frontend/src/lib/tonight.svelte.test.js::never asks for a walk further down the ranking than the route will serve",
+]
+# M4.12 cycle 1, M412-FE-2 and M412-SOLO-02. `wrapped` reported the modulus alone, and the walk
+# comes back round to the top of the ranking two ways -- the modulus, and the wrap-fill that
+# splices the top back in whenever `start + PICKS` passes the end, which on any pool whose length
+# is not a multiple of three fires one press EARLIER. So the press that first shows two titles the
+# household was looking at a second ago said nothing, which is the confusion decision 222 exists to
+# remove; `any(out["wrapped"] for out in presses[1:])` was satisfied by the press after it and
+# could not see it. The four-title test now asserts the flag per press. And the rendered half had
+# no assertion at any layer -- three greps in the whole tree, all of them the copy itself -- so the
+# static guard is what says the line is still wired to the flag at all. The browser holds the rest:
+# the walk is three titles wide and the e2e bundle owns six films, so the reshuffle spec presses
+# until the line appears -- the second press there -- rather than a counted number of times, which
+# would assert the size of the fixture pool rather than the rule. [M412-SOLO-03]
+#
+# Two more of the same control, on the surface rather than in the flag. Reshuffle posts
+# `sharpen: false`, so the server draws no pair; pressed from inside the round the screen read that
+# as convergence -- printing "nothing left to ask" over a round with pairs still in it and hiding
+# the only control that could ask for one, leaving Back, which discards the evening's sharpen
+# answers. And the walk's counter was raised before the POST and never lowered, so a refused press
+# moved it by a step nobody saw and press 65 ran past `SoloBody.offset`'s own `le=64`: a 422, and so
+# was every press after it. [M4.12 review cycle 1: M412-SOLO-01, M412-SOLO-06]
+
+[[requirement]]
+id = "tonight-a-refusal-names-what-is-actually-wrong"
+spec = "§6.2 steps 1 and 3 (session controls; candidate pool); §5.1; §6.8; decision 216"
+milestone = "M4.12"
+kind = "integration"
+what = "A seated member with no user_score rows for the active bundle is refused by name and reason rather than with the budget message, and the budget message is kept for the genuine budget case; a malformed solo answer entry is refused as 422 naming the field rather than escaping the route as a 500."
+why = "pool.build requires every seated member to have scored a title, so the first evening after adding a member refused with advice — widen the budget, include rewatches — that cannot help, and the household concludes the feature is broken. §6.8's register is what a refusal owes."
+# The unscored-member half (decision 216). Two tests because a refusal is a sentence AND a
+# status: the first asserts the name, the absence of the budget advice, the budget message still
+# standing for the budget case, and that the room stays joinable so the fold-in can catch up;
+# the second pins `_room_error`'s mapping, which is the only thing between the reason and a
+# silent default. Solo's malformed-answer 422 belongs to the same claim and its test is
+# appended by the solo step -- which it now is, below. `SoloBody.answers` was
+# `list[dict[str, Any]]`, so a missing key was a KeyError and a non-numeric value a ValueError,
+# and an answer outside decision 154's four was dropped in silence. All three are 422s naming the
+# field now, which is the same sentence this row asks of the unscored-member refusal: say what is
+# wrong, about the thing that is wrong.
+#
+# The fourth is the same register applied to `start`'s own empty result. Its claim tests
+# `state = 'open'`, so a room the household ended came back as one that "has already started" --
+# false of an abandoned room, unactionable on either, and 409 where `rooms.join` and (after finding
+# 8) `play._participant` both ask `ended_at` of the same row and answer 404 "that evening has
+# ended". The host whose lobby outlived their own End is the household that meets it.
+# [M4.12 cycle 1, M412-PLAY-3]
+tests = [
+    "backend/tests/test_tonight_integration.py::test_a_refusal_names_the_member_the_pool_cannot_rank",
+    "backend/tests/test_tonight_integration.py::test_the_named_refusal_reaches_the_household_as_a_refusal_and_not_a_500",
+    "backend/tests/test_tonight_routes.py::test_a_malformed_solo_answer_is_a_refusal_that_names_the_field",
+    "backend/tests/test_tonight_integration.py::test_starting_a_room_the_household_ended_says_so_rather_than_already_started",
+]
+
+[[requirement]]
+id = "tonight-the-answer-latency-is-a-measurement"
+spec = "§4.2 (session_answer columns); §14 risk 6 (the round must be instrumented before it is re-tuned); decision 226"
+milestone = "M4.12"
+kind = "e2e"
+what = "An answer recorded through the real UI stores a non-zero latency_ms measured from when the pair reached the screen, and one answer and one verdict each complete within §6's per-card budgets against the fixture."
+why = "The elapsed time was evaluated inside the object literal one statement after it was started, so every row ever written is 0 — and rows are append-only, so evenings already played cannot be re-measured. §14 risk 6 requires the instrument before anyone tunes the round, and a zero reads as a measurement rather than as a bug."
+# Asserted against the REQUEST the client sends rather than against the stored row, and that is
+# the whole of where the defect lives: `latency_ms` is the client's number, the backend writes
+# whatever arrives, and a row read back through the API would have been a round trip about the
+# column rather than about the instrument. The Playwright test spends a deliberate 400 ms in
+# front of the pair first, because the quantity is how long a card was on a screen and an
+# instrument for it has to give it something to measure -- and it bounds the value from above as
+# well, since a clock armed once at the door satisfies "not zero" on every pair of a round.
+#
+# The budgets ride here because §6's preamble states them in one line for both cards this app
+# asks a question on ("<2 s per sweep card, <1.5 s per battle") and nothing measured either on
+# the phone project, which is the form factor the sentence is about. The sweep half borrows a
+# verdict from §6.1 and gives it back through §6's own "undo everywhere", so the member's queue
+# is left as the test found it rather than draining towards a skip on the fifth re-run.
+# [M4.12 findings 41, 47; decision 226]
+#
+# "MEASURED FROM WHEN THE PAIR REACHED THE SCREEN" is the half the browser gate falsified, and
+# three of the rows below are what holds it. `loadRound` is the tail of `refresh`, which every channel
+# frame ends in, so a clock armed on each re-read reported the time since the last thing anybody
+# in the household did; `start` sends the host's own device both a `lobby` and a `rooms.changed`
+# frame, which made it the first pair of every round -- a card held for 400 ms recorded as 176.
+# The pair's identity is the sealed card token, and both directions are asserted because a clock
+# that never re-arms satisfies the first one alone.
+#
+# The third of them is mounted rather than stated in the store, because the interval it is about
+# is one in which the page does not exist: /tonight is not in the layout's `bare` list, so the nav
+# rail renders over a live round and one tap on Rank destroys the component while the module keeps
+# the clock. The re-read that brings the pair back carries the same sealed token, so the gate two
+# paragraphs above -- correct about a channel frame -- did not re-arm on it either, and the next
+# answer was charged the whole absence: measured, a 900 ms read after two minutes elsewhere wrote
+# 181200. No store test can produce it, for the reason the finding-19 case in the same file cannot
+# be written here: the defect is that the module outlives its own page.
+# [M4.12 review cycle 1: M412-FE-1]
+tests = [
+    "e2e/specs/14-tonight.spec.js::an answer carries the time it took, and the card budgets hold",
+    "frontend/src/lib/tonight.svelte.test.js::records how long the pair was on screen rather than zero",
+    "frontend/src/lib/tonight.svelte.test.js::sends nothing at all rather than zero before a pair has been shown",
+    "frontend/src/lib/tonight.svelte.test.js::is not restarted by a household frame that re-reads the pair already on screen",
+    "frontend/src/lib/tonight.svelte.test.js::is restarted by a card that is new, which the hand-off puts on the phone",
+    "frontend/src/routes/tonight/tonight-page.test.js::charges the answer the read after the remount, not the time the page was gone",
+]

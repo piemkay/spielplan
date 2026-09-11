@@ -484,12 +484,15 @@ def data_sources() -> dict[str, Any]:
     """§6.6's sources-and-terms list and decision 191's outstanding axis task.
 
     The ids come from the real frozen set and the facets from the real `DEFAULT_FACET_COLOURS`,
-    with the paths built by the real rule (`axes/<facet>.tsv`), so the harness cannot teach the
-    page a shape the backend does not serve — which is what `test_devstub_contract.py` exists to
-    keep true. The licence strings are invented: the fixture's `rating_source` rows carry none,
-    and inventing a plausible-looking real licence for a real dataset is the one thing a harness
-    must not do.
+    with the paths built by the real rule (`<facet>.tsv` beside the vocabulary files, since
+    decision 173 moved the loader off the unreachable `axes/` subdirectory), so the harness
+    cannot teach the page a shape the backend does not serve — which is what
+    `test_devstub_contract.py` exists to keep true. The two `disables` sentences are the
+    backend's own, verbatim, for the same reason. The licence strings are invented: the
+    fixture's `rating_source` rows carry none, and inventing a plausible-looking real licence
+    for a real dataset is the one thing a harness must not do.
     """
+    from spielplan.api.admin import AXES_DISABLES
     from spielplan.importer.dna import DEFAULT_FACET_COLOURS
     from spielplan.importer.validate import FROZEN_RATING_SOURCE_IDS
 
@@ -504,8 +507,9 @@ def data_sources() -> dict[str, Any]:
             "vocabulary_version": "v1",
             "loaded": 0,
             "expected": [
-                f"dna_vocab/v1/axes/{facet}.tsv" for facet in sorted(DEFAULT_FACET_COLOURS)
+                f"dna_vocab/v1/{facet}.tsv" for facet in sorted(DEFAULT_FACET_COLOURS)
             ],
+            "disables": list(AXES_DISABLES),
         },
     }
 
@@ -3165,6 +3169,11 @@ class TonightSoloBody(BaseModel):
     runtime_budget_min: int = 130
     include_rewatches: bool = False
     offset: int = 0
+    # Declared rather than silently dropped: the client sends it on the sharpen tap (M4.12
+    # finding 35), and a harness that swallowed the field would teach the front end that it makes
+    # no difference. The stub serves no pair either way -- it has never run the round -- so what
+    # the flag buys here is that the body it accepts is the body the app accepts.
+    sharpen: bool = False
     answers: list[dict[str, Any]] = []
 
 
@@ -3294,6 +3303,31 @@ def tonight_start(
     return {"session_id": session_id, "state": room["state"]}
 
 
+@app.post("/api/tonight/sessions/{session_id}/end")
+def tonight_end(
+    session_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """Decision 169's host-only end control, mirrored because the harness answers every path the
+    app serves.
+
+    `test_devstub_contract.py` compares the two path sets in both directions, and the reason it
+    does is this one: a control the Tonight screen reaches for is a screen that works against the
+    stub all week and 404s against the backend. Host-only and refused on a room that has already
+    ended, for the app's reasons (`rooms.end_session`); the rows stay, because a harness that
+    dropped the answers would teach §14 risk 6's opposite.
+    """
+    user = _me(spielplan_session)
+    room = _tonight_room(session_id)
+    if room["host"]["user_id"] != user["id"]:
+        raise HTTPException(403, "only the host ends the room")
+    if room["ended_at"] is not None:
+        raise HTTPException(404, {"reason": "no_room",
+                                  "message": "that evening has already ended"})
+    room["state"] = "abandoned"
+    room["ended_at"] = datetime.now(UTC).isoformat()
+    return {"session_id": session_id, "state": room["state"]}
+
+
 def _tonight_seat(room: dict[str, Any], participant_id: int) -> dict[str, Any]:
     seat = next((s for s in room["seats"] if s["participant_id"] == participant_id), None)
     if seat is None:
@@ -3309,10 +3343,17 @@ def _tonight_round_for(room: dict[str, Any], seat: dict[str, Any]):
     )
     answers = room["answers"].get(seat["participant_id"], [])
     return tonight_round.replay(
-        pool_scores, answers, z=Hyperparams().straddle_z,
+        # No `z`: the round's boundary is its own constant (decision 214). Passing §6.3's badge
+        # threshold here would end every stubbed evening in one or two pairs, which is the app's
+        # own defect reproduced in the harness rather than the app's behaviour mirrored.
+        pool_scores, answers,
         has_profile=seat["role"] != "guest",
         axes=tonight_combine.axis_positions(_tonight_dna(), _tonight_axes()),
         escaped=seat["ended_by"] == tonight_round.ESCAPE,
+        # The seat, as `play._round_of` keys it (decision 223). 54b's arm is a rate drawn from a
+        # stable key now, and a harness that keyed it differently would serve the hold-out on
+        # different pairs than the app does on the same history.
+        holdout_key=str(seat["participant_id"]),
     )
 
 
@@ -3341,7 +3382,8 @@ def _tonight_state(room: dict[str, Any], seat: dict[str, Any]) -> dict[str, Any]
         "cap": tonight_round.CAP_PAIRS,
         "ended_by": seat["ended_by"],
         "stop_reason": played.stop_reason,
-        "escape_available": tonight_round.escape_available(seat["answered_count"]),
+        "escape_available": seat["ended_by"] is None
+        and tonight_round.escape_available(seat["answered_count"]),
         "card_token": token,
         "pair": None if pair is None else {
             "a": side(pair.title_a), "b": side(pair.title_b),
@@ -3565,6 +3607,13 @@ def tonight_result(
                 for s in room["seats"]
             ],
             "conflict": slate.conflict if slot == "finalist" else None,
+            # 54d's reserved slot, "**labelled as such**" — mirrored here for the same reason
+            # `conflict` and `label` are: the harness serves the reveal card's contract field for
+            # field, and a client that renders the counterweight against a stub missing it would
+            # be testing its own fallback. `slate.reserved` is None on every night with no split,
+            # which is every night this stub's fixture produces (it seeds no axes).
+            # [M4.12 decision 220]
+            "reserved": slate.reserved is not None and title_id == slate.reserved,
             # §6.4's "honestly labelled", served rather than spelled in the client.
             "label": tonight_combine.WILDCARD_LABEL if slot == "wildcard" else None,
             "play_url": None,
@@ -3630,7 +3679,11 @@ def tonight_solo_route(
     dna = _tonight_dna()
     order = tonight_combine.ranked({c.title_id: c.group_score for c in candidates})
     by_id = {c.title_id: c for c in candidates}
-    span = max(len(order) - 1, 1)
+    # The app's modulus, and the app's reason (M4.12 finding 36): one less than the ranking's
+    # length makes `3 * offset % 3` zero for every offset on a four-title pool, so Reshuffle
+    # returns the same three titles for ever. The harness had the same off-by-one and would have
+    # taught the front end that the walk does not move.
+    span = max(len(order), 1)
     start = (body.offset * tonight_solo.PICKS) % span if body.offset else 0
     chosen = [t for t, _ in order[start:start + tonight_solo.PICKS]]
     if len(chosen) < tonight_solo.PICKS:
@@ -3657,6 +3710,13 @@ def tonight_solo_route(
         "empty": None,
         "answered": len(body.answers),
         "sharpened": bool(body.answers),
+        # Decision 222 renders this beside Reshuffle, so the harness has to carry it or the line
+        # can never appear against the stub — and it has to carry `solo.picks`'s own expression,
+        # both clauses of it, or it appears one press LATE here and the person working on the line
+        # tunes it against a stub that disagrees with the app. [M4.12 cycle 1: M412-FE-2]
+        "wrapped": bool(body.offset) and (
+            start + tonight_solo.PICKS > span or start < (body.offset * tonight_solo.PICKS)
+        ),
         "pair": None,
         "stop_reason": None,
         "tilt": {},

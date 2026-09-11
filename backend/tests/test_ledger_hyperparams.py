@@ -20,7 +20,6 @@ import contextlib
 import dataclasses
 import json
 import shutil
-import types
 
 import httpx
 import pytest
@@ -538,15 +537,14 @@ async def test_a_constant_the_fit_cannot_use_is_a_503_with_a_reason_and_not_a_50
     carry a different `hp_digest`, so every cached fit in the install would be discarded and
     re-fitted behind a constant nobody chose.
 
-    Both surfaces that read the constants per request are asserted, one each way round. Rate goes
-    over HTTP because the tap is the thing that must not write. Tonight's reader is called
-    directly: reaching `_z` over HTTP needs a room, a started evening, a seat and a shortlist, and
-    what is under test is one `except` clause. (`api/rank.py`'s copy of the same reader belongs to
-    M4.10's Rank-route step and is asserted beside that change.)
+    Rate goes over HTTP because the tap is the thing that must not write. Tonight had a reader of
+    its own and it was asserted here beside Rate's; decision 214 deleted it, because §6.2's round
+    now tests its shortlist boundary against `round.BOUNDARY_Z` and reads no bundle constant at
+    all — so there is no longer a Tonight surface this refusal can reach, which is a narrowing of
+    what the constants file can break rather than a hole in what is asserted about it.
+    (`api/rank.py`'s copy of the same reader belongs to M4.10's Rank-route step and is asserted
+    beside that change.)
     """
-    from fastapi import HTTPException
-
-    from spielplan.api import tonight as tonight_api
     from tests.fixtures import make_bundle as fx
 
     application, client = await booted(fx.break_straddle_z)
@@ -566,8 +564,3 @@ async def test_a_constant_the_fit_cannot_use_is_a_503_with_a_reason_and_not_a_50
     assert tap.status_code == 503, tap.text
     assert "ledger constants" in tap.json()["detail"]
     assert await db.fetchval("SELECT count(*) FROM verdict") == 0
-
-    with pytest.raises(HTTPException) as refused:
-        tonight_api._z(types.SimpleNamespace(app=application))
-    assert refused.value.status_code == 503
-    assert "ledger constants" in refused.value.detail

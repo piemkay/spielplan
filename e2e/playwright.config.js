@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { baseUrl } from './env.mjs';
 
 /**
  * End-to-end tests against the real stack.
@@ -28,7 +29,7 @@ import { defineConfig, devices } from '@playwright/test';
 // binds credentials to the origin (§2, §14.4), so a passkey registered from
 // http://127.0.0.1:8080 against an rp_id of `localhost` is refused — correctly, and
 // confusingly. Same host, same port, different origin.
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
+const BASE_URL = baseUrl();
 
 export default defineConfig({
   testDir: './specs',
@@ -73,7 +74,8 @@ export default defineConfig({
       // 14-tonight joins them for the same reason: §6.2 step 2's hand-the-phone is a
       // statement about a PHONE ("Guests use the initiator's phone"), and solo is the
       // one-tap path §6's preamble is written around. 15-tonight-group needs two browser
-      // contexts and 16-tonight-tv is a television, so both stay on desktop.
+      // contexts, so it stays on desktop. It named a third file until decision 165 retired
+      // the TV client, which is the whole of why results are a phone surface too.
       testMatch: /(shell|library|responsive|13-rank|14-tonight)\.spec\.js/,
     },
   ],

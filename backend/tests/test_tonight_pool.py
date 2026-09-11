@@ -160,9 +160,33 @@ def test_an_over_budget_title_says_how_far_over_and_a_fitting_one_says_nothing()
 
 def test_the_fit_line_reads_the_way_the_spec_writes_it():
     """§6.2 step 7 fixes both branches verbatim: "fits your 130 min" / "runs 21 min over"."""
-    assert pool.fit_line(runtime_min=110, budget_min=BUDGET) == "fits your 130 min"
-    assert pool.fit_line(runtime_min=151, budget_min=BUDGET) == "runs 21 min over"
-    assert pool.fit_line(runtime_min=None, budget_min=BUDGET) == "runtime unknown"
+    assert pool.fit_line(runtime_min=110, budget_min=BUDGET, kind="movie") == "fits your 130 min"
+    assert pool.fit_line(runtime_min=151, budget_min=BUDGET, kind="movie") == "runs 21 min over"
+    assert pool.fit_line(runtime_min=None, budget_min=BUDGET, kind="movie") == "runtime unknown"
+
+
+def test_a_series_label_says_which_minutes_it_is_counting():
+    """54h, amending §6.2 step 1: "On a **series** session the budget is **per episode** … and
+    every label that states a number on a series card says so ("fits your 60 min per episode")".
+
+    The arithmetic does not move and is not meant to: `title.runtime_min` is per-episode for a
+    series, so the bound was always per-episode and only the label was silent about it. Measured
+    against the shipped bundle the series pool is 121 of 121 owned titles at budget 60, 130 and
+    200 alike — the slider narrows nothing on a series night, and a bare "fits your 60 min" on a
+    24 min/ep, 293-episode show reads as a promise about the evening. [decision 219]
+    """
+    assert pool.fit_line(runtime_min=45, budget_min=60, kind="series") == (
+        "fits your 60 min per episode"
+    )
+    assert pool.fit_line(runtime_min=81, budget_min=60, kind="series") == (
+        "runs 21 min over per episode"
+    )
+    # No number, no qualifier: "runtime unknown" measures nothing, and a per-episode note on it
+    # would be precision about an absence.
+    assert pool.fit_line(runtime_min=None, budget_min=60, kind="series") == "runtime unknown"
+    # And the bound itself is untouched by the label, on either kind.
+    assert pool.admits(runtime_min=45, budget_min=60)
+    assert pool.over_budget_by(runtime_min=81, budget_min=60) == 21
 
 
 def test_a_candidate_carries_its_own_over_budget_label():
@@ -177,6 +201,20 @@ def test_a_candidate_carries_its_own_over_budget_label():
     assert by_id[1].over_budget_min == 21
     assert by_id[1].fit_line == "runs 21 min over"
     assert by_id[2].over_budget_min is None
+    assert by_id[2].fit_line == "fits your 130 min"
+
+
+def test_a_series_candidate_is_stamped_with_the_qualifier_and_a_film_is_not():
+    """The one pass stamps 54h's qualifier too, off the candidate's own kind — so the three
+    surfaces that render `fit_line` (the pair card, the reveal, solo) all say the same thing
+    without any of them knowing what kind of evening it is. [decision 219]"""
+    built = pool.with_budget(
+        [candidate(1, [0.5], runtime=45, kind="series"), candidate(2, [0.5], runtime=110)],
+        budget_min=BUDGET,
+    )
+    by_id = {c.title_id: c for c in built}
+
+    assert by_id[1].fit_line == "fits your 130 min per episode"
     assert by_id[2].fit_line == "fits your 130 min"
 
 

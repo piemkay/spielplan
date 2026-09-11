@@ -3299,6 +3299,495 @@ un-marking guard answers it.
 
 ---
 
+## Decisions taken (owner, 2026-09-11, as M4.12 opened)
+
+Thirteen, taken as M4.12 opened on the six questions `docs/milestones/M4.12-plan.md`'s step 14 puts
+to the owner rather than settle inside a diff — O6 carries three separate calls, and the plan's
+coverage section carries a fourteenth premise that turns out to be stale. What this milestone
+repairs is a row §12 already had: M4's "a real Friday night resolved by the app" was closed against
+a six-title fixture pool, a household of one account and a guest seat no screen could take to the
+reveal. Against the shipped 696-title owned pool the same evening does not resolve — the pair search
+costs 36 s for a member and 126 s for a guest seat, the `voting -> ballot` transition exists only
+inside a POST handler, a pool of two or three candidates converges at zero answers and waits for
+ever, and the session WebSocket pins one of ten pooled connections per open phone.
+
+Two of the thirteen are not new questions. **Decision 175** already ruled O1 — Tonight's boundary
+becomes its own constant, §6.3's badge constant is retuned, and the sharing between them ends — and
+**decision 205** deferred precisely that work here in terms: "the retune of `hyperparams.straddle_z`,
+`BOUNDARY_Z` in `tonight/round.py` and the deletion of `api/tonight.py:106-112`'s `_z` stay with
+M4.12". So 214 applies a ruling rather than taking one, and the plan's §7 sentence "It does not
+re-tune the round" is overturned by the two decisions that predate it. And 226 corrects a premise
+rather than answering a question: the plan says frontend vitest tests are invisible to the coverage
+contract, which M4.9's `_vitest_ids()` made false.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 214 | O1 — the round's stopping threshold: its own constant beside `CAP_PAIRS`, calibrated against the measured owned-pool scale? And is `prior_var = 1.0` four times the real variance (finding 32)? | **Decision 175, applied exactly as 205 hands it here.** `BOUNDARY_Z = 0.6` beside `CAP_PAIRS`; `straddle_z` 1.0 -> 0.15 as §6.3's badge constant; `api/tonight.py`'s `_z()` and every `z=` plumbing deleted. `prior_var` stays 1.0 and finding 32 is recorded as **refuted** — `foldin.fit_user` standardises both halves of the score over the reference population, so the measured pool variance is 0.76-0.88 and 1.0 is 1.14-1.31x it. |
+| 215 | O2 — a 2-3 candidate pool: refuse admission below four with a named reason, or skip the round and go straight to 54e's ballot? | **Straight to the ballot.** `play.start` keeps admitting any pool of two or more; the seat whose replay reports a stop reason with no pair to serve ends itself with that reason, `everyone_finished` turns true, and settle-from-a-read moves the room to `ballot`. |
+| 216 | O3 — `has_profile` from a live observation count (`cs-16`), or naming the unscored member in the refusal? | **The named refusal.** `play.start` checks the seated member ids against `user_score` before `pool.build` and raises `unscored_member` naming the person. `has_profile` stays `role != guest`, and `cs-16`'s pool-average admission — which rewrites §6.2 step 3's arithmetic — is not built. |
+| 217 | O4 — the split trigger: (a) `divergent_answers` reads the answers rather than the scores, (b) `D_THRESHOLD` re-calibrated against the shipped z-scored `user_score`? | **Neither ships.** `combine.py`'s docstring gains the scale note and this decision records the measured firing rate. `zeroed()`, `D`, `D_THRESHOLD` and `contested_facet()` are untouched, and §6.2's normative ~14.5% is not edited to match the code. |
+| 218 | O5 — an untagged candidate is centred as the pool's anti-title: (a) `centred` skips terms the vector does not carry, or (b) `adjustment` divides by the terms the candidate carries? | **(a).** `tilt.centred` returns no coordinate for a term the vector does not carry, so `adjustment(tilt, {}, frame) == 0.0` by construction — which is what `tilt.py:84-88`'s docstring already promises. |
+| 219 | O6a — the runtime budget on a series night: amend §6.2 step 1 to say it is per-episode and make the labels say so, or hide the slider under Series? | **Amend and make the copy honest** (54h). `pool.admits` / `with_budget` / `fit_line` keep applying the bound to `title.runtime_min` and say "per episode" where they say anything; the winner card's `{year} · 24 min` gains the qualifier and the open-rooms line stops printing "Series · 130 min" unqualified. |
+| 220 | O6b — does 54d's reserved-slot label ship, and as a `reserved bool` on `session_result` or as a fourth slot constant? | **It ships, as the boolean.** `reserved boolean NOT NULL DEFAULT false` in migration `0021_tonight_reserved_slot.sql`, carried on `combine.Slate`, written by `play.finish`, passed through `tonight/result.slate` and rendered on the reveal. A fourth `slot` value would turn every `slot in ('finalist','wildcard')` filter into a place to forget. |
+| 221 | The sub-case step 10 escalates: 219 of 1,971 random pools yield `[neutral, neutral, one pole]` after the neutral-leader repair — accept that copy, or replace slot 2 as well? | **Replace slot 2 as well.** When no free finalist carries the reference pole, slot 2 goes to the highest-scoring title on the reference pole and slot 3 to the highest-scoring title on the opposite pole. Still exactly three finalists; no fourth is appended. |
+| 222 | O6c — solo's computed-but-unread `wrapped` flag: render it, or delete the field and its two comment lines? | **Render it**, next to Reshuffle, once finding 36's modulus fix makes it true. The two land together. |
+| 223 | 54b's hold-out is redrawn on every GET, any minted token is accepted, and it is every tenth slot rather than one pair in ten. What replaces it, and what key does the arm draw from when the solo caller has no participant? | **A rate drawn from a stable key, sealed with the pool.** `play.start`'s pool payload gains `holdout_seed`; `round.is_holdout` becomes a 1-in-`HOLDOUT_EVERY` rate drawn from an explicit key threaded through `select` and `replay` — the seat id for a group round, `user.id` for solo. |
+| 224 | The plan opens "This milestone is not in §12". Does it stay outside the table, and where does decision 165's spec half land? | **It takes a row**, appended after M4.11's, on M4.9's, M4.10's and M4.11's argument rather than M4.6's and M4.7's; and "(+ TV route)" is struck from §12's M4 row in the same change, together with decision 165's other four sentences at spec lines 44, 78, 249 and 255. |
+| 225 | The plan says the channel route "also takes its connection through `deps.db` like every other route". Does it? | **No.** It takes `Depends(active_user_ws)` and the hand-rolled cookie handling goes, but it keeps acquiring the pool connection itself, briefly: build both payloads inside the `acquire()` block, exit it, then send, each send under `asyncio.wait_for(..., channel_rules.SEND_TIMEOUT)`. |
+| 226 | The plan's coverage section states "Frontend vitest tests are invisible to the contract". Does that still hold, and do the frontend findings carry rows? | **The premise is stale.** M4.9 added `_vitest_ids()`, so a row may name a vitest title. This milestone's two frontend-bearing rows name their vitest ids as supporting evidence **and** a Playwright or backend test, so no row rests on a suite the two-phase e2e run does not exercise. |
+
+### 214. Tonight's boundary is its own constant at 0.6, straddle_z becomes 0.15, and prior_var stays 1.0
+
+**What the spec says.** §6.3's first bullet: "a straddling title shows \"A/S\" and becomes
+queue-eligible". §6.2's round is "~10 candidate votes" per participant, and 54c ends it "when a
+shortlist of titles has emerged with high certainty". Decision 175 ruled on both constants already:
+keep the ±z·σ reach, retune `straddle_z` from 1.0 to 0.15 as §6.3's **badge** constant, give Tonight
+its own `BOUNDARY_Z = 0.6` beside `CAP_PAIRS`, and reject both of the alternatives — the
+posterior-mass redefinition and narrowing the prior. Decision 205 then declined to do it inside
+M4.10 and named the owner of the work: "the retune of `hyperparams.straddle_z`, `BOUNDARY_Z` in
+`tonight/round.py` and the deletion of `api/tonight.py:106-112`'s `_z` stay with M4.12".
+
+**Why it changes.** It does not change; it lands. The plan's §7 says "It does not re-tune the round"
+and lists finding 31 as an owner question, which reads as an open call and is not one — 175 ruled it,
+205 says in terms that it stays with this milestone, and `docs/TESTING.md:355-362` repeats the same
+sentence from the measurement's side ("the number that argues for the retune is the 600, and it
+belongs to M4.12's findings 31 and 32"). Leaving it open a second time would ship a third milestone
+whose evening always runs to the cap. The two measurements agree on the controlling variable and
+disagree on nothing that matters: 175 swept z on both surfaces at once and found no single value
+serving both (z = 1.0 badges 98.8% of a fitted board and caps Tonight 10/10; z = 0.6 badges 97.4%
+and converges 9/10 at a median of 11 pairs; z = 0.15 badges 24.5% and ends the round in 1.5), while
+this plan's finding 31 re-simulated the round independently and got the same shape (0-1 convergences
+in 20 rounds at z = 1.0, 6-11 at 0.7, 16-20 at 0.5). Finding 32 is **refuted**, and by the structure
+rather than by a fixture: `foldin.fit_user` standardises both halves of the §5.1 score over the
+reference population, so a score has sd ≈ 1 on the board it was standardised over **by
+construction**, and `prior_var = 1.0` is therefore the variance of the pool it is applied to. 175
+measures that variance at 0.76-0.88 over 30-, 120- and 500-candidate pools — 1.14-1.31x the prior,
+not a quarter of it. The plan measures 0.50 sd over the release room's owned pool, which is a
+narrower population; the retune does not rest on which number is right, because 175 re-simulated
+under **both** prior_var values and hit the cap in 12 of 12 rounds either way. The prior is not the
+controlling constant. The threshold is: at z = 1.0, `converged` is dead code on any pool a household
+owns, because 87 of 500 candidates straddle at the start and 20 answers touch at most 40 slots.
+
+**The decision.** Apply 175 exactly, in one change, because the halves are coupled: retuning
+`straddle_z` to 0.15 while Tonight still borrows it would end every evening in ~1.5 pairs against
+§6.2's ~10 — 175's own probe. `BOUNDARY_Z = 0.6` goes beside `CAP_PAIRS` in `tonight/round.py` and
+`straddles` / `straddlers` / `stop_reason` / `select` / `replay` default to it;
+`ledger/hyperparams.py`'s `straddle_z` becomes 0.15 with its comment rewritten to say it is a badge
+constant tuned against the σ-to-tier-width ratio a real fit produces, not a spec literal;
+`api/tonight.py`'s `_z()` and every `z=` argument threaded from it are deleted, so the round owns its
+own constant and no route can hand it another. `prior_var` stays 1.0 and `b_i_tau` is not narrowed.
+Neither constant ships in the corpus bundle's `ledger_hyperparams.json`, so no re-export is needed.
+
+**Cost.** Two docstrings become false the moment this lands and are corrected with it:
+`rank/board.py`'s claim that one predicate serves both surfaces, and `tonight/round.py:227-238`'s
+"rank/board.py and rank/queue.py share straddles() for the same reason"; `ledger/model.py:908` says
+the same thing a third time. Decision 176's proposed §6.3 sentence — "**One predicate serves both**"
+— is written against the arrangement this decision ends, and if M4.16 still wants it, it wants a
+different sentence; 175's replacement text is the one applied here. Rank fixtures that assume
+everything straddles need real σ/cut geometry, a board-maturity test asserting the badged fraction is
+a minority is added, and Tonight rounds now converge in integration fixtures that previously reached
+the cap — which is a test-fixture cost, paid once, against an evening that can end because it is
+finished rather than because it ran out of questions. What the household gives up is the appealing
+story that one number governs both surfaces. What it gets is an A/S chip that means "at a boundary"
+rather than "the model is uncertain", a queue whose 70% boundary arm and 20% exploration arm draw
+from different sets (257/643 on a 900-title board, against 824/76 today), and a round that can report
+`converged`.
+
+### 215. A pool too small for a round goes straight to the ballot; admission is not tightened
+
+**What the spec says.** §6.2 step 3 builds the candidate pool from the owned titles passing the
+kind/budget/rewatch filters and says nothing about a floor. 54d fixes the slate at three finalists
+plus a wildcard, which is four titles; `play.start` admits any pool of two or more
+(`play.py:146-152`).
+
+**Why it changes.** `round.boundary` returns None when `len(beliefs) <= SHORTLIST_SIZE`
+(`round.py:217`), so on a pool of two or three nothing straddles, `stop_reason` is `converged` before
+a single answer, and `state_for` returns `pair=None` with `ended_by=None`. `_end` is reachable only
+from `record_answer` (which needs a pair) and from `escape` (refused below five answers), so
+`everyone_finished` stays false and no route can close the room. Reproduced end to end: start 200,
+round `{stop_reason: converged, pair: None}`, lobby `voting`, escape 409 `too_early`, undo 409,
+ballot 200 with an empty slate — for ever. This is not a race; it is a "series" night with three
+owned shows, or a 60-minute budget on a modest library.
+
+**The decision.** Go straight to the ballot. Admission is unchanged: any pool of two or more still
+starts. The seat whose replay reports a stop reason with no pair to serve **ends itself** with that
+reason, `everyone_finished` turns true, and settle-from-a-read (decision 214's sibling repair, row
+`tonight-lifecycle-settles-from-a-read`) moves the room to `ballot` and returns the slate. The
+milestone's own coverage row settles this on its own terms — `tonight-a-seat-that-can-never-be-asked-ends-itself`
+states the outcome as "a pool of three candidates and a seat with no scores in the frozen snapshot
+both reach ballot instead of waiting for ever" — and the coverage contract is the evidence the exit
+criterion is read against, so refusing at start would contradict the row this milestone is graded on.
+The product argument runs the same way: refusing below four denies a household with three owned shows
+any evening at all, which is a bigger change than letting three titles be voted on.
+
+**Cost.** `ended_by` is stamped `converged` on a round that answered nothing, which is honest about
+the mechanism (the boundary is empty) and generous about the word (there was no "rest" to separate
+the leaders from). That reading goes in the docstring rather than into a fourth `ended_by` value —
+`0013_tonight.sql`'s `session_ended_states` CHECK admits `converged | cap | escape` and is
+sha256-checksummed. Ordering is a hard constraint, not a preference: `combine.py:315`'s `next()` with
+no default raises `StopIteration` inside `play.finish` on a two-candidate pool, so finding 22 lands
+**before** this, or one silent hang becomes a 500 on the last answer of an evening.
+
+### 216. The refusal names the unscored member; has_profile stays derived from the seat's role
+
+**What the spec says.** §6.2 step 3 ranks the pool "by the **plain average** of member Ledger
+scores"; 54c says "A participant with no Ledger — a guest, **a member with too few labels** — starts
+from the pool prior". §6.8 is the register a refusal owes: say what is actually wrong.
+
+**Why it changes.** `pool.build` keeps only titles every seated member has scored (`pool.py:265-277`),
+so a member whose fold-in has not run for this bundle — a freshly created account before the 60 s
+tick, a worker that is down, the minutes after a re-import — empties the pool, and `play.start`
+raises `empty_pool`: "nothing in the library fits tonight — widen the budget or include rewatches".
+The host widens, retries, gets the same answer, and nothing anywhere names the member. Reproduced
+over HTTP. `cs-16` answers the same question from the other end: derive `has_profile` from a live
+observation count and let a thin member's seat carry the pool average on titles they have not scored.
+
+**The decision.** The named refusal. `play.start` checks the seated member ids against `user_score`
+before `pool.build` and raises `unscored_member` naming the person; `_room_error` maps the reason so
+the lobby prints it. `has_profile` stays `role != guest`, and the pool-average admission is not
+built. The plan calls the named refusal "the safe release repair" and `cs-16`'s half "a spec-level
+change" that rewrites §6.2 step 3's arithmetic, and the label threshold it needs is a number read off
+§6.1's measured curve that nobody has taken. Inventing one to unblock a refusal message would put a
+constant with no source into the pool builder — the shape decision 176 spent a milestone removing.
+
+**Cost.** Finding 33 ships no code, and that is stated rather than closed: a member with five labels
+still gets the same full-confidence prior as one with five hundred, so 54c's "a member with too few
+labels" clause remains unreachable, and at initial release both members are at the bottom of §6.1's
+curve. It is recorded as owed. The coverage row `tonight-a-refusal-names-what-is-actually-wrong`
+carries this half together with solo's malformed-answer 422, because both are the same claim: a
+refusal names the thing the household can act on.
+
+### 217. The split trigger is not re-calibrated; the measured rate is recorded and the scale note is written down
+
+**What the spec says.** §6.2 step 5: "A hard split — divergent votes on the top title, or Ledger
+divergence **D ≥ 0.20** (~14.5% of nights; below that, decide silently) — is **surfaced with the
+alternative in hand**". The 14.5% is a claim about how often a household meets this copy.
+
+**Why it changes.** Both halves of the trigger are wrong against the shipped scale, and neither is
+mine to re-tune. `divergent_answers` (`combine.py:120-136`) documents itself as the reading that
+"cannot fire on a household that merely disagrees about how much", but it compares the participants'
+**tonight scores** and returns True when any of the three leading pairs is ordered oppositely by an
+epsilon — near the top of a pool those differences are noise, and it fires on 84-97% of simulated
+two-member evenings at every member correlation. Separately, `D_THRESHOLD = 0.20` is thresholded
+against a `user_score` that ships z-scored with a measured owned-pool sd of 0.50, so D ≥ 0.20 means
+the two members differ by 0.80 sd — 35-57% of top candidates unless tastes correlate at ρ ≈ 0.93.
+
+**The decision.** Neither ships. `combine.py`'s module docstring gains the scale note — the shipped
+`user_score` is z-scored, the measured owned-pool sd is 0.50, so `D_THRESHOLD = 0.20` is 0.80 sd —
+and the measured firing rate is recorded **here**, in the decision register, where a later reader
+looking for the number finds it beside the reason it was not acted on. `zeroed()`, `D`,
+`D_THRESHOLD` and `contested_facet()` are untouched. The plan's own words are the argument: "the
+honest interim is to record the measured rate and add the scale note to the module docstring rather
+than silently re-tune a normative number", and its §7 lists "It does not re-calibrate the split
+trigger". Editing the code to match §6.2's ~14.5% and editing §6.2 to match the code both make that
+sentence unreadable as a check, and it is the only check there is on whether the household's
+experience matches the design.
+
+**Cost.** The trigger stays over-firing on paper and inert in practice: decision 173 ships no DNA
+axes, so `contested_facet` iterates zero axes and returns None on every real night, and
+`session_result.conflict` is always NULL. Nothing in this milestone's exit criterion depends on the
+rate. The debt is a calibration question that needs one evening of real answers to settle, and it
+now has a number attached rather than a suspicion.
+
+### 218. tilt.centred skips terms the candidate's vector does not carry
+
+**What the spec says.** §6.2 step 5: each vote "yields a tilt observation — chosen-minus-rejected
+DNA, **centred on the candidate-pool mean** (the measured centring lever)". §6.2 step 3's pool
+filters are ownership, kind, budget and rewatch, and a missing tag is none of them.
+
+**Why it changes.** `dna.vectors_for` returns `{}` for a title with no rows, and `tilt.centred`
+(`tilt.py:83-96`) maps an absent term to `(0 - mean)/spread` — a negative coordinate on every term
+the pool carries, where its own docstring at `:84-88` promises zero. So every untagged candidate
+picks up the same non-zero adjustment and they rise or fall **as a block**, by about 0.44 sd of the
+real score spread, on a library where 32% of titles carry no DNA at all. A symmetric fixture cancels
+it exactly, which is why the database toy shows 0.0 and the corpus does not.
+
+**The decision.** (a): `centred` returns no coordinate for a term the vector does not carry, so an
+absent term contributes nothing and `adjustment(tilt, {}, frame) == 0.0` by construction. It is the
+smaller diff and it is what the docstring already describes, so the change makes the code match its
+own stated contract rather than introducing a second rule beside it. Untagged titles are **not**
+excluded from the pool.
+
+**Cost.** It changes A/B tilt **observations** too, not only the adjustment — the same function
+centres both — and that is acknowledged here rather than discovered later by someone comparing two
+evenings' stored tilts. Answers already recorded were recorded under the old centring; they are
+append-only and are not rewritten. Option (b), dividing by the terms the candidate carries, would
+have given an empty vector exactly 0.0 as well, but only by adding a second normalisation to a
+function whose docstring already promised the first one.
+
+### 219. The runtime budget for a series session is per-episode, and every label says so
+
+**What the spec says.** §6.2 step 1: session controls are "kind (film/series), a **runtime budget
+slider** (soft — the pool admits up to budget + 40 min; over-budget results are labelled \"runs N min
+over\")". It defines the budget for both kinds and is silent on what a budget means for a series.
+
+**Why it changes.** The code picked an answer silently and the copy does not say which. `pool.admits`
+/ `with_budget` / `fit_line` (`pool.py:129-162`) apply the bound to `title.runtime_min`, which for a
+series is minutes **per episode** — `home/shelves.py:73-75` says so in a comment. Measured against the
+real bundle, the series pool is 121 of 121 owned titles at budget 60, 130 and 200 alike, so the
+slider is a no-op on a series night; 104 candidates carry "fits your 60 min", one of them a 24
+min/ep show with 293 episodes. The winner card prints `{year} · 24 min` with no qualifier and the
+open-rooms line prints "Series · 130 min", both of which read as the evening's length.
+
+**The decision.** Amend §6.2 step 1 in 54h's register and make the copy honest. The budget stays
+per-episode: `pool.admits`, `with_budget` and `fit_line` keep applying the bound to
+`title.runtime_min` and say "per episode" wherever they say anything at all; the winner card's
+runtime gains the qualifier; and the open-rooms line stops printing an unqualified "Series · 130
+min". Hiding the slider under Series was the alternative and it removes a control §6.2 step 1 gives
+for both kinds — and removes the fit-line cases the plan's own amend table asks this milestone to
+add, which presume the budget stays.
+
+**Cost.** One §6.2 amendment (54h below), three label sites, and new cases on
+`tonight-rank-pool-filters-owned-kind-budget-rewatch`. The household gains no filtering power on a
+series night that it did not have — 121 of 121 still pass at every budget — but it stops being told
+a number that means something else. That the slider does not narrow a series pool is now stated
+rather than implied.
+
+### 220. The reserved third slot is labelled, as a boolean column rather than a fourth slot value
+
+**What the spec says.** 54d: the third finalist slot "is reserved for the highest-scoring title on
+the opposite pole of the contested axis, **labelled as such**". §6.2 step 5's copy promises the
+household "here's one of each".
+
+**Why it changes.** Nothing labels it. `combine.py:325-333` gives the reserved title `SLOT_FINALIST`
+like the other two; `session_result.slot`'s CHECK admits only `finalist / wildcard / runner_up`
+(`0013_tonight.sql:178`); and no string `reserved` or `opposite` exists anywhere in
+`api/tonight.py`, `play.py`, `copy.py` or the Tonight page. A household told "here's one of each"
+cannot see which of the three cards is the counterweight, which is the whole content of the clause.
+A spec clause with no implementation is a bug by this project's own rule.
+
+**The decision.** It ships, as `reserved boolean NOT NULL DEFAULT false` on `session_result` in
+migration `0021_tonight_reserved_slot.sql`, carried on `combine.Slate`, written by `play.finish`,
+passed through `tonight/result.slate` and rendered on the reveal. The fourth slot constant
+`SLOT_RESERVED` was the alternative and the plan states the preference outright: it turns every
+`slot in ('finalist','wildcard')` filter (`api/tonight.py:583, 609`) into a place to forget, while
+the boolean is orthogonal to the slot and cannot silently drop a finalist out of a filter. Carrying
+the field on `Slate` and rendering it nowhere was the third option and is refused: a computed field
+with no reader is exactly finding 39's complaint about `wrapped`, which decision 222 repairs three
+entries below.
+
+**Cost.** Migration `0021` is taken. `0019` stays a permanent gap — the ledger maps a number to the
+milestone that owns it and M4.10 needed no schema — and `0022` belongs to M4.13, which is being built
+in parallel; neither is filled here.
+`test_migrations.py::test_the_result_slate_and_its_outcome_are_two_tables` gains the column, and the
+upgrade drill picks it up over populated tables. The label is **inert on the shipped bundle**:
+decision 173 ships no axes, so `contested` is None on every real night and no row is ever written
+with `reserved = true` on release data. It is therefore verified at the pure and integration layers
+with hand-seeded axes, and read as a statement about the rule rather than about what the household
+will see this month.
+
+### 221. When neither free finalist carries the reference pole, slot two is reserved too
+
+**What the spec says.** §6.2 step 5 fixes the copy verbatim — "You're split on light vs heavy — here's
+one of each" — and `copy.py` keeps `SPLIT_LINE` out of the model's reach precisely so it cannot be
+reworded. 54d puts one title on each pole of the contested axis.
+
+**Why it changes.** Repairing the neutral leader (finding 21) does not finish the job. With the
+reference pole taken from the first finalist that actually carries one, 219 of 1,971 random pools
+still come out as [neutral, neutral, one pole]: the two free finalists carry no term on the contested
+axis, so the slate holds exactly one titled card and the copy says "one of each" over it. Dropping
+`contested` in that case is what finding 21 was about and is forbidden here; rewording the line is
+forbidden by §6.2.
+
+**The decision.** Replace slot 2 as well. When no free finalist carries the reference pole, slot 2
+goes to the highest-scoring title on the reference pole and slot 3 to the highest-scoring title on
+the opposite pole, so the slate genuinely holds one of each. Still exactly three finalists — no
+fourth is appended, because 54d fixes the count. With the copy unwritable and silence forbidden,
+making the slate true is the only remaining move, and it is the same mechanism run twice rather than
+a new rule.
+
+**Cost.** Two titles can now be displaced by group score instead of one, which is the price of the
+sentence §6.2 already commits to. `zeroed()`, `D`, `D_THRESHOLD` and `contested_facet()` are still
+untouched (decision 217), the persisted ranks stay a permutation of 1..n under `session_result_rank`
+(`0013_tonight.sql:188`), and the case is asserted at the pure layer in `test_tonight_combine.py`
+with hand-seeded axes, because decision 173 keeps it off release data.
+
+### 222. `wrapped` is rendered next to Reshuffle rather than deleted
+
+**What the spec says.** §6.2 step 7 gives solo "a **reshuffle** control"; 54f: "A **reshuffle**
+control walks further down the ranking." §6.8's register is a surface that says what it did.
+
+**Why it changes.** `solo.py:155-157` argues that a walk "wraps, and the wrap is worth saying out
+loud" and returns `wrapped` at `:194` — and a grep over `frontend/src`, `e2e/specs`, `ops/devstub.py`
+and `backend/tests` finds no reader. It is also wrong today: `span = max(len(order) - 1, 1)` makes
+`wrapped` True from the first press on a four-title pool, on which the picks never change at all.
+
+**The decision.** Render it. Once the modulus is `span = max(len(order), 1)` the flag is correct, and
+the solo screen shows one quiet line next to Reshuffle when the walk has come back round. Deleting
+the field would discard a claim the codebase made rather than answer it, and the plan lists rendering
+first in both places it raises the question. A household pressing Reshuffle a fourth time on a small
+pool otherwise sees the same three titles with nothing saying why.
+
+**Cost.** One line of §6.8-register copy on the solo surface, asserted in `14-tonight.spec.js`'s
+existing reshuffle test. It is only truthful after finding 36's modulus fix, so the two land in the
+same change — a wrap line over a walk that never moves is worse than no line.
+
+### 223. 54b's hold-out is a rate drawn from a stable key, and the draw is sealed with the pool
+
+**What the spec says.** 54b, non-negotiable: the hold-out is "one pair in ten … the only data
+admissible for evaluating whether the round works", and §13 makes the uniform-random stream the only
+data the model may be evaluated on.
+
+**Why it changes.** Both halves were false. `select()` draws the hold-out with the request's own
+`SystemRandom` and nothing persists it, while the card seal carries only `{p, a, b, s, n}` and
+`record_answer` validates only `seq == answered_count + 1` — so twelve GETs at `answered = 9`
+returned twelve **distinct** "uniform-random" pairs, and answering with the first-minted token
+returned 200 and was stored as `uniform_holdout`. §13's only admissible stream was client-selectable.
+Honest clients hit it too: `refresh()` re-reads the round on every `rooms.changed` / `lobby` /
+`reveal` frame and on reconnect, so the card changes under the person's thumb after a phone lock.
+And `is_holdout` is `seq % HOLDOUT_EVERY == 0` — a slot schedule, not a rate — so a round ended by
+the escape at pair six draws **zero** hold-outs. Since convergence is unreachable at the shipped
+threshold (decision 214 fixes that), the escape is the humane exit, and the evenings a household
+actually cuts short are exactly the ones contributing nothing.
+
+**The decision.** Seal the draw and make the arm a rate. `play.start`'s pool payload gains
+`holdout_seed` (`secrets.token_hex(16)`), frozen with the pool; `_round_of` seeds
+`random.Random(f'{seed}:{participant_id}:{seq}')`, falling back to
+`f'{session_id}:{participant_id}:{seq}'` for rooms started before the change, so a live evening does
+not lose its round mid-flight. `round.is_holdout` becomes a rate of `1/HOLDOUT_EVERY` drawn from an
+**explicit key** threaded through `select` and `replay`: the seat id for a group round, `user.id` for
+solo. The key must be explicit because `is_holdout` has a second caller with no participant —
+`api/tonight.py:641-642` re-derives the arm for a solo answer server-side from `seq` alone — and a
+rate keyed on anything not stable per caller would reclassify a stored solo answer between two
+requests. The arm is never accepted from a client (54b).
+
+**Cost.** No migration: the pool payload is jsonb. `api/tonight.py:11-13`'s docstring is corrected to
+"single-use per live answer count". Finding 29 closes by construction rather than by a new check —
+after an undo the re-issued token for the retracted seq is byte-identical to the stashed one, so
+replaying it names the same pair. Sealing the participant's **retraction** count, which would also
+close `dd13`'s adaptive residual (a token minted under a history the participant later rewrote), is
+explicitly out of scope and stays one field away. Row `tonight-rank-holdout-one-in-ten`'s `what` is
+restated from the schedule to the rate, which is why the gap was invisible to the build: the row
+asserted the defect.
+
+### 224. M4.12 takes a §12 row, and §12's M4 row loses "+ TV route"
+
+**What the spec says.** §12's M4 row: "Tonight: lobby + open-rooms discovery, push join, the ~10-vote
+round, guest hand-off, group combine + conflict surfacing, blind reveal, **solo mode** (+ TV route) |
+a real Friday night resolved by the app". Decision 165 retires the TV client; five v2.1 sentences
+still fund it, at lines 44, 78, 249, 255 and 411.
+
+**Why it changes.** The plan opens "This milestone is not in §12", which is true and is not the
+question. What M4.12 repairs is a row the table already had, and its exit criterion was closed
+against a six-title fixture pool, a household of one account, and a guest seat that could answer a
+round but never reach the reveal — the same shape M4.9's, M4.10's and M4.11's preambles use to
+justify their own rows. And §12's table is edited either way: decision 165 is written down and
+nothing else has moved, so the spec still funds a TV client in five sentences while a live `/tv`
+route, an e2e spec and a coverage row keep it shipping.
+
+**The decision.** It takes a row, appended after M4.11's at `docs/spielplan-spec_v2.1.md:416`, with
+the explanatory paragraph M4.9, M4.10 and M4.11 each carry, on their argument rather than M4.6's and
+M4.7's. In the same change, "(+ TV route)" is struck from M4's row at `:411`, and decision 165's
+other four sentences go with it: the §1 diagram's "TV kiosk route" at `:44`, §3.2's shared/TV PIN
+rationale at `:78`, §6.2 step 2's join channels at `:249`, and §6.2 step 8 at `:255`. The route,
+`e2e/specs/16-tonight-tv.spec.js` and the `tonight-rank-tv-kiosk-route` coverage row are deleted
+together in the milestone's own TV commit — rule 2 fails the build the moment those five test titles
+stop existing, so all three go at once.
+
+**Cost.** Both lanes running this week edit §12's table and both append at the end of it, which is a
+mechanical merge rather than a semantic one. `test_spec_coverage.py`'s `MILESTONES` already contains
+`"M4.12"` — it was added when the pre-release rows landed there — so nothing is inserted; only
+`current_milestone` moves, the milestone gains its own paragraph in that file's authored comment
+block, and `docs/TESTING.md`'s ledger block is re-pasted. The household loses a surface nobody
+reached: the room-code join path stays (phones use it) and `ballot.tally`'s blindness guard stays,
+because its other callers are the WebSocket and any later reader.
+
+### 225. The Tonight WebSocket takes the dependency graph, but never `deps.db`
+
+**What the spec says.** §3.1 locks an account to a password change at first login; §3.2 puts every
+route behind a session; §6.2 step 2 makes the live in-app lobby one of the equivalent join channels.
+
+**Why it changes.** The channel route has an empty dependant tree: it opens the cookie itself and
+calls `auth.load_session` (`api/tonight.py:668-675`), so it never checks `must_change_password` and a
+locked account receives `rooms_changed` frames naming who is in which room, while `deps.active_user`
+exists precisely so no route can be reached around that. Because the auth is hand-rolled, a
+route-inventory guard classifies the socket as anonymous. Separately the route opens
+`async with db_pool.acquire()` and awaits `socket.send_json` **twice inside it**: a client that is
+connected but not reading blocks that send indefinitely and pins one of ten pooled connections.
+Reproduced with ten hanging sockets — pool size 10, idle 0, and an ordinary `GET /api/auth/me` timed
+out. That is not a Tonight failure; Rate, Home and auth stop answering.
+
+**The decision.** Take the dependency graph and not the connection. `api/deps.py` gains
+`current_user_ws` / `active_user_ws` — the body of `current_user` reading `socket.cookies` and
+raising `WebSocketException(code=1008)` — and the route takes `Depends(active_user_ws)`, so the
+first-login lock applies and the guard can see it. It does **not** take `deps.db`: that is a yield
+dependency held for the whole request, and on a WebSocket the request is the whole evening, so it
+would pin a pooled connection per open phone — finding 16 with a longer lease. The route keeps
+acquiring for itself, briefly: build both payloads inside the `acquire()` block, exit the block, then
+send, each send wrapped in `asyncio.wait_for(..., channel_rules.SEND_TIMEOUT)`.
+
+**Cost.** The route's own docstring has to say why it is the one route that acquires its own
+connection, or the next reader "fixes" it back. `channel.py`'s `Socket` Protocol gains `close`,
+called in `_deliver`'s except branch, so a device the hub gives up on gets its `onclose` and
+reconnects instead of going silently deaf for the rest of the evening. Raising `max_size` is
+explicitly not the fix; it moves the wall. The `must_change_password` half of this finding already
+landed with decision 179 (`api/tonight.py:719-728`); only the dependency-graph half is owed here.
+
+### 226. A frontend row may name a vitest id, but never only a vitest id
+
+**What the spec says.** `docs/TESTING.md` makes the coverage map the contract: one row per testable
+requirement, and rule 2 requires every named test to exist — "checked against the real pytest
+functions, Playwright titles **and vitest titles**".
+
+**Why it changes.** The plan's coverage section opens with "Frontend vitest tests are invisible to
+the contract" and concludes that the six frontend repairs either earn an e2e assertion or carry no
+row. M4.9 added `_vitest_ids()` to `test_spec_coverage.py:178-205`, so `KNOWN_TESTS` is
+`_pytest_ids() | _playwright_ids() | _vitest_ids()` and the premise is false. Decision 206 declined
+rows for M4.10's frontend findings, but on a count argument specific to that milestone's exit
+criterion ("`M4.10 10/10 covered`" would have become false), not on registrability.
+
+**The decision.** A row may name a vitest id, and no row may rest on one alone. This milestone's two
+frontend-bearing rows — `tonight-the-device-remembers-which-seat-it-is-playing` and
+`tonight-the-answer-latency-is-a-measurement` — stay `kind = "e2e"` and name their vitest ids beside
+the Playwright ones. Writing the assertions only in vitest and naming none of them, as the plan
+proposes, would leave the cheapest tests in the milestone deletable without breaking a build; naming
+a vitest id **instead** of a Playwright one would rest a clause on a suite `npm --prefix e2e run
+fresh` never runs.
+
+**Cost.** Renaming or deleting a named vitest title now breaks the build, which is the point and is
+the same bargain every registered pytest and Playwright name already carries. Nothing else in the map
+changes: decision 206's ten rows stay as they are, and this rule is stated here rather than applied
+retroactively to milestones that closed under the older reading.
+
+---
+
+## Decisions taken (owner, 2026-09-11, M4.12 review cycle 1)
+
+### 227. §6.4 states the axis filename rule the loader enforces, and it is `<facet>.tsv`
+
+**What the spec says.** §6.4: "**Axis definitions are a shipped, authored artifact**: one TSV per
+vocabulary-v1 facet (left pole, right pole, term → weight ∈ [−1, 1]) … shipped in `dna_vocab/v1/`".
+One file per facet, flat in that directory — and no filename at all.
+
+**Why it changes.** Decision 173 moved the loader off the `axes/` subdirectory it had invented, and
+the implementation sketch behind that ruling (ROADMAP-to-M5.md's "What changes") spells the artifact
+`axis_<facet>_v1.tsv`. The loader that shipped globs `*.tsv` and keys `dna_axis` on the file's whole
+stem, so that spelling names a facet called `axis_mood_v1` — which `dna_axis`'s `FOREIGN KEY
+(version, facet) REFERENCES dna_facet` refuses, and which §6.2 step 5 would otherwise print at a
+household as a raw id. The loader is right to take the stem and right to warn: the sketch's own
+example stems (`mood_tone`, `pacing_energy`) are not `dna_tag.facet` values either, so it cannot be
+authored as written. But the rule the loader enforces was then written down nowhere normative: it
+lived in a docstring, a fixture and the §6.6 Data card, while §6.4 — the document a corpus author
+reads before authoring — still named no filename and the decision register named the other one. A
+corpus arriving under proposal 140 as `axis_mood_v1.tsv` imports zero `dna_axis` rows, so
+`dna.axes_for` returns `{}`, `combine.contested_facet` returns `None`, and §6.2 step 5's split is
+dark on every evening — the exact failure decision 173 exists to prevent ("lands correctly the day
+it exists, with no second decision").
+
+**The decision.** §6.4 states the rule: `<facet>.tsv`, flat in `dna_vocab/v1/`, the facet spelled as
+`dna_tag.facet` spells it, two pole names alone on the header line, and `vocab_pacing_axes_v1.tsv`
+explicitly not one of these files. Decision 173's ruling stands as taken — the `axes/` subdirectory
+is gone — and the `axis_<facet>_v1.tsv` spelling in its sketch is superseded rather than
+implemented. `test_dna_import.py::test_the_spec_states_the_axis_filename_rule_the_loader_enforces`
+holds the sentence against the loader's own behaviour, so the two cannot drift apart again.
+
+**Cost.** One amended sentence in §6.4 and a spec-reading test in the importer's suite. No code
+changes: the loader, the per-file warn, the §6.6 Data card and the fixture bundle already implement
+this rule. Nothing is authored either way — decision 173 ships no axes — so the whole of this is the
+honesty the milestone owes a corpus author who reads the normative document rather than the app.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
@@ -3487,3 +3976,37 @@ for.
 
 **Cost.** One new table, three new columns. All M4, but the schema is decided now so the M4
 write-path is built against it rather than migrated afterwards.
+
+### 54h. Step 1, amended — what the runtime budget means on a series night
+
+**Proposed amendment.** Amend step 1's runtime-budget clause: "a **runtime budget slider** (soft —
+the pool admits up to budget + 40 min; over-budget results are labelled \"runs N min over\"). On a
+**series** session the budget is **per episode** — it is compared with the show's per-episode
+runtime, not with a season or a series total — and every label that states a number on a series card
+says so (\"fits your 60 min per episode\")."
+
+**Cost.** Free copy plus three label sites. Measured against the shipped bundle the series pool is
+121 of 121 owned titles at budget 60, 130 and 200 alike, so this changes no candidate set and no
+ranking; what it changes is that the slider stops appearing to promise an evening's length. Without
+it §6.2 step 1 defines a budget for both kinds and is silent on what it means for one of them, and
+the code has already picked per-episode without saying so. (Decision 219.)
+
+### 54c, amended — "every tenth pair" is a rate, and the draw is sealed with the pool
+
+**Proposed amendment.** In 54c's *How a pair is chosen*, replace "Every tenth pair is the
+uniform-random hold-out (54b) and is chosen by none of this" with: "**One pair in ten** is the
+uniform-random hold-out (54b) and is chosen by none of this — a rate drawn from a stable key rather
+than a fixed slot, so a round the escape ends at pair six carries hold-outs at the same rate as one
+that runs to the cap. **The draw is sealed for the evening**: the pair a seat is shown at a given
+answer count is a function of a nonce frozen with the pool, so every read of that card returns the
+same pair and the same sealed token."
+
+**Cost.** None to 54b, whose own wording is already the rate ("One pair in ten is drawn uniformly at
+random from the candidate pool"); this is 54c's sentence catching up with it, and with what the code
+now does. The measurement is in decision 223: as a slot schedule the arm gave an escaped round zero
+hold-out rows and a four-candidate pool zero always — exactly the evenings a household cuts short
+contributing nothing to §13's only admissible stream — while the redrawn-per-request pair made that
+stream client-selectable, twelve GETs returning twelve different "uniform-random" pairs each sealed
+into an accepted token. One round in eight now draws no hold-out over a full twenty pairs, which is
+what a rate means and what §13 asks for: a rate over a household's evenings, not a quota per
+evening. (Decision 223.)

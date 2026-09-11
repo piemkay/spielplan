@@ -46,6 +46,10 @@ CI = WORKFLOWS / "ci.yml"
 CORPUS = WORKFLOWS / "real-bundle.yml"
 RUNNER = REPO / "e2e" / "run.mjs"
 RESET = REPO / "e2e" / "reset.mjs"
+# The `.env` reader moved out of reset.mjs when a checkout per lane made
+# run.mjs's and playwright.config.js's hard-coded origin a cross-worktree bug:
+# all three now read the stack's own PUBLIC_URL through this one module.
+ENV_MJS = REPO / "e2e" / "env.mjs"
 SPECS = REPO / "e2e" / "specs"
 FIRST_BOOT = SPECS / "01-first-boot.spec.js"
 JELLYFIN = SPECS / "08-jellyfin.spec.js"
@@ -1414,7 +1418,7 @@ _PARSER_THAT_SHIPPED = r"""function env(key) {
 
 
 def _env_parser(source: str) -> str:
-    """`reset.mjs`'s `env()` as text, to be run rather than read.
+    """`env.mjs`'s `env()` as text, to be run rather than read.
 
     Lifted by bracket matching rather than copied, so the thing under test is the shipped
     function and a later edit to it is what these cases meet. Its body reaches nothing but
@@ -1422,9 +1426,9 @@ def _env_parser(source: str) -> str:
     it -- importing the module instead would run `docker compose` and drop a database.
     """
     start = source.find("function env(")
-    assert start >= 0, "e2e/reset.mjs no longer defines env(): this guard is reading nothing"
+    assert start >= 0, "e2e/env.mjs no longer defines env(): this guard is reading nothing"
     _, end = _span(source, start, "{", "}")
-    assert end > 0, "e2e/reset.mjs's env() has unbalanced braces"
+    assert end > 0, "e2e/env.mjs's env() has unbalanced braces"
     return source[start:end]
 
 
@@ -1451,7 +1455,7 @@ def test_the_reset_parser_reads_the_values_compose_reads(tmp_path, line, key, va
     """The parser and the stack it resets have to agree about what PUBLIC_URL *is*, because the
     guard standing between an operator and their data is a prefix test on what this returns. A
     value compose accepts and this mangles is a refusal that cannot be argued with."""
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
@@ -1471,7 +1475,7 @@ def test_the_reset_parser_harness_sees_the_order_that_shipped(tmp_path):
     assert not re.match(r"^https?://(localhost|127\.0\.0\.1)", shipped), (
         "reset.mjs:53's prefix guard would have accepted the mangled value after all"
     )
-    assert _parse_with(_env_parser(_read(RESET)), tmp_path, line, key) == value
+    assert _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, line, key) == value
 
 
 # A wait bound to a name, where the name is later handed to `expect(...).rejects`. Only that
@@ -1645,7 +1649,7 @@ def test_the_reset_parser_resolves_a_key_the_way_the_stack_that_booted_did(tmp_p
         "the stale value would have been refused anyway, so this file cannot show what reading "
         "the first assignment costs"
     )
-    live = _parse_with(_env_parser(_read(RESET)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
+    live = _parse_with(_env_parser(_read(ENV_MJS)), tmp_path, _APPENDED_TWICE, "PUBLIC_URL")
     assert live == "https://spielplan.example"
     assert not _DEV_STACK.match(live), "the guard above `DROP DATABASE` accepts the live value"
 
@@ -1900,10 +1904,14 @@ _FOLD_IN_SECTION = "\u00a75.3"
 # comments rather than printed messages and their files are M4.6's, so widening the guard onto
 # them would be an edit this milestone was not asked to make; what it does instead is refuse to
 # let the set grow, which is the half a guard can honestly hold.
+#
+# It named a third until decision 165 retired the TV client with `16-tonight-tv.spec.js`. Kept in
+# step deliberately: the set is consumed as `grown <= ...`, so a dead entry only widens a
+# permission nothing claims -- but a sentence that has stopped being true is how the next reader
+# learns to distrust the rest of it. [M4.12 review cycle 1: M412-FE-4]
 _FOLD_IN_SHORTHAND_PREDATING_M48 = {
     "14-tonight.spec.js",
     "15-tonight-group.spec.js",
-    "16-tonight-tv.spec.js",
 }
 
 
@@ -1977,6 +1985,58 @@ def test_no_fold_in_cadence_is_attributed_to_a_section_that_does_not_give_it():
         "the section 5.3 shorthand has spread to "
         f"{sorted(grown - _FOLD_IN_SHORTHAND_PREDATING_M48)}"
     )
+
+
+# Every `NN-name` a comment reaches for, with or without the suffix: the config drops it -- "and
+# 16-tonight-tv is a television" -- and that is the spelling which outlived the file, so a guard
+# anchored on `.spec.js` would have read straight past it. A letter is required after the number
+# so that a date (`2026-09-11`) is not read as a spec file.
+_SPEC_NAMED = re.compile(r"\b(\d{2}-[a-z][a-z0-9-]*)(?:\.spec\.js)?\b")
+
+
+def _specs_named_that_are_gone(source: str) -> list[str]:
+    """Every spec file a passage names that `e2e/specs` does not have."""
+    live = {path.name.removesuffix(".spec.js") for path in SPECS.glob("*.spec.js")}
+    return [
+        f"line {_line_of(source, match.start())}: names {match.group(1)}.spec.js, which is not "
+        "in e2e/specs"
+        for match in _SPEC_NAMED.finditer(source)
+        if match.group(1) not in live
+    ]
+
+
+def test_the_harness_names_no_spec_file_that_does_not_exist():
+    """A deleted surface takes its spec with it, and the prose that funds the spec too.
+
+    Decision 165 retires the TV client, so its route, `e2e/specs/16-tonight-tv` and its coverage
+    row went together -- each was the others' red gate. The route's directory is named in the
+    coverage map's note and not here: check 9 of `ops/m412_exit_criterion.py` searches
+    `backend/tests` for the route literal, and a docstring that spells the path is reported as
+    funding a client this milestone deleted. What no gate could see is the
+    config's own reasoning: the phone project's `testMatch` is shaped the way it is for two stated
+    reasons, and one of them was "16-tonight-tv is a television". That comment is the document a
+    maintainer reads when deciding whether a new Tonight spec belongs on the phone, and it cited a
+    file that does not exist -- which is how the next reader concludes the matrix was pruned for a
+    reason it no longer has, or goes looking for a spec that was deleted on purpose.
+
+    The allowance below is held to the same rule for the same reason: a set of files that "carried
+    the same shorthand before this milestone and still do" cannot name one that is gone. It is
+    consumed as `grown <= ...`, so a dead entry widens a permission nothing claims -- harmless
+    today, and a sentence that has stopped being true either way.
+    [decision 165; M4.12 finding 43; M4.12 review cycle 1: M412-FE-4]
+    """
+    assert _specs_named_that_are_gone(_read(CONFIG)) == []
+    dead = _FOLD_IN_SHORTHAND_PREDATING_M48 - {path.name for path in SPECS.glob("*.spec.js")}
+    assert not dead, f"the fold-in allowance names spec files that are gone: {sorted(dead)}"
+
+
+def test_the_spec_name_guard_sees_a_comment_that_outlived_its_file():
+    """Both arms, because a reader that finds nothing anywhere is a guard that passes for free."""
+    gone = _specs_named_that_are_gone("// 16-tonight-tv is a television, so it stays on desktop")
+    assert len(gone) == 1 and "16-tonight-tv" in gone[0], gone
+    assert _specs_named_that_are_gone("// 14-tonight.spec.js runs on the phone too") == []
+    # A date is not a spec file, and this harness writes them.
+    assert _specs_named_that_are_gone("// measured on 2026-09-11, on Docker Desktop") == []
 
 
 @pytest.mark.parametrize(
@@ -2075,3 +2135,63 @@ def test_the_seeding_reach_guard_sees_a_claim_the_spec_directory_contradicts(tex
     11-rate does not have to come back here to be allowed to say so."""
     problems = _seeding_reach_problems(text, copies)
     assert bool(problems) is expected, problems
+
+
+@pytest.mark.parametrize("name", ["run.mjs", "playwright.config.js"])
+def test_the_harness_takes_its_origin_from_the_stack_it_is_driving(name):
+    """Neither may carry a literal origin, because a second checkout is a second stack.
+
+    Both shipped `process.env.BASE_URL ?? 'http://localhost:8080'`, which is correct for one
+    checkout and silently wrong for two: with a worktree per lane, the second suite reset its own
+    database and then drove the FIRST one's application. It reported 8 skipped in phase one --
+    `01-first-boot.spec.js` sees a stack long past first boot and skips, exactly as designed --
+    and 13 phase-two failures against an app on another branch. Nothing in either number said
+    "wrong stack". `reset.mjs` never had the bug: it had always read PUBLIC_URL from the `.env`
+    beside it, which is why it dropped the right database while the suite drove the wrong app.
+    [M4.12, the parallel-lane setup]
+    """
+    source = _read(REPO / "e2e" / name)
+    assert "localhost:8080" not in source, (
+        f"e2e/{name} carries a literal origin; it must resolve one through e2e/env.mjs's "
+        "baseUrl(), which reads the stack's own PUBLIC_URL"
+    )
+    assert "baseUrl(" in source, f"e2e/{name} no longer resolves its origin through env.mjs"
+
+
+def test_the_origin_guard_sees_a_literal_put_back():
+    """The synthetic violation, because a guard with no failing case is a comment."""
+    regressed = "const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';"
+    assert "localhost:8080" in regressed and "baseUrl(" not in regressed
+
+
+def test_the_harness_reaches_the_fake_jellyfin_on_the_port_its_own_stack_published():
+    """The third address of the same class, and the one the browser gate found rather than this
+    file.
+
+    `ops/compose.e2e.yml` publishes the fake on `${JELLYFIN_FAKE_PORT:-8096}` so a lane per
+    worktree can hold a stack each; inside the compose network it stays `jellyfin-fake:8096` for
+    both, which is why only the published half may be parameterised. `e2e/helpers.js` kept
+    `http://127.0.0.1:8096`, so the suite set Played on the OTHER lane's fake and the app swept
+    its own: §7.3's adopt direction had nothing to adopt, `seen.sync_all` returned healthy with
+    every counter zero -- which was the truth -- and "a flag set in jellyfin arrives in the app"
+    failed on a seen-state nobody had set. Measured on the M4.12 gate: the fake on 8096 held
+    `jf-1` played with no tokens and no writes, the fake on 8097 held the member's token and no
+    Played flag.
+    """
+    source = _read(HELPERS)
+    assert "127.0.0.1:8096" not in source, (
+        "e2e/helpers.js carries a literal control address; the fake's published port is "
+        "JELLYFIN_FAKE_PORT and must be resolved through e2e/env.mjs's env()"
+    )
+    assert "JELLYFIN_FAKE_PORT" in source, (
+        "e2e/helpers.js no longer reads the port ops/compose.e2e.yml publishes the fake on"
+    )
+    # The service name is the half that must NOT move: it is the compose network's, identical in
+    # every lane, and a checkout that parameterised it would be testing a topology nobody ships.
+    assert "jellyfin-fake:8096" in source
+
+
+def test_the_fake_jellyfin_port_guard_sees_the_constant_that_shipped():
+    """The synthetic violation, for `test_the_origin_guard_sees_a_literal_put_back`'s reason."""
+    regressed = "  control: process.env.FAKE_JELLYFIN_CONTROL ?? 'http://127.0.0.1:8096',"
+    assert "127.0.0.1:8096" in regressed and "JELLYFIN_FAKE_PORT" not in regressed

@@ -44,9 +44,10 @@ belief is updated — because a rule spread across three call sites is a rule wi
 forget it. Two consequences carried over verbatim from `rank/queue.py`:
 
   * **The hold-out arm never receives a fallback**, in either direction. An adaptive slot with
-    no straddler left still reports itself adaptive; the tenth pair is a hold-out whether or not
-    the round has anything to resolve. Its *rate* has to be independent of the model's own
-    confidence, or the evaluation stream stops being independent of what it audits.
+    no straddler left still reports itself adaptive; a pair the arm draws is a hold-out whether or
+    not the round has anything to resolve. Its *rate* has to be independent of the model's own
+    confidence, or the evaluation stream stops being independent of what it audits — which is also
+    why the arm is a rate drawn from a stable key rather than every tenth slot (decision 223).
   * **An arm is reported as the arm that drew it.**
 """
 
@@ -90,11 +91,45 @@ END_REASONS: tuple[str, ...] = (CONVERGED, CAP, ESCAPE)
 # `rank/queue.py` applies to §6.3's 70/20/10 shares.
 CAP_PAIRS = 20
 ESCAPE_FROM_PAIR = 6
+# The denominator of 54b's "one pair in ten", and it is read as a RATE rather than as a period:
+# `is_holdout` below draws with probability 1/HOLDOUT_EVERY from a stable key, because the tenth
+# slot gave a round ended at the escape no hold-out at all (decision 223). The name is the spec's
+# phrasing and is kept; what changed is what the number means to the selector.
 HOLDOUT_EVERY = 10
 
 # 54d: "three finalists and a wildcard". The boundary the round exists to resolve is the cut
 # between rank 3 and rank 4.
 SHORTLIST_SIZE = 3
+
+# How wide "its posterior interval still straddles the boundary" is, in sigmas. It belongs with
+# CAP_PAIRS above because it is the other half of the same sentence: 54c ends a round either when
+# the boundary is resolved or at the cap, so a threshold that can never resolve makes the cap the
+# only ending there is.
+#
+# WHY IT IS NOT §6.3's `straddle_z` (decisions 175, 205, 214). The round borrowed that constant on
+# the argument that "still straddles" is one predicate. It is one predicate over two scales: §6.3
+# measures a Ledger posterior in logit units against learned cutpoints roughly one unit apart,
+# this measures a §5.1 score standardised to unit variance against the midpoint of ranks 3 and 4.
+# One sigma multiple cannot calibrate both, and sharing it made this side a no-op. Re-measured at
+# the shipped owned-pool scale (score sd 0.50, prior_var 1.0, pools of 12/20/40, 20 seeded rounds
+# each): at z = 1.0 `converged` fires 0-2 times in 20 and the median round is the full cap of 20;
+# at z = 0.6 it fires 13-17 in 20 with a median of 8.5-13 pairs, which is §6.2 step 4's "~10
+# candidate votes per participant"; at z = 0.15 — what §6.3's badge constant is now tuned to — it
+# fires 20 in 20 with a median of 1-2 pairs, an evening over before it started. Decision 175's own
+# sweep found the same shape from the other side (z = 0.6: converged 9/10, median 11 pairs;
+# z = 1.0: cap 10/10), which is why 205 left this retune here rather than taking it in M4.10.
+#
+# THE FIGURES ARE ASSERTED RATHER THAN REMEMBERED. This paragraph invites a re-derivation — "do
+# not narrow this without a new measurement" below — and it first shipped with two of its four
+# ranges wrong (0-1 where `_simulate` gives 0-2; 14-16 where it gives 13-17), which a reader
+# running the stated sweep cannot tell from the constant having drifted under them.
+# `test_tonight_round.py::test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way`
+# runs exactly this sweep, so the comment and the harness disagreeing is a red test rather than a
+# paragraph nobody can check. [M4.12 review cycle 1: M412-RND-02]
+#
+# It is not a §4.3 bundle knob for CAP_PAIRS' reason — it is not a constant of the §5.2 recipe —
+# and it is not the prior's to fix either; `initial` carries that measurement.
+BOUNDARY_Z = 0.6
 
 # The pairwise noise of a single answer, on the tonight-score scale. "Which one tonight?" is a
 # noisier question than a considered verdict — the person is choosing a mood, not reporting a
@@ -194,6 +229,23 @@ def initial(
     rule searches all n(n−1)/2 pairs with an O(n) update inside each instead of the handful the
     boundary actually separates. A guest's evening got measurably slower than everybody else's
     for no information gained — and the ordering the row requires was not there either.
+
+    `prior_var` STAYS AT 1.0, and this is where the argument goes so it is not re-derived from
+    the same numbers a third time. §5.1's score is standardised, so a unit prior is what "one
+    score's worth of uncertainty" means structurally; the finding that it is "four times the
+    real owned-pool variance" reads a *pool* sd of 0.50 as if it were the spread of one
+    person's belief about one title, which are different quantities. It was measured rather
+    than argued away: over the same 20 seeded rounds BOUNDARY_Z is calibrated against, narrowing
+    the prior to 0.25 leaves convergence at 0-1 in 20 at z = 1.0 (0, 1 and 0 over pools of
+    12/20/40) and drops it at z = 0.6 from 17/13/16 to 13/9/10 over the same three pools — the
+    tighter prior makes fewer rounds resolve, not more, because the boundary moves as far as the
+    intervals shrink. The threshold is the controlling variable. Decision 214 records the finding
+    as refuted; do not narrow this without a new measurement.
+
+    PER POOL, because the single pair this once quoted ("from 14/20 to 7/20") is produced by no
+    pool size the sweep names, and a reader who cannot reproduce the number cannot tell a stale
+    record from a drifted constant. The same test that pins BOUNDARY_Z's own figures pins these.
+    [M4.12 review cycle 1: M412-RND-02]
     """
     var = prior_var * (GUEST_VAR_FACTOR if not has_profile else 1.0)
     return {t: Belief(mu=float(s), var=var) for t, s in pool_scores.items()}
@@ -226,17 +278,21 @@ def boundary(beliefs: Mapping[int, Belief]) -> float | None:
     return (mus[SHORTLIST_SIZE - 1] + mus[SHORTLIST_SIZE]) / 2.0
 
 
-def straddles(belief: Belief, cut: float, *, z: float) -> bool:
+def straddles(belief: Belief, cut: float, *, z: float = BOUNDARY_Z) -> bool:
     return abs(belief.mu - cut) < z * math.sqrt(max(belief.var, 0.0))
 
 
-def straddlers(beliefs: Mapping[int, Belief], *, z: float) -> set[int]:
+def straddlers(beliefs: Mapping[int, Belief], *, z: float = BOUNDARY_Z) -> set[int]:
     """Who the round still cannot place either side of the cut.
 
     One predicate, used by both selection and stopping — the round stops exactly when it has
-    nothing left to ask. `rank/board.py` and `rank/queue.py` share `straddles()` for the same
-    reason: a badge threshold and a queue threshold that drift apart give you a title that is
-    queue-eligible and unbadged (proposal 157).
+    nothing left to ask, so a threshold that empties this set ends the evening at pair zero and
+    one that never empties it makes the cap the only ending. That is why the multiple is
+    BOUNDARY_Z's and defaulted here rather than passed in from a route: §6.3's `straddle_z` is
+    the same *predicate* over a different scale, and the two calibrate apart (decision 214).
+    Inside §6.3 the sharing still holds — `rank/board.py` and `rank/queue.py` do share
+    `straddles()`, because a badge threshold and a queue threshold that drift apart give you a
+    title that is queue-eligible and unbadged (proposal 157). Two surfaces, one scale each.
     """
     cut = boundary(beliefs)
     if cut is None:
@@ -340,7 +396,7 @@ def escape(*, answered: int) -> str:
 
 
 def stop_reason(
-    beliefs: Mapping[int, Belief], *, answered: int, z: float
+    beliefs: Mapping[int, Belief], *, answered: int, z: float = BOUNDARY_Z
 ) -> str | None:
     """Why this participant's round is over, or None while it runs.
 
@@ -358,10 +414,38 @@ def stop_reason(
 # --- selection -----------------------------------------------------------------------------
 
 
-def is_holdout(seq: int) -> bool:
-    """54b: "Every tenth pair is the uniform-random hold-out". `seq` is 1-based — §6.7's own
-    log line reads `session_answer(p, pair 4)`."""
-    return seq % HOLDOUT_EVERY == 0
+def is_holdout(seq: int, *, key: str) -> bool:
+    """54b's "one pair in ten", as a RATE of 1/HOLDOUT_EVERY drawn from a stable key.
+
+    IT WAS `seq % HOLDOUT_EVERY == 0`, WHICH IS A SCHEDULE AND NOT A RATE, and the difference is
+    the whole of what §13 asks of this arm. 54c ends a round at the escape from pair 6, at the
+    cap, or on convergence, so a schedule that first fires at pair 10 gives every round a
+    household cuts short exactly zero hold-out rows: measured, a capped six-title round produced
+    16 answers and 1 hold-out, an escaped round 5 and 0, and a four-candidate pool 0 every time.
+    Since the escape is the humane exit, the evenings a household actually ends early were
+    precisely the ones contributing nothing to "the only data admissible for evaluating whether
+    the round works", and `evaluation.shortlist_agreement` returned `rate: None` for them.
+    [M4.12 finding 30; decision 223]
+
+    A rate buys that at a price worth naming: 1 round in 8 now draws no hold-out at all over a
+    full twenty pairs, where the schedule guaranteed two. §13's figure is a rate over a
+    household's evenings and not a quota per evening, and 40% of five-answer rounds now carry one
+    where none could before, so the stream gains the short evenings and loses the guarantee on
+    the long ones. Measured over 2000 keys x 20 seqs: 0.1009.
+
+    THE KEY IS EXPLICIT BECAUSE THE ARM HAS TWO CALLERS AND ONE OF THEM HAS NO PARTICIPANT.
+    `api/tonight.py`'s solo route re-derives the arm of an answer the client is holding, from the
+    seq alone, because 54f gives solo no row to read it off; a rate keyed on anything not stable
+    per caller would classify the same stored answer differently on two requests and put a
+    hold-out into the adaptive stream. So the caller names the key — the seat id for a group
+    round, `user.id` for solo — and it is never accepted from a client (54b).
+
+    `random.Random(str)` AND NEVER `hash()`: CPython seeds a string through sha512, so the draw
+    is identical in every process and under every PYTHONHASHSEED, while `hash()` is salted per
+    process — which is the same reclassification arriving through a server restart. `seq` is
+    1-based, as §6.7's own log line reads it (`session_answer(p, pair 4)`).
+    """
+    return random.Random(f"{key}:{seq}").random() < 1.0 / HOLDOUT_EVERY
 
 
 def _axis_span(axes: Mapping[int, Mapping[str, float]] | None, a: int, b: int) -> float:
@@ -534,16 +618,28 @@ def _Phi_many(x: np.ndarray) -> np.ndarray:
     return 0.5 * (1.0 + _ERF(x / _SQRT2).astype(np.float64))
 
 
-def _v_w_many(t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _v_w_many(t: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """`_v_w`, elementwise. The tail guard is the same one and for the same reason: at large
     negative `t` the denominator underflows and the ratio is not a number, and the limit `-t` is
-    the correct answer rather than a NaN that poisons the posterior."""
+    the correct answer rather than a NaN that poisons the posterior.
+
+    AND IT HANDS BACK ITS OWN DENOMINATOR, which is `Phi(t)` — `_answer_probabilities`' `p_a` for
+    the same `t`. The block comment above has always argued the sharing ("`_answer_probabilities`'
+    own `p_a` is `Phi(t)`, the same value `_v_w` needs. That leaves three `erf` and three `exp`
+    per pair") and the code did not do it: `_block` recomputed the identical array, so the search
+    ran FOUR erf passes per pair, and `_Phi_many` is `np.frompyfunc(math.erf, ...)` plus an object
+    cast — a Python-level loop, and the dominant cost of the whole search. Measured over one full
+    `_PAIR_BLOCK` (32768 pairs), four passes 8 ms against three 4 ms. Returned rather than passed
+    in, because the value belongs to whoever computed it and an optional argument would be a
+    second way to spell the same array. The two `_Board.of` callers ignore it: they move a title
+    against the anchor, where no probability is wanted. [M4.12 review cycle 2: M412-RND-03]
+    """
     denom = _Phi_many(t)
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = _phi_many(t) / denom
     v = np.where(denom < 1e-12, -t, ratio)
     w = v * (v + t)
-    return v, np.clip(w, 0.0, 1.0)
+    return v, np.clip(w, 0.0, 1.0), denom
 
 
 @dataclass(frozen=True, eq=False)
@@ -598,8 +694,8 @@ class _Board:
         # `either`/`neither` against the anchor: the moved belief depends on the title alone.
         c2 = var + BETA * BETA
         c = np.sqrt(c2)
-        v_up, w_up = _v_w_many((mu - anchor) / c)
-        v_dn, w_dn = _v_w_many((anchor - mu) / c)
+        v_up, w_up, _ = _v_w_many((mu - anchor) / c)
+        v_dn, w_dn, _ = _v_w_many((anchor - mu) / c)
         return cls(
             ids=ids,
             row={int(t): i for i, t in enumerate(pool)},
@@ -686,11 +782,14 @@ class _Board:
         c2 = va + vb + BETA * BETA
         c = np.sqrt(c2)
         t = (ma - mb) / c
-        v_p, w_p = _v_w_many(t)
-        v_m, w_m = _v_w_many(-t)
+        v_p, w_p, p_a = _v_w_many(t)
+        v_m, w_m, _ = _v_w_many(-t)
 
-        # `_answer_probabilities`, verbatim and in its own order.
-        p_a = _Phi_many(t)
+        # `_answer_probabilities`, verbatim and in its own order — with `p_a` taken from the
+        # duel above rather than recomputed, which is the sharing the block comment describes and
+        # the code did not do. `_v_w_many`'s denominator IS `Phi(t)` for this same `t`, to the
+        # bit, so the value is identical and the pass is not made twice.
+        # [M4.12 review cycle 2: M412-RND-03]
         cg = np.maximum(c, 1e-9)
         both = np.exp(-np.abs(ma - mb) / cg)
         level = (ma + mb) / 2.0 - self.anchor
@@ -747,16 +846,23 @@ def select(
     *,
     seq: int,
     rng: random.Random,
-    z: float,
+    holdout_key: str,
+    z: float = BOUNDARY_Z,
     axes: Mapping[int, Mapping[str, float]] | None = None,
     asked: Iterable[frozenset[int]] | None = None,
 ) -> Pair | None:
     """The next pair, and the arm that produced it.
 
-    Every tenth pair is the hold-out and is chosen by none of the adaptive machinery. Nothing
+    One pair in ten is the hold-out and is chosen by none of the adaptive machinery. Nothing
     ever falls into or out of that arm: an adaptive slot with no straddler left still reports
     itself adaptive, because the hold-out's *rate* is the one thing §13 needs to be independent
     of the model's own confidence.
+
+    `holdout_key` is required and has no default for `is_holdout`'s reason: a shared key would
+    give every seat in the room the same arm at the same seq, which is the slot schedule again
+    wearing a hash. `rng` draws the hold-out PAIR once the arm has fired, and the caller owns its
+    lifetime — `play._round_of` seeds it from the nonce frozen with the pool so twelve reads of
+    one card return one pair (decision 223), while a pure test seeds it for repeatability.
 
     `asked` is what the participant has already answered. M3-open-points §3.1 is the reason it
     exists: the Rank queue's boundary arm consults nothing, so it re-serves about five distinct
@@ -771,7 +877,7 @@ def select(
     pool = sorted(beliefs)
     if len(pool) < 2:
         return None
-    if is_holdout(seq):
+    if is_holdout(seq, key=holdout_key):
         return _holdout(pool, rng)
 
     already = set(asked or ())
@@ -876,6 +982,16 @@ def select(
     )
 
 
+# `replay` below takes a `select: bool` flag (54f, finding 35), and that name shadows this
+# function inside that one scope. Binding it to a private alias here is the smaller of the two
+# diffs: the public name stays `select` for every caller, every test and `__all__`, and `replay`
+# still calls the one selector rather than a copy of it that could drift from it. The one thing
+# it costs is worth stating, because it is a trap: a test that wants to observe the round's own
+# call has to patch `_select_pair`, since this binding is taken at import and `replay` no longer
+# reads the module's `select` attribute.
+_select_pair = select
+
+
 # --- replay --------------------------------------------------------------------------------
 
 
@@ -883,12 +999,14 @@ def replay(
     pool_scores: Mapping[int, float],
     answers: Sequence[Answered],
     *,
-    z: float,
+    holdout_key: str,
+    z: float = BOUNDARY_Z,
     prior_var: float = 1.0,
     has_profile: bool = True,
     axes: Mapping[int, Mapping[str, float]] | None = None,
     rng: random.Random | None = None,
     escaped: bool = False,
+    select: bool = True,
 ) -> Round:
     """The whole round, from the pool and the rows.
 
@@ -899,15 +1017,41 @@ def replay(
 
     They still count toward the cap: a hold-out is a pair the person actually answered, so it
     costs them one of their twenty. It is excluded from the model, not from their evening.
+
+    `holdout_key` is threaded rather than defaulted for `is_holdout`'s reason: this is the only
+    production caller of `select`, so a default here would be the place every caller forgot the
+    key at once (decision 223).
+
+    `select=False` REPLAYS WITHOUT SEARCHING, and it is what 54f's solo door needs rather than a
+    skip of this whole function. The beliefs are the point: solo ranks its picks from
+    `played.beliefs`, so a door that skipped the replay would show a screen the person's own
+    answers had not reached. What it must not pay for is the pair search, which is O(candidates^2)
+    over the straddling set and cost 0.677 s at 200 candidates with nothing answered — on the
+    screen 54f says "must not be slower than browsing Home", and again on every Reshuffle
+    (finding 35). The `cap` fallback below is guarded by the same flag on purpose: "nothing left
+    to ask" is a statement about a search, and reporting it from a round that never searched would
+    end a solo evening before it began.
     """
     beliefs = initial(pool_scores, prior_var=prior_var, has_profile=has_profile)
     for answered_row in sorted(answers, key=lambda x: x.seq):
         if answered_row.selection == SELECTION_HOLDOUT:
             continue
-        if answered_row.title_a not in beliefs or answered_row.title_b not in beliefs:
+        if (
+            answered_row.title_a == answered_row.title_b
+            or answered_row.title_a not in beliefs
+            or answered_row.title_b not in beliefs
+        ):
             # §10: a re-import can change the pool under a stored answer. Skipping is the only
             # honest option — the alternative is inventing a belief for a title that is no
             # longer a candidate.
+            #
+            # AND ONE TITLE NAMED TWICE IS NOT TWO CANDIDATES. Membership alone admitted it, and
+            # `update` then moved that title's belief by most of a standard deviation on an answer
+            # that compares nothing — while `tilt.applies`, which read the same way, let solo count
+            # it as an answer that tilted. The two halves of one row's meaning have to refuse the
+            # same rows or the posterior and the tilt describe two different histories, which is
+            # the argument the §13 filter above already makes. No selector emits `i == j`, so this
+            # is the client-supplied list solo accepts. [M4.12 review cycle 1: M412-SOLO-04]
             continue
         beliefs = update(
             beliefs,
@@ -931,11 +1075,11 @@ def replay(
     }
     nxt = (
         None
-        if reason
-        else select(beliefs, seq=count + 1, rng=rng or random.Random(0), z=z, axes=axes,
-                    asked=asked)
+        if reason or not select
+        else _select_pair(beliefs, seq=count + 1, rng=rng or random.Random(0),
+                          holdout_key=holdout_key, z=z, axes=axes, asked=asked)
     )
-    if reason is None and nxt is None:
+    if select and reason is None and nxt is None:
         # §6.2 describes the happy path and never a pool small enough to run out of distinct
         # pairs — but a household library can be, and a round with nothing left to ask and no
         # way to end is a deadlock. It is the same terminal state as the cap (the round ended
@@ -955,6 +1099,7 @@ __all__ = [
     "B",
     "Answered",
     "BETA",
+    "BOUNDARY_Z",
     "Belief",
     "CAP",
     "CAP_PAIRS",

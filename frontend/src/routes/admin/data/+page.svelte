@@ -165,14 +165,26 @@
     </section>
 
     {#if !sources.axes.loaded}
-      <!-- Decision 191: the loader stays as it is and the missing artifact becomes a task an
-           operator can see, rather than a warning inside an import report nobody re-reads. -->
+      <!-- Decision 191: the missing artifact becomes a task an operator can see, rather than a
+           warning inside an import report nobody re-reads. (191 also left the loader alone;
+           decision 173 has since moved it off the `axes/` subdirectory a bundle cannot carry,
+           which is why the paths below no longer name one.) -->
       <section class="axes">
         <div class="data heading">OUTSTANDING: AUTHOR THE AXIS ARTIFACT</div>
         <p class="why">
           §6.4 gives each vocabulary facet an authored axis — left pole, right pole, term
-          weights — and the bundle ships none, so the Map has no axes to plot. The importer
-          reads these {sources.axes.expected.length} paths inside the bundle:
+          weights — and the bundle ships none. Without them:
+        </p>
+        <!-- The sentences are the backend's, like the paths below: what the missing artifact
+             costs is a claim about the importer, and a page that wrote it down itself is how
+             this card came to name only the Map while §6.2 step 5 was off too. Decision 173
+             ships the release without axes, so this is the surface that has to say so.
+             [M4.12 finding 25] -->
+        <ul>
+          {#each sources.axes.disables as line}<li class="why">{line}</li>{/each}
+        </ul>
+        <p class="why">
+          The importer reads these {sources.axes.expected.length} paths inside the bundle:
         </p>
         <ul>
           {#each sources.axes.expected as path}<li class="data">{path}</li>{/each}

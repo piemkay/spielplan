@@ -30,7 +30,23 @@ TIER_SET = ("F", "D", "C", "B", "A", "A+", "S")
 CUTS = model.initial_cutpoints(7)
 
 
-def pool(n=60, *, sigma=0.35, seed=2, comparisons=None):
+def sigma_for(reach: float) -> float:
+    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
+
+    Every board below is built to make a stated number of titles straddle, and what decides that
+    is the REACH z·σ, not σ. Decision 214 retunes `straddle_z` from 1.0 to 0.15: written as a bare
+    σ, "every title straddles" quietly became 41 of 60 and the two-settled-titles board became
+    twenty-one, so the arms these tests are about were being exercised on a different board than
+    the docstrings describe. The geometry is pinned to the reach and is now the same at any
+    positive threshold.
+    """
+    return reach / DEFAULTS.straddle_z
+
+
+STRADDLING = sigma_for(0.35)   # the default board's σ, as the reach it is chosen for
+
+
+def pool(n=60, *, sigma=STRADDLING, seed=2, comparisons=None):
     """A board wide enough that every arm can actually draw: titles spread across the whole
     cutpoint range with a σ that makes many of them straddle, and every tier populated.
 
@@ -117,7 +133,7 @@ def test_the_held_out_arm_is_uniform_over_pairs_not_over_strata():
 @pytest.mark.parametrize(
     ("label", "candidates"),
     [
-        ("every title straddles", pool(sigma=3.0)),
+        ("every title straddles", pool(sigma=sigma_for(3.0))),
         ("no title straddles", pool(sigma=1e-6)),
         ("two titles", pool(n=2, sigma=0.35)),
         ("one tier occupied", pool(n=20, sigma=1e-6, seed=5)),
@@ -211,7 +227,7 @@ def test_exploration_anchors_on_the_least_compared_title_of_the_whole_pool():
     1-2 of 900 from answer 110 on and its anchor ended with the most comparisons on the board.
     """
     counts = {i: 50 for i in range(1, 61)} | {42: 0}
-    candidates = pool(sigma=0.35, comparisons=counts)
+    candidates = pool(sigma=STRADDLING, comparisons=counts)
     by_id = {c.title_id: c for c in candidates}
     assert by_id[42].straddle is not None, "the least-compared title is one the model is unsure of"
     assert [c for c in candidates if c.straddle is None], "and some of the board has settled"
@@ -233,7 +249,7 @@ def test_exploration_never_re_serves_a_pair_it_has_already_asked():
     The board here is the one that broke it: two titles settled, everything else straddling, so
     the old filter left an `away` of exactly two and one pair served 78 of 109 draws.
     """
-    sigmas = [3.0] * 60
+    sigmas = [sigma_for(3.0)] * 60
     sigmas[6] = sigmas[49] = 1e-6
     assert len([c for c in pool(sigma=sigmas) if c.straddle is None]) == 2
 

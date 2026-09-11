@@ -32,6 +32,14 @@ import asyncpg
 
 from spielplan.tonight import rooms
 
+# The namespace half of `submit`'s advisory lock, keyed per participant rather than per session:
+# two seats submitting at the same moment is the normal case on 54e's simultaneous reveal and must
+# not queue, while one seat submitting twice is the case that collided. Two ints, the same space
+# `play.finish`'s `_FINISH_LOCK` takes and a different number, so a ballot can never wait on a
+# combine; deliberately not `api/deps.write_txn`'s single-argument `hashtext(...)` space, which is
+# a different space again (`deps.py`'s docstring says why).
+_SUBMIT_LOCK = 6206
+
 
 class BallotError(Exception):
     def __init__(self, reason: str, message: str) -> None:
@@ -68,6 +76,43 @@ async def submit(
     approvals: "has this person submitted?" is then a question about rows existing, which is
     what the reveal condition reads, and an empty ballot ("none of these") is a real answer a
     person can give rather than an absence indistinguishable from not having voted.
+
+    AND "REPLACES" IS DELETE-THEN-INSERT, WHICH NEEDED A LOCK TO MEAN ANYTHING. Without one the
+    second of two overlapping submits could not see the first's uncommitted rows: its DELETE
+    removed nothing, its INSERTs collided with `session_ballot_one_per_title`, and `app.py`'s
+    `_conflict` answered 409 `conflict: session_ballot_one_per_title` — so on the one moment §6.2
+    step 6 makes social the phone was shown the name of a database index, and the whole of that
+    submission was rolled back with it: the DELETE and every INSERT are one transaction, so the
+    ballot standing afterwards is the OTHER tab's, not the merge of the two the constraint name
+    suggests. A double tap and a second tab are both ordinary. Probe:
+    `['UniqueViolationError', 'dict']`, 4 rows, state correct.
+    [M4.12 finding 12; M4.12 review cycle 1: M412-CONC-02 — this paragraph named the wrong status,
+    and the seam has answered 409 since M4.7's `_conflict`; the repair is unchanged]
+
+    The lock rather than `ON CONFLICT ... DO UPDATE` plus a DELETE of rows no longer on the slate,
+    for `finish`'s reason: it makes the loser WAIT and then do the whole thing correctly, so one
+    of the two ballots stands entire rather than the pair of them merging into a third nobody
+    cast. 0013's unique index stays the backstop, and nothing here catches its violation — a
+    repair that caught one would be the same check-then-act with the race moved into an except
+    branch.
+
+    THE OTHER WRITER ON THE SAME BEAT IS `resolve`, AND THE LOCK ABOVE DOES NOT MEET IT. That lock
+    is keyed per participant, so it serialises one person's two submits and nothing else — while
+    the state question at the top of this function is a check-then-act on an autocommit connection
+    that `resolve` can walk through: a changed-mind re-submit that passed the guard commits AFTER
+    `resolve` has counted the approvals and stored §13's share, and `session_outcome` then names a
+    winner the surviving `session_ballot` rows say nobody approved. Reproduced with the window
+    widened: seat A [t1], A re-submits [t2] gathered with B's submit-and-reveal, and the outcome
+    said `{chosen: 1, approval_share: 0.5}` over rows in which title 1 had zero approvals. §13
+    evaluates M4 on that number and §14 risk 6 keeps those rows as the log it is derived from, so
+    the two disagreeing is the one thing this table cannot do.
+
+    So the question is asked again HERE, under the session row `resolve` takes `FOR UPDATE` around
+    its tally — the idiom `play.finish` already uses on the same row — and a submit that arrives
+    after the reveal is the `not_ballot` refusal the client re-reads on rather than a silent write
+    into a resolved room. The read outside the transaction stays: it is the cheap refusal for the
+    ordinary case and it is what makes `not_on_slate` answerable without taking a lock at all.
+    [M4.12 review cycle 2: M412-CONC-04]
     """
     row = await conn.fetchrow(
         "SELECT p.id, p.session_id, s.state FROM session_participant p "
@@ -85,6 +130,19 @@ async def submit(
         raise BallotError("not_on_slate", f"{sorted(unknown)} are not on tonight's slate")
 
     async with conn.transaction():
+        # The first statement, so the loser's DELETE below runs after the winner has committed and
+        # therefore sees the rows it is meant to replace.
+        await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _SUBMIT_LOCK, participant_id)
+        state = await conn.fetchval(
+            "SELECT state FROM session WHERE id = $1 FOR SHARE", row["session_id"]
+        )
+        if state != rooms.STATE_BALLOT:
+            raise BallotError("not_ballot", "this session is not taking approvals")
+        # `FOR SHARE` and not `FOR UPDATE`: two seats submitting at the same moment is the normal
+        # case on 54e's simultaneous reveal and must not queue behind each other, and a shared
+        # lock is what `resolve`'s exclusive one has to wait for. Either order is then correct —
+        # a submit that gets there first is counted, one that arrives after the reveal reads
+        # `resolved` and is refused.
         await conn.execute(
             "DELETE FROM session_ballot WHERE participant_id = $1", participant_id
         )
@@ -118,8 +176,10 @@ async def tally(conn: asyncpg.Connection, session_id: int) -> list[dict[str, Any
     """Approvals per title. **Only after everyone has submitted.**
 
     The guard is here rather than in the route because this is the function that can leak: a
-    second caller — the TV route, the WebSocket, a later feature — would otherwise have to
-    remember the rule, and 54e's simultaneity is the whole social point of the round.
+    second caller — the session WebSocket, a later feature — would otherwise have to remember
+    the rule, and 54e's simultaneity is the whole social point of the round. This clause named
+    the TV route first; decision 165 retires that surface and `tally`'s guard is exactly what
+    M4.12 KEPT of it, because the callers it was written for are still two.
     """
     if not await everyone_submitted(conn, session_id):
         raise BallotError("still_voting", "approvals stay hidden until everyone has submitted")
@@ -142,33 +202,65 @@ async def tally(conn: asyncpg.Connection, session_id: int) -> list[dict[str, Any
     )
 
 
+async def _stored_outcome(conn: asyncpg.Connection, session_id: int) -> dict[str, Any] | None:
+    """§13's row for this evening, if it has one. Asked twice by `resolve` — once cheaply and
+    once under the lock — so it is spelled once."""
+    row = await conn.fetchrow(
+        "SELECT chosen_title_id, approval_share, participants FROM session_outcome "
+        "WHERE session_id = $1",
+        session_id,
+    )
+    if row is None:
+        return None
+    return {
+        "chosen_title_id": row["chosen_title_id"],
+        "approval_share": float(row["approval_share"]),
+        "participants": row["participants"],
+    }
+
+
 async def resolve(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
     """Pick the winner, persist §13's number, and end the evening.
 
     Idempotent: a second call returns the stored outcome rather than re-deriving it. Two
     devices hitting "reveal" at the same moment is the normal case, and a share that changed
     between them would be the measurement moving under the thing it measures.
-    """
-    existing = await conn.fetchrow(
-        "SELECT chosen_title_id, approval_share, participants FROM session_outcome "
-        "WHERE session_id = $1",
-        session_id,
-    )
-    if existing is not None:
-        return {
-            "chosen_title_id": existing["chosen_title_id"],
-            "approval_share": float(existing["approval_share"]),
-            "participants": existing["participants"],
-        }
 
-    counted = await tally(conn, session_id)
-    if not counted:
-        raise BallotError("no_slate", "there is nothing to resolve")
-    _, seated = await submitted_count(conn, session_id)
-    winner = counted[0]
-    share = winner["approvals"] / seated if seated else 0.0
+    AND THE TALLY AND THE ROW IT IS STORED AS ARE ONE TRANSACTION, HOLDING THE SESSION ROW. The
+    count, the winner and the share were computed on an autocommit connection and written after,
+    so a re-submit that had already passed `submit`'s state check could commit in between and
+    leave `session_outcome` naming a winner the surviving `session_ballot` rows do not approve —
+    §13's headline number against §14 risk 6's log of the votes it came from. `FOR UPDATE` on the
+    session row is the same lock `play.finish` takes at the other end of the evening and the one
+    `submit` now waits for, so the two writers meet: whichever gets there first, the stored share
+    is the share of the ballot that is actually in the table.
+
+    The idempotent read stays OUTSIDE the lock and is repeated inside it. Every device polls
+    `GET /result` after the reveal and the answer is a single indexed row; taking a row lock on
+    every one of those polls would serialise the whole household's reveal on the one write that
+    has already happened. [M4.12 review cycle 2: M412-CONC-04]
+    """
+    existing = await _stored_outcome(conn, session_id)
+    if existing is not None:
+        return existing
 
     async with conn.transaction():
+        await conn.execute("SELECT id FROM session WHERE id = $1 FOR UPDATE", session_id)
+        # Re-asked under the lock, because the cheap read above is a check-then-act like any
+        # other: two devices can both have found no outcome and both be here. The INSERT's
+        # `ON CONFLICT DO NOTHING` stopped that being a crash; this stops it being a second
+        # tally, which is what the idempotence promise is actually about.
+        existing = await _stored_outcome(conn, session_id)
+        if existing is not None:
+            return existing
+
+        counted = await tally(conn, session_id)
+        if not counted:
+            raise BallotError("no_slate", "there is nothing to resolve")
+        _, seated = await submitted_count(conn, session_id)
+        winner = counted[0]
+        share = winner["approvals"] / seated if seated else 0.0
+
         await conn.execute(
             "INSERT INTO session_outcome "
             "(session_id, chosen_title_id, approval_share, participants) VALUES ($1, $2, $3, $4) "

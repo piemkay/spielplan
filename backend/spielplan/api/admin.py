@@ -715,6 +715,16 @@ async def job_health(conn) -> dict[str, object]:
     }
 
 
+# What the missing axis artifact costs, one sentence per surface. A constant rather than a
+# literal inside the payload because `ops/devstub.py` serves the same card and a harness that
+# paraphrased this would be teaching the page a claim the backend does not make.
+AXES_DISABLES = (
+    "§6.4's Map surface has no axes to plot and renders its no-axes state.",
+    "Tonight's split surfacing (§6.2 step 5) is off: session_result.conflict is NULL on every "
+    "evening, and 54c's widest-axis tie-break is 0.0 for every pair.",
+)
+
+
 @router.get("/data/sources")
 async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
     """The §6.6 Data card's two read-only lists: dataset terms, and the axes nobody authored.
@@ -727,17 +737,28 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
     is that list and nothing more: no control, no edit, no per-source page (plan step 8.3, "no
     UI beyond that list").
 
-    **The axes.** `importer/dna._load_axes` reads `dna_vocab/<version>/axes/*.tsv` and takes each
-    file's stem as the facet; the shipped `dna_vocab/v1/` has no `axes/` directory at all, so
-    §6.4's eleven authored axes have never been authored anywhere and the loader's warning goes
-    into an import report nobody re-reads. Decision 191 leaves the loader alone and leaves §6.4
-    alone, and surfaces the gap here as an outstanding authoring task instead. The paths are
-    built from the loader's own rule — `axes/<facet>.tsv`, off the facets this install actually
-    has — rather than restated, because a hand-written list is exactly how a card comes to name
-    files the loader does not look for. (Decision 191's prose spells them
-    `axis_<facet>_v1.tsv`; that spelling would make `_load_axes` read a facet named
-    `axis_mood_v1`, and the decision's operative half is "leave the loader exactly as it is",
-    so the loader is the authority on what it reads.)
+    **The axes.** `importer/dna._load_axes` reads the TSVs of `dna_vocab/<version>/` and takes
+    each axis file's stem as the facet; the shipped `dna_vocab/v1/` carries no axis definition at
+    all, so §6.4's eleven authored axes have never been authored anywhere and the loader's
+    warning goes into an import report nobody re-reads. Decision 191 surfaced the gap here as an
+    outstanding authoring task instead; decision 173 has since moved the loader off the `axes/`
+    subdirectory it used to read, onto the flat `dna_vocab/v1/` that §6.4's own sentence names,
+    because the corpus exporter does not descend into subdirectories and a file authored there
+    could never reach a bundle — so until M4.12 this card was sending an operator to a path that
+    cannot work, in eleven lines of it. The paths are still built from the
+    loader's own rule, off the facets this install actually has, rather than restated: a
+    hand-written list is exactly how a card comes to name files the loader does not look for.
+    (Decision 191's prose spells them `axis_<facet>_v1.tsv`; that spelling names a facet called
+    `axis_mood_v1`, which `dna_axis`'s FK to `dna_facet` refuses. The loader reports that file by
+    name, and this card names the spelling that loads.)
+
+    **What it costs.** `disables` names both surfaces, because naming only the Map is what let
+    this read as cosmetic for five milestones. Decision 173 ships the release without axes, so
+    this card is where "the app never tells us we're split" gets its answer: §6.2 step 5 cannot
+    fire with `dna_axis_weight` empty, and §14 risk 6 then watches a split rate that is a
+    permanent 0 and says nothing about the households it is watching. The sentences come from
+    here rather than from the page, for the same reason the paths do — a claim about what the
+    importer does belongs beside the importer. [M4.12 finding 25]
     """
     sources = await conn.fetch(
         "SELECT id, name, scale, url, license, version, notes FROM rating_source ORDER BY id"
@@ -762,7 +783,8 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
         "axes": {
             "vocabulary_version": version,
             "loaded": int(loaded or 0),
-            "expected": [f"dna_vocab/{version or '<version>'}/axes/{f}.tsv" for f in facets],
+            "expected": [f"dna_vocab/{version or '<version>'}/{f}.tsv" for f in facets],
+            "disables": list(AXES_DISABLES),
         },
     }
 

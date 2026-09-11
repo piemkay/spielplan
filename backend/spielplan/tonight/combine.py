@@ -31,6 +31,15 @@ correction is one edit.
 PER CANDIDATE, NOT PER NIGHT. Proposal 63 again: "the ~14.5% figure is the share of nights in
 which the **winning** candidate crosses the threshold". So D is computed per candidate and the
 session's split test reads the leading one.
+
+AND 0.20 IS NOT READ ON THE SCALE IT WAS WRITTEN ON. `member_ledger` carries §5.1 `user_score`
+values, which ship z-scored with a measured sd of 0.50 over the owned pool — so for a couple,
+where mean-minus-min is half the gap, `D_THRESHOLD = 0.20` means the two members differ by 0.80 sd,
+which 35-57% of top candidates do unless tastes correlate at rho ~ 0.93. §6.2's own ~14.5% is
+therefore a claim this code does not meet, and `divergent_answers` below over-fires for a second,
+unrelated reason. Neither is re-tuned here: §6.2's number is normative and the correction needs one
+evening of real answers, so the measured rates are recorded in decision 217 beside the reason they
+were not acted on, and this note is here so nobody reads 0.20 as calibrated. [decision 217]
 """
 
 from __future__ import annotations
@@ -69,6 +78,14 @@ class Slate:
     conflict: dict[str, Any] | None = None
     d: float = 0.0
     rows: list[dict[str, Any]] = field(default_factory=list)
+    # 54d: the third slot is reserved for the opposite-pole title "**labelled as such**". Which
+    # finalist that is was computable and nowhere stated, so the household read "here's one of
+    # each" over three cards with nothing saying which one is the other side of the split — the
+    # whole content of the clause. The counterweight and not every constructed slot: under
+    # decision 221 slot 2 can be placed by construction too, and labelling two of three cards
+    # tells the person nothing about which is which. None on a night with no reservation, which is
+    # every night on the shipped bundle (decision 173 ships no axes). [decision 220]
+    reserved: int | None = None
 
     @property
     def ballot_titles(self) -> list[int]:
@@ -291,50 +308,124 @@ def combine(
     contested = contested_facet(tilts, axes) if split else None
     conflict = None
     finalists = list(leading)
+    reserved: int | None = None
+    # The ranking the slate is drawn from, which is `order` on every night the split does not
+    # survive. A surfaced split replaces it with the zeroed one below, and everything the slate is
+    # built out of then comes from that single ranking rather than from two.
+    slate_order = order
 
     if split and contested:
         # Zeroed, not averaged — and then the alternative, because zeroing alone cannot produce
         # one. The third slot is REPLACED: a fourth finalist is a different promise.
         adjusted = zeroed(scores, facet=contested, dna=dna, axes=axes)
         adjusted_order = ranked(adjusted)
-        finalists = [t for t, _ in adjusted_order[:FINALISTS - 1]]
+        free = [t for t, _ in adjusted_order[:FINALISTS - 1]]
         weights = axes.get(contested, {})
         poles = {t: axis_position(dna.get(t, {}), weights) for t, _ in adjusted_order}
-        lead_pole = poles.get(finalists[0], 0.0)
+        # THE REFERENCE POLE IS NOT THE LEADER'S, BECAUSE A LEADER NEED NOT HAVE ONE. This was
+        # `poles.get(finalists[0], 0.0)`, and 40.6% of the real corpus carries no DNA at all: when
+        # the zeroed leader is one of them its pole is 0.0, every product below is 0.0, `opposite`
+        # comes out empty, the spanning test fails too, and the else branch dropped `contested`
+        # and shipped the zeroed ranking under no copy at all — 31.8% of splits that HAD a
+        # counterweight, silenced by a property of one title. So the reference pole is the first
+        # free finalist that actually carries one, and if none of them does, any pole the pool
+        # carries: the question "is there anything on the other side" is about the library, and
+        # only the pool can answer it. [finding 21]
+        ref = next((poles[t] for t in free if poles.get(t, 0.0) != 0.0), 0.0)
+        if ref == 0.0:
+            ref = next((p for p in poles.values() if p != 0.0), 0.0)
+        finalists = list(free)
         opposite = [
             t for t, _ in adjusted_order
-            if t not in finalists and poles.get(t, 0.0) * lead_pole < 0.0
+            if t not in finalists and poles.get(t, 0.0) * ref < 0.0
         ]
-        if opposite:
-            finalists.append(opposite[0])
-        elif any(poles.get(t, 0.0) * lead_pole < 0.0 for t in finalists):
+        if opposite and not any(poles.get(t, 0.0) * ref > 0.0 for t in free):
+            # NEITHER FREE SLOT IS ON THE REFERENCE POLE, SO SLOT TWO IS RESERVED TOO. `ref` is
+            # taken from the free finalists first, so this branch is reachable only when none of
+            # them carries a term on the contested axis and `ref` came from the pool — 219 of
+            # 1,971 random pools. Reserving slot 3 alone would then leave [neutral, neutral, one
+            # pole] under §6.2's verbatim "here's one of each", which `copy.SPLIT_LINE` keeps out
+            # of the model's reach precisely so it cannot be reworded. Dropping `contested` is
+            # finding 21 again; rewording is forbidden; so the slate is made true instead, by
+            # running the same mechanism twice. Still exactly three. [decision 221]
+            on_ref = [t for t, _ in adjusted_order if poles.get(t, 0.0) * ref > 0.0]
+            reserved = opposite[0]
+            finalists = [free[0], on_ref[0], reserved]
+        elif opposite:
+            reserved = opposite[0]
+            finalists.append(reserved)
+        elif any(poles.get(t, 0.0) * ref < 0.0 for t in finalists):
             # The two free slots already span the axis, so "one of each" is true without a
             # reservation and the third goes to the next best. The split is still SURFACED —
             # dropping the copy here would be the review's finding in reverse: a slate that has
             # one of each and does not say why.
-            finalists.append(next(t for t, _ in adjusted_order if t not in finalists))
+            #
+            # The default is the whole of finding 22: on a pool of exactly two candidates `free`
+            # has consumed both, the generator is empty, and an unhandled StopIteration fired
+            # inside `play.finish` — which runs inside the answer handler, on the last answer of
+            # an evening. It was unreachable only because such a round could never end, so
+            # decision 215's small-pool fix would have turned a silent hang into a 500 without
+            # this line. Two spanning finalists and no third candidate is a complete slate over
+            # that pool, not an error.
+            third = next((t for t, _ in adjusted_order if t not in finalists), None)
+            if third is not None:
+                finalists.append(third)
         else:
             # Nothing anywhere on the other pole is a fact about the library, not a reason to
-            # promise one. §0: "a surfaced split must never ship bare."
-            finalists = [t for t, _ in adjusted_order[:FINALISTS]]
+            # promise one. §0: "a surfaced split must never ship bare." The sentence is true now
+            # that `ref` comes from the pool: `opposite` is empty and no free finalist is on the
+            # far side either, so the far side is empty — before this the branch was also reached
+            # without ever looking past the leader.
+            #
+            # And the silenced slate is `order`'s, not the zeroed one's: nothing is surfaced here,
+            # so the three cards must be the three the `group_score` on their own rows ranks
+            # highest. Shipping `adjusted_order[:3]` put a rank-5 title (0.30) on the slate with a
+            # rank-3 title (0.85) beneath it as a runner-up, under no copy explaining why.
+            finalists = [t for t, _ in order[:FINALISTS]]
             contested = None
         if contested:
+            slate_order = adjusted_order
             conflict = copy_rules.conflict(contested, d=d, phrasing=phrasing)
 
-    wildcard = wildcard_from(order, finalists, dna)
+    # ONE RANKING, NOT TWO. The wildcard used to be drawn from `order` while a surfaced split's
+    # finalists came from `adjusted_order`, so §6.4's "a step outside your usual" was decided by a
+    # ranking the slate was not built from — and on a tie, or a pool whose tail carries no DNA, the
+    # label landed on the best candidate the reservation had just displaced. [finding 23]
+    wildcard = wildcard_from(slate_order, finalists, dna)
+    # THE PERSISTED RANK IS THE SLATE'S READING ORDER WHEN THE TWO DISAGREE. `ballot.slate_of` and
+    # `result.slate` both ORDER BY rank, and on a surfaced split the finalists are no longer a
+    # prefix of `order`: stamping the group-score rank listed the wildcard above two of the three
+    # finalists on the ballot. Only the split path is reordered, because only there do the two
+    # orders differ in a way the reader can see — on every other night the finalists ARE the top
+    # three by group score, the wildcard sits below them, and the rank is also the "how close they
+    # came" that §6.2 step 7's runners-up are sorted by. `group_score` stays the plain average on
+    # every row either way, and the sequence stays a permutation of the pool, which is what
+    # `session_result_rank`'s UNIQUE (session_id, rank) requires of 1..n. [finding 23]
+    if contested:
+        placed = {*finalists, wildcard}
+        sequence = [
+            *finalists,
+            *([wildcard] if wildcard is not None else []),
+            *(t for t, _ in slate_order if t not in placed),
+        ]
+    else:
+        sequence = [t for t, _ in order]
     rows = []
-    for rank, (title_id, score) in enumerate(order, start=1):
+    for rank, title_id in enumerate(sequence, start=1):
         if title_id in finalists:
             slot = SLOT_FINALIST
         elif title_id == wildcard:
             slot = SLOT_WILDCARD
         else:
             slot = SLOT_RUNNER_UP
-        rows.append({"title_id": title_id, "rank": rank, "group_score": score, "slot": slot})
+        rows.append({
+            "title_id": title_id, "rank": rank, "group_score": scores[title_id], "slot": slot,
+            "reserved": title_id == reserved,
+        })
 
     return Slate(
         ranked=order, finalists=finalists, wildcard=wildcard,
-        contested=contested, conflict=conflict, d=d, rows=rows,
+        contested=contested, conflict=conflict, d=d, rows=rows, reserved=reserved,
     )
 
 

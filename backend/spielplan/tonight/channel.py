@@ -24,6 +24,7 @@ until the next REST read, which every client does on reconnect; a broker would c
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -74,9 +75,40 @@ def wire(value: Any) -> Any:
 class Socket(Protocol):
     """What the hub needs of a connection. A Protocol rather than `fastapi.WebSocket` so the
     hub is testable without a browser or an ASGI server — the same reason
-    `connectors/jellyfin.py` takes an injected transport."""
+    `connectors/jellyfin.py` takes an injected transport.
+
+    `close` is here because giving up on a device is two statements and the hub only ever made one:
+    see `close_quietly` below for what the missing half cost. [M4.12 finding 17]
+    """
 
     async def send_json(self, data: Any) -> None: ...
+
+    async def close(self, code: int = 1000) -> None: ...
+
+
+# What the hub closes a socket it has given up on with. Informational — the client reconnects from
+# `onclose` whatever the code says (`tonight.svelte.js`) — so the only requirement is that it is not
+# 1000: a normal closure is the one code a future client could read as "we are done, do not come
+# back", and a device the hub dropped is a device it wants back.
+GAVE_UP = 1011
+
+
+async def close_quietly(socket: Socket) -> None:
+    """Tell a device the hub has given up on it, bounded, and never raise.
+
+    The client's only re-read path is `socket.onclose` (`tonight.svelte.js`), so a hub that
+    unsubscribed and did nothing else left that phone connected, deaf, and certain its lobby was
+    live for the rest of the evening — the exact failure §6's preamble makes this channel the
+    answer to, arriving through the timeout written to contain it. [M4.12 finding 17]
+
+    BOUNDED, BECAUSE A CLOSE IS A SEND. It writes a close frame through the same transport that
+    has just stalled, so an unbounded await here would put the fan-out back on the clock the
+    timeout took it off — one suspended laptop and every device behind it again. And suppressed,
+    because the ordinary case is a socket that has already raised: closing it raises again, and
+    the tidy-up for one device that left must not cost the others the frame they are waiting for.
+    """
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(socket.close(code=GAVE_UP), timeout=SEND_TIMEOUT)
 
 
 # `eq=False` so a Subscriber hashes by identity. Two devices can hold indistinguishable field
@@ -129,7 +161,10 @@ class Hub:
                 # A device that has gone away must not stop the frame reaching the others: the
                 # lobby is the screen a household is looking at while somebody's phone locks.
                 log.debug("dropping a session subscriber that stopped answering")
+                # Unsubscribed first and closed second: the subscription is what the next frame
+                # reads, and the close is the half that can take time. [M4.12 finding 17]
                 self.unsubscribe(sub)
+                await close_quietly(sub.socket)
                 return False
             return True
 
@@ -182,6 +217,7 @@ def reveal_frame(session_id: int) -> dict[str, Any]:
 
 
 __all__ = [
+    "GAVE_UP",
     "Hub",
     "LOBBY",
     "PROGRESS",
@@ -190,6 +226,7 @@ __all__ = [
     "ROOMS_CHANGED",
     "Socket",
     "Subscriber",
+    "close_quietly",
     "wire",
     "lobby_frame",
     "progress_frame",

@@ -169,3 +169,140 @@ def test_the_tilt_round_trips_through_json():
     frame = T.frame(POOL)
     moved = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=frame)
     assert json.loads(json.dumps(moved)) == pytest.approx(moved)
+
+
+# --- decision 218: an untagged candidate is a zero, not the pool's anti-title -----------------
+#
+# M4.12 finding 27. `dna.vectors_for` returns `{}` for a title with no rows and 32% of the shipped
+# library has none, so this is not an edge case: it is a third of every pool. The old `centred`
+# read an absent term as 0.0 and then centred it, which made every untagged candidate the same
+# NEGATIVE point on every term the pool carries — so they rose or fell together, by about 0.44 sd
+# of the real score spread. The two-title symmetric fixtures above cancel that exactly, which is
+# why the whole file passed while the corpus did not.
+
+
+def test_an_untagged_candidate_is_a_zero_rather_than_the_pools_anti_title():
+    """`centred`'s own docstring already promised this: "this film is unremarkable tonight" and
+    "this film is not in the pool" are the same statement. Decision 218 makes the code say it.
+
+    Two untagged titles rather than one, because the defect's shape is that they move as a BLOCK:
+    a single untagged candidate scoring below the tagged ones is a plausible ranking, and the same
+    number on every one of them is a bias.
+    """
+    mixed = {1: {"cosy": 1.0}, 2: {"cosy": 0.0}, 3: {}, 4: {}}
+    f = T.frame(mixed)
+    tilted = T.observe({}, chosen=mixed[1], rejected=mixed[2], frame=f)
+
+    assert T.centred({}, f) == {}, "a vector with no terms has no coordinates"
+    assert T.adjustment(tilted, {}, f) == pytest.approx(0.0), (
+        "54f's 'ranked by the personal Ledger with no tilt' is what an absent vector is owed"
+    )
+    assert T.adjustment(tilted, mixed[3], f) == pytest.approx(0.0)
+    assert T.adjustment(tilted, mixed[4], f) == pytest.approx(0.0)
+
+
+def test_a_term_the_rejected_title_does_not_carry_is_absent_rather_than_fabricated():
+    """Decision 218's acknowledged cost, asserted rather than left as a note: the same function
+    centres both sides of §6.2 step 5's difference, so this changes A/B OBSERVATIONS too.
+
+    The chosen film carries `cosy` and the rejected one does not. The answer now moves the tilt by
+    the chosen film's own coordinate; before, it moved it by that coordinate *minus* a negative
+    number the rejected film never earned — a stronger statement about `cosy` than the person made.
+    """
+    mixed = {1: {"cosy": 1.0, "dread": 0.2}, 2: {"dread": 1.0}, 3: {"cosy": 0.4, "dread": 0.5}}
+    f = T.frame(mixed)
+    moved = T.observe({}, chosen=mixed[1], rejected=mixed[2], frame=f)
+
+    assert moved["cosy"] == pytest.approx(T.centred(mixed[1], f)["cosy"])
+    assert moved["dread"] == pytest.approx(
+        T.centred(mixed[1], f)["dread"] - T.centred(mixed[2], f)["dread"]
+    ), "a term both titles carry is still the difference of the two"
+
+
+# --- finding 37: one answer, applied in one place ---------------------------------------------
+#
+# The same four-branch dispatch stood in `play.record_answer`, `play.retract` and `solo.picks`,
+# and the three had already drifted: only the two in `play` looked their titles up in the frozen
+# pool. §10's re-import guard lives in `round.replay`, twenty lines above solo's copy of the loop,
+# and solo's copy did not have it.
+
+
+def test_one_answer_reaches_the_tilt_the_same_way_whichever_caller_applies_it():
+    """Decision 154's four answers, each equal to what the caller used to spell out by hand. The
+    equivalence is the point: a helper that quietly disagreed with one of the three call sites it
+    replaced would move a stored tilt without anything saying so."""
+    f = T.frame(POOL)
+    vectors = dict(POOL)
+    kw = dict(title_a=1, title_b=2, vectors=vectors, frame=f)
+
+    assert T.applied({}, answer="A", **kw) == pytest.approx(
+        T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=f)
+    )
+    assert T.applied({}, answer="B", **kw) == pytest.approx(
+        T.observe({}, chosen=POOL[2], rejected=POOL[1], frame=f)
+    )
+    assert T.applied({}, answer="EITHER", **kw) == pytest.approx(
+        T.observe_level({}, first=POOL[1], second=POOL[2], frame=f, toward=True)
+    )
+    assert T.applied({}, answer="NEITHER", **kw) == pytest.approx(
+        T.observe_level({}, first=POOL[1], second=POOL[2], frame=f, toward=False)
+    )
+
+
+def test_an_answer_naming_a_title_that_has_left_the_pool_moves_nothing():
+    """§10: "a re-import can change the pool under a stored answer", and `round.replay` skips it
+    — "the alternative is inventing a belief for a title that is no longer a candidate".
+
+    The tilt owes the same answer to the same question, and for the same reason: a posterior and
+    a tilt built from two different subsets of one evening's answers are two histories of one
+    evening. The predicate is public because 54f's provenance line counts with it.
+    """
+    f = T.frame(POOL)
+    started = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=f)
+
+    assert T.applies(POOL, title_a=1, title_b=2) is True
+    assert T.applies(POOL, title_a=1, title_b=99) is False
+    assert T.applies(POOL, title_a=99, title_b=1) is False
+    assert T.applied(
+        started, answer="A", title_a=1, title_b=99, vectors=POOL, frame=f
+    ) == pytest.approx(started), "an answer the replay ignored may not move the tilt either"
+
+
+def test_an_answer_naming_one_title_twice_is_not_two_candidates():
+    """The docstring above `applies` says "two candidates", and membership alone does not say it.
+
+    One title named twice passed, so solo counted such an answer into 54f's "tilted by your N
+    answers" while `applied` returned a delta of exactly zero -- and `round.replay`'s membership
+    guard read the same way, so the belief moved a long way on a comparison that compares nothing.
+    The posterior and the tilt have to skip the same rows or they are two histories of one evening,
+    which is this predicate's whole reason for existing. [M4.12 review cycle 1: M412-SOLO-04]
+    """
+    f = T.frame(POOL)
+    started = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=f)
+
+    assert T.applies(POOL, title_a=1, title_b=1) is False
+    assert T.applied(
+        started, answer="A", title_a=1, title_b=1, vectors=POOL, frame=f
+    ) == pytest.approx(started), "a title compared with itself may not move the tilt"
+
+
+def test_the_frame_counts_an_absent_term_as_a_zero_and_centred_gives_it_no_coordinate():
+    """The two sentences the module now states side by side, held apart by a measurement.
+
+    `frame` is about the pool's distribution and `centred` is about one candidate's position, so
+    absence is an observation in the first and no statement in the second (decision 218). Nothing
+    pinned the first: the toy pool above carries every term on every title, so applying `centred`'s
+    rule to `frame` -- the mistaken generalisation an unreconciled pair invites -- left this module
+    entirely green while changing every stored pool frame. [M4.12 review cycle 1: D3-04]
+    """
+    with_an_untagged_title = T.frame({**POOL, 4: {}})
+
+    assert with_an_untagged_title.mean["cosy"] == pytest.approx(0.375), (
+        "an untagged title is a fourth observation of zero, not three observations and a gap"
+    )
+    assert with_an_untagged_title.mean["dread"] == pytest.approx(0.375)
+    assert T.frame(POOL).mean["cosy"] == pytest.approx(0.5), "the same pool without it"
+
+    assert T.centred({}, with_an_untagged_title) == {}, "absence is no position to report"
+    assert T.adjustment({"cosy": 1.0}, {}, with_an_untagged_title) == 0.0
+    assert "dread" not in T.centred({"cosy": 1.0}, with_an_untagged_title)

@@ -1,5 +1,7 @@
 import { expect } from '@playwright/test';
 
+import { env } from './env.mjs';
+
 /** Credentials the suite creates and reuses. Never a real account. */
 export const ADMIN = { name: 'e2e-admin', password: 'e2e-first-boot-pw' };
 
@@ -107,12 +109,26 @@ export async function kindIsOn(page, label) {
  * The fake Jellyfin from `ops/compose.e2e.yml`. Two addresses for one server, because the
  * backend and the test are in different networks: the app reaches it by service name, the test
  * reaches its published port.
+ *
+ * THE PUBLISHED PORT IS PER-CHECKOUT AND THE SERVICE NAME IS NOT, which is the whole of why
+ * these two lines read differently. `ops/compose.e2e.yml` publishes the fake on
+ * `${JELLYFIN_FAKE_PORT:-8096}` so two worktrees can hold a stack each; inside the compose
+ * network it is `jellyfin-fake:8096` in both. A constant here is the same defect `e2e/env.mjs`
+ * was extracted for, one address further on, and §7.3 is what it costs: `markPlayedInJellyfin`
+ * set Played on the OTHER lane's fake, the app's own sweep then read a library in which nothing
+ * had been played and adopted nothing, and `08-jellyfin.spec.js`'s "a flag set in jellyfin
+ * arrives in the app" failed against a sweep that was reporting itself healthy and telling the
+ * truth. Measured on the M4.12 gate: the fake on 8096 held `jf-1` played with no tokens and no
+ * writes (the test process had reached it and the app never had), the fake on 8097 held the
+ * member's token and no Played flag at all.
  */
 export const JELLYFIN = {
   // as the backend container sees it
   url: process.env.FAKE_JELLYFIN_URL ?? 'http://jellyfin-fake:8096',
-  // as this test process sees it
-  control: process.env.FAKE_JELLYFIN_CONTROL ?? 'http://127.0.0.1:8096',
+  // as this test process sees it, on the port THIS checkout's stack publishes
+  control:
+    process.env.FAKE_JELLYFIN_CONTROL ??
+    `http://127.0.0.1:${env('JELLYFIN_FAKE_PORT') ?? '8096'}`,
   apiKey: process.env.FAKE_JELLYFIN_API_KEY ?? 'e2e-jellyfin-key',
   password: process.env.FAKE_JELLYFIN_PASSWORD ?? 'e2e-jellyfin-password',
   // The fake's own users, fixed in ops/fake_jellyfin.py.

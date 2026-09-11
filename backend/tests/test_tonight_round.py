@@ -24,13 +24,20 @@ Four things here are the milestone, and each has a way of going quietly wrong.
 
 from __future__ import annotations
 
+import inspect
 import math
+import os
 import random
+import statistics
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.tonight import round as rnd
 
 A, B, EITHER, NEITHER = rnd.A, rnd.B, rnd.EITHER, rnd.NEITHER
@@ -46,6 +53,29 @@ def spread(n=8, var=0.0001):
     already converged. σ is small by default so a straddle in a test about something else is
     noise rather than a surprise."""
     return {i + 1: rnd.Belief(mu=1.0 - 0.15 * i, var=var) for i in range(n)}
+
+
+def arm_key(*, fires=(), quiet=()):
+    """A hold-out key whose arm fires exactly where the test asking for it needs it to.
+
+    54b's arm is a rate drawn from a key now, not the tenth slot (decision 223), so `seq=1` no
+    longer names the adaptive arm on its own and `seq=10` no longer names the hold-out: the
+    question "which arm is this pair" has two inputs and a test about either arm has to name
+    both. Searching for a key states that property instead of pinning a magic string, which
+    would silently stop meaning what it says the day the draw is re-derived.
+    """
+    for i in range(100_000):
+        key = f"arm-{i}"
+        if all(rnd.is_holdout(s, key=key) for s in fires) and not any(
+            rnd.is_holdout(s, key=key) for s in quiet
+        ):
+            return key
+    raise AssertionError(f"no key fires at {sorted(fires)} and is quiet at {sorted(quiet)}")
+
+
+# The key every test about the ADAPTIVE selector below is written with: its arm is quiet for a
+# whole round, so the pair those tests get is the one 54c's rule chose and never the uniform draw.
+ADAPTIVE_ARM = arm_key(quiet=range(1, rnd.CAP_PAIRS + 1))
 
 
 # --- decision 154: the four answers, and what each one does ------------------------------
@@ -218,7 +248,7 @@ def test_the_pair_served_comes_from_the_straddling_set():
     unresolved = rnd.straddlers(state, z=1.0)
     assert unresolved == {3, 4, 5, 6}, "the fixture is only meaningful while these four straddle"
 
-    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0)
+    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
     assert pair.selection == rnd.SELECTION_ADAPTIVE
     assert {pair.title_a, pair.title_b} <= unresolved
 
@@ -239,7 +269,7 @@ def test_the_pair_served_is_the_one_that_resolves_the_most_straddlers():
         7: rnd.Belief(0.10, 0.0001),
     }
     anchor = rnd.anchor_of(state)
-    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0)
+    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
 
     served = rnd.expected_straddlers(
         state, title_a=pair.title_a, title_b=pair.title_b, anchor=anchor, z=1.0
@@ -278,12 +308,12 @@ def test_a_tie_on_information_breaks_toward_the_widest_dna_axis():
         3: {"mood": -1.0}, 4: {"mood": 1.0},     # spans the whole mood axis
         5: {"mood": 0.1}, 6: {"mood": 0.0},      # spans almost none of it
     }
-    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0, axes=axes)
+    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, axes=axes)
     assert {pair.title_a, pair.title_b} == {3, 4}
 
     # And without the axes it still returns a straddling pair rather than failing: the tie-break
     # is a preference, not a precondition.
-    bare = rnd.select(state, seq=1, rng=random.Random(0), z=1.0)
+    bare = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
     assert {bare.title_a, bare.title_b} <= {3, 4, 5, 6}
 
 
@@ -300,25 +330,84 @@ def test_selection_never_serves_a_pair_the_participant_has_already_answered():
         7: rnd.Belief(0.05, 0.0001),
     }
     asked = {frozenset({3, 4})}
-    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0, asked=asked)
+    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, asked=asked)
     assert frozenset({pair.title_a, pair.title_b}) not in asked
 
 
 def test_a_pair_never_names_one_title_twice():
     for seed in range(20):
-        pair = rnd.select(spread(6, var=0.5), seq=1, rng=random.Random(seed), z=1.0)
+        pair = rnd.select(
+            spread(6, var=0.5), seq=1, rng=random.Random(seed), holdout_key=ADAPTIVE_ARM, z=1.0
+        )
         assert pair.title_a != pair.title_b
 
 
 # --- 54b: §13's held-out arm -------------------------------------------------------------
 
 
-def test_every_tenth_pair_is_the_uniform_hold_out():
-    """54c: "Every tenth pair is the uniform-random hold-out and is chosen by none of this"."""
+def test_one_pair_in_ten_is_the_uniform_hold_out_and_it_is_a_rate_not_a_slot():
+    """54b: "one pair in ten", which is a RATE and was implemented as `seq % 10 == 0`.
+
+    A slot schedule and a rate agree on the long-run figure and disagree about every round that
+    does not reach pair 10 — and 54c's escape from pair 6 is the humane exit, so the evenings a
+    household cuts short were exactly the ones contributing nothing to §13's only admissible
+    stream. Both halves are asserted here: the rate over a population of seats, and that the
+    seqs it fires on are the seat's own rather than everybody's tenth. [finding 30; decision 223]
+    """
     assert rnd.HOLDOUT_EVERY == 10
-    served = [rnd.is_holdout(seq) for seq in range(1, 21)]
-    assert served.count(True) == 2
-    assert [i + 1 for i, h in enumerate(served) if h] == [10, 20]
+    seats = [str(i) for i in range(2000)]
+    fired = [
+        [seq for seq in range(1, rnd.CAP_PAIRS + 1) if rnd.is_holdout(seq, key=k)] for k in seats
+    ]
+
+    drawn = sum(len(f) for f in fired)
+    rate = drawn / (len(seats) * rnd.CAP_PAIRS)
+    assert 0.085 < rate < 0.115, f"the arm fired {drawn} times in {len(seats) * rnd.CAP_PAIRS}"
+
+    schedule = {rnd.HOLDOUT_EVERY, 2 * rnd.HOLDOUT_EVERY}
+    assert sum(1 for f in fired if set(f) == schedule) < len(seats) / 20, (
+        "the arm is still the tenth slot for most seats"
+    )
+    # The half a schedule cannot have: a round 54c's escape ends at pair 6 carries hold-outs.
+    early = [f for f in fired if any(seq <= rnd.ESCAPE_FROM_PAIR - 1 for seq in f)]
+    assert len(early) > len(seats) / 4, (
+        f"only {len(early)} of {len(seats)} seats draw a hold-out inside an escaped round"
+    )
+
+
+def test_the_arm_is_the_same_answer_in_a_second_process():
+    """The property that makes a rate safe to re-derive: the draw is a function of the key and
+    the seq and of nothing else in the process asking.
+
+    `api/tonight.py`'s solo route classifies an answer the CLIENT is holding — 54f mints no row,
+    so the arm is re-derived on every request from `user.id` and the seq — and the server restarts
+    between two of those requests as a matter of course. A draw keyed through `hash()` would be
+    salted per process and would classify the same stored answer both ways across a restart,
+    putting a hold-out into the adaptive stream and an adaptive answer into §13's. `random.Random`
+    seeds a string through sha512, which is what makes this test pass under three hash seeds.
+    [decision 223]
+    """
+    here = [seq for seq in range(1, 41) if rnd.is_holdout(seq, key="seat-19")]
+    assert here, "pick a key whose arm fires, or this asserts that nothing equals nothing"
+    src = (
+        "from spielplan.tonight import round as rnd;"
+        "print([s for s in range(1, 41) if rnd.is_holdout(s, key='seat-19')])"
+    )
+    # PYTHONPATH from this module's own tree rather than inherited alone, which is the pattern
+    # `test_static_contracts.py::_imports_fastapi` and `test_boot_logging.py` both use: the venv
+    # holds an editable install pointing at the primary checkout, so a worktree's subprocess would
+    # otherwise answer about somebody else's `round.py`.
+    env = dict(os.environ)
+    backend = str(Path(rnd.__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join([backend, env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    for hash_seed in ("0", "1", "4242"):
+        env["PYTHONHASHSEED"] = hash_seed
+        out = subprocess.run(
+            [sys.executable, "-c", src], capture_output=True, text=True, check=True, env=env,
+        )
+        assert out.stdout.strip() == str(here), (
+            f"PYTHONHASHSEED={hash_seed} draws {out.stdout.strip()}, this process draws {here}"
+        )
 
 
 def test_the_hold_out_pair_is_drawn_uniformly_from_the_whole_pool():
@@ -330,8 +419,9 @@ def test_the_hold_out_pair_is_drawn_uniformly_from_the_whole_pool():
         5: rnd.Belief(0.05, 0.0001), 6: rnd.Belief(0.02, 0.0001),
     }
     seen = set()
+    drawn = arm_key(fires=[10])
     for seed in range(400):
-        pair = rnd.select(state, seq=10, rng=random.Random(seed), z=1.0)
+        pair = rnd.select(state, seq=10, rng=random.Random(seed), holdout_key=drawn, z=1.0)
         assert pair.selection == rnd.SELECTION_HOLDOUT
         seen |= {pair.title_a, pair.title_b}
     assert seen == set(state), "the hold-out arm must be able to reach every candidate"
@@ -340,12 +430,15 @@ def test_the_hold_out_pair_is_drawn_uniformly_from_the_whole_pool():
 def test_the_hold_out_arm_never_receives_a_fallback():
     """`rank/queue.py`'s rule, restated for a round: "the evaluation stream's rate would then
     depend on the model's own confidence, which is precisely the coupling the guard exists to
-    break." A pool with nothing left to resolve still serves its tenth pair as a hold-out, and
-    a pool that cannot draw an adaptive pair never borrows the hold-out arm to fill in."""
+    break." A pool with nothing left to resolve still serves the pair its arm drew as a hold-out,
+    and a pool that cannot draw an adaptive pair never borrows the hold-out arm to fill in."""
     resolved = spread()
-    assert rnd.select(resolved, seq=10, rng=random.Random(0), z=1.0).selection == rnd.SELECTION_HOLDOUT
-    for seq in (1, 5, 9, 11):
-        pair = rnd.select(resolved, seq=seq, rng=random.Random(0), z=1.0)
+    quiet = (1, 5, 9, 11)
+    key = arm_key(fires=[10], quiet=quiet)
+    held = rnd.select(resolved, seq=10, rng=random.Random(0), holdout_key=key, z=1.0)
+    assert held.selection == rnd.SELECTION_HOLDOUT
+    for seq in quiet:
+        pair = rnd.select(resolved, seq=seq, rng=random.Random(0), holdout_key=key, z=1.0)
         assert pair.selection == rnd.SELECTION_ADAPTIVE, (
             "an adaptive slot that cannot find a straddler must still report itself as adaptive"
         )
@@ -377,9 +470,10 @@ def test_the_round_replays_identically_with_the_hold_out_answers_removed():
             start=1,
         )
     ]
-    full = rnd.replay(candidates, answers, z=1.0)
+    full = rnd.replay(candidates, answers, z=1.0, holdout_key=ADAPTIVE_ARM)
     stripped = rnd.replay(
-        candidates, [a for a in answers if a.selection != rnd.SELECTION_HOLDOUT], z=1.0
+        candidates, [a for a in answers if a.selection != rnd.SELECTION_HOLDOUT], z=1.0,
+        holdout_key=ADAPTIVE_ARM,
     )
 
     assert full.beliefs == stripped.beliefs, "a hold-out answer moved the posterior"
@@ -397,7 +491,7 @@ def test_a_hold_out_answer_still_counts_toward_the_cap():
                      selection=rnd.SELECTION_HOLDOUT if s % 10 == 0 else rnd.SELECTION_ADAPTIVE)
         for s in range(1, 21)
     ]
-    assert rnd.replay(candidates, answers, z=1.0).answered == 20
+    assert rnd.replay(candidates, answers, z=1.0, holdout_key=ADAPTIVE_ARM).answered == 20
 
 
 # --- 54c: guests -------------------------------------------------------------------------
@@ -457,7 +551,7 @@ def test_a_round_that_runs_out_of_distinct_pairs_ends_rather_than_deadlocking():
             [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)], start=1
         )
     ]
-    played = rnd.replay(four, answers, z=1.0)
+    played = rnd.replay(four, answers, z=1.0, holdout_key=ADAPTIVE_ARM)
 
     assert played.next_pair is None
     assert played.stop_reason == rnd.CAP, "a round that cannot ask must still end"
@@ -488,7 +582,7 @@ def test_selection_falls_back_to_the_pool_when_the_straddlers_own_pair_is_spent(
     assert rnd.straddlers(board, z=1.0) == {3, 4}, "the board this test is about"
 
     spent = {frozenset({3, 4})}
-    pair = rnd.select(board, seq=2, rng=random.Random(0), z=1.0, asked=spent)
+    pair = rnd.select(board, seq=2, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, asked=spent)
 
     assert pair is not None, "the round had nineteen pairs of budget and something left to ask"
     assert frozenset({pair.title_a, pair.title_b}) not in spent
@@ -509,7 +603,9 @@ def test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool():
         pool = {i: rng.gauss(0.0, 1.0) for i in range(30)}
         answers: list[rnd.Answered] = []
         for seq in range(1, rnd.CAP_PAIRS + 1):
-            played = rnd.replay(pool, answers, z=1.0, rng=random.Random(seed))
+            played = rnd.replay(
+                pool, answers, z=1.0, rng=random.Random(seed), holdout_key=ADAPTIVE_ARM
+            )
             if played.stop_reason is not None:
                 break
             pair = played.next_pair
@@ -522,7 +618,9 @@ def test_the_cap_is_the_only_ending_that_fires_short_of_a_spent_pool():
                 )
             )
         else:
-            played = rnd.replay(pool, answers, z=1.0, rng=random.Random(seed))
+            played = rnd.replay(
+                pool, answers, z=1.0, rng=random.Random(seed), holdout_key=ADAPTIVE_ARM
+            )
 
         assert played.stop_reason in (rnd.CAP, rnd.CONVERGED)
         if played.stop_reason == rnd.CAP and played.answered < rnd.CAP_PAIRS:
@@ -602,7 +700,7 @@ def test_a_foregone_pair_is_passed_over_for_one_the_round_is_unsure_about():
     foregone = min(pairs, key=lambda ab: entropy(*ab))
     assert foregone == (10, 11), "the board is built wrong"
 
-    pair = rnd.select(state, seq=1, rng=random.Random(0), z=1.0)
+    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
 
     assert {pair.title_a, pair.title_b} != set(foregone), (
         "the round asked the question whose answer it could already name"
@@ -613,24 +711,217 @@ def test_a_foregone_pair_is_passed_over_for_one_the_round_is_unsure_about():
 
 
 def test_a_non_positive_straddle_threshold_would_end_every_round_before_it_started():
-    """§4.3's `straddle_z` is a §6.3 constant that §6.2's round now also reads, so the bundle
-    validator's refusal of a non-positive one (rule: `break_straddle_z`, refused at import) is
-    what keeps Tonight from a failure with no error anywhere.
+    """The failure mode BOUNDARY_Z's value is chosen against, at its limit.
 
     At z = 0 no posterior reaches the boundary, so nothing straddles, so `stop_reason` converges
     on the empty set: every participant's round ends at pair zero, `ended_by` reads `converged`
-    for a shortlist nobody was asked about, and the evening looks like it worked. M4 adds no new
-    rule a *bundle* can violate — the pool is built from ownership, kind and scores, all of them
-    already covered — but it does give this one a second way to hurt, which is why it is pinned
-    here rather than left to `test_bundle_validation.py` alone.
+    for a shortlist nobody was asked about, and the evening looks like it worked. There is no
+    error anywhere — which is why it is asserted rather than reasoned about.
+
+    Until decision 214 the round read §4.3's `straddle_z` out of the bundle, and this test was
+    about the bundle validator's refusal of a non-positive one (`break_straddle_z`, refused at
+    import). That is now §6.3's business alone: the round's threshold is a module constant no
+    bundle can set, and `test_bundle_validation.py` keeps the import-time refusal for the badge.
+    What survives here is the *shape* of the failure and the reason the round's own constant is
+    nowhere near it: at 0.6 this board has five candidates the round cannot place, and every
+    step toward zero takes some of them away.
     """
     board = beliefs(1.0, 0.9, 0.8, 0.7, 0.6, var=0.25)
-    assert rnd.straddlers(board, z=1.0), "at a real threshold the round has something to ask"
+    assert rnd.BOUNDARY_Z > 0.0, "a non-positive boundary is the bug, not a setting"
+    assert rnd.straddlers(board), "at the round's own threshold it has something to ask"
 
     assert rnd.straddlers(board, z=0.0) == set()
     assert rnd.stop_reason(board, answered=0, z=0.0) == rnd.CONVERGED
-    played = rnd.replay({i: 1.0 - 0.1 * i for i in range(5)}, [], z=0.0)
+    played = rnd.replay({i: 1.0 - 0.1 * i for i in range(5)}, [], z=0.0,
+                        holdout_key=ADAPTIVE_ARM)
     assert played.next_pair is None and played.answered == 0
+
+    # And the same ending approached with a positive number. `straddle_z` is read here and
+    # nowhere in `round.py`: this is the one place the two constants are allowed to meet, and
+    # what is asserted is that they are not interchangeable (decisions 175, 205, 214). Five
+    # unplaced candidates at the round's threshold, two at §6.3's badge — on a pool shaped like
+    # the shipped one that gap is a resolved shortlist against an evening over at pair two,
+    # which `test_the_badge_threshold_and_the_rounds_boundary_cannot_be_one_constant` measures.
+    assert len(rnd.straddlers(board, z=DEFAULTS.straddle_z)) < len(rnd.straddlers(board)), (
+        "if the badge threshold ever grows past the round's, re-measure BOUNDARY_Z rather than "
+        "sharing it again"
+    )
+
+
+# --- decision 214: the boundary is Tonight's own constant ------------------------------------
+#
+# §6.2 step 4 ends a round "when the shortlist boundary is resolved … subject to a hard cap of 20
+# pairs", and quantifies the intent one line earlier: "~10 candidate votes per participant". The
+# round borrowed §6.3's `straddle_z` for the multiple, on the argument that "still straddles the
+# boundary" is one predicate. It is one predicate over two scales, and at the borrowed value
+# `converged` was unreachable: every ending was the cap, so 54c's "adaptive length" was a fixed
+# length and §14 risk 6's rate of each ending had one entry. The tests below are the measurement
+# decisions 175 and 205 asked for, run on this side of the code rather than in a notebook.
+
+
+def _simulate(z=None, *, prior_var=1.0, seeds=20, n_pool=40, score_sd=0.5):
+    """Whole rounds at the shipped scale, against a noisy oracle.
+
+    The pool means are drawn at the measured owned-pool spread — `user_score` sd 0.50 over the
+    696 titles the shipped bundle leaves owned — and the simulated participant answers by their
+    own latent order plus a mood-sized wobble, because a perfectly consistent answerer resolves
+    any boundary and would make every threshold look reasonable. Returns (converged, median).
+    """
+    kwargs = {} if z is None else {"z": z}
+    reasons: list[str | None] = []
+    lengths: list[int] = []
+    for seed in range(seeds):
+        rng = random.Random(seed)
+        truth = {i: rng.gauss(0.0, score_sd) for i in range(n_pool)}
+        answers: list[rnd.Answered] = []
+        for seq in range(1, rnd.CAP_PAIRS + 1):
+            played = rnd.replay(
+                truth, answers, prior_var=prior_var, rng=random.Random(seed),
+                holdout_key=ADAPTIVE_ARM, **kwargs
+            )
+            if played.stop_reason is not None:
+                break
+            pair = played.next_pair
+            assert pair is not None
+            prefers_a = (
+                truth[pair.title_a] + rng.gauss(0.0, 0.3)
+                > truth[pair.title_b] + rng.gauss(0.0, 0.3)
+            )
+            answers.append(
+                rnd.Answered(
+                    seq=seq, title_a=pair.title_a, title_b=pair.title_b,
+                    answer=A if prefers_a else B, selection=pair.selection,
+                )
+            )
+        else:
+            played = rnd.replay(
+                truth, answers, prior_var=prior_var, rng=random.Random(seed),
+                holdout_key=ADAPTIVE_ARM, **kwargs
+            )
+        reasons.append(played.stop_reason)
+        lengths.append(played.answered)
+    return sum(1 for r in reasons if r == rnd.CONVERGED), statistics.median(lengths)
+
+
+def test_the_round_reads_its_own_boundary_and_no_route_hands_it_one():
+    """The wiring half of decision 214: one constant, one owner, no argument from outside.
+
+    `api/tonight.py` used to read the bundle's `straddle_z` per request and pass it down four
+    call paths, which is how a badge threshold came to decide how long an evening is. The
+    threshold is not a constant of §5.2's recipe, so §4.3 is not where it belongs — the same
+    reasoning `CAP_PAIRS` and §6.3's 70/20/10 shares already carry — and with the defaults here
+    a caller who says nothing gets the rule the spec describes.
+    """
+    from spielplan.api import tonight as tonight_routes
+
+    assert rnd.BOUNDARY_Z == 0.6
+    assert "BOUNDARY_Z" in rnd.__all__, "the round's constants are its public surface"
+    for fn in (rnd.straddles, rnd.straddlers, rnd.stop_reason, rnd.select, rnd.replay):
+        assert inspect.signature(fn).parameters["z"].default == rnd.BOUNDARY_Z, fn.__name__
+
+    assert not hasattr(tonight_routes, "_z"), "the per-request threshold reader is gone"
+    assert not hasattr(tonight_routes, "hyperparams"), (
+        "a route reading §4.3's constants to decide how long an evening is is the defect "
+        "decision 214 closes"
+    )
+    assert "z=round_rules.BOUNDARY_Z" in inspect.getsource(tonight_routes), (
+        "the routes hand `play` the round's own constant and choose nothing"
+    )
+
+
+def test_a_round_over_a_realistic_pool_converges_rather_than_always_reaching_the_cap():
+    """§6.2 step 4's "~10 candidate votes per participant", as a measurement.
+
+    `tonight-rank-stopping-and-cap` states the requirement — a round ends when the leading
+    candidates separate, and *otherwise* at the cap — and the pure tests above assert it on
+    hand-built boards where the answer is arranged. This is the same claim on a pool shaped like
+    the shipped one, which is the only place the constant's value shows: at the borrowed z = 1.0
+    convergence fired 0 times in these 20 rounds and every median was the full 20.
+    """
+    converged, median = _simulate()
+
+    assert converged >= 12, f"only {converged} of 20 rounds resolved their shortlist"
+    assert 5 <= median <= 15, (
+        f"median round of {median} pairs is not §6.2's ~10 candidate votes per participant"
+    )
+
+
+def test_the_badge_threshold_and_the_rounds_boundary_cannot_be_one_constant():
+    """Why decision 214 is a second constant rather than a retune of the first.
+
+    §6.3 measures a Ledger posterior in logit units against learned cutpoints; §6.2 measures a
+    standardised §5.1 score against the midpoint of ranks 3 and 4. Both sentences read "the
+    interval still reaches across", and the multiple that satisfies one destroys the other in
+    the opposite direction — which is the whole argument, so it is asserted at both ends.
+    """
+    at_one, median_at_one = _simulate(1.0)
+    assert at_one <= 1, f"{at_one} of 20 rounds converged at z = 1.0; `converged` was dead code"
+    assert median_at_one == rnd.CAP_PAIRS, "and every round ran the cap out"
+
+    _, median_at_badge = _simulate(DEFAULTS.straddle_z)
+    assert median_at_badge <= 3, (
+        f"median round of {median_at_badge} pairs at the badge threshold - borrowing §6.3's "
+        "retuned constant ends the evening before it starts"
+    )
+
+
+def test_narrowing_the_prior_does_not_make_a_round_converge():
+    """Finding 32, refuted rather than acted on (decision 214).
+
+    `M4-open-points §1.1` offers "narrow the member prior" as the remedy for a round that never
+    converges, on the reading that `prior_var = 1.0` is four times the measured owned-pool
+    variance. It is not a remedy: at the borrowed threshold a quarter of the prior converges
+    exactly as often as the full one — zero — and at the round's own threshold it converges
+    LESS, because the boundary tightens as fast as the intervals do. `prior_var` stays at 1.0,
+    where §5.1's standardisation puts it.
+    """
+    assert _simulate(1.0, prior_var=0.25)[0] <= 1, "the prior was never the controlling variable"
+    assert _simulate(prior_var=0.25)[0] < _simulate()[0], (
+        "a narrower prior resolves fewer shortlists, not more"
+    )
+
+
+def test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way():
+    """The measurement written beside `BOUNDARY_Z`, held against the harness that produced it.
+
+    The two tests above assert the ARGUMENT — that the threshold is the controlling variable and
+    that one multiple cannot calibrate both scales — at whichever parameters make each point, and
+    both survive a record that is merely approximate. The paragraph beside the constant is a
+    different kind of claim: it quotes ranges over three named pool sizes and closes with "do not
+    narrow this without a new measurement", so it is the evidence anyone re-deriving the value
+    will run the sweep against. Two of its four ranges did not reproduce (0-1 at z = 1.0 where
+    pool 12 gives 2; 14-16 at z = 0.6 where the three pools give 13, 17 and 16), and the prior
+    docstring's "from 14/20 to 7/20" is produced by no pool size it names. A reader who cannot
+    reproduce a figure cannot tell a stale record from a constant that has drifted under them,
+    which in a comment whose numbers ARE the argument is the whole of its usefulness.
+
+    So the comment and this test are one record. Re-tuning the round moves both, deliberately.
+    Fifteen simulated sweeps, ~2 s: the cost of a paragraph that can be checked.
+    [M4.12 review cycle 1: M412-RND-02]
+    """
+    pools = (12, 20, 40)
+    at_one = [_simulate(1.0, n_pool=n) for n in pools]
+    assert all(0 <= c <= 2 for c, _ in at_one), f"z = 1.0 is written as 0-2 in 20: {at_one}"
+    assert all(m == rnd.CAP_PAIRS for _, m in at_one), f"and every median as the cap: {at_one}"
+
+    at_boundary = [_simulate(rnd.BOUNDARY_Z, n_pool=n) for n in pools]
+    assert all(13 <= c <= 17 for c, _ in at_boundary), (
+        f"z = {rnd.BOUNDARY_Z} is written as 13-17 in 20: {at_boundary}"
+    )
+    assert all(8.5 <= m <= 13 for _, m in at_boundary), (
+        f"with a median of 8.5-13 pairs, which is step 4's ~10: {at_boundary}"
+    )
+
+    at_badge = [_simulate(DEFAULTS.straddle_z, n_pool=n) for n in pools]
+    assert all(c == 20 for c, _ in at_badge), f"the badge threshold: 20 in 20, {at_badge}"
+    assert all(1 <= m <= 2 for _, m in at_badge), f"with a median of 1-2 pairs: {at_badge}"
+
+    # `initial`'s own paragraph, which quotes the same sweep at a quarter of the prior.
+    narrow_at_one = [_simulate(1.0, n_pool=n, prior_var=0.25)[0] for n in pools]
+    assert narrow_at_one == [0, 1, 0], f"written as 0, 1 and 0 over 12/20/40: {narrow_at_one}"
+    narrow = [_simulate(rnd.BOUNDARY_Z, n_pool=n, prior_var=0.25)[0] for n in pools]
+    assert [c for c, _ in at_boundary] == [17, 13, 16], "the figures the drop is quoted from"
+    assert narrow == [13, 9, 10], f"and the narrowed prior drops each of them: {narrow}"
 
 
 # --- perf-01: the fast search is the same search -------------------------------------------
@@ -748,7 +1039,7 @@ def test_a_moved_titles_own_interval_endpoint_landing_on_the_cut_changes_nothing
             )
             assert got == want, (pool[i], pool[j], got, want)
 
-    assert _pair_of(rnd.select(board, seq=1, rng=random.Random(0), z=1.0)) == \
+    assert _pair_of(rnd.select(board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)) == \
         _scalar_select(board, z=1.0)
 
 
@@ -795,6 +1086,53 @@ def test_the_fast_pair_evaluator_reproduces_the_scalar_expectation_exactly():
                 assert float(got) == want, (shape, z, pool[i], pool[j], float(got), want)
 
 
+def test_the_pair_search_evaluates_the_error_function_three_times_per_pair(monkeypatch):
+    """The module's own performance record, asserted rather than asserted-in-prose.
+
+    The block comment above `_Board` concludes "`_answer_probabilities`' own `p_a` is `Phi(t)`,
+    the same value `_v_w` needs. That leaves three `erf` and three `exp` per pair" — and for a
+    milestone the code did not do it: `_v_w_many` computed `denom = _Phi_many(t)` and discarded
+    it, and `_block` recomputed the identical array as `p_a`. Four erf passes per pair, not three,
+    on the one function that is a Python-level loop (`np.frompyfunc(math.erf, ...)` plus an object
+    cast) and is therefore the dominant cost of the whole search: one full `_PAIR_BLOCK` measured
+    8 ms at four passes against 4 ms at three.
+
+    Nothing a household can see failed — a 700-title guest board selects in 26 ms against §6's
+    1.5 s — which is exactly why this is worth a test. A maintainer who re-derives the search's
+    cost from that paragraph budgets three quarters of the erf work the code does, and the same
+    class of drift is what cycle 1 repaired for `BOUNDARY_Z`. The count is the assertion and the
+    sizes are the second half of it: three passes over something other than the pairs would be a
+    different function being counted. [M4.12 review cycle 2: M412-RND-03]
+    """
+    board_beliefs = _random_board(n=40, seed=3, var=4.0)
+    pool = sorted(board_beliefs)
+    board = rnd._Board.of(
+        board_beliefs, pool, anchor=rnd.anchor_of(board_beliefs), z=rnd.BOUNDARY_Z
+    )
+    ia = np.asarray([0, 1, 2, 3], dtype=np.int64)
+    ib = np.asarray([7, 8, 9, 10], dtype=np.int64)
+
+    # Patched AFTER the board is built: `_Board.of` moves every title against the anchor and its
+    # two `_v_w_many` calls are per-`select`, not per-pair.
+    sizes: list[int] = []
+    real = rnd._Phi_many
+
+    def counted(x):
+        sizes.append(int(np.asarray(x).size))
+        return real(x)
+
+    monkeypatch.setattr(rnd, "_Phi_many", counted)
+
+    out = board._block(ia, ib)
+
+    assert out.shape == (ia.size,), "the block still evaluates every pair it was given"
+    assert len(sizes) == 3, (
+        f"{len(sizes)} erf passes per pair, and the comment above `_Board` says three: "
+        f"`_v_w_many`'s denominator is `Phi(t)` and `_block` recomputes it as `p_a`"
+    )
+    assert sizes == [ia.size] * 3, f"a pass over something other than the pairs: {sizes}"
+
+
 def test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves():
     """The whole of `select`, not one expectation: all three searches, the `asked` filter and
     54c's tie-break toward the widest DNA axis. `_axis_span` is 0.0 on release data (decision
@@ -805,9 +1143,11 @@ def test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves():
         for seed in range(4):
             for z in (1.0, 0.6, 0.15):
                 board = _random_board(n, seed)
-                got = rnd.select(board, seq=1, rng=random.Random(0), z=z)
+                got = rnd.select(board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=z)
                 assert _pair_of(got) == _scalar_select(board, z=z), (n, seed, z)
-                got = rnd.select(board, seq=1, rng=random.Random(0), z=z, axes=axes)
+                got = rnd.select(
+                    board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=z, axes=axes
+                )
                 assert _pair_of(got) == _scalar_select(board, z=z, axes=axes), (n, seed, z)
 
     # The second and third searches: every pair BETWEEN straddlers already answered, so the
@@ -821,7 +1161,9 @@ def test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves():
                 for i in range(len(unresolved))
                 for j in range(i + 1, len(unresolved))
             }
-            got = rnd.select(board, seq=1, rng=random.Random(0), z=1.0, asked=asked)
+            got = rnd.select(
+                board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, asked=asked
+            )
             assert _pair_of(got) == _scalar_select(board, z=1.0, asked=asked), (n, seed)
 
 
@@ -838,7 +1180,7 @@ def test_a_guest_seat_gets_its_first_pair_inside_the_battle_budget():
     board = _random_board(716, 11, var=1.0 * rnd.GUEST_VAR_FACTOR)
     assert len(rnd.straddlers(board, z=1.0)) > 500, "the guard is only a guard on a wide board"
     started = time.perf_counter()
-    pair = rnd.select(board, seq=1, rng=random.Random(0), z=1.0)
+    pair = rnd.select(board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
     elapsed = time.perf_counter() - started
     assert pair is not None
     assert elapsed < 0.5, f"first pair took {elapsed:.2f} s on a 716-candidate guest board"
@@ -863,7 +1205,7 @@ def test_the_costlier_fallback_arm_is_inside_the_budget_too():
         for j in range(i + 1, len(unresolved))
     }
     started = time.perf_counter()
-    pair = rnd.select(board, seq=1, rng=random.Random(0), z=1.0, asked=asked)
+    pair = rnd.select(board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, asked=asked)
     elapsed = time.perf_counter() - started
     assert pair is not None and frozenset({pair.title_a, pair.title_b}) not in asked
     assert elapsed < 0.5, f"the fallback arm took {elapsed:.2f} s"

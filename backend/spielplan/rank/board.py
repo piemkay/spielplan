@@ -14,6 +14,11 @@ THREE BADGES, AND WHY THEY ARE ONE MODULE
   straddle               §6.3: "a straddling title shows "A/S" and becomes queue-eligible" —
                          ONE predicate doing both jobs, which is why `queue.eligible` calls
                          `straddles()` here rather than re-deriving a threshold of its own.
+                         Both jobs are §6.3's, on §6.3's scale. `tonight/round.py` asks a
+                         question with the same shape about a different quantity and does NOT
+                         share this threshold: decision 214 gives it BOUNDARY_Z, because a
+                         Ledger posterior against learned cutpoints and a standardised §5.1
+                         score against the rank-3/4 cut cannot be calibrated by one multiple.
   tension                §6.3: "if the model disagrees strongly, the title's badge shows the
                          tension rather than snapping back."
 
@@ -117,6 +122,11 @@ def straddles(item: Item, *, cuts: np.ndarray, hp: Hyperparams) -> int | None:
     badge at σ > .13, queue at σ > .09 — so a title at .11 was queue-eligible and wore no
     badge, and the badge could not be the queue's entry point (proposal 157). One function is
     the only way that identity survives a later edit to either side.
+
+    The identity is between those two, and the threshold is what makes it worth anything: at
+    `straddle_z` 1.0 a fitted board badged 120 of 120, so "queue-eligible" named the whole board
+    and the 70% boundary arm drew from the same set the 20% exploration arm did. Decision 214
+    retunes it to 0.15 — the same board badges 31 of 120 — and moves §6.2's round off it.
 
     `model.straddle` never returns the title's own tier, which is proposal 76's "S never
     renders S/S" falling out of the arithmetic rather than being clamped afterwards.

@@ -14,6 +14,7 @@ explicit `waived = "reason"` and shows up in the report rather than disappearing
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from itertools import zip_longest
@@ -127,6 +128,32 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # was M4.10's to move, and both milestones would otherwise edit `rate/session.py`'s push path
 # in the same lines. Decisions 210-212 record the calls it needed; decision 172 had already
 # ruled two of them. See docs/milestones/M4.11-plan.md.
+#
+# M4.12 follows it and is that shape a fourth time: it takes a §12 row (decision 224) on
+# M4.9's, M4.10's and M4.11's argument rather than M4.6's and M4.7's, because what it repairs
+# is the row this table has had the longest. §12's M4 criterion — "a real Friday night resolved
+# by the app" — was closed against a six-title candidate pool, a household of one account and a
+# guest seat no screen could take to the reveal. Against two real accounts and the shipped
+# 696-title owned pool the same evening does not resolve: the pair search costs 36 s for a member
+# and 126 s for a guest seat against the §6 preamble's 1.5 s per battle; the voting -> ballot
+# transition exists only inside the answer handler, so one transient failure leaves the room in
+# `voting` for ever with its data intact and unreachable; a pool of two or three candidates
+# converges at zero answers and no route can close the room; a member who joins while the host is
+# building the pool is seated into a snapshot that has no scores for them and deadlocks the same
+# way; nothing ends a started room, so every other stall is permanent and recovery means SQL; two
+# answers gathered on one card token are a 500 rather than a 409, and an undo interleaved with an
+# answer makes every later tap a 500 for ever; the session WebSocket authenticates outside the
+# dependency graph and awaits its sends inside an acquired connection, so ten stalled sockets pin
+# the whole ten-connection pool; a room with any guest seat can never reach the reveal; and every
+# `session_answer.latency_ms` ever written is 0, which is the instrument §14 risk 6 requires
+# before anyone re-tunes the round. Its name was already in this list before it opened — three of
+# its findings were pre-release fixes that ship ahead of the milestone owning the rest, which is
+# what the M4.5 paragraph at the head of this block describes — so opening it moves
+# `current_milestone` and adds no entry here. It sits before M4.13 because the two were built in
+# parallel, in separate worktrees, and `ROADMAP-to-M5.md`'s table marks them workable in either
+# order; the position is the one the pre-release rows already fixed. Decisions 214-226 record the
+# calls it needed, and decisions 175 and 205 had already ruled the first of them. See
+# docs/milestones/M4.12-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
@@ -202,7 +229,11 @@ def _vitest_ids() -> set[str]:
     return ids
 
 
-KNOWN_TESTS = _pytest_ids() | _playwright_ids() | _vitest_ids()
+# Bound rather than folded straight into the union: decision 226's guard below has to ask
+# which RUNNER answers to a name, and a path prefix would be a guess about that where this
+# reader is the thing that decides it.
+VITEST_IDS = _vitest_ids()
+KNOWN_TESTS = _pytest_ids() | _playwright_ids() | VITEST_IDS
 
 
 def _at_or_before(milestone: str) -> bool:
@@ -258,6 +289,45 @@ def test_every_named_test_exists():
                 continue
             missing.append(f"{r['id']} names a test that does not exist: {test_id}")
     assert not missing, "\n".join(missing)
+
+
+def test_no_requirement_rests_on_a_vitest_id_alone():
+    """Decision 226: "A row may name a vitest id, and no row may rest on one alone."
+
+    Rule 2 asks whether a named test exists. It cannot ask which runner answers to the name,
+    because `KNOWN_TESTS` is one flat union of the three -- so the half of decision 226 that does
+    the work was a sentence in a decision and nothing else. Naming a vitest id *instead* of a
+    Playwright or a backend one "would rest a clause on a suite `npm --prefix e2e run fresh`
+    never runs": the two cheapest assertions in a frontend repair close the requirement, the gate
+    prints the row as covered, and the browser suite a milestone's exit criterion is measured on
+    has never executed the claim.
+
+    The same family as the defect this milestone found in rule 2 itself -- a `pytest.skip` inside
+    a registered test closed a row while asserting nothing -- and repaired at the three sites it
+    had reached rather than at the rule. A rule with no guard is a convention, and a convention is
+    what a coverage map exists to replace.
+
+    Unscoped, although decision 226's cost paragraph states the rule "is stated here rather than
+    applied retroactively to milestones that closed under the older reading": no row of any closed
+    milestone rests on a vitest id, so the retroactive half forgives nothing today, and a
+    milestone cut-off would be a second thing to keep true for a guard that has never had
+    anything to forgive.
+    [M4.12 review cycle 1: M412-D8-04]
+    """
+    resting = [
+        f"{r['id']} rests on vitest ids alone: {', '.join(r['tests'])}"
+        for r in REQUIREMENTS
+        if r.get("tests") and all(t in VITEST_IDS for t in r["tests"])
+    ]
+    assert not resting, "\n".join(
+        [
+            *resting,
+            "",
+            "Decision 226 admits a vitest id BESIDE a Playwright or a backend test and never "
+            "instead of one: vitest mounts a component against fixtures, and `npm --prefix e2e "
+            "run fresh` -- the suite a milestone closes on -- does not run it at all.",
+        ]
+    )
 
 
 # --- rule 1: shipped milestones owe their tests ---------------------------------------
@@ -411,3 +481,108 @@ def test_the_testing_ledger_counts_the_ids_the_map_actually_holds():
         f"the map holds {held[0]} distinct ids across {held[1]} pytest files and {held[2]} e2e "
         "specs. Restate the sentence -- a count nobody re-derived is decision 184's defect."
     )
+
+
+# "...and it takes the last `pytest.skip` out of a registered Tonight test". The qualifier is
+# OPTIONAL in this pattern on purpose. The sentence is read for the scope it claims, and the
+# guard below then holds exactly that scope: widen the wording back to "a registered test" and
+# the guard widens with it. That is the only arrangement in which the claim and the thing it
+# claims cannot drift apart -- and the drift is what happened, because the unqualified sentence
+# shipped over a tree in which four registered tests still skip, none of them Tonight's.
+_LEDGER_LAST_SKIP = re.compile(
+    r"takes the last `pytest\.skip` out of a registered\s+(?:(\w+)\s+)?test\b"
+)
+
+
+def _registered_tests_that_skip(scope: str | None) -> list[str]:
+    """Every registered backend test that can report a green run having asserted nothing.
+
+    A `pytest.skip` call and a `skipif` marker are one defect with two spellings: rule 2 above
+    asks only whether a named test EXISTS, so either one closes its row while the run it closed
+    it on executed no assertion. The sentence names the call because the call is what this
+    milestone removed; the guard reads both because a maintainer repairing the one and leaving
+    the other would have satisfied the letter of a claim about silent coverage.
+
+    `scope` is a substring of the file stem -- "tonight" for the Tonight suite, None for every
+    registered backend test. Read with `ast` rather than a regex for the reason the argument
+    against `pytest.skip` is made at all: `test_tonight_integration.py:1460` and
+    `test_tonight_routes.py:898` both write "pytest.skip" inside a docstring arguing against it,
+    and a guard that counted those would be reporting its own documentation as the defect.
+
+    A named file that is not there is not this guard's to report -- `test_every_named_test_exists`
+    is the rule for that, and two failures for one cause is one of them mis-diagnosed.
+    """
+    wanted: dict[str, set[str]] = {}
+    for requirement in REQUIREMENTS:
+        for test_id in requirement.get("tests", []):
+            path, _, name = test_id.partition("::")
+            if not path.startswith("backend/tests/") or not name:
+                continue
+            if scope is not None and scope not in Path(path).stem.lower():
+                continue
+            wanted.setdefault(path, set()).add(name)
+
+    out: list[str] = []
+    for path, names in sorted(wanted.items()):
+        source = REPO / path
+        if not source.is_file():
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name not in names:
+                continue
+            for decorator in node.decorator_list:
+                if ast.unparse(decorator).startswith("pytest.mark.skip"):
+                    out.append(f"{path}::{node.name} carries a skip marker at line {node.lineno}")
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and ast.unparse(sub.func) == "pytest.skip":
+                    out.append(f"{path}::{node.name} calls pytest.skip at line {sub.lineno}")
+    return sorted(out)
+
+
+def test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take():
+    """The third ledger guard, and the first about a claim rather than a count.
+
+    Two halves. The first is M4.12's own repair, held permanently and independently of any
+    prose: no registered test in the Tonight suite skips. Defect 44's four sites were all in
+    that suite -- the integration-layer case of 54d gave up when the fixture stopped dividing
+    the household and reported that regression as `1 skipped` and a green file -- and that is
+    the property worth keeping true after the paragraph below has been re-pasted for M4.13.
+
+    The second is the sentence. `docs/TESTING.md` published the repair as "it takes the last
+    `pytest.skip` out of a registered test", which is a universal, and the universal is false:
+    `test_the_default_branch_claim_is_bounded_to_the_run_in_flight` (M4.8) calls `pytest.skip`
+    outright, and three more registered tests carry a `skipif` -- the tz test M4.7 registered
+    is one, and it skips on this checkout. All four are deliberate and argued, so the defect is
+    entirely one of the RECORD: CLAUDE.md sends the next reader to that file "rather than
+    assuming status", and an auditor who reads the class as closed stops looking. The two
+    milestones that own those tests are not this one's to repair, which is why the repair is to
+    scope the sentence rather than to widen the rule.
+
+    The sentence is optional: it belongs to M4.12's paragraph and the paragraph is rewritten by
+    the milestone it is re-pasted for. What the guard refuses is the sentence standing with a
+    scope the tree does not support -- and because the scope is read out of the prose, a
+    maintainer who widens the wording gets the wider rule with it.
+    [M4.12 review cycle 2: M412-C2-LEDGER-01]
+    """
+    survivors = _registered_tests_that_skip("tonight")
+    assert not survivors, (
+        "a registered Tonight test skips, so a row of this milestone closes on a run that "
+        "asserted nothing:\n  " + "\n  ".join(survivors)
+    )
+
+    claims = _LEDGER_LAST_SKIP.findall(LEDGER.read_text(encoding="utf-8"))
+    assert len(claims) <= 1, (
+        f"docs/TESTING.md makes {len(claims)} 'last pytest.skip' claims; the paragraph is "
+        "re-pasted per milestone, so at most one milestone can be claiming it"
+    )
+    for claim in claims:
+        scoped = _registered_tests_that_skip(claim.lower() or None)
+        assert not scoped, (
+            f"docs/TESTING.md claims the last `pytest.skip` was taken out of "
+            f"{'a registered ' + claim + ' test' if claim else 'a registered test'}, and "
+            f"{len(scoped)} still skip:\n  " + "\n  ".join(scoped)
+            + "\n  Scope the sentence to what the milestone did, or name the survivors."
+        )

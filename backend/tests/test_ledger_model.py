@@ -68,6 +68,17 @@ def spearman(a, b):
     return float(np.corrcoef(np.argsort(np.argsort(a)), np.argsort(np.argsort(b)))[0, 1])
 
 
+def reach_sigma(reach: float) -> float:
+    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
+
+    A fixture whose point is "this interval crosses the cut above" is a claim about the REACH,
+    and the reach is z·σ — so written as a bare σ it is pinned to one value of a constant §4.3
+    says is tunable. Decision 214 retunes `straddle_z` from 1.0 to 0.15 and two straddle tests
+    below stopped reaching anything, which is a fixture breaking rather than a rule changing.
+    """
+    return reach / DEFAULTS.straddle_z
+
+
 # --- the derivatives ------------------------------------------------------------------------
 
 
@@ -505,7 +516,7 @@ def test_a_posterior_that_reaches_the_next_tier_is_flagged():
     close."""
     cuts = np.array([-1.0, 0.0, 1.0])
     s = np.array([0.95, 0.20])
-    sigma = np.array([0.30, 0.02])
+    sigma = np.array([reach_sigma(0.30), reach_sigma(0.02)])
     flags = model.straddle(s, sigma, cuts, DEFAULTS)
     assert flags[0] == 3, "0.95 ± 0.30 reaches the tier above"
     assert flags[1] == -1, "0.20 ± 0.02 does not"
@@ -520,7 +531,8 @@ def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
     `searchsorted(lo)` whenever that differed from the tier, so a posterior crossing two cuts
     came back two levels down — "B/F" on a five-tier board — and `queue._boundary` then drew the
     partner from a tier the title does not border. Decision 205 keeps the ±z·σ predicate and
-    restricts the answer to the two neighbours; it does not retune `straddle_z`.
+    restricts the answer to the two neighbours; decision 214 then retuned `straddle_z` to 0.15,
+    which moves how many titles reach a neighbour and nothing about which one they name.
     """
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(19)
@@ -565,14 +577,15 @@ def test_a_posterior_reaching_both_neighbours_names_the_nearer_cut():
     the iteration order.
     """
     cuts = model.initial_cutpoints(7)
+    wide = np.array([reach_sigma(1.0)])   # an interval reaching one unit either way
     assert model.tier_of(np.array([0.9]), cuts)[0] == 4, "s = 0.9 sits in A on the measured set"
-    assert model.straddle(np.array([0.9]), np.array([1.0]), cuts, DEFAULTS)[0] == 5
+    assert model.straddle(np.array([0.9]), wide, cuts, DEFAULTS)[0] == 5
 
     nearer_below = float(cuts[3]) + 0.1
-    assert model.straddle(np.array([nearer_below]), np.array([1.0]), cuts, DEFAULTS)[0] == 3
+    assert model.straddle(np.array([nearer_below]), wide, cuts, DEFAULTS)[0] == 3
 
     midway = (float(cuts[3]) + float(cuts[4])) / 2.0
-    assert model.straddle(np.array([midway]), np.array([1.0]), cuts, DEFAULTS)[0] == 3
+    assert model.straddle(np.array([midway]), wide, cuts, DEFAULTS)[0] == 3
 
 
 # --- §5.2's freshness rule -----------------------------------------------------------------------

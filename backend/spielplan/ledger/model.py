@@ -904,8 +904,11 @@ def straddle(s: np.ndarray, sigma: np.ndarray, cuts: np.ndarray, hp: Hyperparams
     both, the one whose CUT is nearer to `s` wins: that is the boundary the next comparison can
     actually move, and the tier the title is likelier to belong to. A tie keeps the downward
     choice the old `below`-first order had, so the answer stays a function of the numbers rather
-    than of the iteration order. Decision 205 is the constraint this obeys: the predicate stays
-    ±z·σ and `straddle_z` is not retuned here — that measurement is M4.12's.
+    than of the iteration order. Decision 205 is the constraint that shaped this: the predicate
+    stays ±z·σ, and the retune 205 deferred has since happened — decision 214 sets `straddle_z`
+    to 0.15 as a badge constant tuned against a fitted board's σ-to-tier-width ratio, and gives
+    §6.2's round its own BOUNDARY_Z instead of this one. Nothing here changes with it: the shape
+    of the answer is the same at any positive multiple, only how many titles reach one.
 
     The *set* is unchanged, deliberately. §6.3 makes one predicate do two jobs ("shows "A/S"
     **and** becomes queue-eligible", proposal 157), so narrowing which tier is named must not

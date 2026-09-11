@@ -100,11 +100,33 @@ test.describe('tonight together', () => {
     return code;
   }
 
-  /** Answer through one person's whole round. */
+  /** Answer through one person's whole round, wherever that round has got to.
+   *
+   * THE WAIT IS FOR "THIS DEVICE HAS REACHED ITS ROUND OR PASSED IT", and the second half is
+   * what this helper was missing. 54c ends a seat's round when the shortlist boundary stops
+   * being straddled, and decision 214 sets that threshold at `BOUNDARY_Z = 0.6` — calibrated
+   * against pools of 12/20/40 for a median of 8.5-13 pairs, which is §6.2 step 4's "~10
+   * candidate votes". The fixture library is six admissible films, so its rank-3/rank-4
+   * boundary is one comparison wide and ONE answer resolves it: replayed from the rows the
+   * gate wrote, `round.replay` selects the same pair the app served and returns `converged`
+   * at seq 1. So a caller that has already answered a pair — the blind test below answers one
+   * deliberately, to give the other device a count to read — arrives here with this seat over
+   * and the round correctly gone from the screen. Waiting for `tonight-round` alone failed
+   * that caller for the surface behaving exactly as the decision requires.
+   *
+   * Settling on ONE of the three is `toDoor`'s own idiom above and it is here for the same
+   * reason: the surface has a beat where neither is drawn, so a point-in-time read of either
+   * answers "not visible" for a device that is merely between payloads. A seat whose round is
+   * over is on 54c's progress view, or on 54e's ballot once every seat is (decision 215 makes
+   * the second reachable without this seat answering at all).
+   */
   async function playOut(page) {
-    await expect(page.getByTestId('tonight-round')).toBeVisible({ timeout: 20_000 });
+    const round = page.getByTestId('tonight-round');
+    await expect(
+      round.or(page.getByTestId('tonight-waiting')).or(page.getByTestId('tonight-ballot')).first()
+    ).toBeVisible({ timeout: 20_000 });
     for (let i = 0; i < 24; i++) {
-      if (!(await page.getByTestId('tonight-round').isVisible())) break;
+      if (!(await round.isVisible())) break;
       // The write, not a guess at how long it takes: §6.2's round is one POST per pair. Worse
       // here than anywhere else in the suite, because two devices are answering against one
       // session — a 120 ms sleep that runs short leaves this person clicking the pair the

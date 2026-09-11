@@ -38,6 +38,17 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+# Decision 154's four answers live in `round`, which imports nothing from this package (stdlib
+# and numpy only), so this is a one-way edge and not a cycle. The alternative was a second
+# spelling of "A"/"B"/"EITHER" here, and a second spelling is how a branch silently stops
+# matching — the lesson migration 0005's own selection constants already carry. Cited by number
+# and never quoted: `test_rank_integration.py`'s guard reads this package for every spelling of
+# §13's held-out stream, and its allow-list holds deliberate READ paths. This module has none —
+# 54b's exclusion is `play.py`'s and `solo.py`'s, on the rows — and the tilt is precisely the
+# surface a held-out answer must never reach, so an entry here would pre-authorise the one leak
+# that would matter, to buy a comment one word it can do without.
+from spielplan.tonight import round as round_rules
+
 # A facet the pool does not vary on carries no information about tonight, and dividing by its
 # spread would be an infinity rather than an insight. The floor is not a tuned constant: it is
 # the point below which a spread is indistinguishable from zero in float arithmetic.
@@ -66,6 +77,18 @@ def frame(pool_dna: Mapping[int, Vector]) -> Frame:
     A term absent from a candidate is a zero, not a gap: "this film is not cosy" is information
     about the pool, and treating absence as missing would make the mean a statement about the
     subset that happens to carry the term.
+
+    AND THAT IS NOT WHAT `centred` DOES FOUR LINES DOWN, deliberately: decision 218 gives a term
+    the vector does not carry no coordinate at all. The two are answers to different questions.
+    This one is about the pool's DISTRIBUTION — where tonight's middle is, and how far apart
+    tonight's candidates are — and an untagged title genuinely sits at zero in it; that one is
+    about one candidate's POSITION, where absence is no statement to place. The asymmetry the
+    pair leaves is real and is the price of both being right: an untagged title moves the
+    reference point every other candidate is measured against while being exempt from it, which
+    is the honest reading of a library where 32% of titles carry no rows. Said here because
+    `centred`'s own paragraph names the opposed reading and this docstring did not, and a reader
+    who generalises either sentence to the other function silently changes every stored pool
+    frame. [decision 218; M4.12 review cycle 1: D3-04]
     """
     terms: set[str] = set()
     for vec in pool_dna.values():
@@ -86,13 +109,31 @@ def centred(vec: Vector, f: Frame) -> dict[str, float]:
     A candidate sitting exactly at the pool mean on a facet is a zero there, which is what
     makes "this film is unremarkable tonight" and "this film is not in the pool" the same
     statement — as they should be, for a tilt that is about tonight and not about the library.
+
+    A TERM THE VECTOR DOES NOT CARRY GETS NO COORDINATE AT ALL (decision 218). Reading absence as
+    0.0 and then centring it gave `(0 - mean)/spread`: a NEGATIVE coordinate on every term the
+    pool carries, which is the opposite of the sentence above rather than a rounding of it. An
+    untagged candidate — `dna.vectors_for` returns `{}` for a title with no rows, and 32% of the
+    shipped library has none — therefore picked up the same non-zero adjustment as every other
+    untagged candidate, so they rose or fell together by about 0.44 sd of the real score spread.
+    A symmetric fixture cancels that exactly, which is why the toy pools in the tests read 0.0
+    and the corpus did not. Now `adjustment(tilt, {}, f) == 0.0` by construction.
+
+    THIS CHANGES A/B OBSERVATIONS TOO, and that is acknowledged here rather than discovered by
+    someone comparing two evenings' stored tilts: `observe` centres both sides through this
+    function, so a term the chosen film carries and the rejected one does not now contributes the
+    chosen film's coordinate alone instead of that coordinate minus the absent one's fabricated
+    negative. Answers already recorded were recorded under the old centring and are append-only;
+    they are not rewritten. [decision 218; §6.2 step 5]
     """
     out = {}
     for t, m in f.mean.items():
         s = f.spread.get(t, 0.0)
         if s <= MIN_SPREAD:
             continue
-        out[t] = (vec.get(t, 0.0) - m) / s
+        if t not in vec:
+            continue
+        out[t] = (vec[t] - m) / s
     return out
 
 
@@ -140,6 +181,68 @@ def observe_level(
     return _accumulate(tilt, delta)
 
 
+# --- one answer, applied ---------------------------------------------------------------------
+
+
+def applies(vectors: Mapping[int, Vector], *, title_a: int, title_b: int) -> bool:
+    """Whether a stored answer still names two candidates of tonight's pool.
+
+    §10's re-import guard, as a predicate rather than as three copies of an `if`. `round.replay`
+    has always skipped an answer whose titles have left the pool — "the alternative is inventing
+    a belief for a title that is no longer a candidate" — and the tilt has to skip exactly the
+    same rows, or the posterior and the tilt describe two different histories of one evening.
+    It is a separate function from `applied` below because solo also *counts* with it: 54f's
+    provenance line says "tilted by your N answers", and N has to be the number that tilted.
+    TWO CANDIDATES, AND THE DOCSTRING ABOVE MEANS IT. Membership alone is satisfied by one title
+    named twice, and one candidate named twice is not a comparison: `round.update` moved the
+    belief a long way on "I prefer title 1 to title 1" (mu 0.9 -> 0.37 at the measured pool
+    spread) while `applied` below returned a delta of exactly zero — so solo re-ranked its picks
+    and reported "tilted by your 1 answers" over a tilt that had not moved, which is the
+    dishonest provenance finding 37 exists to remove. No selector emits `i == j` (`select` and
+    54b's arm both refuse it, and a group answer's pair is sealed into its card), so the pair can
+    only arrive in solo's client-supplied answer list — which is the argument for the clause being
+    here, in the predicate both the tilt and the count read, rather than in `SoloBody`.
+    `round.replay` carries the same clause on the same row for the posterior half.
+    [M4.12 review cycle 1: M412-SOLO-04]
+    """
+    return title_a != title_b and title_a in vectors and title_b in vectors
+
+
+def applied(
+    tilt: Mapping[str, float],
+    *,
+    answer: str,
+    title_a: int,
+    title_b: int,
+    vectors: Mapping[int, Vector],
+    frame: Frame,
+) -> dict[str, float]:
+    """§6.2 step 5's observation for one answer, whichever of decision 154's four it is.
+
+    THE THIRD COPY IS WHAT MADE THIS A FUNCTION. The same four-branch dispatch stood in
+    `play.record_answer`, in `play.retract` and in `solo.picks`, and the three had already drifted:
+    only the two in `play` looked the titles up in the frozen pool, and solo's used
+    `vectors.get(id, {})` — which, before decision 218, turned a title that had left the pool into
+    the pool's anti-title and moved the tilt with a row `round.replay` twenty lines above had
+    deliberately ignored. A rule with three call sites is a rule with three ways to forget it,
+    which is the argument `round.replay` already makes about §13's hold-out filter.
+
+    `answer` is one of `round.ANSWERS`; anything else is a level answer away from the pair, which
+    is what `NEITHER` means. The membership check is *inside*, so no caller can apply an answer
+    this module would refuse to count.
+    """
+    if not applies(vectors, title_a=title_a, title_b=title_b):
+        return dict(tilt)
+    a_dna, b_dna = vectors[title_a], vectors[title_b]
+    if answer == round_rules.A:
+        return observe(tilt, chosen=a_dna, rejected=b_dna, frame=frame)
+    if answer == round_rules.B:
+        return observe(tilt, chosen=b_dna, rejected=a_dna, frame=frame)
+    return observe_level(
+        tilt, first=a_dna, second=b_dna, frame=frame, toward=answer == round_rules.EITHER,
+    )
+
+
 def adjustment(tilt: Mapping[str, float], vec: Vector, f: Frame) -> float:
     """What this participant's tilt adds to one candidate's tonight score.
 
@@ -169,6 +272,8 @@ __all__ = [
     "Frame",
     "MIN_SPREAD",
     "adjustment",
+    "applied",
+    "applies",
     "centred",
     "frame",
     "moved_facets",

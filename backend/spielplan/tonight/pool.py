@@ -26,6 +26,13 @@ admits up to budget + 40 min; over-budget results are labelled 'runs N min over'
 and labelling are one pass (`with_budget`) so the two cannot disagree about where the boundary
 is, and N is measured from the budget the person set rather than from the +40 bound they never
 saw.
+
+AND ON A SERIES NIGHT IT IS PER EPISODE. §6.2 step 1 as amended by 54h: the bound is compared
+with the show's per-episode runtime, never with a season or a series total, "and every label that
+states a number on a series card says so". That is what the arithmetic here has always done —
+`title.runtime_min` is per-episode for a series — so this module's change is the label and not the
+rule. Hiding the slider under Series was the alternative and it removes a control §6.2 step 1
+gives for both kinds. [decision 219]
 """
 
 from __future__ import annotations
@@ -40,6 +47,24 @@ import asyncpg
 # is not a constant of the §5.2 recipe, so §4.3's `ledger_hyperparams.json` is not where it
 # belongs (the same reasoning `rank/queue.py` applies to §6.3's 70/20/10 shares).
 BUDGET_GRACE_MIN = 40
+
+# §6.2 step 1's slider default: the budget a label falls back to when the session row that held
+# one cannot be read. A bare `130` used to sit in the reveal's card builder inside `api/tonight.py`
+# — the one place that prints "fits your N min" — which made the router a second holder of a
+# number `fit_line` below quotes verbatim. The spec's figure rather than a tunable, for the same
+# reason `BUDGET_GRACE_MIN` above is. [M4.12 arch-06]
+DEFAULT_BUDGET_MIN = 130
+
+# 54h's qualifier, and the one place it is spelled. §6.2 step 1 defines the budget for both kinds
+# and was silent on what it means for a series; the code had already picked an answer — the bound
+# below is applied to `title.runtime_min`, which for a series is minutes PER EPISODE
+# (`home/shelves.py:938` says the same thing over the same column) — and the labels did not say
+# so. Measured against the shipped bundle the series pool is 121 of 121 owned titles at budget 60,
+# 130 and 200 alike, so the slider narrows nothing on a series night and a bare "fits your 60 min"
+# reads as a promise about the evening. Decision 219 keeps the per-episode reading and makes every
+# label that states a number say which number it is. [decision 219; 54h]
+KIND_SERIES = "series"
+PER_EPISODE = " per episode"
 
 
 @dataclass(frozen=True)
@@ -151,14 +176,26 @@ def over_budget_by(*, runtime_min: int | None, budget_min: int) -> int | None:
     return runtime_min - budget_min
 
 
-def fit_line(*, runtime_min: int | None, budget_min: int) -> str:
-    """§6.2 step 7's two branches, verbatim: "fits your 130 min" / "runs 21 min over"."""
+def fit_line(*, runtime_min: int | None, budget_min: int, kind: str) -> str:
+    """§6.2 step 7's two branches, verbatim: "fits your 130 min" / "runs 21 min over" — and on a
+    series session, 54h's qualifier: "fits your 60 min per episode".
+
+    `kind` is required rather than defaulted, because a default is how the qualifier would go
+    missing on exactly the surface it exists for: every caller holds the kind already (the
+    candidate carries it, and the reveal's card takes the session's), and the one that did not
+    was the one printing an unqualified runtime on a series card.
+
+    "runtime unknown" states no number, so it takes no qualifier — decision 219 puts it on the
+    labels that say something, and a qualifier on a label that measures nothing would be
+    precision about an absence. [decision 219]
+    """
     if runtime_min is None:
         return "runtime unknown"
+    per = PER_EPISODE if kind == KIND_SERIES else ""
     over = over_budget_by(runtime_min=runtime_min, budget_min=budget_min)
     if over is None:
-        return f"fits your {budget_min} min"
-    return f"runs {over} min over"
+        return f"fits your {budget_min} min{per}"
+    return f"runs {over} min over{per}"
 
 
 def with_budget(candidates: Iterable[Candidate], *, budget_min: int) -> list[Candidate]:
@@ -178,7 +215,13 @@ def with_budget(candidates: Iterable[Candidate], *, budget_min: int) -> list[Can
             dataclasses.replace(
                 c,
                 over_budget_min=over_budget_by(runtime_min=c.runtime_min, budget_min=budget_min),
-                fit_line=fit_line(runtime_min=c.runtime_min, budget_min=budget_min),
+                # The candidate's own kind, not the session's, though 0013 makes them the same:
+                # `session.kind` is single-valued because "an evening resolves to ONE title", so
+                # asking the row is asking the session, and it keeps this pass from needing an
+                # argument it would only pass through. [§4.1 rule 5; decision 219]
+                fit_line=fit_line(
+                    runtime_min=c.runtime_min, budget_min=budget_min, kind=c.kind
+                ),
             )
         )
     return out
@@ -280,6 +323,9 @@ async def build(
 
 __all__ = [
     "BUDGET_GRACE_MIN",
+    "DEFAULT_BUDGET_MIN",
+    "KIND_SERIES",
+    "PER_EPISODE",
     "Candidate",
     "Seat",
     "admits",

@@ -1968,9 +1968,9 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
 
 
-# --- §12: the five exit scripts, and the console they print to ----------------------------
+# --- §12: the six exit scripts, and the console they print to -----------------------------
 #
-# §12's M2, M3, M4, M4.9 and M4.11 rows are measured by hand, by `ops/m*_exit_criterion.py`,
+# §12's M2, M3, M4, M4.9, M4.11 and M4.12 rows are measured by hand, by `ops/m*_exit_criterion.py`,
 # and a milestone is closed on what they print and the code they exit with. A verdict that
 # cannot come out `no` is a certificate rather than a measurement, so these read the scripts as
 # source: no `check()` whose answer is settled before the run, no dereference of a result the
@@ -1995,6 +1995,17 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
 # the rules did force on it is its `check()` signature: the verdict is the first positional
 # argument, because a number there is exactly what `_constant_check_predicates` reads as a
 # predicate that cannot fail. [M4.11]
+#
+# `ops/m412_exit_criterion.py` is the sixth, and the number moved to 6 only after every rule here
+# had been read against it: no printed literal outside cp850, no `check()` predicate settled
+# before the run, a computed terminal verdict, and no component read at all -- §12's M4.12 row is
+# about an evening that resolves on the real pool, so what it reads is the app over ASGI, the
+# database it wrote to, and the loop it shares. It has no `rate()` seeding path for the last rule
+# to exempt: its household is fitted through `foldin.run`, the app's own §5.3 pass, because
+# §6.2 step 3's candidate pool IS `user_score` and a harness that seeded that table would be
+# measuring its own idea of a score. Three of its twelve checks are source reads (decision 165's
+# TV retirement, the one lifecycle owner, the coverage map's close) and the docstring says so
+# rather than dressing them as runtime facts. [M4.12 decision 224]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2101,7 +2112,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2181,7 +2192,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2307,7 +2318,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2587,7 +2598,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3215,7 +3226,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 5, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 6, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -4596,3 +4607,339 @@ def test_the_decision_210_adoption_guard_catches_each_way_it_was_said(name, text
     210's own Why paragraph that describes the adopt direction without inheriting its rule.
     """
     assert len(_inherits_172s_adoption_rule_unnarrowed(text)) == expected, name
+
+
+# --- M4.12 review cycle 1: three records the tree had no way to hold ---------------------------
+#
+# CLAUDE.md makes the argued comment the record, which is worth exactly as much as the record's
+# accuracy. Three of M4.12's failed differently and none of them could go red: a causal claim
+# about a seam the app contradicts, a coordinate into a file the same diff rewrote, and a line of
+# copy decision 222 ships with no assertion at any layer. Each guard below weighs a claim against
+# the artifact that settles it -- `app.py`'s own handler, the client module, the Tonight page --
+# which is the only reason a comment or a rendered string can be held at all.
+# [M412-CONC-02, M412-CONC-03, M412-FE-2]
+
+TONIGHT_PACKAGE = REPO / "backend" / "spielplan" / "tonight"
+TONIGHT_CLIENT = FRONTEND / "lib" / "tonight.svelte.js"
+TONIGHT_PAGE = FRONTEND / "routes" / "tonight" / "+page.svelte"
+APP_MODULE = REPO / "backend" / "spielplan" / "app.py"
+
+# What a paragraph has to be about before its "500" is a claim about a lost write race. Naming one
+# of the three constraints, or the index itself, is the whole of it.
+_A_LOST_UNIQUENESS_RACE = re.compile(
+    r"unique index|UniqueViolationError|session_answer_seq|session_ballot_one_per_title|"
+    r"session_result_pkey"
+)
+_A_FIVE_HUNDRED = re.compile(r"\b500\b|500ing")
+
+
+def _paragraphs(source: str) -> list[str]:
+    """Prose blocks, as a reader meets them: blank lines and bare `#` lines both end one."""
+    flattened = re.sub(r"(?m)^[ \t]*#[ \t]*$", "", source)
+    return [p for p in re.split(r"\n[ \t]*\n", flattened) if p.strip()]
+
+
+def _answers_a_lost_race_with_a_500(source: str) -> list[str]:
+    return [
+        p for p in _paragraphs(source)
+        if _A_LOST_UNIQUENESS_RACE.search(p) and _A_FIVE_HUNDRED.search(p)
+    ]
+
+
+def test_the_uniqueness_seam_the_tonight_comments_point_at_answers_409():
+    """The premise the guard below rests on, read off `app.py` rather than assumed.
+
+    M4.7's `_conflict` is registered for `asyncpg.UniqueViolationError` and answers 409 with the
+    constraint's name; the general `PostgresError` handler answering 500 is a different exception.
+    If that ever stops being true the guard below becomes the wrong rule, so it is asserted here
+    rather than carried in a reviewer's head. `test_http_seam.py` asserts the behaviour over ASGI;
+    this asserts that the two handlers are still two.
+    """
+    source = APP_MODULE.read_text(encoding="utf-8")
+
+    assert "@app.exception_handler(asyncpg.UniqueViolationError)" in source
+    conflict = source[source.index("(asyncpg.UniqueViolationError)"):]
+    conflict = conflict[:conflict.index("@app.exception_handler(asyncpg.PostgresError)")]
+    assert "status_code=409" in conflict, "the seam stopped answering 409"
+    assert "exc.constraint_name" in conflict, "and stopped naming the constraint"
+
+
+def test_no_tonight_paragraph_answers_a_lost_uniqueness_race_with_a_500():
+    """M4.12's three write-race repairs were argued from a status the app does not return.
+
+    Nine comments and two coverage rows said the loser of a race to `session_answer_seq`,
+    `session_ballot_one_per_title` or `session_result_pkey` got a 500. It got 409 with the
+    constraint's name, from a handler M4.7 shipped in the same repository with a test whose
+    docstring reads "the seam M4.10 and M4.12 plug into, asserted here so they can point at it".
+    The repairs were right for other reasons -- a reused seq, a wedged seat, a whole ballot rolled
+    back -- but a maintainer weighing an unguarded write against a lock reads these paragraphs to
+    learn what this app does with a lost race, and plan step 6 forbids the redundant except
+    branch the false record invites. [M412-CONC-02]
+    """
+    offenders = {
+        path.name: _answers_a_lost_race_with_a_500(path.read_text(encoding="utf-8"))
+        for path in sorted(TONIGHT_PACKAGE.glob("*.py"))
+    }
+    named = {name: found for name, found in offenders.items() if found}
+
+    assert not named, "\n\n".join(
+        f"{name}: {block.strip()[:400]}" for name, blocks in named.items() for block in blocks
+    )
+
+
+@pytest.mark.parametrize(
+    "name, text, expected",
+    [
+        ("record_answer", "the loser's INSERT collided with 0014's partial unique index -- "
+                          "`app.py` turns that into a 500, and the client re-reads on a 409.", 1),
+        ("ballot.submit", "its INSERTs collided with `session_ballot_one_per_title`, and `app.py` "
+                          "turns every `asyncpg.PostgresError` into a 500.", 1),
+        ("finish", "it deletes nothing, inserts, and is refused by `session_result_pkey` -- a 500 "
+                   "on the last answer of somebody's round.", 1),
+        ("the correction", "refused by `session_result_pkey` -- 409 conflict: session_result_pkey "
+                           "out of `app.py`'s handler, on a room that is by then fine.", 0),
+        ("settle", "a combine that raised once left the answer standing, the request 500ing, and "
+                   "the room in `voting` for the rest of the evening.", 0),
+    ],
+)
+def test_the_lost_race_guard_catches_each_way_it_was_said(name, text, expected):
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    Three shipped wordings, the correction that has to stay sayable, and a 500 about something
+    else entirely -- a combine that RAISED is a real 500 and settle's docstring says so.
+    """
+    assert len(_answers_a_lost_race_with_a_500(text)) == expected, name
+
+
+_CLIENT_BY_LINE = re.compile(r"tonight\.svelte\.js:\d+")
+_CLIENT_BY_SYMBOL = re.compile(r"tonight\.svelte\.js`'s `(\w+)`")
+
+
+def test_no_backend_comment_cites_the_tonight_client_by_line_number():
+    """A coordinate into another file is a citation nothing can keep true.
+
+    Four backend comments and one coverage-registered test docstring cited
+    `tonight.svelte.js:183-196`, `:259`, `:273` and `:275` -- taken from the plan, which took them
+    from a commit two before the one that shipped -- and the same diff rewrote that module from 490
+    lines to 774. All five pointed at a closing brace, a comment fragment or an unrelated
+    statement, and one of them also described refresh as having three branches in a diff that gave
+    it five. A function name survives the edit that moves it, and is checkable, which is the whole
+    difference. channel.py already cited the module this way. [M412-CONC-03]
+    """
+    cited = {
+        str(path.relative_to(REPO)): _CLIENT_BY_LINE.findall(path.read_text(encoding="utf-8"))
+        for path in sorted((REPO / "backend").rglob("*.py"))
+        # This file quotes the coordinates it forbids, which is how the docstring above says what
+        # went wrong; a guard may name its own subject.
+        if path != Path(__file__)
+    }
+    named = {path: hits for path, hits in cited.items() if hits}
+
+    assert not named, f"cite the function, not the line: {named}"
+
+
+def test_every_tonight_client_function_the_backend_cites_exists():
+    """The other half: a name is only better than a number if something checks the name.
+
+    Read off the module's own declarations rather than by importing it -- this is a Svelte runes
+    module, and the guard is about what a reader will find when they open the file.
+    """
+    declared = set(re.findall(r"function (\w+)\(", TONIGHT_CLIENT.read_text(encoding="utf-8")))
+    assert declared, "the client module declares no functions, so this guard is reading nothing"
+
+    cited: dict[str, set[str]] = {}
+    for path in sorted((REPO / "backend").rglob("*.py")):
+        found = set(_CLIENT_BY_SYMBOL.findall(path.read_text(encoding="utf-8")))
+        if found:
+            cited[str(path.relative_to(REPO))] = found
+
+    assert cited, "nothing cites the client by name, so this guard is reading nothing"
+    unknown = {path: sorted(names - declared) for path, names in cited.items() if names - declared}
+    assert not unknown, f"named a client function that does not exist: {unknown}"
+
+
+def test_the_reshuffle_wrapped_line_is_rendered_where_decision_222_says_it_is():
+    """Decision 222 ships one quiet line beside Reshuffle, and nothing asserted that it renders.
+
+    A grep for tonight-wrapped and WRAPPED_LINE over the tree found exactly three hits -- the
+    constant, the import and the paragraph element -- so the rendered half of the decision rested
+    on nobody deleting it. The flag behind it is the backend's and is tested there; what this layer
+    holds is that the copy is still wired to the flag and spelled once. The browser holds the rest
+    -- `14-tonight.spec.js`'s reshuffle case presses until the line appears, which on a bundle of
+    six owned films is the second press. [M412-FE-2; M412-SOLO-03; decision 222]
+    """
+    page = TONIGHT_PAGE.read_text(encoding="utf-8")
+    client = TONIGHT_CLIENT.read_text(encoding="utf-8")
+
+    copy = re.search(r"export const WRAPPED_LINE = .([^']+).;", client)
+    assert copy, "the line decision 222 renders is no longer a constant of the client module"
+    assert "{#if tonight.solo.wrapped}" in page, "the line is rendered unconditionally, or not"
+    assert 'data-testid="tonight-wrapped"' in page, "and has no handle for an e2e assertion"
+    assert "{WRAPPED_LINE}" in page, "the page spells the copy itself"
+    assert copy.group(1) not in page, (
+        "the copy is written twice, and the second spelling is the one that will drift"
+    )
+
+
+# --- M4.12 review cycle 1: the map's account of the socket's own history ------------------------
+#
+# A fourth record the tree had no way to hold, and the same shape as the three above: a claim
+# whose truth is settled by an artifact in the repository, written down as its opposite. This one
+# is in `spec_coverage.toml`, which CLAUDE.md calls the contract -- so the artifact that settles
+# it is the map itself, where a shipped M0 row has named the refusal as its own evidence since
+# before the Tonight channel had a second gate to argue about. [M412-API-03]
+
+LOCKED_SOCKET_TEST = (
+    "backend/tests/test_api_gating.py::test_the_tonight_channel_refuses_a_locked_account"
+)
+
+# Absolute denials only. A `why` may say the gate was undeclared, written out by hand, or
+# invisible to a dependency sweep -- all three are true of this route before M4.12, and the route
+# docstring says exactly that. What no row may say is that the refusal was not there.
+_A_DENIAL = re.compile(r"never enforced|never refused|never closed|did not enforce|was not enforced")
+
+
+def test_no_row_calls_decision_179s_socket_refusal_m4_12s_own_defect():
+    """M4.12's channel row told the contract file that the lock had never been enforced.
+
+    It had. Decision 179 wrote `must_change_password` out by hand inside the route in M4.6 -- one
+    branch closing the anonymous and the locked caller together with `WS_1008_POLICY_VIOLATION`
+    before `accept` -- and M0's `platform-forced-first-login-change` has named the gating test as
+    ITS evidence ever since, its `what` saying in as many words that the Tonight WebSocket closes
+    a locked session. So the two `== 1008` assertions M4.12 added to that test are green against
+    the route as it was. What this milestone changed is that the gate is DECLARED, through
+    `deps.active_user_ws` where a dependency sweep can see it, and that the route holds none of
+    the pool's connections across its sends.
+
+    The row said the opposite ten lines above its own trailing comment, which says decision 179
+    "already wrote the `must_change_password` check out by hand inside the route". That matters
+    because a later milestone reads this file to learn what was established and when: a reader who
+    believes the `why` deletes
+    `test_the_channel_is_behind_the_dependency_graph_and_never_behind_deps_db` as duplicated by
+    the gating test, takes decision 225's only assertion with it, and the row stays green.
+
+    Premise first, as `test_the_uniqueness_seam_the_tonight_comments_point_at_answers_409` does
+    above: if M0 ever stops claiming the refusal, the rule enforced below is the wrong one and
+    should fail loudly rather than pass quietly. [M412-API-03; decisions 179, 225]
+    """
+    rows = tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["requirement"]
+    naming = [r for r in rows if LOCKED_SOCKET_TEST in r.get("tests", [])]
+    origin = [r for r in naming if r["id"] == "platform-forced-first-login-change"]
+    assert origin, (
+        "M0's platform-forced-first-login-change no longer names the locked-socket test, so the "
+        "premise this guard weighs later rows against has moved out of the map"
+    )
+    assert "Tonight WebSocket closes it" in origin[0]["what"], (
+        "M0's row stopped claiming that the Tonight WebSocket closes a locked session; this "
+        "guard's premise moved, so the rule below is no longer the right one"
+    )
+
+    for row in naming:
+        if row["id"] == origin[0]["id"]:
+            continue
+        denial = _A_DENIAL.search(row["why"])
+        assert not denial, (
+            f"{row['id']} ({row['milestone']}) says the socket {denial.group(0)!r} section 3.1's "
+            f"first-login lock, while {origin[0]['id']} (M0) names the same test as evidence that "
+            "it did. The gate was undeclared, not absent - say that instead"
+        )
+        assert "179" in row["why"], (
+            f"{row['id']} narrates this socket's pre-M4.12 auth without crediting decision 179, "
+            "which is what put the refusal in the route body by hand and is the whole reason the "
+            "1008 assertions are a regression guard rather than this milestone's evidence"
+        )
+
+
+# --- M4.12 review cycle 2 (M412-GATE-8): the instrument reads what it grades --------------------
+#
+# The guards at the top of this file ask whether an exit check CAN report a failure. This one asks
+# a narrower question of one check, and it is the same question one layer in: check 8 of
+# `ops/m412_exit_criterion.py` grades the clause "a pool of two or three candidates reaches the
+# ballot rather than waiting silently", and the only thing that can move such a room is the round
+# read -- `boundary` returns None at or below the shortlist size, so there is no pair to answer,
+# and the escape is refused below pair six (decision 215). The check issued one more GET of the
+# session AFTER its loop of seat reads, and every read of the session, the ballot and the result
+# calls `play.settle`: so the trailing GET moved the room itself, the verdict came back 'ballot'
+# whichever way the round read behaved, and the detail line the check prints -- "'voting' is the
+# silent wait this milestone closed" -- named the one thing it could not see.
+#
+# Held as source rather than by running the script, for the reason §12 rows are: its runtime is a
+# live stack and the shipped 696-title bundle. What is being held is an ORDER, and an order is
+# visible in the source.
+
+
+_SMALL_POOL_CHECK = "check_eight"
+_SETTLING_ROUTE = "/api/tonight/sessions"
+
+
+def _settling_reads_after_the_seat_loop(source: str, label: str) -> list[str]:
+    """Every settling route check 8 reads after the seat reads whose effect it is grading.
+
+    `/api/tonight/sessions` covers all three of them -- the session, its `/ballot` and its
+    `/result` -- because `api/tonight.py` settles on each one; the round read the loop makes is
+    `/api/tonight/seats/{id}/round` and is deliberately not a prefix of it.
+
+    The loop is found by what it ITERATES rather than by position or by what it contains: check 8
+    runs its whole sequence twice, once per pool size, so the enclosing `for size in (3, 2)` holds
+    the seat read too, and a reader keyed on that read would find two loops and be unable to say
+    which one a trailing GET followed. Keyed on `e.seats(...)`, a statement inserted above the
+    loop cannot quietly move the line this measures from either.
+    """
+    tree = ast.parse(source)
+    checks = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == _SMALL_POOL_CHECK
+    ]
+    assert len(checks) == 1, f"{label}: {_SMALL_POOL_CHECK} is check 8 and there is exactly one"
+    loops = [
+        node for node in ast.walk(checks[0])
+        if isinstance(node, ast.For) and "e.seats(" in ast.unparse(node.iter)
+    ]
+    assert len(loops) == 1, f"{label}: check 8 reads its seats in exactly one loop"
+    ends_at = loops[0].end_lineno
+    return [
+        f"{label}:{node.lineno}: {node.value!r} is read after the seat loop ends at line {ends_at}"
+        for node in ast.walk(checks[0])
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and _SETTLING_ROUTE in node.value and node.lineno > ends_at
+    ]
+
+
+def test_the_small_pool_check_grades_the_state_the_seat_reads_left():
+    """Check 8's verdict is what the seat reads left behind, or it is not a measurement.
+
+    `tonight.svelte.js`'s `refresh()` GETs the session and only then calls `loadRound`, so a
+    session read after the last round read is an order no client produces -- and it is the order
+    that made the check green over the defect the clause is about. The session read stays in the
+    sequence, before each seat's round read, because that is where the phone puts it and because
+    on a pool this size it settles nothing when it runs. [M412-GATE-8; decision 215]
+    """
+    script = REPO / "ops" / "m412_exit_criterion.py"
+    offenders = _settling_reads_after_the_seat_loop(script.read_text(encoding="utf-8"), script.name)
+    assert not offenders, (
+        "check 8 reads a settling route after the seat reads it grades, so it reports 'ballot' "
+        "whether or not the round read moved the room:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_settling_read_guard_catches_a_trailing_session_get():
+    """The arrangement that shipped, and the one that replaced it."""
+    body = [
+        "async def check_eight(e):",
+        "    for size in (3, 2):",
+        "        for seat in await e.seats(session_id):",
+        "            await e.card(e.client_for(seat['user_id']), seat['id'])",
+    ]
+    trailing = "\n".join([*body, "    await e.host.get(f'/api/tonight/sessions/{session_id}')"])
+    caught = _settling_reads_after_the_seat_loop(trailing + "\n", "probe.py")
+    assert len(caught) == 1 and caught[0].startswith("probe.py:5: "), caught
+
+    leading = "\n".join(
+        [
+            *body[:3],
+            "            await e.host.get(f'/api/tonight/sessions/{session_id}')",
+            body[3],
+        ]
+    )
+    assert _settling_reads_after_the_seat_loop(leading + "\n", "probe.py") == []

@@ -484,3 +484,134 @@ async def test_an_approval_share_outside_zero_to_one_is_refused(db):
             "VALUES ($1, $2, 1.5, 2)",
             await _session(db, user), title,
         )
+
+
+# --- 0021 / decision 220: the reserved slot, labelled ---------------------------------------
+
+# 54d's axis, hand-seeded. Decision 173 ships no `dna_axis_weight` rows, so `contested` is None on
+# every real night and no row is ever written with `reserved = true` on release data — which is
+# exactly why the column is exercised here against a real server rather than left to the day the
+# corpus work (proposal 140) lands. [M4.12 finding 24]
+_PACE = {"pace": {"slow": -1.0, "fast": 1.0}}
+
+
+async def _slate_session(db, *, titles, scores, tilts):
+    """A started two-member room whose frozen pool carries `_PACE`, ready for `play.finish`.
+
+    The pool is written straight into `session.context` rather than built by `play.start`: the
+    claim under test is what the combine's slate does to `session_result`, and a real pool would
+    need `user_score` rows, a fold-in and a bundle the axes are attached to for no extra coverage.
+    """
+    host = await _user(db, name="patrick")
+    other = await _user(db, name="jenny")
+    sid = await _session(db, host)
+    for title_id in titles:
+        await _title(db, title_id)
+    seats = [
+        await _seat(db, sid, user_id=host, role="host", seat=1),
+        await _seat(db, sid, user_id=other, role="member", seat=2),
+    ]
+    for pid, tilt in zip(seats, tilts, strict=True):
+        await db.execute("UPDATE session_participant SET tilt = $2 WHERE id = $1", pid, tilt)
+    await db.execute(
+        "UPDATE session SET state = 'voting', context = $2 WHERE id = $1",
+        sid,
+        {"pool": {
+            "candidates": {str(t): {"name": f"t{t}"} for t in titles},
+            # Per seat, because D is Ledger divergence over these very numbers: a pool that scores
+            # both members identically has D = 0 and surfaces nothing to reserve a slot for.
+            "scores": {
+                str(t): {str(p): v for p, v in zip(seats, scores[t], strict=True)}
+                for t in titles
+            },
+            "dna": {str(t): v for t, v in titles.items()},
+            "axes": _PACE,
+            "version": "test-v1",
+        }},
+    )
+    return sid, seats
+
+
+async def test_a_slate_row_is_not_reserved_until_something_reserves_it(db):
+    """`reserved boolean NOT NULL DEFAULT false`: every row already stored is a slate that had no
+    reservation — it either surfaced no split or surfaced one before the label existed — so false
+    is the truth about those rows and not a placeholder. NULL is refused rather than read as
+    "unknown", because a card either is the other side of the split or is not. [decision 220]
+    """
+    user = await _user(db)
+    sid = await _session(db, user)
+    title = await _title(db, 1)
+    await db.execute(
+        "INSERT INTO session_result (session_id, title_id, rank, slot, group_score) "
+        "VALUES ($1, $2, 1, 'finalist', 0.5)",
+        sid, title,
+    )
+    assert await db.fetchval(
+        "SELECT reserved FROM session_result WHERE session_id = $1", sid
+    ) is False, "a slate written without a reservation carries none"
+    with pytest.raises(asyncpg.NotNullViolationError):
+        await db.execute("UPDATE session_result SET reserved = NULL WHERE session_id = $1", sid)
+    # Orthogonal to the slot, which is the whole argument for a boolean over a fourth `slot`
+    # value: the reserved title is still a finalist, and every `slot IN ('finalist','wildcard')`
+    # filter keeps counting it.
+    await db.execute(
+        "UPDATE session_result SET reserved = true WHERE session_id = $1", sid
+    )
+    assert await db.fetchval(
+        "SELECT count(*) FROM session_result WHERE session_id = $1 AND slot = 'finalist'", sid
+    ) == 1
+
+
+async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
+    """54d: the third slot is reserved for the opposite-pole title "**labelled as such**", and
+    nothing labelled it — `combine` gave it `SLOT_FINALIST` like the other two and no string
+    `reserved` or `opposite` existed anywhere between the rule and the screen. So the household
+    was told "here's one of each" over three cards and could not see which was the counterweight.
+    [M4.12 finding 24; decision 220; migration 0021]
+
+    Through `play.finish` and `result.slate` rather than against the pure slate, because the claim
+    spans three layers that each used to drop the field: the rule computes it, the INSERT carries
+    it, and the reveal reads it back. Four titles lean slow and one leans fast, with the divergent
+    Ledger on the leader, so the reservation has to reach past the group's top three — which is
+    also what makes the stored ranks visible as slate order rather than score order.
+    """
+    from spielplan.tonight import play
+    from spielplan.tonight import result as result_rules
+    from spielplan.tonight import round as round_rules
+
+    titles = {1: {"slow": 1.0}, 2: {"slow": 1.0}, 3: {"slow": 1.0}, 4: {"slow": 1.0},
+              5: {"fast": 1.0}}
+    sid, seats = await _slate_session(
+        db, titles=titles,
+        # Group scores 0.95 / 0.90 / 0.85 / 0.80 / 0.30, with the two members 0.60 apart on the
+        # leader: mean - min is 0.30, over §6.2 step 5's D >= 0.20.
+        scores={1: (1.25, 0.65), 2: (0.90, 0.90), 3: (0.85, 0.85), 4: (0.80, 0.80),
+                5: (0.30, 0.30)},
+        tilts=({"slow": 1.0}, {"fast": 1.0}),
+    )
+    slate = await play.finish(db, sid, z=round_rules.BOUNDARY_Z)
+
+    assert slate.contested == "pace", "the fixture only says anything while the split surfaces"
+    assert slate.reserved is not None and slate.reserved in slate.finalists
+    rows = await db.fetch(
+        "SELECT title_id, rank, slot, reserved FROM session_result "
+        " WHERE session_id = $1 ORDER BY rank",
+        sid,
+    )
+    assert [r["title_id"] for r in rows if r["reserved"]] == [slate.reserved], (
+        "exactly the counterweight, and exactly one of them"
+    )
+    assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1))
+    assert [r["title_id"] for r in rows[:3]] == slate.finalists, (
+        "the stored ranks read in slate order, so ORDER BY rank lists the finalists first"
+    )
+    assert rows[3]["slot"] == "wildcard"
+
+    reveal = await result_rules.slate(
+        db, sid, [], {"chosen_title_id": slate.finalists[0], "approval_share": 0.5,
+                      "participants": 2},
+    )
+    assert [c["title_id"] for c in reveal["finalists"] if c["reserved"]] == [slate.reserved], (
+        "the reveal can say which card is the other side of the split"
+    )
+    assert reveal["wildcard"]["reserved"] is False
