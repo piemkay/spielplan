@@ -139,10 +139,23 @@ function fail(err) {
  */
 let requestSeq = 0;
 
+/**
+ * The vocabulary read needs the same guard for the same reason, and a counter of its own rather
+ * than a share of `requestSeq`: a filter change fires `load()` alone, and a shared number would
+ * let that bump discard a facets response that is still the newest one — leaving both selects
+ * empty until the next kind tap. Home keeps `requestSeq` and `homeSeq` apart for the same
+ * reason. The failure this catches is two kind taps inside one round trip: the function blanks
+ * the vocabulary and then assigns whatever comes back, so the film genres end up above a series
+ * board, offering a filter that returns nothing. [finding 21]
+ */
+let facetSeq = 0;
+
 export async function loadFacets(kind = rank.kind) {
+  const mine = ++facetSeq;
   facets.genres = [];
   facets.decades = [];
   const found = await get(`/facets${qs({ kind: [kind] })}`).catch(() => null);
+  if (mine !== facetSeq) return;          // a newer request has already answered
   if (found) {
     facets.genres = found.genres ?? [];
     facets.decades = found.decades ?? [];

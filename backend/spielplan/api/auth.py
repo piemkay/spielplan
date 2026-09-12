@@ -80,8 +80,15 @@ class PreferencesRequest(BaseModel):
 
 
 # §6: the surface names are normative — Home / Rate / Tonight / Rank / Map / Taste — and each
-# one is visible from day one with the milestone that owns it, so the shape of the finished app
-# is legible rather than appearing later as a surprise.
+# one is visible from day one, so the shape of the finished app is legible rather than appearing
+# later as a surprise.
+#
+# `milestone` is §12's build order, and it is carried to the client here so that the DESTINATION
+# can render it: `Milestone.svelte`, mounted by `/map` and `/taste`, is the only reader. The nav
+# rail shows a label and an icon and always has — this comment claimed otherwise, and the client
+# meanwhile hard-coded "M6" a second time on each placeholder page, so §12's order was stated in
+# three places and kept true in one. The field is the single source; the two pages now read it.
+# [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
 SURFACES: tuple[dict[str, str], ...] = (
     {"key": "home", "href": "/", "label": "Home", "milestone": "M0"},
     {"key": "rate", "href": "/rate", "label": "Rate", "milestone": "M2"},

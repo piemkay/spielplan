@@ -200,6 +200,7 @@ Two things happen on the way that are easy to miss:
 > M4.11   17/17  covered
 > M4.12   18/18  covered
 > M4.13   17/17  covered
+> M4.15   11/11  covered
   M5    0/10  covered
   M6    0/12  covered
   M7    0/1   covered
@@ -218,14 +219,159 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.13 is the milestone this block was last re-pasted for, and its `17/17` closed the red list it
+**M4.15 is the milestone this block was last re-pasted for, and its `11/11` is the red list it
+opened with, closed.** Eleven rows were written before any source edit and `current_milestone` was
+raised in the same change, each naming the exact tests it owes rather than leaving `tests` off —
+M4.9's and M4.13's opening rather than M4.10's and M4.11's, because a row with no tests tells you
+only that a row is bare, while a row naming a test that does not exist yet tells you which stage
+owes what. That mattered more here than in either of them: the names spread over
+**49 ids across three pytest files and five e2e specs**, and half of these rules can be asserted at the
+source or nowhere — `env()` resolves to 0 in every engine this suite runs unless one is asked to
+report an inset, and a coarse pointer is not something a headless desktop has — so a bare list would
+have hidden which layer each rule is held at. Three of the first twenty-five already existed and were repaired rather than written:
+`06-responsive`'s touch sweep and `13-rank`'s board sweep, which stop asserting 44 under titles that
+say 48, and the mono/display guard the M0 palette row also cites, widened to hold `.why` as well as
+`.data`. A fourth existed and is not touched at all — `01-first-boot`'s opening test, which the
+browser gate registered onto the 401 row (decision 282) after proving that row's first sentence
+false on a first boot: the assertion that caught the defect, at the layer that caught it, and the
+fifth e2e spec in the count above. The milestone wrote the other twenty-one, plus the accent guard
+it adds to that M0 row, and those **twenty-two names were the test plan**
+(`docs/milestones/M4.15-plan.md`). The figure moved while they were being written, so the series is
+published in full here rather than left as a total a reader has to take on trust (decision 184):
+**21 ids** written against the plan's own rows, **3 ids** registered by the stages that wrote them
+onto rows that already stood, **1 id** the browser gate added, **10 ids** the first adversarial
+review cycle registered, **8 ids** the second and **6 ids** the third. That decomposition stood at "six more" for the
+first cycle until review cycle 2 added it up — a figure published as measured that the map had
+overtaken, which is the id total's own defect one granularity down, and
+`test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` now sums the parts against
+the map rather than leaving the arithmetic to the reader. Cycle 1's ten are also what bring the
+SECOND AND THIRD pytest files into the count, and each of them is a rule that was already shipped
+and held by nothing: four controls sitting under `--touch` on an axis or a pointer no sweep in this
+suite reaches; the title panel's heading standing under its own close control; the phone project's
+`testMatch` deciding which specs reach an iPhone 13 with no gate evaluating it (decision 267, and
+the one id in `test_harness_contracts.py`); `svelte.config.js`'s poll interval and the shell's
+`beforeNavigate` (finding 23), which no engine here can exercise at all; the logout row's own
+sentence, which claimed unconditionally what decision 272's amendment makes true on one branch of
+two; the innocent half of the why-register guard's own reach, since a widening measured only on a
+clean tree publishes the half of the trade that pays and not the half that costs; the tinted
+composite the contrast guard had been measuring past; the licensed focus ring, read by value rather
+than by selector; the status-bar inset injected over CDP; and the owed device checks themselves,
+which nothing in the tree read at all (the one id in `test_spec_coverage.py`). The second cycle's
+seven are argued in the rows' own comments. What the ledger guards below publish is a count of rows
+that NAME tests, not of rows whose tests pass, so the `11/11` above is
+not by itself the claim that eleven rules hold: the browser gate is the other half of it, and the
+six facts below are the part of it that no run in this repository can settle. **No waiver was
+added and the milestone was not lowered.**
+
+**The milestone is the box every surface sits inside, and it takes no §12 row: like M4.5, M4.8 and
+M4.13 it ships no new surface.** §6's preamble - "responsive PWA, phone-first (48 px targets,
+one-handed, swipe), desktop as progressive enhancement, installable, service-worker shell cache" — is
+normative, is the only sentence in the document that describes that box, and has never had an owner.
+§12 schedules screens; every surface milestone built its own correctly and left the chrome alone; and
+until these eleven rows this map named `06-responsive.spec.js` in no row at all. Its three
+`02-shell.spec.js` ids were held by M0's session-cookie contract and M4.9's model rail, neither of
+them the preamble, so nobody owed the box a test [review cycle 3: M415-C3-COV-01]. What the box
+turned out to contain is the
+milestone: an installed app whose header renders under the status bar and whose bottom tab bar
+renders under Safari's toolbar, because `app.html` asks for `viewport-fit=cover` and a translucent
+status bar while the only `env(safe-area-inset-*)` in the tree is the nav rail's bottom padding and
+the shell is `100vh`, which on iOS Safari is the LARGE viewport; form controls at 10-13 px on every
+screen a member touches, which that browser zooms on focus and does not zoom back; a `--touch` token
+that says 48 px against a stack of 33 px links to /account and a full-bleed overlay whose only exit
+is 32 px wide; menus and panels with no outside tap and no Escape at all (proposal 131); quiet
+reasons set in the data face §6.8 reserves for model numbers and IDs, at an ink token measuring
+2.82:1; one accent spent on six meanings across fifteen files; and the one module that knows the
+wire holding no deadline, no 401 branch and no case for a pydantic 422. One item on that list did
+not survive being measured, and it is corrected here rather than left standing: the plan read three
+declared font weights whose `src` is the 400 file and concluded nothing in the app had ever
+rendered bold, but both families ship a VARIABLE woff2 — `fvar` gives Space Grotesk a wght axis of
+300..700 and JetBrains Mono one of 400..800, and the css2 endpoint returns a single URL for all of
+them; the run that regenerated the four committed files matched every one, by sha256, against what
+Google serves today, and no binary in the repository changed. So the 500 and 700 faces are real
+instances and always were. Deleting them would have handed bold to the browser's synthesiser and
+committing six files would have pushed the same bytes to the phone three times, so what shipped
+instead is `ops/fetch-fonts.py` — the generator `fonts.css:4` had named since M0 and which did not
+exist — and a guard that asserts the rule rather than the bytes: a face declared against a file that
+does not carry that weight in its name is honest only where the file carries a wght axis. Decisions
+**267-286** record the calls it needed, four of them refusals, and it writes **no migration** — 0022
+is the highest applied, 0023 is M4.14's and 0024 is M4.16's. Two rows the map already had are
+amended in place rather than duplicated: M0's palette row, which forbade "no facet colour or user
+identity colour reuses the ember accent" while its own named guard whitelists `facet-mood` in as
+many words and reads `design.css` alone (decision 276), and M3's
+`tonight-rank-tap-to-tier-and-cancel`, whose text does not change at all while the test it names
+stops asserting 44 under a title that says 48.
+
+**Four of its facts cannot be produced by any run in this suite, and they are recorded as owed
+rather than signed (decision 281).** A green Playwright run is not evidence for them and never was:
+`06-responsive.spec.js` has been green through every milestone in which the first two were false,
+because the engine it drives has no status bar, no dynamic toolbar and no focus zoom. The fourth
+joined them at the second browser gate, on measurement rather than by argument: Playwright's WebKit
+answers `page.reload` with "WebKit encountered an internal error" while the context is offline,
+nine milliseconds in and before the worker holding the cached shell is asked, so the phone project
+skips that test and says so rather than asserting an offline boot no engine here can perform
+(decision 284). So they are written here as an outstanding check, in the shape decision 184
+requires of any measurement — the run that produced it, or nothing:
+
+- **the header clears the status bar** in installed standalone mode (Add to Home Screen, not a
+  Safari tab), at the top of every surface and with the phone rotated. Review cycle 1 took half of
+  this out of the dark and review cycle 2 finished the half it had only claimed:
+  `06-responsive.spec.js` injects a 47 px top inset into Chromium
+  (`Emulation.setSafeAreaInsetsOverride`) and measures the header at the desktop project's 1400 px
+  AND again with that same page resized to 390, where `@media (max-width: 720px)` is live and the
+  phone override's own `min-height` is what decides the box — so the ARITHMETIC of both rules is in
+  CI. Until that resize the test ran at 1400 px only, where the phone block is inert, and this line
+  claimed a composition nothing was performing. The DEVICE fact is not in CI, and is what this line
+  owes —
+  desktop Chromium with a number injected has no standalone web view, no real inset and no
+  rotation, and the `phone` project's WebKit has no CDP to inject one with;
+- **the tab bar stays above Safari's toolbar at every scroll position**, in a tab and installed,
+  including mid-scroll while the toolbar is collapsing;
+- **no form control zooms the page on focus**, on the device rather than in an emulated viewport —
+  /login's field first, because it is the first thing a new member touches;
+- **the installed app opens with the appliance unreachable** — aeroplane mode, then launch from the
+  home screen: the shell cache serves the document, the unreachable card says so, the session
+  survives, and the shell comes back by itself within a few seconds of the network returning
+  (decision 283's retry), with no reload gesture used.
+
+Two more join them at the first review cycle, and they are owed for a sharper reason than the four
+above: the copy already asserts them. `Onboarding.svelte`'s iOS branch tells a member in as many
+words that the home-screen icon keeps its own sign-in, and offers a passkey as the thing that
+shortens the second sign-in that follows — which only means anything if a passkey registered in the
+Safari tab answers inside the installed app. The plan's finding 22 said to verify both on a device
+before the copy asserts them, and the milestone built decision 281's mechanism for exactly this
+shape of claim and then did not use it for either:
+
+- **the home-screen icon opens on /login**, so the installed app really does hold its own session
+  rather than inheriting the tab's — Add to Home Screen while signed in, then launch the icon;
+- **a passkey registered in the Safari tab signs in inside the home-screen app** — register from
+  `/account?welcome=1` in the tab, then sign in from the icon with no password typed. If it does
+  not, the sentence offering the passkey "before you go" comes out rather than being hedged.
+
+`verified on iPhone ________, iOS ________, by ________, on ________` — **unfilled.** Nothing in
+this repository can fill it; the owner does, after the browser gate, and until then this milestone
+closes with a visible debt rather than a quiet one.
+
+**One of its ten exit measures is not reachable on this branch at all, and that is stated rather
+than engineered around (decision 273).** `npm --prefix frontend run check` stood at 28 errors and 1
+warning on a clean tree while the only static signal the frontend has was buried among them, and
+this milestone adds the step that runs it in CI. Twenty-seven of those errors are this lane's and
+all twenty-seven are gone: the branch closes at **1 error and 1 warning across 275 files**, the
+error being `src/routes/admin/data/+page.svelte:14`, which M4.14 owns in the sibling worktree this
+wave and which this lane did not open, and the warning `PosterCard.svelte`'s `line-clamp`, which
+the criterion does not count. So the frontend CI job is RED here until the two branches merge, and
+the check is neither narrowed nor suppressed to make the number look right: clause 10 of the exit
+criterion is met on the merge and not before. M4.14 is being built in parallel on its own stack and
+inserts itself into `MILESTONES` between M4.13 and M4.15 when the branches meet; the one-line
+conflict here and in that list is expected.
+
+**M4.13 shipped before it, and its `17/17` closed the red list it
 opened with.** Fifteen new rows were written before any source edit and `current_milestone` was
 raised in the same change, each naming the exact tests it owes rather than leaving `tests` off —
 M4.9's opening rather than M4.10's and M4.11's, because a row with no tests tells you only that a
 row is bare, while a row naming a test that does not exist yet tells you which stage owes what. That
 list, 77 names across seven files, *was* the test plan (`docs/milestones/M4.13-plan.md`), and it was
 closed by writing those tests under those names: all seventeen rows now name tests that exist —
-**98 ids across seventeen pytest files and zero e2e specs**, the last six added by review cycle 2 —
+**98 ids in seventeen pytest files and no e2e spec**, the last six added by review cycle 2 —
 five to three rows whose sentences claimed more than their tests held, and one to §10's refusal
 row, whose sentence named a silence the worker does not leave — and the two ledger guards below were red
 for exactly as long as the block above was M4.11's, which is the honest state of an opening rather

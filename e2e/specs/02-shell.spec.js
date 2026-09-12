@@ -18,13 +18,46 @@ test('the nav carries the six spec surface names', async ({ page }) => {
   await expect(nav.getByRole('link')).toHaveCount(6);
 });
 
-test('every nav destination resolves — no dead links', async ({ page }) => {
+/**
+ * What each surface puts on the screen that no other surface does.
+ *
+ * The identity, not the status code. `app.py:134-147` raises 404 only for paths beginning
+ * `api/` and answers index.html for everything else, so the assertion this replaces - navigate,
+ * then `status < 400` - was true of a renamed href, of a typo and of a path that never existed;
+ * `07-boundaries.spec.js:28-30` already documents that fallback, which is what made the check
+ * vacuous rather than merely weak. Its companion "main is not empty" was satisfied by
+ * SvelteKit's own error page and by either placeholder, so neither half could fail.
+ *
+ * §12's unbuilt surfaces are identified by the placeholder's heading rather than by a testid:
+ * `Milestone.svelte` renders the surface name as its `h1`, and the nav carries a LINK of the
+ * same name, so the role filter is what separates the destination from the way in.
+ * [tq4-nav-dead-link-check-against-a-200-for-everything]
+ */
+const MARKER = {
+  '/': (page) => page.getByTestId('home-mode'),
+  '/rate': (page) => page.getByTestId('rate-surface'),
+  '/tonight': (page) => page.getByTestId('tonight-surface'),
+  '/rank': (page) => page.getByTestId('rank-surface'),
+  '/map': (page) => page.getByRole('heading', { level: 1, name: 'Map', exact: true }),
+  '/taste': (page) => page.getByRole('heading', { level: 1, name: 'Taste', exact: true })
+};
+
+test('every nav destination resolves to its own surface', async ({ page }) => {
   const nav = page.getByRole('navigation', { name: 'Surfaces' });
   const hrefs = await nav.getByRole('link').evaluateAll((els) => els.map((e) => e.getAttribute('href')));
+
+  // The table is half the assertion. A surface renamed in `api/auth.py`'s SURFACES and nowhere
+  // else would otherwise look up `undefined` here and fail on a TypeError naming neither side
+  // of the disagreement.
+  expect(
+    [...hrefs].sort(),
+    'the nav carries an href this table does not know how to identify'
+  ).toEqual(Object.keys(MARKER).sort());
+
   for (const href of hrefs) {
-    const response = await page.goto(href);
-    expect(response?.status(), `${href} must not 404`).toBeLessThan(400);
-    await expect(page.locator('main')).not.toBeEmpty();
+    await page.goto(href);
+    expect(new URL(page.url()).pathname, `${href} did not stay on its own path`).toBe(href);
+    await expect(MARKER[href](page), `${href} answered, but it is not that surface`).toBeVisible();
   }
 });
 
@@ -89,19 +122,69 @@ test('logging out clears the session and returns to the sign-in page', async ({ 
   expect(me.status()).toBe(401);
 });
 
-test('a logout the server never answers still ends it on this device', async ({ page }) => {
-  // feroutes-logout. §3.2 makes logout "clears the session cookie only", and on the LAN or
-  // Tailscale origin §2 puts this app on, a request that never lands is the ordinary failure
-  // rather than the exotic one. Unguarded, it rejected out of the click handler and left the
-  // menu open showing the name of a person whose session the server may already have destroyed;
-  // the local half — forget the user, drop Rank's pending lift, go to /login — must happen
-  // either way, which is what the try/catch in the shell is for and what this aborts to prove.
-  await page.route('**/api/auth/logout', (route) => route.abort());
-  const menu = await openAccountMenu(page);
-  await menu.getByRole('button', { name: 'Log out' }).click();
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  await page.unroute('**/api/auth/logout');
+/**
+ * NO SERVICE WORKER FOR THE ONE TEST WHOSE SUBJECT IS A REQUEST THAT DOES NOT LAND.
+ *
+ * `page.route` does not see a request a service worker mediates, and this file registers no
+ * worker option of its own — so on the `phone` project (iPhone 13, WebKit) the abort below never
+ * happened: the POST landed, the session really ended, and the assertion could not fail. It was
+ * then asserting what the test above it already asserts, on the form factor §6's preamble makes
+ * primary, for a row M0 shipped. Decision 284 measured that and deferred the repair on the ground
+ * that 02-shell was a file the gate had not opened; it is open in this milestone's diff, so the
+ * ground is gone and the three lines are free.
+ *
+ * A describe rather than a file-scope `test.use`: `the model rail opens from every surface` and
+ * `reopening the rail refills it from the live log, once` are cache-adjacent and were written
+ * against a live worker, and 19-phone-shell blocks at file scope only because every one of its
+ * tests wants that. [decision 284]
+ */
+test.describe(() => {
+  test.use({ serviceWorkers: 'block' });
+
+  test('a logout the server never answers still ends it on this device', async ({ page }) => {
+    // feroutes-logout. §3.2 makes logout "clears the session cookie only", and on the LAN or
+    // Tailscale origin §2 puts this app on, a request that never lands is the ordinary failure
+    // rather than the exotic one. Unguarded, it rejected out of the click handler and left the
+    // menu open showing the name of a person whose session the server may already have destroyed;
+    // the local half — forget the user, drop Rank's pending lift, go to /login — must happen
+    // either way, which is what the try/catch in the shell is for and what this aborts to prove.
+    await page.route('**/api/auth/logout', (route) => route.abort());
+    const menu = await openAccountMenu(page);
+    await menu.getByRole('button', { name: 'Log out' }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    // The session the POST never ended is still alive on the appliance, which is why decision 272
+    // was amended to leave the document only on a sign-out the server CONFIRMED: what this device
+    // can still do is forget the person, and that is the whole of what is asserted here.
+    expect((await page.request.get('/api/auth/me')).status()).toBe(200);
+    await page.unroute('**/api/auth/logout');
+  });
+});
+
+test("an unknown address renders the app's own error card, not the framework's page", async ({
+  page
+}) => {
+  // The only test at any layer that RENDERS `+error.svelte`. The static guard beside it reads the
+  // file - that it exists, that it imports design.css, that it prints `$page.error` and offers two
+  // doors - and a file that is never mounted can satisfy all four while rendering nothing.
+  //
+  // How this address gets here: `app.py`'s SPA fallback answers index.html for every GET that is
+  // not under `api/`, so a mistyped or retired address reaches the client router, which matches no
+  // route; and because `+layout.js` sets `ssr = false` the first navigation is unhydrated, so
+  // SvelteKit renders the ROOT error page rather than reloading the address it is already on. What
+  // a household got before M4.15 was the framework's light-themed page on white, outside the
+  // design system and with no way back into the dark shell - a dead end in an installed standalone
+  // view, which has no address bar. §3.1 asks for an explicit state instead of an error.
+  // [M4.15 finding 19, fe-15; review cycle 2: M415-C2-COMP-04]
+  await page.goto('/not-a-surface');
+  const card = page.getByTestId('app-error');
+  await expect(card).toBeVisible();
+  await expect(card, 'the card does not say what happened').toContainText('ERROR 404');
+  await expect(
+    card.getByRole('link', { name: 'Home' }),
+    'the error page offers no way back into the shell'
+  ).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Reload' })).toBeVisible();
 });
 
 test('a deep link while signed out lands on sign-in, not a broken shell', async ({

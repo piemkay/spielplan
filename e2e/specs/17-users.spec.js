@@ -239,8 +239,16 @@ test.describe('users, roles and the account surface', () => {
     // also still reachable, which it was not: the shell used to bounce an admin to Home the
     // instant the admin row existed, making its last two steps unreachable in the built app.
     await admin.goto('/setup');
-    const steps = admin.getByRole('progressbar').getByRole('button');
+    // The steps are reached by their test id, and the progress ROLE is asserted to hold none of
+    // them. ARIA makes a progressbar's children presentational, so while the container carried
+    // both, the only controls that reach a step were announced as decoration on the first screen
+    // a household ever meets — and §3.1's sequence is walkable, which is the claim those controls
+    // exist to make. Decision 280 moved the role onto a childless sibling; this reads the same
+    // structure from the other side. [§3.1; M4.15 finding 6, decision 280]
+    const steps = admin.getByTestId('setup-step');
     await expect(steps).toHaveCount(3);
+    await expect(admin.getByRole('progressbar')).toHaveCount(1);
+    await expect(admin.getByRole('progressbar').getByRole('button')).toHaveCount(0);
     // A revisiting admin lands on step two, because `onMount` skips the step whose work is done.
     await expect(admin.getByRole('heading', { name: 'Connectors' })).toBeVisible();
 

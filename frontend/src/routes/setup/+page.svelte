@@ -72,10 +72,18 @@
 
 <div class="page">
   <div class="wrap">
-    <div class="progress" role="progressbar" aria-valuenow={step + 1} aria-valuemax={STEPS.length}>
+    <!-- The steps are controls because §3.1's sequence is walkable: a step already done can be
+         gone back to, and `01-first-boot.spec.js` reaches every one of the three that way. The
+         container used to carry `role="progressbar"`, and ARIA makes a progressbar's children
+         presentational — so the only controls that reach a step were announced as decoration, on
+         the first screen a household ever meets. The role moves to a childless sibling, where it
+         states the position (and the minimum it never had) without swallowing them.
+         [§3.1; M4.15 finding 6, decision 280] -->
+    <div class="progress">
       {#each STEPS as s, i (s.key)}
         <button
           type="button"
+          data-testid="setup-step"
           class:on={i <= step}
           class:done={done.has(s.key)}
           aria-label={`${s.title}${done.has(s.key) ? ' — done' : ''}`}
@@ -84,6 +92,14 @@
         ></button>
       {/each}
     </div>
+    <span
+      class="progress-value"
+      role="progressbar"
+      aria-label="Setup progress"
+      aria-valuenow={step + 1}
+      aria-valuemin="1"
+      aria-valuemax={STEPS.length}
+    ></span>
     <div class="ribbon data">{session.setup?.note ?? 'first boot · a bundle-less app is a legal state'}</div>
 
     <h1>{STEPS[step].title}</h1>
@@ -151,8 +167,14 @@
 
 <style>
   .page {
+    /* `min-height: 100vh` stays: this page scrolls and carries no fixed bottom bar, so iOS
+       Safari's large viewport costs it nothing. The top padding does move — `app.html` sets
+       `viewport-fit=cover` and a translucent status bar, so the installed app draws from the
+       physical top edge and a flat 40px starts the wizard under the clock. `max()` rather than
+       an addition, so the page keeps exactly the padding it had everywhere `env()` is 0, which
+       is every browser this suite runs. [§6 preamble; M4.15 finding 1] */
     min-height: 100vh;
-    padding: 40px 24px;
+    padding: max(40px, env(safe-area-inset-top)) 24px 24px;
     display: flex;
     justify-content: center;
   }
@@ -166,22 +188,56 @@
     display: flex;
     gap: 6px;
   }
+  /* Three 48px grey blocks above the heading, on the first screen a household ever meets. This
+     is a 3px bar drawn as buttons, and `design.css`'s coarse block raises every `button` to
+     `min-height: var(--touch)` — which a scoped rule declaring only `height` cannot outrank,
+     because specificity decides a property a rule never states. §6's preamble writes that floor
+     for the same phone this wizard's first screen is read on, so the coarse rule is right and
+     it is this hairline that is the exception to it. The narrow fix is here, in the one
+     component that is a bar drawn as buttons; decision 280 refuses the wide one, because a blanket
+     `button { min-height: auto }` in design.css would spare this hairline by giving up the floor
+     for everything else. [§6 preamble; M4.15 finding 6, decision 280] */
   .progress button {
     flex: 1;
     height: 3px;
+    min-height: 3px;
     padding: 0;
     border: none;
     border-radius: 2px;
-    background: var(--line-2);
+    background: var(--progress-track);
     cursor: pointer;
   }
   /* A step already recorded server-side reads as done even after a reload — that is the
-     whole point of `setup_step`, and the wizard was computing it and dropping it. */
+     whole point of `setup_step`, and the wizard was computing it and dropping it.
+     In the progress ramp, not a hex: `design.css` mints --progress-track / -fill / -now for
+     exactly three consumers and names "the first-boot wizard's steps" as one of them, and the
+     rule beside it says a facet colour may not be borrowed, "because a facet colour is an
+     identity that means one vocabulary term on every surface it appears". The literal here was
+     `--facet-characters`, so a household that has seen the Map or a DNA chip had been taught
+     that this green means one vocabulary term before it ever meant "step done". `--progress-fill`
+     is the ramp's part-behind-you, and in §3.1's walkable sequence a step the server has recorded
+     IS behind you whether or not the cursor has passed it — which is the distinction this rule
+     and the one below exist to draw, and the ramp's brightness carries it.
+     [§6.8; decision 276; M4.15 review cycle 1] */
   .progress button.done {
-    background: #5fae7a;
+    background: var(--progress-fill);
   }
+  /* Where you are in the sequence, in the progress ramp rather than the accent: §6.8 spends the
+     ember on selection and primary actions, and on this screen the primary action is the button
+     that creates the admin. [§6.8; decision 276] */
   .progress button.on:not(.done) {
-    background: var(--ember);
+    background: var(--progress-now);
+  }
+  /* Announced, never drawn: the bar a household sees IS the row above, and this carries the
+     role so that row does not have to. `clip-path` rather than `display: none`, which would take
+     it out of the accessibility tree as well and leave the wizard with no progress semantics at
+     all. [decision 280] */
+  .progress-value {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
   .ribbon {
     letter-spacing: 0.02em;

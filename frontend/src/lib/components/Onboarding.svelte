@@ -274,15 +274,40 @@
       </p>
     {:else if where === 'ios-safari'}
       <!-- §6 preamble: "iOS has no programmatic install prompt". There is no button to offer
-           here — this list is the entire mechanism, not a consolation prize for one. -->
+           here — this list is the entire mechanism, not a consolation prize for one.
+
+           The third step used to read "then come back here for notifications", which is the
+           one thing the member cannot do. The session is an HttpOnly SameSite=Lax cookie
+           (`api/auth.py`'s `set_cookie`) and the home-screen app has its own cookie jar, so
+           the icon opens on a 401, §3.2 makes that the server's answer, and the shell lands
+           the member on /login — a second sign-in nobody had mentioned, with the passkey that
+           would shorten it offered *after* the instruction to leave.
+
+           NO DIRECTION WORD. This component does not know where its host puts it: `/account`
+           renders the Passkeys card ABOVE `<Onboarding />` on the `?welcome=1` visit and below
+           it on every other, and that inversion is the repair finding 22 asked for — so "below"
+           was wrong on the one visit the whole change was made for, and a sentence that names
+           a direction is a sentence a host can falsify by moving a card. "On this page" is true
+           either way.
+
+           AND NEITHER OF THE TWO FACTS UNDER THIS COPY IS SIGNED. That the icon opens with its
+           own cookie jar follows from §3.2's HttpOnly SameSite=Lax cookie, and whether a passkey
+           registered in this tab answers inside the home-screen app does not follow from
+           anything — it is a device fact no engine in this suite can observe. Both are owed in
+           `docs/TESTING.md` as unsigned device checks (decision 281), which is the mechanism
+           this milestone built for exactly this shape of claim; until they are signed the copy
+           states the first and only points at the card for the second.
+           [fe-14-ios-install-journey-second-login-and-copy; M4.15 review cycle 1] -->
       <ol class="steps" data-testid="onboarding-ios-steps">
         <li>Tap the Share button in Safari's toolbar (the square with the arrow).</li>
         <li>Scroll down and choose <strong>Add to Home Screen</strong>.</li>
-        <li>Open Spielplan from the new icon, then come back here for notifications.</li>
+        <li>Open Spielplan from the new icon and sign in there once.</li>
       </ol>
       <p class="why">
         Safari gives a page no way to ask to be installed, so these three taps are the whole
-        mechanism on iOS — and on an iPhone notifications only work from that icon.
+        mechanism on iOS — and on an iPhone notifications only work from that icon. The icon
+        opens with its own cookies, so the home-screen app keeps its own sign-in and will ask
+        who you are one more time. Adding a passkey on this page is worth doing before you go.
       </p>
     {:else if where === 'ios-other'}
       <p class="why" data-testid="onboarding-ios-browser">
@@ -316,10 +341,25 @@
   <div class="step">
     <div class="label data">2 · notifications</div>
     {#if pushState === 'unsupported'}
-      <p class="why" data-testid="onboarding-push-state">
-        This browser has no Web Push support. Nothing is lost: every prompt notifications would
-        carry also waits for you inside the app.
-      </p>
+      <!-- "This browser has no Web Push support" is true in an iOS Safari tab and names the
+           wrong cause, which is the half of fe-14 that lives in step 2. §6's preamble states
+           the actual rule — "on iPhone, Web Push works only for a PWA added to the home screen
+           (iOS 16.4+)" — so the tab is not a browser that cannot do this; it is the wrong place
+           to ask from, and step 1 above is the way out. Branched on `ios-safari` alone:
+           `ios-other` already has its own sentence in step 1 (no iOS browser but Safari can
+           install), and on a desktop browser with no push the original line is the true one. -->
+      {#if where === 'ios-safari'}
+        <p class="why" data-testid="onboarding-push-state">
+          On an iPhone notifications come from the home-screen app rather than from a Safari
+          tab — add the icon in step 1 and turn them on there. Nothing is lost meanwhile: every
+          prompt notifications would carry also waits for you inside the app.
+        </p>
+      {:else}
+        <p class="why" data-testid="onboarding-push-state">
+          This browser has no Web Push support. Nothing is lost: every prompt notifications would
+          carry also waits for you inside the app.
+        </p>
+      {/if}
     {:else if pushState === 'on'}
       <p class="why" data-testid="onboarding-push-state">
         Notifications are on for this device. They are best-effort — anything they would have

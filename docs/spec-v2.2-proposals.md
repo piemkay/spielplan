@@ -4258,6 +4258,1029 @@ honesty the milestone owes a corpus author who reads the normative document rath
 
 ---
 
+## Decisions taken (owner, 2026-09-12, as M4.15 opened)
+
+Twenty, 267-286, and not at one sitting: fifteen as the milestone opened, under the owner's standing
+instruction to take each plan's recommended option and record it here rather than ask; four across
+the four rounds of the browser gate; and one at review cycle 1. All twenty stay under this one
+header because all twenty answer the same plan — the 2026-09-10 block's shape, which discloses its
+eleventh inside its opening sentence, rather than the separate `as M4.13 closed` block — and the
+count above is what that shape costs: it read "Fifteen" over a block review cycle 1 counted at
+twenty, so it is now held by a guard
+(`test_the_register_block_opens_with_the_number_of_decisions_it_holds`) rather than by the next
+person to notice. M4.15 is the shell milestone — the chrome every surface sits inside — and it
+gives §6's preamble its first owner: "responsive PWA, phone-first (48 px targets,
+one-handed, swipe), desktop as progressive enhancement, installable, service-worker shell cache" is
+normative, §12 scheduled it nowhere, and every surface milestone shipped its own screen correctly
+and left the box around it alone. Eleven of the opening fifteen close questions
+`docs/milestones/M4.15-plan.md` left open or asked against a tree that has since moved under it, and
+four record what the milestone refuses to do. None of them amends the normative document: the milestone ships no new surface and
+repairs no row §12 already has, so it takes no row in that table either — M4.5's and M4.8's shape
+rather than M4.6's and M4.7's — and its own justification is carried by `docs/TESTING.md`'s ledger
+block and by the plan. M4.14 is being built in parallel and holds 247-266, which is why this block
+starts at 267.
+
+### 267. The new phone spec is `19-phone-shell.spec.js`, not `17-shell-phone.spec.js`
+
+**What the spec says.** §6's preamble makes the phone the primary form factor, and
+`e2e/playwright.config.js:58-80` is where that sentence is executed: a `phone` project on
+`devices['iPhone 13']` whose `testMatch` is `/(shell|library|responsive|13-rank|14-tonight)\.spec\.js/`.
+CLAUDE.md adds the other half — "E2E specs are stateful, filename-ordered, one worker. Number new
+files into the sequence." The plan names a new file `e2e/specs/17-shell-phone.spec.js` and argues it
+runs on the phone project without a config edit.
+
+**Why it changes.** Both of those premises are now false, and each is fatal on its own. `17` is
+taken: `17-users.spec.js` shipped with M4.6 and `18-system.spec.js` with M4.7, so the plan's number
+would either collide or force a renumber, and a renumber reorders a suite whose state is carried
+from file to file by one worker. And the `testMatch` alternation is anchored by the `\.spec\.js`
+that immediately follows it, so a filename matches only when one of the five words is the last thing
+before the extension: `17-shell-phone.spec.js` contains `shell`, but what follows it is `-phone`, so
+the file would have run on `desktop` only — the milestone whose whole exit criterion is stated on
+the phone project would have shipped its principal spec where no phone ever ran it, and the gate
+would have been vacuous while green.
+
+**The decision.** `e2e/specs/19-phone-shell.spec.js`, and every coverage row names that path.
+`playwright.config.js` is not edited: the name ends in `shell.spec.js`, so the existing alternation
+matches it, and `19` sorts after `18-system` so the file lands last in the sequence rather than
+inside it. It runs on both projects, and the phone-only assertions guard with
+`test.skip(!isMobile, …)` the way `06-responsive.spec.js` already does.
+
+**Cost.** Every `tests = [...]` entry the plan writes as `e2e/specs/17-shell-phone.spec.js::…`
+becomes `e2e/specs/19-phone-shell.spec.js::…`; six of the eleven M4.15 rows name it. Nothing else
+moves — no existing spec is renumbered, and the config keeps the regex whose exactness is the reason
+this decision exists at all.
+
+### 268. The real 500/700 font weights if the lane can reach the network; otherwise the declarations go
+
+**What the spec says.** §6.8 gives the app two faces, Space Grotesk for display and body and
+JetBrains Mono for "every model number, ID and data annotation", and
+`frontend/static/fonts/fonts.css:1-4` states why they are self-hosted in the file's own words: "The
+app must render on a LAN or over Tailscale with no route to the internet; a blocking stylesheet from
+fonts.googleapis.com would make the shell wait on a host it may not be able to reach. … Regenerate
+with `ops/fetch-fonts.py`."
+
+**Why it changes.** Three declared weights — Space Grotesk 500, Space Grotesk 700 and JetBrains Mono
+500, six `@font-face` blocks across the latin and latin-ext subsets — set `src` to the **400** file,
+and the directory ships exactly four woff2 files, all of them 400. A declared face suppresses the
+browser's synthetic bold, so every `font-weight: 500` and `font-weight: 700` in the app — the
+wordmark, every heading, every primary button — renders at 400 and has since the fonts landed. The
+script `fonts.css:4` tells the next reader to regenerate with does not exist in `ops/`.
+
+**The decision.** Write `ops/fetch-fonts.py` and run it, so the four missing subsets land beside the
+four that are there. If this lane has no route to the internet, delete the three lying weights'
+blocks so the browser synthesises bold again, commit the script anyway, and say in the report that
+the owner runs it. Either branch satisfies the guard
+`test_every_declared_font_face_ships_its_own_file`, which asserts the rule rather than a file list:
+every `src: url(/fonts/…)` exists on disk with a filename weight equal to its rule's `font-weight`,
+and no face is declared for a weight the repository does not ship.
+
+**Cost.** `frontend/static/fonts/fonts.css` changes and up to four woff2 files are added;
+`ops/fetch-fonts.py` is new and falls under root `ruff check .` (the root `ruff.toml` widens to
+`ops/`). `06-responsive.spec.js`'s "fonts are self-hosted" test is green either way, because neither
+branch reaches for a remote stylesheet. The deletion branch is the weaker of the two only in
+appearance: synthetic bold is what the app has been rendering all along, so it changes nothing a
+household sees and stops the file from claiming otherwise.
+
+**Amended after the run this decision authorised (`M415-C2-DEC-01`): there were never six files to
+add, and the rule stated above is not the rule that shipped.** The first branch was taken --
+`ops/fetch-fonts.py` was written and run -- and the run falsified the premise the decision is
+argued from. Google's css2 endpoint serves ONE woff2 per (family, subset) covering every weight,
+because both families are variable: all four committed files carry `fvar`, `gvar`, `avar` and
+`STAT`, Space Grotesk's `wght` axis is 300-700 and JetBrains Mono's 400-800, and the four files are
+byte-identical by sha256 to what the endpoint serves today. So the 500 and 700 faces are real
+instances of the axis and always were; nothing in the app has ever rendered synthetic bold, and
+"renders at 400 and has since the fonts landed" is false of the tree this decision was taken over. `test_every_declared_font_face_ships_its_own_file` therefore asserts a
+rule these paragraphs do not state -- a face declared against a file that does not carry that
+weight in its name is honest only where that file carries a `wght` axis -- with
+`test_the_font_stylesheet_is_what_its_generator_emits` beside it holding `fonts.css` to what the
+generator emits. Both repairs the text above licenses would make the app worse: deleting the
+heavier faces hands bold to the browser's synthesiser, and committing six files pushes the same
+bytes to every phone three times through `service-worker.js`'s all-or-nothing `addAll`. The heading
+and the paragraphs above stand as the record of what was ruled on, which is the shape decision 281
+keeps; what a reader acts on is the guard and this paragraph. The register is normative from the
+day a decision is taken (decision 177), so leaving the superseded rule as its only reading was the
+one place in the record that could have overruled the code that disagrees with it.
+
+### 269. The request deadline is declared in `api.js`, not passed at three call sites
+
+**What the spec says.** `frontend/src/lib/api.js:1-2` states the module's contract in its own first
+line — "One place that knows the wire format, so a route never hand-rolls a fetch" — and today that
+one place has no deadline at all: `api()` awaits `fetch` with whatever `opts.signal` it was handed
+and nothing else. The plan gives it a 10 s default and says the three legitimately slow callers each
+pass an explicit `timeoutMs`.
+
+**Why it changes.** Two of those three call sites are in the sibling lane's milestone. The owner has
+forbidden this lane to open `frontend/src/routes/admin/data/+page.svelte`, and
+`BundleImport.svelte` is M4.14's principal surface this wave, so a two-line edit in either is a
+merge conflict in exactly the file the wave was split to keep apart — and it buys nothing, because
+the deadline is a property of the route, not of the caller. Declaring it centrally also makes the
+rule stronger: a new caller of `/admin/bundle/import` gets the long deadline without knowing to ask
+for it, which is the same argument the plan itself makes for putting the 422 case in one place.
+
+**The decision.** `opts.timeoutMs` exists as the escape hatch, but the three long routes are named
+in a module-level path list inside `api.js` that supplies their own default:
+`/admin/bundle/validate`, `/admin/bundle/import` and `/admin/connectors/jellyfin/sync`, each with a
+one-line comment naming why that route takes minutes. No call site is edited. The plan's own
+prohibition — do not bolt per-surface timers onto the stores — is honoured exactly.
+
+**Cost.** `BundleImport.svelte` and `admin/connectors/+page.svelte` are not touched by this
+milestone. The list is load-bearing rather than defensive: without it the e2e import and Jellyfin
+sync specs abort at 10 s and the suite goes red on two shipped milestones. A route that becomes slow
+later has to be added to it, which is the cost of centralising the rule and the reason each entry
+carries its own sentence.
+
+**Amended at review cycle 2 (`M415-C2-API-01`): the list was read off callers that run for minutes,
+and a route can outlive ten seconds without being one of them.** Three admin routes reach a
+THIRD-PARTY server and inherit its budget: `connectors/jellyfin.py` gives `JellyfinClient`
+`timeout: float = 15.0`, `connectors/registry.py`'s `make_client` never overrides it, and `check()`
+spends that budget twice — once on `server_info()`, once on `users()`. Ten seconds is shorter than
+the floor, so the client gave up before the server could answer, and on two of them that is worse
+than a wait. `put_jellyfin` calls `save_jellyfin` and only THEN `_store_probed_version`, so §6.6's
+card said "the network did not answer" about a save that had already landed; and
+`POST /connectors/jellyfin/test` answers HTTP 200 with `{ok: false, error, status}`, so the abort
+did not delay §6.6's one reachability verdict, it destroyed it — the control whose entire purpose is
+to report an unreachable media server could not report one. Nothing saw it, because
+`ops/fake_jellyfin.py` answers instantly and no spec measures a deadline on these routes.
+
+So a second default, not a longer one: `CONNECTOR_TIMEOUT_MS = 45_000` — the server's own floor
+with the round trip on top — matched by a pattern rather than an `under()` prefix, because
+`POST /admin/users/{id}/jellyfin` (`link_jellyfin`, which reaches `authenticate_by_name` on the same
+fifteen seconds from the same page's Link button) carries an account id in the middle of its path.
+600 s is refused for them deliberately: a ten-minute ceiling IS a wait once the appliance itself is
+what stopped answering, which is finding 16's own failure rather than a repair for it.
+`/connectors/jellyfin/sync` stays on the long list and is matched first, because a sync over a whole
+library is the job and not the hop. The cost is a third number in the module; what it buys is that
+the deadline stays what decision 269 says it is — a property of the route.
+
+### 270. Finding 18 — the Data tab's terminal error — is not taken here
+
+**What the spec says.** §3.1 requires an explicit state rather than an error, and
+`fe-lc-13-admin-data-error-is-terminal` files that against
+`frontend/src/routes/admin/data/+page.svelte`, where a failed read leaves the tab dead with no way
+back.
+
+**Why it changes.** The owner's lane instruction is explicit and later than the plan: M4.14 is
+rewriting that file in the sibling worktree this wave, and this lane must not open it. The cost of
+deferring is nil — no coverage row in this milestone's contract names finding 18, so deferring it
+discharges no obligation and leaves no red row — while the cost of taking it is a conflict in the
+one file the wave was split to keep apart.
+
+**The decision.** Deferred. The milestone does not edit that file, the finding is re-filed against
+M4.14's lane, and the report says so by name rather than leaving it to be noticed at merge.
+
+**Cost.** Step 7's `admin/data` bullet is dropped from the build. The `svelte-check` error at
+`admin/data/+page.svelte:14` stays standing too, which is decision 273 and the reason this branch
+alone cannot reach the exit criterion's tenth clause.
+
+### 271. `hasBundle` becomes tri-state; the header pill renders on `=== false`; Home's three reads stay as they are
+
+**What the spec says.** §3.1 makes a bundle-less app a legal state, and
+`session.svelte.js:6-7` says so in the module's own words: "A bundle-less app is a legal state
+(§3.1) — `hasBundle: false` is a value the UI renders, never an error it catches." The plan offers
+two ways to stop the shell asserting that state from a read that failed: make `hasBundle` tri-state,
+or gate the header pill on `!session.offline`.
+
+**Why it changes.** Only the first covers the failure the row's own `why` names. `bootstrap()`
+swallows a failed `/config` into `null` (`get('/config').catch(() => null)`) and then leaves
+`session.hasBundle` at its previous value — `false` on a cold boot — so a `/config` that fails while
+`/auth/me` succeeds prints "no bundle imported" to a household that has one. That path is not
+offline: the app is reachable, one read failed, and an `!session.offline` gate would miss exactly
+the case. Tri-state makes "not read" representable, which is the state the shell is actually in.
+
+**The decision.** `hasBundle: null` initially, assigned only when `/config` actually answers;
+`+layout.svelte`'s pill renders on `session.hasBundle === false`. `routes/+page.svelte`'s three
+`!session.hasBundle` reads are left untouched, where `null` is falsy and reads exactly as `false`
+did.
+
+**Cost.** `session.svelte.js`'s initial value and its `@type`, and one condition in
+`+layout.svelte`. Home's bundle-less empty state belongs to another milestone's surface and renders
+byte-identically. The type gains a third case that every future reader has to think about once,
+which is the point: the shell had no way to say "I have not been told".
+
+**Amended at review cycle 3 (`M415-C3-COV-01`): "renders byte-identically" is a statement about
+the DIFF, and it is true; it is not a statement that Home is right in the state this decision
+created.** `null` and `false` render that surface the same, which is what a **Cost.** section
+measures -- but against the truth they render the opposite. With a full library and a `/config`
+that did not answer, the count line prints "no bundle imported" and the bundle-less branch
+replaces the shelf list with "Nothing to show yet / No artifact bundle has been imported" and a
+CTA to import a bundle the household already has. The shell retracts the claim and the surface
+directly under it makes it in more words, which is §3.1's "a rendering of a fact nobody read" on
+the loudest surface in the app.
+
+The operator is still NOT swapped there, and the reason is not only that the plan scoped its
+finding 15 to the header. `=== false` on that branch sends a genuinely bundle-less household
+whose `/config` failed into the shelves branch instead, where the server's `no_bundle` degraded
+card is deliberately suppressed -- the comment above that block says so, and names the duplicate
+CTA it avoids -- so what that household meets is `ShelfList`'s "No shelf can say why it exists
+yet ... rate a few titles" on an app with no titles. That is the same defect facing the other
+way, and it is at least as likely, because a first-week boot against a box that is still starting
+is exactly where both conditions co-occur. The panel is keyed off a field this milestone does not
+own; the honest repair keys it off the server's `degraded` payload, which is M4.9's and M4.12's
+surface, and it is re-filed there rather than half-made here.
+
+What this milestone owed and had not paid was the record. The guard added at review cycle 2
+argued that those bare reads were safe because the branch renders what arrived rather than
+asserting what exists. It does not: it carries a heading, a stated sentence and a CTA, and it
+replaces the shelf list. That message is corrected, the row's comment now names the divergence
+instead of filing it under "null is falsy there", and
+`test_the_record_names_the_surface_that_still_states_the_bundle_claim` holds the record to that
+account for as long as the header's condition and that surface's differ.
+
+### 272. Logout clears the previous person with `location.reload()`, not with three new `clearAll()` functions
+
+**What the spec says.** §3.2: logout "clears the session cookie only", and the account chip switches
+between member profiles on one device — so the household's family tablet is a supported shape, not
+an edge case. `+layout.svelte:136-138` already knows the problem in its own comment: "Sign-out is a
+client-side navigation, so module-level surface state survives it."
+
+**Why it changes.** That comment is true of more than Rank. `resetRank()` is the only clear there,
+so the next person to sign in on the same device inherits Rate's card, ledger score and model log,
+and Tonight's whole evening — ballot, approvals and reveal. The alternative is three new exported
+resets in three files two other milestones own, one of which (`rate.reset()`) already means
+something else — the hold timer, called on every `/rate` destroy — so widening it would break a
+contract that is not this milestone's to change.
+
+**The decision.** `await goto('/login')` and then `location.reload()`, the house pattern
+`AccountChip.svelte` already uses for the PIN switch. A reload is the one move that is total by
+construction: it cannot miss a field a store gains next month.
+
+**Cost.** `+layout.svelte`'s `logout()` gains one line. Two things are already true and must not be
+re-done: `feroutes-logout-has-no-catch` has landed on this branch — `:129-134` wraps the POST in a
+`try`/`catch` with the argued comment above it — so writing it twice would be a diff tracing to
+nothing, and
+that finding's owner should be told it is discharged. The reload must come after the navigation
+resolves: `e2e/helpers.js`'s `signedIn()` re-enters through `/login`, and a reload mid-navigation
+races an assertion.
+
+**Amended at the second browser gate.** The reload happens only when the POST answered. The cookie
+is HttpOnly, so a sign-out the server never heard leaves it standing, and reloading then re-boots
+into the session the tap was meant to end: `/auth/me` answers 200, `landingRoute()` returns `/`,
+and `guard()` carries the person who just tapped Log out back to Home under their own name.
+`02-shell.spec.js:125` is the measurement — it aborts the POST and asks for /login, and it got `/`.
+Totality is worth having only once there is nothing left to come back to; on the path where the
+request never landed, what stands is the local half §3.2 leaves a browser able to do at all — the
+user forgotten, Rank's pending lift dropped, the sign-in form on screen — and the surface stores
+this decision clears stay standing, which is the state the app shipped in before it. Ending a
+session only the server can end is not in this page's gift, and pretending otherwise by reloading
+is how the sign-out became visibly undone.
+
+### 273. The CI `svelte-check` step lands in this milestone even though one error survives in the sibling lane's file
+
+**What the spec says.** CLAUDE.md lists `npm --prefix frontend run check` among the frontend
+commands, and `docs/TESTING.md` lists the layers the project claims to run. The exit criterion asks
+for the command at zero errors and a CI job step running it; the plan says the CI line lands last,
+after the count is zero.
+
+**Why it changes.** The count cannot reach zero on this branch. Twenty-eight errors stand: 14 in
+`src/lib/api.test.js`, 12 in `src/lib/passkeys.js` (WebAuthn's `Credential` narrowing), 1 in
+`vite.config.js` — all ours — and 1 in `src/routes/admin/data/+page.svelte:14`, which is M4.14's
+file and which decision 270 forbids this lane to open. The coverage row
+`platform-the-frontend-type-check-runs-in-ci` is discharged by a static guard asserting the step
+exists, so deferring the line would leave a row no stage in this milestone can close.
+
+**The decision.** Fix all 27 of ours and append the step to `ci.yml` anyway. The honest end state on
+this branch is **1 error, 1 warning**, and the frontend CI job is RED here until M4.14 merges. Do
+not exclude `*.test.js`, do not `@ts-nocheck`, do not widen the check's failure threshold, and do
+not touch the sibling's file.
+
+**Cost.** A red frontend job on a milestone branch, named in the report with its one cause and its
+owner, against a coverage row nobody could otherwise discharge. The `PosterCard` `line-clamp`
+warning is left standing too: the criterion says zero *errors*, and a surgical diff does not chase
+warnings. The report must state plainly that clause 10 of the exit criterion is met on the merge and
+not before.
+
+### 274. The coverage rows name no vitest ids
+
+**What the spec says.** Decision 226: "A row may name a vitest id, and no row may rest on one
+alone" — which supersedes the plan's claim that a vitest test "cannot be named in
+`spec_coverage.toml`", and is now enforced by
+`test_spec_coverage.py::test_no_requirement_rests_on_a_vitest_id_alone`.
+
+**Why it changes.** It does not — and decision 226's own reason is why. `npm --prefix e2e run fresh`,
+the suite a milestone closes on, does not run vitest at all, so a named vitest id adds a name the
+gate never executes. Beside a real test it is legitimate; it adds nothing these eleven rows lack,
+since every one of them is already discharged by a pytest static guard or a Playwright title, and it
+would put frontend paths into a ledger sentence whose published arithmetic counts only pytest files
+and e2e specs.
+
+**The decision.** No vitest id appears in any M4.15 row. The vitest tests are written and left
+unregistered: new and extended cases in `api.test.js` (the 422 shape, the deadline under fake
+timers, the 401 handler firing for a surface route and not for `/auth/login`),
+`session.svelte.test.js` (the offline boot), `dismiss.test.js`, and the two sequence-guard probes in
+`rank.svelte.test.js` and `tonight.svelte.test.js`.
+
+**Cost.** The fast layer exists and is unnamed, which is exactly its status in every milestone
+before M4.9. The ledger sentence stays three coherent numbers, and a reviewer counting the map's ids
+against the two runners the gate executes gets an arithmetic that closes.
+
+### 275. `cs-29` wins over `fe-06`: `.why` becomes the display face at 13 px, and the ink tokens rise to 0.55 / 0.50
+
+**What the spec says.** §6.8 gives JetBrains Mono to "every model number, ID and data annotation"
+and Space Grotesk to everything else, and `design.css:8-11` calls using the mono face for anything
+else a design bug in the file's own header. Two findings disagree about the quiet-reason register:
+`fe-06` says keep the mono face and enlarge it, `cs-29` says the mono face IS the violation.
+
+**Why it changes.** The file's own contract settles it, and the scale decides how much it is worth:
+129 elements across 27 `.svelte` files carry a `why` class, which makes `.why` the largest single
+§6.8 deviation in the tree by element count. The contrast half is arithmetic. Measured here (WCAG
+2.x relative luminance, each token composited over the opaque colour beneath it): `--ink-4` at 0.35
+is **2.82:1** against `--ground` and **2.87:1** against `--card`; `--ink-5` at 0.28 is **2.22:1** and
+**2.28:1** — below even the 3:1 large-text floor, on copy §6.8 makes load-bearing, at 10-13 px.
+`fe-06`'s proposed `--ink-5 ≈ 0.45` measures **3.93:1** and fails the 4.5:1 guard the same finding
+asks for, so its mitigation and its test contradict each other.
+
+**The decision.** `.why { font-family: var(--display); font-size: 13px; }`, keeping
+`color: var(--ink-4)` and the line height; `--ink-4: rgba(236, 233, 228, 0.55)` and
+`--ink-5: rgba(236, 233, 228, 0.52)`. `.data` keeps the mono face at 10 px, 11 px on coarse
+pointers. 0.52 is the smallest alpha that clears 4.5:1 on every surface these tokens are drawn on,
+and 0.51 does not (4.49). 0.55 measures 5.35 / 5.29 / 5.23 on the opaque grounds.
+
+**Amended at review cycle 1 (`m415-rev1-css-01`): the bottom rung is 0.52, because "every surface
+these are drawn on" is eight and the first measurement read four.** The decision as first written
+said 0.50 and named `--ground`, `--card` and `--card-raised`; the guard it shipped enumerated the
+four opaque grounds, on the premise that "an alpha over an alpha has no single answer". That
+premise is false for a tint over a KNOWN ground — there are exactly four answers and design.css
+alone determines them. `--ember-wash` is `rgba(200, 97, 58, 0.1)` laid over one of the opaque four
+at sixteen sites, and it carries `--ink-*` text on them: `RateSweepCard.svelte`'s `.next` hint is
+`--ink-5` at 10 px inside a `.reveal` whose background is the wash over `--card`, and it shipped at
+**4.43:1**. The composite is lighter than the card beneath it, which is the direction that costs
+contrast, so the opaque reading was the optimistic one throughout. Both halves are taken, because
+either alone leaves a false sentence standing: the guard composites `--ember-wash` over each
+`SURFACE_TOKENS` entry and measures the whole ladder on all eight, and the token rises to 0.52 so
+it passes (worst case 4.61, on the wash over `--card-raised`). Recolouring the one span to
+`--ink-4` was the alternative and is refused: it fixes the site and leaves the instrument blind, and
+design.css's own sentence — "every one of them clears WCAG AA's 4.5:1 against each ground it lands
+on" — is a claim about the TOKEN. The cost is that the bottom two rungs are three points of alpha
+apart; that is what the floor costs, and a rung nobody can read is not a rung.
+
+**Amended at review cycle 2 (`M415-C2-CSS-04`): the coarse `.data` rule reaches less than its own
+comment claims, and what it does not reach is now named rather than assumed.** `design.css` raises
+`.data` to 11 px on a coarse pointer and argues it — "10 px of a narrow mono face on a phone is
+under the floor for reading a digit correctly, and a misread digit is worse than no digit" — but a
+bare `.data` is (0,1,0), a media query adds no specificity, and Svelte compiles every scoped rule to
+`.sel.svelte-hash` at (0,2,0). Seven rules in the shipped tree therefore defeated it, and no layer
+measured a `.data` size at all: the sibling 16 px rule fourteen lines above got per-component
+overrides AND a computed-size sweep because Safari's focus zoom strands a member on a magnified
+page, and this one got neither.
+
+Two of the seven are prose-shaped and are raised where they live — the sign-in page's `OR` divider
+at 10.5 px, which is on the first screen §3.1 hands every new member, and the Users panel's section
+headings at 10 px. Four are M4.9's poster overlays, sized together under proposal 29 so that `new`,
+`seen`, the rank and the tier share one geometry in the four corners of a 2:3 card; raising one of
+them alone breaks the set, and the sentence behind the `new` chip is carried by the surface in full
+(decision 278). The seventh, Tonight's `.label`, is not defeated at all — that file re-declares
+`.data` at 12 px on the next line and the two tie on specificity. All five are enumerated in
+`DATA_VOICE_EXEMPT` with the reason, which is decision 280's shape: exempt by decision, not by
+silence. The guard that reads them scans every `.svelte` file for a rule reaching a `.data` element
+under 11 px and accepts only two answers — raised in the file's own coarse block, or named there.
+
+**Amended again at review cycle 2 (`why-c2-01`): the register guard reads a compound as a set of
+classes, and `--ember-lift` joins the register's colours with it.** Neither is a fresh choice; both
+are this decision's own rule applied where the instrument could not reach it, which is the shape
+review cycle 1 already used on decision 276 with 286 spent. The guard matched a selector's last
+compound as ONE string, so every ordinary way of NARROWING a rule — a second class, a negation, a
+position, a `[data-testid]` hook — left the rule inside the cascade and outside the guard. The
+docstring accounted for the over-match that widening bought and said nothing about the under-match,
+which reads as a claim there was not one. There is, and it is not hypothetical: `rate/+page.svelte`
+ships `<p class="banner error why" role="alert">` styled by `.banner.error`, so the guard's verdict
+on a shipped rule was decided by the selector's punctuation rather than by the property, and
+simplifying that selector to `.error` would have reddened a build without moving a pixel. A compound
+is now its tag plus the SET of its classes, pseudo-classes and attribute selectors stripped first
+because both narrow rather than widen — and ALL of its classes, never any of them, because the Data
+tab's why-line is a `<td class="note why">` and an any-token reading would call every other cell in
+that sheet a why-line. Measured on this tree the way the first widening was: fifteen rules are
+reached only by it, fourteen of them borders, paddings and margins this guard does not read.
+
+The banner is then the question the repaired instrument asks, and the answer is the rule this
+decision already states. `--ember-lift` is the accent QUOTED rather than spent — error copy, which
+is why the accent guard refuses it and why the three derivative tokens exist — and on that surface
+the error and the reason are ONE element, so the copy wears the error's colour. The guard already
+licenses that element's frame on purpose (`background-color` and `border-color` are read past so "a
+why-line inside a tinted callout keeps its frame"); licensing the frame and refusing the copy inside
+it is half a rule. The direction that decides is untouched — over the wash the error copy is
+BRIGHTER than `--ink-4`, not dimmer, and nothing admitted here is quieter than the register, which
+is the one thing this guard forbids. The alternative, recolouring the shipped banner to an ink rung,
+was refused for the reason review cycle 1 refused recolouring one span: it fixes a site and leaves
+the instrument blind, and here it would also take §6.8's one word for "this failed" off the one
+sentence on the screen that says so. A class attribute in single quotes is read too: nothing in
+`frontend/` enforces the other kind — there is no prettier and no eslint, and `npm run check` is
+`svelte-check` alone — so one quote made a whole file invisible to this guard and to the
+card-padding guard at once.
+
+**Cost.** The token change lands BEFORE step 7 deletes `RateClassBalance`'s `--ink-2` override, so
+the warning is never less legible even for one commit. `ShelfRow.svelte:188-189`'s
+`.caption { color: var(--ink-5) }` is deleted, so the shelf why-line reads at the register's own
+colour. Where a why-line embeds a model number that fragment is wrapped in `.data`, as `ModelNote`
+already does — the two voices stay two voices rather than one becoming the other. `fe-06`'s coarse
+`.why { font-size: 12px }` is subsumed by the 13 px display size, and its request for a larger
+`.why` on `tv/+page.svelte` is moot under decision 165.
+
+### 276. The ember guard is widened to every component style block; `--facet-mood` is named as the exception rather than recoloured
+
+**What the spec says.** §6.8: "one ember accent `#c8613a` spent on selection and primary actions".
+`spec_coverage.toml`'s M0 row `map-taste-admin-palette-facet-binding-and-accent` reads that as "no
+facet colour or user identity colour reuses the ember accent `#c8613a`", and its named guard
+`test_the_ember_accent_is_not_reused_as_a_neutral` whitelists `facet-mood` in as many words and
+reads `design.css` alone.
+
+**Why it changes.** The row forbids what its own test permits, and no component can trip either: 21
+`var(--ember)` / `#c8613a` uses live in 15 component and route style blocks the guard never opens,
+and the one thing it does check — a `--facet-*` token sharing the hex — is whitelisted. So the
+clause has been unenforced since M0 while reading as enforced. The plan is explicit that the
+mitigation offers either direction "but not both ways at once", and recolouring a facet is a palette
+decision belonging to whoever ships §6.4 (proposal 124 assigns mood the warm end); the owner has
+also reserved `design.css`'s facet block to M4.9 in this lane.
+
+**The decision.** Amend the row's `what` to state `--facet-mood` as the deliberate exception, and
+add a NEW guard, `test_the_ember_accent_is_spent_only_on_selection_and_primary_actions`, that scans
+every `.svelte` `<style>` block for `var(--ember)` / `#c8613a` against an explicit
+selection-and-primary-action allowlist. Recolouring `--facet-mood` is not taken.
+
+**Cost.** The allowlist is enumerated by reading each site, with a one-line why per entry. Retired:
+`AccountChip.svelte:201` (the identity avatar), `PosterCard.svelte:97` (the "new" badge),
+`RateClassBalance.svelte:122` (the high bar), `RateBlockCounter.svelte:55` (the current tick),
+`RateRail.svelte:128` (the progress fill), `setup/+page.svelte:184` (wizard progress) and
+`tonight/+page.svelte:742,751` (the room code and the beat). Kept, each read and each justified as
+selection, focus or a primary action: `AccountChip.svelte:310-311` (the switch track when on),
+`RateBattleCard.svelte:223,262,294`, `ShelfRow.svelte:289` (the focus ring),
+`BundleImport.svelte:144`, `ModelRail.svelte:187`, `RateCorrections.svelte:60`,
+`RateSweepCard.svelte:198`, `RateUndo.svelte:69` and `rank/+page.svelte:449`. The row's four
+existing test names stay; the new guard is added to its `tests` by the stage that writes it.
+
+**Amended at review cycle 1 (`M415-REV1-08`): the scan reads the whole component, not its
+`<style>` block.** "Every `.svelte` `<style>` block" is one of the two places this app writes
+colour, and the guard's own job — making every new spend name itself — does not survive the other
+one. Four of the files the sweep retired a fill from already write colour in the markup
+(`ShelfRow.svelte:133-134` and `TitleDetail.svelte:317,319,342` pass `facetColour()` through
+`style:color`), and `AccountChip.svelte:167` takes an avatar's background from `u.colour`, a
+database column no guard can read — so the retired identity fill is one row away from returning in
+the idiom its own file already uses, and `style="background: var(--ember)"` on the badge would have
+been invisible. `_accent_sites` therefore matches over the ELEMENT's attributes rather than out of
+a `style=` value: a directive, a quoted attribute and Svelte's shorthand are three spellings of one
+spend, and a guard enumerating spellings is one a fourth spelling walks past. A markup spend has no
+selector, so it names itself as its tag and class list (`<span class="badge data">`), which is what
+an allowlist entry would have to be recognisable as. `design.css` is deliberately NOT read by this
+guard and the row's sentence is not widened to it: design.css is where the accent is SUPPOSED to be
+spent — `.pill[aria-pressed='true']`, `.btn-primary`, `:focus-visible` — so scanning it against a
+component allowlist would mean licensing the app's own selection rules, which inverts the sweep's
+direction. `test_the_ember_accent_is_not_reused_as_a_neutral`, already on the row, is design.css's
+half.
+
+**Amended again at review cycle 1 (`acc-01`, `acc-03`, `acc-04`): one keep-list entry retired, the
+colour's spellings widened, and design.css read by a guard of its own.** Three things the first
+amendment left standing, none of them a fresh choice — 286 is spent, and each of the three is this
+decision's own reasoning applied where it had not been.
+
+*The keep-list loses `BundleImport.svelte:144`.* The Cost above lists it among the sites "each read
+and each justified as selection", and the justification is not true of the markup: the strip is four
+NON-interactive `<span class="step data">` lit by `class:on={(phase === 'validated' && i <= 1) ||
+(phase === 'imported' && i <= 3)}`, which is cumulative and index-driven, and whose fourth stage
+("active") is a server outcome nobody can pick. The sister construct settles it rather than a taste
+argument: `setup/+page.svelte:82-90` is `class:on={i <= step}` on real `<button>`s that walk back —
+strictly MORE selection-like — and this milestone retired it to `var(--progress-now)` under a comment
+quoting this decision in as many words. `setup/+page.svelte:146` then renders `<BundleImport>` at
+wizard step 3, so the two ramps are on ONE screen, in two colours, for one meaning, with the
+`.btn-primary` whose fill IS the accent standing between them. `.step.on` takes `border-color:
+var(--progress-now)` and `color: var(--ink)`, the allowlist entry goes, and the site joins
+`RETIRED_ACCENT_SITES` as the ninth. The alternative — keeping the entry with a truthful reason and
+re-filing the recolour, the shape decision 270 used for finding 18 — was refused because this list is
+not a list of sites, it is the DEFINITION exit criterion 7 is measured against, and a progress ramp
+inside the selection-and-primary-action allowlist makes that criterion self-satisfying. **Cost:** a
+style-block hunk in a file the sibling lane is rewriting this wave. M4.14's work there is script and
+template — its plan's E4 turns `run('import')` into a 202-and-poll phase machine and legislates when
+the strip advances, never what colour it advances in — so the conflict surface is a rule neither plan
+names. Decision 270's prohibition is untouched: it names `routes/admin/data/+page.svelte`, which is
+not opened.
+
+*`_ACCENT` matches three spellings of one colour.* The same argument this decision already makes
+about the two places a spend can be WRITTEN applies to the ways it can be SPELLED, and the literal
+pattern held neither of the token's other legal forms: `var( --ember )`, and `var(--ember, #fff)`,
+where a fallback list moves the closing paren the pattern anchored on. `rgb(200, 97, 58)` is the same
+colour again with no token in it at all, one keystroke pattern from the hex and invisible to every
+token audit. Full strength only, because `--ember-wash` and `--ember-edge` ARE that triple at an
+alpha: matching it bare would call the quietest use of this colour its loudest. The boundary kept
+rather than papered over is a near miss in another colour space — `hsl(16 55% 51%)` is three units
+off and indistinguishable on screen — which needs a conversion and a tolerance, and is a different
+guard from one asking whether a writer named the accent.
+
+*design.css gets a list of its own, and the sentence above stands.* Reading the sheet against the
+COMPONENT allowlist would license the app's own selection rules and invert the sweep, which is why
+that is still refused. What was not considered is that the scan stopping at `.svelte` left the one
+stylesheet every surface inherits from as the single place a global `.badge { background:
+var(--ember) }` could be added with both guards green — the M0 guard matches `--name: #c8613a`
+DEFINITIONS and cannot see a use of any spelling. Its five spends (`a`, `:focus-visible`,
+`.pill[aria-pressed='true']`, `.pill.on`, `.btn-primary`) are enumerated in
+`DESIGN_CSS_ACCENT_SITES` with the line saying which of the two each is, `:root` is excluded because
+a name being given a value is not that value being drawn, and the list is held in both directions so
+a licence cannot outlive the rule it licensed. `a { color: var(--ember) }` is the one that had to be
+argued rather than transcribed: a link is the one thing a person can act on from inside a sentence,
+which is what separates it from the text this sweep retired — a room code and a beat label do
+nothing when tapped.
+
+**Amended once more at review cycle 2 (`acc-c2-02`, `M415-C2-CSS-07`, `acc-c2-04`): the seam
+between the two readers, the third place a colour can be written, and the direction the component
+list was not held in.** None of the three is a fresh choice either, and 286 is still spent; each is
+the argument above applied where it had not been.
+
+*The two halves of the sentence read one vocabulary.* Splitting §6.8 into a reader of NAMES and a
+reader of SPENDS is only as strong as the weaker half, and the weaker half was M0's lowercase hex
+literal, matching `--name: #c8613a` and nothing else. The spend reader skips every `--` property by
+design — a name being given a value is not that value being drawn — so a second token holding the
+accent was answerable to the name reader alone, and that reader knew one of its four spellings.
+`--badge-bg: rgb(200, 97, 58)`, `--badge-bg: #C8613A` (the M0 pattern carries no `re.I`) and the
+plain alias `--badge-bg: var(--ember)` each minted the colour under a second name with both guards
+green, and `.badge { background: var(--badge-bg) }` under it is the global widening the design.css
+list was added three paragraphs above to refuse — reached one colour space over, and by the alias
+with no colour literal at all. Both halves read `_ACCENT` now, over every rule rather than `:root`
+alone, because a token minted inside an `@media` block is still a token. The boundaries this
+decision already drew are where they were: the alpha derivatives are still the accent quoted rather
+than spent, and the `hsl()` near miss still needs a conversion and a tolerance.
+
+*The scan reads the JavaScript beside the markup.* The amendment above widened from the style block
+to the element's attributes because `style:color={facetColour(...)}` is the house idiom — and what
+a directive carries is an EXPRESSION, which holds no literal for a colour pattern to find. So the
+spend simply moves one scope out: `const FILL = 'var(--ember)'` in the component's own script block,
+which the markup reader strips, or `export const ACCENT = 'var(--ember)'` in a module beside it,
+which the walk never opened. Every accent guard here stays green while a status badge wears §6.8's
+one colour again. A site is named by the identifier it is bound to, because the mechanism is
+unchanged — the point was never to forbid the colour but to make a writer say which of the two
+things §6.8 rations it to this is, and `lib/theme.js: ACCENT` is what an allowlist entry has to be
+recognisable as. Colocated `*.test.js` are skipped for the reason `_frontend_sources` already
+gives: a falsifier naming a colour is asserting about it. What stays unseeable is unchanged — a
+colour computed at runtime, or one arriving from a database column the way `AccountChip`'s avatar
+does.
+
+*The component list is held in both directions.* The design.css list was, from `acc-04`, under
+prose arguing the rule generally: "a listed site that is no longer there is a licence for a rule
+that has moved, which is how an allowlist rots into a list of things somebody once wrote." That
+argument was then applied to five entries in one file and not to sixteen over eight — the list a
+component rewrite actually moves. The keys are `file: selector`, so the blast radius is the file
+itself reintroducing that selector, which is precisely what rewriting a component does, and the
+reason string beside a stale licence reads exactly like a checked one. **Cost:** deleting or
+renaming an accented rule now means dropping its licence in the same commit — the identical
+obligation the design.css list already imposes, and `_rules` steps over `@media` wrappers, so
+moving an allowed rule into a media query does not trip it.
+
+### 277. Tonight's `accent-color` on the budget range input stays on the allowlist
+
+**What the spec says.** §6.8 spends the accent on selection and primary actions.
+`tonight/+page.svelte:717` sets `.controls input[type='range'] { accent-color: var(--ember); }`, and
+the plan's list of ember sites names neither retiring it nor keeping it.
+
+**Why it changes.** `accent-color` on a native range control paints the filled track and the thumb —
+the control's own selected-value indicator, which is the grammar §6.8 reserves the accent for and
+the same grammar `.pill[aria-pressed='true']` already wears. Retiring it would mean restyling a
+native control from scratch, which is a redesign this milestone does not do; leaving it unlisted
+would mean the new guard fails on a line the plan never asked anyone to change.
+
+**The decision.** Allow it, as an explicit allowlist entry with its own comment. The exit
+criterion's "the ember accent appears ONLY on selection and primary actions" is satisfied by reading
+a form control's selection as selection.
+
+**Cost.** One more line in the allowlist, and the narrowest possible one: it names the property and
+the selector, so an author who copies `accent-color: var(--ember)` onto a non-selection element
+still trips the guard.
+
+### 278. Finding 10 ships two of its three repairs; `AdminTabs` is already discharged
+
+**What the spec says.** The §6 preamble makes the phone the primary form factor, and a phone cannot
+hover — so a reason that exists only in a `title=` attribute does not exist. The plan's step 7 names
+three sites: `AdminTabs.svelte`, `TitleDetail.svelte` and `PosterCard.svelte`, and cites Home's kind
+toggle and Rank's entry badge as further instances without prescribing a fix.
+
+**Why it changes.** One of the three has already been repaired by another milestone and one of the
+two citations is not an instance. `AdminTabs.svelte:9-12` now argues this exact point in its own
+comment — "Visible text and not `title=`: the milestone used to live in a tooltip, and the declared
+primary form factor is a phone, which cannot hover (spec-13)" — all four tabs carry hrefs and the
+pending set is empty, so re-doing it would be a diff that traces to nothing. `rank/+page.svelte:244`'s
+`title={entry.badge}` duplicates the `<span class="why badge">{entry.badge}</span>` two lines below
+it, which is visible text: a redundancy, not a hover-only reason. Home's conditional kind-toggle
+tooltip is a genuine instance, but the plan gives it no "Should" and no coverage row reaches it, so
+improvising a fix would be an unrequested change.
+
+**The decision.** Do `TitleDetail.svelte:179` — the disabled Jellyfin action's reason, today
+`title="link a Jellyfin server in Admin (M1)"`, becomes a `<p class="why">` under the actions row —
+and `PosterCard.svelte:54`, where the cold badge's sentence is carried once by the shelf rather than
+by every card. Do not touch `AdminTabs.svelte`, Home's kind toggle or Rank's entry badge.
+
+**Cost.** `ModelNote.svelte:41-49` stays as it is, with the plan's note that its tooltip is
+desktop-only. Home's kind-toggle tooltip is re-filed in the report so it does not disappear with
+this milestone, and the owner of `AdminTabs`'s finding is told it is discharged.
+
+**Amended at review cycle 2 (`M415-C2-COMP-06`): "carried once by the shelf" left the OTHER surface
+this card renders on with nothing.** `PosterCard` is also drawn by Home's catalog grid, reached by
+the search box, a filter chip or a tapped credit, and that grid has no shelf header: on a phone the
+chip there was an unexplained word on a poster, which is finding 10's own defect surviving on the
+primary form factor. The justification left in the component said as much and then answered it with
+"the touch path reads the shelf's line", which is a line the grid does not draw. The sentence
+belongs to the SURFACE rather than to the row, so the grid carries it once above itself on the same
+terms — `{#if items.some(isColdPlaced)}`, the exported helper `ShelfRow` already calls, and the same
+words. The tooltip stays for the pointer, which is the one device that can ask an individual card;
+it is no longer the only answer anywhere.
+
+### 279. The header's top inset is applied in two places, because M4.9 made the phone header `height: auto`
+
+**What the spec says.** The plan's entry 1: `header { padding-top: env(safe-area-inset-top);
+height: calc(54px + env(safe-area-inset-top)); }`, with the two fixed overlays offsetting from
+`calc(54px + env(safe-area-inset-top))` rather than a bare `54px`.
+
+**Why it changes.** The tree has since gained a `@media (max-width: 720px)` block
+(`+layout.svelte:346-351`) setting `header { gap: 10px; flex-wrap: wrap; height: auto;
+min-height: 54px; }` — because the phone header wraps to two rows when four badges are present.
+Applying the plan's sentence to the base rule alone would therefore be silently discarded on the
+primary form factor, which is where the entire finding lives. `env()` is 0 on every engine this
+suite runs, so no browser test can catch that; the static guard is the only check, which is why it
+asserts the rule and not the file's bytes.
+
+**The decision.** The base rule takes `padding-top: env(safe-area-inset-top)` and
+`height: calc(54px + env(safe-area-inset-top))`; the ≤720 px block's `min-height: 54px` becomes
+`min-height: calc(54px + env(safe-area-inset-top))` and keeps `height: auto`, so the header grows BY
+the inset rather than TO a fixed height. The overlays' `top` becomes
+`calc(54px + env(safe-area-inset-top))` in BOTH the base rule and the ≤720 px override that also
+names `top: 54px`.
+
+**Cost.** `TitleDetail.svelte:343` and `:540` and `ModelRail.svelte:139` take the calc.
+`ModelRail`'s ≤720 px override (`top: auto; bottom: 0`) is unchanged — it is a bottom sheet, not a
+top-anchored panel. `app.html` is not edited: `viewport-fit=cover` and `black-translucent` stay,
+NavRail's home-indicator padding depends on the first of them, and `maximum-scale=1` is never added.
+
+### 280. The first-boot wizard's step indicator is the one named exemption from the 48 px sweep
+
+**What the spec says.** §6's preamble sets 48 px targets and `design.css:77` sets `--touch: 48px`;
+the coarse-pointer block grows every `button` to it. `setup/+page.svelte:169-177` styles
+`.progress button { flex: 1; height: 3px; padding: 0 }` with no `min-height`, so the global rule
+wins and the hairline renders as five 48 px grey blocks on any touch device.
+
+**Why it changes.** The plan states the alternative and rejects it: making the steps genuinely
+tappable is a `role="list"` with real 48 px rows — a redesign, and an owner decision not taken here.
+What is left is to make the exemption explicit, because the coverage row
+`platform-every-touch-target-meets-the-token` names it as "the one named exception … exempt by
+decision and not by silence", and a sweep that simply fails to select it is silence.
+
+**The decision.** Exempt it in writing. Add `min-height: 3px` beside the `height: 3px` so the scoped
+rule wins on the property that decides; move `role="progressbar"` off the container that holds five
+focusable buttons (`setup/+page.svelte:75`) or put it on a childless sibling, and add
+`aria-valuemin="1"` beside the `aria-valuenow`/`aria-valuemax` it already carries. Do NOT add a
+blanket `button { min-height: auto }` escape hatch to `design.css`.
+
+**Cost.** The e2e 48 px sweep skips the wizard's step indicator by testid and says why on the same
+line, so the exemption is visible in the failure message rather than absent from the selector. One
+control in the app is deliberately below the floor, and the only place that can be read is the test
+that excludes it and this decision.
+
+### 281. The three facts no engine can see are recorded in `docs/TESTING.md` as an OWED device check, never pre-signed
+
+**What the spec says.** The exit criterion discharges three facts by "a signed line: verified on
+iPhone <model>, iOS <version>, <date>" — the header clearing the status bar in installed standalone
+mode, the tab bar staying above Safari's toolbar at every scroll position, and the absence of focus
+zoom on a real device. Decision 184 already refuses to publish a measurement no run produced.
+
+**Why it changes.** This lane has no device, and the plan's own warning says what the substitute
+would be worth: "Do not let a green Playwright run stand in for them: Playwright has no dynamic
+toolbar and no focus zoom, which is precisely why 06-responsive passed while both were broken." A
+pre-signed device line is decision 184's defect wearing a signature — worse than a gap, because it
+tells the next reader to stop looking.
+
+**The decision.** Write the three facts into `docs/TESTING.md` as an explicit outstanding check with
+an unfilled signature line, stating that no run in this suite can produce it and that the owner
+fills it after the browser gate. Never write a name, model, version or date this lane did not
+observe.
+
+**Cost.** The M4.15 ledger paragraph names the three facts and says they are owed, so the milestone
+closes with a visible debt rather than a quiet one. The report repeats it, so the owner reads it
+before running the gate rather than after.
+
+**Amended at review cycle 2 (`M415-C2-CSS-02`): the runtime check did not measure what the
+paragraph above says it measures, and now does.** "The two header rules COMPOSED — padding, height,
+the phone block's `min-height` and the cascade between them" was written into four places, and
+`06-responsive.spec.js` skips every non-Chromium project while the desktop project is pinned to
+1400x900 and no spec in the suite calls `setViewportSize`. `@media (max-width: 720px)` was therefore
+inert for the whole test: what the delta measured was the base rule alone, and the phone override —
+the half decision 279 exists for, the half M4.9 broke — was held by one text match on one property.
+A `padding-top: 0` written into that block, which is the same mechanism by which `height: auto`
+arrived there, would have passed the guard and the browser test together. The test now resizes the
+same Chromium page to 390 after its desktop assertions and asserts `min-height` rather than a height
+delta, because the phone rule sets `height: auto` and a delta would be satisfied by content
+reflowing. No new test, no new project, no change to the skip count — and the four owed facts are
+untouched, because a resized desktop Chromium is still not a standalone web view. A claim broader
+than its measurement is what decision 184 refuses; this one was inside a paragraph refusing it.
+
+**A fourth fact, added at the second browser gate and recorded here at review cycle 1
+(`m415-c1-e2e-05`).** Decision 284 adds the installed app cold-booting with the appliance
+unreachable, and for a reason the three above do not share: it is not that no engine here has the
+hardware, it is that this one breaks. Playwright's WebKit answers `page.reload` with "WebKit
+encountered an internal error" nine milliseconds into an offline context, before the worker holding
+the cached shell is asked, so the `phone` project skips that test rather than assert an offline boot
+it cannot perform. The heading above and the paragraphs under it still say three because three is
+what this decision ruled on — the shape decision 272 keeps, whose heading still says
+`location.reload()` after 285 replaced it — and what a reader acts on is `docs/TESTING.md`, where
+the block lists those four plus the two more review cycle 1 added on a sharper argument, all under
+one unfilled signature line. The rule does not move: the run that produced it, or nothing. The
+count is now held by `test_the_owed_device_checks_are_recorded_and_still_unsigned`, which reads
+that block's claims against its bullets and its signature line against the blanks, because until
+review cycle 1 nothing in the tree read it at all.
+
+**Amended at review cycle 1 (`M415-C1-COV-02`): the debt stands, and one of its arguments does
+not.** Three places said `env()` cannot be exercised in any engine the suite runs, and the first
+was the justification for buying no runtime check at all. It is false for Chromium, which exposes
+`Emulation.setSafeAreaInsetsOverride` — a CDP method that overrides exactly what
+`env(safe-area-inset-*)` resolves to — and the desktop project is `devices['Desktop Chrome']`, so
+the instrument was installed the whole time; `09-passkeys.spec.js` and `17-users.spec.js` already
+reach for `newCDPSession` behind `test.skip(browserName !== 'chromium', ...)`. `06-responsive.spec.js`
+therefore injects a 47 px top inset and measures the two header rules COMPOSED, which is the half a
+text guard cannot read: padding, height, the phone block's `min-height` and the cascade between
+them. Not one of the four owed facts is discharged by it and the signature line does not move.
+Desktop Chromium with a number injected is not an installed standalone web view, has no real inset
+and no rotation, and WebKit — the engine the `phone` project runs — has no CDP at all. What changes
+is the sentence: no engine here can produce the DEVICE fact, which is the true claim, rather than
+no engine here can exercise `env()`, which was the convenient one. A claim broader than its
+measurement is the failure decision 184 exists to refuse, and it applies to a justification for
+NOT measuring exactly as it does to a measurement.
+
+### 282. A 401 is a lost session only where the shell believed it held one, and a first boot holds none
+
+**What the spec says.** §3.1: "the app boots with `/data/artifacts` and `artifact_bundle` empty,
+serving the setup wizard and admin routes" — first boot belongs to the wizard, and a bundle-less
+app is a legal state rather than an error. §3.2 makes the session a server fact the shell obeys.
+Finding 14 put the one reaction to that fact in `api.js` (decision 269's module): a 401 outside
+`CREDENTIAL_ROUTES` and outside §3.2's admin re-prompt clears the user and goes to /login.
+
+**Why it changes.** The browser gate's phase 1 died on its first test and took the other seven with
+it (serial file), so phase 2 never ran: `01-first-boot.spec.js:43` expected `/setup` and got
+`/login`. Measured against the live first-boot stack, `/` issues `/api/config` 200,
+`/api/setup/state` 200 `{"required": true}`, `/api/auth/me` 401 (exempt), and then Home's four
+mount-time reads — `/api/prompts/finish`, `/api/titles`, `/api/facets`, `/api/home` — 401 and
+exempt from nothing. `landingRoute()` answered `/setup` and `guard()` went there; the four refusals
+landed afterwards and each one was read as a session being lost. The rule was drawn up as a list of
+ROUTES, and what it missed is not a route but a STATE: on a box where no account has ever existed,
+every authenticated route answers 401 legitimately, and that state is exactly §3.1's first boot.
+`guard()` cannot undo it — /login is one of the shell's three PUBLIC destinations, so once the seam
+has landed there nothing routes back to the wizard, whatever `/setup/state` keeps saying. The cost
+is not a red assertion: a household that installs Spielplan cannot set it up. The wizard that
+creates the first admin is unreachable, and the app offers a password field for an account nobody
+can have been given.
+
+**The decision.** The seam takes a third exclusion, and it is a state rather than a route:
+`session.user` must be non-null for a 401 to mean a lost session. A 401 can only END a session the
+shell believed it HELD. Finding 14's own three cases are untouched by construction — a rotated
+`SESSION_SECRET`, a restored backup and the hourly prune all strike a tab whose `/auth/me` has
+already answered, which is what puts the name in the chip and a user in that field; its e2e test
+signs in and waits for the greeting before clearing the cookie, so the precondition is the test's
+own opening line. Finding 15's offline case never reaches the branch: a read that did not arrive
+carries status 0, `isUnauthenticated` is false, and `session.offline` is what the shell renders.
+The alternative — stop the surfaces firing authenticated reads until `guard()` has routed — is
+rejected. `goto()` is asynchronous and the children mount the moment `booted` flips, so any such
+flag narrows the window rather than closing it, and it would leave the wrong rule in place for
+every 401 that lands after a guard has run: the next surface that reads early, or one slow route on
+a busy box, reopens the same defect. A race made smaller is not a rule.
+
+**Cost.** One condition and its comment in `api.js`. `api.test.js` states the precondition in the
+two cases that assert a sign-out — which is the honest shape for a test about losing a session —
+and gains the first-boot case, which reproduces the gate's failure as four sign-outs where there
+should be none. The coverage row `platform-a-401-returns-the-member-to-login` has its first
+sentence amended and gains `01-first-boot`'s opening test, the assertion that caught this at the
+layer that caught it; `docs/TESTING.md`'s id count is re-derived, 24 across four e2e specs to 25
+across five. What a member sees when a session really is pruned mid-use is unchanged: the tap they
+made lands on /login with the chip gone, no backend sentence on the way out, and Rank's pending
+lift dropped.
+
+### 283. The unreachable card asks again on a timer, not only when the browser says `online`
+
+**What the spec says.** §6's preamble makes the app installable and gives it a service-worker shell
+cache; §3.1 asks for "an explicit state instead of erroring"; §2 puts the appliance on a LAN or a
+Tailscale address. Finding 15 and decision 271 put that state on the screen — the box did not
+answer, the session is untouched, and the card says so instead of a red line on every surface.
+
+**Why it changes.** The card's only automatic way back was
+`window.addEventListener('online', reconnect)`, and the browser gate measured what that is worth:
+after `context.setOffline(false)` the desktop project issued no request at all for thirty seconds
+and the shell stood on the card until the test timed out. The event reports the INTERFACE; what
+this shell is waiting for is the appliance, and the three ordinary ways it comes back — a box
+restarting, a Tailscale route re-establishing, a captive portal letting go — all happen with the
+interface up the whole time, so no event is owed and none arrives. A desktop is never truly stuck,
+because the card carries Try again; the shape §6's preamble is written for is, because an installed
+standalone web view has no reload gesture and a household that does not know to press the button is
+looking at an app that has stopped. `19-phone-shell.spec.js`'s own comment claimed the listener "is
+the only way back", which was true of the diagnosis and false of the remedy.
+
+**The decision.** While `session.offline` stands, ask again every five seconds — an `$effect` armed
+and disarmed by that flag, so the timer exists only while the shell has already failed to reach the
+box and is cleared by the read that lands. `reconnect()` takes a re-entry guard, because the
+button, the event and the timer are now three callers and two boots writing into one `session`
+object would let the older answer win. The alternative — leaving it to the person — is rejected on
+the same ground §3.1 rejects an error page: the app knows the box is not answering, and waiting to
+be asked is not an explicit state, it is a shrug.
+
+**Cost.** `+layout.svelte` gains a constant, an effect and one line in `reconnect()`. Five seconds
+is not tuned: it is short enough that a restarting box is met within one attempt of coming back and
+long enough that the ten-second deadline in `api.js` cannot stack requests on a box that is down.
+Nothing polls a working app, which is the objection `tonight.svelte.js:795` records against polling
+in general and which this does not meet.
+
+### 284. `page.route` is a Chromium-only instrument once a service worker is in the middle, so `19-phone-shell` registers none
+
+**What the spec says.** CLAUDE.md: "The `phone` project (iPhone 13, WebKit) is the primary form
+factor", and "Test doubles are refusers, not mocks". §6's preamble is what puts a service worker in
+front of every request this suite makes.
+
+**Why it changes.** Four of the nine failures at the second browser gate are one fact: on WebKit,
+Playwright's interception does not see a request the service worker mediates. `src/service-worker.js`
+refuses to cache anything under `/api` and does not even call `respondWith` for a POST, but the
+request is still attributed to the worker, and the phone project's routes were silently ignored. The
+damage runs both ways. A test asked for a room to be held open and watched the room open for real,
+then failed waiting twenty-five seconds for the sentence a held request produces; and
+`02-shell.spec.js:125`'s aborted logout has been passing on the phone because the abort never
+happened — the POST landed, the session really ended, and the assertion could not fail. The same
+file already wrote half of this down in M4.9 ("`page.route` never sees one") and generalised it from
+one engine; it is not general, which is why `04-title-card`, `10-home` and `18-system` route `/api`
+happily on desktop.
+Playwright documents the fact and the remedy together, in its own note on `page.route`: it "will
+not intercept requests intercepted by Service Worker" (microsoft/playwright#1090), and it
+recommends `serviceWorkers: 'block'` for precisely this. Nothing here was diagnosed from the
+symptom alone: the phone trace carries `POST /api/tonight/sessions 201` under a route that was
+registered two actions earlier and never fulfilled.
+
+**The decision.** `19-phone-shell.spec.js` declares `test.use({ serviceWorkers: 'block' })` at file
+scope, so the three tests that hold or answer a request get the request. The one test whose subject
+IS the cache — the offline boot — re-enables it in a `test.describe` of its own, and skips on WebKit:
+Playwright's WebKit answers `page.reload` with "WebKit encountered an internal error" nine
+milliseconds into an offline context, before the worker is asked, so a run there measures the
+harness. Reaching that state another way costs the claim — with the worker blocked there is no cache
+to boot from, and with the API stubbed instead the document comes off the network, which is the half
+being asserted — so the fact joins decision 281's owed device check as a fourth line, unsigned.
+
+**Cost.** One `test.use` and one describe in a file that was written this milestone. The phone
+project loses the offline boot and `docs/TESTING.md` says so with the reason; it gains three
+assertions that were not being made at all. What is NOT done here: `02-shell.spec.js` is left
+alone — its logout test passes on both projects once decision 272's reload is conditional, and
+making the phone half honest is a change to a file this gate did not open.
+
+### 285. Logout leaves by a document navigation that NAMES /login, because a reload names nothing
+
+**What the spec says.** §3.2: logout "clears the session cookie only", and the account chip switches
+between member profiles on one device — so decision 272's rule is that a sign-out leaves nothing of
+the previous person on that device. §6.8 governs what a household reads while it happens.
+
+**Why it changes.** Decision 272 wrote `await goto('/login')` and then `location.reload()`, and named
+the hazard in its own comment: "AFTER the navigation resolves, not beside it ... a reload
+mid-navigation races it." The await does not close that race. `clearUser()` two lines above is read
+by `+layout.svelte`'s own `guard()` effect, so a second `goto('/login')` starts in the same tick;
+SvelteKit writes the history entry only after `await load_route` has imported the route's chunk
+(`client.js:1882`), and a superseded navigation returns before it — `navigate()` resolves either way,
+so `await goto(x)` is no statement about where the address bar is.
+
+The third browser gate's trace says what that cost. `POST /api/auth/logout 200`; then
+`GET /_app/immutable/nodes/9` — the /login chunk, still in flight; then, 1.3 ms later, a document
+navigation to **/rate** (`Sec-Fetch-Mode: navigate`, `Cache-Control: max-age=0`). The reload did
+clear the previous person — the rail on the next screen reads the new member's own empty ledger —
+and then mounted the Rate surface with nobody signed in at all. `rate/+page.svelte` calls
+`onMount(load)` unconditionally, so `GET /api/rate` answered 401 fifty-one milliseconds before the
+next person's name went into the form. Decision 282 is right not to call that a lost session, so the 401 fell
+through to the surface, which latched `booted = true` and `api/deps.py`'s "not signed in" — and the
+sign-in that follows is a client-side navigation, which clears nothing. The new member's Rate
+surface therefore opened on the previous boot's error, with no loading state and no card:
+`19-phone-shell.spec.js:744`, ten seconds waiting for `rate-loading`, on the desktop project.
+
+**The decision.** `if (ended) location.assign('/login')`, with the client-side `goto('/login')` kept
+for the path where the POST never landed (decision 272, amended, is untouched: nothing may leave
+this device believing a session ended that the server never heard of). A document navigation is as
+total as a reload and it names its destination instead of inheriting one, so there is no race left
+to win; this file already leaves the same way for a new version (`beforeNavigate`,
+`location.href = nav.to.url.href`).
+
+**Cost.** One line in `logout()` and the paragraph that argued the old one. Nothing else moves: the
+seam, `guard()`, the stores and every assertion stay as they are. The phone project passed this test
+at the third gate and desktop failed it, and nothing about the two form factors is involved — the
+margin in the trace is 1.3 ms between a superseded `goto` and a history entry, which is exactly the
+kind of ordering two engines schedule differently. The phone's pass was the same defect landing the
+other side of a photo finish.
+
+**What is NOT done here, and is filed.** Two facts the trace exposes are real and neither is this
+failure. (1) §6.8: a surface printed the backend's own sentence — "not signed in", under a header
+carrying the household's own name. That is decision 282's deliberate fall-through: wherever a read
+lands with no session, the surface renders `err.message`, which is `api/deps.py`'s words. Repairing
+it is a copy rule for six surfaces plus a change to the seam decision 282 has only just settled, and
+phase 1's eight tests are what that decision protects. (2) `rate.svelte.js:300-301` sets
+`booted = true` in a `finally`, so a first read that FAILED counts as booted and the loading state
+never comes back; the same latch is in Rank, Tonight and Home. (2) is what makes (1) durable rather
+than a flash. Both are reachable with no logout anywhere near them: `02-shell.spec.js`'s deep-link
+test opens /rank with no cookies, and the surface reads and fails before `guard()` reaches /login.
+
+**Amended at review cycle 2 (`M415-C2-SHELL-03`): the hook that leaves the document for a deploy
+was rewriting the one navigation this decision keeps client-side.** Finding 23's `beforeNavigate`
+turns ANY client-side navigation into `location.href = nav.to.url.href` while `$updated` is up, and
+`svelte.config.js` polls every 60 s, so for a minute after a deploy lands that includes
+`logout()`'s `else await goto('/login')` — the branch decision 272's amendment chose deliberately
+because the POST never landed. Converted to a document load it re-boots into the session the tap was
+meant to end: the cookie is HttpOnly, `/auth/me` answers 200, `landingRoute()` returns `/` and
+`guard()` carries the person who just tapped Log out back to Home under their own name, which is the
+sign-out visibly not happening. The repair is one flag, `leaving`, set around that `goto` and read by
+the hook — narrower than excluding /login, which would refuse a deploy to anyone navigating there on
+purpose. A deploy is taken at a route change the person CHOSE, and a sign-out that could not reach
+the appliance is not one. Held by `test_the_deploy_is_taken_at_a_route_change_the_person_chose`,
+which is where the hook's other two clauses already live, because no spec moves `$updated`.
+
+---
+
+### 286. A destination the shell cannot name is an explicit state, not the authed shell with nobody in it
+
+**What the spec says.** §3.1: a first boot "serves the setup wizard", and where the app cannot do
+what was asked it must "render an explicit state instead of erroring". §3.2 makes the session a
+server fact the shell obeys. §6.8 says what a household reads while it happens.
+
+**Why it changes.** `guard()` routes from two reads. `bootstrap()` swallows a failed `/setup/state`
+into null, and `landingRoute()` reads `setup.required` to tell §3.1's first admin from a signed-out
+member — so where that read did not arrive and `/auth/me` answered 401, /setup and /login are both
+live readings of one state and the client holds no bit that separates them. sec-14 cut the anonymous
+payload; here there is no payload at all. Finding 15 asked the guard to refuse to route there, and
+it does: `if (!session.setup && !session.user) return;`.
+
+Refusing is right. Refusing and stopping was not. `session.offline` is false in that state — the
+appliance ANSWERED — so the shell fell through to its last branch and painted the authed chrome:
+the header, an account chip reading "signed out", `NavRail` deriving no links from a null user, and
+the surface underneath printing `api/deps.py`'s sentence. Decision 283's retry is armed by
+`session.offline`, so no timer existed; decision 282 correctly declines to read that 401 as a
+sign-out, so the seam never fired; and `guard()` re-entered the same early return on every later
+navigation. The only exit was the menu labelled "signed out". It is reachable from one shape rather
+than an exotic one: `/config` and `/setup/state` go out together and `/auth/me` only after they
+settle, so `api.js`'s 10 s deadline (or `api/deps.py`'s own 10 s pool-acquire 503, whose docstring
+names "an eleventh request to `/api/setup/state` never answered") opens a window in which the box
+becomes answerable between the two. A dead cookie — the hourly prune, a rotated `SESSION_SECRET`, a
+restored backup — is the other half, and finding 14 already lists all three. `main` routed that
+person to /login correctly; this milestone fixed the first-boot half and broke the other one.
+
+And the state was wrong under BOTH readings of its own ambiguity: a first admin does not belong on
+the authed shell either. What stood there was a rendering of a fact nobody read, which is exactly
+the category decision 271 took out of the header — "the one line of the shell that is a statement of
+fact rather than a rendering of one".
+
+**The decision.** The shell states the missing read and asks again. `landingUnknown` is
+`session.booted && !session.offline && !session.setup && !session.user`; it renders a card of its
+own (`data-testid="landing-unknown"`) in place of the shell, after the `bare` branch and after the
+offline one, and it arms decision 283's 5 s retry beside `session.offline`. `guard()`'s early return
+is untouched and still load-bearing: it is what keeps the shell from routing that person on a guess
+while the card is up. The moment `/setup/state` answers, `landingUnknown` goes false, the effect's
+cleanup disarms the timer and `guard()` lands §3.1's first admin on /setup and a lapsed member on
+/login — both correctly, and without the client ever having had to choose.
+
+`bare` still wins, deliberately: /login's form and /setup's wizard each re-read for themselves
+(`setup/+page.svelte` calls `bootstrap()` on mount when `session.setup` is null), so a person
+already on one of them is not taken off it and shown a card instead.
+
+**What is refused.** Not deleting the early return: that is the whole of finding 15's first-boot
+half, and /login is in `PUBLIC`, so once the first admin has been carried there nothing routes back
+— in an installed standalone web view there is no address bar to type /setup into either. Not
+reusing the offline card: its copy says "You are still signed in and nothing was sent", which is
+false to the one person this state is about. And not a fourth read or a `/setup/state` retry of its
+own: decision 283's timer already asks the whole of `bootstrap()` on the same cadence, and a second
+poller would be the automatic retry the plan's non-goals refuse.
+
+**Amended at review cycle 2 (`M415-C2-SESS-01`, `M415-C2-SHELL-01`, `M415-C2-SHELL-02`): this card
+must not be reached by destroying an answer the device already has, and the card beside it must not
+assert one.** Three repairs, all in the same boot path.
+
+`bootstrap()` assigns `/config`'s three fields only inside `if (config)`; the sibling line wrote the
+swallowed `/setup/state` null straight through. So a SECOND boot — this document had already been
+told the wizard was done, the hourly prune then took the cookie while the first pair of reads blipped
+— destroyed the answer in hand and rendered this card, whose own sentence says that answer "did not
+arrive" to a device that had it. `landingUnknown` reads `!session.setup`, which conflates "never
+read" with "the latest read failed", and only the first is the state argued for above. The read is
+now preserved when it says `required: false` and dropped when it says `required: true`: the first is
+terminal, because `api/setup.py` defines `required` as "no admin exists" and
+`api/admin.py`'s `_refuse_if_last_active_admin` refuses to demote, disable or delete the last one,
+while the second goes stale the moment an admin is created on another device — and `setup/+page.svelte`
+reads that bit as `hasAdmin` under fe-46's default, where a payload not read yet counts as an admin
+existing. Preserving the transient half would have re-opened fe-46; preserving the terminal half
+costs nothing and lands the lapsed member on /login, which is where `main` landed them.
+
+The offline card beside this one said "You are still signed in and nothing was sent" unconditionally.
+`manifest.webmanifest` starts the installed icon at `/`, which is not `bare`, and module `$state`
+does not survive a document load — so on the one journey the shell cache exists for, `session.user`
+is null and that sentence was a rendering of nothing. A member who had tapped Log out and reopened
+the icon was told the opposite of what the tap did, on a screen with no address bar to reach /login
+from. The second sentence is now conditional on the bit that decides it, which is decision 271's rule
+applied one card over.
+
+And the initial boot was a fourth way into `bootstrap()` that `reconnect()`'s single-flight guard
+could not see: `onMount` called `bootstrap()` inline, and the `online` listener is registered before
+it. An interface that flaps while the first reads are in flight — up to `api.js`'s deadline — opened
+a second concurrent boot writing into the same `session` object; the winner painted a working shell
+and the loser's stale `/auth/me` then rejected into `session.offline` on top of it. The boot goes
+through `reconnect()`, which is that body plus the flag, and at mount the flag is false, so nothing
+else about the boot moves.
+
+**Cost.** One `$derived`, one clause in decision 283's effect, one branch of markup, and the
+comment that argues the guard's early return. No coverage row changes destination; the row
+`platform-an-unreachable-appliance-is-not-a-sign-out` gains the sentence and keeps its tests. No
+spec in `e2e/` drives a failed `/setup/state` — putting a server into that shape for one assertion
+buys a fixture with no other use — so the branch arithmetic is held in
+`frontend/src/routes/shell-layout.test.js`, mounted vitest, unregistered by decision 274, with the
+first-boot and lapsed-member cases beside it as the two things this must not undo. The gate's
+counts do not move: every spec in the suite answers `/setup/state`, so `landingUnknown` is false
+everywhere the suite looks.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

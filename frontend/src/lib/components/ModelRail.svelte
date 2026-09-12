@@ -17,6 +17,7 @@
    * reconstruct one.
    */
   import { eventTime, loadModelLog } from '$lib/home.svelte.js';
+  import { dismiss } from '$lib/dismiss.js';
 
   let { open = false, onClose, suppressed = [] } = $props();
 
@@ -53,10 +54,38 @@
   const events = $derived(log?.events ?? []);
   const kinds = $derived(log?.kinds ?? []);
   const shown = $derived(filter ? events.filter((e) => e.kind === filter) : events);
+
+  /**
+   * The shell's trigger, which is the one outside tap this drawer must NOT dismiss on.
+   *
+   * `rail.svelte.js` documents `toggleRail` as one rule for the button and proposal 118's `m`
+   * shortcut — "Flip the drawer" — and the button lives in `+layout.svelte`'s header, outside
+   * this node. A plain outside-tap dismissal closes on its pointerdown and the click that follows
+   * flips it straight back open, so the control that opens the drawer would stop being able to
+   * close it. The keystroke needs no such guard: `m` is not Escape, and Escape pressed while the
+   * trigger happens to hold focus is still a dismissal.
+   */
+  const OPENER = '[data-testid="model-rail-open"]';
+
+  /** @param {Event} event */
+  function dismissRail(event) {
+    const target = event.target;
+    if (event.type === 'pointerdown' && target instanceof Element && target.closest(OPENER)) return;
+    onClose?.();
+  }
 </script>
 
 {#if open}
-  <aside class="rail" data-model-log aria-label="Model log" data-testid="model-rail">
+  <!-- Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape."
+       Proposal 118 makes this a sheet on compact layouts, which is the shape that most needs it:
+       62 vh of the screen whose only exit was the control in its corner. [proposals 127, 131] -->
+  <aside
+    class="rail"
+    data-model-log
+    aria-label="Model log"
+    data-testid="model-rail"
+    use:dismiss={dismissRail}
+  >
     <header>
       <div>
         <div class="title">Model log</div>
@@ -134,9 +163,14 @@
 {/if}
 
 <style>
+  /* The same inset the header reserves, for the same reason: `app.html` asks for
+     `viewport-fit=cover` and a black-translucent status bar, so the installed web view begins
+     above the header and a drawer anchored at a bare 54 px opens behind the clock. The compact
+     override below is a bottom sheet (`top: auto`) and needs none of this. [§6 preamble;
+     decision 279] */
   .rail {
     position: fixed;
-    top: 54px;
+    top: calc(54px + env(safe-area-inset-top));
     right: 0;
     bottom: 0;
     width: min(430px, 100%);
@@ -158,6 +192,8 @@
     font-size: 14.5px;
     font-weight: 600;
   }
+  /* 48 px on both axes, not only the one `design.css`'s coarse block reaches. It raises
+     `min-height` and never `min-width`, so this exit measured 48 by 32 on a phone. [§6 preamble] */
   .close {
     background: none;
     border: none;
@@ -186,6 +222,25 @@
   .chip.on {
     border-color: var(--ember);
     color: var(--ember-lift);
+  }
+  /* Both axes, on the pointer the rule is about, for both of this component's controls.
+     `design.css`'s coarse block raises `min-height` on `button` and never `min-width`, and it
+     gives `padding-inline` to three primitives a `.chip` is none of — so the exit came out 48 by
+     32 and the kind filters 48 by 36: the same defect, eight lines apart, and only the exit was
+     repaired. The filters are three and four characters of a 10 px mono face in a wrapping row
+     with a 6 px gap, on the surface §6.7 calls the primary M2 debugging instrument, and a
+     mis-tap changes which events it is showing.
+     COARSE, not unconditional: the rule these complete lives behind `pointer: coarse`, so
+     declaring the width outside it made both controls 48 wide and 32 tall on a mouse — the same
+     lopsidedness rotated, and in `TitleDetail` it put the box over the end of the heading. A
+     mouse has no 48 px floor; §6's preamble writes it for fingers. Still scoped here rather than
+     added to design.css's coarse list, which decision-level would inflate every narrow control
+     in the app. [§6 preamble; M4.15 review cycle 1] */
+  @media (pointer: coarse) {
+    .close,
+    .chip {
+      min-width: var(--touch);
+    }
   }
   .events {
     list-style: none;

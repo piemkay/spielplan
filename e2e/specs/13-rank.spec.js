@@ -492,6 +492,13 @@ test.describe('rank', () => {
     const first = board(page).locator('[data-title]').first();
     await first.click();
 
+    // 48, and BOTH dimensions. The title has promised 48 since M3 while the assertion admitted
+    // 44, and `design.css` has never defined a 44: `--touch` is 48px and no 44-47 px value
+    // exists anywhere in `frontend/src`, so the number under the title was checking against a
+    // constant the app does not have. The width is the half that was missing rather than merely
+    // low - the coarse block raises `min-height` alone, so a control 48 px tall and 32 px wide
+    // passed every 48 px assertion in this suite, which is the shape two overlay exits shipped
+    // in. [tq4-48px-rule-asserted-at-44-against-a-48px-token]
     for (const id of [
       'rank-sharpen',
       'rank-seen',
@@ -501,7 +508,14 @@ test.describe('rank', () => {
     ]) {
       const box = await page.getByTestId(id).boundingBox();
       expect(box, `${id} is not on screen`).not.toBeNull();
-      expect(box.height, `${id} is ${box.height}px tall`).toBeGreaterThanOrEqual(44);
+      expect(
+        box.height,
+        `${id} is ${box.height}px tall, under --touch (48px)`
+      ).toBeGreaterThanOrEqual(48);
+      expect(
+        box.width,
+        `${id} is ${box.width}px wide, under --touch (48px)`
+      ).toBeGreaterThanOrEqual(48);
     }
     await page.getByTestId('rank-cancel-lift').click();
   });

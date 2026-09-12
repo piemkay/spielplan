@@ -41,18 +41,24 @@
     display: flex;
     gap: 3px;
   }
+  /* How far through the block, in three volumes of one neutral: the remainder is the line the
+     UI is already drawn with, the part behind you is ink at reading weight, and the slot you are
+     on is full ink. Progress is a fact about the sitting and never a selection, so §6.8's one
+     accent does not pay for it — the ramp's brightness carries what the hue used to, and the
+     fifteen ticks stop competing with whichever pair is actually being chosen between.
+     [§6.8; decision 276] */
   .tick {
     height: 3px;
     flex: 1;
     min-width: 6px;
     border-radius: 2px;
-    background: var(--line-2);
+    background: var(--progress-track);
   }
   .tick.done {
-    background: var(--ember-edge);
+    background: var(--progress-fill);
   }
   .tick.now {
-    background: var(--ember);
+    background: var(--progress-now);
   }
   [data-testid='rate-counter'] {
     letter-spacing: 0.04em;

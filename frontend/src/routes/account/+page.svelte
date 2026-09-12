@@ -6,8 +6,8 @@
    *   - passkeys, which are primary auth and are registered *from the profile page* (§3.2);
    *   - first-run onboarding — home-screen install and push permission (§6 preamble) — which
    *     is §3.1's fifth setup step and the only surface that can complete it. It sits first
-   *     while it is still owed, because a member arriving here from the forced password change
-   *     (`?welcome=1`) is exactly the person it was written for;
+   *     while it is still owed — except on the `?welcome=1` hand-off itself, where the passkey
+   *     card is rendered above it and the markup below argues why;
    *   - the switch PIN, which is a shared-device convenience, not a login;
    *   - the Jellyfin link, which is optional and drives seen-sync only (§3.3).
    *
@@ -169,49 +169,64 @@
   {#if error}<div class="err" role="alert">{error}</div>{/if}
   {#if note}<div class="note" role="status">{note}</div>{/if}
 
+  {#snippet passkeys()}
+    <section class="card">
+      <h2>Passkeys</h2>
+      {#if !canPasskey}
+        <p class="why">This browser has no WebAuthn support — password sign-in still works.</p>
+      {/if}
+
+      {#if credentials.length === 0}
+        <p class="why" data-empty="passkeys">No passkey registered on this account yet.</p>
+      {:else}
+        <ul class="list">
+          {#each credentials as c (c.id)}
+            <li class:dead={!c.usable}>
+              <div>
+                <div class="name">{c.label ?? 'Unnamed passkey'}</div>
+                <div class="data meta">
+                  {c.rp_id} · used {c.sign_count} time{c.sign_count === 1 ? '' : 's'}
+                  {#if !c.usable}· registered for a different address — no longer usable{/if}
+                </div>
+              </div>
+              {#if !pinSession}
+                <button class="btn-ghost" onclick={() => removePasskey(c.id)}>Remove</button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if pinSession}
+        <p class="why" data-pin-session>{PIN_SESSION}</p>
+      {:else}
+        <div class="row">
+          <input type="text" placeholder="Name this device (optional)" bind:value={label} />
+          <button class="btn-primary" onclick={addPasskey} disabled={busy || !canPasskey}>
+            {busy ? 'Waiting for the device…' : 'Add a passkey'}
+          </button>
+        </div>
+      {/if}
+    </section>
+  {/snippet}
+
+  <!-- Which of these two cards comes first, and why it is not always the same one.
+       §3.1's forced password change lands a new member here as `?welcome=1`, and the first
+       thing the install step then tells them is to leave for the home-screen icon — where
+       §3.2's HttpOnly cookie, held in that app's own jar, makes them sign in a second time.
+       Offering the passkey *after* the instruction to leave is offering it too late, so on
+       that one visit the order inverts. `welcome` is already precisely that visit — the
+       `?welcome=1` hand-off, no credential registered yet, WebAuthn present — and every other
+       visit keeps §3.1's own order, with the fifth setup step first while it is still owed.
+       [fe-14-ios-install-journey-second-login-and-copy] -->
+  {#if welcome}{@render passkeys()}{/if}
+
   <!-- §6 preamble / §3.1's fifth step. Its own component because it owns four asynchronous
        browser facts (permission, subscription, install prompt, standalone) that have nothing
        to do with the rest of this page. -->
   <Onboarding />
 
-  <section class="card">
-    <h2>Passkeys</h2>
-    {#if !canPasskey}
-      <p class="why">This browser has no WebAuthn support — password sign-in still works.</p>
-    {/if}
-
-    {#if credentials.length === 0}
-      <p class="why" data-empty="passkeys">No passkey registered on this account yet.</p>
-    {:else}
-      <ul class="list">
-        {#each credentials as c (c.id)}
-          <li class:dead={!c.usable}>
-            <div>
-              <div class="name">{c.label ?? 'Unnamed passkey'}</div>
-              <div class="data meta">
-                {c.rp_id} · used {c.sign_count} time{c.sign_count === 1 ? '' : 's'}
-                {#if !c.usable}· registered for a different address — no longer usable{/if}
-              </div>
-            </div>
-            {#if !pinSession}
-              <button class="btn-ghost" onclick={() => removePasskey(c.id)}>Remove</button>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
-
-    {#if pinSession}
-      <p class="why" data-pin-session>{PIN_SESSION}</p>
-    {:else}
-      <div class="row">
-        <input type="text" placeholder="Name this device (optional)" bind:value={label} />
-        <button class="btn-primary" onclick={addPasskey} disabled={busy || !canPasskey}>
-          {busy ? 'Waiting for the device…' : 'Add a passkey'}
-        </button>
-      </div>
-    {/if}
-  </section>
+  {#if !welcome}{@render passkeys()}{/if}
 
   <!-- as-14: the forced first-login change was the only way anybody ever reached
        /account/password, so an unlocked member had no way to change their password at all

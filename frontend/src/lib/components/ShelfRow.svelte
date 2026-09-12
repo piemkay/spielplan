@@ -18,11 +18,23 @@
    * detection plus hover-revealed edge chevrons paging 80% of the viewport; touch gets native
    * momentum scroll with an edge-fade affordance and no chevrons."
    */
-  import PosterCard from '$lib/components/PosterCard.svelte';
+  import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
   import { facetColour, toPosterTitle } from '$lib/home.svelte.js';
 
   let { section, shelfId, ranking = true, onSelect } = $props();
+
+  /**
+   * Does any card on this row wear §8 stage 10's chip?
+   *
+   * The chip's own explanation lived in a `title=` attribute, which is a hover tooltip and does
+   * not exist on the form factor §6's preamble makes primary — so on a phone the badge was an
+   * unexplained word on a poster. §6.8's rule is that every conflict carries its one-line why,
+   * and the shelf is where that line costs once rather than once per card: twelve identical
+   * sentences down a row would be the noise the quiet-reason register exists to avoid.
+   * [§6.8; M4.15 finding 10, decision 278]
+   */
+  const anyColdPlaced = $derived(section.items.some((item) => isColdPlaced(toPosterTitle(item))));
 
   /** @type {HTMLElement | undefined} */
   let row = $state();
@@ -95,6 +107,11 @@
     <p class="why" data-testid="shelf-why">{section.why}</p>
     {#if section.caption}
       <p class="why caption" data-testid="shelf-caption">{section.caption}</p>
+    {/if}
+    {#if anyColdPlaced}
+      <p class="why" data-testid="shelf-cold-note">
+        Cards marked "new" are placed by the Cold Tower — no crowd data yet.
+      </p>
     {/if}
     {#if section.shared_terms?.length}
       <!-- Computed by the server as the intersection over the cards actually returned, so the
@@ -185,9 +202,10 @@
   .why {
     margin: 4px 0 0;
   }
-  .caption {
-    color: var(--ink-5);
-  }
+  /* `.caption` has no rule of its own: it was a second, dimmer colour for a line already in the
+     quiet-reason register — --ink-5, the darkest text in the app at 2.22:1 before decision 275
+     raised the token — and §6.8's register is one thing or it is not a register. The class stays
+     in the markup because `shelf-caption` is what the suite reads. [§6.8; decision 275] */
   .terms {
     display: flex;
     gap: 6px;
@@ -284,9 +302,18 @@
   .rowwrap:hover .nudge:not([hidden]) {
     opacity: 1;
   }
+  /* The accent stays here because a focus ring IS §6.8's other selection: the keyboard has
+     chosen this control. The rule does a second job the app's one global ring cannot — the
+     chevron is `opacity: 0` until the row is hovered, so without this a keyboard user tabs onto
+     a control that is not drawn at all. That reveal is the whole of what the exception buys: the
+     outline beside it RESTATES design.css's one ring and does not redefine it, so it is that
+     rule's value to the character. It was `1px` here, which made the app's single focus ring two
+     of them — 2px everywhere and 1px on this chevron, because a scoped `.nudge:focus-visible`
+     outranks a bare `:focus-visible` and wins on width, style and colour while the offset falls
+     through. [§6.8; proposals 127, 131; decision 276 keep-list; review cycle 1] */
   .nudge:focus-visible {
     opacity: 1;
-    outline: 1px solid var(--ember);
+    outline: 2px solid var(--ember);
   }
 
   /* Touch gets native momentum scroll and an edge fade — no chevrons (proposal 28). */

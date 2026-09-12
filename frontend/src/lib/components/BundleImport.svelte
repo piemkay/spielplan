@@ -140,9 +140,18 @@
     border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
   }
+  /* The progress ramp, not the accent. These four are non-interactive spans lit cumulatively by
+     `phase`, so nothing here is selected and the last of them is a server outcome nobody picks —
+     and §6.8 spends the ember on selection and primary actions. The cost was visible rather than
+     theoretical: `setup/+page.svelte` renders this component at wizard step 3, directly under the
+     step ramp already drawn in `--progress-now` and directly over the `.btn-primary` whose fill IS
+     the accent, so the household's first session showed two step ramps in two colours and an ember
+     strip competing with the one action the colour is being saved for. One token and not the
+     ramp's three because this strip cannot tell a step behind you from the one you are on.
+     [§6.8; decision 276 as amended; M4.15 review cycle 1: acc-01] */
   .step.on {
-    border-color: var(--ember);
-    color: var(--ember-lift);
+    border-color: var(--progress-now);
+    color: var(--ink);
   }
   label {
     display: flex;

@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.13"
+current_milestone = "M4.15"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -465,9 +465,84 @@ id = "map-taste-admin-palette-facet-binding-and-accent"
 spec = "§6.8 + §6.4 binding note"
 milestone = "M0"
 kind = "static"
-what = "A source guard asserts the UI's facet colour keys are exactly vocabulary v1's eleven facets (no invented dialogue/tone/setting/craft, none of place/era/sensibility/register missing) and that no facet colour or user identity colour reuses the ember accent #c8613a."
+what = "A source guard asserts the UI's facet colour keys are exactly vocabulary v1's eleven facets (no invented dialogue/tone/setting/craft, none of place/era/sensibility/register missing), and the accent scan covers EVERY component style block AND every component's markup, not only design.css: no component spends var(--ember) or #c8613a — in a rule, in a style attribute, on a style: directive or in the JavaScript that feeds one, whether in the component's own script block or in a module beside it — outside an explicit selection-and-primary-action allowlist that is read in both directions, so a licence cannot outlive the rule it licensed; and no design.css token is given that colour under a second name, in any of its spellings — var(--facet-mood) included, which paints the same six hex digits and is read as one of those spellings for as long as design.css binds it to them. --facet-mood sharing the accent hex is the one deliberate exception, named here rather than forbidden by a sentence its own test whitelists; the exception is the token's VALUE and not a licence for its spends, so a spend of it is enumerated too, on a second list that argues facet rather than selection. The progress ramp design.css mints in place of the retired accent fills is painted from its own three tokens on the consumer design.css names by hand — the first-boot wizard's steps — rather than from a raw hex that is a facet's identity."
 why = "§6.4 binds everything facet-shaped to the real 11 facets; §6.8 spends the accent on selection and primary actions, so a facet or avatar wearing it makes selection and data indistinguishable."
-tests = ["backend/tests/test_static_contracts.py::test_facet_colours_are_exactly_vocabulary_v1", "backend/tests/test_static_contracts.py::test_no_prototype_facet_survives", "backend/tests/test_static_contracts.py::test_the_facet_colours_are_distinguishable", "backend/tests/test_static_contracts.py::test_the_ember_accent_is_not_reused_as_a_neutral", "backend/tests/test_static_contracts.py::test_the_data_voice_is_monospace_and_the_display_face_is_not"]
+# Decision 276 amends this sentence. It forbade "no facet colour or user identity colour reuses the
+# ember accent" while its own named guard whitelists `facet-mood` in as many words and reads
+# design.css alone -- so the row forbade what its test permits, and the 21 `var(--ember)` uses in 15
+# component and route style blocks could not trip it. The exception is the deliberate one
+# (proposal 124 gives mood the warm end) and recolouring a facet is a palette decision belonging to
+# whoever ships §6.4; what changes is the scan. The name below,
+# `test_the_ember_accent_is_spent_only_on_selection_and_primary_actions`, is M4.15's to write: it
+# reads every `.svelte` `<style>` block against an enumerated allowlist, and it is named here
+# before it exists for the reason M4.9's and M4.13's openings give -- a bare row says only that a
+# row is bare, while a named missing test says which stage owes what. Until it lands this row is
+# one of the nineteen names rule 2 prints, and that list is the milestone's test plan.
+#
+# Review cycle 1 adds the ramp's own guard. The accent scan matches `var(--ember)` and `#c8613a`
+# and nothing else, so a component may spend any OTHER token's colour as a literal and the build
+# stays green — and the first-boot wizard was painting a recorded step `#5fae7a`, which is
+# `--facet-characters`, on the screen §3.1 puts before any facet has been seen. design.css's own
+# sentence forbids exactly that ("a facet colour may not be borrowed either, because a facet
+# colour is an identity that means one vocabulary term on every surface it appears") and names the
+# wizard's steps as a consumer of the three-token ramp it mints instead. The scan is NOT widened
+# to the eleven facet hexes: four further sites carry that same green as an ok/success colour and
+# one of them is `routes/admin/data/+page.svelte`, which decision 270 puts in the sibling lane.
+#
+# Review cycle 1 also widens the scan from the style block to the whole component. Reading
+# `<style>` alone read one of the two places this app writes colour: `style:color={facetColour(
+# ...)}` is the idiom in four of the very files the sweep retired a fill from, and `AccountChip`
+# takes an avatar's background from a database column — so a returning spend would have been
+# written the way its neighbours are written, and the guard whose job is to make each new spend
+# name itself would have stayed green. The match is over the ELEMENT's attributes rather than out
+# of a `style=` value: a directive, a quoted attribute and a shorthand are three spellings of one
+# spend, and enumerating spellings is how a fourth one walks past. [M415-REV1-08]
+#
+# Review cycle 1 takes that argument its last two steps. The SPELLING of the colour is widened the
+# way its LOCATION was: `var( --ember )` and `var(--ember, #fff)` are the token's own other legal
+# forms and the literal pattern matched neither, while `rgb(200, 97, 58)` is the same colour one
+# keystroke pattern from the hex with no token in it at all. Full strength only, because
+# `--ember-wash` and `--ember-edge` ARE that triple at an alpha and matching it bare would call the
+# quietest use of this colour its loudest. [acc-03]
+#
+# design.css gets a list of its own rather than being read against the component one, which
+# decision 276 refuses for a reason that still holds — the sheet is where this accent is SUPPOSED
+# to be spent. But the component scan stops at `.svelte`, which left the one stylesheet every
+# surface inherits from as the place a global `.badge { background: var(--ember) }` could be added
+# with both guards green: the M0 guard matches token DEFINITIONS and cannot see a use of any
+# spelling. Its five spends are enumerated with the line saying which of the two each is, and the
+# list is held in both directions so a licence does not outlive the rule it licensed. [acc-04]
+#
+# The component allowlist also loses an entry. `BundleImport.svelte: .step.on` was licensed as "the
+# swap step the admin has reached, of four — the wizard's own selection" over markup that is four
+# NON-interactive spans lit cumulatively by `phase`. The component renders inside the first-boot
+# wizard at step 3, so one screen carried two step ramps in two colours for one meaning, with the
+# ember strip between the ramp above it that this milestone retired and the `.btn-primary` below
+# whose fill IS the accent. A licence with a false reason reads exactly like a true one, which is
+# what the second guard named below exists to say. [acc-01]
+#
+# Review cycle 2 closes the seam BETWEEN the two readers. The half that reads names was M0's
+# lowercase hex literal, and the half that reads spends skips every `--` property by design — so a
+# token minted as `rgb(200, 97, 58)`, as `#C8613A` or plainly as `var(--ember)` was a name to one
+# and an unrecognised colour to the other, and a `.badge { background: var(--badge-bg) }` under it
+# reached every surface in the app with both guards green. That is the scenario the design.css
+# list above was added for, reached one colour space over; both halves read `_ACCENT` now, which
+# leaves the derivatives and the `hsl()` near miss exactly where decision 276 put them.
+# [acc-c2-02]
+#
+# The scan reads the JavaScript beside the markup, for the reason it already reads the markup
+# beside the style block: `style:background={FILL}` carries an EXPRESSION, so the colour sits one
+# scope out in the component's own script block or one file out in a module, and no spelling of it
+# appears where either reader was looking. Colocated `*.test.js` are skipped, the reason
+# `_frontend_sources` already gives — a falsifier naming a colour is asserting about it.
+# [M415-C2-CSS-07]
+#
+# And the sixteen-entry component list is read in both directions, which its five-entry design.css
+# sibling already was under prose arguing the rule generally: a licence for a rule that has moved
+# is how an allowlist rots into a list of things somebody once wrote. The keys are
+# `file: selector`, so the file that renames or deletes a rule inherits its own stale licence the
+# moment it writes that name again, which is what a component rewrite does. [acc-c2-04]
+tests = ["backend/tests/test_static_contracts.py::test_facet_colours_are_exactly_vocabulary_v1", "backend/tests/test_static_contracts.py::test_no_prototype_facet_survives", "backend/tests/test_static_contracts.py::test_the_facet_colours_are_distinguishable", "backend/tests/test_static_contracts.py::test_the_ember_accent_is_not_reused_as_a_neutral", "backend/tests/test_static_contracts.py::test_the_ember_accent_is_spent_only_on_selection_and_primary_actions", "backend/tests/test_static_contracts.py::test_the_wizard_paints_its_steps_from_the_progress_ramp", "backend/tests/test_static_contracts.py::test_the_two_step_ramps_answer_in_one_register", "backend/tests/test_static_contracts.py::test_design_css_spends_the_accent_where_the_app_selects_and_acts", "backend/tests/test_static_contracts.py::test_the_data_voice_is_monospace_and_the_display_face_is_not", "backend/tests/test_static_contracts.py::test_the_accent_sweep_reads_the_modules_beside_the_components", "backend/tests/test_static_contracts.py::test_a_component_licence_outliving_its_rule_is_an_offence", "backend/tests/test_static_contracts.py::test_the_accent_pattern_names_facet_mood_only_while_it_is_the_accent", "backend/tests/test_static_contracts.py::test_no_style_block_hides_a_brace_in_a_string"]
 
 [[requirement]]
 id = "platform-pin-profile-switch"
@@ -1380,6 +1455,13 @@ why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift
 # the ONLY way to move a title, so the fabricated neighbour duel was not an edge case but every
 # promotion into a non-empty tier. The e2e tap test asserts zero `tier_insert` duels.
 # [M4.10 finding 17, cs-03]
+#
+# This row's text does not change in M4.15 and its last test is NOT renamed -- two rows name that
+# title literally, and a renamed registered test breaks the build. What moves is what the title
+# means: `every control on the board meets the 48 px touch floor` asserted 44 in one dimension, so
+# a board of 44x33 controls passed a test named for a 48 px rule. It now asserts §6's preamble and
+# `--touch` as written -- 48 in BOTH dimensions -- which is the same clause this row has always
+# cited for the phone being §6.3's primary form factor.
 tests = [
     "e2e/specs/13-rank.spec.js::a title lifts on a tap and puts itself down again, writing nothing",
     "e2e/specs/13-rank.spec.js::tapping a tier drops the lifted title into it, and it stays there",
@@ -3591,7 +3673,7 @@ milestone = "M4.8"
 kind = "backend"
 what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_every_published_decision_range_ends_where_the_register_does", "backend/tests/test_spec_coverage.py::test_the_register_block_opens_with_the_number_of_decisions_it_holds"]
 # The ledger guard is registered here rather than given an eleventh row, and the row it lands on
 # is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
 # run is published, so a count no run produced is the same defect as a silent skip, one document
@@ -3611,6 +3693,16 @@ tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the
 # cycle after the paragraph was written, and nothing compared the two. Decision 184 refuses to
 # invent a count no run produced; this refuses to leave one standing that the map has overtaken,
 # which is the same rule read from the other end. [M4.11 review cycle 2: m411-c2-ledger-02]
+#
+# The fourth and fifth are that rule applied to the figure the other two cannot see: the DECISION
+# range and the count the register's own block opens with. Neither existing guard can reach one --
+# they parse the fenced block and the id-count sentence -- and M4.15 published three spellings of
+# one range simultaneously, the ledger ending at the last decision taken, the map's section header
+# one short of it and this file's own `MILESTONES` comment two, because all three were written
+# before the browser gate appended four more. They land here rather than on an M4.15 row for this
+# row's two reasons exactly: the defect is a published figure a later run overtook, and a twelfth
+# M4.15 row would flip that milestone's published block to 12/12 and redden the sibling guard
+# above until the block was re-pasted. [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -5793,3 +5885,661 @@ tests = [
     "backend/tests/test_layering_guards.py::test_the_guard_rejects_an_import_of_the_refit_module",
     "backend/tests/test_layering_guards.py::test_the_hyperparams_leaf_imports_nothing_but_the_standard_library",
 ]
+
+# --- M4.15: the shell on a phone (decisions 267-286; docs/milestones/M4.15-plan.md) ---------
+#
+# One milestone because one set of files. Six carry nearly every finding — `app.html`,
+# `routes/+layout.svelte`, `lib/design.css`, `lib/api.js`, `lib/session.svelte.js` and
+# `components/NavRail.svelte` — and they are exactly the files every other frontend milestone is
+# forbidden to edit. Every row below is a RULE that has to be decided once: the coarse-pointer
+# font size (16 px, because Safari zooms below it and does not zoom back), the touch minimum (48,
+# because `design.css:77` says `--touch: 48px`), the top inset (`env(safe-area-inset-top)`,
+# because `app.html` sets `viewport-fit=cover` and a translucent status bar), the ink contrast
+# (4.5:1, because the copy is 10-13 px), the accent's single meaning, the two type voices, and
+# the wrapper's deadline and error sentence. A rule decided inside one component is not a rule —
+# that sentence is already in `test_static_contracts.py:78`, and it is why this milestone exists.
+#
+# §6's preamble is the clause under all of it, and until these rows it was under the contract
+# nowhere near the chrome. `06-responsive.spec.js` -- the one spec in this suite that measures the
+# box -- was named by no row at all. The map's three `02-shell.spec.js` ids were held by M0's
+# session-cookie contract (§3.2) and M4.9's model rail (§6.7), and the older rows that do cite the
+# preamble cite it for undo, push, install guidance and per-card budgets, never for the chrome. So
+# the one normative sentence describing the box every surface sits inside owed no test to anybody.
+# The universal this paragraph shipped with is false of `02-shell` on three ids in two rows, and a
+# record an auditor greps has to survive the grep. [review cycle 3: M415-C3-COV-01]
+#
+# The rows are written BEFORE the code and every one of them NAMES the tests it owes — M4.9's and
+# M4.13's opening rather than M4.10's and M4.11's, because a row with no `tests` key tells you only
+# that a row is bare, while a row naming a test that does not exist yet tells you which stage owes
+# what. That is `docs/TESTING.md`'s own sentence about M4.13's opening, and it is worth more here
+# than in any milestone before it: the names are spread over one pytest file and four e2e specs, so
+# a bare list would have hidden which layer each rule is asserted at, and half of these rules can
+# only be asserted at the source because `env()` and a coarse pointer are not things this suite's
+# engines have. Twenty-one names, of which three already exist — 06-responsive's touch sweep,
+# 13-rank's board sweep and the mono/display guard the M0 row above also cites. The gate fails on
+# the other eighteen, plus the one this block adds to that M0 row, and THAT RED LIST IS THE TEST
+# PLAN: it is closed by writing those tests under those names, never by a waiver, never by renaming
+# a row's test, and never by lowering `current_milestone`. `docs/TESTING.md`'s ledger block and its
+# id-count sentence are re-pasted in the same change that writes these rows, because with the names
+# present the two ledger guards can be made green at the opening rather than left red until the
+# last test lands.
+#
+# Six of the eleven name `e2e/specs/19-phone-shell.spec.js` (decision 267). The phone project's
+# `testMatch` anchors its alternation on `\.spec\.js`, so the plan's `17-shell-phone.spec.js`
+# would not have run on the phone project at all — the milestone whose entire exit criterion is
+# stated on an iPhone 13 would have shipped its principal spec where no phone ever ran it. No row
+# below names a vitest id (decision 274): the vitest layer is written and left unregistered,
+# because `npm --prefix e2e run fresh`, the suite a milestone closes on, does not run it.
+#
+# Two rows this map already had are amended in place rather than duplicated, for the reason
+# M4.11's banner gives. `map-taste-admin-palette-facet-binding-and-accent` (M0) forbade what its
+# own test permits and is corrected above (decision 276); `tonight-rank-tap-to-tier-and-cancel`
+# (M3) takes no text change at all, but its named test `every control on the board meets the
+# 48 px touch floor` rises from 44 to 48 and gains a width assertion, so the row's meaning moves
+# without its words — which is why the note sits on that row itself, where a reviewer reading the
+# row against the test will meet it. That title must NOT change: two rows name it literally, and a
+# renamed registered test breaks the build.
+#
+# No migration. 0022 is the highest applied; 0023 belongs to M4.14 and 0024 to M4.16, and a
+# migration in this milestone's diff means the diff is wrong.
+
+[[requirement]]
+id = "platform-shell-clears-the-status-bar-and-the-toolbar"
+spec = "§6 preamble (installable PWA, phone-first)"
+milestone = "M4.15"
+kind = "static"
+what = "The app shell reserves the top safe-area inset and uses the dynamic viewport: the header rule pads and sizes itself by env(safe-area-inset-top), the two fixed overlays offset from the header by the same inset rather than a bare 54px, the shell and boot heights declare 100dvh behind a 100vh fallback, and the bare pages' top padding is max(their own value, env(safe-area-inset-top)). The bottom bar reserves env(safe-area-inset-bottom) and draws its links clear of it. And the three metas the whole argument rests on are read off the live document: viewport-fit=cover, the iOS standalone flag and the translucent status-bar style, with no scale lock beside them."
+why = "app.html sets viewport-fit=cover and apple-mobile-web-app-status-bar-style=black-translucent, so the installed app's web view starts under the status bar and 100vh is iOS Safari's large viewport — the header and the bottom tab bar are both covered on the primary form factor. env() resolves to 0 in every engine the suite drives unless one is asked to report an inset, so the rule is asserted at the source, and the shell header is measured once more with an inset injected into Chromium."
+# Decision 279: the inset is applied in TWO places. M4.9 gave the phone header `height: auto;
+# min-height: 54px; flex-wrap: wrap` (`+layout.svelte:346-351`) because four badges wrap it to two
+# rows, so the base rule's `calc(54px + env(...))` is silently discarded on exactly the form factor
+# the finding lives on. The guard asserts the rule and not the file's bytes, because `env()` is 0
+# on every engine here and a wrong calc() would fail no browser test.
+#
+# The bare pages are the row's third clause and they have no shell to inset them: `login` and
+# `account/password` pad themselves by 24px and `setup` by 40px, each of which starts under the
+# status bar in the installed app. `setup` is the one the component sweep owns, so its rule is
+# asserted by a guard of its own beside the shell's; the other two land with the shell.
+#
+# Review cycle 1 buys the row one RUNTIME check for the inset. "env() cannot be exercised in any
+# engine the suite runs" was the premise for asserting this at the source and nowhere else, and it
+# is false for Chromium: `Emulation.setSafeAreaInsetsOverride` overrides what env(safe-area-inset-*)
+# resolves to, and under it the header's two rules compose — padding, height, and the phone block's
+# min-height — which is the half a text match cannot read. It does NOT discharge any of the four
+# owed device checks in docs/TESTING.md and does not touch their signature line: there is no
+# standalone web view here, no real inset and no rotation, and WebKit has no CDP at all, so the
+# phone project keeps only the static guard. [M415-C1-COV-02]
+#
+# Which left the owed block itself held by nothing. Decision 281 refuses a pre-signed line because
+# it "tells the next reader to stop looking", and until review cycle 1 no test read those bullets
+# or that signature line at all -- so a later milestone could have closed the debt by writing a
+# device and a date rather than by holding one, and every gate would have stayed green. The guard
+# added here reads the block's claimed counts against the facts it lists and its signature fields
+# against the blanks, and its polarity is 05-milestones.spec.js's: it goes red on the day the
+# owner honestly signs, and comes out of this row in the same change. It cannot tell a true
+# signature from a fabricated one; what it buys is that filling the line means deleting a test
+# that quotes decision 281 back at you. [M4.15 review cycle 1: M415-C1-COV-03]
+#
+# And review cycle 2 makes that runtime check measure what the paragraph above says it measures.
+# It did not. `06-responsive.spec.js` skips every non-Chromium project and the desktop project is
+# pinned to 1400x900, so `@media (max-width: 720px)` was inert for the whole test and the delta
+# measured the base rule alone -- while three sentences in this repository, this one included, said
+# the phone block's min-height composed under it. That block was held by one text match on one
+# property, so a `padding-top: 0` written beside it would have passed both layers and put the
+# wordmark back under the status bar. The same test now resizes the same Chromium page to 390 and
+# asserts the override's own property, `min-height`, rather than a height delta: the phone rule
+# sets `height: auto`, which a delta assertion would let content reflow satisfy. Same project, same
+# test count, one more measurement. [review cycle 2: M415-C2-CSS-02]
+#
+# Review cycle 3 closes the two halves of that argument nothing read. The first is `app.html`: it
+# is one of M4.15's six exclusive files and no static guard CAN see it, because
+# `_frontend_sources()` filters to .css/.js/.svelte, so the .html is outside every sweep by
+# construction -- and its three metas are the PREMISE this row's `why` states by file:line. Delete
+# `, viewport-fit=cover` and the installed web view still starts at the physical top edge while
+# env() resolves to 0, so the header's padding and its calc() both collapse and every assertion
+# above stays green: the CDP test overrides what env() resolves to, BELOW the viewport-fit gate
+# that produces it in production. The inverse was unheld too -- `maximum-scale=1` would suppress
+# focus zoom by taking pinch zoom from everybody and redden nothing. The four assertions land in
+# the installability test, which already reads the live document on both projects.
+#
+# The second is the BOTTOM inset, and the asymmetry is what makes it a finding: the top one has a
+# static guard AND a CDP measurement, while `NavRail.svelte`'s
+# `padding-bottom: max(6px, env(safe-area-inset-bottom))` -- the only one in the tree -- had
+# neither. The static guard is scoped away from it by an explicit comment naming the bottom inset
+# as the near miss it must REJECT; the 48 px sweep measures link boxes, which a container's
+# padding does not move; and `the bottom bar sits inside the visible viewport` asserts the nav's
+# own box against innerHeight, which holds identically at 6 px and at 34. Deleting the line put
+# the bottom 34 px of six primary targets under the home indicator on every iPhone in portrait
+# with the whole gate green. `Emulation.setSafeAreaInsetsOverride` takes `bottom` as well as
+# `top`, measured in this Chromium before it was written, so it lands as two assertions inside the
+# CDP test that already holds a session on a page resized to 390 -- same project, same test count.
+# [review cycle 3: M415-C3-E2E-01, M415-C3-E2E-02]
+#
+# The banner above this milestone's rows argued that §6's preamble had never had an owner, and
+# published a universal about two spec files to carry it. This file refutes half of it, three ids
+# and 5600 lines earlier. The conclusion stands -- neither of those rows cites the preamble
+# -- but nothing keyed on the sentence, so the guard registered here reads the claim against the
+# map instead of leaving it to the next person who greps. [review cycle 3: M415-C3-COV-01]
+tests = [
+    "backend/tests/test_spec_coverage.py::test_the_owed_device_checks_are_recorded_and_still_unsigned",
+    "backend/tests/test_static_contracts.py::test_the_shell_reserves_the_top_safe_area",
+    "backend/tests/test_static_contracts.py::test_the_shell_uses_the_dynamic_viewport",
+    "backend/tests/test_static_contracts.py::test_the_first_boot_page_starts_below_the_status_bar",
+    "e2e/specs/06-responsive.spec.js::the bottom bar sits inside the visible viewport, not the large one",
+    "e2e/specs/06-responsive.spec.js::the header grows by the status-bar inset when one is reported",
+    "e2e/specs/06-responsive.spec.js::the app is installable: a manifest, an icon, and a theme colour",
+    "backend/tests/test_static_contracts.py::test_no_record_says_this_map_never_named_a_spec_it_did",
+]
+
+[[requirement]]
+id = "platform-no-form-control-triggers-focus-zoom"
+spec = "§6 preamble (phone-first); §3.1 (member first-run)"
+milestone = "M4.15"
+kind = "e2e"
+what = "On a coarse pointer every input, select and textarea on the member path computes a font-size of at least 16px, including the controls whose scoped rules outrank design.css; desktop sizes are unchanged."
+why = "iOS Safari zooms the page on focus for any control below 16px and does not zoom back out, and the first thing a new member touches is the login field. §6 preamble makes the phone the primary form factor, so a rule that only holds on desktop is not the rule."
+# Specificity decides this row, not intent: the global `input:not()x4` rule is (0,4,1) and beats a
+# scoped input rule, so the three Rank inputs and Home's search box need nothing of their own; a
+# bare global `select` is (0,0,1) and LOSES to Home's scoped `select` (0,1,1) and to Rank's
+# `.controls select`, so those six take a coarse override in their own sheets — Rank's inside the
+# block that is last in its sheet on purpose, because its selectors tie on specificity with the
+# rules above it. The sweep names any override still owed rather than guessing at them.
+tests = ["e2e/specs/19-phone-shell.spec.js::no form control on the member path zooms on focus"]
+
+[[requirement]]
+id = "platform-every-touch-target-meets-the-token"
+spec = "§6 preamble (48 px targets, one-handed)"
+milestone = "M4.15"
+kind = "e2e"
+what = "Every interactive control measures at least --touch (48px) in BOTH dimensions on the phone project — the nav links, the kind group, the account menu's nav entries, the Rank board's controls, the model rail's kind filters and the two overlays' close buttons — asserted at 48 rather than 44, with the controls no sweep can reach (the header's no-bundle badge, Rank's empty-state anchor, the two rate cards' skip control and the title panel's trailer chip) holding the rule at the source instead. Each completion is declared inside a `@media (pointer: coarse)` block, where the rule it completes lives, so a mouse is not handed a 48-by-32 control; and the phone project's own testMatch is evaluated against the spec directory, because six of these rows are discharged on an iPhone 13 or nowhere. The first-boot wizard's step indicator is the one named exception: it is a progress bar drawn as buttons, exempt by decision and not by silence."
+why = "§6 preamble is normative and design.css:73 sets --touch: 48px, while the coarse-pointer block raises min-height only and never min-width, and a bare <a> is outside its selector list entirely — so the only phone path to /account and /admin/data is a stack of 33px links and the only exit from a full-screen panel is 32px wide. Four assertions titled '48 px' asserted 44."
+# The token the `why` cites has moved with the file, twice: `--touch: 48px` was `design.css:77`
+# when this row was written, not the finding's `:73`, and it is `design.css:119` at the close,
+# because this milestone's own token work landed above it. The sentence is the finding's and is
+# kept as it was measured; the line it cites is re-derived here rather than left to drift.
+#
+# The exception is decision 280 and it is deliberately narrow: `min-height: 3px` beside the
+# `height: 3px` so the scoped rule wins on the property that decides, `role="progressbar"` off the
+# container holding the step buttons — THREE of them on this tree, not the plan's five, because
+# decision 164 took two steps out of the wizard — and NO blanket `button { min-height: auto }`
+# escape hatch in design.css. The sweep skips them by testid (`setup-step`) and says why on the
+# same line, so the exemption is visible in the failure message rather than absent from the
+# selector.
+#
+# Which is also why the exemption carries a guard of its own. A control the sweep steps over is a
+# control the sweep cannot hold: nothing in the e2e layer would notice the hairline going back to
+# 48px, and a 48px hairline is what the tree shipped. The static guard asserts the two halves the
+# sweep gives up — the scoped `min-height` that wins, and design.css's missing escape hatch — plus
+# the role that moved off the buttons, which no measurement sees at all.
+#
+# Three guards join the sweep after review cycle 1, for the same argument decision 280 makes about
+# the hairline: a control a sweep cannot reach is a control a sweep cannot hold. The header badge
+# renders only where `/config` says there is no bundle and phase 2 asserts there is one; Rank's
+# empty-state CTA is an anchor in three of `emptyState()`'s four branches and a 48 px button in the
+# fourth; and the rail's filter row is `{#if kinds.length > 1}`. All three sat under the floor with
+# the gate green, because `design.css`'s coarse block names six primitives (no bare `<a>`) and sets
+# no width at all — so every control it DOES reach clears a height-only assertion by construction.
+# The third guard reads the phone project's `testMatch` and evaluates it, because the file carrying
+# six of these rows reaches an iPhone 13 by matching the bare word `shell` and nothing gated that.
+#
+# Review cycle 2 adds the sixth site, and it was the one in front of everybody. `NavRail`'s links
+# take the floor inside `@media (max-width: 720px)` -- the LAYOUT reflow, where the rail becomes
+# the bottom bar -- and carry `min-height: 40px` outside it. design.css's coarse block states the
+# rule that decides this in its own words, "pointer: coarse rather than a width query -- a finger
+# is a finger on a tablet", and a bare `<a>` is outside its selector list, so above 720 px nothing
+# reached them: every iPad in either orientation, and an iPhone 13 turned sideways at 844, drew the
+# app's only surface switcher at 40 while every button and input beside it was 48. No project in
+# `playwright.config.js` is both coarse and wider than 720 and the phone project is 390, where the
+# width query happens to supply the floor, so both sweeps passed and the static guard did not name
+# the file at all. The repair is a coarse block of its own beside the width one, height only: in
+# the side rail those links are the column's full width. [review cycle 2: M415-C2-CSS-01]
+#
+# Review cycle 3 adds three more sites and they are the worst in the tree, which is the measure of
+# how far an enumerated guard reaches. `.text` on both rate cards is proposal 38's `skip` -- four
+# characters of an 11.5 px mono face with `padding: 6px 0`, so design.css's coarse block made it
+# 48 tall and left it 25 WIDE, 53% of the floor on the §4 loop's own card and 18 px from the
+# control that writes a §4.2 observation. `.trailer` in the title panel is §6.0's trailer
+# affordance, a bordered inline-flex chip 26 px tall, inside the overlay whose only other exit
+# this milestone repaired. Neither testid appears in any spec, `11-rate.spec.js` is not in the
+# phone project's testMatch -- though `02-shell` and `14-tonight` both are and both open /rate on
+# an iPhone 13, so the 25 px control is painted on the primary form factor during a phone run and
+# measured by nothing. Exit criterion 4 admits exactly ONE exemption and names it; these were a
+# second, a third and a fourth, exempt by silence. [review cycle 3: M415-C3-CSS-01, M415-C3-COMP-01]
+#
+# And the phone project's other half is read in the same cycle: which specs run AFTER it. The
+# file's own header argued its position from filename order on one worker and concluded that
+# "everything that must not meet that state has already run" -- true within a project, false
+# across the two this suite drives, because Playwright groups by project and the desktop project
+# declares no testMatch, so it runs `19-phone-shell` end to end (creating a household member and
+# signing in as them) before the phone project's first spec starts. Nothing downstream counts the
+# roster today; what was wrong is the sentence a future author reads before adding a test there.
+# The set is computed from the same `testMatch` rather than asserted in prose.
+# [review cycle 3: M415-C3-E2E-05]
+tests = [
+    "e2e/specs/06-responsive.spec.js::touch targets meet the 48 px rule on a phone",
+    "e2e/specs/19-phone-shell.spec.js::the account menu's entries and the overlay exits meet the touch floor",
+    "e2e/specs/13-rank.spec.js::every control on the board meets the 48 px touch floor",
+    "backend/tests/test_static_contracts.py::test_the_wizard_step_indicator_stays_a_hairline",
+    "backend/tests/test_static_contracts.py::test_every_control_the_coarse_selector_list_misses_declares_the_floor_itself",
+    "backend/tests/test_static_contracts.py::test_the_title_panels_heading_clears_its_close_control",
+    "backend/tests/test_harness_contracts.py::test_the_phone_project_selects_the_specs_the_coverage_map_believes_it_runs",
+    "backend/tests/test_harness_contracts.py::test_the_phone_spec_names_the_specs_that_run_after_its_desktop_pass",
+]
+
+[[requirement]]
+id = "platform-menus-and-overlays-dismiss"
+spec = "§6 preamble (one-handed); §6.8 via proposals 127, 131"
+milestone = "M4.15"
+kind = "e2e"
+what = "The account menu, the title detail panel and the model rail each close on an outside tap and on Escape, the account menu closes when one of its own links navigates, and the app has a global :focus-visible ring rather than six per-component ones — one width, one colour, one offset, with a component licensed to restate it but never to redefine it."
+why = "Proposal 131: 'Every popover, menu and sheet dismisses on outside click and on Escape — the prototype has neither, and an implementation copying it ships a menu you cannot click away.' Navigation is client-side inside a persistent layout, so an undismissed menu follows the person onto the next page."
+# The ring's licence is read by SITE AND VALUE from review cycle 1 on. The first draft licensed the
+# selector alone, so the tree's one exception — ShelfRow's chevron, licensed because it has to
+# become visible before a ring around it means anything — carried `1px solid var(--ember)` against
+# design.css's 2px and the guard could not see it. A scoped `.nudge:focus-visible` outranks a bare
+# `:focus-visible`, so that was the ring the app really drew there. [m415-rev1-css-06]
+#
+# The reader is a RING reader and not an outline reader from review cycle 1 on: a `box-shadow`
+# spread on a focus rule is a second ring by every measure that matters to a keyboard, and it is
+# the commonest modern way to draw one because it follows a border radius. Only on a focus selector
+# — a shadow elsewhere is a shadow, and AccountChip's menu has one — and only where it draws
+# something, since `box-shadow: none` takes away a shadow rather than a ring. [reach-01]
+#
+# Which of the two buckets a site lands in is decided by the PROPERTY from review cycle 2 on. The
+# outline reader's removal pattern matches a leading `0`, and every shadow ring in the idiom opens
+# with an offset of `0` — the comment beside `_SHADOW_NONE` says so — so the guard read a component
+# drawing the rounder ring reach-01 exists to catch as a component that had removed the ring, and
+# sent its author to undo a removal nobody made. Both buckets are asserted, so nothing wrong could
+# ship on it; what shipped was the wrong sentence, on a branch with no sites in the tree to say it
+# about. [ring-c2-01]
+#
+# Review cycle 3 writes down what the action does when TWO overlays are mounted, because nothing
+# said and nothing tested it. Each application registers its own `document` listener and no
+# instance knows whether it is the topmost, so one Escape dismisses both -- and there is exactly
+# one reachable way to stack two: with §6.7's "show the model" on, a title panel opened from Home
+# and then `m`, whose handler is on the window and skips only INPUT/TEXTAREA/SELECT/contentEditable.
+# Proposal 131 asks that every popover, menu and sheet dismiss on Escape and both of them do, so
+# the answer is the sentence rather than a module-level stack: that would be a rule the spec does
+# not ask for, added to the file every overlay depends on. The pointerdown half is not the same
+# question and is already right -- a tap inside overlay A really is outside overlay B. Held in
+# `dismiss.test.js`, which now mounts two nodes (the three surfaces' own vitest files each mount
+# one, and 19-phone-shell closes each overlay before opening the next, so a stack added later
+# would have landed with the whole suite green). Vitest, unregistered by decision 274.
+# [review cycle 3: M415-C3-COMP-04]
+tests = [
+    "e2e/specs/19-phone-shell.spec.js::every menu and overlay dismisses by outside tap and by Escape",
+    "backend/tests/test_static_contracts.py::test_the_app_has_one_focus_ring_rule",
+    "backend/tests/test_static_contracts.py::test_a_licensed_exception_may_restate_the_ring_and_not_redefine_it",
+    "backend/tests/test_static_contracts.py::test_a_shadow_ring_is_a_second_ring_and_not_the_ring_taken_away",
+]
+
+[[requirement]]
+id = "platform-quiet-reasons-are-prose-and-legible"
+spec = "§6.8 (the two voices, quiet reasons)"
+milestone = "M4.15"
+kind = "static"
+what = "The quiet-reason register is set in the display face, not the mono one — `.why` is var(--display) while `.data` is var(--mono) — and every --ink-* token used for text clears 4.5:1 against every ground it lands on: the four opaque grounds, the four composites --ember-wash makes over them, and the account chip's --identity disc over the two grounds it is drawn on, which is held as a ground-and-ink pair because one glyph in one colour is what lands there, with no component re-lightening or re-monospacing a why-line to escape the register. A reason that exists only as a `title=` tooltip is not a reason on the primary form factor, so every surface that draws the cold badge states it in the markup."
+why = "§6.8 gives JetBrains Mono to 'every model number, ID and data annotation' and design.css's own header calls using it for anything else a design bug, yet all 106 .why elements across 25 files were mono; --ink-4 measured 2.82:1 and --ink-5 2.22:1 at 10-13px, which is below even the 3:1 large-text floor, on the copy §6.8 makes load-bearing."
+# Re-counted against this tree as the milestone opened: 129 elements across 27 files, not the
+# review's 106 across 25 — the row's `why` keeps the figure its finding measured and this is the
+# figure the guard will see. The tokens rise to 0.55 and 0.52 (decision 275), measured here at
+# 5.35 / 5.29 and 4.89 / 4.85 against --ground / --card; 0.45, which the finding proposed, measures
+# 3.93 and would have contradicted the 4.5:1 guard the same finding asks for.
+#
+# 0.52 and not 0.50, and the row says "every ground it lands on" rather than naming two, because
+# the first guard enumerated only the OPAQUE grounds while design.css claimed the wider sentence.
+# --ember-wash is a 10% tint over one of those four at sixteen sites and it carries this ink on
+# them, so the ground is the composite: 0.50 cleared all four opaque grounds and measured 4.43:1
+# on the wash over --card, which is where RateSweepCard's reveal hint is drawn. The guard now
+# composites the tint before measuring, and 0.51 fails it at 4.49. A claim broader than its
+# measurement is the thing this file exists to refuse. [review cycle 1: m415-rev1-css-01]
+#
+# The escape guard's REACH is widened in the same cycle, because a register is a claim about what
+# the copy reads as and it was holding one third of that claim. It compared WHOLE selectors, so
+# `.empty .why` and `.drained .why` — two rules that ship — could restyle a why-line unseen, and
+# `:global(.why)`, Svelte's own way of reaching a child's, was invisible by construction. It read
+# `font-family` and not `font`, which sets the face in one word. And it read colour but not volume:
+# --ink-4 measures 5.35:1 on --ground, so an `opacity` under 1 on a rule that reaches a why-line
+# takes the register under the floor at about 0.90 AFTER the token was chosen, which is exactly
+# where the contrast guard beside it stops looking. The reach is bought by matching the selector's last compound,
+# which is the opposite trade from `_invented_paddings` and carries the opposite risk: eight rules
+# in the shipped tree are reached only by the widening, none of them touches the register, and the
+# innocent half of that trade is asserted below rather than assumed. [review cycle 1: reach-01]
+#
+# The data voice's own coarse floor joins the row in review cycle 2, held at the source for the
+# reason the register guard beside it already is. design.css raises `.data` to 11px on a coarse
+# pointer and argues it -- "a misread digit is worse than no digit" -- but a bare `.data` is
+# (0,1,0) and Svelte compiles every component rule to (0,2,0), so seven scoped rules defeated it
+# and no layer measured a `.data` size at all. Two of the seven are prose-shaped and are raised
+# where they live (the sign-in page's OR divider, the Users panel's section headings); four are
+# M4.9's poster overlays under proposal 29's geometry, and the seventh is Tonight's `.label`,
+# beaten by that file's own later `.data` rule at 12px. All five are named in DATA_VOICE_EXEMPT
+# with the reason, which is decision 280's shape for an exemption: by decision, not by silence.
+# [review cycle 2: M415-C2-CSS-04]
+#
+# And the register's other half, the one a face and a contrast ratio cannot hold: decision 278
+# moved the cold badge's sentence out of a `title=` tooltip and onto the shelf, once for the row --
+# but `PosterCard` draws on TWO surfaces and the second, Home's catalog grid, has no shelf header.
+# There the chip was an unexplained word on a poster again, which is finding 10's own defect
+# surviving its repair on the form factor §6's preamble makes primary. The rule is per surface, so
+# the guard asks every file that draws the card whether it draws the sentence.
+# [review cycle 2: M415-C2-COMP-06]
+#
+# The FIGURES join the row in the same cycle, because this milestone's contribution is a set of
+# measured numbers and two of them had been overtaken by the tokens they describe. `--ink-4` was
+# published at 4.60:1 on --ground here and in the guard file -- that is --ink-5 at the alpha
+# decision 275's amendment replaced, sixteen lines under the right figure in this very comment
+# block -- and design.css published the identity disc at 10.8:1 on "the header's ground", which is
+# the reading on --ground while the header is --ground-raised. The rules survived the arithmetic;
+# what did not is the margin a later reader re-tuning the ramp would have acted on. Every figure
+# the record states in the form `<token> [on <token>] measures N:1 on <ground>` is re-derived from
+# design.css now. [review cycle 2: M415-C2-CSS-06]
+#
+# The register guard reads a selector's last compound as its tag and the SET of its classes in the
+# same cycle, not as one string. Every ordinary way of NARROWING a rule — a second class, a
+# negation, a position, a test hook — had left an escape inside the cascade and outside the guard,
+# so the verdict on a rule turned on the selector's punctuation rather than on the property. One
+# such rule ships: Rate's `<p class="banner error why" role="alert">` is styled as `.banner.error`,
+# and simplifying it to `.error` would have reddened a build without moving a pixel. `--ember-lift`
+# joins the register's colours with it, because on that surface the error and the reason are one
+# element and the error colour is LOUDER than the register rather than quieter — the guard already
+# read past `background-color` and `border-color` so a why-line inside a tinted callout keeps its
+# frame, and licensing the frame while refusing the copy inside it is half a rule. A class
+# attribute in single quotes is read too; nothing in this repo enforces the other kind.
+# [review cycle 2: why-c2-01]
+tests = [
+    "backend/tests/test_static_contracts.py::test_the_data_voice_is_monospace_and_the_display_face_is_not",
+    "backend/tests/test_static_contracts.py::test_every_surface_that_draws_the_cold_badge_states_its_reason",
+    "backend/tests/test_static_contracts.py::test_the_data_voices_coarse_floor_reaches_every_element_it_claims",
+    "backend/tests/test_static_contracts.py::test_every_text_ink_token_clears_the_contrast_floor",
+    "backend/tests/test_static_contracts.py::test_the_contrast_guard_composites_a_tinted_surface_before_measuring",
+    "backend/tests/test_static_contracts.py::test_no_component_re_monospaces_a_why_line",
+    "backend/tests/test_static_contracts.py::test_the_why_register_guard_leaves_innocent_files_alone",
+    "backend/tests/test_static_contracts.py::test_every_contrast_figure_the_record_publishes_is_the_one_it_measures",
+    "backend/tests/test_static_contracts.py::test_the_data_voice_counts_this_record_publishes_are_the_ones_it_measures",
+]
+
+[[requirement]]
+id = "platform-shipped-font-weights-are-real"
+spec = "§6.8 (Space Grotesk display/body); proposal 130"
+milestone = "M4.15"
+kind = "static"
+what = "Every @font-face src in frontend/static/fonts/fonts.css resolves to a woff2 in the repository under the <family>-<weight>-<subset> convention, and every declared weight is one that file can really render: its own, or an instance of its wght axis where the file is variable. No woff2 sits in the directory that no face declares, and the stylesheet is byte-for-byte what ops/fetch-fonts.py renders."
+why = "Self-hosting is load-bearing rather than a preference: §6's preamble and app.html:13-15 make this a PWA a household opens over the LAN and over Tailscale, so a weight that cannot be fetched at runtime cannot be declared at build time. Finding 12 read the 500 and 700 faces pointing at a file named -400- and concluded nothing in the app — wordmark, headings, primary buttons — had ever rendered bold. Measured on this tree that is false: all four committed woff2 carry fvar, gvar, avar and STAT, Space Grotesk's axis is 300-700 and JetBrains Mono's 400-800, so those faces are real instances of the axis and the app has always rendered bold."
+# Decision 268 took its first branch — the lane had a route to the internet, so ops/fetch-fonts.py
+# was written and run — but the branch's premise did not survive the run. Google's css2 endpoint
+# serves ONE woff2 per (family, subset) covering every weight, because both families are variable,
+# and the four committed files are byte-identical to what it serves today: there were never six
+# files to add. Shipping six would have put three identical copies of each subset into a shell
+# cache service-worker.js fills with an all-or-nothing addAll, and the no-network branch would
+# have handed real bold back to the browser's synthesiser. So the row guards the rule in both
+# worlds, which is what a rule is for: a face whose file does not carry its weight in its name is
+# honest only where that file carries a wght axis. The generator is guarded beside it because
+# fonts.css:4 had named it since M0 and it did not exist, which is how the file drifted.
+#
+# Review cycle 2 closes the half of that correction that lived only in the code. Decision 268 still
+# read "renders at 400 and has since the fonts landed" and still prescribed a filename weight EQUAL
+# to its rule's font-weight -- both false of the shipped stylesheet, in the one document entries
+# 162 onward make normative from the day they are taken (decision 177). A reader following the
+# citation out of the guard's docstring met a sentence licensing exactly the two repairs this
+# milestone measured and rejected. The register carries the amendment now, and a third guard holds
+# it there for as long as fonts.css declares a face against a file that does not carry that weight
+# in its name. [review cycle 2: M415-C2-DEC-01]
+tests = ["backend/tests/test_static_contracts.py::test_every_declared_font_face_ships_its_own_file", "backend/tests/test_static_contracts.py::test_the_font_stylesheet_is_what_its_generator_emits", "backend/tests/test_static_contracts.py::test_decision_268_records_the_run_that_falsified_its_premise"]
+
+[[requirement]]
+id = "platform-a-401-returns-the-member-to-login"
+spec = "§3.2 (sessions); §6.8 (the copy register)"
+milestone = "M4.15"
+kind = "e2e"
+what = "A 401 on any surface route returns the member to /login with the client-side session cleared, rather than printing the backend's sentence under a header that still shows their name — but only where the shell believed it held a session: a 401 from a credential route does not sign anybody out — including the one route whose 401 is a THIRD-PARTY server refusing a credential the household typed — a 401 carrying the admin re-prompt header does not, and on a first boot, where every authenticated route answers 401 because no account has ever existed, none of them does. The exemptions are asserted from a shell that HOLDS a session, because the rule short-circuits on one that does not. A request that never answers fails with a stated sentence instead of parking the surface busy for ever, and a 422 renders the field and the reason rather than the HTTP reason phrase. A route that reaches a third-party server carries that server's budget rather than the ordinary ten seconds, and a refusal this module cannot parse still reaches the household as a stated sentence rather than as the empty string or as an edge's own error page."
+why = "§3.2 makes the session a server fact the shell must obey; api.js is the one place that knows the wire, and today it has no interceptor, no deadline and no case for FastAPI's list-shaped 422 detail — so a rotated SESSION_SECRET, a phone that leaves WiFi and an empty number field all reach the household as a red line saying nothing actionable."
+# Decision 269: the deadline is declared in api.js, and the three routes that legitimately run for
+# minutes — /admin/bundle/validate, /admin/bundle/import and /admin/connectors/jellyfin/sync — are
+# named in a module-level path list there rather than passed at call sites the sibling lane owns
+# this wave. `opts.timeoutMs` stays as the escape hatch. Without the list the e2e import and sync
+# specs abort at 10 s and two shipped milestones go red.
+#
+# Decision 282 amends the row's first sentence, and the browser gate is what amended it. The rule
+# shipped here as "a 401 on a surface route is a lost session", which is true of every case
+# finding 14 measured and false of the one case it did not: a FIRST BOOT, where §3.1 serves the
+# wizard on a box with no accounts and every authenticated route answers 401 honestly. Home's four
+# mount-time reads each arrived at the seam as a sign-out, and the household's first admin was
+# carried past the wizard to a sign-in form for an account nobody can have been given -- with
+# `/api/setup/state` answering `{"required": true}` the whole time. `guard()` could not undo it,
+# because /login is one of the shell's PUBLIC destinations. The seam now also requires a
+# `session.user`: a 401 can only END a session the shell believed it HELD, which is the state
+# every one of finding 14's cases is in and the state a first boot is never in. The e2e id added
+# below is 01-first-boot's own opening test -- the assertion that caught this, at the layer that
+# caught it, already registered by three M0 rows.
+#
+# Decision 269's list is amended in review cycle 2, because it was read off CALLERS that run for
+# minutes and missed a class that is not long and is still longer than ten seconds.
+# `connectors/jellyfin.py` gives its httpx client 15 s and `registry.make_client` never overrides
+# it, so every admin route that reaches the media server has a floor of fifteen seconds on a
+# silently dropped connect, and `check()` spends that budget twice. At ten the client gave up
+# first: `put_jellyfin` writes the credentials BEFORE it probes, so §6.6's card said "the network
+# did not answer" about a save that had landed, and the Test button -- whose diagnosis is a 200
+# body rather than a raise -- could not report the unreachable server it exists to report. Those
+# routes carry 45 s now, matched by pattern because `POST /admin/users/{id}/jellyfin` carries an
+# account id in the middle of its path; 600 s is refused for them, because that IS a wait once the
+# appliance itself is the thing that stopped answering, which is finding 16's own failure.
+#
+# And `wireMessage`'s last resort was `res.statusText`, which its own comment argues is the empty
+# string in §2's deployment -- the household reaches this app over Traefik and Cloudflare, and h2
+# carries no reason phrase. Every surface gates its error line on truthiness, so a shape the three
+# branches do not match produced no line at all, and a body that is not JSON (an edge's own HTML
+# page) was handed through as the message. Both halves are held in `frontend/src/lib/api.test.js`,
+# vitest, unregistered by decision 274: no spec in the suite drives a proxy's error body or
+# measures a deadline on a connector route, and `ops/fake_jellyfin.py` answers instantly.
+# [review cycle 2: M415-C2-API-01, M415-C2-API-02]
+#
+# Review cycle 3 finds the sixth 401 raise site, the one that is neither. `api/admin.py`'s
+# `link_jellyfin` answers `POST /admin/users/{id}/jellyfin` with "Jellyfin refused that sign-in"
+# at 401, because §3.3 never delegates authentication to Jellyfin and the media server's refusal
+# of a password an admin typed into a member's Link row is not a statement about this app's
+# session at all. It was on no exclusion, so a typo ran clearUser(), resetRank() and a goto to
+# /login over a session that was perfectly alive -- the failure the CREDENTIAL_ROUTES comment says
+# in its own words is worse than the one being fixed. The module had already read that route once,
+# for its 45 s deadline, and not for its status. POST only: DELETE on the same path is
+# `unlink_jellyfin`, which makes no foreign call, so its only 401 is a real session loss.
+#
+# And the three cases that NAME the exemptions could not have failed. Decision 282's `session.user`
+# is the third conjunct at the seam and `&&` short-circuits, so a case that runs with nobody signed
+# in asserts decision 282 twice and the route list zero times: with the shipped preconditions,
+# deleting the whole `!under(path, CREDENTIAL_ROUTES)` term left every case in `api.test.js` green,
+# and /auth/password, /auth/switch and /auth/logout are covered at no other layer -- 19-phone-shell
+# drives only /auth/pin and the reauth header, and every other e2e hit on those routes is a
+# `request.post` that never enters the module. Three lines, and the same mutation now reddens three
+# cases. Vitest, unregistered by decision 274.
+#
+# `wireMessage`'s field label is corrected in the same cycle: pydantic's `loc` opens with the
+# SOURCE, so a missing body answers ["body"] and a bad element in a list-valued query answers
+# ["query","kind",0], and reading the last segment as a field name printed "body: Field required"
+# and "0: Input should be a valid integer" -- the wire under the household's own name, which is
+# the register §6.8 spends this branch avoiding. Neither shape is reachable from this client's
+# callers today, so the correction is hardening plus a sentence the code now holds.
+#
+# The seam's own citations are the third half. It cited `api/auth.py:306,380,416` for the three
+# routes that answer 401 "wrong current password"; those numbers were true at HEAD and were
+# falsified by THIS milestone's seven-line edit to that router in the same change set, and named
+# the wrong two routes besides. `test_no_backend_comment_cites_the_tonight_client_by_line_number`
+# settles the rule for the other direction of the same wire -- cite the function -- and there was
+# no guard for this direction. There is now, and it reads the count as well: "the first seven are
+# the anonymous doors" plus "the last three" against a list of eleven never closed.
+# [review cycle 3: M415-C3-API-01, M415-C3-API-02, M415-C3-API-05, M415-C3-API-06]
+tests = [
+    "e2e/specs/19-phone-shell.spec.js::a 401 returns the member to the sign-in page",
+    "e2e/specs/01-first-boot.spec.js::a bundle-less app boots, serves the wizard, and says so",
+    "e2e/specs/19-phone-shell.spec.js::a request that never answers ends with a sentence, not a dead surface",
+    "e2e/specs/19-phone-shell.spec.js::a refused field says which field and why",
+    "backend/tests/test_static_contracts.py::test_the_seam_describes_the_credential_routes_it_actually_carries",
+]
+
+[[requirement]]
+id = "platform-an-unreachable-appliance-is-not-a-sign-out"
+spec = "§6 preamble (service-worker shell cache); §3.1 (render an explicit state instead of erroring)"
+milestone = "M4.15"
+kind = "e2e"
+what = "With the network down, the cached shell opens on an explicit 'appliance not reachable' state and keeps the signed-in session rather than navigating to a sign-in form it cannot submit; coming back online restores the shell without a manual reload; and the header never asserts 'no bundle imported' from a read that failed. A read the shell needs and did not get is stated rather than guessed at wherever it happens: where `/setup/state` failed and `/auth/me` answered 401, the shell says so and keeps asking instead of rendering the authed chrome to somebody it was just told is signed out. Two reads of `/auth/me` overlapping cannot let the older one win, however long it has been in flight. A thrown route error renders the app's own dark card, not the framework's default page — naming which of its two doors repairs which failure — and a deploy is taken at a route change the person chose rather than on the tap whose chunk import failed."
+why = "§6 preamble builds the shell cache for exactly the phone that has just lost the network, and §3.1 requires an explicit state rather than an error. bootstrap() rethrew every non-401 /auth/me failure after setting booted, so a restarting appliance signed every open phone out."
+# The header half is decision 271: `hasBundle` becomes tri-state, because bootstrap() swallows a
+# failed /config into null and leaves the old value standing — so a /config that fails while
+# /auth/me succeeds prints 'no bundle imported' to a household that has one, on a path that is not
+# offline at all. Home's three `!session.hasBundle` reads are untouched, where null is falsy -- so
+# `routes/+page.svelte` still prints the same four words in its count line, and still replaces the
+# shelves with "No artifact bundle has been imported" in exactly the state the header stopped
+# claiming it in. Decision 271 scoped this row to the header and that panel is M4.9's surface, so
+# the divergence is named here rather than left to be found, and re-filed against its owner. The
+# guard registered below holds the record to that account for as long as the two differ.
+# [review cycle 3: M415-C3-COV-01]
+#
+# What the e2e title looks for: the card is `data-testid="appliance-unreachable"` in
+# `+layout.svelte`, rendered in place of the shell and AFTER the `bare` branch on purpose -- a
+# person with no session belongs on /login, where the form's own failure now says the same thing
+# in the same words. `guard()` returns early while `session.offline`, which is what keeps the
+# session on screen instead of routing it away, and `window.addEventListener('online', ...)`
+# plus the card's own button are the two ways back.
+#
+# Decision 286 is the third read the same argument reaches. `guard()` refuses to route while both
+# of its reads are unknown, which is right — but refusing to route is not a state, and what stood
+# in its place was the authed shell: the header, a chip reading "signed out", no nav links, and
+# `api/deps.py`'s sentence underneath, with no timer armed because `session.offline` is false. The
+# appliance ANSWERED; only the destination is unknown, and /setup and /login are both live
+# readings of it. The shell now states which read is missing and asks again on decision 283's
+# timer, which lands §3.1's first admin on the wizard and a lapsed member on the sign-in form the
+# moment `/setup/state` arrives. No e2e spec drives a failed `/setup/state`, so the layer that
+# holds it is `frontend/src/routes/shell-layout.test.js` — vitest, unregistered by decision 274.
+#
+# Finding 23's half is the other unobservable one: `pollInterval` is a build-time constant the
+# poller short-circuits under `__SVELTEKIT_DEV__`, and the `beforeNavigate` fires on a navigation
+# against a version no spec moves. Deleting either reddened nothing at all.
+#
+# Review cycle 2 gives `+error.svelte` the one thing it did not have: a test that RENDERS it. The
+# guard reads the file, and a file nothing ever mounts can satisfy every substring in it while
+# rendering nothing -- no spec in the suite visited an address the router does not know. The new
+# 02-shell case does, and the two docstrings that named the trigger are corrected with it: there is
+# no `load` function anywhere in `src/routes`, so "a throw from a load" named a path with no
+# instances. What reaches this page is a client-router 404 through `app.py`'s SPA fallback on the
+# unhydrated first navigation, and a chunk import that fails while `_app/version.json` has not
+# moved. SvelteKit keeps the root layout in the branch when it swaps in a root error page, so the
+# `design.css` import here is belt and braces rather than the only source of the look, and the
+# guard's failure message said otherwise.
+#
+# The deploy hook gains one clause in the same cycle. It rewrote EVERY client-side navigation while
+# `$updated` is up, which for the sixty seconds after a deploy lands includes the one `goto` that
+# must not become a document load: decision 272's amendment routes a sign-out whose POST never
+# landed WITHOUT leaving the document, because the cookie is HttpOnly and a re-boot answers
+# `/auth/me` 200 and carries the person who just tapped Log out back to Home under their own name.
+# A deploy is taken at a route change the person CHOSE, and that is not one.
+# [review cycle 2: M415-C2-COMP-04, M415-C2-CSS-08, M415-C2-SHELL-03]
+#
+# And the header clause of this row's `what` -- decision 271's tri-state -- was the one half of
+# that audit no layer held. `=== false` and `!` differ in exactly one state, `hasBundle === null`,
+# and nothing drove it through the template: the offline e2e asserts the badge absent inside the
+# branch that renders no `<header>` at all, so its count is zero under either spelling, and
+# `01-first-boot` measures a genuinely bundle-less household, which both spellings render. Flipping
+# the operator back reddened nothing in pytest, Playwright or vitest. A static guard reads the
+# condition now, and `shell-layout.test.js` mounts the state -- vitest, unregistered by decision
+# 274. [review cycle 2: M415-C2-COV-01]
+#
+# Review cycle 3 closes the race decision 283's timer opened from the other side. `retrying`
+# serialises boot against boot -- the button, the `online` event and the 5 s tick -- and cannot
+# see `refreshUser()`, the second writer of `/auth/me`, at all. `api.js` gives each request ten
+# seconds and a boot spends two of them in series, so a boot armed by the timer can be in flight
+# twenty seconds later, and while the card stands one is in flight almost continuously. `bare`
+# wins over the card, so /login renders its form over it: the member signs in the moment the box
+# comes back, `land()` reads them back, and the doomed boot then landed on top -- `offline = true`
+# put the unreachable card over a working shell and UNMOUNTED the surface under it, which closes
+# Tonight's room socket and stops §4.2's round clock; on the 401 variant it nulled the user who
+# had just signed in and `guard()` sent them to /login. A module-local counter and three lines at
+# each writer, the house convention `rank.svelte.js` and Home already carry -- not the shared
+# abstraction the plan refuses -- covering the `/auth/me` writes only, because `/config` and
+# `/setup/state` have one writer between them. No assertion in the e2e suite reads this state;
+# the layer that holds it is `session.svelte.test.js`, vitest, unregistered by decision 274.
+#
+# And `+error.svelte`'s two doors are told apart in the same cycle. The guard licensed the primary
+# door with "the error is usually a stale chunk, and a reload is the fix" -- a frequency nobody
+# measured, about a case this app routes away from this page twice over -- while on the one
+# trigger any test in this repository drives, a client-router 404, a reload is a no-op by
+# construction: the SPA fallback answers the same address with index.html and 200 and the card
+# renders again. In an installed standalone view there is no address bar behind that door. The
+# card now names which door repairs which, and the guard reads the sentence rather than the
+# frequency. [review cycle 3: M415-C3-SESS-01, M415-C3-COMP-02]
+tests = [
+    "e2e/specs/19-phone-shell.spec.js::an offline boot keeps the session and says the appliance is unreachable",
+    "e2e/specs/02-shell.spec.js::an unknown address renders the app's own error card, not the framework's page",
+    "backend/tests/test_static_contracts.py::test_the_app_ships_an_error_boundary",
+    "backend/tests/test_static_contracts.py::test_the_deploy_is_taken_at_a_route_change_the_person_chose",
+    "backend/tests/test_static_contracts.py::test_the_header_states_the_bundle_from_a_read_that_answered",
+    "backend/tests/test_static_contracts.py::test_the_record_names_the_surface_that_still_states_the_bundle_claim",
+]
+
+[[requirement]]
+id = "platform-signing-out-leaves-nothing-of-the-previous-person"
+spec = "§3.2 (logout clears the session; the chip switches profiles)"
+milestone = "M4.15"
+kind = "e2e"
+what = "After a logout the appliance CONFIRMED and a sign-in as a different account on the same device, no surface shows any of the previous person's state: no Rate card, ledger score or model log, no tier board, and no Tonight ballot, approvals or reveal — including before the new person's first response lands. On the other branch — a logout POST that never landed, where the session is still alive and leaving would come straight back into it — the guarantee is the local half only: the user forgotten, Rank's pending lift dropped, the sign-in form on screen."
+why = "§3.2's chip and the per-user Ledger exist to keep two members apart on one device; the stores are module-level singletons that survive client-side navigation, and logout reset Rank alone, so the family tablet showed one member's taste to another."
+# Decision 272: cleared by leaving the document — the house pattern AccountChip.svelte already
+# uses for the PIN switch — and not by three new clearAll() functions in three files two other
+# milestones own, one of which already means something else. A document load is total by
+# construction: it cannot miss a field a store gains next month. Decision 285 names the
+# destination: `location.assign('/login')`, because a reload has none of its own and takes
+# whatever is in the address bar — which at the third gate was /rate, and Rate then read as
+# nobody and latched the 401 into the next person's session.
+#
+# And the `what` above names its branch, because the code does. Decision 272 was amended during
+# the browser gate to leave the document only on a sign-out the server CONFIRMED: the cookie is
+# HttpOnly, so a POST that never landed leaves it standing and leaving re-boots into the session
+# the tap was meant to end — /auth/me answers 200, landingRoute() returns '/', and guard() carries
+# the person who just tapped Log out back to Home under their own name. That is the sign-out
+# visibly not happening, which is worse than the module state this clears. The cost is real and is
+# stated rather than left to the reader: on that branch the shell client-navigates and Rate's card
+# and log, Rank's `tiers` and `ratedTotal` and Tonight's step, ballot and approvals all survive.
+# The e2e test below signs out against a live appliance and waits for a `load`, so it can only
+# ever run the branch where the unconditional sentence was true; the static guard holds the
+# sentence itself against the branch the code keeps. [decisions 272, 285; M4.15 review cycle 1]
+tests = [
+    "e2e/specs/19-phone-shell.spec.js::the next person to sign in sees none of the previous one's surfaces",
+    "backend/tests/test_static_contracts.py::test_the_logout_row_states_the_branch_on_which_it_holds",
+]
+
+[[requirement]]
+id = "platform-nav-destinations-are-identified-not-merely-answered"
+spec = "§6 (surface names, normative); §1 (the backend serves the SPA)"
+milestone = "M4.15"
+kind = "e2e"
+what = "Every nav destination is verified by identity — the URL matches the href and that surface's own marker is on screen — never by HTTP status, and the surfaces beyond the current milestone are identified by their placeholder rather than by an empty shell."
+why = "app.py's SPA fallback returns index.html with status 200 for every non-/api path, so the previous 'no dead links' assertion passed for a renamed href, a typo and a path that never existed; 07-boundaries already documents the fallback that made it vacuous."
+# This is the row that renames a registered test: 02-shell.spec.js's dead-link title changes with
+# its assertion, and the row must carry the NEW title in the same commit — test_spec_coverage.py
+# matches Playwright titles literally, so a rename lands as a missing test and breaks the build.
+tests = ["e2e/specs/02-shell.spec.js::every nav destination resolves to its own surface"]
+
+[[requirement]]
+id = "platform-the-frontend-type-check-runs-in-ci"
+spec = "docs/TESTING.md (the layers the project claims to run); CLAUDE.md commands"
+milestone = "M4.15"
+kind = "static"
+what = "`npm --prefix frontend run check` is a job step in the CI frontend job, and the tracked tree passes it with zero errors — including the route file whose local `state` shadowed the rune namespace. The measurement this branch closes at is published once rather than twice: the map and the ledger state one result for one run of one command."
+why = "A documented command that always fails teaches everyone to ignore it: 25-27 errors stood on a clean tree while the only static signal the frontend has — a renamed envelope key, a dropped export, a rune/store collision — was buried among them, and no gate ran it."
+# Decision 273: the guard asserts the STEP exists, which this branch can discharge; the zero-error
+# half cannot be reached here. 28 errors stood on this tree when the row was written — 14 in
+# src/lib/api.test.js, 12 in src/lib/passkeys.js, 1 in vite.config.js, all ours, and 1 in
+# src/routes/admin/data/+page.svelte, which M4.14 owns in the sibling worktree this wave and which
+# this lane must not open (decision 270). All twenty-seven of ours are gone and the branch closes
+# at 1 error and 1 warning across 275 files: that one error, and PosterCard's `line-clamp` warning
+# the criterion does not count. The frontend CI job is RED here until M4.14 merges, the check is
+# neither narrowed nor suppressed to hide it, and the `what` above is met on the merge, not before.
+#
+# That figure is load-bearing rather than decorative, which is why review cycle 2 gave it a guard:
+# it is the evidence that EXACTLY one error survives and that the survivor is the sibling lane's,
+# which is the whole basis for landing the step red. The map said 274 files and docs/TESTING.md 275
+# for one run of one command, and nothing read either, so an auditor of exit clause 10 met two
+# numbers and no way to tell which run produced which -- decision 184's defect, on the one figure
+# the clause is argued from. The guard cross-checks the two documents rather than re-deriving the
+# count: svelte-check is a node command over a tree this suite does not build, and decision 184
+# owes that number to a run. [review cycle 2: M415-C2-COV-02]
+tests = ["backend/tests/test_static_contracts.py::test_ci_runs_the_frontend_type_check", "backend/tests/test_static_contracts.py::test_the_two_records_publish_one_svelte_check_measurement"]

@@ -26,6 +26,7 @@ TESTS = Path(__file__).resolve().parent
 REPO = TESTS.parents[1]
 MAP = TESTS / "spec_coverage.toml"
 LEDGER = REPO / "docs" / "TESTING.md"
+REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 
 # M4.5 is not in §12. It exists because §12's M0 importer was verified against a fixture
 # that did not resemble the artifact it stands in for, and M5's pipeline cannot be built
@@ -40,7 +41,7 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.14 through M4.16 are not in the list yet — each is added
+# "M4.5". M4.14 and M4.16 are not in the list yet — each is added
 # by the milestone that opens it, in one commit with its first row.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
@@ -171,8 +172,39 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # either milestone depends on the other: that table marks the two workable in parallel in both
 # directions, and they were built that way, in two worktrees on two branches.
 # See docs/milestones/M4.13-plan.md.
+#
+# M4.15 is not in §12 either, and it is M4.5's and M4.8's shape rather than M4.6's: it ships no
+# new surface, so it takes no row in that table and none was added. It exists because §6's
+# preamble — "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
+# progressive enhancement, installable, service-worker shell cache" — is normative, is the only
+# sentence in the document describing the box every surface sits inside, and has never had an
+# owner: §12 schedules the screens and every surface milestone built its own correctly and left
+# the chrome alone, so nobody owed the box a test: `06-responsive` was named by no row at all. The
+# map's three `02-shell` ids were held by M0's session-cookie contract and M4.9's model rail,
+# neither of them the preamble [review cycle 3: M415-C3-COV-01]. What the box turned out to contain
+# is the milestone: an installed app whose header renders under the status bar and whose bottom tab
+# bar renders under
+# Safari's toolbar, form controls at 10-13 px that iOS Safari zooms on focus and does not zoom
+# back, a 48 px token no menu entry and no overlay exit meets on its narrow axis, no outside-tap
+# and no Escape on any menu or full-bleed panel, quiet reasons set in the data face §6.8 reserves
+# for model numbers at an ink token measuring 2.82:1, one accent spent on six meanings across
+# fifteen files, a stylesheet naming a generator nobody had written, and the one module that
+# knows the wire holding no deadline, no 401 branch and no case for a pydantic 422. One item on
+# that list did not survive being measured and is stated here as measured rather than as read:
+# the plan counted three declared font weights whose src is the 400 file and concluded nothing
+# had ever rendered bold, but both families ship a VARIABLE woff2, so the 500 and 700 faces are
+# real instances of a wght axis and always were. What was actually missing is ops/fetch-fonts.py,
+# which fonts.css:4 had named since M0 and which did not exist -- the drift, not the weights. See
+# the row platform-shipped-font-weights-are-real, which carries the measurement. It sits after
+# M4.13 and LAST among the pre-release frontend milestones because the surfaces had to stop
+# moving before they were reskinned: M4.6's Users screen, M4.9's title card, M4.10's board and
+# M4.12's round each rewrote one of the screens it reskins, and this milestone changes every
+# surface's appearance at once. M4.14 is being built in parallel in a second worktree and inserts
+# itself between M4.13 and this entry when the two branches merge, which is expected and is not
+# this lane's to pre-empt. Decisions 267-286 record the calls it needed, and it writes no
+# migration. See docs/milestones/M4.15-plan.md and §6's preamble.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
-              "M4.11", "M4.12", "M4.13", "M5", "M6", "M7"]
+              "M4.11", "M4.12", "M4.13", "M4.15", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 
@@ -500,6 +532,44 @@ def test_the_testing_ledger_counts_the_ids_the_map_actually_holds():
     )
 
 
+# "**21 ids** written against the plan's own rows, **3 ids** registered by the stages ..." -- the
+# series the total above decomposes into, each part bolded so the prose can be read as arithmetic.
+# The total itself carries "across N pytest files", so the two sentences cannot be confused for
+# each other, and a part re-wrapped across a line break stops being read -- which the sum then
+# catches, because the parts no longer reach the whole.
+_LEDGER_ID_PARTS = re.compile(r"\*\*(\d+) ids?\*\*")
+
+
+def test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes():
+    """The sibling above holds the total; this holds the series a reader reconciles it from.
+
+    The total was honest and the decomposition under it was not: M4.15 published 21 + 3 + 1 + 6 for
+    a map that already held 35 by then and 42 now, because the first review cycle registered ten
+    ids and the sentence said six -- and the four it left out are the four that brought two further
+    pytest files into the count, so the same paragraph also told a reader the wrong cycle bought
+    them. That is the defect the guard above was written for, one granularity down: an auditor sent
+    here by CLAUDE.md "rather than assuming status" sums the parts, misses the whole by seven, and
+    cannot tell a stale sentence from ids registered with no row to hold them.
+
+    Conditional on the ledger making the claim at all. A milestone whose figure never moved owes no
+    decomposition and this stays quiet for it; what it may not do is publish a series that does not
+    reach its own total. Rounded numerals rather than number words on purpose -- these are addends,
+    and the sentence they sit in is doing arithmetic in front of the reader.
+    [decision 184; M4.15 review cycle 2: M415-C2-COV-01]
+    """
+    parts = [int(n) for n in _LEDGER_ID_PARTS.findall(LEDGER.read_text(encoding="utf-8"))]
+    if not parts:
+        return
+    ids = {t for r in REQUIREMENTS if r["milestone"] == CURRENT for t in r.get("tests", [])}
+    assert sum(parts) == len(ids), (
+        f"docs/TESTING.md decomposes {CURRENT}'s id count as "
+        + " + ".join(str(p) for p in parts)
+        + f" = {sum(parts)}, and the map holds {len(ids)}. Restate the series from the map: a "
+        "reader reconciling the total against these parts is exactly who this paragraph is for, "
+        "and a part that no longer adds up tells them nothing about which of the two is stale."
+    )
+
+
 # "...and it takes the last `pytest.skip` out of a registered Tonight test". The qualifier is
 # OPTIONAL in this pattern on purpose. The sentence is read for the scope it claims, and the
 # guard below then holds exactly that scope: widen the wording back to "a registered test" and
@@ -603,3 +673,209 @@ def test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take():
             f"{len(scoped)} still skip:\n  " + "\n  ".join(scoped)
             + "\n  Scope the sentence to what the milestone did, or name the survivors."
         )
+
+
+# `## Decisions taken (owner, <date>[, as <milestone> opened])` heads one block of the register and
+# `### <n>. <sentence>` heads one decision inside it -- two hashes and three, so the block pattern
+# cannot match a decision heading. The register is the primary record and it is not what drifts:
+# every decision is present and correct under its block. What drifts is the prose ELSEWHERE that
+# publishes the range, which has no author once the block is written.
+_REGISTER_BLOCK = re.compile(r"^## Decisions taken \(.*\)\s*$", re.M)
+_REGISTER_DECISION = re.compile(r"^### (\d+)\. ", re.M)
+
+# The files that publish a decision RANGE as prose: the ledger's milestone paragraph, the map's
+# section header, this file's comment above `MILESTONES`, and the register's own preamble.
+# `docs/milestones/*.md` is excluded for the reason test_static_contracts.py gives for the same
+# exclusion -- the plan is the plan, the workflow forbids editing it, and a correction owed there
+# goes to the owner by hand -- and ROADMAP-to-M5.md is why that exclusion has to be stated rather
+# than assumed: it cites a connector's LINE range in this pattern exactly, starting at the number
+# M4.15's decisions start at. The first number is what scopes the sweep -- only a range that
+# STARTS where this milestone's decisions start is a claim about this milestone -- which is also
+# why no range literal is written anywhere else in this file: it would be read as a claim.
+_RANGE_PUBLISHERS = (LEDGER, MAP, REGISTER, TESTS / "test_spec_coverage.py")
+_PUBLISHED_RANGE = re.compile(r"\b(\d+)-(\d+)\b")
+
+
+def _current_milestone_blocks() -> list[tuple[str, str, list[int]]]:
+    """Every `## Decisions taken` block the register heads for `current_milestone`.
+
+    One tuple per block: the header, the preamble above its first decision, and the numbers under
+    it. Scoped to `current_milestone` for the reason the id-count guard above gives -- the block
+    in flight is the one this milestone is writing. Two earlier blocks carry exactly this drift
+    and neither is repaired here: 2026-09-09 opens "Seven" over twelve decisions and M4.11's opens
+    "Three" over four, both with no sentence disclosing the rest. Another milestone's record is
+    not this one's to rewrite, and a guard that went red on it would be reporting history rather
+    than the diff in front of it.
+    """
+    body = REGISTER.read_text(encoding="utf-8")
+    heads = list(_REGISTER_BLOCK.finditer(body))
+    # `M4` must not match the header that says `M4.15`, so the milestone name is read with a
+    # boundary of its own: `\b` counts the dot as one and would match the longer name inside it.
+    scoped = re.compile(re.escape(CURRENT) + r"(?![\d.])")
+    out = []
+    for i, head in enumerate(heads):
+        if not scoped.search(head.group(0)):
+            continue
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(body)
+        block = body[head.end():end]
+        decisions = list(_REGISTER_DECISION.finditer(block))
+        preamble = block[:decisions[0].start()] if decisions else block
+        out.append((head.group(0).strip(), preamble, [int(m.group(1)) for m in decisions]))
+    return out
+
+
+def test_every_published_decision_range_ends_where_the_register_does():
+    """Four documents publish this milestone's decision range, and only one of them was derived.
+
+    The register numbers the decisions; `docs/TESTING.md`'s ledger paragraph, the map's section
+    header and the comment above `MILESTONES` each restate the RANGE in prose -- and prose written
+    before a browser gate appends four more decisions stays where it was. M4.15 shipped three
+    spellings of one range at once: the ledger's ended at the last decision taken, the map's stopped
+    one short of it and this file's comment two, so an auditor reconciling the record against the
+    register met neither the decision that replaced logout's exit with `location.assign('/login')`
+    nor the one that made 272 conditional on a sign-out the server confirmed.
+
+    Decision 184 refuses to publish a measurement no run produced; this is the same rule from the
+    other side, applied to a figure a later run overtook, which is what the two ledger guards above
+    already hold for the milestone counts and the id total. Neither of them can see a range.
+    [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
+    """
+    blocks = _current_milestone_blocks()
+    assert blocks, f"the register heads no `## Decisions taken` block for {CURRENT}"
+    held = sorted(n for _, _, numbers in blocks for n in numbers)
+    assert held, f"the register's {CURRENT} block holds no `### <n>.` decision"
+    lo, hi = held[0], held[-1]
+
+    published, stale = 0, []
+    for path in _RANGE_PUBLISHERS:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for first, last in _PUBLISHED_RANGE.findall(line):
+                if int(first) != lo:
+                    continue
+                published += 1
+                if int(last) != hi:
+                    stale.append(
+                        f"{path.relative_to(REPO).as_posix()}:{number}: publishes {first}-{last}"
+                    )
+    assert published, (
+        f"no file publishes {CURRENT}'s decision range, so this guard holds nothing. Either the "
+        "ledger paragraph states it, in the shape M4.7's block uses -- the full range, then the "
+        "sittings it decomposes into -- or this guard comes out."
+    )
+    assert not stale, (
+        f"{CURRENT}'s decisions are {lo}-{hi} in docs/spec-v2.2-proposals.md, and these publish a "
+        "range that stops short of it. A reader reconciling the record against the register never "
+        "meets the decisions past the end they name:\n  " + "\n  ".join(stale)
+    )
+
+
+def test_the_register_block_opens_with_the_number_of_decisions_it_holds():
+    """The same drift one document in, and the only place it cannot be read as scoped.
+
+    Every dated block in the register opens with the count it holds -- "Ten, taken as M4.10
+    opened", "Thirteen, taken as M4.12 opened" -- and M4.15's opened "Fifteen" over a block holding
+    twenty, because the four decisions the browser gate produced and the one review cycle 1 took
+    were appended under the header that already said fifteen. A reader of the preamble is then told
+    a smaller number than the block under it contains, which is the id-count guard's failure in the
+    other document: a figure published as measured that a later run overtook.
+
+    Held per block rather than per milestone, because the house may put a milestone's later
+    decisions under a dated header of their own (`as M4.13 closed`, `M4.12 review cycle 1`) and
+    each header then owns its own count. Either arrangement passes; neither may miscount.
+    [M4.15 review cycle 1: M415-C1-COV-01]
+    """
+    drift = []
+    for header, preamble, numbers in _current_milestone_blocks():
+        first = preamble.split()[0].strip(",.") if preamble.split() else ""
+        spelled = _spelled(first)
+        assert spelled is not None, (
+            f"the register's block `{header}` opens with {first!r} rather than the count it "
+            "holds. Open it the way every dated block above it does, so the count can be read."
+        )
+        if spelled != len(numbers):
+            drift.append(f"{header}: opens {first!r}, holds {len(numbers)} decisions")
+    assert not drift, (
+        "the register publishes a decision count its own block has overtaken. Restate the count, "
+        "and disclose the later sittings inside the sentence the way the 2026-09-10 block does "
+        "for its eleventh:\n  " + "\n  ".join(drift)
+    )
+
+
+# The owed device checks in `docs/TESTING.md`: the bullets, and the signature line under them.
+# Read as one shape, because the debt is only a debt while both halves stand -- a filled line over
+# the bullets is decision 184's defect wearing a signature, and bullets with no line under them
+# are a paragraph nobody is asked to discharge.
+_OWED_OPENER = "cannot be produced by any run in this suite"
+_OWED_SIGNATURE = re.compile(r"`verified on ([^`\n]*)`")
+# "**Four** of its facts cannot be produced ..." and "Two more join them at the first review
+# cycle": the two sentences that COUNT the debt. Summed against the bullets under them, for the
+# reason the id-count guard sums its three figures -- a bullet added or dropped without restating
+# the sentence is the same drift, and this block is the one nothing else in the tree reads.
+_OWED_FACT_COUNTS = re.compile(r"\b([A-Za-z]+) (?:of its facts cannot be produced|more join them)\b")
+
+
+def test_the_owed_device_checks_are_recorded_and_still_unsigned():
+    """Decision 281's refusal, held by something other than the next reader's good faith.
+
+    Four facts in M4.15's exit criterion cannot be produced by any run in this suite -- the header
+    clearing the status bar and the tab bar clearing Safari's toolbar in installed standalone mode,
+    focus zoom on real hardware, and the installed app cold-booting with the appliance unreachable
+    -- and review cycle 1 added two more the shipped copy already asserts. They are written into
+    `docs/TESTING.md` as an outstanding check with an unfilled signature line, in the shape
+    decision 184 requires of any measurement: the run that produced it, or nothing.
+
+    Nothing read that block. The two ledger guards above hold the fenced `Current state` block and
+    the id-count sentence, `test_harness_fixtures.py` re-measures what `-q` prints, and no coverage
+    row names the device checks at all -- so a later milestone re-pasting this file could have
+    closed the debt by writing a device and a date rather than by holding one, and every gate would
+    have stayed green. A pre-signed line is worse than a gap because it tells the next reader to
+    stop looking, which is decision 281's own sentence.
+
+    The polarity is deliberate and is `05-milestones.spec.js`'s: this goes red on the day the owner
+    honestly signs, and the repair is to delete it together with its row entry, in the same change.
+    It cannot tell a true signature from a fabricated one -- nothing here can -- so what it buys is
+    that filling the line requires deleting a test that quotes decision 281 at you.
+    [M4.15 review cycle 1: M415-C1-COV-03]
+    """
+    body = LEDGER.read_text(encoding="utf-8")
+    signature = [line for line in body.splitlines() if _OWED_SIGNATURE.search(line)]
+    assert len(signature) == 1, (
+        f"docs/TESTING.md holds {len(signature)} `verified on ...` signature lines; decision 281 "
+        "owes exactly one, under the facts it covers. It was deleted, or a second milestone is "
+        "carrying its own device debt and this guard is reading the wrong one."
+    )
+    assert "**unfilled.**" in signature[0], (
+        "docs/TESTING.md's device check no longer says it is unfilled. Decision 281: the run that "
+        f"produced it, or nothing.\n  {signature[0].strip()}"
+    )
+    filled = []
+    for field in _OWED_SIGNATURE.search(signature[0]).group(1).split(", "):
+        label, _, value = field.partition(" ")
+        if not re.fullmatch(r"_+", value):
+            filled.append(f"{label}: {value}")
+    assert not filled, (
+        "docs/TESTING.md's device check carries a value, and no run in this repository can "
+        "produce one: there is no status bar here, no dynamic toolbar, no focus zoom and no "
+        "installed web view. Decision 281 refuses a pre-signed line because it tells the next "
+        "reader to stop looking. If the owner has signed it on a device, delete this guard and "
+        "its entry in spec_coverage.toml in the same change:\n  " + "\n  ".join(filled)
+    )
+
+    assert body.count(_OWED_OPENER) == 1, (
+        f"docs/TESTING.md states {body.count(_OWED_OPENER)} owed-device-check paragraphs; the "
+        "block is one debt under one signature line, so exactly one opens it."
+    )
+    start = body.rindex("\n\n", 0, body.index(_OWED_OPENER))
+    region = body[start:body.index(signature[0])]
+    bullets = [line for line in region.splitlines() if line.startswith("- **")]
+    claimed = [_spelled(word) for word in _OWED_FACT_COUNTS.findall(region)]
+    assert claimed and None not in claimed, (
+        f"the owed-check block counts its facts as {_OWED_FACT_COUNTS.findall(region)}, which is "
+        "not a number word. The count is read out of the prose so that widening one widens the "
+        "other; restate it as a word."
+    )
+    assert sum(claimed) == len(bullets), (
+        f"docs/TESTING.md's owed-check block claims {sum(claimed)} facts and lists "
+        f"{len(bullets)} of them. A debt published as a count nobody re-derived is decision 184's "
+        "defect on the document CLAUDE.md sends the next reader to for status."
+    )

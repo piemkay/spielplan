@@ -19,6 +19,7 @@
   // after a poster that said `24m/ep`. [M4.9 findings 3, 4, 37]
   import { facetColour } from '$lib/home.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
+  import { dismiss } from '$lib/dismiss.js';
 
   let { titleId, onClose, onPerson, onStateChange } = $props();
 
@@ -110,7 +111,13 @@
   );
 </script>
 
-<aside class="panel" aria-label="Title detail">
+<!-- Proposal 131's outside tap and Escape, through the one action. On a phone this panel is the
+     whole screen (`width: min(420px, 100%)` and full-bleed under 720 px), and until now the only
+     way out of it was the close control in the corner — which is exactly the "menu you cannot
+     click away" proposal 131 describes, at full size. The Home selection staying out of the URL
+     is a separate half of the same finding and is deliberately not taken here. [proposals 127,
+     131; §6 preamble] -->
+<aside class="panel" aria-label="Title detail" use:dismiss={onClose}>
   <button class="close" onclick={onClose} aria-label="Close">✕</button>
 
   {#if error}
@@ -176,12 +183,19 @@
           Play on Jellyfin
         </a>
       {:else}
-        <button class="btn-primary" disabled title="link a Jellyfin server in Admin (M1)">
-          Play on Jellyfin
-        </button>
+        <button class="btn-primary" disabled>Play on Jellyfin</button>
       {/if}
       <a class="btn-ghost" href="/map?title={t.id}">Show on map</a>
     </div>
+    {#if !data.actions.play_on_jellyfin}
+      <!-- §6.8: every conflict carries its one-line why. This one was carried in `title=`, which
+           is a hover tooltip and does not exist on touch — so on §6 preamble's primary form factor
+           §6.0's second action was simply a dead button with no reason attached to it anywhere.
+           The register is the quiet reason the rest of this card already speaks in. -->
+      <p class="why actionwhy" data-testid="title-jellyfin-why">
+        Play needs a linked Jellyfin server — an admin links one in Admin (M1).
+      </p>
+    {/if}
     {#if t.kind === 'series' && t.seen_state === 'seen'}
       <!-- Decision 210(a): a series is app-only in the un-marking direction. Jellyfin stores no
            Played flag on a Series at all — it computes the folder's from its episodes — so the only
@@ -338,9 +352,16 @@
 </aside>
 
 <style>
+  /* §6 preamble makes this an installable PWA, and `app.html` asks for `viewport-fit=cover` with
+     a black-translucent status bar: the installed web view starts UNDER the status bar, so a
+     panel offset by a bare 54 px starts that many pixels too high and its first rows sit behind
+     the clock. The header is sized `calc(54px + env(safe-area-inset-top))`, and anything anchored
+     below it has to say the same thing rather than a number that was only ever the header's
+     height on a browser tab. `env()` resolves to 0 everywhere this suite runs, which is why the
+     rule is asserted at the source. [§6 preamble; decision 279] */
   .panel {
     position: fixed;
-    top: 54px;
+    top: calc(54px + env(safe-area-inset-top));
     right: 0;
     bottom: 0;
     width: min(420px, 100%);
@@ -351,6 +372,19 @@
     z-index: 50;
     animation: fadeIn 0.14s ease;
   }
+  /* `design.css`'s coarse block raises `min-height` and never `min-width`, so this control came
+     out 48 px tall and 32 px wide — two thirds of §6 preamble's floor on its narrow axis, on the
+     only exit a full-bleed panel has. The token is named here rather than widened globally,
+     because a blanket `min-width` in the coarse block would reach every narrow control in the
+     app at once. (The two casualties that argument used to name are not among them: ShelfRow's
+     `.nudge` is `display: none` under `pointer: coarse`, and RateBlockCounter's ticks are
+     `<span>`s inside an `aria-hidden` container, so the coarse block's six selectors miss both.
+     The argument for keeping the fix scoped stands on its own; those two examples did not.)
+     BEHIND `pointer: coarse`, because that is where the rule it completes lives. Declared
+     unconditionally it made the control 48 wide and 32 tall on a mouse — the same lopsidedness
+     rotated — and its 48 px box then started 12 px inside the heading beside it, where a 4 px gap
+     had been. §6's preamble writes the floor for fingers; a mouse has no such threshold.
+     [§6 preamble; M4.15 review cycle 1] */
   .close {
     position: absolute;
     top: 14px;
@@ -363,8 +397,33 @@
     width: 32px;
     height: 32px;
   }
+  @media (pointer: coarse) {
+    .close {
+      min-width: var(--touch);
+    }
+    /* §6.0's trailer key is content, but the thing drawn around it is a control — a bordered,
+       padded, pill-radius chip, which is the same sentence `+layout.svelte` uses to admit
+       `a.nobundle` to this rule and the line that separates both from an inline prose link. It
+       measured 26 tall, a little over half the floor, inside the overlay whose only OTHER exit is
+       the rule above; and a bare `<a>` sits outside design.css's coarse selector list by design,
+       so nothing reached it on either axis. Height is its short one: at 183 wide it clears the
+       other by a factor of three. Exit criterion 4 admits exactly one exemption and names it
+       (decision 280); this was a second, exempt by silence.
+
+       `align-items` with it, because `baseline` in a box taller than its content puts both spans
+       at the top of the 48 px target instead of in the middle of it.
+       [§6 preamble; §6.0; review cycle 3: M415-C3-COMP-01] */
+    .trailer {
+      min-height: var(--touch);
+      align-items: center;
+    }
+  }
+  /* The right margin reserves the widest the close control is ever drawn, not the widest it used
+     to be: `.close` sits at `right: 16px` inside the panel's 20 px padding, so on a coarse
+     pointer its box starts `--touch` from the text edge and a 32 px margin put the last
+     characters of a long title under a transparent hit area. [§6 preamble] */
   h2 {
-    margin: 0 32px 4px 0;
+    margin: 0 var(--touch) 4px 0;
     font-size: 19px;
     font-weight: 600;
   }
@@ -412,6 +471,12 @@
     text-decoration: none;
     display: inline-flex;
     align-items: center;
+  }
+  /* Pulled up under the row it explains: `.actions` already carries the 18 px that separates it
+     from the next section, and a paragraph's own margins on top of it would read as a sentence
+     belonging to neither. */
+  .actionwhy {
+    margin: -14px 0 18px;
   }
   section {
     margin-bottom: 20px;
@@ -537,7 +602,10 @@
 
   @media (max-width: 720px) {
     .panel {
-      top: 54px;
+      /* In both places, because this override wins on the form factor the finding lives on:
+         a base rule carrying the inset and a phone rule replacing it with a bare 54 px is the
+         inset silently discarded on the only device it is for. [decision 279] */
+      top: calc(54px + env(safe-area-inset-top));
       width: 100%;
       border-left: none;
     }

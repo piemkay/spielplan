@@ -135,6 +135,17 @@ ANONYMOUS = frozenset(
 # escape routes DO — each produced its next card by replaying the whole round a second time — so the
 # test that closes it is an HTTP test of both handlers, which is exactly the assertion the two
 # entries said was missing. Found by the rule again, on the run that added that test. [M4.12]
+#
+# **M4.15 takes one more, and the set below is four.** The entry below named M4.15 as the owner
+# of the client half, and the repair put the route on the wire under a test that says something
+# about it: `e2e/specs/19-phone-shell.spec.js`'s 401 seam enumerates the reads ONE surface makes,
+# and Rank issues two of them from the same `onMount` -- the board, and §4.1's kind-scoped genre
+# and decade vocabulary -- so a 401 from `/api/facets` IS the surface the household tapped, and a
+# test that would otherwise call it a second surface refusing behind their back has to name it.
+# Narrower than an assertion about the payload, and recorded as such rather than banked: what it
+# holds is that this route is Rank's read and that its refusal travels with Rank's, which is the
+# fact decision 282's seam is wrong about if it is wrong. Found by the rule again, on the run
+# that added the spec. [M4.15; decision 282]
 UNTESTED = frozenset(
     {
         # M4.14 (bundle import and artifact custody). Its ~127 s POST is the finding that made the
@@ -149,10 +160,6 @@ UNTESTED = frozenset(
         # from a template, and a literal is what this rule can see. M4.11 is the next plan to open
         # the admin Users routes (its Jellyfin-link column reads `/api/admin/users`).
         "/api/admin/users/{user_id}/passkeys/{credential_id}",
-        # The filter vocabulary Rank and the Library read. M4.15 owns the client half
-        # (`dd-fe-facet-vocabulary-read-has-no-sequence-guard`), which is the bug this route's
-        # payload is the input to.
-        "/api/facets",
         # A Home projection whose domain function `test_home.py` drives directly — which is
         # precisely the shape `docs/TESTING.md`'s M3 lesson is about. `/api/home/shelves` has no
         # client caller at all today (`home.svelte.js` reads `/api/home`), so nothing reaches it
@@ -485,8 +492,8 @@ def test_the_untested_set_may_only_shrink():
         "these routes are named by a test now, so they are no longer untested - delete them from "
         f"UNTESTED: {sorted(closed)}"
     )
-    assert len(UNTESTED) == 5, (
-        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 5 - an entry leaves "
+    assert len(UNTESTED) == 4, (
+        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 4 - an entry leaves "
         "when a test names its route, and lowering this number is how that is recorded; raising it "
         "is the edit this rule exists to make argue for itself"
     )

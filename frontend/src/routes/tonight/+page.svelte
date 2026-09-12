@@ -713,7 +713,10 @@
      basis decides the main size and `width` never gets a say. */
   .controls input[type='number'] { flex: 0 0 4.5rem; }
   /* The one range control in the app. Left to the user agent it draws in the platform's blue,
-     which is the one colour §6.8's surface does not otherwise contain. */
+     which is the one colour §6.8's surface does not otherwise contain. This is the accent under
+     its own rule rather than beside it: `accent-color` paints the part of a native control that
+     shows the value the person has chosen — the same grammar as `.pill[aria-pressed='true']`,
+     which is why it stays while the six fills around it go. [§6.8; decision 277] */
   .controls input[type='range'] { accent-color: var(--ember); }
   .quiet { opacity: 0.85; }
   .controls { display: flex; flex-direction: column; gap: 10px; }
@@ -739,7 +742,11 @@
     padding: 8px 0; border-bottom: 1px solid var(--line);
   }
   .seat { min-height: var(--touch); }
-  .code { font-size: 22px; letter-spacing: 0.18em; color: var(--ember); }
+  /* The room code is the lobby's content, not its accent: the host reads it out and the guests
+     type it, so it wants the full ink the rest of the data voice steps down from. It wore the
+     ember, which §6.8 spends on selection and primary actions — and the primary action on this
+     step is Start. [§6.8; decision 276] */
+  .code { font-size: 22px; letter-spacing: 0.18em; color: var(--ink); }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .poster {
     min-height: 140px; display: flex; flex-direction: column; justify-content: flex-end;
@@ -748,7 +755,10 @@
     text-align: left; cursor: pointer;
   }
   .poster:hover, .poster:focus-visible { border-color: var(--ember-edge); }
-  .beat { letter-spacing: 0.2em; color: var(--ember); }
+  /* Proposal 60's beat is a label over the reveal, and nothing here is chosen yet — so it keeps
+     the data voice's own `--ink-2` (this file's `.data`, one rule up) and spends no accent. The
+     letter-spacing is what makes it a beat. [§6.8; decision 276] */
+  .beat { letter-spacing: 0.2em; }
   .winner { border-color: var(--ember-edge); }
   /* `.slate` rows are plain list items; `.picks` rows are cards, so they take the card's own
      padding rather than a bare vertical rhythm. Sharing one rule left them with no horizontal

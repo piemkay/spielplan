@@ -33,6 +33,8 @@ const ENABLE = '[data-testid="onboarding-push-enable"]';
 const DISABLE = '[data-testid="onboarding-push-disable"]';
 const DEVICE = '[data-testid="onboarding-device"]';
 const NOTE = '[data-testid="onboarding-push-note"]';
+const STEPS = '[data-testid="onboarding-ios-steps"]';
+const PUSH_STATE = '[data-testid="onboarding-push-state"]';
 
 // base64url, as the server hands the public half over.
 const KEY = 'BFVpcUFyb2xs';
@@ -80,6 +82,22 @@ function inBrowser({ subscription = null } = {}) {
   return registration;
 }
 
+/**
+ * An iPhone in a Safari tab. `platform()` reads the agent string and nothing else, and jsdom's
+ * default one is a desktop Chrome, so both iOS branches are unreachable without this. Defined as
+ * an own property for the same reason `serviceWorker` is: `Reflect.deleteProperty` in `afterEach`
+ * hands the prototype's getter back, where `vi.stubGlobal('navigator', …)` would replace the
+ * object Svelte mounts against.
+ */
+function onIphone() {
+  Object.defineProperty(navigator, 'userAgent', {
+    configurable: true,
+    value:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+      '(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
+  });
+}
+
 beforeEach(() => {
   target = document.createElement('div');
   document.body.appendChild(target);
@@ -95,6 +113,7 @@ afterEach(() => {
   // read-only in lib.dom, and `npm run check` counts that as an error on a baseline this milestone
   // measures against.
   Reflect.deleteProperty(navigator, 'serviceWorker');
+  Reflect.deleteProperty(navigator, 'userAgent');
 });
 
 /** The account screen's one read, with whatever devices this member's account holds. */
@@ -191,6 +210,11 @@ describe('a browser with no Web Push at all', () => {
     try {
       expect(target.querySelector(SECTION).getAttribute('data-push-state')).toBe('unsupported');
       expect(target.querySelector(ENABLE)).toBeNull();
+      // The negative control for the iOS branch below: off iOS, "no Web Push support" IS the
+      // cause, and the sentence that names it has to survive the branch added beside it.
+      expect(target.querySelector(PUSH_STATE).textContent).toContain(
+        'This browser has no Web Push support'
+      );
     } finally {
       unmount(app);
     }
@@ -235,6 +259,70 @@ describe('an off switch that finds nothing to switch off', () => {
       // the table on the member, and the DELETE that would have shortened the list never ran.
       const scopes = [...target.querySelectorAll(DEVICE)].map((li) => li.getAttribute('data-device'));
       expect(scopes).toEqual(['unknown', 'unknown']);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+/**
+ * The iOS install journey, in the two sentences that were wrong about it. Spec v2.1 §6 preamble,
+ * §3.2; M4.15 finding 22 [fe-14-ios-install-journey-second-login-and-copy].
+ *
+ * Both sentences were true of a world this app is not in. "Open Spielplan from the new icon, then
+ * come back here for notifications" describes a journey the session forbids: §3.2's session is an
+ * HttpOnly SameSite=Lax cookie and the home-screen app holds its own jar, so the icon opens on a
+ * 401 and the shell lands the member on /login. And "This browser has no Web Push support" is
+ * true in a Safari tab while naming the wrong cause — §6's preamble states the real rule, "on
+ * iPhone, Web Push works only for a PWA added to the home screen (iOS 16.4+)", which is a place
+ * and not a capability.
+ *
+ * MOUNTED, because the branch is chosen by the agent string and by nothing a stack can be put
+ * into: `playwright.config.js`'s phone project is WebKit on an iPhone 13 viewport, so it reaches
+ * `ios-safari` too, but it cannot be made to hold the one fact the copy now turns on — a second
+ * cookie jar behind a home-screen icon, which is decision 281's owed device check. What is
+ * assertable here is what the screen SAYS, and that is the whole of this repair.
+ */
+describe('an iPhone in a Safari tab', () => {
+  it('says the icon keeps its own sign-in, instead of promising a way back', async () => {
+    onIphone();
+    pushState([]);
+    const app = await open();
+    try {
+      const steps = target.querySelector(STEPS);
+      expect(steps).not.toBeNull();
+      const third = steps.querySelectorAll('li')[2].textContent;
+      expect(third).toContain('Open Spielplan from the new icon and sign in there once');
+      // The claim the old copy made, and the one thing the cookie jar makes impossible.
+      expect(target.textContent).not.toContain('come back here for notifications');
+      // The reason, and the card `/account` puts ABOVE this one on the `?welcome=1` visit and
+      // below it on every other. Which is why the sentence names no direction: this component
+      // does not know where its host places it, and "below" was false on precisely the visit
+      // finding 22 inverted the order for. Both facts under this copy — that the icon opens
+      // with its own cookie jar, and whether a passkey registered in this tab answers inside
+      // the home-screen app — are owed in `docs/TESTING.md` as unsigned device checks
+      // (decision 281); this asserts what renders, and claims nothing about what an iPhone does.
+      expect(target.textContent).toContain('the home-screen app keeps its own sign-in');
+      expect(target.textContent).toContain('Adding a passkey on this page');
+      expect(target.textContent).not.toContain('passkey below');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('says notifications come from the icon, rather than blaming the browser', async () => {
+    // No `inBrowser()`: an iOS Safari tab has no PushManager, which is exactly the state that
+    // used to render "This browser has no Web Push support" to somebody whose browser has it.
+    onIphone();
+    pushState([]);
+    const app = await open();
+    try {
+      expect(target.querySelector(SECTION).getAttribute('data-platform')).toBe('ios-safari');
+      expect(target.querySelector(SECTION).getAttribute('data-push-state')).toBe('unsupported');
+      const said = target.querySelector(PUSH_STATE).textContent;
+      expect(said).toContain('notifications come from the home-screen app');
+      expect(said).toContain('add the icon in step 1');
+      expect(said).not.toContain('This browser has no Web Push support');
     } finally {
       unmount(app);
     }

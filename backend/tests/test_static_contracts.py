@@ -66,21 +66,67 @@ def test_the_facet_colours_are_distinguishable():
 
 def test_the_ember_accent_is_not_reused_as_a_neutral():
     """§6.8: "one ember accent #c8613a spent on selection and primary actions". It is also
-    facet-mood's colour, which is deliberate and the only exception."""
+    facet-mood's colour, which is deliberate and the only exception.
+
+    Read through `_ACCENT` from review cycle 2 on, rather than through the lowercase hex literal
+    this shipped with since M0. This is the half of the sentence that reads NAMES, and the half
+    that reads spends skips every `--` property by design -- so a second token holding the accent
+    was answerable to this guard alone, and this guard knew one of its four spellings. Both
+    `--badge-bg: rgb(200, 97, 58)` and the plain alias `--badge-bg: var(--ember)` minted the colour
+    under a second name with both guards green, and `.badge { background: var(--badge-bg) }` in
+    the sheet every surface inherits from is the widening the pair exists to refuse.
+    `test_the_design_css_accent_guard_tells_a_spend_from_a_definition` shows all four refused and
+    the two alpha derivatives still admitted.
+    [§6.8; decision 276 as amended; review cycle 2: acc-c2-02]
+    """
     css = _css()
     assert "--ember: #c8613a;" in css
-    ember_uses = re.findall(r"--([a-z-]+):\s*#c8613a", css)
-    assert set(ember_uses) <= {"ember", "facet-mood"}, ember_uses
+    ember_uses = _design_css_accent_names(_stylesheet(DESIGN))
+    assert set(ember_uses) <= {"--ember", "--facet-mood"}, (
+        f"these design.css tokens hold the ember accent: {ember_uses}. §6.8 rations the colour to "
+        "one name -- `--facet-mood` is #c8613a by §6.4's own binding and is the single exception "
+        "(decision 276) -- and a second name for it is a second accent whatever it is called, "
+        "because every consumer of the new token spends the one colour the app reserves"
+    )
 
 
 def test_the_data_voice_is_monospace_and_the_display_face_is_not():
     """§6.8: JetBrains Mono for every model number, ID and data annotation; Space Grotesk for
-    everything else. A data voice that is not visually distinct is not a voice."""
+    everything else. A data voice that is not visually distinct is not a voice.
+
+    Which is the half that had never been read here. The declarations were checked and the classes
+    were not, so `.why` -- the quiet-reason register, the sentence §6.8 makes the reason a household
+    trusts a recommendation at all -- was set in the mono face on 129 elements across 27 files,
+    half a pixel from the numbers it was explaining, and this guard called the design language
+    intact. §6.8 gives the mono face to "every model number, ID and data annotation" and to nothing
+    else; prose is not an annotation. Decision 275 moved `.why` to the display face, so both
+    classes are now read -- and read for the declaration that renders rather than for one that is
+    merely present, because a face is taken back by a second line under the first. [§6.8; decision 275]
+
+    Registered twice on purpose -- by M0's `map-taste-admin-palette-facet-binding-and-accent` and
+    by M4.15's `platform-quiet-reasons-are-prose-and-legible`. Widen it; renaming it takes two
+    rows down at once.
+    """
     css = _css()
     assert "--mono: 'JetBrains Mono'" in css
     assert "--display: 'Space Grotesk'" in css
     data_rule = re.search(r"\.data\s*\{([^}]+)\}", css)
     assert data_rule and "var(--mono)" in data_rule.group(1)
+    why_rule = re.search(r"\.why\s*\{([^}]+)\}", css)
+    assert why_rule, "design.css declares no `.why`, so the quiet-reason register has no face"
+    # The LAST font-family in each rule, not whether the right one appears somewhere in it. A
+    # second declaration under the first is how a face is taken back inside its own rule -- the
+    # cascade renders the later one and `in` would read the one that lost.
+    faces = {
+        name: re.findall(r"font-family\s*:\s*([^;}]+)", body.group(1))[-1].strip()
+        for name, body in ((".data", data_rule), (".why", why_rule))
+    }
+    assert faces == {".data": "var(--mono)", ".why": "var(--display)"}, (
+        f"the two voices render as {faces}, and §6.8 gives the mono face to model numbers, ids and "
+        "data annotations only -- a quiet reason is prose. Where one quotes a model number, that "
+        "fragment wears `.data`, which is two voices inside one sentence rather than one of them "
+        "becoming the other"
+    )
 
 
 def test_the_touch_target_rule_applies_beyond_the_nav():
@@ -133,8 +179,13 @@ def _classes(attrs: str) -> set[str]:
     so `\\bcard\\b` calls `PosterCard.svelte` a card surface when it holds no card at all, and
     then excuses its button reset as if it were a card's padding.
     """
-    static = re.search(r'class="([^"]*)"', attrs)
-    names = set(static.group(1).split()) if static else set()
+    # Either quote. HTML accepts both and nothing in this repo picks one: `frontend/package.json`
+    # has no prettier and no eslint, and `npm run check` is svelte-check alone -- so every class
+    # attribute in the tree being double-quoted is a habit and not a constraint, and a single
+    # quote took a whole file out of both consumers of this function at once, the card-padding
+    # guard and the why-register guard. [review cycle 2: why-c2-01]
+    static = re.search(r"class=(\"|')(.*?)\1", attrs)
+    names = set(static.group(2).split()) if static else set()
     # `class:card={expr}` is the same claim written as a directive.
     names |= set(re.findall(r"class:([A-Za-z0-9_-]+)", attrs))
     return names
@@ -574,16 +625,63 @@ def test_the_cold_badge_expression_reads_e_source_not_placement():
     to the placement test would be invisible again -- the badge would simply be wrong, on a
     surface with no assertion that reads it. The comment beneath it IS the specification and is
     pinned with it.
+
+    The expression moved in M4.15 and this guard followed it rather than being relaxed. It was
+    inline in `$derived(...)` while the card was its only reader; the shelf now asks the same
+    question, to carry the badge's one-line why once for the row instead of in a `title=` tooltip
+    no phone can open (finding 10, decision 278). A second copy of the test is exactly what the
+    comment beneath it forbids, so there is one `isColdPlaced` and both readers call it -- which
+    is what keeps this pin over both of them.
     """
     poster = _src(POSTER_CARD)
-    derived = re.search(r"noCrowdData\s*=\s*\$derived\((?P<expr>.*?)\n\s*\);", poster, re.S)
-    assert derived, "PosterCard no longer derives noCrowdData"
-    assert " ".join(derived.group("expr").split()) == _COLD_BADGE, (
+    stated = re.search(
+        r"export function isColdPlaced\(title\) \{\s*return (?P<expr>.*?);\s*\}", poster, re.S
+    )
+    assert stated, "PosterCard no longer states the cold-placement test as one exported expression"
+    assert "$derived(isColdPlaced(title))" in poster, (
+        "the badge no longer reads the expression this guard pins, so the pin holds nothing"
+    )
+    assert " ".join(stated.group("expr").split()) == _COLD_BADGE, (
         "the no-crowd-data badge is off `e_source`/`item_n`, NOT off `title.placement`:\n"
-        f"  found:  {' '.join(derived.group('expr').split())}\n  wanted: {_COLD_BADGE}"
+        f"  found:  {' '.join(stated.group('expr').split())}\n  wanted: {_COLD_BADGE}"
     )
     assert "Off `e_source`/`item_n`, NOT off `title.placement`." in poster, (
         "the comment stating the rule is the specification and travels with the expression"
+    )
+
+
+# The sentence decision 278 moved out of the tooltip, matched on the half that carries no em dash
+# so a failure message stays ASCII on a cp1252 console.
+COLD_REASON = 'Cards marked "new" are placed by the Cold Tower'
+
+
+def test_every_surface_that_draws_the_cold_badge_states_its_reason():
+    """§6.8's quiet reasons, on the form factor a `title=` attribute does not exist on.
+
+    Decision 278 took the cold badge's explanation out of the hover and gave it to the SHELF, once
+    for the row rather than once per card -- twelve identical sentences down a row is the noise the
+    quiet-reason register exists to avoid. `PosterCard` renders on TWO surfaces, though, and the
+    second is Home's catalog grid: reached by the search box, a filter chip or a tapped credit, and
+    drawing no shelf header at all. There the chip went back to being an unexplained word on a
+    poster, which is finding 10's own defect surviving its repair, on the form factor §6's
+    preamble makes primary.
+
+    So the rule is per SURFACE rather than per component, and this asks every file that draws the
+    card whether it also draws the sentence. The tooltip is not an answer and is not counted: a
+    hover is a pointer affordance, and this is the rule for fingers.
+    [§6.8; decision 278; M4.15 review cycle 2: M415-C2-COMP-06]
+    """
+    silent = []
+    for path in sorted(FRONTEND.rglob("*.svelte")):
+        source = _src(path)
+        if "<PosterCard" in source and COLD_REASON not in source:
+            silent.append(path.relative_to(REPO).as_posix())
+    assert not silent, (
+        "these surfaces draw the cold badge and carry no reachable reason for it: "
+        + ", ".join(silent)
+        + ". The chip's sentence belongs to the surface (decision 278) -- carry it once above the "
+        "cards, the way `ShelfRow` carries it in the row header. A `title=` tooltip is not the "
+        "answer: it does not exist on a phone, which is the whole of finding 10."
     )
 
 
@@ -2678,6 +2776,13 @@ def test_the_count_line_measure_reports_the_population_the_disclosure_exists_for
 DATA_CARD = FRONTEND / "routes" / "admin" / "data" / "+page.svelte"
 
 
+def _markup(source: str) -> str:
+    """A Svelte source's template: script block, style block and HTML comments removed."""
+    body = re.sub(r"<script\b.*?</script>", "", source, flags=re.S)
+    body = re.sub(r"<style\b.*?</style>", "", body, flags=re.S)
+    return re.sub(r"<!--.*?-->", "", body, flags=re.S)
+
+
 def _rendered_markup(path: Path) -> str:
     """A Svelte file's template: script block, style block and HTML comments removed.
 
@@ -2686,9 +2791,7 @@ def _rendered_markup(path: Path) -> str:
     file of nothing but comments (M4.7 ddocs-08). The claim below is that the card RENDERS these
     fields, so what is searched has to be what renders.
     """
-    body = re.sub(r"<script\b.*?</script>", "", path.read_text(encoding="utf-8"), flags=re.S)
-    body = re.sub(r"<style\b.*?</style>", "", body, flags=re.S)
-    return re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    return _markup(path.read_text(encoding="utf-8"))
 
 
 def test_the_data_card_renders_the_per_dataset_terms():
@@ -5120,3 +5223,3297 @@ def test_the_clamp_control_arithmetic_moves_when_the_simulation_does():
     assert _tense_under_the_clamp(60, 7, 12) == 19
     assert _tense_under_the_clamp(60, 12, 12) == 0
     assert _tense_under_the_clamp(60, 7, 4) == 0
+
+
+# --- M4.15: the weights the stylesheet declares are the weights the repository ships -------
+
+FONTS_DIR = REPO / "frontend" / "static" / "fonts"
+FONTS_CSS = FONTS_DIR / "fonts.css"
+FETCH_FONTS = REPO / "ops" / "fetch-fonts.py"
+
+_FONT_FACE = re.compile(r"@font-face\s*\{(.*?)\}", re.S)
+_FONT_FILE = re.compile(r"([a-z-]+?)-(\d{3})-(latin|latin-ext)\.woff2")
+
+
+def _fetch_fonts():
+    """Import `ops/fetch-fonts.py`, whose name is not an identifier, under one that is."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("fetch_fonts", FETCH_FONTS)
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution, the way `_exit_script` above does it and for the same reason.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_every_declared_font_face_ships_its_own_file():
+    """§6.8 gives the app two faces, and a face the repository cannot serve is a face that lies.
+
+    Self-hosting is the constraint, not a preference. §6's preamble makes this an installable PWA
+    a household opens over the LAN and over Tailscale, and `app.html:13-15` says the same thing
+    over its own `<link>` -- so a weight that cannot be fetched at *runtime* cannot be declared at
+    *build time*. The rule, therefore: every `src` resolves to a file in the repository, and every
+    declared weight is one that file can really render -- its own, or an instance of its `wght`
+    axis if the file is variable.
+
+    M4.15's finding 12 read the three heavier faces pointing at a file named `-400-` and concluded
+    the app had never rendered bold. Measured here, that is not what those files are: all four
+    carry `fvar`, `gvar`, `avar` and `STAT`, Space Grotesk's axis is 300-700 and JetBrains Mono's
+    400-800, so the 500 and 700 faces are real instances of the axis. Which is exactly why this
+    guards the rule and not a file list -- both repairs the finding proposed would have made the
+    app worse. Deleting the faces hands bold back to the browser's synthesiser; copying one file
+    under three names makes `service-worker.js`'s all-or-nothing `addAll` push the same bytes to
+    the phone three times before the shell will open offline.
+
+    The axis *bound* is the one clause this cannot reach: `fvar` is inside the brotli stream and
+    the repo has no brotli. `ops/fetch-fonts.py` checks it over the wire instead, where Google's
+    css2 endpoint answers a weight outside the axis with HTTP 400. [M4.15 finding 12, decision 268]
+    """
+    css = FONTS_CSS.read_text(encoding="utf-8")
+    module = _fetch_fonts()
+
+    faces = []
+    for block in _FONT_FACE.findall(css):
+        weight = re.search(r"font-weight:\s*(\d+)", block)
+        src = re.search(r"src:\s*url\(/fonts/([^)]+)\)", block)
+        assert weight and src, f"a @font-face in fonts.css declares no weight or no src: {block!r}"
+        faces.append((int(weight.group(1)), src.group(1)))
+    assert faces, "frontend/static/fonts/fonts.css declares no @font-face at all"
+
+    referenced = set()
+    for weight, name in faces:
+        named = _FONT_FILE.fullmatch(name)
+        assert named, (
+            f"/fonts/{name} does not follow the <family>-<weight>-<subset>.woff2 convention the "
+            f"committed files use and ops/fetch-fonts.py writes"
+        )
+        path = FONTS_DIR / name
+        assert path.is_file(), (
+            f"fonts.css declares font-weight {weight} against /fonts/{name}, which is not in the "
+            f"repository: the app self-hosts, so nothing fetches it at runtime"
+        )
+        data = path.read_bytes()
+        assert data[:4] == b"wOF2", f"/fonts/{name} is not a woff2 file"
+        referenced.add(name)
+        if int(named.group(2)) == weight:
+            continue
+        # A file serving a weight that is not the one in its name is only honest if it is
+        # variable: the woff2 table directory is in the clear, so `fvar` is readable without
+        # decompressing anything.
+        assert "fvar" in module.woff2_tables(data), (
+            f"fonts.css declares font-weight {weight} against /fonts/{name}, a static font whose "
+            f"own weight is {named.group(2)}: a declared face suppresses synthesis, so that text "
+            f"renders at {named.group(2)} and never bold"
+        )
+
+    orphans = sorted(p.name for p in FONTS_DIR.glob("*.woff2") if p.name not in referenced)
+    assert not orphans, (
+        f"frontend/static/fonts ships {orphans}, which no @font-face names: service-worker.js "
+        f"precaches the directory with an all-or-nothing addAll, so an unused subset is bytes "
+        f"every phone downloads before the shell will open offline"
+    )
+
+
+def test_the_font_stylesheet_is_what_its_generator_emits():
+    """`fonts.css:4` has named a generator since M0 that did not exist until M4.15.
+
+    A generated file nobody can regenerate is a hand-edited file with a misleading header, and
+    this one wore the evidence: every block carried a blank line where the `/* latin */` comment
+    it was pasted from had been deleted. `ops/fetch-fonts.py` is that script, and `render_css()`
+    is a pure function of the families it declares and the files on disk -- no network, because
+    which weights share a file is a fact about the files -- so the committed stylesheet can be
+    held to it on every run. [M4.15 finding 12]
+    """
+    assert FETCH_FONTS.is_file(), (
+        "frontend/static/fonts/fonts.css tells its reader to regenerate with "
+        "ops/fetch-fonts.py, which does not exist"
+    )
+    module = _fetch_fonts()
+    assert module.render_css() == FONTS_CSS.read_text(encoding="utf-8"), (
+        "frontend/static/fonts/fonts.css is not what ops/fetch-fonts.py renders: either the "
+        "stylesheet was hand-edited, or the script changed and nobody regenerated it"
+    )
+
+
+def test_decision_268_records_the_run_that_falsified_its_premise():
+    """The record, not the code, and the one document that can overrule the code.
+
+    Decision 268 ruled "write `ops/fetch-fonts.py` and run it, so the four missing subsets land
+    beside the four that are there", and stated the guard's rule as a filename weight EQUAL to its
+    rule's `font-weight`, with no face declared for a weight the repository does not ship. The run
+    it authorised falsified both halves: the css2 endpoint serves one variable woff2 per (family,
+    subset), all four committed files carry `fvar`, and the guard two tests above permits the
+    mismatch exactly where the axis is. Entries 162 onward are normative from the day they are
+    taken (decision 177), so a reader following `[M4.15 finding 12, decision 268]` out of that
+    guard's docstring meets a sentence saying the shipped tree is non-compliant -- and the obvious
+    repair from that reading, deleting the heavier faces or committing six files, is the repair
+    this milestone measured and rejected.
+
+    Conditional on the code, the way `test_the_logout_row_states_the_branch_on_which_it_holds`
+    is: while `fonts.css` declares a face against a file that does not carry that weight in its
+    name, decision 268 has to say so. Delete the heavier faces and this goes quiet, because then
+    the decision's own sentence is true again.
+    [decision 177; decision 268; row `platform-shipped-font-weights-are-real`;
+     review cycle 2: M415-C2-DEC-01]
+    """
+    mismatched = []
+    for block in _FONT_FACE.findall(FONTS_CSS.read_text(encoding="utf-8")):
+        weight = re.search(r"font-weight:\s*(\d+)", block)
+        src = re.search(r"src:\s*url\(/fonts/([^)]+)\)", block)
+        named = _FONT_FILE.fullmatch(src.group(1)) if weight and src else None
+        if named and int(named.group(2)) != int(weight.group(1)):
+            mismatched.append(f"{src.group(1)} declared at {weight.group(1)}")
+    if not mismatched:
+        return
+
+    _, marker, amendment = _decision_section(268).partition("**Amended")
+    assert marker, (
+        "fonts.css declares " + ", ".join(mismatched) + ", which decision 268 says is the state "
+        "the repair exists to end -- and the register carries no amendment saying otherwise. The "
+        "run that decision authorised proved its premise false: the faces are real instances of a "
+        "wght axis. Add the amendment paragraph in the shape decisions 272, 275, 276 and 281 use, "
+        "or delete the faces and make the decision's own sentence true again."
+    )
+    assert re.search(r"(?i)wght|fvar|variable", amendment), (
+        "decision 268's amendment does not name the axis, which is the whole of why the shipped "
+        "faces are honest. A paragraph that discloses a correction without stating it leaves the "
+        "superseded rule as the only reading a reader can act on."
+    )
+
+
+# --- M4.15: the frontend type check is a gate, not a line in a command list ---------------
+
+# `.github/workflows/ci.yml` read as TEXT, like the compose files above and for the reason
+# `test_harness_contracts.py` argues at length: a reader of the instrument has to run wherever
+# the suite runs, including on the partial virtualenv this file's own escape hatches exist for,
+# and a check that needs a parser installed before it can speak is one more thing that stops
+# speaking without saying so.
+CI_WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
+TESTING_LEDGER = REPO / "docs" / "TESTING.md"
+
+FRONTEND_TYPE_CHECK = "npm --prefix frontend run check"
+
+# The frontend job as M4.8 left it -- install, unit tests, build, and no type check. Kept here so
+# the guard below can be shown refusing the source this milestone actually found, rather than
+# being a reader nobody has watched say no to anything.
+_FRONTEND_JOB_BEFORE_M415 = """  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend test
+      - run: npm --prefix frontend run build
+
+  e2e:
+"""
+
+
+def _job_block(workflow: str, name: str) -> str:
+    """One job's lines, from its key under `jobs:` to the next key at the same indentation."""
+    start = re.search(rf"^  {re.escape(name)}:[ \t]*$", workflow, re.M)
+    if start is None:
+        return ""
+    rest = workflow[start.end() :]
+    end = re.search(r"^  \S", rest, re.M)
+    return rest[: end.start()] if end else rest
+
+
+def _runs_and_can_fail(job: str, command: str) -> bool:
+    """True when a step in `job` runs `command` in a way that can still fail the job."""
+    if "continue-on-error" in job:
+        return False
+    for line in job.splitlines():
+        step = line.strip()
+        if not step.startswith(("- run:", "run:")) or command not in step:
+            continue
+        return "||" not in step
+    return False
+
+
+def test_ci_runs_the_frontend_type_check():
+    """§12's gates are read off CI, and svelte-check was the one layer no job ran.
+
+    `npm --prefix frontend run check` is in CLAUDE.md's command list and among the layers
+    docs/TESTING.md publishes, and it exited 1 on a clean tree -- 25 errors on one day and 27 on
+    another -- for this project's whole life. A documented command that always fails is worse
+    than a missing one: it teaches every reader to skip the only static signal this frontend has,
+    and the defects it does catch (a renamed envelope key, a dropped export, a rune and a local
+    colliding) sit unread in that noise. So the command becomes a job step, on the branch where
+    the count first reached its floor.
+
+    Two things this is deliberately strict about. The step must be able to FAIL the job:
+    `ruff format --check . || true` two jobs up is this same workflow's own precedent for a step
+    that reports instead of gating, and a row discharged by that shape asserts nothing. And the
+    job is located by name rather than by a substring over the whole file, because the command
+    quoted in a comment is not a gate.
+
+    What this cannot assert is the count. Decision 273 lands the step with one error still
+    standing at `src/routes/admin/data/+page.svelte:14`, which M4.14 owns in the sibling worktree
+    of this wave and which M4.15 must not open, so the frontend job is RED on this branch until
+    the two merge. That is the honest state, and it is not hidden by narrowing the check, by
+    excluding a file, or by `|| true`.
+    [M4.15 finding 26, decision 273, row `platform-the-frontend-type-check-runs-in-ci`]
+    """
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert _runs_and_can_fail(_job_block(workflow, "frontend"), FRONTEND_TYPE_CHECK), (
+        "ci.yml's frontend job installs, tests and builds but does not run "
+        f"`{FRONTEND_TYPE_CHECK}`: svelte-check is the only static signal the frontend has, and "
+        "a command no job runs is a command that exits 1 for a year with nobody reading it"
+    )
+
+    # The guard has to be able to refuse. Two sources it must not read as covered: the job as
+    # M4.8 left it, and the same step with its exit code thrown away.
+    before_m415 = _job_block(_FRONTEND_JOB_BEFORE_M415, "frontend")
+    assert not _runs_and_can_fail(before_m415, FRONTEND_TYPE_CHECK)
+    discarded_exit_code = "      - run: " + FRONTEND_TYPE_CHECK + " || true"
+    assert not _runs_and_can_fail(discarded_exit_code, FRONTEND_TYPE_CHECK)
+
+
+# "1 error and 1 warning across 275 files", which is what `npm --prefix frontend run check` last
+# printed on this branch. Two documents publish it -- the map's comment on the CI row and the
+# ledger's paragraph on exit clause 10 -- and one run produced one number, so either they agree or
+# one of them was typed rather than read.
+_SVELTE_CHECK_RESULT = re.compile(r"(\d+) errors? and (\d+) warnings? across (\d+) files")
+
+
+def test_the_two_records_publish_one_svelte_check_measurement():
+    """Decision 184, applied to the one figure clause 10 of the exit criterion is argued from.
+
+    The figure is load-bearing rather than decorative: it is the evidence that EXACTLY one error
+    survives and that the surviving one is the sibling lane's, which is the whole basis for landing
+    the CI step red on this branch (decision 273). The map said 274 files and the ledger 275, for
+    one run of one command on one tree, and nothing read either -- so an auditor reconciling clause
+    10 meets two numbers, cannot tell which run produced which, and either re-runs `svelte-check`
+    to break the tie or restates a figure they did not derive. Both are what decision 184 exists to
+    prevent.
+
+    A cross-check and not a re-derivation, deliberately. `svelte-check` is a node command over a
+    tree this suite does not build, and a pytest guard that shelled out to it would make every
+    backend run depend on `frontend/node_modules`; decision 184 owes that figure to a run, not to a
+    guard. What a guard CAN hold is that the record publishes one of them.
+    [decision 184; decision 273; row `platform-the-frontend-type-check-runs-in-ci`;
+     review cycle 2: M415-C2-COV-02]
+    """
+    published = []
+    for path in (COVERAGE, TESTING_LEDGER):
+        for found in _SVELTE_CHECK_RESULT.findall(path.read_text(encoding="utf-8")):
+            published.append((path.relative_to(REPO).as_posix(), found))
+    assert len(published) >= 2, (
+        f"only {len(published)} document publishes the svelte-check result, so this guard holds "
+        "nothing. Both the coverage map's comment on the frontend type-check row and the ledger's "
+        "clause 10 paragraph state it, and clause 10 is argued from the fact that the single "
+        "surviving error is the sibling lane's."
+    )
+    readings = {found for _, found in published}
+    assert len(readings) == 1, (
+        "the record publishes more than one svelte-check result for one run of one command: "
+        + "; ".join(
+            f"{where} says {errors} error(s) and {warnings} warning(s) across {files} files"
+            for where, (errors, warnings, files) in published
+        )
+        + ". One run produced one number. Restate the stale one from the run rather than picking "
+        "the reading that looks right -- a count nobody re-derived is decision 184's defect."
+    )
+
+
+# --- M4.15: the register the quiet reasons are set in, and the one control exempt from 48 -------
+
+# §6.8's two voices are two FACES, not two sizes: `.why` is the prose register in Space Grotesk
+# and `.data` is the data voice in JetBrains Mono, which §6.8 gives to "every model number, ID and
+# data annotation" and to nothing else. design.css says so in its own header and decision 275
+# moved `.why` to the display face to mean it -- but a rule decided once in design.css is decided
+# nowhere if a scoped block can quietly take it back. Scoped CSS wins silently: no conflict, no
+# warning, nothing but a reader ever notices, which is the failure mode this whole file exists to
+# read. So the register is held at the source, over every component, and not in design.css alone.
+
+# design.css's ink ramp, loudest first. The order is the rule: a why-line may be made louder by
+# the surface it sits on and may not be made quieter, so the ladder is what "quieter" means.
+INK_LADDER = ("--ink", "--ink-2", "--ink-3", "--ink-4", "--ink-5")
+
+# Every OPAQUE ground text is drawn on. Opaque is what makes an alpha ink measurable at all: the
+# drawn colour is the ink composited over what is behind it, and a surface carrying an alpha of
+# its own is not a colour until something is behind it either.
+SURFACE_TOKENS = ("--ground", "--ground-raised", "--card", "--card-raised")
+
+# The fifth surface class, and the reason the four above are not the whole list. `--ember-wash` is
+# a 10% tint laid over one of them at sixteen sites -- the sweep card's reveal, the re-auth banner,
+# the no-bundle badge -- and it carries `--ink-*` text on every one of them. "An alpha over an
+# alpha has no single answer" was the premise for leaving it out, and it is false for a wash over a
+# KNOWN ground: there are exactly four answers, all computable from design.css alone. It mattered,
+# because at 0.50 `--ink-5` measured 4.43:1 on the wash over `--card` -- the composite
+# `RateSweepCard.svelte`'s `.next` hint actually ships on -- while measuring 4.58 on the bare
+# `--card` this guard was reading. design.css:31 claims the floor holds "against each ground it
+# lands on"; a guard reading only the opaque four is narrower than the sentence it enforces, and it
+# would have stayed green for every future ink placed on the tint.
+# [§6.8; decision 275 as amended; M4.15 review cycle 1: m415-rev1-css-01]
+WASH_TOKEN = "--ember-wash"
+
+# The sixth surface class, and the reason a fifth `SURFACE_TOKENS` entry would have been the wrong
+# repair for it. `--identity` is an alpha too -- a 16% bone disc on the account chip -- so like the
+# wash it is not a colour until something is behind it, and the two things behind it are known:
+# `+layout.svelte`'s header at `--ground-raised` and `AccountChip`'s menu at `--card-raised`.
+#
+# What makes it a different KIND of ground from the wash is what lands on it, and that is why it is
+# a PAIR here rather than a fifth ground in the cross product above. The wash is a tint under COPY:
+# any rung of the ladder may be set on it, so every rung is measured against it. The disc carries
+# one glyph in one colour -- `AccountChip.svelte` is `background: var(--identity); color: var(--ink)`
+# -- and running it through the ladder would measure `--ink-5` at 3.85:1 on a 22px disc nothing has
+# ever drawn `--ink-5` on, reddening the build over a composite the app does not contain. A guard
+# asserting something false is worse than the gap it closed, because the reader it sends to
+# design.css has nothing there to fix.
+#
+# It is held at all because the token is this milestone's own and nothing held it. design.css
+# publishes 10.58 and 9.56 for it, and the guard that reads those two sentences asks that the figure
+# MATCH the measurement, not that the measurement clear the floor -- so the one move the record
+# leaves open is the unguarded one. Take the alpha to 0.55, restate the two figures as 2.96 and
+# 2.82, and all three contrast guards stay green with the household's own initial at 2.82:1 on every
+# signed-in screen: 2.82 is the exact figure design.css's header cites as the unreadable value
+# decision 275 was minted to raise.
+# [§6.8; decision 276; design.css:31 "each ground it lands on";
+#  M4.15 review cycle 3: M415-C3-CSS-02]
+TINTED_GROUNDS = (
+    ("--ink", "--identity", "--ground-raised", "the account chip's disc, on the header's ground"),
+    ("--ink", "--identity", "--card-raised", "the same disc in the menu, the worse of the two"),
+)
+
+# WCAG 2.x AA for body text. The 3:1 large-text relaxation is not available to either voice here:
+# the quiet reasons are 13px and the data voice 10-11px, both well under the 18.66px threshold.
+CONTRAST_FLOOR = 4.5
+
+# The colours a component may give a why-line. Tonight sets its own at --ink-3 because the copy
+# there IS the surface's content rather than a footnote under it, and that is allowed -- louder is
+# a surface's business. --ink-5 is the rung below the register and is where ShelfRow's caption
+# was: the darkest text in the app, 2.22:1 before decision 275 raised the token under it. A raw
+# colour is refused whatever its value, because a hex here is a fourth voice nobody declared. So
+# is an `opacity` under 1 on a rule that reaches a why-line: --ink-4 measures 5.35:1 on --ground,
+# so a dimmed ancestor takes the register under the floor at about 0.90 -- 0.9028 over
+# --card-raised, the worst of the eight -- AFTER the token was chosen, which is exactly where
+# `test_every_text_ink_token_clears_the_contrast_floor` stops looking: it measures tokens, and an
+# opacity composites what they drew. Any dimming is refused rather than composited, because a
+# scoped rule does not say which ancestor stack it will be drawn under. The figure published here
+# was 4.60, which is --ink-5 at the alpha decision 275's amendment superseded -- the rule survived
+# the arithmetic, but a reader re-tuning this ramp would have read a margin of 0.1 where there is
+# 0.85. [review cycle 1: reach-01; review cycle 2: M415-C2-CSS-06]
+#
+# The one entry that is not a rung of that ladder is `--ember-lift`, admitted at review cycle 2
+# with the matching that made the rule reachable in the first place. §6.8's derivatives are the
+# accent QUOTED rather than spent -- `--ember-lift` IS error copy, which is why `_ACCENT` refuses
+# it and why the three derivative tokens exist at all -- and `rate/+page.svelte` ships
+# `<p class="banner error why" role="alert">`, so on that surface the error and the reason are one
+# element. The guard already licenses that element's frame on purpose: `background-color` and
+# `border-color` are read past three rules below so that "a why-line inside a tinted callout keeps
+# its frame", and licensing the frame while refusing the copy inside it is half a rule. The
+# direction that decides is untouched, which is the whole test of the widening: over the wash the
+# error copy is BRIGHTER than --ink-4, not dimmer, and nothing admitted here is quieter than the
+# register. The alternative was recolouring the shipped banner to an ink rung, which takes §6.8's
+# one word for "this failed" off the one sentence on the screen that says so.
+# [§6.8; decision 275 as amended; review cycle 2: why-c2-01]
+WHY_REGISTER_COLOURS = (
+    frozenset(f"var({token})" for token in INK_LADDER[:-1]) | {"var(--ember-lift)"}
+)
+
+SETUP_PAGE = FRONTEND / "routes" / "setup" / "+page.svelte"
+
+
+def _channel(value: float) -> float:
+    """One 8-bit sRGB channel, linearised -- WCAG 2.x's own formula, constants included."""
+    v = value / 255
+    return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+
+def _luminance(rgb: tuple[float, float, float]) -> float:
+    r, g, b = (_channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(one: tuple[float, ...], two: tuple[float, ...]) -> float:
+    a, b = _luminance(one), _luminance(two)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def _hex_rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _composite(rgb: tuple[float, ...], alpha: float, ground: tuple[float, ...]) -> tuple[float, ...]:
+    """What an alpha colour actually draws as, once the thing behind it is known.
+
+    The one operation this whole section turns on, named because it is now applied twice: once to
+    put an ink on its ground, and once more to put a tinted SURFACE on its own ground first.
+    """
+    return tuple(rgb[i] * alpha + ground[i] * (1 - alpha) for i in range(3))
+
+
+def _token_colour(css: str, token: str) -> tuple[tuple[int, int, int], float]:
+    """A design.css colour token as (rgb, alpha).
+
+    Both spellings the file uses: `#ece9e4` for the opaque ones and `rgba(236, 233, 228, 0.55)`
+    for the ramp, which is one colour at five volumes rather than five colours.
+    """
+    opaque = re.search(rf"{token}:\s*(#[0-9a-fA-F]{{6}})\s*;", css)
+    if opaque:
+        return _hex_rgb(opaque.group(1)), 1.0
+    ramp = re.search(rf"{token}:\s*rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\s*\)\s*;", css)
+    assert ramp, f"design.css declares no {token}"
+    r, g, b, alpha = ramp.groups()
+    return (int(r), int(g), int(b)), float(alpha)
+
+
+def test_every_text_ink_token_clears_the_contrast_floor():
+    """§6.8's copy register is load-bearing, so it has to be readable.
+
+    Every `--ink-*` is drawn as text -- there is no decorative one -- and two of them were not
+    readable: --ink-4 at 0.35 measured 2.82:1 against --ground and 2.87:1 against --card, --ink-5
+    at 0.28 measured 2.22 / 2.28, under even the 3:1 floor a large-text relaxation would have
+    given them, on the quiet reasons §6.8 makes the reason a household trusts a recommendation.
+
+    Measured rather than declared: the ramp is one bone colour at five alphas over eight grounds,
+    so the drawn colour is a composite and no token's own value says what it reads at. That is
+    also why 0.52 and not a rounder number -- 0.51 measures 4.49 on the tinted surface and fails
+    this guard, and finding fe-06's proposed 0.45 measures 3.93, which would have contradicted the
+    4.5:1 the same finding asked for.
+
+    Eight grounds and not four: `--ember-wash` is a surface too, and the reason it was left out --
+    that an alpha over an alpha has no single answer -- is false for a tint over a KNOWN ground.
+    At 0.50 the bottom rung cleared every opaque ground this guard read and measured 4.43:1 on the
+    wash over `--card`, which is the composite the sweep card's reveal hint ships on.
+
+    And eight grounds plus two PAIRS, which is the same widening finished rather than a second one.
+    The eight are cross-producted with the whole ladder because they are surfaces any rung may land
+    on; `--identity` is a 22px disc carrying one glyph in `--ink`, so the ground and the ink that
+    lands on it are one claim and `TINTED_GROUNDS` states them together. Putting it in the cross
+    product instead would have measured four rungs the app never draws there and reddened over
+    them, which is why the gap this closes survived a review cycle looking straight at it.
+    [§6.8; decisions 275 as amended, 276; row `platform-quiet-reasons-are-prose-and-legible`;
+     review cycle 3: M415-C3-CSS-02]
+    """
+    css = _css()
+    grounds = {token: _token_colour(css, token)[0] for token in SURFACE_TOKENS}
+    wash, wash_alpha = _token_colour(css, WASH_TOKEN)
+    for token in SURFACE_TOKENS:
+        grounds[f"{WASH_TOKEN} on {token}"] = _composite(wash, wash_alpha, grounds[token])
+    failures = []
+    for token in INK_LADDER:
+        rgb, alpha = _token_colour(css, token)
+        for name, ground in grounds.items():
+            drawn = _composite(rgb, alpha, ground)
+            ratio = _contrast(drawn, ground)
+            if ratio < CONTRAST_FLOOR:
+                failures.append(f"{token} on {name}: {ratio:.2f}:1")
+    for ink, tint, ground, where in TINTED_GROUNDS:
+        rgb, alpha = _token_colour(css, tint)
+        assert alpha < 1.0, f"{tint} is opaque, so it is a SURFACE_TOKENS entry and not a pair"
+        behind = _composite(rgb, alpha, _token_colour(css, ground)[0])
+        rgb, alpha = _token_colour(css, ink)
+        ratio = _contrast(_composite(rgb, alpha, behind), behind)
+        if ratio < CONTRAST_FLOOR:
+            failures.append(f"{ink} on {tint} on {ground}: {ratio:.2f}:1 -- {where}")
+    assert not failures, (
+        f"every --ink-* is text and clears {CONTRAST_FLOOR}:1 on every ground it lands on:\n  "
+        + "\n  ".join(failures)
+        + "\n\nRaise the alpha in design.css. A token that fails here is unreadable on the phone"
+        " §6's preamble makes the primary form factor, whatever it looks like on a desktop panel."
+    )
+
+
+def test_the_contrast_guard_composites_a_tinted_surface_before_measuring():
+    """The step above that the guard passed for a whole milestone without.
+
+    Written as a claim about the ARITHMETIC rather than about today's token values, so it keeps
+    saying something once `--ink-5` moves again: a tint over a ground is a lighter ground, and a
+    ladder measured against the ground under the tint reads a number nothing is ever drawn at.
+    0.50 is the value this is shown with because 0.50 is the value that shipped -- it cleared
+    every opaque ground and missed the floor on the composite, which is precisely the shape of
+    hole a guard enumerating only opaque tokens cannot see.
+    [§6.8; decision 275 as amended; M4.15 review cycle 1: m415-rev1-css-01]
+    """
+    css = _css()
+    bone, _ = _token_colour(css, "--ink-5")
+    wash, wash_alpha = _token_colour(css, WASH_TOKEN)
+    assert wash_alpha < 1.0, "--ember-wash is opaque, so it is a SURFACE_TOKENS entry and not this"
+
+    card = _token_colour(css, "--card-raised")[0]
+    tinted = _composite(wash, wash_alpha, card)
+    assert _luminance(tinted) > _luminance(card), (
+        "the wash is meant to LIFT the surface it tints; if it ever darkens one, the opaque "
+        "ground stops being the optimistic reading and this guard is measuring the wrong way"
+    )
+
+    shipped = 0.50
+    assert _contrast(_composite(bone, shipped, card), card) >= CONTRAST_FLOOR
+    assert _contrast(_composite(bone, shipped, tinted), tinted) < CONTRAST_FLOOR, (
+        "the tinted composite no longer costs the bottom rung its floor, so this test proves "
+        "nothing -- re-derive it against whatever surface is now the worst case"
+    )
+
+
+# Every contrast figure the record publishes about a token, in the one form it publishes them in:
+# a colour, optionally over a second colour, measured against a ground. Read rather than trusted,
+# because this milestone's contribution IS a set of measured numbers and one of them was a token's
+# superseded value -- `--ink-4` was published at 4.60:1, which is `--ink-5` at the alpha decision
+# 275's amendment replaced, sixteen lines under the right figure in the same comment block.
+_PUBLISHED_RATIO = re.compile(
+    r"(--[a-z0-9-]+)(?: on (--[a-z0-9-]+))? measures ([0-9]+\.[0-9]+):1 on (--[a-z0-9-]+)"
+)
+
+# How many figures stand in that form today: two in the map and this file's twin of the same
+# sentence, two in design.css's `--identity` comment. The floor is here because the one way to
+# satisfy this guard without obeying it is to rephrase a figure out of the form rather than
+# correct it -- the same dodge `test_the_why_register_guard_leaves_innocent_files_alone` exists
+# for one guard over.
+_PUBLISHED_RATIO_FLOOR = 4
+
+
+def test_every_contrast_figure_the_record_publishes_is_the_one_it_measures():
+    """A measurement in a comment is a measurement, and decision 184 governs it.
+
+    The two guards above hold the TOKENS; nothing held the sentences written about them, and the
+    record drifted in the direction that costs a reader most: `--ink-4` was published at 4.60:1 on
+    --ground in the map and in this file, in the argument for refusing any `opacity` on a rule
+    that reaches a why-line. The rule survived the arithmetic -- the token really is one dimming
+    away from the floor -- but the margin is 0.85 and not 0.1, and the figure quoted was the value
+    review cycle 1 superseded. design.css's `--identity` comment had the same shape of error twice:
+    the header's ground is --ground-raised and the figure published was the one on --ground, and
+    "no worse than 9.6" is 9.56, which rounds the wrong way.
+
+    So the figures are re-derived from design.css rather than compared with a copy of themselves,
+    the way `test_every_published_decision_range_ends_where_the_register_does` re-derives a range
+    from the register. Rounding is read off the figure's own precision: a record that publishes two
+    decimals is held to two, and one that publishes one is held to one.
+    [§6.8; decisions 275 as amended, 276; decision 184;
+     row `platform-quiet-reasons-are-prose-and-legible`; review cycle 2: M415-C2-CSS-06]
+    """
+    css = _css()
+    wrong, found = [], 0
+    for path in (DESIGN, COVERAGE, Path(__file__).resolve()):
+        text = path.read_text(encoding="utf-8")
+        for fg, mid, published, ground in _PUBLISHED_RATIO.findall(text):
+            found += 1
+            base, base_alpha = _token_colour(css, ground)
+            assert base_alpha == 1.0, (
+                f"{path.name} measures {fg} against {ground}, which is not opaque: an alpha over "
+                "an alpha is not a colour until something is behind it, so name the composite"
+            )
+            behind = base
+            if mid:
+                rgb, alpha = _token_colour(css, mid)
+                behind = _composite(rgb, alpha, behind)
+            rgb, alpha = _token_colour(css, fg)
+            measured = _contrast(_composite(rgb, alpha, behind), behind)
+            places = len(published.partition(".")[2])
+            if f"{measured:.{places}f}" != published:
+                over = f"{fg} on {mid} " if mid else f"{fg} "
+                wrong.append(
+                    f"{path.relative_to(REPO).as_posix()}: publishes {over}at {published}:1 on "
+                    f"{ground}, which measures {measured:.{places}f}:1"
+                )
+    assert not wrong, (
+        "the record publishes a contrast figure that is not the one design.css draws:\n  "
+        + "\n  ".join(wrong)
+        + "\n\nRestate it from the measurement. A figure a later token value overtook is the "
+        "defect decision 184 refuses from the other side, and this ramp is the one place in the "
+        "app where a reader re-tuning a number has nothing but these sentences to go on."
+    )
+    assert found >= _PUBLISHED_RATIO_FLOOR, (
+        f"the record publishes {found} contrast figures in the form this guard reads and "
+        f"{_PUBLISHED_RATIO_FLOOR} stood here when it was written. A figure moved out of the form "
+        "is a figure nothing re-derives; keep the form, or lower this floor in the same change "
+        "that removes the sentence."
+    )
+
+
+# A compound's own punctuation, taken off before its class tokens are read. Both of these NARROW a
+# selector -- `:not(.loud)` names a class the element does not carry and `[data-testid='w']` is a
+# test hook -- so neither can put a rule outside the set of elements the compound's classes reach.
+_PSEUDO_PART = re.compile(r"::?[a-z-]+(?:\([^()]*\))?")
+_ATTR_PART = re.compile(r"\[[^\]]*\]")
+
+
+def _reaches_a_why_line(part: str, reachable: set[str]) -> bool:
+    """Whether one comma-separated selector part lands on a why-line in this file.
+
+    The LAST compound and not the whole part -- the opposite trade from `_invented_paddings`, and
+    right here for the opposite reason. That guard compares whole selectors because `.rooms li`
+    styles a row INSIDE a card and matching `li` alone would call every list row a card; here the
+    descendant IS the target. `.empty .why` and `.drained .why` are two live rules that reach a
+    why-line and that a whole-selector comparison could not see, and `.wrap p` is how a component
+    restyles the paragraph it wrapped. The over-match this buys is real and is measured rather
+    than assumed: eight rules in the shipped tree are reached only by the widening, none of them
+    touches the register, and `test_the_why_register_guard_leaves_innocent_files_alone` holds the
+    side of the trade that costs.
+
+    `:global(...)` is unwrapped first because Svelte's escape hatch is exactly how a component
+    reaches a why-line it did not declare, and the wrapper is punctuation around a selector rather
+    than part of one. It helps only where the same file also carries a why-element: `reachable` is
+    built from this file's markup, so a component styling ANOTHER component's why-line is still
+    outside what a per-file scan can see, and saying so is cheaper than implying otherwise.
+
+    The under-match was neither measured nor stated, and the paragraph above accounting for the
+    over-match alone read as a claim that there was not one. The last compound was compared as ONE
+    string, so every ordinary way of NARROWING a selector fell outside `reachable` while staying
+    inside the cascade: `.why.loud`, `.why:not(.loud)`, `.why:first-child` and `p[data-testid='w']`
+    all reach a why-line the file carries and none of them matched. That is not hypothetical --
+    `rate/+page.svelte` ships `<p class="banner error why" role="alert">` styled as `.banner.error`,
+    so the guard's verdict on a rule in the tree was decided by the selector's punctuation and not
+    by the property, and simplifying that rule to `.error` would have reddened a build without
+    moving a pixel. So a compound is read as its tag and the SET of its classes, pseudo-classes and
+    attribute selectors removed first because both narrow rather than widen.
+
+    All of the compound's classes, never any of them, which is what keeps the trade the paragraph
+    above measures: the Data tab's why-line is a `<td class="note why">`, so `td` is in reach, and
+    an any-token reading would call every other cell in that sheet a why-line. Measured again on
+    this tree: fifteen rules are reached only by this widening, fourteen of them borders, paddings
+    and margins the guard does not read, and the fifteenth is the error banner above. What stays
+    out is a compound whose classes no single why-line carries -- two why-lines in one file with a
+    class each still admit `.a.b`, which is the over-match this direction costs and is the same
+    direction the paragraph above already accepts.
+    [§6.8; decision 275 as amended; review cycle 1: reach-01; review cycle 2: why-c2-01]
+    """
+    part = re.sub(r":global\(\s*([^()]*?)\s*\)", r"\1", part.strip())
+    if part in reachable:
+        return True
+    # Attribute selectors are put aside before the combinator split and put back after it, because
+    # `~` is both the general-sibling combinator and the `~=` of a class-list match: splitting the
+    # raw string tore `[class~="why"]` into `[class` and `="why"]` and left the compound reader a
+    # fragment. Two bugs in one line -- the split destroyed the selector and the strip below then
+    # dropped what survived -- which is why the shape read as narrowing when it is exactly as wide
+    # as `.why`. [review cycle 3: M415-C3-WHY-05]
+    stash: list[str] = []
+    part = _ATTR_PART.sub(lambda m: stash.append(m.group(0)) or f"\x00{len(stash) - 1}\x00", part)
+    last = re.split(r"[\s>+~]+", part)[-1]
+    last = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], last)
+    if last in reachable:
+        return True
+    bare = _PSEUDO_PART.sub("", _ATTR_PART.sub("", last))
+    tag = re.match(r"[A-Za-z][A-Za-z0-9]*", bare)
+    classes = {"." + name for name in re.findall(r"\.([A-Za-z0-9_-]+)", bare)}
+    # An attribute selector ON `class` is a class selector in the one spelling the strip above
+    # takes off: `[class~="why"]` matches exactly what `.why` matches, so dropping it as a
+    # NARROWING left a rule reaching the register with nothing left to compare and `bool(tag)`
+    # answering False. Only `class` -- `[data-testid='w']` really does narrow and stays dropped.
+    # [review cycle 3: M415-C3-WHY-05]
+    classes |= {
+        "." + token
+        for attr in _ATTR_PART.findall(last)
+        for value in re.findall(r"^\[\s*class\s*[~*^$|]?=\s*[\"']?([^\"'\]]*)", attr)
+        for token in value.split()
+    }
+    if tag and tag.group(0) not in reachable:
+        return False
+    if classes:
+        return classes <= reachable
+    return bool(tag)
+
+
+def _register_escapes(name: str, source: str) -> list[str]:
+    """Every rule in one component that takes a why-line out of the register.
+
+    Reached the way `_selectors_that_style` reaches a card: by what the markup actually carries,
+    not by searching for `.why {`. RateClassBalance's warning is `<p class="warn why">` and styled
+    as `.warn`, ShelfRow's was `<p class="why caption">` styled as `.caption` -- neither file
+    contains the string this guard is about, and both were escapes.
+
+    Three ways out and not one, because a register is a claim about what the copy READS as: the
+    face, the colour, and the volume it is drawn at. The face is read through the shorthand as
+    well as the longhand -- `font: 13px/1.4 var(--mono)` sets it in one word, and a guard that
+    knew only `font-family` was one word from being walked past.
+
+    A FILE THAT CARRIES NO WHY-LINE STILL GETS READ IF IT NAMES ONE GLOBALLY, which the early
+    return below used to decide the other way. Both halves are deliberate. The return is right for
+    every scoped shape: Svelte prunes a `.why` rule in a component with no why-element, so seeding
+    the register there would manufacture escapes out of dead selectors. It is wrong for exactly the
+    shape `_reaches_a_why_line` unwraps -- `:global(.why)` NAMES the register literally, needs no
+    cross-file knowledge to resolve, and by definition is written in the one kind of file this
+    guard then refused to open: a shell or layout styling an element it does not render.
+    `RateBattleCard.svelte` already reaches into `PosterCard`'s `.poster` that way, so the idiom is
+    the tree's, and one `:global(.why) { font-family: var(--mono) }` re-monospaces all 129 quiet
+    reasons in the app -- the failure decision 275 exists to prevent -- from a file that passed.
+
+    What stays out, stated rather than implied: a class computed at runtime,
+    `<p class={c ? 'why' : 'note'}>`, is invisible to any markup scan short of evaluating the
+    expression, and that is a boundary rather than a gap.
+    [§6.8; decision 275 as amended; review cycle 2: why-c2-01; review cycle 3: M415-C3-WHY-05]
+    """
+    reachable = _selectors_that_style(source, "why")
+    if not reachable and not re.search(r":global\([^()]*\.why(?![\w-])", _style_blocks(source)):
+        return []
+    reachable.add(".why")
+    offenders = []
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", _style_blocks(source)):
+        if not any(_reaches_a_why_line(part, reachable) for part in selector.split(",")):
+            continue
+        for prop, face in re.findall(r"(?<![a-z-])(font(?:-family)?)\s*:\s*([^;}]+)", body):
+            offenders.append(f"{name}: {selector.strip()} {{ {prop}: {face.strip()} }}")
+        # `(?<![a-z-])` so `background-color`, `border-color` and `accent-color` are not read as
+        # the text colour: a why-line inside a tinted callout keeps its frame.
+        for colour in re.findall(r"(?<![a-z-])color\s*:\s*([^;}]+)", body):
+            if colour.strip() in WHY_REGISTER_COLOURS:
+                continue
+            offenders.append(f"{name}: {selector.strip()} {{ color: {colour.strip()} }}")
+        for dim in re.findall(r"(?<![a-z-])opacity\s*:\s*([^;}]+)", body):
+            if _dimmer_than_full(dim.strip()):
+                offenders.append(f"{name}: {selector.strip()} {{ opacity: {dim.strip()} }}")
+    return offenders
+
+
+def _dimmer_than_full(value: str) -> bool:
+    """Whether an `opacity` value draws at less than full strength, in either spelling.
+
+    A value this cannot read -- a variable, a keyword, an animation's own -- is not called an
+    escape: this guard's job is to catch the copy being dimmed, not to refuse what it cannot
+    measure, and a false positive here would send a reader looking for a register bug in a fade.
+    """
+    number = value.rstrip("%").strip()
+    try:
+        level = float(number) / (100 if value.endswith("%") else 1)
+    except ValueError:
+        return False
+    return level < 1
+
+
+def test_no_component_re_monospaces_a_why_line():
+    """The register is one thing, in one place, or it is not a register.
+
+    §6.8 assigns JetBrains Mono to "every model number, ID and data annotation"; design.css's own
+    header calls using it for anything else a design bug; and 129 `.why` elements across 27 files
+    wore it anyway, half a pixel from the numbers they were explaining. Decision 275 moved the
+    class to the display face, which fixes all 129 at once -- and leaves exactly the hole this
+    guard fills, because two components had already overridden the class locally and a scoped rule
+    outranks design.css silently.
+
+    Colour is held on the same rule, in one direction. A surface may make its own why-line louder
+    (Tonight's is --ink-3, because there the reason is the content) and may not make one quieter:
+    ShelfRow's caption sat at --ink-5, the darkest text in the app. `--ember-lift` joins the ink
+    ladder on that list at review cycle 2, because Rate's error banner IS its own why-line and the
+    error colour is louder than the register rather than quieter -- the rule this holds.
+
+    What it reads is a compound's tag and the SET of its classes from the same cycle on, not the
+    compound as one string: every ordinary narrowing -- a second class, a negation, a position, a
+    test hook -- left an escape inside the cascade and outside this guard, and the one shipped rule
+    it had been missing is the banner above. [§6.8; decision 275 as amended; review cycle 2:
+    why-c2-01; row `platform-quiet-reasons-are-prose-and-legible`]
+    """
+    offenders = []
+    for path in sorted(FRONTEND.rglob("*.svelte")):
+        offenders += _register_escapes(path.name, path.read_text(encoding="utf-8"))
+    assert not offenders, (
+        "the quiet-reason register is design.css's to set, and these take it back locally:\n  "
+        + "\n  ".join(offenders)
+        + "\n\n`.why` is var(--display) at 13px in var(--ink-4). A fragment that really is a model"
+        " number wears `.data` inside the sentence, as design.css's header describes; the sentence"
+        " around it does not change face, and no why-line is dimmer than the register itself."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        (
+            "the mono face on a co-class",
+            '<p class="warn why">x</p><style>.warn { font-family: var(--mono); }</style>',
+            ["x.svelte: .warn { font-family: var(--mono) }"],
+        ),
+        (
+            "quieter than the register",
+            '<p class="why caption">x</p><style>.caption { color: var(--ink-5); }</style>',
+            ["x.svelte: .caption { color: var(--ink-5) }"],
+        ),
+        (
+            "a raw colour, whatever its value",
+            '<p class="why">x</p><style>.why { color: #8a8a8a; }</style>',
+            ["x.svelte: .why { color: #8a8a8a }"],
+        ),
+        (
+            "styled by its tag rather than its class",
+            '<p class="why">x</p><style>p { font-family: monospace; }</style>',
+            ["x.svelte: p { font-family: monospace }"],
+        ),
+        # The two shapes that are not violations, which matter as much: a surface is allowed to
+        # raise its own reasons, and a frame around one is a frame, not a face.
+        (
+            "louder is a surface's own business",
+            '<p class="why">x</p><style>.why { color: var(--ink-3); }</style>',
+            [],
+        ),
+        (
+            "a tinted callout keeps its frame",
+            '<p class="warn why">x</p><style>.warn { background-color: var(--ember-wash); }</style>',
+            [],
+        ),
+        (
+            "a rule that reaches no why-line",
+            '<p class="note">x</p><style>.note { color: #8a8a8a; }</style>',
+            [],
+        ),
+        # The four the whole-selector comparison could not see. Two of the first shape ship.
+        (
+            "reached through a descendant selector, which is how two live rules reach one",
+            '<p class="why">x</p><style>.empty .why { color: var(--ink-5); }</style>',
+            ["x.svelte: .empty .why { color: var(--ink-5) }"],
+        ),
+        (
+            "reached through Svelte's own escape hatch",
+            '<p class="why">x</p><style>:global(.why) { font-family: var(--mono); }</style>',
+            ["x.svelte: :global(.why) { font-family: var(--mono) }"],
+        ),
+        # The same escape hatch from the file it is actually written in. A component that reaches
+        # OUT with `:global` renders no why-line of its own by definition, and the guard used to
+        # return on that -- so the one rule that re-monospaces all 129 quiet reasons at once was
+        # written in the one kind of file nothing opened.
+        (
+            "the escape hatch from a file carrying no why-line of its own",
+            "<p>x</p><style>:global(.why) { font-family: var(--mono); }</style>",
+            ["x.svelte: :global(.why) { font-family: var(--mono) }"],
+        ),
+        (
+            "the same shell rule quieting the register instead of re-facing it",
+            "<p>x</p><style>:global(.why) { opacity: 0.4; }</style>",
+            ["x.svelte: :global(.why) { opacity: 0.4 }"],
+        ),
+        (
+            "a global that reaches another component's element and not the register",
+            "<p>x</p><style>:global(.poster) { opacity: 0.4; }</style>",
+            [],
+        ),
+        # `[class~="why"]` matches exactly what `.why` matches. It escaped twice over: the
+        # combinator split tore it at the `~`, and the attribute strip dropped what was left.
+        (
+            "the register named by an attribute selector rather than a class",
+            '<p class="why">x</p><style>[class~="why"] { font-family: var(--mono); }</style>',
+            ['x.svelte: [class~="why"] { font-family: var(--mono) }'],
+        ),
+        (
+            "an attribute selector that really does narrow is still a narrowing",
+            '<p class="why">x</p><style>div[data-testid=\'w\'] { font-family: var(--mono); }</style>',
+            [],
+        ),
+        (
+            "the face set by the shorthand, where one word leaves the register",
+            '<p class="why">x</p><style>.why { font: 13px/1.4 var(--mono); }</style>',
+            ["x.svelte: .why { font: 13px/1.4 var(--mono) }"],
+        ),
+        (
+            "dimmed rather than recoloured, which the contrast guard measures past",
+            '<p class="why">x</p><style>.why { opacity: 0.4; }</style>',
+            ["x.svelte: .why { opacity: 0.4 }"],
+        ),
+        (
+            "full strength is the register, not an escape from it",
+            '<p class="why">x</p><style>.why { opacity: 1; }</style>',
+            [],
+        ),
+        # The five a whole-compound comparison could not see. The last compound was matched as one
+        # string, so every ordinary way of NARROWING a selector -- a second class, a negation, a
+        # position, a test hook -- put the rule outside the guard while leaving it inside the
+        # cascade. The property never decided; the selector's punctuation did.
+        (
+            "narrowed by a second class the same element carries",
+            '<p class="why loud">x</p><style>.why.loud { font-family: var(--mono); }</style>',
+            ["x.svelte: .why.loud { font-family: var(--mono) }"],
+        ),
+        (
+            "narrowed by a negation, which is a class the element does not carry",
+            '<p class="why">x</p><style>.why:not(.loud) { color: var(--ink-5); }</style>',
+            ["x.svelte: .why:not(.loud) { color: var(--ink-5) }"],
+        ),
+        (
+            "narrowed by position, which is how a writer tells two why-lines apart",
+            '<p class="why">x</p><style>.why:first-child { opacity: 0.4; }</style>',
+            ["x.svelte: .why:first-child { opacity: 0.4 }"],
+        ),
+        (
+            "narrowed by a test hook, which is an attribute and not a class",
+            '<p class="why" data-testid="w">x</p>'
+            "<style>p[data-testid='w'] { font-family: var(--mono); }</style>",
+            ["x.svelte: p[data-testid='w'] { font-family: var(--mono) }"],
+        ),
+        (
+            "a class attribute in the other quote, which made the whole file invisible",
+            "<p class='why'>x</p><style>.why { color: var(--ink-5); }</style>",
+            ["x.svelte: .why { color: var(--ink-5) }"],
+        ),
+        (
+            "an error banner that is its own reason keeps the error's colour",
+            '<p class="banner error why" role="alert">x</p>'
+            "<style>.banner.error { background: var(--ember-wash); color: var(--ember-lift); }"
+            "</style>",
+            [],
+        ),
+    ],
+)
+def test_the_why_register_guard_catches_each_way_out_of_the_register(name, source, expected):
+    """The guard above passes on a clean tree, so it is shown refusing each escape it exists for
+    -- including the two this project deliberately allows, which a stricter reader would break."""
+    assert _register_escapes("x.svelte", source) == expected, name
+
+
+def test_the_why_register_guard_leaves_innocent_files_alone():
+    """The side of the last-compound trade that costs, which the cases above do not show.
+
+    `_invented_paddings` compares whole selectors and says why in as many words: `.rooms li` styles
+    a row inside a card, and reading `li` alone would call every list row a card. This guard takes
+    the opposite trade, so it carries the opposite risk -- once a file's why-line is a `<p>`, every
+    rule in that file ending in `p` is read as reaching one. Measured rather than assumed: eight
+    rules in the shipped tree are reached only by the widening and none of them touches the face,
+    the colour or the volume, which is why the trade is worth making here and not there.
+
+    What stays out is what a reader would expect to stay out: a file with no why-line at all, and
+    a rule whose last compound is a class no why-line carries.
+    [§6.8; decision 275; review cycle 1: reach-01]
+    """
+    no_why = '<p class="note">a number</p><style>p { font: 10px var(--mono); }</style>'
+    assert _register_escapes("x.svelte", no_why) == [], (
+        "a file with no why-line has no register to leave: `reachable` is built from its markup"
+    )
+    cousin = '<p class="why">x</p><style>.tick .fill { color: #8a8a8a; }</style>'
+    assert _register_escapes("x.svelte", cousin) == [], (
+        "the last compound is `.fill`, which this file's why-line does not carry -- the widening "
+        "reaches what a why-line's own selectors reach, not every descendant in the sheet"
+    )
+    # The cost the SECOND widening carries, and the one shape it has to refuse. Reading a compound
+    # as a set of tokens rather than as one string is what admits `.why.loud` -- and a file whose
+    # why-line is a `<td>` puts `td` in reach, so an any-token reading would call every other cell
+    # in that sheet a why-line. All of the compound's classes, or none of it: the Data tab really
+    # does carry `<td class="note why">`, and the rule below it is a different cell entirely.
+    narrowed = '<td class="note why">x</td><style>td.active { color: #8a8a8a; }</style>'
+    assert _register_escapes("x.svelte", narrowed) == [], (
+        "`td.active` narrows to a class no why-line carries, so it reaches a different element -- "
+        "a compound is read as ALL of its classes, which is what tells a narrowing from a co-class"
+    )
+
+
+def _declarations(body: str) -> dict[str, str]:
+    """One rule's declarations. Longhands are compared by name, so `min-height` and `height` are
+    two properties rather than one substring of the other."""
+    return {
+        name.strip(): value.strip()
+        for name, value in re.findall(r"([a-z-]+)\s*:\s*([^;}]+)", body)
+    }
+
+
+def test_the_wizard_step_indicator_stays_a_hairline():
+    """The one control §6's 48 px floor is exempt from, exempt in writing rather than by silence.
+
+    `.progress button` is a 3px hairline drawn as three buttons, and design.css's coarse-pointer
+    block raises every `button` to `min-height: var(--touch)`. With no `min-height` of its own the
+    scoped rule lost on the only property that decides, so the first thing a household saw on a
+    phone at first boot was three 48px grey blocks above the heading. The repair is the narrow
+    one: `min-height` beside the `height`, in the component, so the scoped rule wins where it
+    matters and the floor still holds everywhere else. Decision 280 refuses the wide one -- a
+    blanket `button { min-height: auto }` in design.css would exempt every button in the app from
+    §6's preamble to spare this one, and the sweep that measures 48 would then measure nothing.
+
+    The role moves with it. `role="progressbar"` sat on the container holding the three focusable
+    buttons, and ARIA makes a progressbar's children presentational -- so the only way to reach a
+    step was through controls the accessibility tree had been told not to expose, which is also
+    the path `01-first-boot.spec.js` walks. It carried no `aria-valuemin` either.
+    [§6 preamble; decision 280; row `platform-every-touch-target-meets-the-token`]
+    """
+    source = SETUP_PAGE.read_text(encoding="utf-8")
+    rule = re.search(r"\.progress button\s*\{([^}]*)\}", _style_blocks(source))
+    assert rule, "the first-boot wizard has no `.progress button` rule"
+    decls = _declarations(rule.group(1))
+    assert decls.get("height") and decls.get("min-height") == decls["height"], (
+        "the wizard's step indicator declares "
+        f"height: {decls.get('height')} and min-height: {decls.get('min-height')}: design.css's "
+        "coarse-pointer block gives every button min-height: var(--touch), so a hairline with no "
+        "min-height of its own is 48px tall on every phone"
+    )
+    hatch = re.search(r"(?<![a-z-])button[^{}]*\{[^{}]*min-height:\s*auto", _css())
+    assert not hatch, (
+        "design.css exempts buttons from the touch floor wholesale, which spares this hairline by "
+        "giving up §6's preamble for every other control in the app (decision 280)"
+    )
+
+    markup = _rendered_markup(SETUP_PAGE)
+    bars = re.findall(r"<([a-z]+)([^>]*\brole=\"progressbar\"[^>]*)>", markup)
+    assert len(bars) == 1, f"the wizard declares {len(bars)} progressbars"
+    tag, attrs = bars[0]
+    assert 'aria-valuemin="1"' in attrs, "the progressbar states no minimum, so its value is unscaled"
+    element = re.search(rf"<{tag}[^>]*\brole=\"progressbar\"[^>]*>(.*?)</{tag}>", markup, re.S)
+    assert element and "<" not in element.group(1), (
+        "the progressbar has element children: ARIA makes them presentational, and here they are "
+        "the three buttons that are the only way to reach a step"
+    )
+
+
+def test_the_first_boot_page_starts_below_the_status_bar():
+    """The bare pages have no shell to inset them, so each one insets itself.
+
+    `app.html` sets `viewport-fit=cover` and a translucent status bar, which is what lets the
+    installed app draw to the physical top edge -- and means a page that pads itself by a flat
+    40px starts its heading under the clock. `max()` rather than an addition: `env()` is 0 in
+    every browser this suite runs and on every desktop, so the page keeps exactly the padding it
+    had unless the inset is larger than it, and nothing moves where there is nothing to clear.
+
+    Asserted at the source because no run in this suite reaches this page with an inset reported:
+    `01-first-boot.spec.js` is the only spec that opens the wizard, it runs on the desktop project
+    alone, and nothing in it asks Chromium for one -- so a wrong `max()` here would pass every
+    browser test. (The shell's own header is measured under an injected inset by
+    `06-responsive.spec.js`; a bare page is a different rule on a page that run never visits.)
+
+    `test_the_shell_reserves_the_top_safe_area` sweeps for this too, and keeps the wider claim; it
+    finds this page by its `min-height: 100vh`, and accepts any top padding the inset appears in.
+    This one names the page and the shape -- `max()` first, so the padding is the larger of the
+    two rather than their sum, and the wizard keeps exactly the 40px it had on every desktop.
+    [§6 preamble; M4.15 finding 1; row `platform-shell-clears-the-status-bar-and-the-toolbar`]
+    """
+    source = SETUP_PAGE.read_text(encoding="utf-8")
+    rule = re.search(r"\.page\s*\{([^}]*)\}", _style_blocks(source))
+    assert rule, "the first-boot wizard has no `.page` rule"
+    padding = _declarations(rule.group(1)).get("padding", "")
+    assert re.match(r"max\(\s*[0-9.]+px\s*,\s*env\(safe-area-inset-top\)\s*\)", padding), (
+        f"the first-boot page pads its top with `{padding}`: on a notched phone in standalone "
+        "mode that is measured from under the status bar. The top component is "
+        "max(<the page's own padding>, env(safe-area-inset-top))"
+    )
+
+
+# --- M4.15: the box every surface sits inside (§6 preamble) --------------------------------
+
+SHELL_LAYOUT = FRONTEND / "routes" / "+layout.svelte"
+ERROR_PAGE = FRONTEND / "routes" / "+error.svelte"
+SESSION_STORE = FRONTEND / "lib" / "session.svelte.js"
+
+# The one line of the shell that STATES a fact about the household rather than rendering one, and
+# therefore the one line whose condition is worth reading character by character (decision 271).
+NO_BUNDLE = "no bundle imported"
+
+# The one inset the whole app is wrong without, spelt exactly once here so the guard below
+# rejects a near miss (`safe-area-inset` alone, or the bottom one) rather than accepting it.
+TOP_INSET = "env(safe-area-inset-top)"
+
+# The header's own height, and the number three fixed overlays anchor themselves to. It is a
+# literal in five places and that is fine -- what is not fine is a literal that forgot the inset.
+HEADER_HEIGHT = "54px"
+
+_HEIGHT = re.compile(r"(?<![a-z-])height\s*:\s*([^;]+);")
+_MIN_HEIGHT = re.compile(r"min-height\s*:\s*([^;]+);")
+_PADDING_SHORTHAND = re.compile(r"(?<![a-z-])padding\s*:\s*([^;]+);")
+_ANY_DECLARATION = re.compile(r"([a-z-]+)\s*:\s*([^;{}]+)")
+
+
+def _stylesheet(path: Path) -> str:
+    """The CSS a file ships, comments stripped, whether it is a component or the stylesheet."""
+    if path.suffix == ".svelte":
+        return _style_blocks(_src(path))
+    return re.sub(r"/\*.*?\*/", "", _src(path), flags=re.S)
+
+
+def _css_rule(styles: str, selector: str, start: int = 0, end: int | None = None) -> str:
+    """The declarations of the first `selector { ... }` in a window of a stylesheet.
+
+    A window rather than the whole sheet because the same selector is written twice on purpose:
+    `header` has a base rule and a `@media (max-width: 720px)` override, and decision 279 is
+    exactly the claim that the second one has to repeat what the first says.
+    """
+    window = styles[start:end if end is not None else len(styles)]
+    found = re.search(rf"(?m)^\s*{re.escape(selector)}\s*\{{([^{{}}]*)\}}", window)
+    assert found, f"no `{selector}` rule in that part of the stylesheet"
+    return found.group(1)
+
+
+def _shorthand_parts(value: str) -> list[str]:
+    """Split a shorthand on top-level whitespace, so `max(24px, env(...))` stays one part."""
+    parts: list[str] = []
+    current = ""
+    depth = 0
+    for char in value:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char.isspace() and depth == 0:
+            if current:
+                parts.append(current)
+                current = ""
+        else:
+            current += char
+    if current:
+        parts.append(current)
+    return parts
+
+
+def test_the_shell_uses_the_dynamic_viewport():
+    """§6 preamble: phone-first, and the phone's first session is in a Safari tab.
+
+    In an iOS Safari tab `100vh` is the LARGE viewport -- 745 px on an iPhone 13 -- while 664 px
+    are visible with the toolbar expanded. A shell sized to it puts the 61 px bottom bar inside
+    the 81 px strip the toolbar covers, and because the document is then exactly the layout
+    viewport nothing overflows, so Safari never has a reason to collapse the toolbar and show it.
+    The surface switcher is simply absent, on the form factor §6's preamble makes primary and in
+    the session §3.1 puts before the install.
+
+    The pair, in this order: `100dvh` alone drops iOS < 15.4 to `auto`, and a browser that does
+    not know the second declaration keeps the first. Nothing in this suite can fail this rule --
+    Playwright's viewport is the visible one by construction, which is why `06-responsive` passed
+    while the bar was under the toolbar -- so it is asserted at the source. [M4.15 finding 2]
+    """
+    styles = _stylesheet(SHELL_LAYOUT)
+    for selector in (".boot", ".shell"):
+        declared = _HEIGHT.findall(_css_rule(styles, selector))
+        assert declared == ["100vh", "100dvh"], (
+            f"`{selector}` declares height {declared}: the shell has to be the VISIBLE viewport "
+            f"(100dvh) with 100vh in front of it as the fallback for iOS < 15.4, in that order"
+        )
+
+
+def test_the_shell_reserves_the_top_safe_area():
+    """§6 preamble: installable. `app.html` says how, and the CSS never answered.
+
+    `app.html:5` sets `viewport-fit=cover` and `:12` sets
+    `apple-mobile-web-app-status-bar-style=black-translucent`, so the installed app's web view
+    starts at the physical top edge with the status bar drawn over it -- 47 px on an iPhone 13,
+    59 px from the 14 Pro on. Under a 54 px header that is the whole header, and the account chip
+    is a 32 px control centred in it: a tap where it appears to be is a tap on the status bar,
+    which scrolls to top instead.
+
+    Four rules, not one, because the inset is discarded by whichever of them forgets it:
+
+    1. the base `header` rule pads and sizes itself by the inset;
+    2. the `@media (max-width: 720px)` override repeats it on `min-height`, because M4.9 gave the
+       phone header `height: auto` so four badges can wrap and that discards the base `height`
+       on exactly the form factor the inset exists for (decision 279);
+    3. nothing anywhere anchors to the bare header height -- the two full-bleed overlays offset
+       from `calc(54px + inset)`, not from `54px`;
+    4. a page that IS the screen (`min-height: 100vh`) starts its padding below the status bar.
+
+    `env()` resolves to 0 on every engine this suite runs UNLESS one is asked to report an inset,
+    and one can be: `06-responsive.spec.js`'s `the header grows by the status-bar inset when one
+    is reported` sends Chromium's `Emulation.setSafeAreaInsetsOverride` and then measures the two
+    header rules COMPOSED -- which is the half this guard cannot read, because it matches text.
+    The two are not redundant and neither replaces the other. This one reaches every file in the
+    frontend, including the pages no browser test loads and the overlays no run opens; that one
+    reaches the cascade, where a `box-sizing` regression, a later `padding-top: 0` or a
+    `min-height: unset` would each break the rule while writing none of the literals swept for
+    below. WebKit has no CDP, so the phone project has only this guard.
+    [M4.15 finding 1; decision 279; review cycle 1: M415-C1-COV-02]
+    """
+    styles = _stylesheet(SHELL_LAYOUT)
+    phone_at = styles.find("@media (max-width: 720px)")
+    assert phone_at > 0, "the shell has no phone override to check the inset in"
+
+    base = _css_rule(styles, "header", 0, phone_at)
+    assert f"padding-top: {TOP_INSET}" in base, (
+        "the header does not pad itself by env(safe-area-inset-top): with viewport-fit=cover and "
+        "a translucent status bar its content sits under the clock"
+    )
+    height = _HEIGHT.search(base)
+    assert height and HEADER_HEIGHT in height.group(1) and TOP_INSET in height.group(1), (
+        f"the header's height is {height.group(1).strip() if height else 'unset'}: it has to GROW "
+        f"by the inset it pads by, or the row below it moves up under the status bar"
+    )
+
+    floor = _MIN_HEIGHT.search(_css_rule(styles, "header", phone_at))
+    assert floor and HEADER_HEIGHT in floor.group(1) and TOP_INSET in floor.group(1), (
+        f"the phone header's min-height is {floor.group(1).strip() if floor else 'unset'}: the "
+        f"override sets height: auto so the badges can wrap, which discards the base rule's "
+        f"calc() on the primary form factor -- the inset has to be repeated here (decision 279)"
+    )
+
+    anchored = []
+    unlifted = []
+    for path in sorted(_frontend_sources()):
+        if path.suffix not in {".svelte", ".css"}:
+            continue
+        css = _stylesheet(path)
+        where = path.relative_to(REPO).as_posix()
+        for prop, value in _ANY_DECLARATION.findall(css):
+            if HEADER_HEIGHT in value and TOP_INSET not in value:
+                anchored.append(f"{where}: {prop}: {value.strip()}")
+        for body in re.findall(r"\{([^{}]*)\}", css):
+            if not re.search(r"min-height\s*:\s*100vh", body):
+                continue
+            padding = _PADDING_SHORTHAND.search(body)
+            if not padding:
+                continue
+            top = _shorthand_parts(padding.group(1))[0]
+            if TOP_INSET not in top:
+                unlifted.append(f"{where}: padding: {padding.group(1).strip()}")
+
+    assert not anchored, (
+        f"these anchor to the header's bare height and so sit under the status bar in the "
+        f"installed app, where the header itself does not: {anchored}"
+    )
+    assert not unlifted, (
+        f"these pages are the whole screen (min-height: 100vh) and start their padding at the "
+        f"physical top edge, which is behind the status bar: {unlifted}. The rule is "
+        f"max(<the page's own value>, env(safe-area-inset-top)) for the top component"
+    )
+
+
+def test_the_app_ships_an_error_boundary():
+    """§3.1 asks for an explicit state instead of an error; §6.8 gives the app one language.
+
+    Two things reach this page, and neither is the one the first version of this docstring named:
+    there is no `load` function anywhere in `src/routes` -- `+layout.js` exports `ssr` and
+    `prerender` and nothing else -- so "a throw from a load" had no instances in this app. What
+    does reach it is a client-router 404 (`app.py`'s SPA fallback answers index.html for every GET
+    outside `api/`, and `ssr = false` makes the first navigation unhydrated, so SvelteKit renders
+    the root error page rather than reloading the address it is already on) and a route chunk that
+    fails to import while `_app/version.json` has not moved. Either way the alternative was
+    SvelteKit's built-in page, a bare light-themed "Internal Error" on white, outside the design
+    system and with no way back into the dark shell -- in an installed standalone web view there
+    is no address bar to type into, so that page is a dead end on the primary form factor.
+
+    This guard reads the file. `02-shell.spec.js`'s `an unknown address renders the app's own
+    error card, not the framework's page` is what renders it, and the two are not redundant: a
+    file nothing mounts can satisfy every substring below while drawing nothing at all.
+
+    The retraction reaches the MESSAGE and not only this docstring, which is where it went the
+    first time: pytest prints the assertion, not the prose above it, so the reader at a red log was
+    still being sent after a `load` this app does not have while the paragraph correcting that sat
+    four lines up, unprinted. [M4.15 finding 19, fe-15; review cycle 2: M415-C2-COMP-04;
+    review cycle 3: M415-C3-COMP-03]
+    """
+    # The premise both sentences rest on, asserted rather than restated. `load` is where every
+    # other SvelteKit app's errors come from, so "a throw from a load" is the sentence that writes
+    # itself here -- it wrote itself once already -- and it is only wrong for as long as this app
+    # has no load. The day one appears, this reddens and sends the reader to the two sentences
+    # above instead of letting the wrong one quietly become right for the wrong reason.
+    loaders = sorted(
+        path.relative_to(FRONTEND).as_posix()
+        for path in (FRONTEND / "routes").rglob("+*.js")
+        if re.search(r"(?m)^\s*export\s+(?:async\s+function|function|const)\s+load\b", _src(path))
+    )
+    assert not loaders, (
+        f"these route modules export a `load`: {loaders}. This guard's docstring and message both "
+        "argue from there being none -- the two things that reach +error.svelte are a client-"
+        "router 404 and a chunk that fails to import -- so re-read both before adding one."
+    )
+    assert ERROR_PAGE.is_file(), (
+        "frontend/src/routes/+error.svelte does not exist, so a client-router 404 or a route "
+        "chunk that fails to import renders SvelteKit's own light-themed page outside the app's "
+        "design language -- and in an installed standalone web view there is no address bar, so "
+        "that page is a dead end on the primary form factor"
+    )
+    source = _src(ERROR_PAGE)
+    assert "$lib/design.css" in source, (
+        "+error.svelte does not import design.css. SvelteKit keeps the root layout in the branch "
+        "when it swaps in a root error page, so `+layout.svelte`'s import is in force and this one "
+        "is belt and braces -- which is the right trade for the page whose whole job is to render "
+        "when something upstream did not, and it costs nothing because the import is deduplicated "
+        "at build time"
+    )
+    assert "$page.error" in source, "+error.svelte renders no reason at all"
+    for door, why in (
+        ("location.reload()", "a chunk that failed to import is the case a reload repairs"),
+        ('href="/"', "an installed standalone view has no address bar to type a way out into"),
+    ):
+        assert door in source, f"+error.svelte offers no {door}: {why}"
+
+    # AND THE CARD HAS TO SAY WHICH DOOR IS FOR WHICH FAILURE. The reason above used to read "the
+    # error is usually a stale chunk, and a reload is the fix" -- a frequency nobody measured,
+    # about a case this app routes away from this page twice over (`beforeNavigate` takes the
+    # deploy while `$updated` is up, and the docstring's own second trigger is the chunk failure
+    # where the version has NOT moved). On the one trigger any test in this repository drives, a
+    # client-router 404, a reload is a no-op by construction: the SPA fallback answers the same
+    # address with index.html and 200 and this card renders again, which on a phone in standalone
+    # mode is a door with no address bar behind it. §6.8 asks for a sentence a person can act on,
+    # so the card names both doors rather than leaving the ember-filled one to look like the
+    # answer. [§6.8; review cycle 3: M415-C3-COMP-02]
+    quiet = re.findall(r'<p class="why">(.*?)</p>', source, re.S)
+    named = [line for line in quiet if "Reload" in line and "Home" in line]
+    assert named, (
+        "+error.svelte draws two doors that repair different failures and says which for "
+        "neither: a `.why` line has to name both, because on a client-router 404 -- the only "
+        "trigger this suite drives -- the primary door re-renders this same card"
+    )
+
+
+# --- M4.15: one ring and one accent, both decided in design.css (§6.8) ----------------------
+
+# Every rule in a shipped component that spends the full-strength accent, and the reason it is
+# allowed to. Keyed `file: selector` on the path relative to `frontend/src`, because two of the
+# sixteen live in a `+page.svelte` and a basename would let one route's licence excuse another's.
+#
+# §6.8 rations the colour in one sentence -- "one ember accent #c8613a spent on selection and
+# primary actions" -- and a sentence with no list under it was read as "the accent colour", so it
+# also drew two statuses, an avatar, three progress fills and two pieces of text: eight sites where
+# it meant nothing at all, and where a selection next to one of them was no longer legible AS a
+# selection. This list is what those two words mean in this app, written down once. Adding a line
+# is the point at which the reader has to say which of the two the new site is.
+#
+# Scope is the full-strength token only. `--ember-lift`, `--ember-wash` and `--ember-edge` are the
+# accent quoted rather than spent -- error copy, a tinted callout's frame, a hover border -- and
+# `--facet-mood` is #c8613a by §6.4's own binding, which decision 276 records as the deliberate
+# exception rather than recolouring a facet to protect a guard.
+ACCENT_ALLOWLIST = {
+    "lib/components/AccountChip.svelte: .track.on":
+        "the show-model switch, on: a switch's on state is a selection the person made",
+    "lib/components/ModelRail.svelte: .chip.on":
+        "the event-kind filter the rail is currently showing",
+    "lib/components/RateBattleCard.svelte: .side:hover:not(:disabled) :global(.poster)":
+        "the poster a pointer is about to pick: hover is the selection in progress",
+    "lib/components/RateBattleCard.svelte: .side:focus-visible :global(.poster)":
+        "the same pick reached by keyboard, so both input devices tell the same story",
+    "lib/components/RateBattleCard.svelte: .cell:hover:not(:disabled)":
+        "proposal 48's mirrored strip: the verdict under the thumb",
+    "lib/components/RateBattleCard.svelte: .cell:focus-visible":
+        "the same verdict reached by keyboard",
+    "lib/components/RateBattleCard.svelte: .track.on":
+        "the decisive switch, on",
+    "lib/components/RateCorrections.svelte: .side:hover:not(:disabled)":
+        "the side of a correction pair about to be chosen",
+    "lib/components/RateCorrections.svelte: .side:focus-visible":
+        "the same side reached by keyboard",
+    "lib/components/RateSweepCard.svelte: .verdict:hover:not(:disabled)":
+        "the sweep verdict about to be given",
+    "lib/components/RateSweepCard.svelte: .verdict:focus-visible":
+        "the same verdict reached by keyboard",
+    "lib/components/RateUndo.svelte: .chip:hover:not(:disabled)":
+        "the undo about to be taken -- a primary action, and the only one on that strip",
+    "lib/components/RateUndo.svelte: .chip:focus-visible":
+        "the same undo reached by keyboard",
+    "lib/components/ShelfRow.svelte: .nudge:focus-visible":
+        "a focus ring, which is the keyboard's selection (see FOCUS_RING_EXCEPTIONS)",
+    "routes/rank/+page.svelte: .tile.picked":
+        "§4.2's lifted entry: the card tap-to-tier has picked up and is waiting to place",
+    "routes/tonight/+page.svelte: .controls input[type='range']":
+        "decision 277: `accent-color` paints a native control's own chosen value, which is the "
+        "same grammar as `.pill[aria-pressed='true']` and not a second answer to it",
+}
+
+# Where the fourth spelling is spent, which is a SECOND list and deliberately not an entry in the
+# one above. `ACCENT_ALLOWLIST` is selection and primary actions -- that is the sentence §6.8
+# writes and exit criterion 7 measures -- and a facet stripe is neither, so putting one in there
+# would license the retired colour under a reason that is false. What a spend of `--facet-mood`
+# has to argue instead is that it is the FACET: proposal 124 gives mood the warm end of §6.4's
+# ramp, and `ModelRail`'s event-kind stripes are proposal 118's colour-coding bound to that ramp
+# rather than to eleven new hues.
+#
+# The collision the decision leaves standing is real and is named here rather than papered over:
+# forty lines above that stripe, `.chip.on` spends the accent on the kind filter the rail is
+# showing, so inside one component #c8613a means both "the filter you selected" and "this event is
+# a verdict". Recolouring the facet is the only repair and decision 276 refuses it by name --
+# §6.4's palette belongs to whoever ships it. An enumerated exception is what was available: it
+# keeps the collision to one selector a reader can see, instead of a token-wide licence nothing
+# counts. [§6.8; proposals 118, 124; decision 276 as amended; review cycle 3: M415-C3-ACC-01]
+FACET_ACCENT_SITES = {
+    "lib/components/ModelRail.svelte: .events li[data-kind='verdict']":
+        "proposal 118's event-kind stripe, bound to the facet palette rather than to a new colour "
+        "-- the facet is mood and mood is #c8613a by §6.4's binding, not a spend of the accent",
+}
+
+# The eight the sweep retired, with what each of them actually meant, and the ninth review cycle 1
+# sent after them. They are not a second list the guard consults -- they are absent from the one
+# above, which is what makes their return a failure -- but they are the reason it exists, and
+# `_accent_sites` is shown refusing each below.
+#
+# The ninth is the one this list had already licensed, which is what makes it worth naming: the
+# entry read "the swap step the admin has reached, of four -- the wizard's own selection", and the
+# markup is four NON-interactive spans lit cumulatively by `phase`. Nothing there is selected, the
+# last of the four is a server outcome nobody picks, and the component renders inside the first-boot
+# wizard at step 3 -- under the step ramp this same milestone retired to --progress-now and over a
+# `.btn-primary` whose fill IS the accent. A licence with a false reason reads exactly like a true
+# one, which is why these reasons are prose. [review cycle 1: acc-01; decision 276 as amended]
+RETIRED_ACCENT_SITES = (
+    "PosterCard's cold badge (a status, now --status)",
+    "RateClassBalance's .high count (a status)",
+    "AccountChip's avatar (an identity, now --identity)",
+    "RateBlockCounter's .tick.now and RateRail's .fill (progress)",
+    "the first-boot wizard's current step (progress)",
+    "Tonight's room code and beat label (text, now --ink and the file's own .data rule)",
+    "BundleImport's reached swap steps (progress, now --progress-now)",
+)
+
+# design.css's own spends, which the component scan deliberately does not read. A second list and
+# not a widening of the first, because the two answer different questions: a COMPONENT asking for
+# the accent has to argue for it, while design.css is where the argument was already won -- the
+# rule named `.btn-primary` IS the primary action, and `.pill.on` IS the selection. Reading the
+# sheet against the component allowlist would mean licensing the app's own selection rules, which
+# inverts the sweep's direction (decision 276 as amended).
+#
+# What a list buys here is the other half of the sentence. The scan stops at `.svelte`, so the
+# highest-leverage stylesheet in the app -- the one every surface inherits from -- was the one
+# place a global `.badge { background: var(--ember) }` could be added and reach every screen at
+# once with both guards green. `:root` is absent because a token DEFINITION is not a spend:
+# `--ember` and `--facet-mood` are design.css saying what the colour IS, which is
+# `test_the_ember_accent_is_not_reused_as_a_neutral`'s half of the clause.
+# [§6.8; decision 276 as amended; review cycle 1: acc-04]
+DESIGN_CSS_ACCENT_SITES = {
+    "a": "a link is the one thing a person can act on from inside a sentence, so it is an action "
+         "-- unlike the text the sweep retired, a room code and a beat label that do nothing",
+    ":focus-visible": "the app's one ring, which is the keyboard's selection; its VALUE is held by "
+                      "test_the_app_has_one_focus_ring_rule rather than here",
+    ".pill[aria-pressed='true']": "a pill that is pressed: the selection, stated by ARIA",
+    ".pill.on": "the same pill, where the state is a class rather than an attribute",
+    ".btn-primary": "the primary action, in the class named after it",
+}
+
+# Three spellings of ONE colour, because the rule is about the colour and a guard that enumerates
+# spellings is a guard the next spelling walks past -- the same argument decision 276's amendment
+# makes about the two places a spend can be WRITTEN, applied to the ways it can be SPELLED. The
+# literal `var(--ember)` missed both of the token's other legal forms: `var( --ember )`, and
+# `var(--ember, #fff)`, where the fallback list breaks the closing paren. The raw triple missed
+# `rgb(200, 97, 58)` entirely, which is one keystroke pattern away from the hex and invisible to
+# every token audit there is.
+#
+# Full strength only, which is why the alpha is spelled out rather than left open: `--ember-wash`
+# and `--ember-edge` ARE `rgba(200, 97, 58, ...)` in design.css, so a component writing the wash
+# out by hand is quoting the accent rather than spending it, and matching the triple alone would
+# call the quietest use of this colour its loudest. The boundary this cannot hold is a near miss
+# in another colour space -- `hsl(16 55% 51%)` is three units off #c8613a and indistinguishable on
+# screen -- and closing it needs a conversion and a tolerance, which is a different guard from one
+# that asks whether a writer named the accent.
+#
+# The fourth spelling is a token name, and it is the only one left in this tree: design.css binds
+# `--facet-mood` to #c8613a, so `var(--facet-mood)` paints pixel for pixel what `var(--ember)`
+# paints and was invisible to all three accent guards. A writer who wants the retired colour back
+# does not have to reach for the accent's own name -- decision 276 settled that the token's VALUE
+# stays (recolouring a facet is §6.4's call), and the guard read that as a licence for its SPENDS,
+# which is one token wider than the decision.
+#
+# Admitted as a spelling rather than as an exception, which is what keeps this a rule about the
+# COLOUR: `test_the_accent_pattern_names_facet_mood_only_while_it_is_the_accent` holds the binding
+# this alternative rests on, so the day §6.4 gives mood its own hue the guard reddens and says to
+# drop the alternative rather than quietly demanding an accent licence for a colour that is no
+# longer the accent. [§6.8; review cycle 1: acc-03; decision 276 as amended;
+# review cycle 3: M415-C3-ACC-01]
+ACCENT_ALIAS_TOKEN = "--facet-mood"
+_ACCENT = re.compile(
+    r"var\(\s*--ember\s*[,)]"
+    r"|var\(\s*--facet-mood\s*[,)]"
+    r"|#c8613a"
+    r"|rgba?\(\s*200\s*[, ]\s*97\s*[, ]\s*58\s*(?:[,/]\s*(?:1|1\.0*|100%)\s*)?\)",
+    re.I,
+)
+
+# How a colour written in JavaScript names itself: the declaration binding it, or the object key
+# it sits under. `<expression>` where the line carries neither, which asks the writer to name the
+# site rather than guessing at what it is called.
+_JS_BINDING = re.compile(r"(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*)\s*[:=]")
+
+# `outline-offset` is deliberately not a ring: it positions one. Matching it would make the single
+# global rule look like two answers to its own question.
+_A_RING = re.compile(r"(?<![a-z-])outline(?:-(?:color|style|width))?\s*:\s*([^;}]+)")
+
+# ZERO OF ANY UNIT, and not a list of units, because `^(none|0)\b` got both directions of this
+# backwards. `\b` wants a non-word character after the `0` and `p` is a word character, so `0px`
+# -- the commonest way after `none` to kill a ring -- fell into the DRAWING bucket and reddened
+# the build with "these declare a second ring... put the change there if the whole app should
+# have it", which is the repair for the opposite defect. `0.5px` went the other way: `.` IS a
+# non-word character, so a genuine sub-pixel hairline was reported as the ring being taken away.
+# Both send the reader to the wrong fix, which is ring-c2-01's own finding one pattern over --
+# "nothing wrong could ship on it... what shipped was the wrong sentence, and in a file whose
+# whole output is sentences that is the product."
+#
+# So the rule is stated rather than the units enumerated: an optional fractional part that is all
+# zeroes, an optional unit of any name, and nothing word-like or decimal after it. `0q`, `0vh`,
+# `0ch` and `0in` are covered by the rule and would each have needed a line in a list; the
+# trailing `(?![\w.])` rather than `$` is what keeps `outline: 0 solid red` a removal, which the
+# boundary read correctly before. [proposals 127, 131; review cycle 2: ring-c2-01;
+# review cycle 3: M415-C3-RING-06]
+_RING_SUPPRESSED = re.compile(r"^(?:none\b|0(?:\.0+)?(?:[a-z]+|%)?(?![\w.]))", re.I)
+
+# A ring drawn with `box-shadow` is still a second ring, and it is the commonest modern way to draw
+# one: a spread shadow follows the border radius, which is the one thing an outline could not do
+# until recently, so it is what a component reaching for a rounder ring reaches for. Only on a
+# focus rule, because `box-shadow` anywhere else is a shadow -- AccountChip's menu has one -- and
+# only where it draws something: `box-shadow: none` takes away a shadow, not a ring, which is why
+# the suppression half stays outline-only. In this app the outline IS the ring.
+# [proposals 127, 131; review cycle 1: reach-01]
+_A_FOCUS = re.compile(r":focus(?:-visible|-within)?\b")
+_A_SHADOW = re.compile(r"(?<![a-z-])box-shadow\s*:\s*([^;}]+)")
+# Not `_RING_SUPPRESSED`, which reads an OUTLINE value: every shadow ring in the idiom begins with
+# an offset of `0`, so the removal pattern an outline uses would have read `0 0 0 2px var(--ember)`
+# as the ring being taken away and dropped exactly the shape this exists to see.
+_SHADOW_NONE = re.compile(r"^none\b")
+
+# The one rule, in the one file. Everything else that draws a ring is an exception or a bug.
+GLOBAL_RING = "lib/design.css: :focus-visible"
+
+# A component may still ring something itself, if the global rule cannot do what it needs. One
+# does, and the reason is the whole test of whether an exception is real.
+#
+# Licensed by SITE, held to VALUE. The first draft licensed the site alone -- `ring.split(...)[0]
+# not in FOCUS_RING_EXCEPTIONS` -- which dropped the value entirely, so this selector could carry
+# any ring of any width and colour and the test that exists to prevent six competing rings would
+# not have noticed. It was already carrying one: `1px solid var(--ember)` under a docstring saying
+# in as many words that "a different width or a different colour is not" a legitimate exception.
+# So an exception may RESTATE the one ring and may not REDEFINE it; what it buys is the property
+# design.css cannot reach from outside the component.
+# [proposals 127, 131; M4.15 review cycle 1: m415-rev1-css-06]
+FOCUS_RING_EXCEPTIONS = {
+    "lib/components/ShelfRow.svelte: .nudge:focus-visible":
+        "the shelf's chevron is opacity: 0 until its row is hovered, so this rule has to REVEAL "
+        "the control before ringing it -- a ring drawn around something invisible is not a ring, "
+        "and `opacity: 1` is the half design.css cannot express",
+}
+
+
+def _rules(styles: str) -> list[tuple[str, str]]:
+    """(selector, body) for every rule in a stylesheet, one entry per comma-separated selector.
+
+    Per selector rather than per rule, so an allowlist entry says which element it licenses:
+    `.side:hover:not(:disabled), .side:focus-visible` is two claims about two input devices, and
+    a key holding both would be silently rewritten by anyone who reordered them.
+
+    `[^{}]` on both halves means an `@media` wrapper is stepped over rather than swallowed -- the
+    rules inside it are found on their own, which is how Rank's coarse-pointer block is read.
+
+    THE SAME `[^{}]` DOES NOT STEP OVER A BRACE INSIDE A STRING, and the consequence is stated
+    here because six guards inherit it: the component accent sweep, both design.css readers,
+    `_ring_sites`, `_coarse_declarations` and the card-padding reader. `content: "}"` ends the body
+    early, so everything after it in that rule is deleted from all six at once -- `_accent_sites`
+    on `.a::after { content: "}"; background: var(--ember); }` returns nothing. `content: "{"` goes
+    the other way and yields a rule whose SELECTOR is `content: "`, which no allowlist could
+    sensibly hold. A real parser is not worth the one shape; a boundary nobody wrote down is what
+    made the `@media` half worth writing down, and `_coarse_blocks` a few thousand lines on
+    hand-matches braces precisely because this reader cannot. `test_no_style_block_hides_a_brace_
+    in_a_string` keeps the shape out of reach instead, which is the trade this file already makes
+    for `_accent_in_code` and a `//` inside a string literal.
+    [review cycle 3: M415-C3-GUARD-04]
+    """
+    out = []
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", styles):
+        for part in selector.split(","):
+            part = " ".join(part.split())
+            if part:
+                out.append((part, body))
+    return out
+
+
+def _element_site(tag: str, attrs: str) -> str:
+    """How an accent spend written in the markup names itself, since it has no selector.
+
+    The tag plus its class list, because that is what a reader greps for and what an allowlist
+    entry has to be recognisable as. Two `<span>`s in one file are then two keys rather than one.
+
+    Both quotes, which is the invariant the sentence above claims and a double-quote-only read did
+    not hold: a single-quoted `class` collapsed every `<span>` in a file onto one key, so a licence
+    written for one of them licensed the others, and a licence written as `<span class="badge">`
+    stopped matching the moment someone rewrote the quotes. Nothing enforces quote style here --
+    `frontend/` ships neither prettier nor eslint, which is the argument `_classes` already carries
+    for the same one-line widening at the top of this file. Behaviour-neutral on the shipped tree:
+    every class attribute in it is double-quoted, so no label moves.
+    [§6.8; review cycle 2: why-c2-01; review cycle 3: M415-C3-ACC-07]
+    """
+    marker = re.search(r"class=(\"|')(.*?)\1", attrs)
+    return f"<{tag}" + (f' class="{marker.group(2)}"' if marker else "") + ">"
+
+
+def _design_css_accent_sites(css: str) -> list[str]:
+    """Every selector in design.css that SPENDS the accent, in sheet order, definitions excluded.
+
+    Per declaration rather than per rule body, because `:root` holds both halves of the clause at
+    once: `--ember: #c8613a` says what the colour is and `--facet-mood: #c8613a` says what else is
+    allowed to be it, and neither is a use. A property starting `--` is a name being given a value;
+    everything else is that value being drawn.
+    """
+    sites = []
+    for selector, body in _rules(css):
+        if any(
+            not prop.startswith("--") and _ACCENT.search(value)
+            for prop, value in _declarations(body).items()
+        ):
+            sites.append(selector)
+    return sites
+
+
+def _design_css_accent_names(css: str) -> list[str]:
+    """Every custom property in design.css whose VALUE is the accent, in sheet order.
+
+    The exact complement of `_design_css_accent_sites`' filter, and the other half of §6.8's
+    sentence: that reader takes the properties that DRAW a colour, this one takes the names being
+    given one. Written here rather than left inline in the M0 guard six thousand lines above
+    because the two halves are one rule and were drifting apart -- the seam between them was a
+    spelling, and a spelling is exactly what `_ACCENT` exists to stop being a seam.
+
+    Every rule and not `:root` alone, because the pattern this replaces scanned the whole sheet and
+    a token minted inside an `@media` block is still a token.
+    [§6.8; decision 276 as amended; review cycle 2: acc-c2-02]
+    """
+    return [
+        prop
+        for _, body in _rules(css)
+        for prop, value in _declarations(body).items()
+        if prop.startswith("--") and _ACCENT.search(value)
+    ]
+
+
+def _accent_sites(name: str, source: str) -> list[str]:
+    """Every `file: selector` in one component that spends the full-strength accent.
+
+    Style blocks AND markup. A `<style>`-only scan is a scan of one of the two places this app
+    writes colour: `style:color={facetColour(t.facet)}` is the house idiom in four of the very
+    files the sweep retired a fill from, and `AccountChip.svelte` already takes an avatar's
+    background from a database column. So the sweep's eight retirements held only for as long as
+    nobody reached for the spelling their neighbours use, and the guard whose whole job is to make
+    a new spend NAME itself would have stayed green through it.
+
+    Read across the element's attributes rather than out of a `style=` value, because the rule is
+    about the colour and not about which of Svelte's two spellings carried it -- a directive, a
+    quoted attribute and a shorthand are three ways to write one spend, and a guard that
+    enumerates spellings is a guard a fourth spelling walks past.
+
+    The reader is brace-aware for the same sentence, one level down. An attribute run of
+    `[^<>"]` ends at the first bare `>`, and a Svelte attribute IS an expression: `{() => ...}`,
+    `{n > 3 ? ... : ...}` and `{n >= k}` all close the match mid-attribute, so everything after
+    the arrow was read by nothing -- and `{n < 3 ? ...}` was worse, because the group can give
+    back no `>` and the whole element is dropped. That is not a hypothetical spelling: a returning
+    cold badge is `style:background={n > 3 ? 'var(--ember)' : 'var(--status)'}`, one keystroke
+    from `style:color={facetColour(t.facet)}` at `ShelfRow.svelte:133`, and it passed all three
+    accent guards. Measured on this tree, the old run truncated 101 elements across 22 of 23
+    components; the brace-aware one truncates none and reports the same seventeen sites, so it is
+    four spellings closed at zero cost to the allowlist. One nested level is the limit, which is
+    an object literal inside an expression and is where a source scan should stop.
+    [§6.8; decision 276 as amended; M4.15 review cycle 1: M415-REV1-08;
+     review cycle 3: M415-C3-ACC-02]
+    """
+    sites = [
+        f"{name}: {selector}"
+        for selector, body in _rules(_style_blocks(source))
+        if _ACCENT.search(body)
+    ]
+    for tag, attrs in re.findall(
+        r"<([A-Za-z][A-Za-z0-9-]*)((?:[^<>\"{]|\"[^\"]*\"|\{(?:[^{}]|\{[^{}]*\})*\})*)>",
+        _markup(source),
+    ):
+        if _ACCENT.search(attrs):
+            sites.append(f"{name}: {_element_site(tag, attrs)}")
+    sites += _accent_in_code(
+        name, "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", source, re.S))
+    )
+    return sites
+
+
+def _accent_in_code(name: str, code: str) -> list[str]:
+    """Every `file: identifier` in one file's JavaScript that names the full-strength accent.
+
+    The third place this app can write a colour, and the one the other two point at: the value
+    reaching `style:background={expr}` is an EXPRESSION, and an expression carries no literal for
+    a colour pattern to match. So the spend moves one scope out -- into the component's own script
+    block, which `_markup` strips, or into a module beside it, which the walk never opened -- and
+    every accent guard in this file stays green while a status badge wears §6.8's one colour again.
+    That is the same widening decision 276 already took twice, applied to the third place rather
+    than to a fourth spelling.
+
+    Named by the identifier it is bound to, because the mechanism is unchanged: the point is not to
+    forbid the colour but to make a writer say which of the two things §6.8 rations it to this is,
+    and `lib/theme.js: ACCENT` is what an allowlist entry would have to be recognisable as.
+
+    Comments are stripped first, at the cost this file already accepts elsewhere for the same
+    reason: a `//` inside a string literal takes the rest of that line with it, which can only
+    lose a site, while a comment explaining the accent -- the likeliest line in the tree to name
+    it -- would otherwise be reported as a spend of it.
+    [§6.8; decision 276 as amended; review cycle 2: M415-C2-CSS-07]
+    """
+    code = re.sub(r"(?m)//.*$", "", re.sub(r"/\*.*?\*/", "", code, flags=re.S))
+    sites = []
+    for line in code.splitlines():
+        if not _ACCENT.search(line):
+            continue
+        bound = _JS_BINDING.search(line)
+        label = (bound.group(1) or bound.group(2)) if bound else "<expression>"
+        sites.append(f"{name}: {label}")
+    return sites
+
+
+def _live_accent_sites(root: Path) -> list[str]:
+    """Every accent spend in the shipped frontend under `root`, in file order.
+
+    A root rather than the constant, so the sweep can be shown reading a tree that has one in it
+    -- the shape `_invented_paddings` and `_unsigned_exceptions` already use here. Colocated
+    `*.test.js` are skipped for `_frontend_sources`' own reason: a falsifier naming a colour is
+    asserting about it, and vitest is what reads those files.
+    [§6.8; decision 276 as amended; review cycle 2: M415-C2-CSS-07, acc-c2-04]
+    """
+    sites = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.name.endswith(".test.js"):
+            continue
+        name = path.relative_to(root).as_posix()
+        if path.suffix == ".svelte":
+            sites += _accent_sites(name, _src(path))
+        elif path.suffix == ".js":
+            sites += _accent_in_code(name, _src(path))
+    return sites
+
+
+def _ring_sites(name: str, styles: str) -> list[tuple[str, str, str]]:
+    """Every `(file: selector, value, property)` that draws or removes a ring.
+
+    Two properties and not one, because this is a guard about the RING and not about the property
+    a ring was drawn with: a `box-shadow` spread on a focus rule is a second ring by every measure
+    that matters to a keyboard, and an outline-only reader calls a tree with one in it clean.
+
+    Which of the two a site came from travels WITH it, because the reader downstream cannot
+    recover it from the value: `0` is the ring taken away on an outline and the first offset of a
+    ring being drawn on a shadow, and a bucketing that reads the value alone gets exactly that case
+    backwards. [review cycle 2: ring-c2-01]
+    """
+    sites = []
+    for selector, body in _rules(styles):
+        sites += [
+            (f"{name}: {selector}", value.strip(), "outline") for value in _A_RING.findall(body)
+        ]
+        if not _A_FOCUS.search(selector):
+            continue
+        sites += [
+            (f"{name}: {selector}", value.strip(), "box-shadow")
+            for value in _A_SHADOW.findall(body)
+            if not _SHADOW_NONE.match(value.strip())
+        ]
+    return sites
+
+
+def _rings_and_removals(sites: list[tuple[str, str, str]]) -> tuple[list[str], list[str]]:
+    """The sites that DRAW a ring and the sites that take one away, told apart by property.
+
+    Split out of the guard for the reason `_ring_offences` was, and after the same kind of defect:
+    a bucketing that lives in a test body is the one piece of a guard nothing can be shown
+    refusing, and this one was wrong. `_SHADOW_NONE` says four lines above `_A_SHADOW` why
+    `_RING_SUPPRESSED` must not be pointed at a shadow -- every shadow ring in the idiom begins
+    with an offset of `0` -- and the guard then pointed it at every value this returns, so a
+    component drawing the rounder ring the shadow branch exists to catch was told it had removed
+    the ring and sent to undo a removal it had not made. [proposals 127, 131; review cycle 2:
+    ring-c2-01]
+    """
+    rings, removed = [], []
+    for site, value, prop in sites:
+        taken = prop == "outline" and _RING_SUPPRESSED.match(value)
+        (removed if taken else rings).append(f"{site} -> {value}")
+    return rings, removed
+
+
+def _ring_offences(rings: list[str], global_ring: str) -> tuple[list[str], list[str]]:
+    """The two ways a ring can be wrong, told apart: a second one, and a licensed one redrawn.
+
+    Split out of the guard so it can be shown refusing a licensed site that changes the value,
+    which is the case the site-only filter it replaces could not refuse and the case that shipped.
+    """
+    competing, redrawn = [], []
+    for ring in rings:
+        site, _, value = ring.partition(" -> ")
+        if site == GLOBAL_RING:
+            continue
+        if site not in FOCUS_RING_EXCEPTIONS:
+            competing.append(ring)
+        elif " ".join(value.split()) != " ".join(global_ring.split()):
+            redrawn.append(f"{ring} (the one ring is `{global_ring}`)")
+    return competing, redrawn
+
+
+def test_the_ember_accent_is_spent_only_on_selection_and_primary_actions():
+    """§6.8: "one ember accent #c8613a spent on selection and primary actions."
+
+    `test_the_ember_accent_is_not_reused_as_a_neutral` has guarded the token side of that sentence
+    since M0 -- no second design.css token may hold the colour -- and nothing guarded the spending
+    of it, which is where the sentence actually applies. Seven components had taken the accent for
+    a status badge, a count, an avatar, three progress fills, a room code and a beat label: eight
+    sites, none of them a selection, none an action, and each one costing the selections beside it
+    the only thing that made them legible as selections. That is the failure the rationing exists
+    to prevent, and it was invisible to every other guard here, because each of the eight was a
+    perfectly ordinary line of CSS in a perfectly ordinary component.
+
+    An allowlist rather than a heuristic. "Selection" and "primary action" are design judgements
+    and no regex holds them; what a regex can do is make every new spend name itself, which turns
+    a silent widening into one line a writer has to write and a reader has to read. Decision 276
+    chose exactly that over recolouring `--facet-mood`, whose #c8613a is §6.4's binding and not a
+    reuse.
+
+    Components only, which is a division of labour and not a hole: design.css's own spends are a
+    different question with a different answer, and they are asked one test below. Components
+    INCLUDING the JavaScript beside them from review cycle 2 on -- a fill bound to a constant and
+    applied with `style:background={FILL}` is the same spend written one scope out, and the
+    expression the directive carries holds no colour for a scan of the markup to find.
+
+    The list is held in both directions, which is the half its design.css sibling had and this one
+    did not, under prose arguing the rule generally: a licence for a rule that has moved is how an
+    allowlist rots into a list of things somebody once wrote. Three times the size and spread over
+    eight files, this is the list a component rewrite actually moves.
+    [§6.8; decision 276 as amended; review cycle 2: M415-C2-CSS-07, acc-c2-04;
+    row `map-taste-admin-palette-facet-binding-and-accent`]
+    """
+    sites = _live_accent_sites(FRONTEND)
+    licensed = {**ACCENT_ALLOWLIST, **FACET_ACCENT_SITES}
+    offenders = [site for site in sites if site not in licensed]
+    assert not offenders, (
+        "§6.8 spends the ember accent on selection and primary actions and on nothing else, and "
+        "these sites are on neither list:\n  " + "\n  ".join(offenders) + "\n\nIf the site really "
+        "is a selection or a primary action, add it to ACCENT_ALLOWLIST with the one line that "
+        "says which of the two it is. If it is a status, an identity, a progress or a piece of "
+        "text, design.css already has a token for it (--status, --identity, --progress-track / "
+        "-fill / -now, --ink*): the accent is the only colour in this app that means something, "
+        f"and it means it by being rare. Retired for that reason: {'; '.join(RETIRED_ACCENT_SITES)}."
+        f" `var({ACCENT_ALIAS_TOKEN})` reaches this list too and is not a way around it: it is the "
+        "same six hex digits under §6.4's binding, and FACET_ACCENT_SITES is where a spend argues "
+        "it is the FACET rather than the accent."
+    )
+    gone = [site for site in licensed if site not in sites]
+    assert not gone, (
+        f"these are licensed to spend the accent and no longer spend it: {gone}. Drop the entry "
+        "rather than leaving a licence behind for whatever is written at that selector next: the "
+        "keys are `file: selector`, so the file that renames or deletes a rule inherits its own "
+        "stale licence the moment it writes that name again."
+    )
+
+
+def test_the_accent_pattern_names_facet_mood_only_while_it_is_the_accent():
+    """What the fourth spelling in `_ACCENT` rests on, asserted rather than assumed.
+
+    `var(--facet-mood)` is read as a spend of the accent for exactly one reason: design.css binds
+    `--facet-mood` to #c8613a, so the two names paint the same pixels and a sweep that reads only
+    one of them can be satisfied by moving a colour rather than by retiring it. That is a fact
+    about today's palette and not a rule -- decision 276 leaves the recolour to whoever ships §6.4,
+    and proposal 124's warm end is a palette decision this milestone has no standing to take.
+
+    So the alternative is held to its own premise. On the day mood gets a hue of its own, this
+    fails first and says to drop the alternative: without it `_ACCENT` would go on demanding an
+    accent licence for a colour that is no longer the accent, and `FACET_ACCENT_SITES`' one entry
+    would be a licence for a spend nobody needs to argue for any more.
+    [§6.8; §6.4's binding note; decision 276 as amended; review cycle 3: M415-C3-ACC-01]
+    """
+    assert ACCENT_ALIAS_TOKEN in _design_css_accent_names(_stylesheet(DESIGN)), (
+        f"design.css no longer binds `{ACCENT_ALIAS_TOKEN}` to the accent hex, so `_ACCENT`'s "
+        f"`var({ACCENT_ALIAS_TOKEN})` alternative now matches a DIFFERENT colour and every site "
+        "in FACET_ACCENT_SITES is licensed against a rule that has moved. Drop the alternative "
+        "and the list together: the pattern is spellings of one colour, and this was one of them."
+    )
+
+
+def test_design_css_spends_the_accent_where_the_app_selects_and_acts():
+    """§6.8's other half, in the file the sentence was always about.
+
+    The component scan above stops at `.svelte`, and that left the sheet every surface inherits
+    from as the one place the accent could be widened with both guards green: a new
+    `.badge { background: var(--ember) }` in design.css reaches every screen in the app at once,
+    and `test_the_ember_accent_is_not_reused_as_a_neutral` -- the M0 guard that does read this file
+    -- matches `--name: #c8613a` token DEFINITIONS, so it cannot see a use of any spelling. The
+    row's own sentence reads as a rule about the app while its two tests between them read
+    components and token names.
+
+    Five sites, and the list is held in both directions. An unlisted spend is a widening nobody
+    argued for; a listed site that is no longer there is a licence for a rule that has moved,
+    which is how an allowlist rots into a list of things somebody once wrote.
+
+    And the division of labour has to be exhaustive or it is a third hole, which is what acc-04's
+    repair left behind: the component sweep dispatches on suffix and reads `.svelte` and `.js`, and
+    this test reads ONE named path, so `frontend/src/lib/anything-else.css` -- imported from
+    `+layout.svelte` exactly the way `$lib/design.css` already is in four route files -- would be
+    read by neither, and reach every surface the same way the hole acc-04 closed did. The two
+    readers are checked to cover the tree between them rather than assumed to, below. Note what
+    this does NOT claim: `frontend/static/fonts/fonts.css` is a shipped stylesheet linked from
+    `app.html` and lives outside this root; it is closed by
+    `test_the_font_stylesheet_is_what_its_generator_emits`, which holds it byte-for-byte to
+    `ops/fetch-fonts.py`, and not by any accent reader.
+    [§6.8; decision 276 as amended; review cycle 1: acc-04; review cycle 3: M415-C3-ACC-03;
+    row `map-taste-admin-palette-facet-binding-and-accent`]
+    """
+    stylesheets = sorted(p.relative_to(FRONTEND).as_posix() for p in FRONTEND.rglob("*.css"))
+    assert stylesheets == ["lib/design.css"], (
+        f"frontend/src holds stylesheets this guard does not read: {stylesheets}. The accent sweep "
+        "dispatches on suffix and takes `.svelte` and `.js`; this test takes design.css by name, "
+        "so a second sheet is read by neither and a global `.badge { background: var(--ember) }` "
+        "in it reaches every surface with both guards green. Fold it into design.css, or widen "
+        "both readers in the change that adds it."
+    )
+    inline = [
+        block
+        for block in re.findall(
+            r"<style\b[^>]*>(.*?)</style>", _src(FRONTEND / "app.html"), re.S
+        )
+        if block.strip()
+    ]
+    assert not inline, (
+        "frontend/src/app.html carries a <style> block, and no accent guard opens that file: the "
+        "sweep skips it on suffix and this test reads design.css. It is the one document every "
+        "surface is served inside, so a rule here outranks the component scan entirely."
+    )
+
+    sites = _design_css_accent_sites(_stylesheet(DESIGN))
+    unlisted = [site for site in sites if site not in DESIGN_CSS_ACCENT_SITES]
+    assert not unlisted, (
+        "design.css spends the ember accent on selectors nobody has named: " + str(unlisted)
+        + "\n\nThis is the app's own stylesheet, so a rule here reaches every surface at once. If "
+        "it really is a selection or a primary action, add it to DESIGN_CSS_ACCENT_SITES with the "
+        "line that says which; if it is a status, an identity, a progress or a piece of text, the "
+        "file already mints --status, --identity, --progress-* and the ink ladder for it."
+    )
+    gone = [site for site in DESIGN_CSS_ACCENT_SITES if site not in sites]
+    assert not gone, (
+        f"these are licensed to spend the accent in design.css and no longer do: {gone}. Drop the "
+        "entry rather than leaving a licence behind for whatever is written at that selector next."
+    )
+
+
+def test_the_design_css_accent_guard_tells_a_spend_from_a_definition():
+    """The distinction the sheet's own `:root` turns on, shown rather than asserted in prose.
+
+    `:root` holds `--ember: #c8613a` and `--facet-mood: #c8613a`, so a guard that read rule bodies
+    would report the two lines that say what the colour IS as two spends of it -- and the reader
+    sent to justify them has nothing to justify.
+
+    Which means the division of this sentence into two readers is only as good as the WEAKER of
+    them, and the seam between them is a name: a token is invisible to the spend reader by the
+    rule asserted directly below, so everything a `--` declaration can hide rests on the name
+    reader alone. Until review cycle 2 that reader was M0's lowercase hex literal, so
+    `--badge-bg: rgb(200, 97, 58)` in `:root` -- with `.badge { background: var(--badge-bg) }`
+    under it, reaching every surface in the app at once -- was a name to one half and a non-hex to
+    the other, and the only thing between caught and uncaught was the colour space the author
+    typed. `#C8613A` and the plain alias `var(--ember)` walked past it too, and the alias is the
+    one a writer reaches for first because it needs no colour literal at all. Both halves read
+    `_ACCENT` now, which is the same argument decision 276's amendment already makes about the
+    ways a spend can be SPELLED, applied where it had not been.
+    [§6.8; decision 276 as amended; review cycle 1: acc-04; review cycle 2: acc-c2-02]
+    """
+    css = _stylesheet(DESIGN)
+    assert ":root" not in _design_css_accent_sites(css), (
+        "a token definition is not a spend: naming the colour is this file's job, and the M0 guard "
+        "test_the_ember_accent_is_not_reused_as_a_neutral is the half that reads the names"
+    )
+    widened = _design_css_accent_sites(css + "\n.badge { background: var(--ember); }\n")
+    assert ".badge" in widened, "a new global spend in design.css is exactly what this must see"
+
+    for spelling in ("#c8613a", "#C8613A", "rgb(200, 97, 58)", "var(--ember)"):
+        minted = css.replace("--ember: #c8613a;", f"--ember: #c8613a;\n  --badge-bg: {spelling};")
+        assert "--badge-bg" in _design_css_accent_names(minted), (
+            f"a token minted as `{spelling}` is the accent under a second name, which is the one "
+            "shape neither reader was looking at: a spend reader skips it because it is a name, "
+            "and a name reader that enumerates spellings is one the next spelling walks past"
+        )
+    for derivative in ("rgba(200, 97, 58, 0.1)", "rgba(200, 97, 58, 0.35)"):
+        minted = css.replace("--ember: #c8613a;", f"--ember: #c8613a;\n  --tint: {derivative};")
+        assert "--tint" not in _design_css_accent_names(minted), (
+            "the accent at an alpha is the accent QUOTED rather than spent -- --ember-wash and "
+            "--ember-edge ARE that triple -- and a reader that called the quietest use of this "
+            "colour its loudest would retire the two derivatives §6.8's own ramp is built from"
+        )
+
+
+def test_the_app_has_one_focus_ring_rule():
+    """Proposals 127 and 131: dismissal and focus are the same clause of baseline hygiene.
+
+    A keyboard needs to know where it is, and the prototype answered that question six times --
+    six components with a ring of their own, six widths, six colours, six different ideas of
+    whether a tap draws one. §6.8 answers it once, the way it answers the card's box model once,
+    and the answer lives in design.css: `:focus-visible`, a 2px ember outline, offset by 2.
+
+    So this reads two things. Nothing may suppress the ring -- `outline: none` on a focus rule is
+    the commonest single way an app loses its keyboard, and it is invisible to every other test
+    here because the app goes on working perfectly for a pointer. And no component may draw a
+    second one, unless it needs something the global rule cannot express: ShelfRow's chevron is
+    `opacity: 0` until its row is hovered, so it has to become visible before a ring around it
+    means anything, and that is the shape of a real exception. A different width or a different
+    colour is not -- which this now ASSERTS rather than only saying. The licence was read off the
+    selector alone, so the one exception in the tree quietly carried a 1px ring under a rule that
+    says 2px, and any future value at that selector would have passed too.
+
+    Which bucket a site lands in is `_rings_and_removals`' answer rather than this body's, because
+    the answer turns on the property and the body only had the value: it read a shadow ring's first
+    offset as `outline: 0` and reported a second ring as a missing one.
+    [§6.8; proposals 127, 131; M4.15 review cycle 1: m415-rev1-css-06; review cycle 2: ring-c2-01;
+    row `platform-menus-and-overlays-dismiss`]
+    """
+    declared = {site: value for site, value, _ in _ring_sites("lib/design.css", _stylesheet(DESIGN))}
+    global_ring = declared.get(GLOBAL_RING)
+    assert global_ring and "var(--ember)" in global_ring, (
+        f"design.css declares no global `:focus-visible` outline (found: {global_ring}), so every "
+        "component that stopped drawing its own now has no ring at all"
+    )
+
+    sites = []
+    for path in sorted(_frontend_sources()):
+        if path.suffix not in {".svelte", ".css"}:
+            continue
+        sites += _ring_sites(path.relative_to(FRONTEND).as_posix(), _stylesheet(path))
+    rings, suppressed = _rings_and_removals(sites)
+
+    assert not suppressed, (
+        "these take the focus ring away, and a control with no ring is a control a keyboard "
+        f"cannot find: {suppressed}. §6.8's ring is `:focus-visible`, so it is already not drawn "
+        "on a tap -- which is the only reason anyone has ever had for removing one."
+    )
+    competing, redrawn = _ring_offences(rings, global_ring)
+    assert not competing, (
+        "the app has one focus ring and it is declared in frontend/src/lib/design.css; these "
+        f"declare a second: {competing}\n\nPut the change there if the whole app should have it, "
+        "or add the selector to FOCUS_RING_EXCEPTIONS with the one line saying what the global "
+        "rule cannot do for that control."
+    )
+    assert not redrawn, (
+        "these are licensed in FOCUS_RING_EXCEPTIONS and draw a DIFFERENT ring, which is the one "
+        f"thing the licence does not buy: {redrawn}\n\nAn exception exists for the property "
+        "design.css cannot reach -- ShelfRow's `opacity: 1` on a chevron that is invisible until "
+        "its row is hovered. The ring beside it restates the app's one ring; a second width or a "
+        "second colour is a second answer to a question §6.8 answers once."
+    )
+    assert "outline-offset" in _css_rule(_stylesheet(DESIGN), ":focus-visible"), (
+        "the global ring has no outline-offset: flush against a card's own border an outline "
+        "reads as a border colour change rather than as focus"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        # The shapes the eight retired sites actually had.
+        (
+            "a status badge",
+            "<style>.badge { background: var(--ember); color: var(--ember-ink); }</style>",
+            ["x.svelte: .badge"],
+        ),
+        (
+            "a progress fill",
+            "<style>.fill { background: var(--ember); }</style>",
+            ["x.svelte: .fill"],
+        ),
+        (
+            "the raw hex, which no token audit would see",
+            "<style>.code { color: #c8613a; }</style>",
+            ["x.svelte: .code"],
+        ),
+        (
+            "inside a media query, where the rule is still a rule",
+            "<style>@media (pointer: coarse) { .tick.now { background: var(--ember); } }</style>",
+            ["x.svelte: .tick.now"],
+        ),
+        (
+            "one selector of a group, not the group",
+            "<style>.a:hover,\n  .b:focus-visible { border-color: var(--ember); }</style>",
+            ["x.svelte: .a:hover", "x.svelte: .b:focus-visible"],
+        ),
+        # The spellings that are the same token and the same colour, written differently.
+        (
+            "the token with a fallback, where the closing paren is not where it was",
+            "<style>.chip { color: var(--ember, #ffffff); }</style>",
+            ["x.svelte: .chip"],
+        ),
+        (
+            "the token with whitespace inside its own parens",
+            "<style>.chip { border-color: var( --ember ); }</style>",
+            ["x.svelte: .chip"],
+        ),
+        (
+            "the colour as a triple, which is one keystroke pattern from the hex",
+            "<style>.badge { background: rgb(200, 97, 58); }</style>",
+            ["x.svelte: .badge"],
+        ),
+        (
+            "the triple at full strength, with its alpha spelled out",
+            "<style>.badge { background: rgba(200, 97, 58, 1); }</style>",
+            ["x.svelte: .badge"],
+        ),
+        # The spellings that are not a style block at all. The retired fills were unconditional
+        # backgrounds, which is exactly what a style attribute can express -- and four of the
+        # files the sweep touched already write colour in the markup, so this is the idiom a
+        # returning spend would reach for rather than an exotic one.
+        (
+            "the same fill, moved into a style attribute",
+            '<span class="badge" style="background: var(--ember)">cold</span>',
+            ['x.svelte: <span class="badge">'],
+        ),
+        (
+            "a style: directive, which is how this tree writes colour in markup",
+            "<span class=\"avatar\" style:background={u.colour ?? 'var(--ember)'}></span>",
+            ['x.svelte: <span class="avatar">'],
+        ),
+        (
+            "the raw hex in the markup, where no token audit and no style scan would see it",
+            '<div style="border-color: #c8613a"></div>',
+            ["x.svelte: <div>"],
+        ),
+        # The four spellings a `[^<>"]` attribute run walked past, which are not exotic: every one
+        # of them is an operator inside a Svelte expression, and the first two are how a retired
+        # status fill comes back. The `<` case is the worst of them -- the old run could give back
+        # no `>`, so the element was not truncated but DROPPED.
+        (
+            "an arrow ahead of the spend, which ends a non-brace-aware attribute run",
+            "<button class=\"cta\" style:background={() => on ? 'var(--ember)' : 'var(--line)'}>x"
+            "</button>",
+            ['x.svelte: <button class="cta">'],
+        ),
+        (
+            "the retired cold badge, returning behind a greater-than",
+            "<span class=\"cold\" style:background={n > 3 ? 'var(--ember)' : 'var(--status)'}>"
+            "</span>",
+            ['x.svelte: <span class="cold">'],
+        ),
+        (
+            "the same comparison the other way round, which dropped the element entirely",
+            "<span class=\"cold\" style:background={n < 3 ? 'var(--ember)' : 'var(--status)'}>"
+            "</span>",
+            ['x.svelte: <span class="cold">'],
+        ),
+        (
+            "a single-quoted class, which named the site `<span>` and merged it with every other",
+            "<span class='badge' style:background={'var(--ember)'}></span>",
+            ['x.svelte: <span class="badge">'],
+        ),
+        # The two shapes that look like spends and are not: the derivatives, and the binding.
+        (
+            "the accent quoted rather than spent",
+            "<style>.err { color: var(--ember-lift); background: var(--ember-wash); }</style>",
+            [],
+        ),
+        # Not a shape that looks like a spend and is not: the same six hex digits under a second
+        # name, which is the one legal spelling of #c8613a this tree still had. The spend is
+        # REPORTED and argued on `FACET_ACCENT_SITES` -- a facet stripe is not a selection, so the
+        # licence has to say facet rather than borrow the allowlist's sentence.
+        (
+            "facet-mood, which is #c8613a by §6.4's binding, spent on something that is no facet",
+            "<style>.dot { background: var(--facet-mood); }</style>",
+            ["x.svelte: .dot"],
+        ),
+        (
+            "the accent quoted rather than spent, in the markup too",
+            '<p style="border-color: var(--ember-edge)">x</p>',
+            [],
+        ),
+        (
+            "--ember-wash written out as a triple is still the derivative, not the accent",
+            "<style>.callout { background: rgba(200, 97, 58, 0.1); }</style>",
+            [],
+        ),
+        (
+            "markup that has been commented out is not markup",
+            '<!-- <span style="background: var(--ember)"></span> -->',
+            [],
+        ),
+        # The third place a component writes colour, which is the one the retired sites' own idiom
+        # points at: `style:background={expr}` carries an EXPRESSION, and an expression holds no
+        # literal for a colour pattern to match. The spend is one scope away, in the script block
+        # this guard's markup reader strips.
+        (
+            "the fill bound to a constant in the component's own script",
+            "<script>const FILL = 'var(--ember)';</script>\n"
+            '<span class="badge" style:background={FILL}></span>',
+            ["x.svelte: FILL"],
+        ),
+        (
+            "a comment naming the colour is a comment",
+            "<script>// the one accent is #c8613a, and nothing here spends it\n</script>",
+            [],
+        ),
+    ],
+)
+def test_the_accent_guard_sees_each_way_a_retired_site_would_come_back(name, source, expected):
+    """The guard above passes on a swept tree, so it is shown refusing each shape that was in it
+    before the sweep -- and passing the two that look like spends and are not."""
+    assert _accent_sites("x.svelte", source) == expected, name
+
+
+def test_no_style_block_hides_a_brace_in_a_string():
+    """`_rules` reads CSS with a regex, and this is the shape that regex cannot survive.
+
+    Held here rather than repaired there, because the repair is a real parser and the exposure is
+    one declaration. `content` is the only property in CSS whose value is routinely a string, and a
+    brace in one truncates or shatters the rule for every reader built on `_rules`: the component
+    accent sweep, both design.css readers, `_ring_sites`, `_coarse_declarations` and the padding
+    reader. `.a::after { content: "}"; background: var(--ember); }` reports no accent spend at all
+    -- a decoration nobody would look at twice, deleting the guard that rations §6.8's one colour.
+
+    So the blind spot is kept out of reach instead of taught to the parser, which is the same trade
+    `_accent_in_code` makes for a `//` inside a string and the same shape as the `button
+    { min-height: auto }` hatch this file already forbids by name. It passes today -- the tree
+    holds no `content:` declaration at all, only `justify-content` and `align-content` -- and
+    reddens on the first one, at which point a reader has this docstring instead of six guards
+    silently agreeing about a rule that is not there. [review cycle 3: M415-C3-GUARD-04]
+    """
+    hiding = []
+    for path in sorted(FRONTEND.rglob("*")):
+        if not path.is_file() or path.suffix not in {".svelte", ".css"}:
+            continue
+        styles = _stylesheet(path) if path.suffix == ".css" else _style_blocks(_src(path))
+        # The value is read as declaration text OR a quoted string, and not as `[^;}]`, because
+        # `[^;}]` stops at the brace this is looking for: on `content: "}"` it captures the opening
+        # quote alone and the guard reports nothing. Reading the string as a unit is the same step
+        # `_rules` does not take and is exactly why this test exists.
+        for value in re.findall(
+            r"(?<![a-z-])content\s*:\s*((?:[^;}'\"]|'[^']*'|\"[^\"]*\")*)", styles
+        ):
+            if "{" in value or "}" in value:
+                hiding.append(f"{path.relative_to(FRONTEND).as_posix()}: content: {value.strip()}")
+    assert not hiding, (
+        "a brace inside a CSS string is invisible to `_rules`, which reads braces with a regex:\n  "
+        + "\n  ".join(hiding)
+        + "\n\nEverything built on that reader loses the rest of this rule -- the accent sweep, "
+        "both design.css readers, the ring sweep, the coarse-pointer reader and the card-padding "
+        "reader. Draw the glyph some other way, or teach `_rules` to match braces before you write "
+        "it: a decoration is not worth six guards going quiet on the rule it sits in."
+    )
+
+
+def test_the_accent_sweep_reads_the_modules_beside_the_components(tmp_path):
+    """A spend routed through a JS identifier, which is the one route out of a colour scan.
+
+    `_accent_sites` reads two of the three places this app writes colour, and the third is where
+    `style:background={expr}` gets its value from: an expression carries no literal, so the spend
+    is one scope away in a script block the markup reader strips, or one file away in a module the
+    walk never opened. `export const ACCENT = 'var(--ember)'` in `lib/theme.js`, bound on a status
+    badge, passes every accent guard in this file -- the token list is untouched, design.css is
+    untouched, and the component's own style block and markup hold no colour.
+
+    Held open rather than papered over, in the same shape `_frontend_sources` already keeps: a
+    colocated `*.test.js` names colours to ASSERT about them and is read by vitest, not by a
+    palette audit. What a widened scan cannot see stays unseeable -- a colour computed at runtime,
+    or one that arrives from the database the way `AccountChip`'s avatar does -- which is decision
+    276's accepted boundary and not this one.
+    [§6.8; decision 276 as amended; review cycle 2: M415-C2-CSS-07]
+    """
+    (tmp_path / "Badge.svelte").write_text(
+        "<script>const FILL = '#c8613a';</script>\n"
+        '<span class="badge" style:background={FILL}></span>\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "theme.js").write_text("export const ACCENT = 'var(--ember)';\n", encoding="utf-8")
+    (tmp_path / "theme.test.js").write_text(
+        "it('is the accent', () => expect(ACCENT).toBe('var(--ember)'));\n", encoding="utf-8"
+    )
+    (tmp_path / "quiet.js").write_text("export const TINT = 'var(--ember-wash)';\n", encoding="utf-8")
+
+    assert _live_accent_sites(tmp_path) == ["Badge.svelte: FILL", "theme.js: ACCENT"], (
+        "the sweep reads a component's script block and the modules beside it, skips the vitest "
+        "file that names the colour in order to assert about it, and leaves the derivative alone"
+    )
+
+
+def test_a_component_licence_outliving_its_rule_is_an_offence(monkeypatch):
+    """The direction the component allowlist was held in only one of.
+
+    Its design.css sibling argues the rule generally -- "a listed site that is no longer there is a
+    licence for a rule that has moved, which is how an allowlist rots into a list of things
+    somebody once wrote" -- and then holds five entries in one file to it, while the sixteen over
+    eight files, three times the size and the ones a component rewrite actually moves, were read in
+    one direction only. The keys are `file: selector`, so a stale licence is inherited by the same
+    file writing that selector again, which is exactly what a rewrite of that component does.
+    [§6.8; decision 276 as amended; review cycle 1: acc-04; review cycle 2: acc-c2-04]
+    """
+    monkeypatch.setitem(
+        ACCENT_ALLOWLIST,
+        "lib/components/ShelfRow.svelte: .nudge:hover",
+        "a selector that file does not carry: the licence has outlived the rule it licensed",
+    )
+    with pytest.raises(AssertionError, match="no longer spend it"):
+        test_the_ember_accent_is_spent_only_on_selection_and_primary_actions()
+
+
+@pytest.mark.parametrize(
+    ("name", "styles", "expected"),
+    [
+        (
+            "the ring taken away",
+            "button:focus { outline: none; }",
+            [("x.css: button:focus", "none", "outline")],
+        ),
+        (
+            "the ring taken away by a longhand",
+            ".chip:focus-visible { outline-style: none; }",
+            [("x.css: .chip:focus-visible", "none", "outline")],
+        ),
+        (
+            "a second ring, in a component",
+            ".tile:focus-visible { outline: 1px dashed #fff; }",
+            [("x.css: .tile:focus-visible", "1px dashed #fff", "outline")],
+        ),
+        (
+            "an offset is not a ring",
+            ":focus-visible { outline-offset: 4px; }",
+            [],
+        ),
+        (
+            "a hover/focus pair that moves a border is not a ring",
+            ".side:hover, .side:focus-visible { border-color: var(--ember); }",
+            [],
+        ),
+        (
+            "a ring drawn with a shadow, which follows a radius an outline did not",
+            ".tile:focus-visible { box-shadow: 0 0 0 2px var(--ember); }",
+            [("x.css: .tile:focus-visible", "0 0 0 2px var(--ember)", "box-shadow")],
+        ),
+        (
+            "a shadow that is a shadow: no focus in the selector, so no ring",
+            ".menu { box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); }",
+            [],
+        ),
+        (
+            "a shadow taken off a focus rule is a shadow removed, not a ring removed",
+            ".chip:focus-visible { box-shadow: none; }",
+            [],
+        ),
+    ],
+)
+def test_the_focus_ring_guard_tells_a_ring_from_a_border(name, styles, expected):
+    """Every shape this guard has to tell apart: the two ways a ring is taken away, a second ring,
+    and the two that are neither -- the offset the global rule itself carries, and the four
+    components that answer `:focus-visible` with the same border their `:hover` draws.
+
+    Each site carries the property it was written with, which is load-bearing rather than
+    descriptive: `outline: 0` is the ring taken away and `0 0 0 2px ...` is a shadow's first
+    offset, so nothing downstream can tell a removal from a ring without it.
+    [review cycle 2: ring-c2-01]"""
+    assert _ring_sites("x.css", styles) == expected, name
+
+
+def test_a_licensed_exception_may_restate_the_ring_and_not_redefine_it():
+    """The case the licence could not refuse, which is why it shipped.
+
+    `FOCUS_RING_EXCEPTIONS` is keyed by site, and the filter it feeds read the site and discarded
+    the value -- so the one licensed selector in the tree carried `1px solid var(--ember)` while
+    the rule beside it said 2px, and a later edit could have put any width and any colour there
+    under the same licence. The licence is for a PROPERTY design.css cannot reach from outside a
+    component, never for a different answer to the question §6.8 answers once.
+    [proposals 127, 131; M4.15 review cycle 1: m415-rev1-css-06]
+    """
+    one_ring = "2px solid var(--ember)"
+    licensed = next(iter(FOCUS_RING_EXCEPTIONS))
+
+    assert _ring_offences([f"{GLOBAL_RING} -> {one_ring}"], one_ring) == ([], [])
+    assert _ring_offences([f"{licensed} -> {one_ring}"], one_ring) == ([], [])
+    # Whitespace is not a redefinition; a width is, and so is a colour.
+    assert _ring_offences([f"{licensed} -> 2px  solid   var(--ember)"], one_ring) == ([], [])
+
+    _, redrawn = _ring_offences([f"{licensed} -> 1px solid var(--ember)"], one_ring)
+    assert len(redrawn) == 1 and "1px solid var(--ember)" in redrawn[0]
+    _, recoloured = _ring_offences([f"{licensed} -> 2px solid #ffffff"], one_ring)
+    assert len(recoloured) == 1
+
+    competing, redrawn = _ring_offences(["lib/components/Other.svelte: .x:focus-visible -> "
+                                         + one_ring], one_ring)
+    assert competing and not redrawn, (
+        "an unlicensed site drawing the SAME ring is still a second rule: it survives a change to "
+        "design.css that the global rule's own consumers do not"
+    )
+
+
+def test_a_shadow_ring_is_a_second_ring_and_not_the_ring_taken_away():
+    """The bucketing, which was the one piece of ring logic living in a test body.
+
+    `_RING_SUPPRESSED` reads an OUTLINE value, and `_SHADOW_NONE` exists four lines under it saying
+    in as many words why it must not be pointed at a shadow: every shadow ring in the idiom begins
+    with an offset of `0`, so the removal pattern reads `0 0 0 2px var(--ember)` as the ring being
+    taken away. The guard then applied it to every value `_ring_sites` returned, shadows included
+    -- so the commonest modern way to DRAW a second ring was reported under the message for losing
+    one, and the reader was sent to undo a removal nobody had made. Nothing wrong could ship on it,
+    because both buckets are asserted and both are red; what shipped was the wrong sentence, and in
+    a file whose whole output is sentences that is the product.
+
+    Routed by PROPERTY, because no value tells the two apart: a leading `0` is a suppression on an
+    outline and an offset on a shadow.
+
+    What the licence still refuses is asserted here rather than left implied. `_ring_offences`
+    holds an exception to the global ring's VALUE and the global ring is an outline, so a licensed
+    shadow ring lands in `redrawn` even with the bucketing repaired -- which is the right answer
+    and not a second defect: a radius-following ring is a second answer to the question §6.8
+    answers once, and the licence buys the property design.css cannot reach from outside a
+    component, never a different ring. [§6.8; proposals 127, 131; review cycle 2: ring-c2-01]
+    """
+    shadow = _ring_sites("x.svelte", ".t:focus-visible { box-shadow: 0 0 0 2px var(--ember); }")
+    assert shadow == [("x.svelte: .t:focus-visible", "0 0 0 2px var(--ember)", "box-shadow")]
+
+    rings, removed = _rings_and_removals(shadow)
+    assert removed == [], (
+        "a shadow ring begins with an offset of 0 and was read as `outline: 0`: the site that DREW "
+        "a ring is reported under the message for the one thing it did not do"
+    )
+    assert rings == ["x.svelte: .t:focus-visible -> 0 0 0 2px var(--ember)"]
+
+    # Zero of any unit, because the unit is not the rule and `\b` could not see past one: `0px`
+    # is the commonest way after `none` to kill a ring and it was bucketed as a second ring being
+    # DRAWN. `0 solid red` is the same zero with the shorthand's other two parts after it.
+    for taken in ("none", "0", "0px", "0em", "0rem", "0vh", "0%", "0.0px", "0 solid red"):
+        sites = _ring_sites("x.css", f".chip:focus-visible {{ outline: {taken}; }}")
+        assert _rings_and_removals(sites)[1] == [f"x.css: .chip:focus-visible -> {taken}"], (
+            f"`outline: {taken}` takes the ring away, and a control with no ring is a control a "
+            "keyboard cannot find -- reported as a second ring, the reader is sent to move a rule "
+            "into design.css instead of to put the ring back"
+        )
+    # And the converse, which the same boundary got wrong in the other direction: `.` is not a
+    # word character, so a sub-pixel hairline satisfied `^0\b` and a ring that DRAWS was reported
+    # under the message for one that was removed.
+    for drawn in ("0.5px solid var(--ember)", "2px solid var(--ember)"):
+        sites = _ring_sites("x.css", f".chip:focus-visible {{ outline: {drawn}; }}")
+        assert _rings_and_removals(sites)[0] == [f"x.css: .chip:focus-visible -> {drawn}"], (
+            f"`outline: {drawn}` draws a ring, however thin, and was read as one being taken away"
+        )
+
+    licensed = next(iter(FOCUS_RING_EXCEPTIONS))
+    _, redrawn = _ring_offences([f"{licensed} -> 0 0 0 2px var(--ember)"], "2px solid var(--ember)")
+    assert len(redrawn) == 1, (
+        "a licensed site may restate the one ring and may not draw a rounder one: the licence is "
+        "for `opacity: 1` on an invisible chevron, not for a second answer to §6.8's question"
+    )
+
+
+# --- M4.15 review cycle 1: the coarse-pointer floor, where design.css cannot reach ------------
+
+SVELTE_CONFIG = REPO / "frontend" / "svelte.config.js"
+COARSE = "@media (pointer: coarse)"
+TOUCH = "var(--touch)"
+
+
+def _coarse_blocks(styles: str) -> str:
+    """Everything inside a stylesheet's `@media (pointer: coarse)` blocks, concatenated.
+
+    Brace-matched rather than regexed to the first `}`, because these blocks hold whole rules and
+    a lazy match would return the first declaration list and call the rest of the block absent.
+    """
+    out = []
+    for opener in re.finditer(re.escape(COARSE) + r"\s*\{", styles):
+        depth, cursor = 1, opener.end()
+        while cursor < len(styles) and depth:
+            if styles[cursor] == "{":
+                depth += 1
+            elif styles[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        out.append(styles[opener.end():cursor - 1])
+    return "\n".join(out)
+
+
+def _coarse_declarations(path: Path, selector: str) -> dict[str, str]:
+    """What a component gives one selector inside its coarse-pointer blocks.
+
+    Through `_rules`, not `_css_rule`, because these sites are written as comma-separated groups:
+    `.empty a` shares a rule with six other selectors in Rank's sheet, and a guard that only
+    matched a selector standing alone would report the repaired rule as missing.
+    """
+    found: dict[str, str] = {}
+    for candidate, body in _rules(_coarse_blocks(_stylesheet(path))):
+        if candidate == selector:
+            found.update(_declarations(body))
+    return found
+
+
+# Every interactive control this app draws that `design.css`'s coarse block cannot reach, and the
+# axis each one was short on. That block names `.pill, .btn-primary, .btn-ghost, button, select,
+# [role='button']` and raises `min-height` only -- so a bare `<a>` is outside the selector list
+# entirely (deliberately: adding one would grow every inline prose link), and every `button` in
+# the app clears a height-only assertion by construction while its narrow axis goes unmeasured.
+# None of these is an inline prose link: two are standalone flex-item CTAs, four are chrome, two
+# are the escape hatch on the §4 loop's own card and one is a bordered, padded, radiused chip --
+# which is what separates every one of them from `AccountChip.svelte`'s "Set yours on the account
+# page." and keeps the design.css refusal intact.
+#
+# Review cycle 3 adds the last three, and they are the two gaps stated above meeting the two
+# surfaces the phone project actually opens. `.text` is a `button`, so the coarse block reaches it
+# on the axis it sets and not on the one that was short; `.trailer` is a bare `<a>`, so the block
+# never reaches it at all. Neither was held anywhere else: `rate-skip`, `rate-battle-skip` and the
+# trailer link appear in no e2e assertion, and `11-rate.spec.js` is not in the phone project's
+# `testMatch` at all -- though `02-shell` and `14-tonight` both ARE, and both open /rate on an
+# iPhone 13, so the 25 px control is painted on the primary form factor during a phone run and
+# measured by nothing. [review cycle 3: M415-C3-CSS-01, M415-C3-COMP-01]
+COARSE_FLOOR_SITES = (
+    (
+        "frontend/src/routes/+layout.svelte",
+        "a.nobundle",
+        "min-height",
+        "the header's no-bundle badge is an admin's door out of a bundle-less app, on the screen "
+        "a brand-new household spends its first session on, and it measured 137 by 25",
+    ),
+    (
+        "frontend/src/lib/components/NavRail.svelte",
+        "a",
+        "min-height",
+        "the six surface links are this app's whole switcher and the one bare `<a>` in its chrome; "
+        "the floor was keyed on `max-width: 720px` instead of on the pointer, so on every iPad in "
+        "either orientation -- and on an iPhone 13 turned sideways at 844 -- they measured 40 tall "
+        "while every button, pill and input beside them was 48",
+    ),
+    (
+        "frontend/src/routes/rank/+page.svelte",
+        ".empty a",
+        "min-height",
+        "Rank's empty-state CTA is a 48px button in the `no-match` branch and a 17px anchor in "
+        "the `fitting`/`unrated`/`thin` ones, so the floor held or not depending on which "
+        "sentence emptyState() returned",
+    ),
+    (
+        "frontend/src/lib/components/ModelRail.svelte",
+        ".chip",
+        "min-width",
+        "the rail's kind filters are three and four characters of a 10px mono face -- 48 tall and "
+        "36 wide, on the surface §6.7 calls the primary M2 debugging instrument",
+    ),
+    (
+        "frontend/src/lib/components/ModelRail.svelte",
+        ".close",
+        "min-width",
+        "the rail's exit measured 48 by 32",
+    ),
+    (
+        "frontend/src/lib/components/TitleDetail.svelte",
+        ".close",
+        "min-width",
+        "the title panel's exit measured 48 by 32, and it is the only way out of a panel that "
+        "covers a phone",
+    ),
+    (
+        "frontend/src/lib/components/RateSweepCard.svelte",
+        ".text",
+        "min-width",
+        "proposal 38's `skip` is four characters of an 11.5 px mono face with zero horizontal "
+        "padding, so the sweep card's escape hatch measured 48 tall and 25 wide -- 53% of the "
+        "floor on its narrow axis, with `not seen` 18 px away and that one writes a §4.2 "
+        "observation",
+    ),
+    (
+        "frontend/src/lib/components/RateBattleCard.svelte",
+        ".text",
+        "min-width",
+        "the same four characters and the same rule on the duel card, where the strip they sit "
+        "in wraps, so the two halves of §4's most repeated interaction fail the floor together",
+    ),
+    (
+        "frontend/src/lib/components/TitleDetail.svelte",
+        ".trailer",
+        "min-height",
+        "§6.0's trailer affordance is a bordered inline-flex chip of an 11 px mono face -- 183 "
+        "wide and 26 tall, inside the overlay whose only other exit this milestone repaired, and "
+        "a bare `<a>` so design.css's list cannot reach it on either axis",
+    ),
+)
+
+
+def test_every_control_the_coarse_selector_list_misses_declares_the_floor_itself():
+    """§6 preamble: "48 px targets", on both axes and for every control -- not only the ones a
+    selector list happens to name.
+
+    `design.css`'s coarse block raises `min-height` on six primitives. That leaves two gaps and
+    both of them shipped: a bare `<a>` matches none of the six, and nothing in that block ever
+    sets a width, so every control it does reach clears a height-only assertion by construction.
+    This app's real failures were all on the axis nobody measured -- two overlay exits at 48 by
+    32, a rail filter at 48 by 36, a header badge 25 tall and a Rank CTA 17.
+
+    AND THE DECLARATION HAS TO LIVE WHERE THE RULE IT COMPLETES LIVES. `min-width: var(--touch)`
+    written outside a coarse block makes the control 48 wide and 32 tall on a mouse -- the same
+    lopsidedness rotated ninety degrees -- and in `TitleDetail` it also pushed the hit area 12px
+    over the end of the heading beside it. §6's preamble writes the floor for fingers; a pointer
+    has no such threshold, and a rule that fires for both is not that rule.
+
+    The e2e sweep measures what it can reach on the phone project, and these are the ones it
+    cannot: the badge renders only where `/config` says there is no bundle (phase 2 asserts there
+    is one), Rank's CTA needs a member below the tier threshold, and the rail's filter row is
+    `{#if kinds.length > 1}`. A control a sweep steps over is a control a sweep cannot hold, which
+    is the argument decision 280 already makes for the wizard's hairline.
+    [§6 preamble; row `platform-every-touch-target-meets-the-token`; M4.15 review cycle 1]
+    """
+    missing = []
+    for where, selector, prop, why in COARSE_FLOOR_SITES:
+        declared = _coarse_declarations(REPO / where, selector).get(prop)
+        if declared != TOUCH:
+            missing.append(f"{where}: {COARSE} {{ {selector} {{ {prop}: {declared} }} }} -- {why}")
+    assert not missing, (
+        "these controls take no touch floor on the pointer the floor is written for:\n  "
+        + "\n  ".join(missing)
+        + f"\n\nDeclare the missing axis as `{TOUCH}` in the component, inside its own `{COARSE}` "
+        "block. Not in design.css's coarse list: a bare `a[href]` there would grow every inline "
+        "prose link, and a blanket min-width would reach every narrow control in the app at once."
+    )
+
+
+# The other coarse rule with the same reach problem, and the sites that answer for themselves.
+#
+# `design.css`'s coarse block writes `.data { font-size: 11px }` and argues for it in a sentence -
+# "10 px of a narrow mono face on a phone is under the floor for reading a digit correctly, and a
+# misread digit is worse than no digit". A bare `.data` is (0,1,0) and a media query adds no
+# specificity, while Svelte compiles every component rule to `.sel.svelte-hash` at (0,2,0) - so
+# any scoped rule that sizes a `.data` element defeats it, silently and everywhere at once. The
+# sibling rule fourteen lines above it (16 px against Safari's focus zoom) answers the same trap
+# with per-component overrides AND a computed-size sweep on the phone; this one answers it here,
+# because a badge 2 px under the floor is a legibility cost and not a control a member is stranded
+# on.
+#
+# An entry is the OTHER answer to the same question, and it costs a sentence saying which: raising
+# the site in the file's own coarse block is the first. Two raise themselves and both are prose,
+# not overlays: /login's divider and the Users page's group heading. Five are named below, four of
+# them M4.9's corner overlays under proposal 29's geometry, and the fifth a `.data` Tonight
+# re-declares at 12 px on the line after - none of them prose, none of them a number a household
+# has to read off a scrim to act.
+#
+# Both numerals are re-derived by `test_the_data_voice_counts_this_record_publishes_are_the_ones_
+# it_measures`, because the sentence they replace read "Both entries here" over a list of five and
+# design.css carried the identical stale numeral one file over. A reader adding a sixth reads a
+# numeral as the composition, and decision 184's rule -- the run that produced it, or nothing --
+# is a rule about counts as much as about milliseconds. [decision 184; review cycle 3:
+# M415-C3-CSS-03]
+DATA_VOICE_FLOOR_PX = 11.0
+_FONT_SIZE = re.compile(r"(?<![a-z-])font-size\s*:\s*([0-9.]+)px")
+DATA_VOICE_EXEMPT = {
+    ("frontend/src/lib/components/PosterCard.svelte", ".badge"): (
+        "proposal 29's overlay geometry: a 9px chip in the corner of a 2:3 poster, reading `new`, "
+        "whose sentence the surface carries in full (decision 278) - the chip is a marker, not the "
+        "digit the floor is written for"
+    ),
+    ("frontend/src/lib/components/PosterCard.svelte", ".seen"): (
+        "the same overlay, the same word-length, the opposite corner"
+    ),
+    ("frontend/src/lib/components/ShelfRow.svelte", ".rank"): (
+        "M4.9 sized the four corner overlays together under proposal 29 (`new`/`seen` on top, rank "
+        "and tier below) and raising one of them alone breaks the set; the rank is also the one "
+        "number on the card that is legible from the row's ORDER without reading it"
+    ),
+    ("frontend/src/lib/components/ShelfRow.svelte", ".tierbadge"): (
+        "the fourth corner of that same set"
+    ),
+    ("frontend/src/routes/tonight/+page.svelte", ".label"): (
+        "not defeated at all: this file re-declares `.data` at 12px on the line AFTER it, and the "
+        "two tie on specificity, so every `class=\"data label\"` element on Tonight computes 12 - "
+        "listed so the scan's own answer is on the page rather than in a reader's head"
+    ),
+}
+
+
+def test_the_data_voices_coarse_floor_reaches_every_element_it_claims():
+    """§6 preamble, on the rule design.css states for the data voice and cannot enforce alone.
+
+    Specificity, not intent, decides this - the same sentence the 16 px rule above it already
+    carries, and the same trap. What is different is the answer: the 16 px rule gets a computed-
+    size sweep on the phone project because focus zoom strands a member on a magnified page with
+    no gesture to undo it, and a `.data` size is a legibility cost with no such cliff. So it is
+    held at the source, where every file is reachable including the ones no browser test loads.
+
+    The reach test is the LAST compound of the selector, because `.sub h3` styles an `h3` inside a
+    `.sub` and a whole-selector match would call that rule unreachable. A file that raises the
+    same selector inside its own `@media (pointer: coarse)` block has answered; anything else has
+    to be named above, with the reason it is the exception. [§6 preamble; decision 275;
+    row `platform-quiet-reasons-are-prose-and-legible`; M4.15 review cycle 2: M415-C2-CSS-04]
+    """
+    unheld = []
+    for path in sorted(FRONTEND.rglob("*.svelte")):
+        source = _src(path)
+        reachable = _selectors_that_style(source, "data")
+        if not reachable:
+            continue
+        reachable.add(".data")
+        where = path.relative_to(REPO).as_posix()
+        styles = _style_blocks(source)
+        raised = {
+            selector
+            for selector, body in _rules(_coarse_blocks(styles))
+            if (found := _FONT_SIZE.search(body))
+            and float(found.group(1)) >= DATA_VOICE_FLOOR_PX
+        }
+        for selector, body in _rules(styles):
+            if selector not in reachable and re.split(r"[\s>+~]+", selector)[-1] not in reachable:
+                continue
+            size = _FONT_SIZE.search(body)
+            if not size or float(size.group(1)) >= DATA_VOICE_FLOOR_PX:
+                continue
+            if selector in raised or (where, selector) in DATA_VOICE_EXEMPT:
+                continue
+            unheld.append(f"{where}: {selector} {{ font-size: {size.group(1)}px }}")
+    assert not unheld, (
+        "these rules outrank design.css's coarse `.data` floor and leave the element under it:\n  "
+        + "\n  ".join(unheld)
+        + f"\n\nRaise the selector to at least {DATA_VOICE_FLOOR_PX:.0f}px inside the file's own "
+        f"`{COARSE}` block, after the rule it overrides so source order decides the tie - or add "
+        "it to DATA_VOICE_EXEMPT with the reason it is one. The rule in design.css says a misread "
+        "digit is worse than no digit; a rule that cannot reach the digit does not say it."
+    )
+
+
+def test_the_data_voice_counts_this_record_publishes_are_the_ones_it_measures():
+    """Decision 184 applied to a count, which is a measurement with a smaller number in it.
+
+    The rule design.css states for the data voice is answered two ways -- a file raises the site in
+    its own coarse block, or the site is named as an exemption -- and both records describing the
+    split publish the size of each side as a word. The sentence that stood here opened "Both
+    entries here" over a list of FIVE, and the twin sentence in design.css had drifted identically
+    in the same cycle. That is the shape `test_every_contrast_figure_the_record_publishes_is_the
+    _one_it_measures` already refuses for a ratio: a figure that was true when it was written and
+    that nothing re-derives is a figure the record keeps publishing after it stops being true.
+
+    Two files and not four. `spec_coverage.toml` and the proposals register publish the same split
+    in a different form ("seven rules: two raised in place, four overlays, the seventh Tonight's
+    `.label`") and both were correct; what drifted is this sentence, in the two places that carry
+    it word for word, so this is what those two are held to.
+    [decision 184; decision 275; §6 preamble; review cycle 3: M415-C3-CSS-03]
+    """
+    raised, exempt = [], []
+    for path in sorted(FRONTEND.rglob("*.svelte")):
+        source = _src(path)
+        reachable = _selectors_that_style(source, "data")
+        if not reachable:
+            continue
+        reachable.add(".data")
+        where = path.relative_to(REPO).as_posix()
+        styles = _style_blocks(source)
+        answered = {
+            selector
+            for selector, body in _rules(_coarse_blocks(styles))
+            if (found := _FONT_SIZE.search(body))
+            and float(found.group(1)) >= DATA_VOICE_FLOOR_PX
+        }
+        for selector, body in _rules(styles):
+            if selector not in reachable and re.split(r"[\s>+~]+", selector)[-1] not in reachable:
+                continue
+            size = _FONT_SIZE.search(body)
+            if not size or float(size.group(1)) >= DATA_VOICE_FLOOR_PX:
+                continue
+            if selector in answered:
+                raised.append(f"{where}: {selector}")
+            elif (where, selector) in DATA_VOICE_EXEMPT:
+                exempt.append(f"{where}: {selector}")
+
+    # Each phrase carries enough of its own sentence to be the one being counted: a bare
+    # `are named` reads four unrelated sentences in this file, and a guard that greps a common
+    # phrase is a guard that reddens on prose it was never about.
+    words = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+    measured = {
+        r"raise themselves and both are prose": len(raised),
+        r"are named(?: below)?, four of them": len(exempt),
+    }
+    assert len(exempt) == len(DATA_VOICE_EXEMPT), (
+        f"DATA_VOICE_EXEMPT holds {len(DATA_VOICE_EXEMPT)} entries and {len(exempt)} of them are "
+        f"reached by the sweep: {sorted(set(DATA_VOICE_EXEMPT) - {tuple(e.split(': ')) for e in exempt})}"
+        ". An exemption nothing reaches is a licence for a rule that has moved."
+    )
+    wrong, missing = [], []
+    for path in (DESIGN, Path(__file__).resolve()):
+        where = path.relative_to(REPO).as_posix()
+        # Comment markers off and whitespace collapsed before the phrases are read, because both
+        # records carry these sentences wrapped inside a comment block and a count must not be
+        # able to leave this guard's reach by moving two words onto the next line. The opposite
+        # trade from `_PUBLISHED_RATIO`, which reads figures written one per line on purpose:
+        # there the line IS the form, here the sentence is, and a reflow is not an edit.
+        text = " ".join(re.sub(r"(?m)^[ \t]*#", " ", path.read_text(encoding="utf-8")).split())
+        for phrase, count in measured.items():
+            published = re.findall(rf"(\w+) {phrase}", text)
+            # Per FILE and not pooled, because the defect this exists for was one record drifting
+            # while its twin was right: a floor counting both together is discharged by the file
+            # that did not drift. And a numeral rephrased out of the form is a numeral nothing
+            # re-derives, which is the one way to satisfy a guard like this without obeying it --
+            # the stale sentence here opened "Both entries here" and carried neither phrase.
+            if not published:
+                missing.append(f"{where}: no sentence in the form `<count> {phrase}`")
+            wrong += [
+                f"{where}: publishes `{one}` where {words[count]} rules do"
+                for one in published
+                if one.lower() != words[count]
+            ]
+    assert not missing, (
+        "these records describe the data voice's two answers and no longer publish the size of "
+        "each side in the form this guard re-derives:\n  " + "\n  ".join(missing)
+        + "\n\nKeep the form, or take the sentence out of both files in the same change. A count "
+        "that reads as prose is the half of decision 184 a rephrase walks past."
+    )
+    assert not wrong, (
+        "the record publishes a count of these rules that is not the count it holds:\n  "
+        + "\n  ".join(wrong)
+        + "\n\nRestate it from the list. A reader adding a sixth exemption reads the numeral as "
+        "the composition, and the two sentences this guard reads are the argument for what each "
+        "side of the split is FOR -- one raises itself, the other is named with its reason."
+    )
+
+
+def test_the_title_panels_heading_clears_its_close_control():
+    """The other half of that repair, and the one no measurement of the BUTTON can see.
+
+    `.close` is absolutely positioned at `right: 16px` inside the panel's 20px padding, so on a
+    coarse pointer its box begins `--touch` in from the text edge. The heading beside it reserved
+    32px, which was right while the control was 32 wide and wrong the moment it was not: the last
+    characters of a long title sat under a transparent hit area, and a thumb aimed at them
+    dismissed the panel. Exit criterion 4 passes on that control the whole time, because it
+    measures the button and never what the button is standing on. [§6 preamble]
+    """
+    margin = _declarations(_css_rule(_stylesheet(TITLE_DETAIL), "h2")).get("margin", "")
+    parts = _shorthand_parts(margin)
+    assert len(parts) == 4 and parts[1] == TOUCH, (
+        f"the title panel's heading reserves `{margin}` on its right: the close control's box is "
+        f"{TOUCH} wide on a coarse pointer and starts at the panel's padding edge, so anything "
+        "narrower puts the end of a long title under a transparent hit area"
+    )
+
+
+def test_the_wizard_paints_its_steps_from_the_progress_ramp():
+    """§6.8, and design.css's own sentence about the eight fills the accent stopped playing:
+    "None of these is a new hue: a second accent would be the same violation with a different hex,
+    and a facet colour may not be borrowed either, because a facet colour is an identity that
+    means one vocabulary term on every surface it appears."
+
+    design.css mints `--progress-track / -fill / -now` for three named consumers -- "Rate's rail
+    fill, its block ticks, the first-boot wizard's steps" -- and the wizard was spending one of
+    the three and writing the other two out by hand: the track as the raw value behind its token,
+    and the recorded step as `#5fae7a`, which is `--facet-characters`. A household that has seen
+    the Map or a DNA chip has been taught that that green means one vocabulary term, and on the
+    first screen it was being used to mean "step done".
+
+    The ember scan cannot see this: it matches `var(--ember)` and `#c8613a` and nothing else, so a
+    component may take any OTHER token's colour raw and the build stays green. Widening it to the
+    eleven facet hexes is not this milestone's to do -- four further sites carry the same green as
+    an ok/success colour and one of them is the sibling lane's file (decision 270). What IS this
+    milestone's is the ramp it minted, held on the consumer design.css names.
+    [§6.8; decision 276; row `map-taste-admin-palette-facet-binding-and-accent`]
+    """
+    styles = _stylesheet(SETUP_PAGE)
+    ramp = {
+        ".progress button": ("background", "var(--progress-track)"),
+        ".progress button.done": ("background", "var(--progress-fill)"),
+        ".progress button.on:not(.done)": ("background", "var(--progress-now)"),
+    }
+    wrong = []
+    for selector, (prop, expected) in ramp.items():
+        declared = _declarations(_css_rule(styles, selector)).get(prop)
+        if declared != expected:
+            wrong.append(f"{selector} {{ {prop}: {declared} }} -- the ramp says {expected}")
+    assert not wrong, (
+        "the first-boot wizard's step indicator is one of the three consumers design.css names "
+        "for --progress-track / -fill / -now, and it paints itself from something else:\n  "
+        + "\n  ".join(wrong)
+        + "\n\nThe three states ARE the ramp, and its brightness carries the meaning the accent "
+        "used to. A raw hex here is either a second accent or a borrowed facet identity, and "
+        "design.css refuses both in as many words."
+    )
+
+
+BUNDLE_IMPORT = FRONTEND / "lib" / "components" / "BundleImport.svelte"
+PROGRESS_RAMP = ("var(--progress-track)", "var(--progress-fill)", "var(--progress-now)")
+
+
+def test_the_two_step_ramps_answer_in_one_register():
+    """One screen, two step strips, and for a milestone they were two colours.
+
+    `setup/+page.svelte:146` renders `<BundleImport>` on the wizard's last step, so a household's
+    first session shows both at once: the wizard's own hairline above, retired to --progress-now by
+    the test beside this one, and the swap strip below it saying the same thing -- how far a
+    sequence has got -- in var(--ember). Between them sits the `.btn-primary` whose fill IS the
+    accent, which is the whole of why §6.8 rations it: a selection next to four ember boxes is
+    no longer legible AS a selection.
+
+    The ember scan cannot catch this on its own, and that is the point of holding it here. The
+    swap strip was on ACCENT_ALLOWLIST, licensed as "the swap step the admin has reached, of four
+    -- the wizard's own selection", over markup that is four non-interactive spans lit cumulatively
+    by `phase`. A licence with a false reason reads exactly like a true one, so what a second guard
+    can add is not another look at the colour but the agreement: two strips, one question, one
+    register.
+
+    One token and not the ramp's three, because this strip does not tell a step behind you from
+    the one you are on -- `class:on` is cumulative and index-driven, and drawing that distinction
+    belongs to whoever owns the phase machine rather than to a colour sweep.
+    [§6.8; decision 276 as amended; review cycle 1: acc-01;
+    row `map-taste-admin-palette-facet-binding-and-accent`]
+    """
+    ramps = (
+        (SETUP_PAGE, ".progress button.on:not(.done)", "background"),
+        (BUNDLE_IMPORT, ".step.on", "border-color"),
+    )
+    wrong = []
+    for path, selector, prop in ramps:
+        declared = _declarations(_css_rule(_stylesheet(path), selector)).get(prop)
+        if declared not in PROGRESS_RAMP:
+            wrong.append(f"{path.name}: {selector} {{ {prop}: {declared} }}")
+    assert not wrong, (
+        "both of these say how far a sequence has got, on the same screen, and they answer in "
+        "different colours:\n  " + "\n  ".join(wrong)
+        + f"\n\nThe answer is one of {PROGRESS_RAMP}. The accent is not available to either: "
+        "§6.8 spends it on selection and primary actions, a step nobody picked is neither, and "
+        "the primary action on that screen is the button standing between the two strips."
+    )
+
+
+def test_the_deploy_is_taken_at_a_route_change_the_person_chose():
+    """Finding 23: a deploy reloaded every open phone at its next tap.
+
+    `service-worker.js` calls `skipWaiting()` and deletes every other cache on activate, so a tab
+    open across a deploy has lost the chunks it is about to import. SvelteKit's fallback for that
+    is a native navigation and it is the right one; what was wrong was WHEN it fired. With
+    `kit.version.pollInterval` unset the check happens on the failed import itself -- mid-round or
+    mid-block, on the tap that was meant to record a verdict. Polled, the flag is already up by
+    the time a route changes, and a route change is the one moment the person has just said they
+    are leaving the screen.
+
+    Two halves, and neither is observable anywhere else in this project. `pollInterval` is read by
+    Vite at build time into `__SVELTEKIT_APP_VERSION_POLL_INTERVAL__`, and SvelteKit
+    short-circuits the poller under `__SVELTEKIT_DEV__`, so no dev server and no browser in this
+    suite can exercise it; the `beforeNavigate` fires on a navigation no spec performs against a
+    version that has moved. Deleting either reddens nothing -- which is the shape decision 281
+    answers with a guard at the source.
+    [§6 preamble (installable PWA, service-worker shell cache); finding 23;
+     row `platform-an-unreachable-appliance-is-not-a-sign-out`]
+    """
+    config = _src(SVELTE_CONFIG)
+    poll = re.search(r"pollInterval\s*:\s*([0-9_]+)", config)
+    assert poll and int(poll.group(1).replace("_", "")) > 0, (
+        "frontend/svelte.config.js declares no non-zero `kit.version.pollInterval`, so SvelteKit "
+        "checks for a new deploy only once a chunk import has already failed -- which is the tap "
+        "the person was making, not a moment they chose"
+    )
+    hook = re.search(r"beforeNavigate\(\((\w+)\)\s*=>\s*\{([^}]*)\}", _src(SHELL_LAYOUT), re.S)
+    assert hook, "the shell registers no `beforeNavigate`, so the polled flag is read by nobody"
+    assert "location.href" in hook.group(2) and f"{hook.group(1)}.to" in hook.group(2), (
+        "the shell's `beforeNavigate` does not send the browser to the navigation's own "
+        f"destination (`{hook.group(1)}.to.url.href`): a reload names no destination of its own, "
+        "and the point of taking the deploy here is that the person just said where they are going"
+    )
+    # And the one navigation this shell makes that must NOT become a document load. Decision 272's
+    # amendment is deliberate about the branch where the logout POST never landed: the cookie is
+    # HttpOnly, so leaving the document re-boots into the session the tap was meant to end --
+    # `/auth/me` answers 200 and `guard()` carries the person who just tapped Log out back to Home
+    # under their own name. The hook rewrites EVERY client-side navigation while the flag is up,
+    # which for the sixty seconds after a deploy lands includes that one.
+    assert "!leaving" in hook.group(2) and re.search(r"leaving\s*=\s*true", _src(SHELL_LAYOUT)), (
+        "the shell's `beforeNavigate` rewrites a failed sign-out's `goto('/login')` into a "
+        "document load: a deploy is taken at a route change the person CHOSE, and a sign-out that "
+        "could not reach the appliance is not one (decision 272, amended; decision 285)"
+    )
+
+
+def test_the_header_states_the_bundle_from_a_read_that_answered():
+    """Decision 271's whole content is one operator, and nothing in the gate could see it.
+
+    `hasBundle` was made tri-state so that "no bundle imported" is said only about a `/config` that
+    ANSWERED. `session.hasBundle === false` and `!session.hasBundle` differ in exactly one state --
+    null, the read that never arrived -- and that state is reachable on a path that is NOT offline
+    at all: `bootstrap()` swallows a failed `/config` into null while `/auth/me` answers 200, so
+    `session.offline` stays false, the shell renders, and the badge's condition is the only thing
+    deciding whether a household with a full library is told it has none.
+
+    Held at the source because no run in this suite can see it. `01-first-boot` measures a
+    genuinely bundle-less household, where both spellings render the badge; `19-phone-shell`'s
+    offline test asserts the badge absent inside the branch that renders no `<header>` at all, so
+    its count is zero whichever operator is used; and until this cycle every case in the one vitest
+    file that mounts this layout wired `/config` to an answer. Flipping the operator back reddened
+    nothing anywhere, which is the shape decision 281 answers with a guard at the source.
+
+    The store's half is asserted beside it because `=== false` means nothing against a field that
+    never holds null: the comparison and the initial value are one rule in two files.
+    [§3.1; decision 271; row `platform-an-unreachable-appliance-is-not-a-sign-out`;
+     review cycle 2: M415-C2-COV-01]
+    """
+    shell = _src(SHELL_LAYOUT)
+    assert NO_BUNDLE in shell, (
+        f"the shell no longer draws {NO_BUNDLE!r} at all, so decision 271's badge is gone and "
+        "this guard reads nothing"
+    )
+    owning = [
+        condition
+        for condition in re.findall(r"\{#if ([^}]+)\}", shell[: shell.index(NO_BUNDLE)])
+        if "hasBundle" in condition
+    ]
+    assert owning, (
+        f"the shell draws {NO_BUNDLE!r} under no `hasBundle` condition at all, so it says it "
+        "whatever /config answered"
+    )
+    condition = owning[-1].strip()
+    assert re.fullmatch(r"session\.hasBundle\s*===\s*false", condition), (
+        f"the header's bundle badge is gated on `{condition}`, which reads null -- a /config that "
+        "did not answer -- as 'no bundle imported'. That is the claim decision 271 took out of "
+        "the header: a read that failed is not a fact about the household's library, and this is "
+        "the one line of the shell that states a fact rather than rendering one. Compare with "
+        "`=== false`. Home's three reads stay bare because decision 271 scoped this row to "
+        "the header, and M4.9's surface still says it in more words -- re-filed, not denied."
+    )
+    store = _src(SESSION_STORE)
+    assert re.search(r"hasBundle:\s*null", store), (
+        "frontend/src/lib/session.svelte.js no longer initialises `hasBundle` to null, so the "
+        "header's `=== false` compares against a value the boot invented and the third state "
+        "decision 271 exists for is gone"
+    )
+
+
+def test_the_logout_row_states_the_branch_on_which_it_holds():
+    """The record, not the code. §3.2's totality is real on one branch and the row claims both.
+
+    `logout()` leaves the document -- `location.assign('/login')`, decision 285 -- only where the
+    POST was CONFIRMED, because a sign-out the server never heard of comes back as a live session:
+    the cookie is HttpOnly, `/auth/me` answers 200, and leaving would carry the person who just
+    tapped Log out to Home under their own name. Decision 272's amendment argues that trade and it
+    is the right one. What it leaves standing is the module state on the OTHER branch, where the
+    shell client-navigates: Rate's card and log, Rank's `tiers` and `ratedTotal`, Tonight's step,
+    ballot and approvals all cross into the next person's session.
+
+    The row's `what` stated the guarantee with no condition, and its one registered test signs out
+    against a live appliance and waits for a `load` event -- so it can only ever run the branch
+    where the claim is true. `spec_coverage.toml`'s own header says nothing there is aspirational,
+    and this project already treats an unqualified claim in the record as a first-class defect:
+    `test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take` exists for exactly
+    that shape, one file over, and its remedy is the same one -- scope the sentence to what the
+    milestone did, or name the survivors.
+
+    So the guard reads the code for the branch and the row for the condition: while `logout()`
+    has a path that does not leave the document, the row has to say so.
+    [§3.2; decisions 272, 285; row `platform-signing-out-leaves-nothing-of-the-previous-person`]
+    """
+    shell = _src(SHELL_LAYOUT)
+    body = re.search(r"async function logout\(\)\s*\{(.*?)\n  \}", shell, re.S)
+    assert body, "the shell has no `logout()` to read"
+    leaves = "location.assign(" in body.group(1)
+    stays = re.search(r"else\s+await\s+goto\(", body.group(1)) is not None
+    assert leaves, (
+        "logout() no longer leaves the document, so nothing clears the three surface stores that "
+        "outlive a client-side navigation (decision 272)"
+    )
+
+    rows = tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["requirement"]
+    row = next(
+        r for r in rows
+        if r["id"] == "platform-signing-out-leaves-nothing-of-the-previous-person"
+    )
+    if not stays:
+        return
+    # Both halves, because either one alone is still a claim the tree does not support: the
+    # condition on which totality holds, and what survives on the branch where it does not.
+    what = row["what"]
+    named = re.search(r"(?i)\bconfirmed\b", what) and re.search(
+        r"(?i)never landed|did not land|was not confirmed", what
+    )
+    assert named, (
+        "logout() keeps a branch that does not leave the document -- the POST that never landed, "
+        "where the shell client-navigates to /login and Rate's card, Rank's board and Tonight's "
+        "ballot all survive -- and the row claims the guarantee unconditionally:\n\n  "
+        + what
+        + "\n\nName the condition the way decisions 272 and 285 do, or name the survivors. The "
+        "one registered test signs out against a live appliance and waits for a `load`, so it "
+        "cannot reach the branch the sentence is silent about."
+    )
+
+
+API_CLIENT = FRONTEND / "lib" / "api.js"
+AUTH_ROUTER = REPO / "backend" / "spielplan" / "api" / "auth.py"
+
+# The number words the seam's own comment is allowed to count its anonymous doors in. Spelt out
+# because the comment is prose: "the first eight" is what a reader meets, not `len(...)`.
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+}
+
+
+def test_the_seam_describes_the_credential_routes_it_actually_carries():
+    """A coordinate into another file is a citation nothing can keep true, in either direction.
+
+    `test_no_backend_comment_cites_the_tonight_client_by_line_number` settles that rule for the
+    backend citing the frontend, and its verdict is "cite the function, not the line". The same
+    defect had landed the other way round and nothing scanned for it: `api.js`'s CREDENTIAL_ROUTES
+    comment cited `api/auth.py:306,380,416` for the three routes that answer 401 "wrong current
+    password". Those numbers were true at HEAD and were falsified by THIS milestone's own
+    seven-line edit to that router, in the same uncommitted change set -- so at the close they
+    landed on a comment fragment, a bare docstring terminator and a sentence about PIN lockout
+    counters. They also named the wrong two routes, having been listed in file order and read back
+    in another.
+
+    So this guard reads both halves the comment states and neither is a line number. The three
+    handlers are named, and each one exists in the router and raises the 401 it is cited for. And
+    the anonymous doors are COUNTED, because the same comment said "the first seven" while the
+    array held eight of them and "the last three" beside it -- seven plus three against a list of
+    eleven, a sum that never closed.
+    [CLAUDE.md; M412-CONC-03; row `platform-a-401-returns-the-member-to-login`;
+     review cycle 3: M415-C3-API-05]
+    """
+    client = _src(API_CLIENT)
+    block = re.search(r"const CREDENTIAL_ROUTES = \[(.*?)\];", client, re.S)
+    assert block, "api.js declares no CREDENTIAL_ROUTES, so finding 14's exemption is gone"
+    routes = re.findall(r"'([^']+)'", block.group(1))
+    assert routes, "CREDENTIAL_ROUTES is empty, so this guard is reading nothing"
+
+    blocks = re.findall(r"/\*\*(.*?)\*/", client, re.S)
+    comment = next((block for block in blocks if "the anonymous doors" in block), "")
+    assert comment, "CREDENTIAL_ROUTES no longer carries the comment that argues for it"
+    cited = re.findall(r"api/(\w+)\.py:[\d,\- ]*\d", comment)
+    assert not cited, (
+        f"the seam cites {sorted(set(cited))} by line number. Cite the function: a coordinate "
+        "into another file is a citation nothing can keep true, and the three this comment "
+        "shipped with were falsified by this milestone's own edit to that router"
+    )
+
+    # The count, read as prose and checked against the list. The password routes are the tail, so
+    # the anonymous doors are everything before the first of them.
+    password = [route for route in routes if route.startswith("/auth/") and "passkey" not in route]
+    anonymous = routes.index("/auth/password")
+    said = re.search(r"The first (\w+) are the anonymous doors", comment)
+    assert said, "the seam no longer says how many of its entries are the anonymous doors"
+    counted = _NUMBER_WORDS.get(said.group(1).lower())
+    assert counted == anonymous, (
+        f"the seam says the first {said.group(1)} entries are the anonymous doors and lists "
+        f"{anonymous} of them before /auth/password. A reader checking the exemption against the "
+        "array meets two different lists."
+    )
+    assert password[-3:] == ["/auth/password", "/auth/pin", "/auth/reauth"], (
+        f"the three authenticated credential routes are {password[-3:]}, and the comment above "
+        "the list is written about /auth/password, /auth/pin and /auth/reauth"
+    )
+
+    # And the three handlers, because a name is only better than a number if something checks it.
+    router = _src(AUTH_ROUTER)
+    named = re.findall(r"`api/auth\.py`'s `(\w+)`, `(\w+)` and `(\w+)`", comment)
+    assert named, (
+        "the seam names no `api/auth.py` handler for the three routes that answer 401 'wrong "
+        "current password', so the claim it makes about them is checkable by nothing"
+    )
+    unknown = []
+    for handler in named[0]:
+        body = re.search(rf"async def {handler}\((.*?)(?=\nasync def |\n@router|\Z)", router, re.S)
+        if not body or "wrong current password" not in body.group(1):
+            unknown.append(handler)
+    assert not unknown, (
+        f"api.js names {unknown} as the handlers that answer 401 'wrong current password', and "
+        "api/auth.py has no such function raising it. A name survives the edit that moves a line; "
+        "it is only better than a coordinate while something reads it."
+    )
+
+
+# --- M4.15 review cycle 3: two records, held against the tree they describe -----------------
+
+HOME_PAGE = FRONTEND / "routes" / "+page.svelte"
+PHONE_SPEC = REPO / "e2e" / "specs" / "19-phone-shell.spec.js"
+E2E_SPECS = REPO / "e2e" / "specs"
+
+# The leaders a comment, a JSDoc block or a TOML comment puts in front of its prose. Stripped so
+# the sentence a reader sees is the sentence these guards read, and nothing else about the line.
+_COMMENT_MARKER = re.compile(r"^\s*(?:#+|//+|/\*\*?|\*/|\*)\s?")
+
+# Two ways of saying that a branch draws nothing. Enumerated rather than judged, because the
+# repair for a record that says one of them is to say what the branch actually draws, and a guard
+# asking for that positively would be asking somebody else's prose to match a template.
+_RENDERS_NOTHING = re.compile(r"(?i)empty grid|renders nothing|renders no panel")
+
+# The shapes a record uses to say a spec file owed the contract nothing. `named neither` is in the
+# list because that is the spelling this milestone shipped; the others are what a rewrite reaches
+# for next, and the point of a guard over prose is that it survives the rewording.
+_OWED_NOTHING = re.compile(
+    r"(?i)no (?:coverage )?rows? at all|named by no (?:coverage )?row"
+    r"|in a single (?:coverage )?row|in no (?:coverage )?row|named neither"
+)
+
+
+def _prose_blocks(path: Path) -> list[str]:
+    """The prose in a record, with the code around it removed.
+
+    A record's claims live in comments, docstrings and assertion messages; its data does not. The
+    naive reading -- join every line and split on full stops -- glues a TOML `what =` string to the
+    `tests = [...]` array under it and then finds spec filenames in a sentence that never mentioned
+    one, which is how the first draft of the guard below reported `01-first-boot` against a row
+    about an absent bundle directory. So each file is read for the thing it keeps prose in:
+    paragraphs for Markdown, runs of comment lines elsewhere, and every string constant as well for
+    Python, because an assertion message is where this file does its arguing.
+    """
+    text = _src(path)
+    blocks: list[str] = []
+    run: list[str] = []
+    if path.suffix == ".md":
+        for line in text.splitlines():
+            if line.strip():
+                run.append(line.strip())
+            elif run:
+                blocks.append(" ".join(run))
+                run = []
+    else:
+        marks = ("#",) if path.suffix in {".toml", ".py"} else ("//", "*", "/*")
+        for line in text.splitlines():
+            if line.lstrip().startswith(marks):
+                run.append(_COMMENT_MARKER.sub("", line).strip())
+            elif run:
+                blocks.append(" ".join(run))
+                run = []
+    if run:
+        blocks.append(" ".join(run))
+    if path.suffix == ".py":
+        blocks += [
+            " ".join(node.value.split())
+            for node in ast.walk(ast.parse(text))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+    return blocks
+
+
+def _record_sentences(path: Path) -> list[str]:
+    return [
+        sentence
+        for block in _prose_blocks(path)
+        for sentence in re.split(r"(?<=[.!?])\s+", block)
+        if sentence
+    ]
+
+
+def test_the_record_names_the_surface_that_still_states_the_bundle_claim():
+    """Decision 271 took the claim out of the header and left it standing one element lower.
+
+    The header's badge reads `session.hasBundle === false` and Home's three reads are bare, so the
+    two conditions differ in exactly the state the decision exists for: a `/config` that never
+    answered while `/auth/me` did, which is not offline and does not clear. There the shell is
+    silent, and `routes/+page.svelte` says the same four words in its count line and replaces the
+    shelf list with a heading, a stated sentence and a CTA to import a bundle the household may
+    already have. The divergence is defensible -- that panel is M4.9's surface, `=== false` on that
+    branch would send a genuinely bundle-less household into `ShelfList`'s "rate a few titles"
+    instead, and the honest repair reads the server's `degraded` payload rather than this field --
+    but it is only defensible while the record STATES it. This milestone's own guard argued the
+    opposite, from a description of that branch which the branch does not answer to, and that is
+    the defect class review cycle 2 repaired twice: a record publishing a claim the tree refutes.
+
+    So the source supplies the fact and the records are held to it. The check is negative on
+    purpose. A positive one would be a template for somebody else's sentence, while what is
+    actually forbidden is narrow: describing a branch that draws a heading and a CTA as one that
+    draws nothing. Sentences naming `_RENDERS_NOTHING` itself are skipped, for the obvious reason.
+    [§3.1; decision 271, amended; row `platform-an-unreachable-appliance-is-not-a-sign-out`;
+     review cycle 3: M415-C3-COV-01]
+    """
+    home = _src(HOME_PAGE)
+    reads = [match.group(0) for match in re.finditer(r"session\.hasBundle(?:\s*===\s*\w+)?", home)]
+    assert reads, "frontend/src/routes/+page.svelte no longer reads `session.hasBundle` at all"
+    if all("===" in read for read in reads):
+        return  # Home took the operator too, and there is no divergence left to disclose
+
+    # What the bare branch draws, read off the surface rather than asserted about it.
+    assert NO_BUNDLE in home and "No artifact bundle has been imported" in home, (
+        "Home no longer carries the bundle-less copy this guard is about, so the records it holds "
+        "to that copy are describing something that is gone"
+    )
+
+    for path in (COVERAGE, Path(__file__).resolve(), REGISTER):
+        for sentence in _record_sentences(path):
+            if "_RENDERS_NOTHING" in sentence or "Home" not in sentence:
+                continue
+            if "hasBundle" not in sentence and "reads" not in sentence:
+                continue
+            assert not _RENDERS_NOTHING.search(sentence), (
+                f"{path.name} describes Home's bundle-less branch as drawing nothing:\n\n  "
+                + sentence
+                + "\n\nIt draws a heading, a stated sentence and a CTA, and it replaces the shelf "
+                "list -- in exactly the state decision 271 stopped the header claiming. The "
+                "divergence between the header's `=== false` and Home's bare reads is a decision, "
+                "not an accident, and a decision the record misdescribes is one nobody can audit."
+            )
+
+
+def test_no_record_says_this_map_never_named_a_spec_it_did():
+    """The same defect class in the same records, about a different file and a louder claim.
+
+    M4.15 opened on the argument that §6's preamble had never had an owner, and published it as a
+    measurement: `02-shell.spec.js` and `06-responsive.spec.js` "were named by no row at all". Half
+    of that is true. The other half is refuted by the map itself, 5600 lines above the sentence --
+    three ids in two rows, M0's session-cookie contract and M4.9's model rail -- and the sentence
+    was repeated into `test_spec_coverage.py`, `docs/TESTING.md` and the phone spec's own header,
+    which is where an auditor sent here by CLAUDE.md "rather than assuming status" reads it. The
+    conclusion survives the correction, because neither of those rows cites the preamble. The
+    universal does not, and nothing keyed on it, so nothing could go red.
+
+    The rule is therefore the one a record can be held to mechanically: a claim that this map owed
+    a spec file nothing has to be true of the map. Rows of the CURRENT milestone are excluded,
+    because the claim is always about what the map held BEFORE those rows were written; a later
+    milestone naming one of these files makes the sentence a dated one and this guard say so,
+    which is the right outcome rather than a false alarm.
+    [decision 184; §6 preamble; row `platform-shell-clears-the-status-bar-and-the-toolbar`;
+     review cycle 3: M415-C3-COV-01]
+    """
+    stems = sorted({path.name.split(".", 1)[0] for path in E2E_SPECS.glob("*.spec.js")})
+    assert stems, "e2e/specs holds no spec files, so this guard is reading nothing"
+    contract = tomllib.loads(COVERAGE.read_text(encoding="utf-8"))
+    current = contract["current_milestone"]
+    older: dict[str, set[str]] = {}
+    for row in contract["requirement"]:
+        if row.get("milestone") == current:
+            continue
+        for test in row.get("tests", []):
+            for stem in stems:
+                if test.startswith(f"e2e/specs/{stem}."):
+                    older.setdefault(stem, set()).add(row["id"])
+
+    for path in (COVERAGE, COVERAGE_REPORT, TESTING_LEDGER, PHONE_SPEC):
+        for sentence in _record_sentences(path):
+            if not _OWED_NOTHING.search(sentence):
+                continue
+            named = sorted(stem for stem in stems if stem in sentence and stem in older)
+            assert not named, (
+                f"{path.name} says this map owed {', '.join(named)} nothing:\n\n  "
+                + sentence
+                + f"\n\nThe map names {named[0]} in "
+                + ", ".join(sorted(older[named[0]]))
+                + ". Narrow the sentence to the file that was genuinely unnamed and say which "
+                "rows held the other, or the next auditor greps the map and finds the record "
+                "refuted by the file it is written in."
+            )

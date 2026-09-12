@@ -19,6 +19,7 @@ import {
   escape,
   handBallot,
   leave,
+  loadRooms,
   loadRound,
   loadSolo,
   minutesAgo,
@@ -654,6 +655,33 @@ describe('the reconnect (§6 preamble; finding 18)', () => {
       stop();
     }
   });
+
+  it("takes back its own complaint and leaves everybody else's standing", async () => {
+    // The re-read above is a BACKGROUND read — the socket fires it the moment it opens, and every
+    // `rooms.changed` frame fires it again — so it lands while the person is reading a sentence
+    // about something else entirely. Clearing the error slot on success wiped those: a refused
+    // guests box said "guests: Input should be a valid integer" and lost it forty milliseconds
+    // later to a handshake that had just finished. Only the phone met it, because WebKit opens
+    // the channel after the tap where Chromium opens it before — but nothing about the defect is
+    // WebKit's, and on a settled device it is any other member opening a room. [§6.8; finding 18]
+    tonight.error = 'guests: Input should be a valid integer';
+    await loadRooms();
+    expect(
+      tonight.error,
+      'a read that worked took away a refusal it had nothing to do with'
+    ).toBe('guests: Input should be a valid integer');
+
+    // And the half the clear is actually for: an open-rooms read that FAILED leaves a sentence,
+    // and the read that recovers has to take that one back or the door complains for ever.
+    tonight.error = '';
+    fetchMock.mockImplementationOnce(async () => {
+      throw new TypeError('Load failed');
+    });
+    await loadRooms();
+    expect(tonight.error, 'a rooms read that failed said nothing at all').not.toBe('');
+    await loadRooms();
+    expect(tonight.error, 'the read that recovered left its own complaint standing').toBe('');
+  });
 });
 
 describe('the copy and the controls this milestone moved', () => {
@@ -781,5 +809,118 @@ describe('the copy and the controls this milestone moved', () => {
     expect(posted('/api/tonight/sessions/7/end')).toEqual({});
     expect(tonight.step).toBe('door');
     expect(tonight.lobby).toBeNull();
+  });
+});
+
+/**
+ * Finding 21. `refresh` is the busiest read in the app — §6.2 step 2 makes every channel frame a
+ * nudge to re-read, and `answer`, `escape` and `start` end in one too — so several are in flight
+ * at once on any evening with more than one device in it. Until this milestone none of them
+ * carried the sequence number `rank.svelte.js` and Home have had since M3.
+ */
+describe('overlapping reads land in order (finding 21)', () => {
+  /** A fetch whose first session read is held open, so the test decides which answer lands last. */
+  function heldSessionRead(stale, fresh) {
+    let release = () => {};
+    let seen = 0;
+    fetchMock.mockImplementation((path, opts = {}) => {
+      calls.push({ method: opts.method ?? 'GET', path, body: null });
+      if (/^\/api\/tonight\/sessions\/\d+$/.test(path)) {
+        seen += 1;
+        if (seen === 1) return new Promise((r) => (release = () => r(stale())));
+        return Promise.resolve(fresh());
+      }
+      if (/^\/api\/tonight\/sessions\/\d+\/ballot$/.test(path)) {
+        return Promise.resolve(
+          reply({
+            session_id: 7,
+            slate: [{ title_id: 1, slot: 'finalist', name: 'Heat' }],
+            submitted: 0,
+            seated: 2,
+            revealed: false
+          })
+        );
+      }
+      if (/^\/api\/tonight\/seats\/(\d+)\/round$/.test(path)) {
+        return Promise.resolve(reply(roundOf(Number(path.match(/seats\/(\d+)/)[1]))));
+      }
+      if (path === '/api/tonight/rooms') return Promise.resolve(reply({ rooms: [] }));
+      throw new Error(`no fixture for ${path}`);
+    });
+    return () => release();
+  }
+
+  it('does not put a device back into the round once the ballot has opened', async () => {
+    // The failure this exists for: two frames arrive close together, the `voting` read answers
+    // after the `ballot` one, and the device that has been handed 54e's ballot is dragged back
+    // to a pair. It then never submits, and `ballot.submitted_count` never reaches `seated` —
+    // so 54e's reveal is blocked for EVERY seat in the room by one device's stale read.
+    tonight.lobby = roomOf({ state: 'voting' });
+    const release = heldSessionRead(
+      () => reply(roomOf({ state: 'voting' })),
+      () => reply(roomOf({ state: 'ballot' }))
+    );
+
+    const overtaken = refresh();
+    await refresh();
+    expect(tonight.step).toBe('ballot');
+
+    release();
+    await overtaken;
+
+    expect(tonight.step, 'a superseded read put the device back into the round').toBe('ballot');
+    expect(tonight.lobby.state).toBe('ballot');
+  });
+
+  it('still leaves a room the host ended when the read that overtook it failed', async () => {
+    // Why the sequence check sits AFTER the abandoned branch and not before it. Decision 169's
+    // door is terminal — the server does not un-abandon a session — and the newer read is not
+    // guaranteed to arrive at all: here it 500s. A guard placed above the branch would discard
+    // the only answer that saw the end of the evening, and the device would sit in a lobby whose
+    // Start 404s with no way out but a reload.
+    tonight.lobby = roomOf();
+    tonight.step = 'lobby';
+    const release = heldSessionRead(
+      () => reply(roomOf({ state: 'abandoned' })),
+      () => reply({ detail: { message: 'gone' } }, 500)
+    );
+
+    const overtaken = refresh();
+    await refresh();
+
+    release();
+    await overtaken;
+
+    expect(tonight.step, 'the end of the evening was discarded as stale').toBe('door');
+    expect(tonight.lobby).toBeNull();
+    expect(tonight.error).toMatch(/ended/);
+  });
+
+  it('keeps the newer pair on screen when an earlier round read answers last', async () => {
+    // `loadRound` is the tail of `refresh` AND the retry `answer` makes on a 409, so two are in
+    // flight whenever a frame lands mid-answer. The older one landing last puts a spent
+    // `card_token` on screen; §4.2's seal is single-use, so the next tap posts a card the route
+    // refuses and the person reads a 409 for a pair they are looking at.
+    let release = () => {};
+    let seen = 0;
+    fetchMock.mockImplementation((path) => {
+      seen += 1;
+      if (seen === 1) {
+        return new Promise(
+          (r) => (release = () => r(reply(roundOf(11, { card_token: 'card-overtaken' }))))
+        );
+      }
+      return Promise.resolve(reply(roundOf(12, { card_token: 'card-newest' })));
+    });
+
+    const overtaken = loadRound(11);
+    await loadRound(12);
+    expect(tonight.round.card_token).toBe('card-newest');
+
+    release();
+    await overtaken;
+
+    expect(tonight.round.card_token, 'a spent card landed over the live one').toBe('card-newest');
+    expect(tonight.activeSeat, 'the seat followed the stale card').toBe(12);
   });
 });

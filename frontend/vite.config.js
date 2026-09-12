@@ -1,9 +1,14 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 
-// Read once: `jsconfig.json` has no node types, so every `process` in this file is an error
-// `npm run check` reports, and the second one would have been a new one on a baseline the
-// milestone measures against.
-const { API_ORIGIN, VITEST } = process.env;
+// Read once, and through a cast: `jsconfig.json` has no node types, so a bare `process` here
+// is one of the errors `npm --prefix frontend run check` reports — and that command is now a
+// CI job step rather than a documented command nobody runs (decision 273), so an error left
+// standing here costs the whole frontend gate. The cast is the idiom `push.js:106` already
+// uses for a global lib.dom does not model. `@types/node` is deliberately NOT the fix: a
+// devDependency added for one name changes `package-lock.json`, which both `npm ci` in CI and
+// the frontend image build resolve against. Nothing about the value read changes — this file
+// is only ever loaded by node. [M4.15 finding 26]
+const { API_ORIGIN, VITEST } = /** @type {any} */ (globalThis).process?.env ?? {};
 
 export default {
   plugins: [sveltekit()],

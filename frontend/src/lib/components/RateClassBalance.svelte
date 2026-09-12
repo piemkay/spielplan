@@ -118,8 +118,12 @@
   .mid {
     background: rgba(236, 233, 228, 0.42);
   }
+  /* The ramp's loud end is a measurement of the household's own labelling, not a selection and
+     not an action, so it reads as the third volume of one neutral (0.22 / 0.42 / this) rather
+     than as the one accent §6.8 reserves. An ember segment here meant the surface's single
+     highlight moved with the distribution. [§6.8; decision 276] */
   .high {
-    background: var(--ember);
+    background: var(--status);
   }
   .counts {
     list-style: none;
@@ -145,16 +149,18 @@
     border-radius: var(--r-pill);
     flex: none;
   }
+  /* A frame, and nothing else. The element is `<p class="warn why">`, so the register — face,
+     size, colour, leading — is `.why`'s and is decided in design.css; what belongs here is the
+     tinted box that marks the sentence as the one §5.2 measured. It used to re-declare all four,
+     which is how §6.8's prose register came to wear the data face on the surface that argues
+     hardest for being read: this copy is, by this component's own docstring, the single largest
+     lever a labeller has. [§6.8; decision 275] */
   .warn {
     margin: 2px 0 0;
     padding: 9px 10px;
     border: 1px solid var(--ember-edge);
     background: var(--ember-wash);
     border-radius: var(--r-sm);
-    color: var(--ink-2);
-    font-family: var(--mono);
-    font-size: 11px;
-    line-height: 1.55;
   }
 
   /* Proposal 43: on phones the widget is the bar; the counts fold behind the header tap.

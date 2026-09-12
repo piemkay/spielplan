@@ -92,7 +92,12 @@
     min-height: 100vh;
     display: grid;
     place-items: center;
-    padding: 24px;
+    /* dd27-standalone-header-under-status-bar, and the same rule /login takes, because §3.1
+       hands straight from one to the other: both are bare routes with no shell header, so on
+       the installed app the status bar is drawn over their top 47-59 px. `env()` is 0 on
+       every engine without a notch, so `max()` leaves desktop and the Safari tab untouched.
+       `min-height: 100vh` is deliberate here too — nothing is fixed to the bottom of it. */
+    padding: max(24px, env(safe-area-inset-top)) 24px 24px;
   }
   form {
     width: min(400px, 100%);

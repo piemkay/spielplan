@@ -95,7 +95,16 @@
     min-height: 100vh;
     display: grid;
     place-items: center;
-    padding: 24px;
+    /* dd27-standalone-header-under-status-bar. §6's preamble makes the installed PWA the
+       primary form factor, and app.html asks for it literally: `viewport-fit=cover` plus
+       `apple-mobile-web-app-status-bar-style=black-translucent` start the web view at the
+       physical top edge with the status bar drawn over it — 47 px on an iPhone 13, 59 px from
+       the 14 Pro on. There is no header here to carry the inset, so it lands on the page box.
+       `max()` and not an added `env()`: 24 px already clears everything without a notch, and
+       `env()` is 0 there, so no other engine moves a pixel. `min-height: 100vh` stays — this
+       page scrolls, carries no fixed bottom bar, and the dynamic viewport belongs to the shell
+       rather than to a card centred in an empty grid. */
+    padding: max(24px, env(safe-area-inset-top)) 24px 24px;
   }
   form {
     width: min(380px, 100%);
@@ -131,5 +140,14 @@
     color: var(--ink-4);
     font-size: 10.5px;
     letter-spacing: 0.12em;
+  }
+  /* 11 px on a finger, for the reason `design.css`'s coarse block states and cannot enforce from
+     there: this scoped rule is (0,2,0) and the shared `.data` floor is (0,1,0), so the divider on
+     the first screen §3.1 hands every new member stayed at 10.5. Last, because the two tie on
+     specificity and order is what is left to decide it. [§6 preamble; decision 275] */
+  @media (pointer: coarse) {
+    .or {
+      font-size: 11px;
+    }
   }
 </style>
