@@ -1904,10 +1904,14 @@ _FOLD_IN_SECTION = "\u00a75.3"
 # comments rather than printed messages and their files are M4.6's, so widening the guard onto
 # them would be an edit this milestone was not asked to make; what it does instead is refuse to
 # let the set grow, which is the half a guard can honestly hold.
+#
+# It named a third until decision 165 retired the TV client with `16-tonight-tv.spec.js`. Kept in
+# step deliberately: the set is consumed as `grown <= ...`, so a dead entry only widens a
+# permission nothing claims -- but a sentence that has stopped being true is how the next reader
+# learns to distrust the rest of it. [M4.12 review cycle 1: M412-FE-4]
 _FOLD_IN_SHORTHAND_PREDATING_M48 = {
     "14-tonight.spec.js",
     "15-tonight-group.spec.js",
-    "16-tonight-tv.spec.js",
 }
 
 
@@ -1981,6 +1985,58 @@ def test_no_fold_in_cadence_is_attributed_to_a_section_that_does_not_give_it():
         "the section 5.3 shorthand has spread to "
         f"{sorted(grown - _FOLD_IN_SHORTHAND_PREDATING_M48)}"
     )
+
+
+# Every `NN-name` a comment reaches for, with or without the suffix: the config drops it -- "and
+# 16-tonight-tv is a television" -- and that is the spelling which outlived the file, so a guard
+# anchored on `.spec.js` would have read straight past it. A letter is required after the number
+# so that a date (`2026-09-11`) is not read as a spec file.
+_SPEC_NAMED = re.compile(r"\b(\d{2}-[a-z][a-z0-9-]*)(?:\.spec\.js)?\b")
+
+
+def _specs_named_that_are_gone(source: str) -> list[str]:
+    """Every spec file a passage names that `e2e/specs` does not have."""
+    live = {path.name.removesuffix(".spec.js") for path in SPECS.glob("*.spec.js")}
+    return [
+        f"line {_line_of(source, match.start())}: names {match.group(1)}.spec.js, which is not "
+        "in e2e/specs"
+        for match in _SPEC_NAMED.finditer(source)
+        if match.group(1) not in live
+    ]
+
+
+def test_the_harness_names_no_spec_file_that_does_not_exist():
+    """A deleted surface takes its spec with it, and the prose that funds the spec too.
+
+    Decision 165 retires the TV client, so its route, `e2e/specs/16-tonight-tv` and its coverage
+    row went together -- each was the others' red gate. The route's directory is named in the
+    coverage map's note and not here: check 9 of `ops/m412_exit_criterion.py` searches
+    `backend/tests` for the route literal, and a docstring that spells the path is reported as
+    funding a client this milestone deleted. What no gate could see is the
+    config's own reasoning: the phone project's `testMatch` is shaped the way it is for two stated
+    reasons, and one of them was "16-tonight-tv is a television". That comment is the document a
+    maintainer reads when deciding whether a new Tonight spec belongs on the phone, and it cited a
+    file that does not exist -- which is how the next reader concludes the matrix was pruned for a
+    reason it no longer has, or goes looking for a spec that was deleted on purpose.
+
+    The allowance below is held to the same rule for the same reason: a set of files that "carried
+    the same shorthand before this milestone and still do" cannot name one that is gone. It is
+    consumed as `grown <= ...`, so a dead entry widens a permission nothing claims -- harmless
+    today, and a sentence that has stopped being true either way.
+    [decision 165; M4.12 finding 43; M4.12 review cycle 1: M412-FE-4]
+    """
+    assert _specs_named_that_are_gone(_read(CONFIG)) == []
+    dead = _FOLD_IN_SHORTHAND_PREDATING_M48 - {path.name for path in SPECS.glob("*.spec.js")}
+    assert not dead, f"the fold-in allowance names spec files that are gone: {sorted(dead)}"
+
+
+def test_the_spec_name_guard_sees_a_comment_that_outlived_its_file():
+    """Both arms, because a reader that finds nothing anywhere is a guard that passes for free."""
+    gone = _specs_named_that_are_gone("// 16-tonight-tv is a television, so it stays on desktop")
+    assert len(gone) == 1 and "16-tonight-tv" in gone[0], gone
+    assert _specs_named_that_are_gone("// 14-tonight.spec.js runs on the phone too") == []
+    # A date is not a spec file, and this harness writes them.
+    assert _specs_named_that_are_gone("// measured on 2026-09-11, on Docker Desktop") == []
 
 
 @pytest.mark.parametrize(

@@ -63,10 +63,17 @@ test('Rank is built — M3 landed, so it is no longer a placeholder', async ({ p
 
 test('Tonight is built — M4 landed, so it is no longer a placeholder', async ({ page }) => {
   // The routine again, one milestone on. The `/tonight` placeholder assertion above failed the
-  // day the surface shipped, and that failure was the reminder to write this. 14-tonight,
-  // 15-tonight-group and 16-tonight-tv are the real tests; this one only asserts the surface
-  // stopped naming a milestone it no longer owes, and that §6.2 step 1's controls and both of
-  // its doors are actually on the page.
+  // day the surface shipped, and that failure was the reminder to write this. 14-tonight and
+  // 15-tonight-group are the real tests; this one only asserts the surface stopped naming a
+  // milestone it no longer owes, and that §6.2 step 1's controls and both of its doors are
+  // actually on the page.
+  //
+  // It named a third file, `16-tonight-tv.spec.js`, until decision 165 retired the TV client:
+  // nothing about a session renders anywhere but a phone, results included. So "both of its
+  // doors" below is now the whole of §6.2's access — together, or solo — and the kiosk route is
+  // not a pending surface either. It is not in `PENDING` above and gets no placeholder: this
+  // list is §12's build order made visible, and a route the spec no longer names owes nothing
+  // to assert. [decisions 165, 224]
   await page.goto('/tonight');
   await expect(page.getByTestId('tonight-surface')).toBeVisible();
   await expect(page.getByText(/Not built yet/)).toHaveCount(0);

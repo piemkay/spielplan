@@ -27,7 +27,7 @@ import pytest
 
 from spielplan.ledger import model
 from spielplan.ledger.hyperparams import DEFAULTS
-from spielplan.ledger.model import MEASURED_TIER_SHARES
+from spielplan.ledger.model import MEASURED_TIER_SHARES, OUT_A, OUT_B, OUT_TIE, ObservationSet
 from spielplan.rank import board
 
 TIER_SET = ("F", "D", "C", "B", "A", "A+", "S")
@@ -47,6 +47,17 @@ def items(values, *, sigma=0.01, assigned=None, names=None):
         )
         for i, v in enumerate(values)
     ]
+
+
+def reach_sigma(reach: float) -> float:
+    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
+
+    A fixture whose point is "this interval stretches one tier over" is making a claim about the
+    REACH, and the reach is z·σ — so spelling it as a bare σ pins it to one value of a constant
+    §4.3 says is tunable. Decision 214 retunes `straddle_z` from 1.0 to 0.15 and three tests here
+    stopped straddling at all, which is a fixture breaking rather than a rule changing.
+    """
+    return reach / DEFAULTS.straddle_z
 
 
 def shares(tiers) -> list[float]:
@@ -267,14 +278,87 @@ def test_moving_the_straddle_threshold_moves_both_sets_together():
     assert seen[0] < seen[1] < seen[2], "a wider threshold has to admit strictly more titles"
 
 
+def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
+    """Decision 214's half of §6.3: what "a straddling title" has to single out.
+
+    Every other test here builds `s` and `sigma` by hand, so none of them can see the number
+    that decides whether the badge means anything — the ratio between the posterior spread the
+    fit actually produces and the width of the tiers it learns. On the household fitted below
+    that is a median sigma of 0.87 against tier widths of 0.75 to 1.08, so at the old
+    `straddle_z` of 1.0 the interval is nearly two tiers wide and 120 of 120 titles badge: "a
+    straddling title shows 'A/S'" names the whole board, "and becomes queue-eligible" says
+    nothing, and §6.3's 70% boundary arm draws from exactly the pool its 20% exploration arm
+    does. A threshold with no discrimination is the same defect as no threshold.
+
+    Asserted as a minority rather than at a number: 0.15 measures 31 of 120 here, and the value is
+    §4.3's to retune offline (proposal 157) — what must not move is that the badge picks titles
+    out rather than covering them. The Tonight side of the same decision is
+    `test_tonight_round.py::test_the_badge_threshold_and_the_rounds_boundary_cannot_be_one_constant`.
+    """
+    from spielplan.rank import queue
+
+    rng = np.random.default_rng(5)
+    n = 120
+    embeddings = rng.normal(size=(n, 64)) / 8.0
+    truth = 0.3 + (embeddings @ (rng.normal(size=64) / 8.0)) + rng.normal(scale=0.25, size=n)
+    # A household that has rated everything once and dropped three quarters of it into tiers,
+    # which is a maturer board than the release ships and therefore the generous case.
+    verdicts = np.searchsorted(np.array([-0.4, 0.4]), truth, side="right")
+    dropped = rng.choice(n, size=90, replace=False)
+    tier_cuts = np.quantile(truth, np.linspace(0, 1, 8)[1:-1])
+    duels = rng.choice(n, size=(200, 2))
+    duels = duels[duels[:, 0] != duels[:, 1]]
+    gap = truth[duels[:, 0]] - truth[duels[:, 1]]
+
+    fit = model.fit(
+        ObservationSet(
+            title_ids=np.arange(n, dtype=np.int64),
+            embeddings=embeddings,
+            embedded=np.full(n, True),
+            ord_index=np.concatenate([np.arange(n), dropped]).astype(np.int64),
+            ord_level=np.concatenate([
+                verdicts, np.searchsorted(tier_cuts, truth[dropped], side="right")
+            ]).astype(np.int64),
+            ord_arm=np.concatenate([np.zeros(n), np.ones(dropped.size)]).astype(np.int64),
+            ord_weight=np.ones(n + dropped.size),
+            duel_a=duels[:, 0].astype(np.int64),
+            duel_b=duels[:, 1].astype(np.int64),
+            duel_outcome=np.where(
+                np.abs(gap) < 0.15, OUT_TIE, np.where(gap > 0, OUT_A, OUT_B)
+            ).astype(np.int64),
+            duel_margin=np.where(rng.random(len(duels)) < 0.4, 1.6, 1.0),
+        ),
+        DEFAULTS,
+    )
+    assert fit.converged, "a fit that did not converge measures nothing about a real board"
+
+    fitted = [
+        board.Item(title_id=i + 1, name=f"T{i + 1}", s=float(fit.s[i]), sigma=float(fit.sigma[i]))
+        for i in range(n)
+    ]
+    entries = by_id(board.build(fitted, cuts=fit.cuts, tier_set=TIER_SET, hp=DEFAULTS))
+    badged = {t for t, e in entries.items() if e.straddle is not None}
+
+    assert 0 < len(badged) < n / 2, (
+        f"{len(badged)} of {n} titles straddle at straddle_z={DEFAULTS.straddle_z}; the badge "
+        "has to single titles out, and a threshold that badges the board singles out nothing"
+    )
+    # Proposal 157's identity, at the value that makes it load-bearing: the queue's 70% arm draws
+    # from this set and its 20% arm from the whole pool, so they are different arms only while
+    # the set is a proper subset.
+    eligible = {i.title_id for i in queue.eligible(fitted, cuts=fit.cuts, hp=DEFAULTS)}
+    assert eligible == badged
+    assert eligible < {i.title_id for i in fitted}
+
+
 def test_the_top_and_bottom_tiers_never_straddle_into_themselves():
     """Proposal 76: the prototype rendered "S/S" because it clamped an index instead of asking
     which tier the posterior reached. At the ends there is only one direction to reach in, so
     the badge names the tier on that side — "S/A+", "F/D" — and never the title's own."""
     cuts = model.initial_cutpoints(7)
-    # Just inside the top and bottom tiers, with a σ that reaches exactly one tier over.
+    # Just inside the top and bottom tiers, with an interval that reaches exactly one tier over.
     tiers = board.build(
-        items([float(cuts[-1]) + 0.15, float(cuts[0]) - 0.15], sigma=0.4),
+        items([float(cuts[-1]) + 0.15, float(cuts[0]) - 0.15], sigma=reach_sigma(0.4)),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     )
     top, bottom = by_id(tiers)[1], by_id(tiers)[2]
@@ -316,7 +400,9 @@ def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
     """Finding 14: the chip is a statement about the posterior, so both halves are the
     posterior's.
 
-    Measured case: s = 0.9 with σ = 1.0 sits in A and reaches A+, dropped into A+. The chip read
+    Measured case: s = 0.9 with an interval reaching 1.0 sits in A and reaches A+, dropped into
+    A+ (the σ that produces that reach is `straddle_z`'s to decide, hence `reach_sigma`). The
+    chip read
     "A+/B" — the tier the person chose, against the tier the old `straddle` named two levels
     under the model's own — describing a span the interval does not have and omitting the level
     it occupies. The drop still decides where the row renders (§6.3: "stays in the assigned
@@ -324,7 +410,8 @@ def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
     """
     cuts = model.initial_cutpoints(7)
     entry = by_id(board.build(
-        items([0.9], sigma=1.0, assigned={1: 5}), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
+        items([0.9], sigma=reach_sigma(1.0), assigned={1: 5}),
+        cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     ))[1]
     assert entry.tier == 5, "§6.3: it stays where it was put"
     assert entry.model_tier == 4 and entry.straddle == 5
@@ -343,7 +430,8 @@ def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_c
     """
     cuts = model.initial_cutpoints(7)
     entry = by_id(board.build(
-        items([0.9], sigma=1.0, assigned={1: 3}), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
+        items([0.9], sigma=reach_sigma(1.0), assigned={1: 3}),
+        cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     ))[1]
     assert entry.straddle is not None, "still queue-eligible"
     assert entry.tier == 3 and entry.tension is None

@@ -21,11 +21,13 @@ the reading that produced the invented file names in the first place.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
+from spielplan.api import admin as admin_api
 from spielplan.importer import dna
 from spielplan.importer import validate as validator
 from spielplan.importer.load import SKIPPED_TABLES
@@ -538,3 +540,214 @@ async def test_every_shipped_dna_table_is_loaded_or_skipped_with_a_reason(
         assert loaded or reason, f"{table} is neither loaded nor reported as skipped"
         # A loader that claims a table it never writes is the same silence with a count on it.
         assert not (loaded and reason), f"{table} is both loaded and named as skipped"
+
+
+# --- §6.4's axis definitions, in the directory an exporter can actually reach ------------
+
+
+def _strip_axis_definitions(vocab_dir: Path) -> None:
+    """Leave the bundle with no authored axis anywhere: neither beside the vocabulary files,
+    where the loader now reads them, nor in the `axes/` subdirectory it used to read."""
+    for facet in fx.AXES:
+        (vocab_dir / f"{facet}.tsv").unlink(missing_ok=True)
+    shutil.rmtree(vocab_dir / "axes", ignore_errors=True)
+
+
+async def test_a_bundle_with_no_axis_artifact_loads_and_the_report_says_what_is_off(db, vocab_dir):
+    """Decision 173: the corpus ships no axes and the release is not gated on them, so the
+    importer's job here is to say what that costs — not to fail, and not to stay quiet.
+
+    The warning named the Map surface and stopped there. §6.2 step 5 is the half a household
+    actually meets: with `dna_axis_weight` empty, `tonight/dna.axes_for` returns `{}`,
+    `combine.contested_facet` iterates zero axes and returns None, `session_result.conflict` is
+    always NULL, and 54c's widest-axis tie-break is 0.0 for every pair. §14 risk 6 then watches
+    a split rate that is a permanent 0 and says nothing about the households it is watching.
+    """
+    _strip_axis_definitions(vocab_dir)
+    report = ImportReport()
+
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, "a bundle with no axes is a legal bundle (decision 173)"
+    assert await db.fetchval("SELECT count(*) FROM dna_axis") == 0
+    warnings = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
+    assert len(warnings) == 1, report.render()
+    assert "§6.2 step 5" in warnings[0].message, warnings[0].message
+    assert "conflict" in warnings[0].message, warnings[0].message
+    assert "Map" in warnings[0].message, "the Map surface's half of the gap is still true"
+    # §10 wants counts, and a count of zero is the one the operator needs: the line is not
+    # conditional on there being something to count.
+    assert "authored axis definition" in report.render()
+
+
+async def test_an_axis_tsv_beside_the_vocabulary_files_is_the_one_that_loads(db, vocab_dir):
+    """Decision 173's operative half. `mdc/export_bundle.py::_export_vocab` copies the regular
+    files of `data/dna_vocab/v1/` and skips subdirectories by construction, so an axis authored
+    into `axes/` could never travel in a bundle at all. The loader was waiting on a path no
+    exporter can fill, which is why five milestones read the gap as "upstream has not authored
+    them yet" rather than as "this app looks somewhere a bundle cannot reach".
+    """
+    _strip_axis_definitions(vocab_dir)
+    (vocab_dir / "visual.tsv").write_text(
+        "murky\tluminous\nvisual.neon\t0.75\nvisual.grainy\t-0.5\n", encoding="utf-8"
+    )
+    # The subdirectory is not a second supported location. Keeping it readable would keep the
+    # unreachable path alive, and an operator who authored into it would still ship nothing.
+    (vocab_dir / "axes").mkdir(exist_ok=True)
+    (vocab_dir / "axes" / "mood.tsv").write_text(
+        "heavy\tlight\nmood.dread\t-1.0\n", encoding="utf-8"
+    )
+    report = ImportReport()
+
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, report.render()
+    rows = await db.fetch("SELECT facet, left_pole, right_pole FROM dna_axis")
+    assert [(r["facet"], r["left_pole"], r["right_pole"]) for r in rows] == [
+        ("visual", "murky", "luminous")
+    ], "the axes/ subdirectory is read, or the file beside the vocabulary is not"
+    weights = await db.fetch("SELECT term, weight FROM dna_axis_weight ORDER BY term")
+    assert [(r["term"], round(r["weight"], 3)) for r in weights] == [
+        ("visual.grainy", -0.5), ("visual.neon", 0.75)
+    ]
+
+
+async def test_the_pacing_coordinates_file_is_not_read_as_an_axis_definition(db, vocab_dir):
+    """`vocab_pacing_axes_v1.tsv` now sits in the very directory the axis loader reads, and it
+    is not an axis definition: seven named columns of per-term coordinates, no label, no gloss,
+    no poles. Read as one it keys `dna_axis` on a facet named `vocab_pacing_axes_v1`, which
+    `dna_axis`'s FK to `dna_facet` turns into a ForeignKeyViolation in the middle of the import
+    transaction — and which §6.2 step 5 would otherwise print at a household as a raw facet id.
+    Decision 173 refuses it twice, and both refusals are asserted here because they fail
+    differently: the pole rule passes the file over in silence, and the facet check would have
+    warned about it by name. A vocabulary artifact is not a malformed axis, and a directory of
+    twenty of them would bury the one line an operator has to read under twenty that mean
+    nothing — so the loader may not merely survive this file, it has to say nothing about it.
+
+    This one guards the new rule rather than reproducing the old defect: the loader that shipped
+    before decision 173 never looked in this directory, so nothing here could fail against it.
+    Measured under sabotage rather than assumed. Relaxing the pole rule alone to `len(poles) >=
+    2` — the bound the `axes/` reader used — lands the file on the facet check and fails the
+    silence assertion below; relaxing both writes `dna_axis` with a facet named
+    `vocab_pacing_axes_v1` and raises ForeignKeyViolationError mid-import.
+    """
+    columns = SHAPES["tsv"]["artifacts/dna_vocab/v1/vocab_pacing_axes_v1.tsv"]
+    assert columns[0] == "id" and len(columns) > 2, "this file opens with column names, not poles"
+    (vocab_dir / "vocab_pacing_axes_v1.tsv").write_text(
+        "\t".join(columns) + "\npacing.patient\t0.1\t0.2\t0.3\t0.4\t0.5\t\n", encoding="utf-8"
+    )
+    report = ImportReport()
+
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, report.render()
+    facets = {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")}
+    assert facets == set(fx.AXES), facets
+    pacing = await db.fetchrow("SELECT left_pole, right_pole FROM dna_axis WHERE facet = 'pacing'")
+    assert (pacing["left_pole"], pacing["right_pole"]) == fx.AXES["pacing"][:2]
+    # Scoped to the axis rule: `load_vocabulary` already notes this file, correctly, as "not a
+    # facet vocabulary". What may not happen is a second line calling it a broken axis.
+    named = [
+        f.message for f in report.findings
+        if f.rule == "axes" and "vocab_pacing_axes_v1.tsv" in f.message
+    ]
+    assert not named, f"a vocabulary artifact was reported as a misnamed axis: {named}"
+
+
+async def test_an_axis_named_for_something_that_is_not_a_facet_is_reported_rather_than_raised(
+    db, vocab_dir
+):
+    """Decision 191's prose spells the artifact `axis_<facet>_v1.tsv`, and the stem is what keys
+    `dna_axis` — so that spelling names a facet called `axis_mood_v1`. `dna_axis` carries
+    `FOREIGN KEY (version, facet) REFERENCES dna_facet` (`0004_dna.sql:57`), so a stem the
+    vocabulary does not know is a ForeignKeyViolation mid-transaction. §10 promises a report,
+    and an uncaught exception is not one; the operator gets the file name and the reason.
+    """
+    (vocab_dir / "axis_mood_v1.tsv").write_text(
+        "heavy\tlight\nmood.dread\t-1.0\n", encoding="utf-8"
+    )
+    report = ImportReport()
+
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, report.render()
+    warnings = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
+    assert len(warnings) == 1, report.render()
+    assert "axis_mood_v1.tsv" in warnings[0].message, warnings[0].message
+    assert {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")} == set(fx.AXES)
+
+
+SPEC_DOC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
+
+
+def _axis_artifact_clause() -> str:
+    """§6.4's "Axis definitions are a shipped, authored artifact" clause, to the sentence after."""
+    text = SPEC_DOC.read_text(encoding="utf-8")
+    start = text.index("**Axis definitions are a shipped, authored artifact**")
+    return text[start:text.index("Deterministic", start)]
+
+
+def test_the_spec_states_the_axis_filename_rule_the_loader_enforces(vocab_dir):
+    """Decision 227. The rule the loader keeps has to live in the document a corpus author reads.
+
+    Decision 173 moved the loader off the `axes/` subdirectory it invented, and the sketch behind
+    that ruling spells the artifact `axis_<facet>_v1.tsv` -- which this loader reads as a facet
+    called `axis_mood_v1`, warns about by name, and skips. The loader is right to (the sketch's own
+    example stems are not `dna_tag.facet` values either, so it cannot be authored as written), but
+    the rule it enforces was written down nowhere normative: a docstring, a fixture and the §6.6
+    Data card, while §6.4 named no filename and the decision register named the other one. A corpus
+    arriving under proposal 140 as `axis_mood_v1.tsv` imports zero `dna_axis` rows, so `axes_for`
+    returns {}, `combine.contested_facet` returns None, and §6.2 step 5's split is dark on every
+    evening -- with the operator told the file is misnamed by an app whose spec says otherwise.
+
+    Asserted against the shipped fixture bundle as well as against the sentence, because a spec
+    sentence nothing is authored to is the same defect one step along.
+    [M4.12 review cycle 1: D3-01; decision 227]
+    """
+    clause = _axis_artifact_clause()
+
+    assert "`<facet>.tsv`" in clause, f"§6.4 still states no filename rule: {clause}"
+    assert "axis_mood_v1.tsv" in clause, (
+        "the register's own spelling has to be named as the one this is not, or the next author "
+        "takes it from decision 173 and the import writes nothing"
+    )
+    assert "vocab_pacing_axes_v1.tsv" in clause, "the neighbour that is not an axis definition"
+    assert "axes/" not in clause, "the subdirectory decision 173 retired"
+
+    shipped = {p.name for p in vocab_dir.glob("*.tsv")}
+    assert {f"{facet}.tsv" for facet in fx.AXES} <= shipped, (
+        f"the fixture bundle is not authored to the rule §6.4 now states: {sorted(shipped)}"
+    )
+
+
+async def test_the_data_card_names_the_paths_the_axis_loader_actually_reads(db, vocab_dir):
+    """§6.6's Data card is where decision 191 put the outstanding authoring task, and it builds
+    its path list from the loader's rule rather than restating it, because a hand-written list
+    is exactly how a card comes to name files nothing looks for. That is worth something only
+    if the two still agree, so the assertion is the agreement and not the string: the card's own
+    path, written into the bundle, is an axis the loader loads.
+
+    The card carries §6.2 step 5's consequence as well as the Map's, because the import report
+    that carries the same sentence is read once, at the moment the operator has already decided
+    to import, and never reopened.
+    """
+    card = await admin_api.data_sources(None, db)
+    axes = card["axes"]
+
+    assert axes["expected"], "the card names nothing for an operator to author"
+    assert not any("axes/" in p for p in axes["expected"]), (
+        "the card still sends the operator to the subdirectory decision 173 retired"
+    )
+    assert any("§6.2 step 5" in line for line in axes["disables"]), axes["disables"]
+
+    _strip_axis_definitions(vocab_dir)
+    named = PurePosixPath(axes["expected"][0])
+    (vocab_dir / named.name).write_text(
+        f"left\tright\n{named.stem}.example\t-1.0\n", encoding="utf-8"
+    )
+    report = ImportReport()
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, report.render()
+    loaded = [r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")]
+    assert loaded == [named.stem], f"the card names {named}, the loader loaded {loaded}"

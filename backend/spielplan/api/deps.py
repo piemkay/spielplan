@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import asyncpg
-from fastapi import Depends, HTTPException, Request, Response, status
+from fastapi import Depends, HTTPException, Request, Response, WebSocket, WebSocketException, status
 
 from spielplan.core import auth
 from spielplan.core.config import settings
@@ -176,6 +176,91 @@ async def active_user(user: CurrentUser) -> auth.SessionUser:
 
 
 ActiveUser = Annotated[auth.SessionUser, Depends(active_user)]
+
+
+# --- the same two gates, for a socket ----------------------------------------------------------
+#
+# §3.2 puts every route behind a session and §3.1 locks a new account to a password change, and
+# neither clause says "over HTTP". The Tonight channel used to read the cookie and call
+# `load_session` in its own body on the ground that a WebSocket cannot take a dependency: it can,
+# only not an *HTTP* one. What that cost was not the check — decision 179 wrote it out by hand in
+# the route — but the check being invisible, because `test_api_gating.py`'s sweep measures which
+# routes resolve `active_user` and a route that authenticates in its body appears on neither side of
+# that subtraction. A gate nothing can enumerate is a gate the next route forgets. [decision 225]
+
+
+async def current_user_ws(socket: WebSocket) -> auth.SessionUser:
+    """`current_user` for a socket: the same cookie and the same session row, closed rather than
+    refused. A handshake has no status code to carry a 401 — §3.2's door on this transport is a
+    close with 1008, which is what the client's `onclose` reconnect is already written against.
+
+    IT TAKES NO `DB`, WHICH IS THE WHOLE POINT OF WRITING IT OUT HERE. `deps.db` is a yield
+    dependency and FastAPI holds it until the endpoint returns; on a socket the endpoint returns
+    when the household closes the app, so each watching phone would hold one of the pool's ten
+    connections (`db/pool.py`) for the evening and Rate, Home and auth would stop answering with
+    nothing failing in Tonight. The acquire is made and released here instead, which costs one
+    checkout per handshake. [M4.12 finding 16; decision 225]
+
+    The slide's cookie half is not attempted and is not lost by this change: `load_session` moves
+    `expires_at` in the row, `current_user` above re-issues the cookie on the same beat, and a
+    handshake has no response object to put a Set-Cookie on — so a socket that is the first call of
+    the day slides the row alone, exactly as the hand-rolled auth did. Recorded rather than repaired
+    because the repair belongs with §3.2's window and not with this milestone's socket.
+
+    AND THE ACQUIRE IS BOUNDED, like `db` at the top of this file and for the reason its docstring
+    gives: unbounded, this was the one acquire in this module that turned "the database is slow"
+    into a hang with nothing in the log. It runs BEFORE `websocket.accept()` — FastAPI resolves the
+    dependencies first — so a saturated pool left the handshake pending with no frame, no close and
+    no upper bound, while every HTTP surface answered 503 in ten seconds with a census line.
+    Measured: the socket was still pending at 13 s having sent nothing at all, and completed only
+    when the pool freed. The client has no handshake timer and reconnects on `onclose` alone, so
+    closing is what gets the phone back and hanging is what leaves the lobby banner silently dead.
+    1011 rather than 1008: this is the server failing, not the caller being refused.
+    [M4.12 review cycle 2: M412-API2-01; decision 225]
+    """
+    sid = auth.open_session_cookie(socket.cookies.get(auth.SESSION_COOKIE))
+    if not sid:
+        # Missing, or signed under a SESSION_SECRET that has since been rotated (§2).
+        raise WebSocketException(status.WS_1008_POLICY_VIOLATION, "not signed in")
+    connections = pool.pool()
+    try:
+        conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
+    except TimeoutError:
+        log.warning(
+            "no pooled connection within %ss for a tonight socket: pool size %d, idle %d",
+            _ACQUIRE_TIMEOUT_S,
+            connections.get_size(),
+            connections.get_idle_size(),
+        )
+        raise WebSocketException(
+            status.WS_1011_INTERNAL_ERROR, "database unavailable"
+        ) from None
+    try:
+        user = await auth.load_session(conn, sid)
+    finally:
+        await connections.release(conn)
+    if user is None:
+        raise WebSocketException(status.WS_1008_POLICY_VIOLATION, "session expired")
+    return user
+
+
+CurrentUserWS = Annotated[auth.SessionUser, Depends(current_user_ws)]
+
+
+async def active_user_ws(user: CurrentUserWS) -> auth.SessionUser:
+    """§3.1's first-login lock, on a socket. `active_user`'s sibling rather than its reuse,
+    because the difference is the exception and not the predicate: an `HTTPException` raised under
+    a WebSocket scope reaches `app.py`'s handler, which builds an HTTP response for a connection
+    that can never carry one."""
+    if user.must_change_password:
+        raise WebSocketException(
+            status.WS_1008_POLICY_VIOLATION,
+            "password change required before this account can be used",
+        )
+    return user
+
+
+ActiveUserWS = Annotated[auth.SessionUser, Depends(active_user_ws)]
 
 
 async def credentialed_user(user: ActiveUser) -> auth.SessionUser:

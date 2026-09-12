@@ -645,7 +645,18 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
                 # threshold that is a bare σ constant belongs in ledger_hyperparams.json". The
                 # corpus does not ship them yet, so `test_bundle_shapes.py` carries them as a
                 # declared exception (`PROPOSAL_157_NOT_YET_SHIPPED`) rather than silently.
-                "straddle_z": 1.0, "tension_credible_mass": 0.80,
+                #
+                # Which makes this literal the only `straddle_z` any stack this repo can boot
+                # runs on: a bundle constant beats the default, and nothing else writes the key.
+                # It stayed at the retired 1.0 across decision 214's re-tune to 0.15 — the value
+                # at which a fitted 120-title board badges 120 of 120 and §6.3's badge singles
+                # nothing out — so `npm --prefix e2e run fresh` and `ops/devstub.py` both badged
+                # at the number the decision exists to end, while the test that grades
+                # the clause built its board from `DEFAULTS` and could not see it. Pinned to
+                # `DEFAULTS` by `test_bundle_shapes.py` rather than imported here: the fixture
+                # stands in for the corpus, and a fixture that reads the app's own constants can
+                # no longer disagree with it. [M4.12 cycle 1, M412-RND-01; decision 214]
+                "straddle_z": 0.15, "tension_credible_mass": 0.80,
             },
             indent=1,
         ),
@@ -845,11 +856,14 @@ def _write_vocab(vocab: Path) -> None:
     )
     # §6.4's axis definitions. The corpus ships no axis TSVs (proposal 140 asks for them), so
     # the fixture ships them under the name the app reads and the gap is recorded in the plan.
-    axes = vocab / "axes"
-    axes.mkdir(exist_ok=True)
+    # Beside the vocabulary files and not in an `axes/` subdirectory: the corpus exporter copies
+    # the regular files of `data/dna_vocab/v1/` and does not descend, so a fixture that wrote
+    # them into a subdirectory was reproducing a layout no real bundle can carry -- which is the
+    # half of the five-milestone gap that was this repository's rather than upstream's, and is
+    # the only thing the fixture can be wrong about here. [decision 173]
     for facet, (left, right, weights) in AXES.items():
         body = f"{left}\t{right}\n" + "".join(f"{t}\t{w}\n" for t, w in weights.items())
-        (axes / f"{facet}.tsv").write_text(body, encoding="utf-8")
+        (vocab / f"{facet}.tsv").write_text(body, encoding="utf-8")
 
 
 def _identity_tokens(ids: np.ndarray, titles: list) -> np.ndarray:

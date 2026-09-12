@@ -151,7 +151,9 @@ async def load_vocabulary(
 
     await _load_aliases(conn, vocab_dir / f"alias_map_{version}.tsv", version, report)
     await _load_adjudications(conn, vocab_dir / f"adjudications_{version}.tsv", version, report)
-    await _load_axes(conn, vocab_dir, version, report)
+    # The axis definitions key on a facet the vocabulary has just declared -- `dna_axis` has an
+    # FK to `dna_facet` -- so the set travels rather than being rediscovered from a file stem.
+    await _load_axes(conn, vocab_dir, version, report, set(facets))
 
 
 async def _load_aliases(
@@ -259,30 +261,62 @@ async def _load_adjudications(
 
 
 async def _load_axes(
-    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport
+    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport,
+    facets: set[str],
 ) -> None:
     """§6.4: 'Axis definitions are a shipped, authored artifact: one TSV per vocabulary-v1 facet
-    (left pole, right pole, term → weight ∈ [−1, 1])'. Deterministic — no nightly rebuild, no
-    Procrustes anchoring, no map shift on bundle re-import."""
-    axes_dir = vocab_dir / "axes"
-    if not axes_dir.is_dir():
-        report.warn(
-            "axes",
-            "no dna_vocab/<v>/axes/ in the bundle — the Map surface has no axes to plot and "
-            "will render its no-axes state",
-        )
-        return
+    (left pole, right pole, term → weight ∈ [−1, 1]) … shipped in `dna_vocab/v1/`'.
+    Deterministic — no nightly rebuild, no Procrustes anchoring, no map shift on re-import.
 
+    **`dna_vocab/<version>/` is the sentence's own words, and the `axes/` subdirectory this
+    loader used to read was an invention of this file's — unreachable by construction.** The
+    corpus exporter copies the regular files of `data/dna_vocab/v1/` and does not descend into
+    subdirectories, so an axis authored into `axes/` could never travel in a bundle at all. Five
+    milestones read the empty table as "upstream has not authored them yet"; half of it was
+    "this app waits on a path no export can fill", and the spec was right the whole time.
+    Decision 173 ships the release without axes and moves the loader onto §6.4's path, so that
+    the day the corpus does author them they arrive. [decision 173]
+
+    The candidate set is therefore every TSV beside the vocabulary files, and the **pole header
+    line** is what tells an axis definition from its neighbours: an axis opens with two poles
+    (`heavy<TAB>light`), every other artifact in this directory opens with a row of column names,
+    and the narrowest of those is four wide (`s_matrix_v1.tsv`: facet, a, b, s). A file that does
+    not open with exactly two poles is counted and passed over rather than reported as a
+    malformed axis — `vocab_mood_v1.tsv` is not a broken axis, it is a vocabulary, and a warning
+    per neighbour would bury the one line an operator has to read.
+
+    `vocab_pacing_axes_v1.tsv` is the file that rule exists for. It is per-term axis
+    *coordinates* (`id, ax_tempo, ax_pressure, …`) — seven named columns, no label, no gloss and
+    no poles — and read as an axis definition it would key `dna_axis` on a facet named
+    `vocab_pacing_axes_v1` and print that raw id at a household in §6.2 step 5's copy. Its header
+    is seven cells wide, so the pole rule refuses it; the facet check below refuses it again.
+
+    That second check earns its place rather than doubling the first: `dna_axis` carries
+    `FOREIGN KEY (version, facet) REFERENCES dna_facet` (`0004_dna.sql:57`), so a stem the
+    vocabulary does not know raises a ForeignKeyViolation in the middle of the import
+    transaction. §10 promises the operator a report, and an uncaught exception is not one — and
+    the stem is a real trap, because decision 191's own prose spells the artifact
+    `axis_<facet>_v1.tsv`, which names a facet called `axis_mood_v1`.
+    """
     loaded = 0
-    for path in sorted(axes_dir.glob("*.tsv")):
-        facet = path.stem
+    not_an_axis = 0
+    for path in sorted(vocab_dir.glob("*.tsv")):
         with path.open(encoding="utf-8", newline="") as fh:
             reader = csv.reader(fh, delimiter="\t")
             header = next(reader, None)
-            if not header or len(header) < 2:
-                report.warn("axes", f"{path.name}: no pole header line; skipped")
+            poles = [c.strip() for c in header] if header else []
+            if len(poles) != 2 or not all(poles):
+                not_an_axis += 1
                 continue
-            left, right = header[0].strip(), header[1].strip()
+            facet = path.stem
+            if facet not in facets:
+                report.warn(
+                    "axes",
+                    f"{path.name}: poles {poles[0]!r}/{poles[1]!r}, but {facet!r} is not a "
+                    "vocabulary facet — an axis file is named for the facet it turns",
+                )
+                continue
+            left, right = poles
             weights: list[tuple[str, str, str, float]] = []
             for row in reader:
                 if len(row) < 2 or not row[0].strip():
@@ -309,7 +343,30 @@ async def _load_axes(
             weights,
         )
         loaded += 1
-    report.note("axes", f"{loaded} authored axis definition(s) loaded", facets=loaded)
+
+    # Both surfaces, because naming only the Map is what let this gap read as cosmetic for five
+    # milestones. Without `dna_axis_weight`, `tonight/dna.axes_for` returns {},
+    # `combine.contested_facet` iterates zero axes and returns None, so `session_result.conflict`
+    # is NULL on every evening a household ever plays and §14 risk 6 watches a split rate that is
+    # a permanent 0 — and 54c's widest-axis tie-break resolves to 0.0 for every pair it is asked
+    # about. The bundle is not broken by this (decision 173 ships without axes deliberately), so
+    # it is a warn and not a fail; it is said out loud so that "no split ever surfaced" is read
+    # as the missing artifact rather than as a household that never disagreed.
+    if not loaded:
+        report.warn(
+            "axes",
+            f"no authored axis definition in dna_vocab/{version}/ — the Map surface has no axes "
+            "to plot and renders its no-axes state, and Tonight's split surfacing (§6.2 step 5) "
+            "is off: session_result.conflict is NULL on every evening and 54c's widest-axis "
+            "tie-break is 0.0 for every pair",
+        )
+    # §10 asks for counts, and zero is the count that matters here, so the line is unconditional.
+    report.note(
+        "axes",
+        f"{loaded} authored axis definition(s) loaded ({not_an_axis} file(s) in "
+        f"dna_vocab/{version}/ open with column names rather than two poles)",
+        facets=loaded, not_axes=not_an_axis,
+    )
 
 
 async def load_tags(

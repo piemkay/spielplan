@@ -90,9 +90,19 @@ async def picks(
     budget_min: int,
     include_rewatches: bool,
     bundle_version: str,
+    holdout_key: str,
     answers: Sequence[round_rules.Answered] = (),
     offset: int = 0,
-    z: float = 1.0,
+    sharpen: bool = False,
+    # THE ROUND'S OWN BOUNDARY, and the retired 1.0 this defaulted to was §6.3's. Decision 214
+    # separated the two scales and deleted `api/tonight.py::_z`, the helper that read `straddle_z`
+    # out of the bundle; the route has passed `round.BOUNDARY_Z` ever since, so this default
+    # reached no production caller and only the tests — which therefore measured every sharpen
+    # round at a boundary the app does not serve, and at 1.0 a pool keeps straddlers the shipped
+    # 0.6 has already resolved. `play.py` avoids the whole class by making `z` required of every
+    # caller; the round's own constant is the same answer in the form `replay` and `select`
+    # already use. [decision 214]
+    z: float = round_rules.BOUNDARY_Z,
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
     """Three picks, a wildcard, and the next pair if the person is sharpening.
@@ -101,6 +111,22 @@ async def picks(
     would hold it. With none, the ranking is the personal Ledger and the tilt is exactly zero —
     which is what "ranked by the personal Ledger with **no tilt**" requires, and why
     `tilt.adjustment` returns 0.0 for an empty tilt rather than a small number.
+
+    `holdout_key` arrives made rather than being composed here from `user_id`, and that is the one
+    thing solo's arm can get wrong. 54b's arm is a rate drawn from a stable key (decision 223), and
+    solo has two readers of it: the route re-derives the arm of every answer in `answers` — it may
+    not accept it from the client — and this call draws the pair that will come back as one of
+    them. A key composed in two places is a key that can be composed two ways, and the two
+    disagreeing is a hold-out landing in the adaptive stream, which is the one thing §13 forbids.
+
+    `sharpen` IS THE DOOR'S WHOLE COST, AND IT IS NOT A SKIP OF THE REPLAY. 54f puts this screen
+    on the fastest path to a film — "must not be slower than browsing Home" — and the door and
+    Reshuffle never draw a pair at all. They were paying for one anyway: `replay` selected
+    unconditionally, and with nothing answered the search runs over the straddling set of the
+    WHOLE pool (0.677 s at 200 candidates, tens of seconds on the shipped 696-title owned pool,
+    and again on every press of Reshuffle). The replay itself still runs, because `played.beliefs`
+    is what the ranking below is built from and a sharpen round that never reached the picks would
+    be a control that did nothing; it is the selection alone that is skipped. [finding 35; 54f]
     """
     seat = pool_rules.Seat(participant_id=user_id, user_id=user_id, is_member=True)
     candidates = await pool_rules.build(
@@ -122,28 +148,40 @@ async def picks(
 
     version = await dna_reads.active_version(conn)
     ids = [c.title_id for c in candidates]
-    vectors = await dna_reads.vectors_for(conn, ids, version=version or "")
+    tagged = await dna_reads.vectors_for(conn, ids, version=version or "")
+    # A KEY PER CANDIDATE, ALWAYS. `vectors_for` gives one to every id it is asked about, so its
+    # key set IS tonight's pool — except on a bundle carrying no DNA vocabulary at all, where it
+    # returns nothing. Normalising here keeps the predicate below reading "is this title still a
+    # candidate" (§10, and `round.replay`'s own guard) rather than "does this title carry tags":
+    # a library with no DNA tilts nothing, but its sharpen round still re-ranked the picks and
+    # 54f's provenance line has to be able to say so.
+    vectors = {t: tagged.get(t, {}) for t in ids}
     prior = {c.title_id: c.group_score for c in candidates}
 
-    live = [a for a in answers if a.selection != round_rules.SELECTION_HOLDOUT]
     played = round_rules.replay(
         prior, list(answers), z=z, has_profile=True,
         axes=combine_rules.axis_positions(vectors, await dna_reads.axes_for(conn, version=version or "")),
-        rng=rng or random.Random(0),
+        rng=rng or random.Random(0), holdout_key=holdout_key, select=sharpen,
     )
+    # THE SAME ROWS THE REPLAY COUNTED, AND NO OTHERS. §13's hold-out filter and §10's re-import
+    # guard are both `replay`'s, twenty lines above; this loop walked the identical list and
+    # applied only the first of them, so a stored answer whose title had left the pool moved the
+    # tilt the posterior had deliberately ignored — and solo rebuilds its pool on every request,
+    # so the two disagreed whenever anything changed between two sharpen taps. `tilt.applies` is
+    # that predicate, shared rather than restated, and the count is taken AFTER it so 54f's
+    # "tilted by your N answers" names the answers that tilted. [finding 37]
+    counted = [
+        a for a in answers
+        if a.selection != round_rules.SELECTION_HOLDOUT
+        and tilt_rules.applies(vectors, title_a=a.title_a, title_b=a.title_b)
+    ]
     frame = tilt_rules.frame(vectors)
     tilt: dict[str, float] = {}
-    for a in live:
-        a_dna, b_dna = vectors.get(a.title_a, {}), vectors.get(a.title_b, {})
-        if a.answer == round_rules.A:
-            tilt = tilt_rules.observe(tilt, chosen=a_dna, rejected=b_dna, frame=frame)
-        elif a.answer == round_rules.B:
-            tilt = tilt_rules.observe(tilt, chosen=b_dna, rejected=a_dna, frame=frame)
-        else:
-            tilt = tilt_rules.observe_level(
-                tilt, first=a_dna, second=b_dna, frame=frame,
-                toward=a.answer == round_rules.EITHER,
-            )
+    for a in counted:
+        tilt = tilt_rules.applied(
+            tilt, answer=a.answer, title_a=a.title_a, title_b=a.title_b,
+            vectors=vectors, frame=frame,
+        )
 
     scored = {
         t: b.mu + tilt_rules.adjustment(tilt, vectors.get(t, {}), frame)
@@ -154,8 +192,16 @@ async def picks(
 
     # 54f/proposal 65: reshuffle "walks further down the ranking" rather than re-drawing. A
     # random re-draw from a ranked list either returns the same top titles or silently degrades
-    # the picks; a walk wraps, and the wrap is worth saying out loud.
-    span = max(len(order) - 1, 1)
+    # the picks; a walk wraps, and the wrap is worth saying out loud — decision 222 renders that
+    # line beside Reshuffle, which is what turns the flag below into a claim rather than a note.
+    #
+    # THE SPAN IS THE RANKING'S LENGTH, not one less than it. Off by one, the walk could not reach
+    # the last-ranked title of any pool whose size is 1 more than a multiple of 3: on a four-title
+    # pool `3 * offset % 3` is 0 for every offset, so Reshuffle returned the identical three
+    # titles for ever while `wrapped` reported True from the first press. The shipped tests used a
+    # six-film pool, where a span of five happens to walk. The wrap-fill below already handles a
+    # start near the end, so this is the whole repair. [finding 36; decision 222]
+    span = max(len(order), 1)
     start = (offset * PICKS) % span if offset else 0
     chosen = [t for t, _ in order[start:start + PICKS]]
     if len(chosen) < PICKS:
@@ -186,12 +232,23 @@ async def picks(
         "picks": [await card(t, stretch=False) for t in chosen],
         "wildcard": None if wildcard is None else await card(wildcard, stretch=True),
         "provenance": provenance(
-            budget_min=budget_min, answers=len(live), include_rewatches=include_rewatches
+            budget_min=budget_min, answers=len(counted), include_rewatches=include_rewatches
         ),
         "empty": None,
+        # `answered` is every answer they gave — a hold-out costs one of their twenty even though
+        # it moves nothing (54b) — while `sharpened` and the provenance line above report what
+        # actually reached the picks. Two numbers because they answer two different questions.
         "answered": len(answers),
-        "sharpened": bool(live),
-        "wrapped": bool(offset) and start < (offset * PICKS),
+        "sharpened": bool(counted),
+        # BOTH WAYS THE WALK COMES BACK ROUND, because decision 222 renders this as a sentence
+        # about what the household is looking at. The modulus is one of them; the wrap-fill four
+        # lines above is the other, and on any pool whose length is not a multiple of PICKS it
+        # fires FIRST — a four-title pool shows ranks 4, 1, 2 on press one, two of them titles
+        # that were on the screen a second ago, while `start < offset * PICKS` is still false.
+        # The flag went from over-reporting (True from press one, on the old modulus) to missing
+        # the first real wrap, which is the same confusion with the sign flipped.
+        # [M4.12 review cycle 1: M412-FE-2, M412-SOLO-02; decision 222]
+        "wrapped": bool(offset) and (start + PICKS > span or start < offset * PICKS),
         # 54f's sharpen round, on the same pool. None once it has converged or hit the cap.
         "pair": None if played.stop_reason else (
             None if played.next_pair is None else {

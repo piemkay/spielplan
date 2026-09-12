@@ -28,9 +28,12 @@ neither milestone writes the other's test: that row is a *static* walk, assertin
 resolves `active_user` or `admin_user` through its dependant. This file asks the question over HTTP
 instead, and the two answers are not the same one. A route can be behind the dependency and still
 answer (a body validator that runs first, a handler that catches too much), and a route can
-authenticate by hand and be entirely correct — the Tonight WebSocket does, because a socket cannot
-take an HTTP dependency. So the allow-list below is not the dependency walk's exemption set: it is
-measured from what a stranger actually receives.
+authenticate by hand and be entirely correct. So the allow-list below is not the dependency walk's
+exemption set: it is measured from what a stranger actually receives. The Tonight WebSocket used to
+be this file's example of the second case, on the ground that a socket cannot take an HTTP
+dependency — true, and beside the point, since M4.12 gave `deps.py` the two a socket *can* take
+(decision 225). It is behind `active_user_ws` now, and the handshake below still measures it the
+only way this file measures anything: by connecting as a stranger.
 
 Skipped without TEST_DATABASE_URL for the two live sweeps; see tests/conftest.py. The three static
 rules need no database and must not skip, because they are properties of `create_app` alone.
@@ -127,6 +130,11 @@ ANONYMOUS = frozenset(
 # assertion about what the route does, which is the one thing the entry said was missing, so the
 # entry leaves and the pin follows it down. Worth recording that the ratchet cost nothing to obey
 # here: the shrink was found by the rule rather than by a reader. [M4.11; decision 212]
+#
+# **M4.12 takes two more, and the set below is five.** Its finding 3 is about what the undo and
+# escape routes DO — each produced its next card by replaying the whole round a second time — so the
+# test that closes it is an HTTP test of both handlers, which is exactly the assertion the two
+# entries said was missing. Found by the rule again, on the run that added that test. [M4.12]
 UNTESTED = frozenset(
     {
         # M4.14 (bundle import and artifact custody). Its ~127 s POST is the finding that made the
@@ -155,11 +163,15 @@ UNTESTED = frozenset(
         # of the haystack above — a grep cannot tell the stub's route from the app's. The entry left
         # when a Playwright spec asked the real one (see the preamble), not when the harness did.
         "/api/home/shelves",
-        # M4.12 owns Tonight's lifecycle, and both handlers are in its findings (the undo/escape
-        # pair at `play.py:410/436/456`, and escape availability on a finished round). M4.10 must
-        # not touch that lifecycle, so it must not claim its tests either.
-        "/api/tonight/seats/{participant_id}/escape",
-        "/api/tonight/seats/{participant_id}/undo",
+        # `/api/tonight/seats/{participant_id}/undo` and `.../escape` stood here for M4.12, whose
+        # findings hold both handlers (the undo/escape pair at `play.py:410/436/456`, and escape
+        # availability on a finished round). They leave with finding 3's repair: both routes built
+        # their payload by calling `play.state_for` again after the write, and
+        # `test_tonight_integration.py::test_one_tap_reads_the_frozen_pool_once_and_runs_the_round_once`
+        # drives each of them over HTTP and asserts what it does -- one frozen-pool decode and one
+        # round for the undo, and neither for the escape, which has no next pair to compute. That is
+        # an assertion about the route rather than about the rule underneath it, which is the one
+        # thing the entries said was missing. [M4.12 finding 3]
     }
 )
 
@@ -473,8 +485,8 @@ def test_the_untested_set_may_only_shrink():
         "these routes are named by a test now, so they are no longer untested - delete them from "
         f"UNTESTED: {sorted(closed)}"
     )
-    assert len(UNTESTED) == 7, (
-        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 7 - an entry leaves "
+    assert len(UNTESTED) == 5, (
+        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 5 - an entry leaves "
         "when a test names its route, and lowering this number is how that is recorded; raising it "
         "is the edit this rule exists to make argue for itself"
     )

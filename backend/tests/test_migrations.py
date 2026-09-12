@@ -327,6 +327,16 @@ def test_the_result_slate_and_its_outcome_are_two_tables(schema):
     assert result["conflict"]["is_nullable"] == "YES", (
         "§6.2 step 5: below D = 0.20 the split is decided silently, so no conflict is stored"
     )
+    # Not §4.2's column but 54d's: "the third finalist slot is reserved for the highest-scoring
+    # title on the opposite pole of the contested axis, **labelled as such**". Nothing carried the
+    # label, so migration 0021 added it as a boolean orthogonal to the slot rather than as a fourth
+    # `slot` value — the reserved title is still a finalist and every filter on the slot keeps
+    # counting it. NOT NULL because every row already stored is a slate that had no reservation.
+    # [M4.12 finding 24; decision 220]
+    assert "reserved" in result, "54d's reserved slot has to be labelled somewhere"
+    assert result["reserved"]["is_nullable"] == "NO", (
+        "a card either is the far side of the split or is not; there is no unknown"
+    )
     outcome = _columns(schema, "session_outcome")
     for name in ("session_id", "chosen_title_id", "approval_share", "participants"):
         assert name in outcome, f"§4.2 names session_outcome.{name}"
@@ -353,10 +363,16 @@ def test_a_retracted_answer_does_not_block_its_own_replacement(schema):
     """§6 preamble's "undo everywhere", reaching `session_answer`.
 
     `play.retract` tombstones rather than deletes (§14 risk 6: log every vote), and the next
-    answer arrives at the seq the retraction freed. A NON-partial unique index on
+    answer used to arrive at the seq the retraction freed. A NON-partial unique index on
     `(participant_id, seq)` makes that insert collide with the tombstone forever — one tap on
     Undo ends that participant's round, and because the reveal waits for every seat (54e), the
     household's evening with it. 0014 scopes it to the live rows.
+
+    M4.12 mints the replacement's seq from every row there has ever been instead (finding 11), so
+    the collision this index forgives is no longer reachable from `record_answer` — and the index
+    stays exactly as 0014 wrote it, because it is the backstop under a repair that lives in
+    application code, and 0014 is applied and sha256-checksummed either way. A partial index is
+    strictly the more permissive of the two, so nothing about the assertion below weakens.
     """
     seq = [
         r for r in schema["indexes"]

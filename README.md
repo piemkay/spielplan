@@ -321,6 +321,19 @@ docker compose start backend worker
 `run --rm` rather than `exec`, because `exec` needs a running container and the worker is the
 process being kept out of the way.
 
+**One thing the corpus does not yet supply is axes, and that disables a surface rather than
+degrading it.** The export's `artifacts/dna_vocab/v1/` ships the eleven facet vocabularies and no
+authored axis definition, so `dna_axis_weight` is empty on a real install: §6.4's Map has nothing
+to plot and renders its no-axes state, and Tonight's split surfacing (§6.2 step 5) is **off** —
+`contested_facet` iterates zero axes, `session_result.conflict` is NULL on every evening a
+household plays, and §14 risk 6's split rate reads a permanent 0 that says nothing. The app says
+so where an operator looks: the import report names both surfaces, and §6.6's Data card lists
+them under the axis count. Authoring the axes is corpus-side work (proposal 140) and is not in
+this repository; M4.12 repaired the combine's split branch anyway, so the day they arrive is not
+also the day four defects in that branch surface on real pools (decision 173). The suite's split
+tests hand-seed their axes and say so, which makes them statements about the rule rather than
+about what a household sees tonight — `docs/TESTING.md` carries the full version.
+
 ### What lives under `data/`
 
 - `data/pg` — Postgres's own directory. Nothing else writes it.
@@ -542,7 +555,8 @@ beside it, written to be handed to one implementation agent.
 Three further owner decisions (2026-09-03) changed scope and are already amended into the spec.
 **164:** accounts are created and managed in §6.6 Users, not the first-boot wizard. **165:** nothing
 about a Tonight session renders on the TV — the phone is the only surface, results included; the
-`/tv` route is deleted rather than deferred. **166:** a guest is a Tonight session seat with no
+`/tv` route is deleted rather than deferred — carried out by **M4.12**, which removed the
+route, its e2e spec, its coverage row and the five v2.1 sentences that funded it. **166:** a guest is a Tonight session seat with no
 account and no profile, the account table keeps **two roles**, at least one active admin always
 exists, and the app gains real user management including password reset (that last part is
 **M4.6**, a milestone §12 did not have).

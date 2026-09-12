@@ -190,7 +190,7 @@ Two things happen on the way that are easy to miss:
 > M1   10/10  covered
 > M2   27/27  covered
 > M3   15/15  covered
-> M4   42/42  covered
+> M4   41/41  covered
 > M4.5   18/18  covered
 > M4.6   12/12  covered
 > M4.7   17/17  covered
@@ -198,7 +198,7 @@ Two things happen on the way that are easy to miss:
 > M4.9   23/23  covered
 > M4.10   10/10  covered
 > M4.11   17/17  covered
-> M4.12    1/1   covered
+> M4.12   18/18  covered
 > M4.13   17/17  covered
   M5    0/10  covered
   M6    0/12  covered
@@ -327,11 +327,202 @@ asks what the plan's sentence actually says — whether the level is more than o
 everything the kept history can be rendered at — which the clamp fails at 32% and the rescale
 passes at 0%, and the board's own tiers are printed beside it with nothing gated on them.
 
-**M4.11 shipped before it, and its `17/17` closed the red list it
-opened with.** Seventeen rows were written before the code and `current_milestone` was raised in the
-same change, with no `tests` key on any of them — M4.10's opening repeated because it worked: the
+**M4.12 shipped before it, and its `18/18` is a gate that was
+red on purpose until the last stage closed it.** Seventeen rows were written before the code
+with no `tests` key on any of them and `current_milestone` was raised in the same change: the
+list that run printed — those seventeen ids
+— *is* the test plan (`docs/milestones/M4.12-plan.md`), the way M4.10's and M4.11's openings
+worked. The eighteenth row was already green the day the milestone opened, because the vectorised
+pair search shipped ahead of it under `ROADMAP-to-M5.md`'s "Start here" table, and the first of the
+seventeen to be filled in is the boundary constant, the second is the lifecycle owner that lets a
+read move a room the combine left behind, and the third is the group of three that keep a seat
+from stranding — the join/start claim, the seat that ends itself when the round has nothing to ask
+it, and the refusal that names the unscored member instead of blaming the budget. The fourth is the
+pair that make a seat's writes serialise: the answer, the undo and the escape behind the seat's own
+row lock, and the ballot behind an advisory lock on its participant. The fifth takes the pair
+search off the event loop and out of the answer's transaction, and stops every write route paying
+for the round a second time to build the card it had already drawn. The sixth is the way out of a
+room that has stopped progressing at all: decision 169's host-only end control, which writes
+`abandoned` rather than deleting anything, and the seats of an ended room, which kept being served a
+pair and a fresh card token after the host had closed them. The seventh is the session channel,
+where the repair is mostly about where things are declared: the socket takes `deps.active_user_ws`
+instead of reading the cookie in its own body -- so §3.1's lock is now enumerable rather than
+merely enforced -- and it takes no `deps.db`, because a yield dependency on a socket would hold one
+of the pool's ten connections for as long as a phone watched the lobby. The eighth seals §13's
+hold-out: the pair the arm draws is a function of a nonce frozen with the pool rather than of the
+request that asked, so twelve reads of one card return one pair and one token where they returned
+twelve, and the arm itself becomes 54b's *rate* rather than every tenth slot -- which is what gives
+a round a household cut short at pair six any hold-out rows at all. The ninth is the combine's
+split branch, where a leading candidate that carried no term on the contested axis silenced a
+surfaceable split and shipped a ranking nobody is shown, a pool of exactly two candidates reached a
+`next()` with no default, the wildcard and every persisted rank came from a ranking the finalists
+did not come from, and 54d's reserved third slot -- "**labelled as such**" -- was labelled nowhere
+between the rule and the screen, which migration 0021's `session_result.reserved` now fixes. The
+tenth is 54f's solo screen, which the spec puts on "the fastest path to a film": its door and its
+Reshuffle ran the whole adaptive pair search on every tap without ever drawing a pair, its walk
+could not reach the last-ranked title of a pool of four or seven, its tilt counted answers the
+replay twenty lines above had deliberately skipped, and a malformed answer left the route as a 500
+rather than a 422 naming the field. The same stage answers decision 218 -- an untagged candidate is
+a zero and no longer the pool's anti-title, which is a third of the shipped library moving as a
+block -- and decision 219, which makes a series night's budget say that its minutes are per
+episode. The eleventh and last is the browser, where three of these rows live and could live
+nowhere cheaper: a room opened with any guest seat could not reach 54e's reveal at all, because
+`ballot.submitted_count` counts guests and Submit was bound to the viewer's own seat, so the
+count stopped one short for ever and what was missing was a *control*; a household frame from
+another device — broadcast on every open, start and end — replaced a guest mid-turn with the
+phone owner's ended round, and the clobber happened inside the handler that read the frame; and
+every `session_answer.latency_ms` ever written is 0, because the elapsed time was evaluated
+inside the object literal one statement after it was started, which is the instrument §14 risk 6
+makes the precondition for re-tuning the round. The same stage retires the TV client under
+decision 165 — the kiosk route's own directory under `frontend/src/routes/`,
+`e2e/specs/16-tonight-tv.spec.js` and the `tonight-rank-tv-kiosk-route` row in one change,
+because each was the others' red gate — and it takes the last `pytest.skip` out of a registered
+Tonight test: the one integration-layer case of 54d over real rows gave up when the fixture
+stopped dividing the household, and with `combine.contested_facet` patched to return None it
+reported that regression as `1 skipped` and a green file. The qualifier in that sentence is part
+of the claim rather than decoration — registered tests in other suites still skip deliberately,
+and an auditor who read the class as closed everywhere would stop looking — so
+`test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take` reads the scope out
+of this paragraph and names the survivors the moment it is widened. So the map today holds
+107 ids in ten pytest files and one e2e spec for M4.12, and the count includes the vitest
+ids decision 226 admits as supporting evidence beside a Playwright or backend test but never
+instead of one. The ninth file arrived from review cycle 1: decision 214's re-tune was inert on
+every stack this repository can boot, because the corpus ships neither §6.3 threshold and
+`make_bundle.py` -- the only writer of the only bundle `npm --prefix e2e run fresh` and
+`ops/devstub.py` can load -- still emitted the retired `straddle_z = 1.0`, while the test grading
+the clause built its board from `DEFAULTS` and could not see the override. A real household is
+unaffected, and that is how it survived a milestone: an imported corpus bundle carries no
+threshold to override the default with. Two others arrived from the browser gate rather than from
+the plan: the clock the latency row is about is re-armed by `loadRound`, which is the tail of `refresh` and therefore
+of every channel frame, so it was measuring the time since the last thing anybody in the
+household did — a card deliberately held for 400 ms was recorded as 176 — and the pair the person
+is reading is identified by its sealed card token, in both directions, because a clock that never
+re-arms passes the first assertion on its own. Cycle 1's surface pass adds six more. Two are
+mounted pages, because both claims are about what the component does and neither can be produced
+from the store: the same clock ran on through intervals in which the page did not exist -- the nav
+rail renders over a live round, so one tap on Rank and back charged the next answer the whole
+absence, 181200 ms for a 900 ms read -- and Reshuffle pressed inside the sharpen round left the
+local flag standing, so the screen announced a round that was out of questions and hid the only
+control that could ask for one. Two more hold the walk that control advances: its counter may not
+run past `SoloBody.offset`'s own bound, nor move on a press the route refused. The last two are
+legs on browser cases this file already had, which is where decision 222's wrap line is finally
+read by something that renders it. The tenth file is `test_static_contracts.py`, and it
+arrived with cycle 1's backend pass for a reason worth stating: three of this milestone's defects
+were defects of the RECORD rather than of the code — a causal claim about a seam `app.py`
+contradicts, four citations into a client module the same diff rewrote, and a line of copy decision
+222 ships that nothing asserted at any layer — and none of them could go red. Each guard weighs the
+claim against the artifact that settles it, which is the only reason a comment or a rendered string
+can be held at all. Cycle 2's backend pass adds four more, and every one of them is the
+same shape as the defects above: a rule whose caller was missing. The round read was the one handler
+that neither settled nor pushed a frame, and on a pool of two or three candidates it is the only
+thing that can end a seat — so a household with three owned shows reached the ballot only when
+somebody reloaded, while the domain tests for that clause called `play.settle` themselves and stayed
+green. `ballot.submit`'s per-participant lock met `resolve` on nothing at all, so a changed-mind
+re-submit could commit between the tally and the row it is stored as and leave §13's share
+describing a ballot §14 risk 6's own rows contradict. The socket gate decision 225 added was the one
+acquire in `api/deps.py` with no bound, so a saturated pool left the handshake pending with nothing
+sent and nothing logged while every HTTP surface answered 503 in ten seconds. And the pair search
+evaluated the error function four times per pair under a comment block that concludes three — a
+defect of the record, on the paragraph that is step 1's own performance argument. Cycle 2's
+surface pass adds one more and repairs two assertions that could not fail on what they claim. The
+seat a ballot Submit NAMES was asserted nowhere below Playwright -- the page cases read the drawn
+controls and the store cases pass the seat in as an argument -- so putting the pre-milestone
+`submitBallot(me?.participant_id)` back left every frontend test green while a guest's vote
+re-wrote the host's; the mounted page now reads the seat off the request. The browser's sharpen
+case asserted that the FIRST answer counts, which decision 223 turned into a property of whichever
+account id `run.mjs` happens to mint -- 6, 21, 43, 48 and 58 hold out at seq 1 -- so it answers
+until the line moves instead, bounded, the way the route's own tests compute the first held-out
+seq rather than assume it. The per-episode row gains the readout that SETS the number, which is
+the one label decision 219's first pass did not reach. Three rows this table already had were amended in the same change rather than
+duplicated: `tonight-rank-holdout-one-in-ten`'s `what` stated the hold-out's *schedule*
+rather than 54b's rate, which is exactly why the gap it describes was invisible to the build; the
+guest hand-off row covered the round hand-off and not the ballot, which is the half no screen could
+reach; and the escape row said nothing about a seat that has already ended. The §12 row it takes is
+at spec line 416, on M4.9's, M4.10's and M4.11's argument rather than M4.6's and M4.7's: M4's exit
+criterion, "a real Friday night resolved by the app", was closed against a six-title candidate
+pool, a household of one account and a guest seat no screen could take to the reveal. Decisions
+**214-226** are numbered in `docs/spec-v2.2-proposals.md`, and the first of them was ruled before
+this plan was read — decision 175 gives Tonight its own boundary constant and decision 205 deferred
+that work to here. It is taken as measured rather than argued, and these are the numbers, over pools of
+12/20/40 at the shipped owned-pool spread: at the borrowed `straddle_z = 1.0`, `converged` fires
+0-2 times in 20 simulated evenings and every median round is the cap of 20; at `BOUNDARY_Z = 0.6`
+it fires 13-17 times in 20 with a median of 8.5-13 pairs, which is §6.2's "~10 candidate votes";
+and the retuned badge constant of 0.15 leaves **31 of a fitted 120-title board** straddling where
+1.0 left 120 of 120. Narrowing `prior_var`, which `M4-open-points §1.1` proposed instead,
+converges 0-1 of 20 at the old threshold and *fewer* rounds at the new one on every one of those
+pools, so it is recorded as refuted. Those ranges were first published as single figures taken
+from one pool size and two of them did not reproduce, so review cycle 1 re-ran the sweep and
+`test_tonight_round.py::test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way`
+now holds this paragraph and the comment beside `BOUNDARY_Z` to the harness that produced them. **One migration**, `0021_tonight_reserved_slot.sql`, which labels 54d's
+counterweight; `0019` stays the permanent gap it has been since M4.10 and `0022` belongs to M4.13,
+built in parallel with this one. **No waiver was added and the milestone was not lowered.** The
+mechanical id sentence moved here from M4.11's paragraph below, which states the same count in a
+phrasing the guard does not read: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds`
+is scoped to `current_milestone`, and exactly one sentence in this file may carry that shape.
+
+**The M4.12 exit criterion is written and has not been run.** `ops/m412_exit_criterion.py` is the
+sixth `ops/m*_exit_criterion.py` and follows the shape of the five before it: it creates and drops
+its own DATABASE, connects through the app's own `db/pool.py` rather than a bare
+`asyncpg.connect` (the json/jsonb codec `session.context` needs — the frozen pool this whole
+milestone is about is jsonb), plays the evening through the real ASGI app over HTTP with three
+real cookie jars, and **refuses to run on a fixture pool on purpose**. The refusal is the point:
+checks 2, 3 and 4 — a guest seat's first pair, a zero-label member's first pair and first answer,
+and an unrelated read served while an answer is in flight — are the three no fixture in this
+repository can falsify, because every candidate pool in `backend/tests` is four to twelve titles
+and a pool that small serves its first pair in milliseconds whatever the selector costs. It takes
+M4.6's account routes for the two members (there is no other way to obtain a second cookie, since
+`POST /api/setup/admin` is first-boot only), §5.3's own `foldin.run` for their scores rather than
+an INSERT into `user_score` — §6.2 step 3's candidate pool *is* that table, and a harness that
+seeded it would be measuring its own idea of a score — and a floor of 600 scored owned movies
+under the shipped 696, below which it refuses rather than reporting a budget nobody was near:
+
+```bash
+CORPUS_BUNDLE_DIR=.../export_bundle/v20260828 \
+TEST_DATABASE_URL=postgresql://... \
+  backend/.venv/Scripts/python ops/m412_exit_criterion.py
+```
+
+Three of its twelve checks are source reads and the script's own docstring says so rather than
+dressing them as runtime facts: decision 165's TV retirement (no route, no spec file, no coverage
+row, no normative sentence), the single lifecycle owner (`play.finish` called from no route), and
+the coverage map's close. That third one deliberately does not shell out to `pytest` or to
+`npm --prefix e2e run fresh`; both commands are at the top of this file, and a harness running the
+suite would report its own subprocess's opinion of a tree it had just changed. What it checks
+instead is the half a green suite cannot show afterwards — that the milestone was closed at
+`current_milestone = "M4.12"`, that every M4.12 row names a test, and that the set of waived rows
+is still the two this milestone inherited. Being the sixth script, the five guards in
+`test_static_contracts.py` that open with `assert len(EXIT_SCRIPTS) == …` now carry 6, and the
+number moved only after each of their rules had been read against it and come back empty: no
+printed literal outside cp850, no `check()` predicate settled before the run, a computed terminal
+verdict, no component read with its comments in. M4.11's paragraph below records why that order is
+the only one in which bumping a tripwire is not the same thing as disarming it.
+
+**The shipped corpus ships no axes, so §6.2 step 5's split surfacing is inert on release data, and
+a green split test is not a statement about release behaviour.** The real export's
+`artifacts/dna_vocab/v1/` contains no authored axis definition (M4.5-plan decision 4 declared the
+gap, and decision 173 leaves shipping them as corpus-side work — proposal 140, not in this
+repository). The consequence runs the length of the chain: `dna_axis_weight` stays empty, so
+`tonight/dna.axes_for` returns `{}`, so `combine.contested_facet` iterates zero axes and returns
+None, so `session_result.conflict` is NULL on every evening a household plays and §14 risk 6's
+split rate reads a permanent 0 that says nothing — and `round._axis_span` is 0.0 for every pair,
+so 54c's widest-axis tie-break is dead too. §6.4's Map has nothing to plot for the same reason.
+So every test in `test_tonight_combine.py`'s M4.12 section hand-seeds its axes and the section's
+own header says so: they assert what the **rule** does when a contested axis exists, which is a
+different claim from what a household sees this Friday, and reading the first as the second is
+how four defects in one branch survived a milestone. M4.12 repairs the branch anyway — a neutral
+leader no longer silences a surfaceable split, a two-candidate pool no longer reaches a `next()`
+with no default, the wildcard comes from the ranking the finalists came from, and 54d's reserved
+card is labelled — so that the day the axes arrive is not also the day all four surface on real
+pools. What the milestone made honest in the meantime is the reporting: decision 173 moves the
+loader onto §6.4's own flat path, the import warn names **both** disabled surfaces rather than the
+Map alone, and §6.6's Data card renders `spielplan.api.admin.AXES_DISABLES` instead of sending an
+operator to a directory the app no longer reads.
+
+**M4.11 closed the red list it opened with, and the `17/17` above is that close.** Seventeen rows
+were written before the code and `current_milestone` was raised in the same change, with no `tests`
+key on any of them — M4.10's opening repeated because it worked: the
 list that run printed, those seventeen ids, *was* the test plan (`docs/milestones/M4.11-plan.md`).
-All seventeen now name tests that exist, and
+All seventeen now name tests that exist — 103 ids in twelve pytest files and two e2e specs — and
 seven rows this table already had were amended in the same change rather than duplicated: the three
 §7.3 M1 rows, the §7.1 upsert row, the banner-path row, §3.3's link row and M2's push-subscription
 row each gained the assertions this milestone's household makes possible, which is the point of
@@ -716,7 +907,10 @@ sealed pair claimed §6.1's `card_token` property in as many words and did not h
 §13's agreement figure counts rows, so a replay weighted one judgement N-fold in the only
 data admitted to evaluate the tier model.
 
-M4 inherited 18 rows and closed 42. Twenty-four were added before any code, from reading
+M4 inherited 18 rows and closed 42; the block above says 41, because M4.12 deletes
+`tonight-rank-tv-kiosk-route` with the surface it described (decision 165 — nothing about a
+session renders anywhere but a phone). A requirement withdrawn is a deletion and never a waiver,
+which is why the count moves rather than the waiver line. Twenty-four were added before any code, from reading
 §6.2 clause by clause: the rewritten step 4 alone (54b/54c) makes claims about the hold-out
 stream, the stopping rule, the escape, the guest prior and the four answers that the inherited
 rows named in one line between them. None of them widened the milestone; they are clauses of a

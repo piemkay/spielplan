@@ -29,13 +29,18 @@
     ESCAPE_LABEL,
     JOIN_CAPTION,
     MAX_GUESTS,
+    RESERVED_LABEL,
     REVEAL_BEAT,
+    WRAPPED_LINE,
     answer,
     approvalShare,
+    ballotTurns,
     bootstrap,
     leave,
     connect,
+    endRoom,
     escape,
+    handBallot,
     join,
     loadBallot,
     loadRooms,
@@ -46,6 +51,7 @@
     roomLine,
     sharpen,
     start,
+    stopClock,
     submitBallot,
     toggleApproval,
     tonight,
@@ -60,6 +66,7 @@
 
   let code = $state('');
   let sharpening = $state(false);
+  let ending = $state(false);
   let disconnect = () => {};
 
   /** The session this device's socket is pointed at, so a re-point happens in one place rather
@@ -68,7 +75,16 @@
    * group and not the room's — household frames arrived and the room's own never did. */
   let watching = null;
 
+  /** Set before `disconnect()` runs, and read by `watch` below. A navigation away can land
+   * BETWEEN `onMount`'s await and its call to `watch`: `onDestroy` goes first, while
+   * `disconnect` is still the no-op default above, and the continuation then opens a socket
+   * into a closure nobody will ever call. Every such navigation leaked a live channel that went
+   * on mutating `tonight.rooms` / `lobby` / `step` from a page that no longer exists — and the
+   * only symptom is the surface behaving oddly somewhere else. [finding 19] */
+  let destroyed = false;
+
   function watch(sessionId) {
+    if (destroyed) return;
     if (watching === sessionId && sessionId !== null) return;
     disconnect();
     watching = sessionId;
@@ -83,9 +99,23 @@
     const resumed = await bootstrap();
     if (watching === null) watch(resumed);
   });
-  onDestroy(() => disconnect());
+  onDestroy(() => {
+    destroyed = true;
+    disconnect();
+    // The pair goes off the screen with the page, and §4.2's clock has to hear about it: the nav
+    // rail renders over a live round, so one tap on Rank is an ordinary way out mid-pair, and the
+    // module keeps its state while this component does not. The clock ran through the absence and
+    // the next answer was charged it — a permanent, unmarked row in the column §14 risk 6 makes
+    // the precondition for re-tuning the round. `loadRound` re-arms on the way back in, so the
+    // answer after a remount measures the read the person actually gave the card.
+    // [finding 41; M4.12 review cycle 1: M412-FE-1]
+    stopClock();
+  });
 
-  const me = $derived(tonight.lobby?.me ?? null);
+  // `me` used to live here and bound Submit to the viewer's own seat. `tonight.activeSeat`
+  // replaces it on both hand-off screens, and the store's `refresh` is what keeps it pointed at
+  // the right person — so a second derivation of "this device's seat" here would be a place for
+  // the two to disagree. [findings 13, 14]
   const isHost = $derived(
     !!tonight.lobby && tonight.lobby.host?.user_id === session.user?.id
   );
@@ -96,6 +126,20 @@
       ? (tonight.lobby?.seats ?? []).filter((s) => s.role === 'guest' && !s.ended_by)
       : []
   );
+  /** The same hand-off one screen later, and the reason a room with any guest could never reach
+   * 54e's reveal: the count the reveal waits on includes the guests, and Submit was bound to
+   * the viewer's own seat. The list is the store's, so the round's turn and the ballot's turn
+   * cannot disagree about whose phone this is. [finding 13] */
+  const ballotSeats = $derived(ballotTurns());
+  /** The seat whose ballot is on screen, and whether it still owes one. `activeSeat` is set by
+   * `refresh` on arrival and by the hand-off after that, so Submit writes for the person
+   * holding the phone rather than for its owner. */
+  const ballotSeat = $derived(
+    (tonight.lobby?.seats ?? []).find((s) => s.participant_id === tonight.activeSeat) ?? null
+  );
+  const ballotOpen = $derived(
+    !!ballotSeat && !tonight.submittedSeats.includes(ballotSeat.participant_id)
+  );
 
   /** Back to the door. The seat is kept — `resume` on the open-rooms row comes back to it. */
   async function toDoor() {
@@ -104,7 +148,20 @@
     // which would re-read the room this device just stepped out of.
     watch(null);
     sharpening = false;
+    ending = false;
     await loadRooms();
+  }
+
+  /** Decision 169's control. Two taps, because one mis-tap beside Back would end the
+   * household's evening and there is no undo for it: `abandoned` is terminal, the room leaves
+   * §6.2 step 2's list and its code is released. The room is stopped watching afterwards for
+   * `toDoor`'s reason — a session frame would otherwise end in a `refresh` of a session this
+   * device has just left. */
+  async function endTheRoom() {
+    await endRoom();
+    ending = false;
+    watch(null);
+    sharpening = false;
   }
 
   async function openAndWatch() {
@@ -130,6 +187,31 @@
            stranding somebody becomes a trap of its own — one live room and the surface has no
            other door. -->
       <button class="pill back" onclick={toDoor} data-testid="tonight-back">Back</button>
+    {/if}
+    <!-- Decision 169. In the header rather than on one screen, because the states a room gets
+         stuck in are several — a seat that never finishes leaves the host on `waiting`, a seat
+         that never submits leaves them on 54e's ballot — and the remedy has to be reachable
+         from whichever one the household is looking at. Host-only: §6.2 step 1 gives the host
+         the session's controls, and a member ending the evening on the household's behalf is
+         the same failure with the sign flipped. Not on the reveal: that room has `ended_at` set
+         already, so the control could only ever produce `rooms.end_session`'s 404 — and an
+         evening that resolved is not one that got stuck. -->
+    {#if isHost && tonight.lobby && tonight.step !== 'door' && tonight.step !== 'reveal'}
+      {#if ending}
+        <button
+          class="pill end on"
+          onclick={endTheRoom}
+          disabled={tonight.busy}
+          data-testid="tonight-end-room-confirm">Yes, end it</button
+        >
+        <button class="pill end" onclick={() => (ending = false)} data-testid="tonight-end-room-cancel"
+          >Keep going</button
+        >
+      {:else}
+        <button class="pill end" onclick={() => (ending = true)} data-testid="tonight-end-room"
+          >End room</button
+        >
+      {/if}
     {/if}
     {#if tonight.error}
       <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
@@ -166,8 +248,21 @@
           bind:value={tonight.controls.runtime_budget_min}
           data-testid="tonight-budget"
         />
+        <!-- 54h / decision 219: on a series night this number bounds minutes PER EPISODE, and
+             this readout is where the household SETS it -- one row under the Series pill, and
+             ahead of every label the server later attaches it to. The two labels the decision
+             names report the number afterwards (a candidate's "fits your 60 min per episode",
+             and the open-rooms row), so an unqualified "60 min" here is where the misreading
+             starts: measured against the shipped bundle the series pool is 121 of 121 owned
+             titles at 60, 130 and 200 alike, so the number narrows nothing and the evening's
+             length is precisely what it is not. Spelled in place rather than through a shared
+             constant, because `roomLine` spells its own the same way and two spellings of one
+             word are cheaper than a module that owns it.
+             [decision 219; M4.12 review cycle 2: M412-FE-5] -->
         <span class="data" data-testid="tonight-budget-value"
-          >{tonight.controls.runtime_budget_min} min</span
+          >{tonight.controls.runtime_budget_min} min{tonight.controls.kind === 'series'
+            ? ' per episode'
+            : ''}</span
         >
       </label>
       <label class="row">
@@ -365,27 +460,47 @@
     <div class="card" data-testid="tonight-ballot">
       <h2>Tap what you'd be happy with</h2>
       <p class="why">Approvals stay hidden until everyone has submitted.</p>
-      <ul class="slate">
-        {#each tonight.ballot.slate as card (card.title_id)}
-          <li>
-            <button
-              class="pill"
-              aria-pressed={tonight.approved.includes(card.title_id)}
-              onclick={() => toggleApproval(card.title_id)}
-              data-testid={`tonight-approve-${card.title_id}`}
-            >
-              {card.name}
-              {#if card.slot === 'wildcard'}<span class="why">· wildcard</span>{/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-      <button
-        class="pill on"
-        onclick={() => submitBallot(me?.participant_id)}
-        disabled={tonight.busy || !me}
-        data-testid="tonight-submit-ballot">Submit</button
-      >
+      {#if ballotOpen}
+        <!-- Whose ballot this is. On the initiator's phone it is not always its owner's, and a
+             person handed a phone has to be told which vote they are casting before they cast
+             it — the screen is otherwise identical for every seat. -->
+        <p class="data label" data-testid="tonight-ballot-seat">{ballotSeat.name}</p>
+        <ul class="slate">
+          {#each tonight.ballot.slate as card (card.title_id)}
+            <li>
+              <button
+                class="pill"
+                aria-pressed={tonight.approved.includes(card.title_id)}
+                onclick={() => toggleApproval(card.title_id)}
+                data-testid={`tonight-approve-${card.title_id}`}
+              >
+                {card.name}
+                {#if card.slot === 'wildcard'}<span class="why">· wildcard</span>{/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <button
+          class="pill on"
+          onclick={() => submitBallot(tonight.activeSeat)}
+          disabled={tonight.busy || tonight.activeSeat === null}
+          data-testid="tonight-submit-ballot">Submit</button
+        >
+      {/if}
+      <!-- The round's hand-off (the waiting screen's `tonight-hand-to-` control), one screen
+           later and with the stakes of the whole evening. Without it the phone could carry a
+           guest through twenty pairs and then had no way to cast their vote, and
+           `ballot.submitted_count` counts them — so the reveal waited on a ballot no screen
+           could submit and the evening never ended. `handBallot` clears the previous person's
+           ticks, which is 54e's blindness across the hand-off rather than only across the
+           room. [finding 13] -->
+      {#each ballotSeats as guest (guest.participant_id)}
+        <button
+          class="pill hand"
+          onclick={() => handBallot(guest.participant_id)}
+          data-testid={`tonight-ballot-to-${guest.participant_id}`}>pass to {guest.name}</button
+        >
+      {/each}
       <p class="data" data-testid="tonight-ballot-progress">
         {tonight.ballot.submitted} of {tonight.ballot.seated} submitted
       </p>
@@ -399,8 +514,21 @@
       <p class="data beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
       <div class="winner card" data-testid="tonight-winner">
         <h2>{tonight.result.winner?.name}</h2>
+        <!-- 54h's per-episode qualifier arrives here for free, and that is worth saying rather
+             than re-deriving: `metaLine` reads the card's `kind` and prints `24m/ep` for a
+             series, and the reveal card carries the session's kind since M4.9. The label the
+             winner card was missing under decision 219 is `fit_line`'s, and the server builds
+             that one. [decision 219] -->
         <p class="why">{metaLine(tonight.result.winner)}</p>
         <p class="data" data-testid="tonight-approval-share">{approvalShare(tonight.result)}</p>
+        {#if tonight.result.winner?.reserved}
+          <!-- 54d: the reserved finalist is "labelled as such". The household is told "here's
+               one of each" by the conflict line below; this is the half that says which card is
+               the other each, and without it the clause had no implementation at all. Inert on
+               the shipped bundle — decision 173 ships no axes, so nothing is reserved on real
+               data — but the rule is the rule. [decision 220] -->
+          <p class="data" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
+        {/if}
         {#if tonight.result.unanimous}
           <p class="data" data-testid="tonight-unanimous">Unanimous.</p>
         {/if}
@@ -433,7 +561,15 @@
         <p class="data label">RUNNERS-UP</p>
         <ul>
           {#each tonight.result.runners_up ?? [] as card (card.title_id)}
-            <li class="why">{card.name} · {card.approvals} approved</li>
+            <!-- The reservation is a claim about the SLATE, so the label follows the card
+                 wherever it lands: the counterweight is a finalist and the votes may leave it
+                 here. Built as a `const` so the row's text stays one node — Svelte collapses the
+                 whitespace around an expression that spans lines, and this row is read by the
+                 eye as one sentence. [decision 220] -->
+            {@const counterweight = card.reserved ? ` · ${RESERVED_LABEL}` : ''}
+            <li class="why" data-testid={`tonight-runner-up-${card.title_id}`}
+              >{card.name} · {card.approvals} approved{counterweight}</li
+            >
           {/each}
           {#if (tonight.result.runners_up ?? []).length === 0}
             <li class="why">nothing else was in the running</li>
@@ -475,19 +611,55 @@
           </div>
         {/if}
         <div class="row">
+          <!-- The walk leaves the round, and the flag has to leave with it. Reshuffle is a browse
+               gesture, so it posts `sharpen: false` and the server sends no pair back — it was
+               not asked for one, and a skipped selection is `pair: null` with `stop_reason` null,
+               which on the wire is the converged round it is not. Held here rather than read off
+               `stop_reason`, because the screen's question is which gesture it is showing the
+               result of: with the flag left standing, the picks came back under "nothing left to
+               ask" and the one control that could ask for a pair was hidden, so Back was the only
+               way out and Back clears the evening's sharpen answers.
+               [decision 222; M4.12 review cycle 1: M412-SOLO-01] -->
           <button
             class="pill"
-            onclick={() => loadSolo({ reshuffle: true })}
+            onclick={() => {
+              sharpening = false;
+              loadSolo({ reshuffle: true });
+            }}
             data-testid="tonight-reshuffle">Reshuffle</button
           >
-          {#if tonight.solo.pair && !sharpening}
+          {#if !sharpening}
+            <!-- No longer gated on a pair being in hand: 54f's door lands on the picks and the
+                 pair search is what this tap ASKS for, so the pair arrives with the tap rather
+                 than ahead of it. Gating on `solo.pair` while the door stopped drawing one would
+                 have hidden the control that is the only way to get one. -->
             <button
               class="pill"
-              onclick={() => (sharpening = true)}
+              onclick={() => {
+                sharpening = true;
+                loadSolo({ sharpen: true });
+              }}
               data-testid="tonight-sharpen">sharpen this</button
             >
           {/if}
         </div>
+        {#if tonight.solo.wrapped}
+          <!-- 54f: the reshuffle "walks further down the ranking", and a walk that has come back
+               round returns titles this person has already seen on this screen. The flag has
+               been on the payload since M4 with no reader, so a fourth press on a small pool
+               looked broken. [decision 222] -->
+          <p class="why" data-testid="tonight-wrapped">{WRAPPED_LINE}</p>
+        {/if}
+        {#if sharpening && !tonight.solo.pair}
+          <!-- The round has nothing left to ask: 54c's shortlist resolved, or the cap was
+               reached. Said out loud because the tap that asks for a pair is now the tap that
+               STARTS the round, so a pool that converges at zero answers would otherwise answer
+               "sharpen this" with a blank space where the question should be — §6.8's register
+               is a surface that says what it did. -->
+          <p class="why" data-testid="tonight-sharpen-done">
+            The round has nothing left to ask — these picks are as sharp as this pool gets.
+          </p>
+        {/if}
         {#if tonight.solo.pair && sharpening}
           <!-- 54f runs "the same adaptive round against the same pool", which means the same
                question: §6.2 step 4's "Which one tonight?". An earlier version had one button
@@ -596,6 +768,11 @@
   .error { color: var(--ember-lift); font-size: 12.5px; }
   header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .back { min-height: var(--touch); }
+  /* §6 preamble's 48 px floor on the two controls this milestone adds. design.css raises
+     `button.pill` on a coarse pointer, which is the phone — these say it on every pointer,
+     because the hand-off is the control a guest meets first and the end control is the one that
+     must not be hit by accident. */
+  .hand, .end { min-height: var(--touch); }
   .empty { color: var(--ink-2); font-size: 13px; }
   .disabled { opacity: 0.55; }
   /* §6 preamble's 48 px floor. design.css raises `button.pill` on a coarse pointer; the Play

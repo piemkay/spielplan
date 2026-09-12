@@ -124,8 +124,21 @@ class Hyperparams:
     # the prior *mean*, so an unused level sits where the crowd puts it rather than at ±∞.
     cutpoint_prior_precision: float = 1.0
     tie_prior_precision: float = 1.0
-    # §6.3: a posterior within this many σ of a boundary is an "A/S straddle".
-    straddle_z: float = 1.0
+    # §6.3: a posterior within this many σ of a boundary is an "A/S straddle". A BADGE constant,
+    # and only that: decision 214 gives §6.2's round its own BOUNDARY_Z, so this number no longer
+    # doubles as a stopping rule for Tonight.
+    #
+    # 1.0 was a placeholder, not a spec literal — §6.3 says "the posterior reaches the next tier"
+    # and names no multiple. Tuned here against the ratio the badge actually depends on, a fitted
+    # board's posterior sd against its learned tier widths: on a 120-title household fit those are
+    # a median σ of 0.87 against tier widths of 0.75-1.08, so at 1.0 the interval is nearly twice
+    # a tier wide and 120 of 120 titles badge — and because §6.3 makes badging and queue
+    # eligibility one predicate (proposal 157), the queue's 70% boundary arm then draws from the
+    # same whole board its 20% exploration arm does and the two arms stop being different arms.
+    # At 0.15 the same board badges 31 of 120, which is what "a straddling title" is supposed to
+    # single out. The number is still a §4.3 bundle knob — the corpus project does not
+    # ship it yet (proposal 157), so this default is what every box runs on.
+    straddle_z: float = 0.15
     # §6.3: "if the model disagrees strongly, the title's badge shows the tension rather than
     # snapping back". "Strongly" is operationally the 80% credible interval — the tier the
     # person assigned and the posterior's interval are disjoint. A probability rather than a σ

@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from spielplan.importer import bundle as bundle_import
+from spielplan.ledger.hyperparams import DEFAULTS, from_mapping
 from tests.fixtures import make_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -174,7 +175,13 @@ def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped,
 # manifests, and the exporter has not done it. The fixture therefore carries them under the name
 # the app reads, and the gap is DECLARED here rather than hidden by a looser assertion. The test
 # below also asserts the exception is still needed, so it cannot rot into a permanent excuse.
-SPEC_REQUIRED_NOT_YET_SHIPPED = ("artifacts/dna_vocab/v1/axes/",)
+# Named file by file rather than by a directory prefix since decision 173: the axes sit beside
+# the vocabulary files now, because the exporter does not descend into subdirectories and an
+# `axes/` directory is a layout no real bundle can carry. Built off `make_bundle.AXES` so the
+# exception cannot come to cover a file the fixture stopped writing.
+SPEC_REQUIRED_NOT_YET_SHIPPED = tuple(
+    f"artifacts/dna_vocab/v1/{facet}.tsv" for facet in sorted(make_bundle.AXES)
+)
 
 
 def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, built):
@@ -367,6 +374,41 @@ def test_the_fixture_hyperparameters_are_the_constants_the_corpus_ships(shipped,
         f"fixture constants {sorted(ours - PROPOSAL_157_NOT_YET_SHIPPED)} != shipped "
         f"{sorted(theirs)}. A fixture naming a constant the way the app happens to read it "
         "cannot fail when the app reads the wrong name."
+    )
+
+
+def test_the_declared_exception_carries_the_thresholds_the_app_actually_ships(bundle_root):
+    """The other half of the exception above: the fixture is the ONLY bundle that ships §6.3's
+    two thresholds, so whatever it writes is what every stack this repo can boot runs on.
+
+    `app.py`'s lifespan caches `hyperparams.load(store)` and `api/rank.py` badges with
+    `hp.straddle_z`, so a bundle constant beats the default everywhere — and because the corpus
+    does not ship these two keys (the guard above), the fixture's literal is the only source
+    there is for `npm --prefix e2e run fresh` and for `ops/devstub.py`. Decision 214
+    retuned `straddle_z` from 1.0 to 0.15 for exactly the reason `ledger/hyperparams.py` records
+    — at 1.0 a fitted 120-title board badges 120 of 120 and §6.3's badge stops singling anything
+    out — and the fixture kept 1.0, so the retune was inert on every stack the household can
+    look at while the test that grades the clause passed `DEFAULTS` and could not see it.
+
+    Against `DEFAULTS` rather than the literal 0.15: the fixture stands in for a producer that
+    does not ship these keys yet, so the value it carries has no independent ground truth to be
+    held to — what it must not be is a number the app retired. The next re-tune then fails here
+    instead of leaving the fixture behind again.
+    [M4.12 cycle 1, M412-RND-01; decision 214]
+    """
+    raw = json.loads(
+        (bundle_root / "artifacts" / "ledger_hyperparams.json").read_text(encoding="utf-8")
+    )
+    loaded, _ = from_mapping(raw)
+    assert loaded.source == "bundle", "read through the loader the app boots on, not the defaults"
+    assert loaded.straddle_z == DEFAULTS.straddle_z, (
+        f"the fixture bundle boots §6.3's badge at straddle_z={loaded.straddle_z} while the app "
+        f"ships {DEFAULTS.straddle_z}: every stack this repo can boot badges a whole fitted "
+        "board and the queue's boundary and exploration arms draw from the same set."
+    )
+    assert loaded.tension_credible_mass == DEFAULTS.tension_credible_mass, (
+        f"the fixture bundle boots §6.3's tension badge at {loaded.tension_credible_mass} "
+        f"while the app ships {DEFAULTS.tension_credible_mass}."
     )
 
 
@@ -686,6 +728,9 @@ def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, b
 
     # §6.4's axis TSVs are the one artifact this fixture ships that the corpus does not
     # (SPEC_REQUIRED_NOT_YET_SHIPPED above), so nothing else would notice if the pool stopped
-    # writing them -- and an axis with no file is a facet with no coordinate.
-    axes = {p.name for p in (root / "artifacts" / "dna_vocab" / "v1" / "axes").glob("*.tsv")}
-    assert axes == {f"{facet}.tsv" for facet in make_bundle.AXES}
+    # writing them -- and an axis with no file is a facet with no coordinate. Beside the
+    # vocabulary files since decision 173, and asserted here as well as up there because a
+    # subdirectory is the location `importer/dna._load_axes` no longer reads at all.
+    vocab = root / "artifacts" / "dna_vocab" / "v1"
+    assert {f"{facet}.tsv" for facet in make_bundle.AXES} <= {p.name for p in vocab.glob("*.tsv")}
+    assert not (vocab / "axes").exists(), "an axis in a subdirectory cannot reach a real bundle"

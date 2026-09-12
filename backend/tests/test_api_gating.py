@@ -415,13 +415,21 @@ UNGATED_BY_DESIGN = {("POST", "/api/auth/logout")}
 # where it is *declared*, so a route that reads the session cookie in its own body appears in
 # neither set and passes through the subtraction as neither authenticated nor gated. That is how
 # both `GET /api/setup/state` — which called `current_user` as a plain function — and the Tonight
-# WebSocket, which cannot take an HTTP dependency at all, handed a locked account payloads
-# decision 179 puts out of its reach while the sweep still reported the reachable set as four.
+# WebSocket, which read `socket.cookies` itself, handed a locked account payloads decision 179 puts
+# out of its reach while the sweep still reported the reachable set as four.
 SESSION_READERS = ("current_user", "load_session", "open_session_cookie")
 
 # Every hand-rolled reader in `api/`, with what makes it legitimate. A new one is a route the
 # walk above is blind to, so it fails the sweep until it is either declared with `Depends` or
 # named here alongside the live test that holds it to §3.1's lock.
+#
+# The Tonight WebSocket was the fifth entry, on the ground that a socket cannot take a dependency.
+# It can — only not an HTTP one — so M4.12 gave `api/deps.py` the two a socket can take
+# (`current_user_ws` / `active_user_ws`, whose bodies read `socket.cookies` and raise
+# `WebSocketException(1008)`), and the route declares the gate like every other route in the app.
+# `deps.py` is skipped by the scan because it *is* the declared dependency, so the entry leaves
+# rather than moving: the channel is now visible to the walk above instead of exempted from it.
+# Its live test stays where it was and gained the anonymous half. [decision 225; finding 20]
 AUTHENTICATES_BY_HAND = {
     # Both sign-in doors read the *incoming* cookie only to destroy the session this device was
     # already holding (dd24), after the credential check. Nothing is granted on it.
@@ -431,8 +439,6 @@ AUTHENTICATES_BY_HAND = {
     ("auth", "logout"): "clears the cookie for whoever holds it",
     # Held by test_a_locked_account_sees_only_the_anonymous_setup_state below.
     ("setup", "_optional_user"): "a locked session is served as the stranger it still is",
-    # Held by test_the_tonight_channel_refuses_a_locked_account below.
-    ("tonight", "channel"): "a WebSocket writes the ActiveUser check out by hand",
 }
 
 
@@ -500,6 +506,14 @@ def test_the_forced_change_gate_covers_every_authenticated_route_but_four():
     `GET /api/setup/state` and `GET /api/tonight/channel` were invisible to both sides of the
     subtraction below and served a locked account regardless. The source scan is the second half
     — a route the graph cannot classify fails here rather than passing unseen.
+
+    The channel is now on the declared side of that line: M4.12 gave `deps.py` the two dependencies
+    a socket can take and the route asks for `ActiveUserWS`, so it leaves `AUTHENTICATES_BY_HAND`
+    and the scan above is what makes the departure true rather than a claim. It still does not
+    appear in either `paths_behind` set — those are `(METHOD, path)` pairs and a WebSocket has no
+    method — which is why its own live test below is what holds it, and why
+    `test_tonight_channel.py::test_the_channel_is_behind_the_dependency_graph_and_never_behind_deps_db`
+    asserts the dependant directly. [decision 225]
     """
     hand_rolled = hand_rolled_session_readers()
     assert hand_rolled == set(AUTHENTICATES_BY_HAND), (
@@ -607,8 +621,15 @@ async def test_the_tonight_channel_refuses_a_locked_account(app):
     locked session and the socket carrying the same rooms — and each room's per-seat progress —
     must refuse it too.
 
-    Both halves, because closing every socket would satisfy the first assertion and lock the
-    household out of the lobby banner instead.
+    Three halves now, and the third is why this test was extended rather than copied. M4.12 moved
+    the check off the route body and onto `deps.active_user_ws`, so the refusal and the *reason*
+    for it are no longer in the same place: a dependency that only asked about
+    `must_change_password` would satisfy the locked assertion and serve a caller holding no cookie
+    at all. Both refusals are therefore measured here, by their close code rather than by the frame
+    type alone — 1008 is the policy close §3.2's door owes a socket, and a close with no code is
+    what a handshake that failed for some other reason looks like. The served member is the other
+    direction: closing every socket would pass the two refusals and lock the household out of the
+    lobby banner instead. [decision 225; finding 20]
     """
     admin, member = await _bootstrap(app)
     otp = (
@@ -622,6 +643,18 @@ async def test_the_tonight_channel_refuses_a_locked_account(app):
     assert [frame["type"] for frame in refused] == ["websocket.close"], (
         "an account locked to §3.1's first-login change was served the Tonight channel: "
         f"{[frame['type'] for frame in refused]}"
+    )
+    assert refused[0].get("code") == 1008, (
+        f"the locked socket was closed with {refused[0].get('code')} rather than 1008"
+    )
+
+    stranger = await _websocket(app(), "/api/tonight/channel")
+    assert [frame["type"] for frame in stranger] == ["websocket.close"], (
+        "a caller holding no session at all was served the Tonight channel: "
+        f"{[frame['type'] for frame in stranger]}"
+    )
+    assert stranger[0].get("code") == 1008, (
+        f"the anonymous socket was closed with {stranger[0].get('code')} rather than 1008"
     )
 
     served = await _websocket(member, "/api/tonight/channel")

@@ -74,7 +74,8 @@ export default defineConfig({
       // 14-tonight joins them for the same reason: §6.2 step 2's hand-the-phone is a
       // statement about a PHONE ("Guests use the initiator's phone"), and solo is the
       // one-tap path §6's preamble is written around. 15-tonight-group needs two browser
-      // contexts and 16-tonight-tv is a television, so both stay on desktop.
+      // contexts, so it stays on desktop. It named a third file until decision 165 retired
+      // the TV client, which is the whole of why results are a phone surface too.
       testMatch: /(shell|library|responsive|13-rank|14-tonight)\.spec\.js/,
     },
   ],
