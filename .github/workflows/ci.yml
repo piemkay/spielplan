@@ -109,6 +109,15 @@ jobs:
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend test
       - run: npm --prefix frontend run build
+      # svelte-check, appended last, because it is the only static signal this frontend has
+      # and it spent the project's life as a documented command no job ran: 25 errors on one
+      # day and 27 on another, on trees every gate called green. Its exit code is NOT
+      # discarded the way `ruff format --check`'s is in the lint job -- that step is
+      # informational on purpose and this one is not, which is the whole difference between a
+      # gate and a report. It lands red by decision 273: M4.15 cleared 27 of the 28 errors
+      # and left `src/routes/admin/data/+page.svelte`'s one to M4.14, which owns that file in
+      # the same wave. [M4.15 finding 26]
+      - run: npm --prefix frontend run check
 
   e2e:
     # The whole stack, from `docker compose up` to a browser. This is the only job that proves

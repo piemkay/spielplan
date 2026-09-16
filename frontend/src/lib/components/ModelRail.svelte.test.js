@@ -21,6 +21,13 @@
  * promise nobody has resolved yet: it costs nothing and it cannot flake. `02-shell.spec.js`
  * keeps the half only a real server can answer — that the reopened drawer fills again, from the
  * live deque, through the service worker the app actually ships.
+ *
+ * M4.15 adds the drawer's dismissal here for a related reason. `19-phone-shell.spec.js` asserts
+ * the household's version — outside tap and Escape close it — and that is what the coverage row
+ * names. What a browser suite will not show cheaply is the guard that keeps the shell's own
+ * trigger working: the button is outside this node and it TOGGLES, so a plain outside-tap
+ * dismissal closes on its pointerdown and the click that follows reopens it, and every assertion
+ * a spec could write about "the drawer is open" would still pass. [proposals 118, 127, 131]
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -29,6 +36,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModelRail from './ModelRail.svelte';
 
 const RAIL = '[data-testid="model-rail"]';
+/** The shell's trigger, by the testid `+layout.svelte` gives it and four e2e specs already use. */
+const OPENER = 'model-rail-open';
 const EVENT = '[data-testid="model-rail-event"]';
 const EMPTY = '[data-testid="model-rail-empty"]';
 
@@ -97,6 +106,29 @@ function openable() {
 }
 
 const lines = () => [...target.querySelectorAll(EVENT)].map((li) => li.textContent);
+
+/** A pointerdown as an engine sends it. jsdom ships no `PointerEvent`; the action reads none of it. */
+const tap = (/** @type {Element} */ el) =>
+  el.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+
+const press = (/** @type {string} */ key) =>
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+
+/**
+ * The shell's trigger, mounted where it really is: outside the drawer it opens.
+ *
+ * The hint span is returned as well and is what the case below taps, because that is what a finger
+ * lands on — `+layout.svelte` draws the `m` shortcut inside the button — and a guard that only
+ * recognised the button itself would miss every real tap.
+ */
+function opener() {
+  const button = document.createElement('button');
+  button.dataset.testid = OPENER;
+  const hint = document.createElement('span');
+  button.appendChild(hint);
+  document.body.appendChild(button);
+  return { button, hint };
+}
 
 /** The drawer's text — and a failure that names an absent drawer rather than throwing. */
 function railText() {
@@ -168,6 +200,97 @@ describe('the drawer across a close', () => {
       expect(lines(), 'the live request never landed').toEqual([
         expect.stringContaining('Sicario')
       ]);
+    } finally {
+      unmount(rail);
+    }
+  });
+});
+
+describe('the drawer dismisses', () => {
+  it('closes when the pointer lands outside it', () => {
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+      expect(target.querySelector(RAIL)).not.toBeNull();
+
+      tap(document.body);
+      flushSync();
+      expect(props.open, 'the drawer has no outside-tap dismissal').toBe(false);
+    } finally {
+      unmount(rail);
+    }
+  });
+
+  it('stays open when the pointer lands inside it', () => {
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+      tap(target.querySelector(RAIL));
+      flushSync();
+      expect(props.open, 'reading the log closed it').toBe(true);
+    } finally {
+      unmount(rail);
+    }
+  });
+
+  it("leaves the shell's own trigger able to close it", () => {
+    // `rail.svelte.js` documents `toggleRail` as "Flip the drawer — the trigger button and
+    // proposal 118's `m` shortcut, one rule for both". The trigger is in the header and therefore
+    // outside this node, so an unguarded dismissal would close the drawer on its pointerdown and
+    // the click that follows would flip it back open: the button would open the drawer and never
+    // close it, which is worse than the missing dismissal this milestone is here to add.
+    const { button, hint } = opener();
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+
+      tap(hint);
+      flushSync();
+      expect(props.open, 'the trigger can no longer close the drawer it opened').toBe(true);
+    } finally {
+      unmount(rail);
+      button.remove();
+    }
+  });
+
+  it('closes on Escape, and on no other key', () => {
+    // `m` in particular: proposal 118 gives it to the shell's own keydown handler, and a drawer
+    // that dismissed on every key would race the shortcut that opened it.
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+      press('m');
+      flushSync();
+      expect(props.open, 'a key that is not Escape closed the drawer').toBe(true);
+
+      press('Escape');
+      flushSync();
+      expect(props.open, 'Escape does not close the drawer').toBe(false);
+    } finally {
+      unmount(rail);
+    }
+  });
+
+  it('stops listening once it is closed', () => {
+    // The drawer is behind `{#if open}`, so it mounts and unmounts on every open — and it is shell
+    // chrome, mounted on every authed surface. A listener left on `document` is one per open for
+    // the life of the tab.
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+      props.open = false;
+      flushSync();
+
+      const closes = vi.fn();
+      props.onClose = closes;
+      tap(document.body);
+      press('Escape');
+      expect(closes, 'the closed drawer is still listening on document').not.toHaveBeenCalled();
     } finally {
       unmount(rail);
     }

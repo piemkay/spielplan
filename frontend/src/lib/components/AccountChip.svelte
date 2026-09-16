@@ -8,6 +8,7 @@
   import { authMethodLine, refreshUser, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
+  import { dismiss } from '$lib/dismiss.js';
   import { goto } from '$app/navigation';
 
   let { onLogout } = $props();
@@ -35,6 +36,16 @@
     if (open) {
       switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
     }
+  }
+
+  /**
+   * The one way out, for proposal 131's outside tap and Escape and for the entries' own taps.
+   *
+   * It does not reset `switching` or `error`: `toggle()` already clears both on the way back in,
+   * and clearing them here would discard a half-typed PIN on a stray tap rather than on a reopen.
+   */
+  function closeMenu() {
+    open = false;
   }
 
   async function toggleModel() {
@@ -68,7 +79,13 @@
   }
 </script>
 
-<div class="wrap">
+<!-- Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape." The
+     action goes on `.wrap` rather than on `.menu`, because the chip button is inside `.wrap`: an
+     outside-handler scoped to the menu would fire on the chip's own pointerdown, close, and then
+     let the click reopen it — a menu that cannot be tapped shut, which is the same defect from the
+     other side. It is applied unconditionally because `.wrap` is unconditional; closing a menu
+     that is already closed is the no-op it looks like. [proposals 127, 131] -->
+<div class="wrap" use:dismiss={closeMenu}>
   <button class="chip" onclick={toggle} aria-expanded={open} data-testid="account-chip">
     <span class="avatar">{initial}</span>
     <span>{session.user?.name ?? 'signed out'}</span>
@@ -103,7 +120,7 @@
              member's browser never receives the admin links at all — hidden, not disabled. -->
         <div class="group">
           {#each session.user?.nav?.account ?? [] as entry (entry.key)}
-            <a href={entry.href} data-nav={entry.key}>{entry.label}</a>
+            <a href={entry.href} data-nav={entry.key} onclick={closeMenu}>{entry.label}</a>
           {/each}
         </div>
 
@@ -162,7 +179,10 @@
             <div class="data heading">SWITCH USER</div>
             <div class="why hint">
               Nobody else has a switch PIN yet — a profile joins this list once it has one.
-              <a href="/account">Set yours on the account page.</a>
+              <!-- The menu's other navigating link, and it closes for the same reason the entries
+                   above do: the shell is persistent, so a link that does not dismiss carries the
+                   dropdown onto /account with it. -->
+              <a href="/account" onclick={closeMenu}>Set yours on the account page.</a>
             </div>
           </div>
         {/if}
@@ -192,14 +212,21 @@
     font-size: 12.5px;
     cursor: pointer;
   }
+  /* §6.8 spends the one accent "on selection and primary actions" — nothing else. Whose session
+     this is is neither: an ember disc on the chip put the accent on every authed surface at once,
+     permanently, next to the one thing that was actually selected. `--identity` is the role token
+     `design.css` mints for it, and the initial comes with it: `--ember-ink` is a near-black meant
+     for an ember fill, and on `.avatar.sm` — whose background is `u.colour ?? var(--card-raised)`
+     and whose `colour` column no code path has ever written — it was near-black on near-black.
+     [§6.8; decision 276] */
   .avatar {
     width: 22px;
     height: 22px;
     border-radius: 50%;
     display: grid;
     place-items: center;
-    background: var(--ember);
-    color: var(--ember-ink);
+    background: var(--identity);
+    color: var(--ink);
     font-size: 11px;
     font-weight: 700;
   }
@@ -329,5 +356,20 @@
   }
   .hint {
     padding: 0 10px 8px;
+  }
+
+  /* §6 preamble: "phone-first (48 px targets, one-handed)". `design.css`'s coarse block raises
+     `.pill, .btn-primary, .btn-ghost, button, select, [role='button']` and a bare `<a>` is in
+     none of those — deliberately, because widening it to `a[href]` would grow every inline prose
+     link in the app. So the rule lands where the anchors are. These four entries are the only
+     phone path to /account and /admin at all (`api/auth.py`'s SURFACES carries neither), and at
+     `padding: 9px 10px` they measured about 34 px, sitting four pixels above a `Log out` button
+     that the global rule had already taken to 48. This is what `NavRail.svelte` does for its own
+     links; what it is not is a restyle of the entries as pills, which would spend the selection
+     grammar §6.8 reserves on a list of destinations. */
+  @media (pointer: coarse) {
+    .group a {
+      min-height: var(--touch);
+    }
   }
 </style>

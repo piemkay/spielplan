@@ -14,6 +14,7 @@ import {
   facets,
   lift,
   load,
+  loadFacets,
   neighboursIn,
   putDown,
   rank,
@@ -582,6 +583,39 @@ describe('a kind switch (§4.1 rule 5)', () => {
     expect(boardUrl).toContain('q=heat');
     expect(boardUrl).not.toContain('genre=');
     expect(boardUrl).not.toContain('decade=');
+  });
+
+  it('keeps the newer kind vocabulary when an earlier facets read answers last', async () => {
+    // Finding 21. `load()` has carried a sequence number since M3 and `loadFacets` did not, so
+    // two kind taps inside one round trip left whichever request the network happened to finish
+    // second — the film genres over a series board, offering a filter that returns nothing and
+    // hiding the one that would work. The vocabulary is the half a member reads before they can
+    // ask anything, so it is the half where a stale answer costs the most.
+    let releaseFilm = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        releaseFilm = () =>
+          r({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => JSON.stringify({ genres: ['Heist'], decades: [1990] })
+          });
+      })
+    );
+    respond({ genres: ['Procedural'], decades: [2010] });
+
+    const film = loadFacets('movie');
+    await loadFacets('series');
+    expect(facets.genres).toEqual(['Procedural']);
+
+    releaseFilm();
+    await film;
+
+    expect(facets.genres, 'a superseded read put the film genres over the series board').toEqual([
+      'Procedural'
+    ]);
+    expect(facets.decades).toEqual([2010]);
   });
 });
 

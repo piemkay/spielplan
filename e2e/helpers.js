@@ -85,9 +85,19 @@ export async function importBundle(page) {
   await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
 }
 
-/** The account dropdown, opened. */
+/**
+ * The account dropdown, opened.
+ *
+ * By the chip's own test id, not by `.chip`. That class is §6.8's small-pill shape and four
+ * other components wear it — `RateUndo.svelte`, `ModelRail.svelte`'s filters,
+ * `TitleDetail.svelte`'s facet chips and Rank's — so it was never a name for this control; it
+ * merely happened to be unambiguous on Home, which is where every caller used to open the menu.
+ * Opened on Rate it resolves to two elements and Playwright's strict mode refuses. Fixed here
+ * because this file is the one seeding path (decision 186) and a spec with a private copy is
+ * how the next surface re-learns this.
+ */
 export async function openAccountMenu(page) {
-  await page.locator('.chip').click();
+  await page.getByTestId('account-chip').click();
   await expect(page.locator('.menu')).toBeVisible();
   return page.locator('.menu');
 }

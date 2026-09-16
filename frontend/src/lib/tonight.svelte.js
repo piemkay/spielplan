@@ -166,13 +166,30 @@ export function stopClock() {
   shownAt = 0;
 }
 
+/**
+ * What the last open-rooms read put in the error slot, so a later one can take back its own
+ * complaint and nobody else's.
+ *
+ * This is the one read on the surface that nobody asks for: `connect`'s `onopen` fires it, and so
+ * does every `rooms.changed` frame — §6.2 step 2 makes a household frame a nudge to re-read — so
+ * it lands in the middle of whatever the person is reading. Clearing the slot on success wiped
+ * sentences it had not written: §6.8's one-line why for a refused guests box stood for forty
+ * milliseconds on the phone and then went, because WebKit finishes the channel handshake AFTER
+ * the tap where Chromium finishes it before — and on a settled device any other member opening a
+ * room does the same thing at any moment. A read that worked is not evidence that the refusal
+ * before it has stopped being true. [finding 18's re-read on open; §6.8]
+ */
+let roomsComplaint = '';
+
 /** §6.2 step 2's open-rooms list. */
 export async function loadRooms() {
   try {
     tonight.rooms = (await get('/tonight/rooms')).rooms;
-    tonight.error = '';
+    if (roomsComplaint && tonight.error === roomsComplaint) tonight.error = '';
+    roomsComplaint = '';
   } catch (err) {
     fail(err);
+    roomsComplaint = tonight.error;
   }
 }
 
@@ -316,6 +333,18 @@ function ballotDone() {
 }
 
 /**
+ * Overlapping reads land out of order, and this is the busiest read in the app: three frame
+ * kinds end in it (§6.2 step 2 makes every frame a nudge to re-read), so does every reconnect,
+ * and so do `answer()`, `escape()` and `start()`. Without a sequence number a slow earlier
+ * response writes the state it saw over a newer one's — the ballot flips back into the round on
+ * one device, that device then never submits, and 54e's reveal waits on a vote nobody can cast.
+ * `rank.svelte.js` and `routes/+page.svelte` carry the same guard with the same argument; this
+ * one is separate from `roundSeq` below because the two reads have different triggers and an
+ * invalidation shared between them would discard answers that are still the newest. [finding 21]
+ */
+let refreshSeq = 0;
+
+/**
  * The lobby, the progress and the ballot state, in one read.
  *
  * `seat` names the seat this particular read is about, for the one caller that knows: 54c's
@@ -324,6 +353,7 @@ function ballotDone() {
  */
 export async function refresh({ seat = null } = {}) {
   if (!tonight.lobby) return;
+  const mine = ++refreshSeq;
   try {
     const seen = await get(`/tonight/sessions/${tonight.lobby.session_id}`);
     // Decision 169: the host ended the evening, here or on another device. There is nothing
@@ -336,6 +366,11 @@ export async function refresh({ seat = null } = {}) {
       tonight.error = 'this evening has ended';
       return;
     }
+    // The sequence check sits AFTER the abandoned branch on purpose. Decision 169's door is
+    // terminal — the server does not un-abandon a session, so this answer cannot be made wrong
+    // by a newer one — and the read that superseded this one may yet fail, in which case
+    // discarding this `leave()` would strand the device inside a room that has ended.
+    if (mine !== refreshSeq) return;      // a newer read has already answered
     tonight.lobby = seen;
     tonight.progress = seen.progress;
     tonight.ballot = seen.ballot;
@@ -409,9 +444,21 @@ export async function start() {
   }
 }
 
+/**
+ * Its own counter, for the same reason `refresh` has one: this function is the tail of `refresh`
+ * AND the retry `answer` makes on a 409, so two reads of a round can be in flight at once — and
+ * the older one landing last puts a stale `card_token` on screen, which the next answer posts
+ * and the route refuses. Separate from `refreshSeq` because a superseded `refresh` returns before
+ * it ever reaches here, so sharing one number would only let the two invalidate each other for
+ * free. [finding 21]
+ */
+let roundSeq = 0;
+
 export async function loadRound(participantId) {
+  const mine = ++roundSeq;
   try {
     const seen = await get(`/tonight/seats/${participantId}/round`);
+    if (mine !== roundSeq) return;        // a newer read has already answered
     // §4.2's clock is armed BY A NEW CARD, not by a re-read of the one already on screen.
     //
     // This function is not only how a pair arrives: it is the tail of `refresh`, and `refresh`

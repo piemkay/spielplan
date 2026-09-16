@@ -30,7 +30,7 @@
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
-  import PosterCard from '$lib/components/PosterCard.svelte';
+  import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
@@ -149,9 +149,19 @@
     }
   }
 
+  // The vocabulary read needs the same guard for the same reason, and its own counter rather
+  // than `requestSeq`: the search box and the four filters fire `load()` alone, and a shared
+  // number would let one of those bumps discard a facets response that is still the newest —
+  // leaving both selects blank until the next kind tap. Two kind taps inside one round trip are
+  // what this catches: the film genres would otherwise settle above the series grid.
+  let facetSeq = 0;
+
   async function loadFacets() {
-    facets =
+    const seq = ++facetSeq;
+    const found =
       (await get(`/facets${qs({ kind: kinds })}`).catch(() => null)) ?? { genres: [], decades: [] };
+    if (seq !== facetSeq) return;        // a newer request has already answered
+    facets = found;
   }
 
   onMount(async () => {
@@ -380,6 +390,17 @@
       {/if}
     </div>
   {:else}
+    {#if items.some(isColdPlaced)}
+      <!-- §8 stage 10's chip explains itself through a `title=` attribute, which is a hover and
+           does not exist on the form factor §6's preamble makes primary. Decision 278 carried the
+           sentence once per shelf row for that reason — and this grid is the other surface the
+           same card renders on, reached by the search box, a filter chip or a tapped credit, with
+           no shelf header in it. Carried here on the same terms: once for the screen, not once
+           per poster. [§6.8; decision 278; review cycle 2: M415-C2-COMP-06] -->
+      <p class="why" data-testid="catalog-cold-note">
+        Cards marked "new" are placed by the Cold Tower — no crowd data yet.
+      </p>
+    {/if}
     <div class="grid">
       {#each items as t (t.id)}
         <PosterCard title={t} onSelect={() => (selected = t.id)} />
@@ -469,6 +490,20 @@
     font-family: var(--mono);
     font-size: 11px;
     color: var(--ink-3);
+  }
+  /* 16 px is iOS Safari's focus-zoom threshold, not a taste: below it the page magnifies on
+     focus and never magnifies back, so these three filters would leave a member reading Home
+     with the tab bar off-screen. `design.css`'s coarse block already says 16 px for `select`,
+     but a bare element selector is (0,0,1) and this scoped one is (0,1,1) — specificity, not
+     intent, decides which rule reaches the control, so the global one never arrives here.
+     §6's preamble makes the phone the primary form factor, which makes the coarse size the real
+     size; the 11 px above stays, because a mouse has no such threshold. Placed straight after
+     the rule it overrides, since the two selectors tie and source order then settles it.
+     [M4.15 finding 3] */
+  @media (pointer: coarse) {
+    select {
+      font-size: 16px;
+    }
   }
   .count {
     letter-spacing: 0.04em;

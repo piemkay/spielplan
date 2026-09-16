@@ -9,6 +9,12 @@
  * carries a one-line why in vocabulary terms, and model numbers appear in the data voice next
  * to their name (`b(t) 0.52 · β 0.8 · gate 0.93`), never bare. `.data` is that voice; using it
  * for anything that is not a model number, an id or a count is a design bug.
+ *
+ * So the two voices are two faces, not two sizes: `.why` is the prose register and is set in the
+ * display face, `.data` is the data voice and is the only class in this file set in JetBrains
+ * Mono. §6.8 gives the mono face to "every model number, ID and data annotation" and to nothing
+ * else, which made a why-line wearing it this tree's largest single §6.8 deviation by element
+ * count — 129 elements across 27 files, every one of them prose. [decision 275]
  */
 
 :root {
@@ -22,8 +28,23 @@
   --ink: #ece9e4;
   --ink-2: rgba(236, 233, 228, 0.75);
   --ink-3: rgba(236, 233, 228, 0.6);
-  --ink-4: rgba(236, 233, 228, 0.35);
-  --ink-5: rgba(236, 233, 228, 0.28);
+  /* Every --ink-* is drawn as text, so every one of them clears WCAG AA's 4.5:1 against each
+     ground it lands on. These two did not: 0.35 measured 2.82 against --ground and 2.87 against
+     --card, 0.28 measured 2.22 / 2.28 — under even the 3:1 large-text floor, on the quiet-reason
+     copy §6.8 makes load-bearing.
+
+     "Each ground it lands on" is eight surfaces, not four. --ember-wash is a 10% tint laid over
+     one of the opaque grounds at sixteen sites and it carries this ink on them, so the ground
+     under a why-line or a .data hint inside a tinted callout is the COMPOSITE — and the composite
+     is lighter than the card beneath it, which is the direction that costs contrast. 0.50 cleared
+     all four opaque grounds (4.60 / 4.58 / 4.55) and measured 4.43 on the wash over --card, where
+     the sweep card's reveal hint is drawn. 0.52 is the SMALLEST alpha that clears 4.5 on all
+     eight (worst case 4.61 on the wash over --card-raised); 0.51 measures 4.49 and fails. That
+     the bottom two rungs are now three points of alpha apart is what the floor costs: 4.5:1 over
+     the tint is where this ramp runs out, and a rung that cannot be read is not a rung.
+     [§6.8; decision 275, amended at M4.15 review cycle 1] */
+  --ink-4: rgba(236, 233, 228, 0.55);
+  --ink-5: rgba(236, 233, 228, 0.52);
   --line: rgba(255, 255, 255, 0.08);
   --line-2: rgba(255, 255, 255, 0.13);
   --line-3: rgba(255, 255, 255, 0.14);
@@ -46,6 +67,47 @@
   --ember-ink: #150c08;
   --ember-wash: rgba(200, 97, 58, 0.1);
   --ember-edge: rgba(200, 97, 58, 0.35);
+
+  /* The roles the accent was playing. "Nothing else" above is a rule with a consequence: eight
+     fills that are neither a selection nor a primary action — an avatar, a status badge, a
+     class-balance bar, a block tick, two progress fills and a wizard's step — each needs a
+     colour named for what it IS, or the single accent goes on meaning everything and marks
+     nothing. None of these is a new hue: a second accent would be the same violation with a
+     different hex, and a facet colour may not be borrowed either, because a facet colour is an
+     identity that means one vocabulary term on every surface it appears. [§6.8; decision 276] */
+
+  /* A status the title carries, not a choice the household made: PosterCard's "new - no crowd
+     data" badge and the high end of Rate's class-balance ramp, which reads 0.22 / 0.42 / this.
+     Opaque, because the badge is drawn over a poster and an alpha fill would let the artwork
+     decide its contrast; bone rather than white so it sits under the ember rather than over it.
+     Text on it is var(--ground), which measures 9.4:1. */
+  --status: #b9b4ad;
+
+  /* Whose session this is, on the account chip's disc. Identity is not an alert: a quiet raised
+     disc with the initial in var(--ink) says who you are without competing with the one selected
+     thing on the screen, which is what an ember disc did on every surface at once. It is legible
+     on both grounds it is drawn on: --ink on --identity measures 10.58:1 on --ground-raised, the
+     header's own ground, and --ink on --identity measures 9.56:1 on --card-raised, the account
+     menu's, which is the worse of the two.
+
+     Both figures are composites twice over — the disc is an alpha over a ground before the
+     initial is an ink over the disc — so neither is a number a token's own value states. They
+     were published as 10.8 and 9.6: 10.8 is the reading on --ground, which the header is not, and
+     the card worst case is 9.56, which rounds the wrong way. Each is written on one line, in the
+     form `test_every_contrast_figure_the_record_publishes_is_the_one_it_measures` re-derives, and
+     that guard counts the figures it can read — re-wrapping one across a line break takes it out
+     of reach, which is the only way to satisfy the guard without obeying it.
+     [§6.8; decision 276; review cycle 2: M415-C2-CSS-06] */
+  --identity: rgba(236, 233, 228, 0.16);
+
+  /* How far through: Rate's rail fill, its block ticks, the first-boot wizard's steps. Three
+     states and no new colour — the unfilled remainder is the line the UI is already drawn with,
+     the part behind you is ink at reading weight, and the step you are on is full ink. Progress
+     is a fact about the session and never a selection, which is the whole reason it stops being
+     the accent; the brightness ramp carries the meaning the hue used to. */
+  --progress-track: var(--line-2);
+  --progress-fill: var(--ink-3);
+  --progress-now: var(--ink);
 
   /* A fixed colour per vocabulary-v1 facet (11). These are identity, not decoration:
      the same facet is the same colour on the map, the silhouette and every DNA chip.
@@ -92,6 +154,17 @@ a { color: var(--ember); text-decoration: none; }
 a:hover { color: var(--ember-lift); }
 button, input, select, textarea { font-family: inherit; color: inherit; }
 
+/* One ring, for the whole app. Proposals 127 and 131 put dismissal and focus in the same clause
+   of baseline hygiene the prototype has neither half of, and in its absence six components each
+   grew a ring of their own — six answers to a question §6.8 answers once, which is the same
+   failure the card's box model had. `:focus-visible` rather than `:focus` so a tap does not draw
+   one. The accent is spent here under its own rule rather than beside it: a focused control is
+   the one the keyboard has selected. [§6.8; proposals 127, 131] */
+:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
 /* The data voice. Model numbers, ids, counts, stage names — never prose. */
 .data {
   font-family: var(--mono);
@@ -101,10 +174,15 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
 }
 .data-lg { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
 
-/* "quiet reasons": the one-line why that every shelf, pick and conflict must carry. */
+/* "quiet reasons": the one-line why that every shelf, pick and conflict must carry. It is prose,
+   so it wears the prose face — the mono face here was §6.8's rule read backwards, and at 10.5px
+   it also made the sentence the household is meant to read the smallest text in the app, half a
+   pixel from the numbers it is explaining. Where a why-line quotes a model number, that fragment
+   wears `.data`, as §6.7's model annotation on the shelf card already does: two voices inside one
+   sentence, rather than one of them becoming the other. [§6.8; decision 275] */
 .why {
-  font-family: var(--mono);
-  font-size: 10.5px;
+  font-family: var(--display);
+  font-size: 13px;
   color: var(--ink-4);
   line-height: 1.5;
 }
@@ -168,6 +246,19 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
   cursor: pointer;
 }
 
+/* A pressed state, because a phone has no hover to borrow one from. `.btn-primary:hover` was the
+   only feedback any of the three primitives had, and on touch a hover either never fires or
+   sticks after the finger has gone — so on the primary form factor these controls acknowledged
+   nothing. The transform is what makes one rule serve all three: a filter reads on the primary's
+   opaque fill and on nothing else, while a scale reads on a transparent background too. It stays
+   off the background so a selected pill keeps its ember while it is held. [§6 preamble] */
+.pill:active,
+.btn-primary:active,
+.btn-ghost:active {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+
 /* Matched by exclusion, not enumeration. An attribute selector reads the DOM attribute rather
    than the IDL default, so `<input>` with no `type` matched none of the old rules: it kept
    `color: var(--ink)` from the bare element rule and got the user agent's light background,
@@ -208,8 +299,42 @@ input::placeholder { color: var(--ink-5); }
   .btn-ghost {
     padding-inline: 20px;
   }
+  /* 16 px is not a taste, it is iOS Safari's threshold: the page zooms in on focus for any
+     control whose text is smaller and does not zoom back out, so the first field a new member
+     ever touches leaves them on a magnified page with the tab bar off-screen and no gesture
+     that says "undo that". §6 preamble makes the phone the primary form factor, which makes the
+     coarse size the real size — the desktop 13 px below is untouched, because a mouse has no
+     such threshold. Specificity, not intent, decides whether this holds: the input selector is
+     (0,4,1) and outranks any component's scoped rule, while a bare `select` is (0,0,1) and loses
+     to every one of them, which is why the sweep measures the computed size on the phone rather
+     than trusting that this rule reached the control. */
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
     min-height: var(--touch);
+    font-size: 16px;
+  }
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  /* The data voice may stay the small one — it is a number beside a name, not a sentence — but
+     10 px of a narrow mono face on a phone is under the floor for reading a digit correctly,
+     and a misread digit is worse than no digit. The prose register does not need a coarse size:
+     `.why` is 13 px display everywhere, which decision 275 sized for the phone first.
+
+     What this rule REACHES is not what it says, and the sentence above is the whole reason that
+     matters: a bare `.data` is (0,1,0) and a media query adds no specificity, while Svelte
+     compiles every scoped rule to `.sel.svelte-hash` at (0,2,0) and wins. The rule fourteen lines
+     up has the same trap and answers it twice — per-component coarse overrides and a sweep that
+     measures the computed size on the phone — because focus zoom strands a member on a magnified
+     page. This one is answered at the source instead, by
+     `test_the_data_voices_coarse_floor_reaches_every_element_it_claims`: every scoped rule that
+     puts a `.data` element under 11 px either raises itself in its own coarse block or is named
+     there as an exemption. Two raise themselves and both are prose, not overlays: /login's
+     divider and the Users page's group heading. Five are named, four of them M4.9's corner
+     overlays under proposal 29's geometry, and the fifth a `.data` Tonight re-declares at 12 px
+     on the line after. [decision 275; §6 preamble; review cycle 2: M415-C2-CSS-04] */
+  .data {
+    font-size: 11px;
   }
 }
 

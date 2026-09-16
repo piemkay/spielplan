@@ -105,6 +105,18 @@ test.describe('tonight', () => {
   });
 
   test.afterAll(async () => {
+    // A hook has its own budget: `test.setTimeout` sets the RUNNING slot's timeout, so the 300 s
+    // the eleventh test raises is that test's, and the teardown after it is still charged the
+    // config's 60 s. It does not fit in one. `page.close()` -- the page holding §6.2's live
+    // socket -- returned in 41 ms; `otherContext.close()` was 59.5 s into a call that had not
+    // returned when the clock expired, on a context idle on Home since `beforeAll`. Nothing in
+    // the app is holding it open: the identical eleven tests cost 7.3 s on desktop and 332.3 s
+    // on the phone project, and on that same project the files that open a context per test
+    // (02-shell, 03-library, 06-responsive, 19-phone-shell) run at desktop speed while the two
+    // that keep ONE PAGE FOR THE FILE are the only slow ones. What is paid for here is a
+    // thirteen-minute-old WebKit context being torn down, so this is a ceiling for the harness
+    // and not a claim about the app -- the same 300 s the four tests above already carry.
+    test.setTimeout(300_000);
     await page?.close();
     await otherContext?.close();
   });
@@ -699,6 +711,18 @@ test.describe('tonight', () => {
     // precondition for re-tuning the round, and a zero reads as a measurement rather than as a
     // bug. The value is the CLIENT's, so the only place the repair can be checked is the
     // request the client actually sends. [M4.12 findings 41, 47]
+    //
+    // Measured at 61.2 s on the phone project against the config's 60 s, in a run where every
+    // assertion below PASSED and the clock expired in the after-hooks -- the same failure the
+    // sharpen test above records, on the same budget and for the same reason. The cost is the
+    // file's shared page rather than this test's work: §4.2's observations are append-only, so the
+    // context is opened once in `beforeAll` and lives for the file, and the median click in it
+    // grows monotonically from 148 ms in the first test to 4811 ms in this one, the eleventh,
+    // while the backend answers at a 7 ms median throughout. What this test claims about speed is
+    // §6's two card budgets below, and both are read off resource timing rather than off the wall
+    // clock -- so the ceiling is a budget for WebKit's actionability round trips and for nothing
+    // else.
+    test.setTimeout(300_000);
     await atTheDoor();
     await page.getByTestId('tonight-open').click();
     await expect(page.getByTestId('tonight-lobby')).toBeVisible();

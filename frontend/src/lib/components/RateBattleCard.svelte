@@ -353,4 +353,15 @@
       min-width: 0;
     }
   }
+
+  /* The same rule and the same four characters as `RateSweepCard`'s, for the same reason: a
+     `button` clears design.css's coarse block on the axis that block sets and goes unmeasured on
+     the one it does not, and `skip` with `padding: 6px 0` is 25 px wide. `.knobs` wraps, so on a
+     phone this is often the only control on its row and there is nothing beside it to widen it.
+     [§6 preamble; proposal 38; review cycle 3: M415-C3-CSS-01] */
+  @media (pointer: coarse) {
+    .text {
+      min-width: var(--touch);
+    }
+  }
 </style>

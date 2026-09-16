@@ -567,9 +567,33 @@
     .controls input,
     .moving button,
     .empty button,
+    .empty a,
     .queue-head button,
     .pair button {
       min-height: var(--touch);
+    }
+    /* `.empty a` is the same control as `.empty button`, one branch over. `emptyState()` sends
+       `no-match` to the button and `fitting`/`unrated`/`thin` to an anchor, and the anchor is the
+       first-run state every member meets — so the floor held or not depending on which sentence
+       the server had sent, which no decision says and exit criterion 4 says cannot be true. A
+       bare `<a>` is outside design.css's coarse list on purpose (it would grow every inline prose
+       link); this is a standalone flex-item CTA, not prose, so it takes the rule here.
+       `inline-flex` because `min-height` does nothing to an inline box.
+       [§6 preamble; M4.15 review cycle 1] */
+    .empty a {
+      display: inline-flex;
+      align-items: center;
+    }
+    /* And the size, for the three selects: iOS Safari magnifies the page on focus for any
+       control below 16 px and never undoes it, which on a filter row leaves a member reading
+       the board magnified with no gesture that says undo. `design.css` says 16 px for `select`
+       too, but that bare selector is (0,0,1) and `.controls select` is not — the same
+       specificity arithmetic the min-height above exists for. The three inputs are deliberately
+       absent: design.css's four-`:not` input rule is (0,4,1) and outranks this sheet, so
+       restating them here would be a second spelling of one rule. The buttons keep 12.5 px —
+       a button is not focus-zoomed, and growing every label reflows the row. [finding 3] */
+    .controls select {
+      font-size: 16px;
     }
   }
 </style>

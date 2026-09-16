@@ -2,8 +2,17 @@
   /**
    * The nav rail. Surface names are normative (spec §6): Home / Rate / Tonight / Rank / Map /
    * Taste. The prototype called Map "Explore" and hid Taste in the account menu; the spec's
-   * names win, and every surface is visible with the milestone that owns it, so the shape of
-   * the finished app is legible from day one rather than appearing later as a surprise.
+   * names win, and every surface is visible from day one, so the shape of the finished app is
+   * legible rather than appearing later as a surprise.
+   *
+   * The milestone that owns each surface travels in the same payload and is rendered on the
+   * DESTINATION, by `Milestone.svelte` — not here. This comment used to say the rail shows it,
+   * which was never true of any line below: the markup renders `s.label` and `title={s.label}`
+   * and reads `s.milestone` nowhere. Putting it in the rail is the rejected option, and not
+   * only because nobody asked for a milestone token beside every link: the payload carries the
+   * milestone that owns a surface and no flag for whether it has shipped, so the rail would
+   * label Home "M0" and Rank "M3" with the same emphasis it labels the two that are still
+   * placeholders. [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
    *
    * The list comes from `/auth/me` rather than from here. §6.6 is admin-role only, and a
    * client-side `{#if role === 'admin'}` hides a link from someone reading the screen while
@@ -101,6 +110,26 @@
     }
     .label {
       font-size: 10px;
+    }
+  }
+
+  /* And the floor on the pointer it is written for. §6 preamble says "48 px targets" without a
+     width in it, and `design.css`'s own coarse block says why that is the query — "a finger is a
+     finger on a tablet". The block above is the LAYOUT reflow and it is keyed on width correctly:
+     at 720 px the rail becomes the bottom bar. The floor was keyed on it too, which made these
+     six links the one control in the shell that is 40 px on a coarse pointer wider than 720 —
+     every iPad in either orientation, and an iPhone 13 turned sideways at 844. `design.css`
+     cannot reach them: its list is `.pill, .btn-primary, .btn-ghost, button, select,
+     [role='button']` and a bare `<a>` is deliberately outside it, because widening it to
+     `a[href]` would grow every inline prose link in the app. So the rule lands here, the shape
+     `AccountChip.svelte`'s `.group a` and `+layout.svelte`'s `a.nobundle` both already use.
+
+     Height only: in the side rail these links are the column's full 136 px, so height is the
+     only short axis, and the bottom bar above sets both because there the column is 48 wide.
+     [§6 preamble; review cycle 2: M415-C2-CSS-01] */
+  @media (pointer: coarse) {
+    a {
+      min-height: var(--touch);
     }
   }
 </style>

@@ -286,4 +286,23 @@
       font-size: 14px;
     }
   }
+
+  /* And the floor on the axis design.css never sets. §6 preamble's "48 px targets" carries no
+     axis in it, and this was the control furthest under it in the tree: `skip` is four characters
+     of an 11.5 px mono face with `padding: 6px 0`, so the coarse block's
+     `button { min-height: var(--touch) }` made it 48 tall and left it 25 wide. Proposal 38 makes
+     that button the escape hatch from a question that cannot be answered, on §4's most repeated
+     interaction, and it sits 18 px from `not seen` — so a thumb that misses it lands on the
+     control that WRITES a §4.2 observation.
+
+     Width only, and in this component rather than in design.css: that block sets no width at all
+     on purpose, because a blanket `min-width` on its six primitives would reach every narrow
+     control in the app at once. The dotted underline is unaffected — a button's text decoration
+     is drawn over its inline content, not over its box.
+     [§6 preamble; proposal 38; review cycle 3: M415-C3-CSS-01] */
+  @media (pointer: coarse) {
+    .text {
+      min-width: var(--touch);
+    }
+  }
 </style>

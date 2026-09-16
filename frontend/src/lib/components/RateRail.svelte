@@ -115,17 +115,22 @@
   .why {
     margin: 0;
   }
+  /* Proposal 49's learning curve, drawn in the progress ramp rather than the accent: where you
+     are against §12's M2 exit criterion is a fact about the session, not a thing the person has
+     selected, and §6.8 spends the ember on selection and primary actions only. Same two tokens
+     as the block counter's ticks, because it is the same claim at a different resolution.
+     [§6.8; decision 276] */
   .curve {
     position: relative;
     height: 6px;
     border-radius: 3px;
-    background: var(--line-2);
+    background: var(--progress-track);
     overflow: hidden;
   }
   .fill {
     position: absolute;
     inset: 0 auto 0 0;
-    background: var(--ember);
+    background: var(--progress-fill);
     border-radius: 3px;
   }
   .mark {

@@ -55,9 +55,17 @@ function requestOptions(options) {
  */
 export async function registerPasskey(label) {
   const { ceremony_id, options } = await post('/auth/passkey/register/options', {});
-  const credential = await navigator.credentials.create({
-    publicKey: creationOptions(options)
-  });
+  // One cast per ceremony, not one per field. `navigator.credentials.create()` is typed as
+  // returning lib.dom's `Credential`, which carries `id` and `type` and none of WebAuthn's
+  // `rawId`, `response` or `getClientExtensionResults`: the twelve errors
+  // `npm --prefix frontend run check` reported in this file were twelve views of that one
+  // absent type, and twelve casts would have been twelve places to keep in step. The idiom is
+  // `push.js:106`'s, for the same reason it gives — the platform is ahead of lib.dom. Casting
+  // the ceremony's result and not each read also keeps the block below reading as what it is:
+  // the wire format this module exists to translate (§3.2). [M4.15 finding 26]
+  const credential = /** @type {any} */ (
+    await navigator.credentials.create({ publicKey: creationOptions(options) })
+  );
   if (!credential) throw new Error('the passkey prompt was dismissed');
   return post('/auth/passkey/register', {
     ceremony_id,
@@ -84,7 +92,11 @@ export async function signInWithPasskey(name) {
   const { ceremony_id, options } = await post('/auth/passkey/login/options', {
     name: name || null
   });
-  const assertion = await navigator.credentials.get({ publicKey: requestOptions(options) });
+  // The assertion's cast, for `registerPasskey`'s reason: `PublicKeyCredential`'s fields are
+  // not on lib.dom's `Credential`, and one cast at the ceremony covers every read below.
+  const assertion = /** @type {any} */ (
+    await navigator.credentials.get({ publicKey: requestOptions(options) })
+  );
   if (!assertion) throw new Error('the passkey prompt was dismissed');
   return post('/auth/passkey/login', {
     ceremony_id,

@@ -2270,3 +2270,102 @@ def test_the_unused_import_guard_sees_the_extraction_that_shipped():
     assert _unused_named_imports(regressed) == ["existsSync", "readFileSync"]
     trimmed = regressed.replace("existsSync, ", "").replace("readFileSync, ", "")
     assert _unused_named_imports(trimmed) == []
+
+
+# The phone project is selected by a regex and nothing evaluated it. `19-phone-shell.spec.js` runs
+# on an iPhone 13 only because its name ends in `shell.spec.js` -- the same bare word that has
+# carried `02-shell` and `03-library` and `06-responsive` there since the project existed, with the
+# config offering no account of any of the three. Decision 267 settled that the config is NOT
+# edited: the alternation's exactness is the reason the decision exists. What was missing is a
+# gate. Tighten the alternation to `(02-shell|03-library|06-responsive|13-rank|14-tonight)` -- a
+# plausible tidy-up, since `shell` now matches two files -- and every rule this milestone exists to
+# hold on a phone is measured on a 1400x900 desktop instead, with `pytest` green and 11/11 rows
+# reporting covered. `test_the_harness_names_no_spec_file_that_does_not_exist` runs the opposite
+# direction and passes on that edit, because every name it leaves behind is a file that exists.
+PHONE_SHELL_SPEC = SPECS / "19-phone-shell.spec.js"
+
+# The sentence review cycle 3 falsified, quoted so the guard below names what it is refusing.
+UNQUALIFIED_ORDER = "Everything that must not meet that state has already run."
+
+PHONE_PROJECT_SPECS = {
+    "02-shell.spec.js",
+    "03-library.spec.js",
+    "06-responsive.spec.js",
+    "13-rank.spec.js",
+    "14-tonight.spec.js",
+    "19-phone-shell.spec.js",
+}
+
+
+def test_the_phone_project_selects_the_specs_the_coverage_map_believes_it_runs():
+    """Six coverage rows are discharged on an iPhone 13, and a regex decides whether they are.
+
+    §6's preamble makes the phone the primary form factor, and the rules M4.15 owns -- the 48 px
+    floor in both dimensions, the 16 px coarse-pointer type that stops Safari's focus zoom, the
+    dismissal rule, the 401 seam and the offline card -- are stated on that device or nowhere.
+    Which specs reach it is `testMatch`, an alternation anchored on `\\.spec\\.js`, and nothing in
+    either suite evaluated it: the file that carries those six rows matches on the bare word
+    `shell`, and that fact is written in the spec it decides, in decision 267 and in this map's own
+    M4.15 banner -- three records and no gate.
+
+    So the regex is lifted out of the config and run against the directory, and the matching set is
+    enumerated here. It is the same instrument as
+    `test_the_harness_takes_its_origin_from_the_stack_it_is_driving`, and it is here for the same
+    reason: a green-looking run that drove the wrong thing says nothing in either number.
+    The config itself is read, never rewritten -- decision 267 keeps the regex exactly as it is.
+    [§6 preamble; decision 267; row `platform-every-touch-target-meets-the-token`]
+    """
+    source = _read(CONFIG)
+    literal = re.search(r"testMatch:\s*/(.+?)/\s*,", source)
+    assert literal, "the phone project declares no `testMatch`, so it runs every spec in the suite"
+    selector = re.compile(literal.group(1))
+    matched = {path.name for path in SPECS.glob("*.spec.js") if selector.search(path.as_posix())}
+    assert matched == PHONE_PROJECT_SPECS, (
+        f"the phone project's testMatch `{literal.group(1)}` selects {sorted(matched)}, and the "
+        f"coverage map is written against {sorted(PHONE_PROJECT_SPECS)}.\n"
+        "Missing: " + str(sorted(PHONE_PROJECT_SPECS - matched)) + "\n"
+        "Extra:   " + str(sorted(matched - PHONE_PROJECT_SPECS)) + "\n"
+        "A spec that drops off this project does not fail -- it quietly stops running where its "
+        "rule is the rule, and `pytest` stays green with every row reporting covered."
+    )
+
+
+def test_the_phone_spec_names_the_specs_that_run_after_its_desktop_pass():
+    """The other half of the same regex: what runs AFTER the file that takes the device away.
+
+    `19-phone-shell.spec.js` said "everything that must not meet that state has already run", and
+    argued it from filename order on one worker. That is true within a project and false across
+    the two this suite drives. Playwright groups by project and the desktop project declares no
+    `testMatch`, so it runs this file in full -- creating a household member and signing in as
+    them -- and only then does the phone project start, with five specs left to run.
+
+    Nothing is broken by that today, which is exactly why the sentence mattered: it is the only
+    thing a future author reads before adding a test here, and it told them they had no
+    downstream. So the set is computed from the config rather than asserted in prose, and the
+    header has to name every member of it. A `testMatch` that gains a file and a header that does
+    not is the same defect again, one spec later.
+    [decision 267; review cycle 3: M415-C3-E2E-05]
+    """
+    source = _read(CONFIG)
+    literal = re.search(r"testMatch:\s*/(.+?)/\s*,", source)
+    assert literal, "the phone project declares no `testMatch`, so it runs every spec in the suite"
+    selector = re.compile(literal.group(1))
+    phone = {path.name for path in SPECS.glob("*.spec.js") if selector.search(path.as_posix())}
+    followers = sorted(phone - {PHONE_SHELL_SPEC.name})
+    assert followers, "the phone project runs this file alone, so there is nothing to name"
+
+    header = _read(PHONE_SHELL_SPEC).split("*/", 1)[0]
+    unnamed = [name for name in followers if name.removesuffix(".spec.js") not in header]
+    assert not unnamed, (
+        f"{PHONE_SHELL_SPEC.name}'s header does not name {unnamed}, which the phone project runs "
+        "AFTER the desktop project has already run this whole file. Playwright groups by project "
+        "before it orders by filename, so 'everything that must not meet that state has already "
+        "run' is true within a project and false across the two this suite drives."
+    )
+    # And the sentence itself, quoted, because naming the five is only half of it: what a future
+    # author reads before adding a test here is the claim, not the list beside it.
+    assert UNQUALIFIED_ORDER not in header, (
+        f'{PHONE_SHELL_SPEC.name}\'s header still says "{UNQUALIFIED_ORDER}". That is true '
+        "WITHIN a project and false across the two this suite drives: the phone project runs "
+        f"{followers} after the desktop project has run this file end to end."
+    )

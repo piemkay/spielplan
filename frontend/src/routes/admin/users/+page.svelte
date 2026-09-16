@@ -594,6 +594,14 @@
     font-weight: 500;
     letter-spacing: 0.08em;
   }
+  /* Same floor, same reason it has to be written here: `.sub h3` is (0,1,1) and outranks
+     `design.css`'s coarse `.data` twice over. After the rule it raises, because the two tie.
+     [§6 preamble; decision 275] */
+  @media (pointer: coarse) {
+    .sub h3 {
+      font-size: 11px;
+    }
+  }
   .list {
     list-style: none;
     margin: 0;
