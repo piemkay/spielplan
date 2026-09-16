@@ -27,6 +27,7 @@ import pytest
 from spielplan.db import library
 from spielplan.importer import dna as dna_loader
 from spielplan.importer import load, meta
+from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
 
@@ -268,6 +269,81 @@ async def test_a_shipped_table_the_mapping_does_not_know_fails_the_import(db, ro
     assert not report.ok
     assert any("title_franchise" in f.message for f in report.failures), report.render()
     assert await db.fetchval("SELECT count(*) FROM title") == 0
+
+
+async def test_a_shipped_view_is_not_counted_as_a_table(db, root):
+    """§10's "counts per table", and the one shape that was counted and then accounted nowhere.
+
+    The validator enumerated `type IN ('table','view')` while `load.unaccounted_tables` and
+    `_account_for_shipped_tables` both enumerate `type = 'table'`, so a view arrived in
+    `report.table_counts` with a row count and no target ever held those rows - a hole in the
+    exit criterion's "0 unaccounted", because the report said the rows came in. v20260828 ships
+    no view, so the case is the next export's and the assertion is built here.
+    [M4.14 step B9, finding 2.23]
+    """
+    edit(root, "CREATE VIEW title_sentiment AS SELECT id AS title_id, 1 AS score FROM title")
+
+    report = await load_content(db, root)
+
+    assert report.ok, report.render()
+    assert "title_sentiment" not in report.table_counts
+    assert "loaded:title_sentiment" not in report.table_counts
+    assert "title_sentiment" not in report.skipped_tables
+
+    validated = ImportReport()
+    source = sqlite3.connect(f"file:{root / 'content.sqlite'}?mode=ro", uri=True)
+    try:
+        validator.validate_content(source, validated)
+    finally:
+        source.close()
+    assert "title_sentiment" not in validated.table_counts, (
+        "counted here and claimed by nobody on the load side is the defect, not the fix"
+    )
+    noted = [f for f in validated.findings if f.rule == "table-view"]
+    assert noted and "title_sentiment" in noted[0].message, validated.render()
+    assert noted[0].severity == "note"
+
+
+async def test_every_mapping_declares_the_targets_primary_key(db, root):
+    """`TableMap.key` is the one place the app's key is written down, and this is what keeps it
+    honest against the migration that declares it.
+
+    `validate._validate_integrity` counts duplicate GROUPS under this key precisely so a COPY
+    cannot meet one, and it derives the key list from `MAPPINGS` rather than from a list of its
+    own -- which only helps if `MAPPINGS` and the DDL agree. They did not, three times: 0015
+    re-keyed `title_language`, `title_country` and `display.platform_rating` after 17,342
+    duplicate groups rolled a seed back, and 0018 re-keyed `title_company` and `title_video`.
+
+    An EMPTY key is the other legal answer and it is checked too: section 4.1 says "credit
+    (dedupe at read time, never at import)", so `credit` and `award` carry a surrogate
+    `bigserial` the mapping does not write, and this asserts that shape rather than accepting
+    silence. [M4.14 step B3]
+    """
+    for tmap in load.MAPPINGS:
+        schema, table = ("public", tmap.target) if "." not in tmap.target else tmap.target.split(".")
+        primary = {
+            r["attname"]
+            for r in await db.fetch(
+                """
+                SELECT a.attname
+                  FROM pg_index i
+                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                 WHERE i.indrelid = $1::regclass AND i.indisprimary
+                """,
+                f'{schema}."{table}"',
+            )
+        }
+        assert primary, f"{tmap.target} has no primary key at all"
+        if tmap.key:
+            assert set(tmap.key) == primary, (
+                f"{tmap.target} is keyed {sorted(primary)} and the mapping declares "
+                f"{sorted(tmap.key)}; the duplicate-group check counts the wrong groups"
+            )
+        else:
+            assert not (primary & set(tmap.pg_columns)), (
+                f"{tmap.target} has no declared key but its primary key {sorted(primary)} is "
+                "written by this mapping -- an empty key is for a surrogate the import never sets"
+            )
 
 
 # --- data-rules-importer-maps-the-shipped-content-schema ----------------------------------

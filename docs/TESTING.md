@@ -200,6 +200,7 @@ Two things happen on the way that are easy to miss:
 > M4.11   17/17  covered
 > M4.12   18/18  covered
 > M4.13   17/17  covered
+> M4.14   12/12  covered
   M5    0/10  covered
   M6    0/12  covered
   M7    0/1   covered
@@ -218,14 +219,238 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.13 is the milestone this block was last re-pasted for, and its `17/17` closed the red list it
-opened with.** Fifteen new rows were written before any source edit and `current_milestone` was
+**M4.14 is the milestone this block was last re-pasted for, and its `12/12` closed the red list
+it opened with.** Twelve rows were written before any source edit and `current_milestone` was
 raised in the same change, each naming the exact tests it owes rather than leaving `tests` off —
-M4.9's opening rather than M4.10's and M4.11's, because a row with no tests tells you only that a
-row is bare, while a row naming a test that does not exist yet tells you which stage owes what. That
+M4.13's opening rather than M4.10's and M4.11's — so the red gate was rule 2 from the first run
+rather than rule 1: `test_every_named_test_exists` printed one line per *test* that did not exist
+yet rather than one per bare row. That list — forty-seven names when the rows were filled, four of
+the files holding them not yet written — *was* the test plan (`docs/milestones/M4.14-plan.md`), and
+it was closed by writing those tests under those names: all twelve rows now name tests that exist —
+**134 ids across fourteen pytest files and one e2e spec**, and the count includes the nineteen
+vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and never
+instead of one — they sit in the frontend's suite rather than in the fifteen files the figure
+names, so an auditor reconciling the two subtracts them first.
+Review cycle 1's are appended to the rows they belong to rather than given rows of their own: the
+four-shape Postgres guard and the crash that leaves no staged tree, the
+reaper's two claims and the door's third window, the seed list's and the axis ledger's clears and
+the four ledgers a bundle stopped carrying, the empty naming layer, the two-vocabulary refusal that
+was a 500, the declaration read twice, the header-aligned truncation, the table count reachable
+from validate, one statement said twice, the guard that ties decision 252's record to the absence
+of the subprocess it rules on, the foreign row a lost poll handed back, the two halves of adopting
+an import the page did not start, and the model-job derivation asserted against a basis reached one
+call frame out.
+Cycle 2's are appended the same way: the fourth ledger's empty-file guard and the two ways a
+models-only bundle can carry ledgers it must not load, the restage that erased the seed row's kind,
+the wrong path diagnosed as a path on both install states, the two-vocabulary refusal an
+undeclared bundle could not read and the same pair in a staged tree taking a boot with it, the
+listed file that is present and unreadable, the staging failure that half-wrote a tree, the
+compressed tar refused as a truncated one, the extraction a report was about and did not name, the
+abandoned claim no tick could reach, the import that did not lead the tick the clock produced, the
+in-flight probe that took the writer's lock, and the validate button an adopted import left
+pressable.
+Cycle 3's: the declaration that contradicts the tree it ships and the bundle told it named nothing
+while its header carried the name, the failed restage that kept its own half copy and the
+replacement that destroyed the copy it could not replace, the half-restored directory the
+repair refused to treat as broken, the crash after the flip reported as a failed import, the guard
+that reads this package's own report messages for a glyph `_ASCII_FOLD` does not fold, and the
+corpus pass's own rendered report read for one — the half of that clause no fixture can make,
+since `test_render_encodes_to_ascii` builds its report by hand and the messages a bundle's own
+strings reach are outside it.
+Cycle 4's bring two more pytest files with them — `test_box_claims.py`, where M4.7's own "a
+stated reason and an actual effect that had come apart" guards live and where this job's budget and
+its self-test now answer the same question, and `test_bundle_import_loop.py`, which times a press
+against the loop it is not allowed to own. The rest: the two leaves of BUNDLE.json's maps, which
+raised out of both routes as "Internal Server Error" and counted a size-only inventory as verified;
+three curated-ledger skip lines written for a seed and read as statements about an install that
+still held them; the extraction destroyed by a refusal that named only the archive; the one exit
+whose report is never returned; the cancellation the job budget delivers, which the serialisation
+row enumerated and no test performed, so narrowing `except BaseException` to `except Exception`
+would have left
+205 MB staged behind a green suite; a staged or failed row something still cites, which decision
+249's hatch assumed away and which came back as the raw constraint name the rule replaces, with the
+guard that holds the hatch's table list against `pg_constraint` beside it; the wizard that mounts
+the importer with no row and could never adopt a running import, and the poll nobody cancelled; and
+the validation that blocked the API process's event loop, which is decision 287, beside the
+extraction that blocked it before the validation ever ran.
+The counts those four sentences used to publish are gone rather than restated. Nothing re-derives
+them once the milestone commits, and two mechanical readings of the same question disagree — the
+`[M4.14 cycle N]` tag in a test's own docstring, and the same tag anywhere in its source — while
+three of cycle 4's own tests carry no tag at all. What survives either way is the enumeration: a
+list beside the ids it names stays checkable at any later date, which is the repair the amended-row
+count got in cycle 2 and the one thing a count published alone cannot offer.
+[M4.14 cycle 4, m414-c4-rec-05]
+Two more of cycle 1's tests sit on M4.5's and M4.9's rows rather than on this milestone's, so
+they are outside the 134: the ledger opened outside `_read_tsv`, and the rail line the import stopped
+being able to write. Cycle 2 adds a third, on M4.8's row: the guard that holds this milestone's
+own amended-row count against the map; cycle 3 a fourth, on M4.5's: decision 162's boundary read
+over the adjudications ledger the bundle's own version names rather than over a literal `v1`, and
+a fifth and sixth beside cycle 2's on M4.8's row — the vitest ids disclosed as inside the published
+total rather than beside it, and the decision numbers this lane has left held against the sections
+the register actually carries. Cycle 4 adds a seventh, an eighth and a ninth, all three on
+M4.5's report-not-raises row rather than on this milestone's: the feature contract whose block is
+not an object, the onboarding `year` of NaN that raised inside the import transaction — an
+exception DEFERRED to the import, which is the half of that row's promise nothing had asserted —
+and the same year read at `/validate`, which is the half an operator meets before the copy rather
+than after it.
+No spec file was added: `01-first-boot.spec.js` is extended to the poll, because the suite is
+filename-ordered and single-worker. **No waiver was added and the milestone was not lowered.** The
+one standing M0 waiver — the feature-builder DB role, which no migration creates — was re-read
+rather than skipped: it is a privilege boundary and this milestone creates no role, so it stays as
+it is.
+
+**The milestone is the import door: the 127-second import became the worker job §5.3 already files
+it as, and every way the importer could refuse, crash or half-write became a named line in the
+report.** §5.3 schedules "Bundle import validation + hot swap" as an admin action with a minutes
+budget, and it was a 127-second `await` inside `POST /api/admin/bundle/import`, on the backend's
+event loop, inside one transaction, behind an ingress that cuts a proxied request at 100 s — so the
+operator was told the import had failed while it completed and flipped, and the retry met decision
+162's seed-once refusal, which reads as corruption. Underneath that: the importer read three keys of
+`BUNDLE.json` and none of its 42 sha256 hashes, so a zeroed `equating_map.json` validated clean and
+a truncated `reviews.sqlite` validated and then died inside the transaction as a 500 with the staged
+tree left behind and no line naming the table; `_unpack` created its directory before it opened the
+archive, never cleaned up and reused whatever it found, so the corpus tar cut at 90% validated `ok`
+over a 332-of-436 MB database; the `DATA_DIR` boundary was a string prefix under which `/database`
+passed for `/data`; referential integrity was never checked, so nine orphan shapes validated clean
+and raised inside the transaction; the vocabulary version was derived four ways that disagreed, and
+decision 163's refusal was skipped by exactly the bundle kind decision 162 says will arrive again;
+a models-only re-import loaded none of the four curated ledgers it carries while the validator read
+two of them off that same bundle and threw them away; two imports at once took no lock at all and
+the loser died on a primary key inside the transaction; an install whose `/data/artifacts` had gone
+had no supported repair; and the report stored on the row omitted the three findings that say what
+the import *did*. M4.14's range in `docs/spec-v2.2-proposals.md` is **247-266**, and one number
+past it. **247-258** were
+taken as the milestone opened, with **259**, which records why §12 gains an M4.14 row at
+all — unlike M4.5, M4.8 and M4.13, this one both reschedules a job the table scheduled nowhere and
+reopens an M0 criterion that was closed against a fixture. The lane building M4.15 in parallel owns
+**267-286**; review cycle 1 then spent **260-263** on the four rules its fixes needed — decision 260
+(guard 2 on the third DELETE-first ledger), 261 (the axis ledger replaces its facet's weights), 262
+(a seed with an empty naming layer records no vocabulary) and 263 (`bundle_swap` and `reconcile`
+join `rail.AWAITING_PRODUCER`) — and review cycle 2 spent the rest: 264 (guard 2 belongs to the
+fourth DELETE-first ledger as well), 265 (a curated ledger naming a vocabulary the install has no
+row for is skipped rather than refused) and 266 (a bundle that names a vocabulary and ships no tree
+for it says which ledgers it skipped). **247-266 is spent**, which is the claim made here rather
+than a count of what is left: the sentence this replaces published 264-266 as spare after all three
+had been argued and cited, and a cycle that reused one would have written a second decision under a
+number five source files already name. Review cycle 4 then needed one rule more and could not take
+267, so it is recorded as **287**: the register runs 247-266 here, 267-286 in M4.15's parallel lane,
+and resumes at 287. This milestone's calls are therefore 247-266 *and* 287, and a reader who stops
+at the end of the range meets neither decision 287 nor the validation it took off the request loop.
+[M4.14 cycle 4, m414-c4-rec-02]
+
+**The one migration is `0023_import_state.sql`, and the rule it carries is repeated here because a
+rule the schema enforces and no prose states is a rule the next operator meets as an error message:
+an `artifact_bundle` row is provenance, and is deleted only while it is still `staged` or
+`failed` and nothing still cites it.** A `BEFORE DELETE` trigger raises for every other state, and
+for those two as well when a title, placement, score, prior, fit or session still names the version,
+in each case naming the version and the state — the hatch's licence is that those two states never
+became anybody's basis, which is true of every row this app writes and which a hand-built row can
+falsify, and an assumed premise came back as `title_placement_has_basis` or
+`session_bundle_version_fkey`, the raw constraint names the rule exists to replace. Nothing in the
+tree writes either state — the importer writes `validated` inside the transaction that flips
+(decision 253) and a failed import rolls that row back — so the hatch is for a psql operator and for
+a state a later milestone may start writing, not for an abandoned import this app produces;
+`user_vector.bundle_version`'s `SET NULL` stays the documented exception, because §10 says a
+vector expressed in the old basis is garbage and a NULL stamp is how every read already recognises
+that. The same file closes the half of that hole reachable with no delete at all: `title` carried
+`placement_bundle` as `SET NULL` while `session` RESTRICTed the delete by accident, so a row that
+did get through left a title at `placement = 'cold_tower', placement_bundle = NULL` — and §12's M2
+exit-criterion index then reported zero owned titles waiting to be placed, for a title with no
+coordinate at all. 0023 backfills those to `unplaced` and adds `title_placement_has_basis CHECK
+((placement = 'unplaced') = (placement_bundle IS NULL))`. Its number is the roadmap ledger's rather
+than the plan's (decision 250): 0016-0018 and 0020-0022 are applied and sha256-checksummed and none
+may be edited, 0019 was allocated to M4.10 and stays unused rather than being recycled, and 0024 is
+reserved for M4.16. README's `/data/artifacts` bullet carries the same rule for the operator.
+
+**Its exit criterion is `ops/m414_exit_criterion.py` — the eighth `ops/m*_exit_criterion.py`, so the
+five guards in `test_static_contracts.py` that open with `assert len(EXIT_SCRIPTS) == …` move to 8 —
+and it has been RUN, three times, against a 1.04 GB archive the script builds itself out of
+`CORPUS_BUNDLE_DIR=v20260828`. It printed `12/13 checks passed` and exited 1 in all three, before
+decision 287; the re-run under decision 246 is what settles the final number and it is the owner's
+to make.** That re-run has one thing to repair before its number means what it says:
+`build_install` opens the archive before `create_app()`, so every check 8 and check 9 on record
+took `_open`'s reuse path and none of them has ever measured the press an operator actually makes.
+Either that pre-open goes, or check 8 presses Validate first the way the Data tab does and check
+9's window reaches back to that press. [M4.14 cycle 4, m414-c4-waveE-02]
+Decision 184 refuses a number nobody ran, so every figure below is one of those runs' and
+none of them is the re-run's. `POST /api/admin/bundle/import` answered **202 in
+3.75 s** against its five-second budget, and the import finished **213 s later, in the worker** —
+the same work that was 127 s *inside the request* before. `/api/health` was sampled **211 times
+across those 213 s**, at least 210 of them due, worst answer **3,738 ms** and worst gap **3.74 s**,
+with **zero non-200 in the 213 s the import ran**. Every file `BUNDLE.json` lists was verified
+first: **42/42 in 1.52 s**, with **0** `artifact_bundle` rows and **0** staged files written by the
+time the integrity pass finished. The script drives the real app over `httpx.ASGITransport` with an
+admin session, pumps `worker._tick` in a child process, creates and drops its own scratch database,
+and refuses to run on the fixture (decision 255).
+
+**One of the thirteen failed for three cycles, and cycle 4 closed it rather than tuning it away.**
+Check 9 — `/api/health` answers every second throughout the import — saw exactly one **503** in all
+three runs, always inside `POST /import`'s own validation window and never during the import. The
+cause was measured, not guessed: `validate_for_install` ran synchronously on the backend's event
+loop and cost **3.45-3.76 s** on the real bundle — the sha256 pass over 42 files and 1.04 GB
+(1.52 s), two `PRAGMA quick_check`s, the referential/NULL/duplicate pass (~1.3 s) and the Cold
+Tower's torch load — against `app._HEALTH_TIMEOUT_S`, which is 2. Decision 252 rests on the premise
+that the validate route "stays synchronous — it is 1.0 s and the operator is standing in front of
+it", and this milestone's own hash and integrity passes falsify that premise. **Decision 287** is
+the repair: one `await asyncio.to_thread(validate, …)` at `validate_for_install`'s single call site,
+which moves the whole window off the loop rather than the ~1.2 s of Cold Tower construction decision
+252's one-shot `ProcessPoolExecutor` would have moved. That subprocess is still **not built** — its
+only seam is four call frames inside `importer/validate.py` — and
+`test_decision_252_does_not_assert_a_subprocess_this_tree_does_not_have` still holds decision 252's
+record against its absence. The same press had a second window on the same loop that no recorded
+run contains, because the instrument never took it: `_open` extracted the 1.04 GB archive inline,
+and measured on one, a 10 ms heartbeat got **one** sample across the extraction on the loop and
+**55** across the same extraction in a thread. Both windows are in a thread now, serialised by a
+process lock so two presses cannot repair each other's staging directory. The exit for the closing
+cycle is the same criterion re-run under decision 246: **`13/13 checks passed`, exit 0**, zero
+non-200 health samples in either half, and a worst gap near the 1 s sample interval rather than
+3.74 s. Bounded honestly even before it closed:
+`ops/backend.Dockerfile`'s healthcheck is `--interval=30s --timeout=5s --retries=5`, so a
+3.7-second window could not make Docker call the backend unhealthy, while the 127-second outage this
+milestone removed could.
+
+**This branch leaves `npm --prefix frontend run check` at 27 errors rather than 0, and that is
+decision 254 rather than a regression to file.** The baseline was 28. One of them —
+`admin/data/+page.svelte:14`, a module-local `state` shadowing the rune — is this milestone's,
+because that file is one of its principal ones, and it is fixed. The other 27 (14 in
+`src/lib/api.test.js`, 12 in `src/lib/passkeys.js`, 1 in `vite.config.js`) belong to M4.15, whose
+own exit criterion is that number reaching zero, and which is being built in a parallel lane:
+touching them here would put two branches in the same four files for no gain. So `check` reads 27
+on this branch by design, and 0 is M4.15's to print.
+
+**Twelve rows the map already had were amended in place rather than duplicated,** for the reason
+M4.11's and M4.13's banners give: each is the same clause asserted against the fixture instead of
+the corpus, and a second row would leave the easy one standing as a claim about the app. Five were
+amended in the opening commit because the change was wording only; all twelve now name the tests
+that assert the clause they gained. Ten of them are the opening set and two arrived with the
+review: M4.9's rail row in cycle 1, and in cycle 2 M4.8's ledger row, which is where the guard that
+holds this very count is registered. Two of the twelve needed a REGISTERED test renamed —
+`test_the_corrections_ledger_is_not_duplicated_by_a_re_import` under decision 247, which pinned a
+re-import path the importer never took, and
+`test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused` under decision 248, which
+asserted that a backbone covering a corpus title this install never seeded is a refusal, when under
+decision 162 that is the corpus going on growing its catalogue. Renaming a registered test breaks
+the build by design, so each rename and its row edit are one commit, and what replaces the refusal
+is the same check from the side a merge is actually observable on: coverage that goes *backwards*
+against the active backbone. The twelve, named so an auditor can check each rather than take the
+count: `data-rules-denylist-live-tables-only`, `map-taste-admin-bundle-report-and-diff` and
+`jellyfin-acquisition-eval-bundle-swap-and-active-version-invariant` on M0;
+`data-rules-corrections-ledger-parsed-at-its-real-header`,
+`data-rules-fixture-matches-the-shipped-artifact`, `data-rules-import-reports-every-shipped-table`,
+`data-rules-validation-reports-rather-than-raises`, `platform-content-seeds-once-models-reimport`,
+`platform-model-bundle-identity-is-checked-not-trusted` and
+`platform-vocabulary-change-is-refused-not-degraded` on M4.5;
+`platform-the-suite-says-whether-the-integration-layer-ran` on M4.8; and
+`library-rate-verdict-rail-line-names-the-person-and-the-title` on M4.9.
+
+**M4.13 shipped before it, and its `17/17` closed the red list it opened with.** Fifteen new rows
+were written before any source edit and `current_milestone` was raised in the same change, each
+naming the exact tests it owes rather than leaving `tests` off — M4.9's opening rather than M4.10's
+and M4.11's, because a row with no tests tells you only that a row is bare, while a row naming a
+test that does not exist yet tells you which stage owes what. That
 list, 77 names across seven files, *was* the test plan (`docs/milestones/M4.13-plan.md`), and it was
 closed by writing those tests under those names: all seventeen rows now name tests that exist —
-**98 ids across seventeen pytest files and zero e2e specs**, the last six added by review cycle 2 —
+**98 ids in seventeen pytest files and no e2e spec**, the last six added by review cycle 2 —
 five to three rows whose sentences claimed more than their tests held, and one to §10's refusal
 row, whose sentence named a silence the worker does not leave — and the two ledger guards below were red
 for exactly as long as the block above was M4.11's, which is the honest state of an opening rather

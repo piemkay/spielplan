@@ -186,15 +186,22 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
         table = RUNTIME if kind == "movie" else SERIES_RUNTIME
         runtime = table.get(offset, 120 if kind == "movie" else 50)
         placement = "cold_tower" if title_id in cold else "warm"
+        # `placement_bundle` is not decoration here: `title_placement_has_basis`
+        # (0023_import_state.sql) makes "placed" and "names a basis" one fact, so a fixture that
+        # stamps only the badge is the state decision 249 exists to forbid. BUNDLE is this
+        # world's active row, inserted above, and it is the basis every placement here means.
         await conn.execute(
             """
-            INSERT INTO title (id, kind, name, year, runtime_min, is_owned, placement, placement_at)
-            VALUES ($1, $2, $3, $4, $5, true, $6, $7)
+            INSERT INTO title
+                (id, kind, name, year, runtime_min, is_owned, placement, placement_at,
+                 placement_bundle)
+            VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)
             """,
             title_id, kind,
             f"Home {'Film' if kind == 'movie' else 'Series'} {title_id}",
             2000 + offset, runtime, placement,
             now - timedelta(days=100 - offset) if placement == "cold_tower" else None,
+            BUNDLE,
         )
 
     # §6.0 shelf 1's world: an anchor, four titles carrying BOTH of its terms, and three decoys
@@ -1804,30 +1811,37 @@ def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
     call site, so a household turning the toggle on to find out why Home changed overnight saw
     nothing about the refit that changed it. [M4.9 finding 24]
 
-    Decision 189 answers it in two halves and this guard holds both. `bundle_swap` and
-    `reconcile` happen inside the WEB process (`importer/bundle.py`'s hot swap and its
-    in-request rebuild sweep) and are recorded now, so they must appear at a call site. The
-    other five are worker-side, and §6.7's "never persisted" makes the buffer per process, so
-    there is no channel this milestone builds for them — they are declared pending instead, by
-    name, in one tuple. What the guard forbids is the third state the rail was actually in: a
-    kind that is neither written nor declared, which is a filter chip for events that cannot
-    arrive.
+    Decision 189 answers it in two halves and this guard holds both. Five kinds are worker-side
+    — the nightly MAP refit, the incremental refit, the fold-in, the blend-weight fit and the
+    placement sweep — and §6.7's "never persisted" makes the buffer per process, so there is no
+    channel for them and they are declared pending by name, in one tuple. `bundle_swap` and
+    `reconcile` were the other half: they were written inside the WEB process, so they were held
+    to "has a producer".
+
+    Decision 263 moves them across, because M4.14 step E2 moved the writer. The hot swap and the
+    in-request rebuild sweep now run in the worker's `_bundle_import`, so those two `rail.record`
+    calls were writing into a process-local buffer that no web request reads — the one event
+    that invalidates every fitted number in the app, narrated to nobody, behind a comment saying
+    the opposite. Seven kinds are pending and none of the seven has a call site, which is what
+    makes "declared pending" mean something a reader can check.
+
+    What the guard forbids is the third state the rail was actually in: a kind that is neither
+    written nor declared, a filter chip for events that cannot arrive.
+    [M4.14 cycle 1, m414-c1-dim-lock-02, decision 263]
     """
     produced = _rail_record_kinds()
     pending = set(rail.AWAITING_PRODUCER)
 
     assert pending == {
         "ledger_refit", "ledger_incremental", "foldin", "blend_weight", "placement",
-    }, "decision 189 names five worker-side kinds; this tuple has drifted from it"
+        "bundle_swap", "reconcile",
+    }, "decision 189 plus decision 263 name seven worker-side kinds; this tuple has drifted"
     assert not produced & pending, (
         f"{sorted(produced & pending)} is written somewhere and still declared pending"
     )
     assert produced | pending == set(rail.EVENT_KINDS), (
         f"unproduced and undeclared: {sorted(set(rail.EVENT_KINDS) - produced - pending)}; "
         f"written but not in EVENT_KINDS: {sorted(produced - set(rail.EVENT_KINDS))}"
-    )
-    assert {"bundle_swap", "reconcile"} <= produced, (
-        "decision 189 records the two writes that already happen in the web process"
     )
 
 

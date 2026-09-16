@@ -7,6 +7,7 @@ teaches the UI a contract the real backend does not honour.
 
 from __future__ import annotations
 
+import ast
 import os
 import sys
 from pathlib import Path
@@ -622,3 +623,252 @@ async def test_the_harness_serves_the_banner_population_and_link_the_app_serves(
         assert series["name"] not in repr(films), (
             "the copy names a series the films-only queue cannot serve"
         )
+
+
+# --- M4.14: the import became a job, and the harness answered for a request -----------------
+#
+# Three shapes moved at once when §5.3's "minutes" budget finally put the import in the worker
+# (decision 253): the import route's STATUS, the state route's KEYS, and a set of phase strings
+# that did not exist before. None of the three is visible to the comparisons above -- the paths
+# are unchanged and neither route declares a query parameter -- and all three are what a client
+# is written against. The first two tests below therefore compare the harness with the app's own
+# artifacts (its OpenAPI document, and the source of the two handlers) rather than with literals
+# re-typed here, for the reason the M4.9 block gives: a list of keys copied into this file would
+# be a third statement of a contract that already has two.
+
+
+ARTIFACT_ROUTES = ROOT / "backend" / "spielplan" / "api" / "artifacts.py"
+
+
+def _returned_keys(function: str) -> set[str]:
+    """The literal keys of the dict `api/artifacts.py`'s `function` returns.
+
+    Read out of the app's source rather than out of a response, because both handlers need a
+    database, an admin session and an `ArtifactStore` on `app.state`, and this file has none of
+    the three. `ast` and not a regex: those two payloads carry comment blocks longer than their
+    own code, and a key is a constant in a dict literal rather than a string near a colon.
+    """
+    tree = ast.parse(ARTIFACT_ROUTES.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == function:
+            returns = [
+                inner.value
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Return) and isinstance(inner.value, ast.Dict)
+            ]
+            assert len(returns) == 1, (
+                f"{function} returns {len(returns)} dict literals; this reader names one payload"
+            )
+            keys = {k.value for k in returns[0].keys if isinstance(k, ast.Constant)}
+            assert keys, f"{function} returns a dict this reader cannot read"
+            return keys
+    raise AssertionError(f"api/artifacts.py has no async def {function}")
+
+
+ARTIFACT_STORE = ROOT / "backend" / "spielplan" / "models" / "artifacts.py"
+
+
+def _summary_keys() -> set[str]:
+    """The literal keys of `ArtifactStore.summary()`.
+
+    A second reader rather than an argument to the one above, because this payload is built in
+    another file and by a method rather than a route -- and it is the shape the app serves TWICE:
+    `api/artifacts.bundle_state` returns `store.summary()` as `loaded` and `api/library`'s
+    `client_config` returns the same object as `bundle`. The harness re-types both.
+    """
+    tree = ast.parse(ARTIFACT_STORE.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef) and node.name == "ArtifactStore"):
+            continue
+        for method in node.body:
+            if isinstance(method, ast.FunctionDef) and method.name == "summary":
+                returns = [
+                    inner.value
+                    for inner in ast.walk(method)
+                    if isinstance(inner, ast.Return) and isinstance(inner.value, ast.Dict)
+                ]
+                assert len(returns) == 1, (
+                    f"ArtifactStore.summary returns {len(returns)} dict literals; this reader "
+                    "names one payload"
+                )
+                keys = {k.value for k in returns[0].keys if isinstance(k, ast.Constant)}
+                assert keys, "ArtifactStore.summary returns a dict this reader cannot read"
+                return keys
+    raise AssertionError("models/artifacts.py has no ArtifactStore.summary")
+
+
+def test_the_harness_answers_with_the_status_code_the_app_declares(apps):
+    """A path in common is not a contract in common, part two: the STATUS is part of the shape.
+
+    `POST /api/admin/bundle/import` answered 200 with the finished import until M4.14 moved the
+    load into the worker, and it now answers 202 with a `job_id` to poll (§5.3, decision 253).
+    The harness kept the 200 and a body carrying neither, so a Data tab developed against it
+    would call `pollImportJob` with `undefined` and read `/api/admin/bundle/state` for a job
+    nothing had enqueued -- spinning until the page's own eleven-minute deadline over a harness
+    that was already imported. Neither comparison above can see that: the path is unchanged and
+    the route declares no query parameter.
+
+    Over every shared operation rather than over the one route this milestone moved, because the
+    next route to change its answer will change it in the app first; and out of both OpenAPI
+    documents, for the reason the parameter comparison gives -- that is the document a client is
+    written against.
+    """
+    real, stub = apps
+
+    def success(app) -> dict[tuple[str, str], list[str]]:
+        out: dict[tuple[str, str], list[str]] = {}
+        for path, operations in app.openapi()["paths"].items():
+            for method, operation in operations.items():
+                out[(path, method)] = sorted(
+                    code for code in operation.get("responses", {}) if code.startswith("2")
+                )
+        return out
+
+    app_side, stub_side = success(real), success(stub)
+    shared = sorted(set(app_side) & set(stub_side))
+    assert shared, "no operation is answered by both, so this comparison asks nothing"
+    drift = {
+        key: (app_side[key], stub_side[key]) for key in shared if app_side[key] != stub_side[key]
+    }
+    assert not drift, f"harness and app disagree about the success status: {drift}"
+
+
+async def test_the_harness_bundle_payloads_carry_the_keys_the_routes_return(fresh):
+    """Both bundle payloads, key for key, against `api/artifacts.py`'s own returns.
+
+    The state payload carried four of its nine keys, and four of the five it omitted are what
+    the Data tab decides with: `routes/admin/data/+page.svelte` puts the active line, §10's restart
+    banner and M4.13's bundle-directory-missing banner inside `{#if bundleState.active}`, which
+    this harness never answered. So the one screen §6.6 gives an operator for the swap sequence
+    could not say that a swap had happened, on the file that screen is developed against, for as
+    long as it has existed.
+
+    Equality and not containment, for the reason the route-path comparison is two tests: a
+    harness that answers with a key the app does not send teaches the UI to read a field that
+    will be absent the first time it runs against the real backend.
+
+    And one level down, on the one key of the nine that has a shape of its own. The page does not
+    read those nine: `bundleImport.svelte.js` takes `state.import_job` and then `job.job_id`,
+    `job.phase` and `job.report` off THAT, and the object is built in two places -- the app's
+    `_running_import` and this harness's queued literal -- with nothing comparing them. The
+    paragraph above is the whole argument for checking it, asserted one level lower than it was
+    written.
+
+    The four nulls are a shape rather than a value, and the app's is the shape: `import_bundle`'s
+    INSERT writes a `detail` of exactly `phase`, `path` and `bundle_version`, so
+    `_running_import`'s `detail.get("report")` and `detail.get("text")` are None while a job is
+    queued, and `job_run.ok` / `finished_at` are the nullable running state `0017_ops.sql` calls
+    "the running state - the row is written before the job runs". The harness answered
+    `text: ""` -- present, falsy, and not what the app sends -- which is this test's own defect
+    one step further down: a field the Data tab can read before the worker has written one.
+    [M4.14 cycle 1, m414-c1-dim-waveE-04]
+
+    And one level down on the other key of the nine with a shape of its own, on the same argument
+    read a second time. `loaded` is `ArtifactStore.summary()`; the page renders four fields off it
+    and the harness answered with a key the app DELETED -- `owned`, which §7.2 makes a Jellyfin
+    fact re-derived per install, so no bundle can know it and `summary()`'s own comment says so
+    where it used to sit -- while omitting `broken`, `missing_path` and `cold_eval`. A harness
+    supplying a plausible `len(fx.TITLES)` there teaches a Data tab to render a field that is
+    `undefined` the first time it meets the real backend, which is the sentence above, one key
+    over. Both payloads that carry it, because `api/library`'s `client_config` serves the same
+    object as `bundle` and the harness re-types it twice.
+    [M4.14 cycle 3, m414-c3-waveE-devstub-loaded-disagrees-one-level-down]
+    """
+    async with _client(fresh) as client:
+        state = await client.get("/api/admin/bundle/state")
+        assert state.status_code == 200, state.text
+        assert set(state.json()) == _returned_keys("bundle_state")
+
+        queued = await client.post("/api/admin/bundle/import", json={"path": None})
+        assert queued.status_code == 202, queued.text
+        assert set(queued.json()) == _returned_keys("import_bundle")
+
+        job = (await client.get("/api/admin/bundle/state")).json()["import_job"]
+        assert job is not None, "the state route has to answer for the import just queued"
+        assert set(job) == _returned_keys("_running_import")
+        assert [job["report"], job["text"], job["ok"], job["finished_at"]] == [None] * 4, job
+
+        # Polled to the terminal phase and restarted, because §10's flip is invisible to the
+        # process until then and `loaded` is None on every read before it -- the harness's own
+        # `_bundle_live()`, which is the repair M4.7 test-14 made.
+        for _ in fresh.IMPORT_PHASES:
+            await client.get("/api/admin/bundle/state")
+        await client.post("/_dev/restart")
+        settled = (await client.get("/api/admin/bundle/state")).json()
+        assert set(settled["loaded"]) == _summary_keys()
+        assert set((await client.get("/api/config")).json()["bundle"]) == _summary_keys()
+
+
+def test_the_harness_reports_the_phases_the_app_writes(harness):
+    """The three phase strings, against the two modules that write them.
+
+    The harness holds the terminal one as a literal because importing `spielplan.worker` runs
+    `logging.basicConfig` at module scope, and this file executes the harness inside pytest --
+    the same reason `api/artifacts.py` gives for holding the job NAME as a literal rather than
+    importing the registry into the web process. A literal held by an assertion is that module's
+    established shape; a literal held by nothing is how a Data tab comes to poll for a phase the
+    worker never writes. [M4.14 step E5, decision 253]
+    """
+    from spielplan import worker
+    from spielplan.api import artifacts
+
+    assert harness.IMPORT_ACTIVE == worker.PHASE_ACTIVE
+    assert harness.IMPORT_PHASES == (artifacts.QUEUED, artifacts.RUNNING, worker.PHASE_ACTIVE)
+
+
+async def test_the_harness_reports_the_import_phase_until_the_bundle_is_active(fresh):
+    """The poll terminates, and the two facts the Data tab reads out of it agree at every read.
+
+    This is the whole of E5: after the 202 the answer to "did it work?" is on
+    `GET /api/admin/bundle/state`, and a harness that flips `imported` inside the import request
+    answers the first question the front end asks with "there is no job" -- which `pollImportJob`
+    reads as an import it has lost, not as one that finished.
+
+    Three things are asserted that a phase counter alone would not give:
+
+    * `active` and the phase agree inside one payload. The flip happens on the read that first
+      reports the terminal phase, so the page cannot see an active row under a running import,
+      which would arm the restart banner over an import that has swapped nothing.
+    * `loaded` follows `_bundle_live()` and not `imported`. §10's flip is real in the database
+      and invisible to the process until the restart, and this is the repair M4.7 test-14 made
+      to `/api/health` and `/api/config` and did not make here: with `loaded` answering for
+      `imported`, `restart_required` is false the moment the import lands and the banner the e2e
+      suite asserts against the real backend is unreachable in the harness.
+    * the stored report arrives with the terminal phase and not before, because it is what the
+      screen renders in place of the validation report the 202 carried (decision 253) -- and the
+      RENDERED half arrives with it. `worker._finish_bundle_import` closes every import with
+      `report.as_dict()` and `report.render()` in one `detail`, so a harness that fills one and
+      leaves the other None teaches a Data tab that `job.text` never exists, which is the queued
+      literal's own argument read from the terminal end: §10's migration report is the pasteable
+      half, and a harness is where a screen for it gets built.
+      [M4.14 cycle 4, m414-c4-dim202-04]
+    """
+    async with _client(fresh) as client:
+        queued = (await client.post("/api/admin/bundle/import", json={"path": None})).json()
+        assert queued["phase"] == fresh.QUEUED, queued
+        assert queued["poll"] == "/api/admin/bundle/state", queued
+        assert queued["report"]["ok"] is True, queued["report"]
+
+        seen = []
+        for _ in fresh.IMPORT_PHASES:
+            state = (await client.get("/api/admin/bundle/state")).json()
+            job = state["import_job"]
+            assert job["job_id"] == queued["job_id"], job
+            seen.append(job["phase"])
+            terminal = job["phase"] == fresh.IMPORT_ACTIVE
+            assert (state["active"] is not None) is terminal, state["active"]
+            assert (job["report"] is not None) is terminal, job
+            assert (bool(job["text"]) is terminal), job
+            assert job["ok"] is (True if terminal else None), job
+            assert state["loaded"] is None, "nothing is loaded until the process restarts"
+        assert seen == list(fresh.IMPORT_PHASES), seen
+        assert state["restart_required"] is True, state
+        assert state["broken"] is False and state["missing_path"] is None, state
+
+        # §10's last step, which `POST /_dev/restart` stands in for here. The banner goes out
+        # because the process now holds what the row names, which is the invariant it reports.
+        await client.post("/_dev/restart")
+        settled = (await client.get("/api/admin/bundle/state")).json()
+        assert settled["loaded"]["version"] == settled["active"] == "test-v1", settled
+        assert settled["restart_required"] is False, settled
+        assert settled["import_job"]["phase"] == fresh.IMPORT_ACTIVE, settled["import_job"]

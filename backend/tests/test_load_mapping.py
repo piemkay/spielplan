@@ -200,6 +200,12 @@ def _add_duplicate_per_source_rows(root: Path) -> dict[str, int]:
         for table in ("title_language", "title_country", "platform_rating")
     }
     db.close()
+    # BUNDLE.json is the corpus's inventory of the tree and M4.14 reads it before the first row
+    # is written, so a helper that adds rows to `content.sqlite` after `make_bundle` returned has
+    # to say so: otherwise the bundle these tests import is one whose manifest no longer matches,
+    # and the refusal they meet is a sha256 mismatch rather than the mapping rule under test.
+    # [M4.14 step B1]
+    fx.reinventory(root)
     return counts
 
 

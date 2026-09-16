@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from spielplan.importer import bundle as bundle_import
+from spielplan.importer.validate import FROZEN_RATING_SOURCE_IDS
 from spielplan.ledger.hyperparams import DEFAULTS, from_mapping
 from tests.fixtures import make_bundle
 
@@ -539,9 +541,107 @@ def test_the_pattern_reducer_separates_grammars_that_differ():
     assert shapes_mod.column_pattern("decade:1990") != shapes_mod.column_pattern("genre:crime")
 
 
-def test_the_committed_manifest_carries_no_prose(shipped):
-    """Belt and braces on the same promise: nothing in the committed file reads like data."""
+# --- the committed manifest carries no prose: an allow-list, and why it has to be one ---------
+#
+# `ops/bundle_shapes.py` promises in the manifest's own `_note` that it is "shapes only -- no
+# values", and §10's bundle is a film corpus: a leaked leaf is a film title, a person's name or
+# a line of review text sitting in a file this repo commits and ships. Until M4.14 the guard
+# below rejected a leaf only when it contained a space, so `Heat`, `Kurosawa` and `tt0113277`
+# were all admitted by a test whose docstring promised none of them could be. [M4.14, tq1]
+#
+# The repair is an allow-list, not a longer reject-list: prose is unbounded and cannot be
+# enumerated, while what a *shape* manifest legitimately carries is short and can be -- table
+# and column names, the bundle's own file paths, the `<s>`/`<n>` patterns `column_pattern`
+# reduces a feature column to, the type names `_json_shape` writes, the frozen `rating_source`
+# ids that key `equating_map` and `fitted_cuts` (§4.1 rule 4), and §8's share-cut grids.
+#
+# Rejecting every string was the other option and it is worse than the defect it fixes: 242 of
+# the 1,502 leaves in the committed manifest are `content.sqlite` column names and 203 are TSV
+# headers, so a guard that fails on `title_id` is a guard that gets waived inside a week.
+
+# `_json_shape` records `type(value).__name__` and its own `"object"` / `"list"` tag, so these
+# are structure. They are admitted by name rather than by form because `NoneType` is the one
+# capitalised token in the set and a form that admitted it would admit `Kurosawa`.
+_TYPE_NAMES = frozenset({"NoneType", "bool", "dict", "float", "int", "list", "object", "str"})
+
+# The suffixes the corpus ships, including `VOCABULARY.md` and `projection_capped_v1.txt` under
+# `dna_vocab/v1/`. A path whose suffix is not here is admitted only by being in the manifest's
+# own `files` list -- a file the bundle declares is part of the bundle by construction, and a
+# new extension arriving as somebody's JSON key is worth reading rather than waving through.
+_BUNDLE_SUFFIXES = frozenset({".json", ".md", ".npz", ".pt", ".sqlite", ".tsv", ".txt"})
+
+# The manifest's own punctuation: `/` between path segments, `.` in a filename and in a decimal,
+# `:` in the feature contract's block grammar and in `cold_eval.json`'s metric keys, `_` and `-`
+# inside a name. Everything between two separators has to be a schema-shaped token.
+_MANIFEST_SEPARATORS = re.compile(r"[/.:_-]")
+
+# A letter run followed immediately by three or more digits is an external id -- `tt0113277`,
+# `nm0000233` -- and never a schema name. The long digit runs the manifest does carry
+# (`ts_pre_1990`, `s_pruned_20260825`, `letterboxd-2020`) all sit behind a separator, which is
+# the whole of what makes the two distinguishable by form.
+_EXTERNAL_ID = re.compile(r"[A-Za-z][0-9]{3,}")
+
+# `biB` and `muB` are shipped `backbone.npz` array names: a lower-case stem and a capitalised
+# variant tag. `Heat` and `Kurosawa` are the other way round -- capital first, lower-case after
+# -- and that asymmetry is the only thing separating an array name from a title at this width.
+_VARIANT_TAG = re.compile(r"[a-z0-9]+[A-Z]+")
+
+# §8's calibration writes its share sweeps under a cut grid: `shares_fixed.json` is keyed
+# `0.20/0.35/0.45`. Nothing else in the manifest is a slash-joined run of decimals.
+_CUT_GRID = re.compile(r"[0-9]+\.[0-9]{2}(?:/[0-9]+\.[0-9]{2})+")
+
+
+def _is_schema_token(text: str) -> bool:
+    """The conservative form every admitted leaf must have: separator-joined segments, each one
+    a lower-case word, an all-capital tag (`E`, `BUNDLE`), a lower-case stem with a capitalised
+    variant tag (`biB`), a bare number, or a `<s>`/`<n>` placeholder."""
+    if not text or _EXTERNAL_ID.search(text):
+        return False
+    for segment in _MANIFEST_SEPARATORS.split(text):
+        if segment in ("<s>", "<n>") or segment.isdigit():
+            continue
+        # Rejects the empty segment too, which is how a leading slash and a `..` get out.
+        if not segment.isalnum():
+            return False
+        if not (segment.islower() or segment.isupper() or _VARIANT_TAG.fullmatch(segment)):
+            return False
+    return True
+
+
+def _is_bundle_path(text: str) -> bool:
+    """A bundle-relative path -- `artifacts/dna_vocab/v1/vocab_mood_v1.tsv` -- or one of the
+    upstream `prep/` and `datasets/` paths BUNDLE.json's `source_provenance` records, which are
+    real paths that the shipped bundle does not itself contain."""
+    stem, dot, suffix = text.rpartition(".")
+    return bool(stem) and dot == "." and f".{suffix}" in _BUNDLE_SUFFIXES
+
+
+def _prose_in_manifest(manifest: dict) -> list[str]:
+    """Every leaf string the allow-list does not admit, as `<json path>: <leaf>`.
+
+    The leaf is rendered with `ascii()` because a leaked one is precisely the kind of string
+    that is not ASCII -- the corpus ships CJK titles and emoji, and `make_bundle` reproduces
+    both on purpose -- and CLAUDE.md's rule is that anything a Windows cp1252 console has to
+    print stays ASCII. A guard whose failure output crashes the console it prints on is a guard
+    read out of a traceback instead of out of a test summary.
+    """
+    files = set(manifest.get("files", ()))
     found: list[str] = []
+
+    def admitted(leaf: str) -> bool:
+        if leaf in _TYPE_NAMES:
+            return True
+        if not _is_schema_token(leaf):
+            return False
+        if leaf.isdigit():
+            # The only bare numbers a shape manifest has business carrying. §4.1 rule 4 freezes
+            # the `rating_source` ids and says they key `fitted_cuts` and `equating_map`, which
+            # is exactly where the manifest holds them; a leaked `tmdb_id` fails here instead of
+            # reading as a scale point.
+            return int(leaf) in FROZEN_RATING_SOURCE_IDS
+        if "/" in leaf or "." in leaf:
+            return leaf in files or _is_bundle_path(leaf) or bool(_CUT_GRID.fullmatch(leaf))
+        return True
 
     def walk(node, path=""):
         if isinstance(node, dict):
@@ -550,11 +650,127 @@ def test_the_committed_manifest_carries_no_prose(shipped):
         elif isinstance(node, list):
             for value in node:
                 walk(value, path)
-        elif isinstance(node, str) and " " in node and "<s>" not in node and "<n>" not in node:
-            found.append(f"{path}: {node[:60]}")
+        elif isinstance(node, str) and not admitted(node):
+            found.append(f"{path}: {ascii(node)}")
 
-    walk({k: v for k, v in shipped.items() if k != "_note"})
-    assert not found, f"the manifest carries value-shaped strings: {found[:5]}"
+    walk({k: v for k, v in manifest.items() if k != "_note"})
+    return found
+
+
+def test_the_committed_manifest_carries_no_prose(shipped):
+    """Belt and braces on the same promise: nothing in the committed file reads like data -- no
+    film title, no person's name, no review text.
+
+    An allow-list since M4.14, because the reject-list it replaced could only see a space, and
+    `Heat`, `Kurosawa` and `tt0113277` are each a value the docstring promised was impossible
+    and the assertion could not catch. The two self-tests below are what make the promise
+    readable: one proves the guard rejects those four, the other proves it still admits a column
+    name, an artifact path and a reduced pattern -- the half a stricter guard gets waived over.
+    [M4.14, tq1]
+    """
+    found = _prose_in_manifest(shipped)
+    assert not found, (
+        f"{len(found)} leaf string(s) in the committed manifest are not shapes the allow-list "
+        f"admits -- regenerate it, or widen `_is_schema_token` with a reason: {found[:5]}"
+    )
+
+
+# The three the space test could not see, and the one it could. Each is a leaf shape the
+# manifest's own `_note` promises is absent: a title, a person, an external id, a two-word name.
+_PROSE_THE_MANIFEST_MUST_NEVER_CARRY = (
+    ("Heat", "a one-word film title -- invisible to the space test this replaced"),
+    ("Kurosawa", "a person's name, the second thing the manifest's `_note` promises is absent"),
+    ("tt0113277", "an external id, which is what makes a leaked leaf re-identifiable"),
+    ("Michael Mann", "the two-word name -- the only shape the old guard could ever see"),
+)
+
+
+def _manifest_carrying(leaf: str | None) -> dict:
+    """A manifest shaped like the committed one, optionally with `leaf` planted in the three
+    places a value can reach it: a `content.sqlite` column list, a JSON object's key set, and
+    the file list. Every other leaf here is copied out of `real_bundle_shapes.json`, so a
+    rejection is the planted leaf and not the scaffolding."""
+    planted = [leaf] if leaf is not None else []
+    return {
+        "_note": "Shapes only -- no values. Regenerate with ops/bundle_shapes.py.",
+        "files": ["content.sqlite", "artifacts/backbone.npz", *planted],
+        "sqlite": {"content.sqlite": {"title": ["id", "tmdb_id", *planted]}},
+        "json": {
+            "artifacts/manifest.json": {
+                "type": "object",
+                "keys": ["class_shares", "fitted_cuts", *planted],
+                "class_shares.keys": ["netflix-prize", "movielens-32m"],
+                "fitted_cuts.keys": ["1", "31"],
+                "n_titles.type": "int",
+            }
+        },
+        "npz": {"artifacts/backbone.npz": ["E", "E_hat", "biB", "b_i"]},
+        "tsv": {"artifacts/corrections_v1.tsv": ["kind", "title_id", "value"]},
+        "pt": {"artifacts/cold_tower.pt": {"head_e.weight": [64, 768]}},
+    }
+
+
+@pytest.mark.parametrize(("leaf", "why"), _PROSE_THE_MANIFEST_MUST_NEVER_CARRY)
+def test_the_manifest_guard_rejects_the_values_it_promises_are_absent(leaf, why):
+    """The guard above is a privacy claim about a file this repo distributes, and a privacy
+    claim nobody has tested is a comment. Three of these four passed it until M4.14.
+
+    Planted in all three positions rather than one, because the old guard was uniform over
+    positions and its replacement has to be too: the leak channel nobody predicted is the one
+    that matters, and `_json_shape` records the key set of any object the corpus happens to key
+    by name. [M4.14, tq1]
+    """
+    assert not _prose_in_manifest(_manifest_carrying(None)), (
+        "the scaffolding this test plants into is not itself clean, so a rejection below would "
+        "prove nothing about the planted leaf"
+    )
+    found = _prose_in_manifest(_manifest_carrying(leaf))
+    caught = [line for line in found if line.endswith(f": {ascii(leaf)}")]
+    assert {line.rsplit(": ", 1)[0] for line in caught} == {
+        "/files",
+        "/sqlite/content.sqlite/title",
+        "/json/artifacts/manifest.json/keys",
+    }, f"{leaf!r} ({why}) reached the manifest unnamed somewhere: caught {found}"
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    [
+        "title_id",                                  # a column name; 242 of the 1,502 leaves are
+        "imdb_id",                                   # these, and failing on them gets us waived
+                                                     # -- and `imdb_id` is the column whose VALUE
+                                                     # is the `tt0113277` rejected just above
+        "content.sqlite",                            # a path in the manifest's own `files` list
+        "artifacts/dna_vocab/v1/vocab_mood_v1.tsv",  # a path admitted by form, not by that list
+        "prep/cold_tower_artifacts.npz",             # upstream, in BUNDLE.json's provenance map
+        "p:<s>:<s>",                                 # what `column_pattern` reduces a person to
+        "decade:<n>",
+        "<s>",
+        "E_hat",                                     # `backbone.npz` array names: capital first
+        "biB",                                       # and capital last
+        "netflix-prize",                             # a rating-source class `audit.json` keys on
+        "ratings_from_users_ge_100",                 # a long digit run behind a separator
+        "s_pruned_20260825",                         # and a longer one
+        "cold:tunedblend_vs_prior",                  # a `cold_eval.json` metric key
+        "0.20/0.35/0.45",                            # §8's share-cut grid
+        "31",                                        # a frozen `rating_source` id, §4.1 rule 4
+        "str",                                       # what `_json_shape` writes for a scalar
+    ],
+)
+def test_the_manifest_guard_admits_what_a_shape_manifest_legitimately_carries(leaf):
+    """The other half of the bargain, and the reason this is an allow-list rather than a ban on
+    strings: every one of these is a leaf the committed manifest carries today. A guard that
+    fails on a column name or an artifact path is one that gets waived rather than fixed, and
+    the waiver would take the four above with it. [M4.14, tq1]
+
+    Planted at the JSON key set because that is the position carrying all of the admitted
+    categories in the shipped manifest -- `files.keys` holds paths, `fitted_cuts.keys` holds the
+    frozen ids, `shares_fixed.json`'s top level holds the cut grids -- and a JSON object's keys
+    are the one thing in a bundle the corpus, not this repo, gets to name.
+    """
+    manifest = _manifest_carrying(None)
+    manifest["json"]["artifacts/manifest.json"]["keys"].append(leaf)
+    assert not _prose_in_manifest(manifest), f"{leaf!r} is a shape the manifest carries today"
 
 
 def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
@@ -730,7 +946,7 @@ def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, b
     # (SPEC_REQUIRED_NOT_YET_SHIPPED above), so nothing else would notice if the pool stopped
     # writing them -- and an axis with no file is a facet with no coordinate. Beside the
     # vocabulary files since decision 173, and asserted here as well as up there because a
-    # subdirectory is the location `importer/dna._load_axes` no longer reads at all.
+    # subdirectory is the location `importer/dna.load_axes` no longer reads at all.
     vocab = root / "artifacts" / "dna_vocab" / "v1"
     assert {f"{facet}.tsv" for facet in make_bundle.AXES} <= {p.name for p in vocab.glob("*.tsv")}
     assert not (vocab / "axes").exists(), "an axis in a subdirectory cannot reach a real bundle"

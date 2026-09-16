@@ -162,10 +162,42 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('import runs the swap sequence and asks for the restart it needs', async () => {
+    // The import is no longer this request's to wait for. §5.3 files it as a job with a
+    // "minutes" budget and M4.14 moved it there: `POST /api/admin/bundle/import` answers 202
+    // the moment validation passes, and the load, the rebuild set and the flip run in the
+    // worker, which is also where the report this screen ends up showing is stored
+    // (decision 253). So the assertion that used to follow the click — a finding the load
+    // writes — now follows a PHASE, and the click proves nothing on its own.
+    //
+    // The budget is the worker's and not this suite's, which is why this test carries numbers
+    // its neighbours do not: the loop wakes every TICK_SECONDS (20 s) to claim a queued row and
+    // the fixture bundle then imports in seconds, against a config default of 60 s per test and
+    // 10 s per assertion. Raised here rather than in `playwright.config.js` because one test in
+    // the suite waits on the tick, and a suite-wide timeout is the thing that stops naming what
+    // it is waiting for. [M4.14 step E6, findings 2.1 and 2.3]
+    test.setTimeout(180_000);
+
     await page.goto('/admin/data');
     await page.getByRole('button', { name: 'Validate bundle' }).click();
     await expect(page.locator('.verdict')).toHaveText('valid');
     await page.getByRole('button', { name: 'Import and activate' }).click();
+
+    // The window the synchronous import had no name for. `data-phase` is the component's own
+    // machine ($lib/bundleImport.svelte.js) and `running` is observable however fast the worker
+    // is: the `job_run` row is created BY this request, so the page's first poll cannot find it
+    // already terminal, and the earliest a terminal phase reaches the screen is the second read
+    // one POLL_INTERVAL_MS later.
+    const box = page.locator('[data-phase]');
+    await expect(box).toHaveAttribute('data-phase', 'running', { timeout: 30_000 });
+    // And the destructive button is dark for the whole of it, which is the state a second press
+    // would have raced §10's staging tree through — the one window `importDisabled` gained and
+    // the one Playwright can actually click in. [M4.14 finding 2.3]
+    await expect(page.getByRole('button', { name: 'Import and activate' })).toBeDisabled();
+
+    // One tick of the worker loop plus the import itself. What is rendered after this is the
+    // report the WORKER stored on its `job_run` row, not the validation the 202 carried: the
+    // three findings below are all written by the load, which no longer happens in a request.
+    await expect(box).toHaveAttribute('data-phase', 'imported', { timeout: 120_000 });
 
     await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
     await expect(page.locator('.finding', { hasText: 'vocabulary v1' })).toBeVisible();

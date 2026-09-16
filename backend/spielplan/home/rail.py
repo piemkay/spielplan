@@ -78,24 +78,33 @@ EVENT_KINDS: tuple[str, ...] = (
 
 # Declared, coloured by `ModelRail.svelte`, and produced by nobody — on purpose, and named here
 # so "nobody produces it" is a recorded state rather than something a reader has to discover by
-# grepping. All five are WORKER-side writes: the nightly MAP refit, the incremental refit the
-# worker runs, the fold-in, the blend-weight fit and the Cold Tower placement sweep. §6.7 says
-# the log is "never persisted", so it is an in-process ring buffer (see the module docstring) —
-# and an event recorded in the worker process therefore reaches no web request's rail. Narrating
-# them would take a cross-process channel this milestone does not build, and deleting them would
-# throw away the colour rules and the renderers (`refit_line`, `placement_line`) that the
-# milestone which does build it will need. So they stay declared, and this tuple is the thing a
-# guard can read. [decision 189, M4.9 finding 24]
+# grepping. All seven are WORKER-side writes: the nightly MAP refit, the incremental refit the
+# worker runs, the fold-in, the blend-weight fit, the Cold Tower placement sweep and — since
+# M4.14 — the bundle swap and its rebuild sweep. §6.7 says the log is "never persisted", so it
+# is an in-process ring buffer (see the module docstring) — and an event recorded in the worker
+# process therefore reaches no web request's rail. Narrating them would take a cross-process
+# channel no milestone has built yet, and deleting them would throw away the colour rules and
+# the renderers (`refit_line`, `placement_line`) that the milestone which does build it will
+# need. So they stay declared, and this tuple is the thing a guard can read.
+# [decision 189, M4.9 finding 24]
 #
-# `bundle_swap` and `reconcile` are deliberately NOT here: both are written inside the WEB
-# process, at `importer/bundle.py`'s hot swap and its in-request rebuild sweep, so they reach a
-# rail today and are held to the "has a producer" half of the guard.
+# `bundle_swap` and `reconcile` are here because M4.14 step E2 moved their writer. They WERE
+# written inside the web process, at `importer/bundle.py`'s hot swap and its in-request rebuild
+# sweep, which is why decision 189 held them to the "has a producer" half of the guard. The
+# import is now a worker job, so those two `rail.record` calls were writing into a buffer with no
+# reader — the one event that invalidates every fitted number in the app, narrated to nobody,
+# under a comment claiming it reached every member. The calls are removed rather than left
+# write-only, so that "declared pending" goes on meaning "no call site" and the guard can go on
+# checking it; what carried the fact instead is `artifact_bundle.report`, which is persisted and
+# is what the Data tab renders. [M4.14 cycle 1, m414-c1-dim-lock-02, decision 263]
 AWAITING_PRODUCER: tuple[str, ...] = (
     "ledger_refit",
     "ledger_incremental",
     "foldin",
     "blend_weight",
     "placement",
+    "reconcile",
+    "bundle_swap",
 )
 
 # Decision 117's inventory, and the only thing `redact` knows about. `model` is the per-card

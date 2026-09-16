@@ -91,6 +91,10 @@ async def _import(db, root: Path, artifacts_root: Path, *, version: str = "test-
         # actually about and the only one that can carry a second version at all.
         (root / "content.sqlite").unlink()
         (root / "reviews.sqlite").unlink()
+        # BUNDLE.json is the corpus's inventory of the tree and M4.14 reads it before the first
+        # row is written, so a bundle made models-only by deleting two files it still lists is a
+        # bundle whose own manifest no longer describes it. [M4.14 step B1]
+        fx.reinventory(root)
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(root), artifacts_root
     )
@@ -231,8 +235,12 @@ async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as
         "the no-version branch must read the ACTIVE row's placements"
     )
 
-    # The other half, on an install with no bundle row whatsoever.
-    await db.execute("DELETE FROM artifact_bundle")
+    # The other half, on an install with no ACTIVE bundle row. This read `DELETE FROM
+    # artifact_bundle` until decision 249 made the row provenance -- a row that has been
+    # somebody's basis is never deleted -- and superseding says the same thing to every reader
+    # this half has: `active_bundle_version` is `WHERE state = 'active'`, so §3.1's bundle-less
+    # household is one with no ACTIVE basis, not one whose history was erased.
+    await db.execute("UPDATE artifact_bundle SET state = 'superseded'")
     user_id = await _user(db, name="Ana", role="member")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)

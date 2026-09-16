@@ -8,6 +8,8 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import re
+
 import asyncpg
 import pytest
 
@@ -261,6 +263,289 @@ async def test_only_one_bundle_can_be_active(db):
     await db.execute("UPDATE artifact_bundle SET state = 'active' WHERE version = 'v1'")
     with pytest.raises(asyncpg.UniqueViolationError):
         await db.execute("UPDATE artifact_bundle SET state = 'active' WHERE version = 'v2'")
+
+
+# --- §10 + §4.2: an artifact_bundle row is provenance. Decision 249 ---------------------
+
+
+async def _bundle(db, version: str, state: str) -> str:
+    """One bundle row in a named state.
+
+    `kind = 'model'` on every call: `kind` defaults to 'seed' and `artifact_bundle_one_seed`
+    (0015_seed.sql:121) allows one seed row per install, so a second defaulted row would fail on
+    that index rather than on the rule under test.
+    """
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state, kind) "
+        "VALUES ($1, '{}', $2, 'model')",
+        version, state,
+    )
+    return version
+
+
+async def test_the_active_bundle_row_cannot_be_deleted(db):
+    """0023's trigger, on the one row §10's whole swap sequence is about.
+
+    Nothing in the tree deletes an `artifact_bundle` row today, which is exactly why the rule had
+    to be said in the schema rather than in a function: data-07's reproduction was refused by
+    `session_bundle_version_fkey` only because a session happened to exist, and an install with
+    no session at all deletes the active row outright -- keeping every score, prior and placement
+    computed in it, now naming a basis the install can no longer describe. `0015_seed.sql:131-135`
+    calls itself "the migration that makes them prunable"; decision 249 is the answer it left
+    open, and this is the state that answer is mostly about.
+
+    The message is asserted and not merely the raise. What an operator at a psql prompt gets
+    today is "violates foreign key constraint session_bundle_version_fkey", which says nothing
+    about why the row exists, so the version and the state are the payload of the fix.
+    """
+    await _bundle(db, "active-v1", "active")
+    with pytest.raises(asyncpg.RaiseError, match="active-v1 is state active and is provenance"):
+        await db.execute("DELETE FROM artifact_bundle WHERE version = 'active-v1'")
+    assert await db.fetchval(
+        "SELECT state FROM artifact_bundle WHERE version = 'active-v1'"
+    ) == "active"
+
+
+async def test_a_superseded_bundle_row_cannot_be_deleted_either(db):
+    """The state the word "prunable" was written for, and the one that must not be pruned.
+
+    A superseded row is the only one a reading of `0015_seed.sql:131-135` would ever point a
+    prune at, and it is where the DDL's three answers do the most damage at once: `user_score`
+    and `title_prior` are ON DELETE CASCADE (`0009_scoring.sql:12,34`), `title_placement` too
+    (`0008_placement.sql:14`), and `title.placement_bundle` is SET NULL
+    (`0008_placement.sql:59-60`) -- so one DELETE silently empties §5.1's scores and §5.3's
+    priors for that basis and strands the title at 'warm' with no version naming where the
+    coordinate came from.
+
+    The survivors are asserted rather than only the raise, because enumerating what the prune
+    would have taken is the whole content of the word "provenance": a test that stopped at
+    `pytest.raises` would document the trigger and not its reason.
+    """
+    user = await _user(db)
+    target = await _title(db, 1)
+    await _bundle(db, "sup-v1", "superseded")
+    await db.execute(
+        "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
+        "VALUES ($1, $2, 'movie', 'sup-v1', 0.5, 0)",
+        user, target,
+    )
+    await db.execute(
+        "INSERT INTO title_prior (title_id, bundle_version, b, item_n, gate, e_source) "
+        "VALUES ($1, 'sup-v1', 0.1, 120, 0.92, 'backbone')",
+        target,
+    )
+    await db.execute(
+        "UPDATE title SET placement = 'warm', placement_bundle = 'sup-v1', placement_at = now() "
+        "WHERE id = $1",
+        target,
+    )
+
+    with pytest.raises(asyncpg.RaiseError, match="sup-v1 is state superseded and is provenance"):
+        await db.execute("DELETE FROM artifact_bundle WHERE version = 'sup-v1'")
+
+    assert await db.fetchval(
+        "SELECT count(*) FROM user_score WHERE bundle_version = 'sup-v1'"
+    ) == 1
+    assert await db.fetchval(
+        "SELECT count(*) FROM title_prior WHERE bundle_version = 'sup-v1'"
+    ) == 1
+    assert await db.fetchval(
+        "SELECT placement_bundle FROM title WHERE id = $1", target
+    ) == "sup-v1", "the title still names the basis its coordinate was computed in"
+
+
+async def test_a_staged_or_failed_row_may_be_deleted(db):
+    """The other half of decision 249, and the half a blanket refusal would have eaten.
+
+    'staged' and 'failed' name an import that never became anybody's basis, so a row in either
+    state that nothing cites records an attempt and no more. What a blanket refusal would eat is
+    a row somebody made by hand, and not an abandoned import: no path in this tree writes either
+    state -- the importer inserts 'validated' inside the transaction that flips (decision 253),
+    a failed import rolls that row back with everything else, and 'staged' survives only as the
+    column default (`0001_system.sql:40`) that no INSERT here leaves to itself. The hatch is for
+    a psql operator and for a state a later milestone may start writing.
+
+    The row nothing cites is the whole of the hatch, which is why the sibling test below exists:
+    decision 249's premise is that these two states are nobody's basis, and a hand-built row can
+    falsify it.
+
+    'validated' is asserted on the other side of the line deliberately. It is the state decision
+    253 has the importer write INSIDE the transaction that flips a bundle active, so a WHEN
+    clause widened to "anything that is not active" would let a crashed import's row be removed
+    while `/data/artifacts/<version>` stays on disk -- the broken install D2 exists to repair,
+    with the row that identifies it gone.
+    """
+    await _bundle(db, "staged-v1", "staged")
+    await _bundle(db, "failed-v1", "failed")
+    await _bundle(db, "validated-v1", "validated")
+
+    await db.execute("DELETE FROM artifact_bundle WHERE version IN ('staged-v1', 'failed-v1')")
+    assert await db.fetchval("SELECT count(*) FROM artifact_bundle") == 1
+
+    with pytest.raises(asyncpg.RaiseError, match="validated-v1 is state validated"):
+        await db.execute("DELETE FROM artifact_bundle WHERE version = 'validated-v1'")
+
+
+async def test_a_staged_or_failed_row_something_still_cites_is_refused_with_the_rule(db):
+    """The hatch's premise, checked rather than assumed. Decision 249.
+
+    "Nothing downstream can be pointing at them" is true of every row this app makes and false
+    of one a psql operator builds by hand -- and 0023 opens by naming what the operator gets
+    when it is false. Measured on a fresh 0001-0023 database before this was closed: a title at
+    `placement_bundle` of a 'failed' row answered the DELETE with `title_placement_has_basis`
+    and the entire title row in the DETAIL, and a session citing a 'staged' row answered with
+    `session_bundle_version_fkey` -- verbatim the two error shapes the migration's header calls
+    the defect it repairs, reproduced on the only two states the rule leaves open.
+
+    Both arms, because they fail differently and a test that took one would leave the other's
+    constraint name reachable: `title.placement_bundle` is SET NULL (`0008_placement.sql:59-60`)
+    and trips the CHECK this same migration adds, while `session.bundle_version` is NOT NULL and
+    RESTRICTs (`0013_tonight.sql:49`).
+    """
+    target = await _title(db, 1)
+    await _bundle(db, "failed-v1", "failed")
+    await db.execute(
+        "UPDATE title SET placement = 'cold_tower', placement_bundle = 'failed-v1', "
+        "placement_at = now() WHERE id = $1",
+        target,
+    )
+    with pytest.raises(asyncpg.RaiseError, match="failed-v1 is state failed and is provenance"):
+        await db.execute("DELETE FROM artifact_bundle WHERE version = 'failed-v1'")
+
+    host = await _user(db)
+    await _bundle(db, "staged-v1", "staged")
+    await db.execute(
+        "INSERT INTO session (room_code, host_user_id, kind, bundle_version) "
+        "VALUES ('MX-2210', $1, 'movie', 'staged-v1')",
+        host,
+    )
+    with pytest.raises(asyncpg.RaiseError, match="staged-v1 is state staged and is provenance"):
+        await db.execute("DELETE FROM artifact_bundle WHERE version = 'staged-v1'")
+
+    assert await db.fetchval("SELECT count(*) FROM artifact_bundle") == 2
+
+
+async def test_the_rule_asks_every_table_that_can_be_citing_the_row(db):
+    """The hatch's list is hand-maintained, so the schema is asked whether it is still complete.
+
+    `artifact_bundle_is_provenance` names six tables one by one, and a later migration that adds
+    a seventh foreign key to `artifact_bundle` would reopen the hole the test above closes with
+    nothing to say so -- the same failure mode `REBUILD_SET` is defined once to avoid. The
+    catalog knows the real list, so it is the catalog that is asked.
+
+    `user_vector` is the one exclusion, and it is decision 249's own: §10 says a vector expressed
+    in the old basis is garbage and a NULL stamp is how every read already recognises that
+    (`0015_seed.sql:138-143`), so a vector is not something that keeps a bundle row alive.
+    """
+    referencing = [
+        r["referencing"] for r in await db.fetch(
+            "SELECT DISTINCT conrelid::regclass::text AS referencing FROM pg_constraint "
+            " WHERE contype = 'f' AND confrelid = 'artifact_bundle'::regclass ORDER BY 1"
+        )
+    ]
+    assert "user_vector" in referencing, "the documented exception is still a foreign key"
+    body = await db.fetchval(
+        "SELECT prosrc FROM pg_proc WHERE proname = 'artifact_bundle_is_provenance'"
+    )
+    missing = [
+        table for table in referencing
+        if table != "user_vector" and not re.search(rf"FROM\s+{table}\b", body)
+    ]
+    assert not missing, (
+        f"these tables can cite an artifact_bundle row and the rule does not ask them: {missing}"
+        " -- a staged or failed row one of them points at would be deleted, and the operator"
+        " would get that table's constraint name instead of decision 249"
+    )
+
+
+async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(pg_url, tmp_path):
+    """0023's backfill and its CHECK, over a row that was already in the reproduced state.
+
+    A database of its own rather than the `db` fixture's, for the reason
+    `test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set` gives at the foot of
+    this file: every other layer of this suite applies the migrations to an EMPTY database, so
+    the `UPDATE title SET placement = 'unplaced'` this migration opens with would otherwise never
+    run over a row at all. Deleting that UPDATE would leave every test here green and every
+    install that has been through §10's re-import failing the ALTER at boot, inside
+    `db/migrate.py`, with no way forward -- the file is checksummed the moment it lands.
+
+    The state staged below is the one data-07 reproduced: `title.placement_bundle`'s ON DELETE
+    SET NULL (`0008_placement.sql:59-60`) leaves a title at 'cold_tower' with no version naming
+    the basis, so §12's M2 exit-criterion index (`0008_placement.sql:64`,
+    `count(*) FROM title WHERE is_owned AND placement = 'unplaced'`, which must be 0) reports
+    nothing waiting to be placed for a title that has no coordinate at all. `reconcile.py`'s
+    sweep does not rescue it either: that sweep only resets rows it can see are stale ('warm'
+    with no Backbone row), and a 'cold_tower' row in this state is never re-examined by anything.
+    """
+    # Not the module's `UNDER_TEST`: that names 0022, whose own drill stages the migrations
+    # BELOW it, and pointing both at one constant would silently move that test's cut line.
+    under_test = "0023_import_state"
+    earlier = [version for version, _ in migrate.discover() if version < under_test]
+    admin, name, url = _sibling(pg_url, "_basis")
+    await _recreate(admin, name)
+    conn = await asyncpg.connect(url)
+    try:
+        directory = _stage(tmp_path, earlier[-1])
+        assert await migrate.apply_all(conn, directory)
+        await conn.execute(
+            "INSERT INTO artifact_bundle (version, manifest, state) "
+            "VALUES ('basis-v1', '{}', 'active')"
+        )
+        await conn.execute(
+            "INSERT INTO title (id, kind, name, is_owned) VALUES "
+            "(21, 'movie', 'stranded', true), (22, 'movie', 'placed', true)"
+        )
+        await conn.execute(
+            "UPDATE title SET placement = 'cold_tower', placement_at = now() WHERE id = 21"
+        )
+        await conn.execute(
+            "UPDATE title SET placement = 'warm', placement_bundle = 'basis-v1', "
+            "placement_at = now() WHERE id = 22"
+        )
+        assert await conn.fetchval(
+            "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
+        ) == 0, "the defect as M2 reads it: nothing appears to be waiting for a coordinate"
+
+        assert under_test in _complete(directory)
+        assert under_test in await migrate.apply_all(conn, directory)
+
+        stranded = await conn.fetchrow(
+            "SELECT placement, placement_at, placement_bundle FROM title WHERE id = 21"
+        )
+        assert stranded["placement"] == "unplaced", "a coordinate with no basis is not a placement"
+        # About THIS row, not about 'unplaced': the backfill clears the stamp because that
+        # timestamp dated a placement which never happened. There is no rule here for a reader to
+        # carry away -- `classify_warm`'s demote is the one statement that puts a row back to
+        # 'unplaced' and it writes `placement_at = now()` doing it (`reconcile.py:157-162`), so
+        # an unplaced title carries a stamp again after the first sweep.
+        assert stranded["placement_at"] is None, "this row's stamp dated a placement that never was"
+
+        placed = await conn.fetchrow(
+            "SELECT placement, placement_at, placement_bundle FROM title WHERE id = 22"
+        )
+        assert (placed["placement"], placed["placement_bundle"]) == ("warm", "basis-v1"), (
+            "the backfill must not touch a title whose placement does name its basis"
+        )
+        assert placed["placement_at"] is not None, "nor clear the stamp of a real placement"
+        assert await conn.fetchval(
+            "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
+        ) == 1, "M2's index now counts the title that has no coordinate"
+
+        # Both halves of the biconditional, because both are reachable: the first from a writer
+        # that stamps `placement` alone, the second from the SET NULL the FK still performs on
+        # `title.placement_bundle` wherever decision 249's trigger is not what fires first.
+        with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
+            await conn.execute(
+                "INSERT INTO title (id, kind, name, placement) "
+                "VALUES (23, 'movie', 'no basis', 'cold_tower')"
+            )
+        with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
+            await conn.execute("UPDATE title SET placement_bundle = NULL WHERE id = 22")
+        with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
+            await conn.execute("UPDATE title SET placement = 'unplaced' WHERE id = 22")
+    finally:
+        await conn.close()
+        await _drop(admin, name)
 
 
 # --- §2: connector secrets --------------------------------------------------------------

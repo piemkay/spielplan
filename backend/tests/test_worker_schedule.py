@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import inspect
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -31,6 +32,7 @@ import pytest
 
 from spielplan import worker
 from spielplan.core.config import settings
+from spielplan.models.artifacts import ArtifactStore
 
 # Every daily job with an implementation: §5.3's four, §2's dump, and `job-run-prune` — which is
 # in neither table and is a daily job in every other sense, so it is anchored like the rest.
@@ -530,17 +532,25 @@ def test_every_row_of_the_spec_s_jobs_table_has_a_registry_entry():
 def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means():
     """`run=None` meant three states at once, and the registry could not tell them apart.
 
-    Two of them are code that ships: the incremental Ledger update runs in the web process on
-    every tap, and the bundle import runs inside the admin's POST. One is code that ships and is
-    reached through another job - the Cold Tower's forward pass, which the placement sweep calls
-    until §8's acquisition pipeline exists. Only the last two rows here are genuinely unwritten.
-    Pinned as sets rather than as counts, because the failure being guarded is a row drifting
-    from one bucket to another silently, which a count cannot see. [M4.10 finding 35]
+    One of them is code that ships in another process: the incremental Ledger update runs in the
+    web process on every tap. One is code that ships and is reached through another job - the
+    Cold Tower's forward pass, which the placement sweep calls until §8's acquisition pipeline
+    exists. Only the last two rows here are genuinely unwritten. Pinned as sets rather than as
+    counts, because the failure being guarded is a row drifting from one bucket to another
+    silently, which a count cannot see. [M4.10 finding 35]
+
+    **`bundle-import` was in the first set until M4.14 and is now live.** It was the sharpest
+    example the paragraph above had - work that ships and is triggered by a request - and §5.3
+    files it as a job with a "minutes" budget, so the 127 s it spent on the web process's event
+    loop was the registry pointing at its own defect. `_bundle_import` claims the `job_run` row
+    the route writes, which is what moves it across this line; the `owner` had to go with it,
+    because a live job carrying one is counted twice by the census below and reads as
+    documentation that this loop is not the caller. [M4.14 step E2, decision 253]
     """
     elsewhere = {j.name: j.owner for j in worker.JOBS if j.run is None and j.owner is not None}
     awaiting = {j.name: j.milestone for j in worker.JOBS if j.run is None and j.owner is None}
 
-    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement", "bundle-import"}
+    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement"}
     assert set(awaiting) == {"dna-projection", "explore-frontier-cache"}
     assert sorted(awaiting.values()) == ["M5", "M6"], (
         "a job with neither an implementation nor an owner has to name the milestone that owes "
@@ -553,6 +563,405 @@ def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means
     # `owner` means "this loop does not fire it". A live job carrying one would make the census
     # below double-count and, worse, would read as documentation that the loop is not the caller.
     assert not [j.name for j in worker.JOBS if j.run is not None and j.owner is not None]
+
+
+# The three names that acquire the ACTIVE bundle inside this process: `_active_store`, the
+# worker's one door to it and the place §10's two assertions are made; `load_active`, the door
+# `_active_store` itself opens; and `ArtifactStore.open`, the constructor `load_active` itself
+# tail-calls and the idiom a job that wants the staged DIRECTORY rather than the mapping reaches
+# for (`importer/bundle.py`, `importer/validate.py`). A job that reaches any of the three fits in
+# that basis and writes numbers expressed in it.
+#
+# The third is spelled with its type because neither half of it is a door alone: `open` by itself
+# is every `Path.open` in a body, and `ArtifactStore` by itself is `ArtifactStore.empty()` -
+# §3.1's bundle-less sentinel, which three of today's six spell - and the annotations on
+# `_active_store` and `_report_basis`. Matching the type holds a job out of the loop for naming
+# the EMPTY store, which is `probe-comment`'s failure wearing a different hat.
+# [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+_BASIS_NAMES = frozenset({"_active_store", "load_active", "ArtifactStore.open"})
+
+
+def _named(fn: ast.AST) -> set[str]:
+    """Every name this function body mentions, attribute access included: `_active_store(c)` and
+    `worker._active_store(c)` are the same acquisition seen from two modules.
+
+    `X.y` is emitted qualified as well as bare, because the third door in `_BASIS_NAMES` can only
+    be named by both of its halves at once - the comment there argues why.
+    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+
+    The qualified form is what carries the walk across a file too: `bb.load_for` is the alias and
+    the function in one string, which is all `_one_module_out` needs to find the file.
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    out: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name):
+            out.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            out.add(node.attr)
+            if isinstance(node.value, ast.Name):
+                out.add(f"{node.value.id}.{node.attr}")
+    return out
+
+
+def _imports(tree: ast.AST, source: Path) -> dict[str, tuple[str, str | None]]:
+    """`alias -> (module, attribute)` for every import a file carries, top level or not.
+
+    Not only the top level, because a job imports its helpers inside the body that uses them -
+    `_ledger_map_refit` opens with three such lines and `worker.py`'s module scope names almost
+    nothing a model job actually calls. A name that meant two different modules in two functions
+    of one file would collapse here, and is not a shape this codebase writes.
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    out: dict[str, tuple[str, str | None]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bare = alias.name.split(".")[0]
+                out[alias.asname or bare] = (alias.name if alias.asname else bare, None)
+        elif isinstance(node, ast.ImportFrom):
+            # A relative import resolves to nothing here, so the job carrying it would be cleared
+            # for a reason that is this function's and not the job's - the silent clearing this
+            # whole derivation exists to refuse. `spielplan` spells every import absolutely today;
+            # this assertion is what says so out loud if that ever stops being true.
+            assert not node.level, (
+                f"{source.name} carries a relative import, which this resolution cannot follow: "
+                "spell it absolutely rather than leaving a job cleared by an unresolved call"
+            )
+            for alias in node.names:
+                out[alias.asname or alias.name] = (node.module, alias.name)
+    return out
+
+
+# Parsed once per file, because the walk below re-enters `worker.py` for every job in the registry
+# and crosses into a dozen more: measured, twenty files for today's fourteen jobs in 0.04 s.
+_PARSED: dict[Path, tuple[dict, dict]] = {}
+
+
+def _parse(source: Path) -> tuple[dict, dict]:
+    """One file's module-level functions by name, and `_imports`' alias map for the same file."""
+    cached = _PARSED.get(source)
+    if cached is None:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        defs = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+        cached = _PARSED[source] = (defs, _imports(tree, source))
+    return cached
+
+
+def _one_module_out(mention: str, imports: dict[str, tuple[str, str | None]]) -> tuple[Path, str] | None:
+    """The file and the function a mention names in another module of this package, or None.
+
+    The walk stops at the PACKAGE rather than one module short of it: `spielplan` is the only code
+    that can acquire this install's basis - a call into asyncpg or numpy cannot - and inside it a
+    job's helper is as likely to sit in `scoring/` or `placement/` as beside the job, which is
+    where CLAUDE.md puts rules ("rules live in the domain packages under `backend/spielplan/`").
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    alias, _, attr = mention.partition(".")
+    if attr:
+        # `bb.load_for`, after `from spielplan.scoring import backbone as bb`: the alias names the
+        # module and the attribute names the function in it.
+        target = imports.get(alias)
+        if target is None:
+            return None
+        module = target[0] if target[1] is None else f"{target[0]}.{target[1]}"
+        func = attr
+    else:
+        # `load_hp`, after `from spielplan.ledger.hyperparams import load as load_hp`: the
+        # function came in by name and its alias carries the module it came from.
+        target = imports.get(mention)
+        if target is None or target[1] is None:
+            return None
+        module, func = target
+    if module.split(".")[0] != "spielplan":
+        return None
+    try:
+        spec = importlib.util.find_spec(module)
+    except ImportError:
+        # `settings.artifacts_dir` resolves `settings` to `spielplan.core.config.settings`, which
+        # is a callable and not a module. Nothing to follow, and nothing wrong.
+        return None
+    origin = spec.origin if spec is not None else None
+    return (Path(origin), func) if origin and origin.endswith(".py") else None
+
+
+def _reaches_the_basis(run) -> bool:
+    """Does `run` acquire the active bundle - itself, or through a helper it calls?
+
+    `"_active_store" in inspect.getsource(job.run)` was the first form of this, and it is a text
+    property of ONE function rather than the property the test below claims. Three ways past it,
+    all of them ordinary: a job that reaches the basis one call frame out - which is the refactor
+    a seventh fit invites, once there are six to share a helper with - a job that calls
+    `ArtifactStore.load_active` itself, and, in the other direction, a job whose COMMENT names
+    `_active_store`, which the substring forced INTO the set. The first two leave the guard green
+    while `_tick` never skips the job, which is exactly the silent failure a hand-kept list
+    produces. `ast` is also what makes the third go away for free: a comment is not a node.
+    [M4.14 cycle 1, m414-c1-dim-lock-06]
+
+    A fourth shape went past the `ast` form too, and past the substring before it: a job that
+    resolves the active version itself and builds the store with `ArtifactStore.open`, because it
+    wants the DIRECTORY rather than the None-for-empty mapping `_active_store` returns.
+    `dna-projection` - the seventh `worker.JOBS` already carries, `run=None` and M5 owing it an
+    implementation - is that shape, and `importer/bundle.py` and `importer/validate.py` both write
+    the idiom today. The paragraph above listed `load_active` among the doors it had closed and
+    `open` is that constructor's sibling, so the guard claimed this one shut a milestone before it
+    was. [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+
+    One module deep was the boundary until cycle 3, and it cleared the fifth shape - which is the
+    first one's, moved one file out. The assertion below guards `run` ITSELF, so a job whose `run`
+    is a module-level function and whose acquisition sits one call away in `scoring/` or
+    `placement/` - the shared helper this docstring has anticipated since cycle 1, put where
+    CLAUDE.md puts rules - was not asserted on and was not derived: seen, cleared, and never
+    skipped while an import held the lock. So the walk follows a call into any module of this
+    package, resolved from the imports the file itself carries.
+
+    What that boundary was protecting is answered by a name instead. The basis is loaded outside
+    the worker too - `importer/bundle.active_backbone_coverage` opens it for decision 248's
+    reverse coverage check - so a package-wide walk derives `bundle-import` into the set, and
+    skipping the import job while an import holds the lock is the one thing `_tick` must never
+    do. Measured over today's registry the walk derives `MODEL_JOBS` and that one job and nothing
+    else, at one hop and at every depth past it, so the guard below drops it by
+    `worker.BUNDLE_IMPORT_JOB` rather than by keeping the walk too short to see it. The package is
+    where the walk does stop, because code this repository did not write cannot open this
+    install's basis; and a `run` that is not a module-level function is still an assertion rather
+    than a False, because a derivation that cannot see a job has to say so instead of clearing it.
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    source = Path(inspect.getsourcefile(run))
+    defs, _ = _parse(source)
+    assert run.__name__ in defs, (
+        f"{run.__qualname__} is not a module-level function of {source.name}, so this derivation "
+        "cannot see what it calls; widen it rather than leaving a job unclassified"
+    )
+
+    seen: set[tuple[Path, str]] = set()
+    pending = [(source, run.__name__)]
+    while pending:
+        file, name = pending.pop()
+        if (file, name) in seen:
+            continue
+        seen.add((file, name))
+        here, imports = _parse(file)
+        if name not in here:
+            continue
+        mentions = _named(here[name])
+        if mentions & _BASIS_NAMES:
+            return True
+        pending.extend((file, callee) for callee in mentions & set(here))
+        pending.extend(
+            out for out in (_one_module_out(m, imports) for m in mentions) if out is not None
+        )
+    return False
+
+
+async def _the_shared_basis_helper(conn):
+    """The helper M5's seventh fit will share with the sixth: one acquisition, six callers."""
+    return await worker._active_store(conn)
+
+
+async def _probe_fits_through_a_helper() -> None:
+    """A model job written with one frame of indirection, and nothing else unusual about it."""
+    await _the_shared_basis_helper(None)
+
+
+async def _probe_loads_the_store_itself() -> None:
+    """A model job that opens the basis directly, naming neither the worker's door nor a helper."""
+    await ArtifactStore.load_active(None, settings().artifacts_dir)
+
+
+async def _probe_only_names_the_basis_in_a_comment() -> None:
+    # `_active_store` is named here and called nowhere, which is what a comment is: this job
+    # writes nothing expressed in a basis and must not be held out of the loop.
+    return None
+
+
+async def _probe_opens_the_active_directory_by_path() -> None:
+    """A model job that resolves the active version itself and opens that DIRECTORY.
+
+    The shape `dna-projection` will have: it needs the tree's files, not `_active_store`'s
+    None-for-empty mapping, so it makes `load_active`'s own SELECT and calls the constructor
+    `load_active` tail-calls. It writes in the active basis and names neither of the other two
+    doors, so before this cycle it derived False, stayed out of `MODEL_JOBS`, and was never
+    skipped while an import held the lock - a projection started against v1 and committed after
+    §10's flip, in a basis the install no longer serves.
+    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+    """
+    conn = None  # never called: this body exists to be parsed, like the three above.
+    version = await conn.fetchval("SELECT version FROM artifact_bundle WHERE state = 'active'")
+    ArtifactStore.open(settings().artifacts_dir / version, version)
+
+
+async def _probe_names_the_type_without_the_door() -> None:
+    """A job that touches `ArtifactStore` and acquires no basis at all.
+
+    The guard on the cure rather than on the disease. Closing `probe-open` by putting the TYPE
+    in `_BASIS_NAMES` also derives this one - §3.1's bundle-less sentinel and an annotation,
+    which is what `_ledger_map_refit`, `_fold_in_tick` and `_tier_set_refits` each spell in their
+    own bodies - and a job held out of the loop for naming the empty store is `probe-comment`'s
+    failure in a new hat. Measured: with `"ArtifactStore"` as the name, this probe derives True.
+    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+    """
+    store: ArtifactStore = ArtifactStore.empty()
+    assert store.is_empty
+
+
+async def _probe_reaches_the_basis_one_module_out() -> None:
+    """A job whose `run` is module-level and whose basis acquisition is one module away.
+
+    The shape the first paragraph above anticipates - "the refactor a seventh fit invites, once
+    there are six to share a helper with" - with the shared helper where CLAUDE.md puts rules
+    ("rules live in the domain packages under `backend/spielplan/`") rather than in `worker.py`.
+    `run` IS a module-level function here, so the assertion that guards the boundary never fires
+    and there is nothing to widen: the walk ran out of MODULE and returned False, and the job was
+    seen, cleared, and never skipped while an import held the lock - `probe-helper`'s failure with
+    the helper one import away.
+
+    `active_backbone_coverage` rather than an invented helper, because it is the acquisition one
+    module out that this codebase already writes: decision 248's reverse coverage check, opening
+    on `ArtifactStore.load_active`. The import sits inside the body for the same reason every
+    model job's does, and this body is never executed, so naming it costs this file no import.
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    from spielplan.importer import bundle as importer
+
+    conn = None  # never called: this body exists to be parsed, like the four above.
+    await importer.active_backbone_coverage(conn, settings().artifacts_dir)
+
+
+def test_the_model_job_derivation_sees_a_basis_reached_through_a_helper():
+    """The guard above is a derivation, and this is what keeps the derivation honest.
+
+    `MODEL_JOBS` and the set derived from today's six agree under any rule that reads the six
+    bodies, so the test above cannot fail for the reason it exists: every one of them spells
+    `_active_store` in its own first lines. What it is FOR is the seventh, and the seventh is
+    written by somebody who has six to copy from - so it is asserted here against jobs that do
+    not exist yet, which is the only place the difference between the rules is visible.
+
+    Three probes, because there were three ways past the substring this replaced. Two of them
+    leave `MODEL_JOBS` short while the guard stays green - a fold-in started against v1 and
+    committed after §10's flip then stamps `user_vector` and `ledger_fit` with a version the
+    install no longer serves, which is the defect D1 exists to prevent and the one §10's
+    invariant cannot see from inside the job. The third goes the other way and is the cheaper
+    failure: a job forced into the skip because a comment mentioned the door.
+    [M4.14 cycle 1, m414-c1-dim-lock-06]
+
+    Five now. `probe-open` is the fourth way past, and the first one this docstring got wrong:
+    it is the same silent shape as the first two, and it survived the rule that replaced the
+    substring. `probe-sentinel` is the fifth and points the other way - it is what stops the
+    obvious fix for the fourth, naming `ArtifactStore` itself, from re-opening `probe-comment`.
+    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+
+    Six. `probe-one-out` is the way past a walk bounded by one FILE, and the one the boundary's
+    own paragraph promised could not happen: it is `run` itself that the assertion there guards,
+    so a job whose `run` is module-level and whose acquisition is not was cleared in silence.
+    [M4.14 cycle 3, m414-c3-dimlock-04]
+    """
+    probes = (
+        worker.Job("probe-helper", "M5", "nightly", "seconds", _probe_fits_through_a_helper),
+        worker.Job("probe-direct", "M5", "nightly", "seconds", _probe_loads_the_store_itself),
+        worker.Job("probe-comment", "M5", "nightly", "seconds",
+                   _probe_only_names_the_basis_in_a_comment),
+        worker.Job("probe-open", "M5", "nightly", "seconds",
+                   _probe_opens_the_active_directory_by_path),
+        worker.Job("probe-sentinel", "M5", "nightly", "seconds",
+                   _probe_names_the_type_without_the_door),
+        worker.Job("probe-one-out", "M5", "nightly", "seconds",
+                   _probe_reaches_the_basis_one_module_out),
+    )
+    fitting = {job.name for job in probes if _reaches_the_basis(job.run)}
+
+    assert fitting == {"probe-helper", "probe-direct", "probe-open", "probe-one-out"}, (
+        "the derivation has to answer for what a job DOES with the basis, not for what its text "
+        f"says: {sorted(fitting)}"
+    )
+
+
+def test_every_job_that_fits_against_the_active_bundle_is_named_in_model_jobs():
+    """`MODEL_JOBS` is a list kept by hand, and this is what keeps it honest.
+
+    `_tick` skips those rows while a bundle import holds the lock, because §10's flip replaces
+    the basis they fit in and a fold-in that starts against v1 and commits after the swap stamps
+    `user_vector` and `ledger_fit` with a version this install no longer serves. The set is
+    therefore a claim about which jobs WRITE in a basis, and the property that makes a job one of
+    them is visible in its source: it acquires the basis through one of `_BASIS_NAMES`' three
+    doors. Derived from that rather than restated, so the seventh model job cannot join this loop
+    and silently not join the skip - which is the failure a hand-kept list produces, and it
+    produces it silently.
+
+    The other direction too: a name in the set whose job does not read the store is a job being
+    held out of the loop for no reason anybody can see. [M4.14 step D1, finding 2.2]
+
+    "Visible in its source" is `_reaches_the_basis` and not a substring of one function's text,
+    for the reasons that function argues; the difference between the two rules is asserted in
+    `test_the_model_job_derivation_sees_a_basis_reached_through_a_helper`, because today's six
+    agree under both. [M4.14 cycle 1, m414-c1-dim-lock-06]
+    """
+    # `bundle-import` is excluded by name, which is what lets the derivation above cross a module
+    # boundary rather than stopping one short of `importer/bundle.active_backbone_coverage`. It is
+    # the one job that opens the store on purpose and the one job this skip must never take: it IS
+    # §10's flip, and holding it out of the loop while the import lock is held is what that
+    # docstring calls the one thing `_tick` must never do. Asserted rather than assumed, because a
+    # name excluded from a set it was never in is a comment that has stopped being true.
+    # [M4.14 cycle 3, m414-c3-dimlock-04]
+    importer = next(j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB)
+    assert _reaches_the_basis(importer.run), (
+        "the exclusion below is by name because the walk derives the import job, and it no longer "
+        "does: either the walk stopped crossing modules or the import stopped opening the store"
+    )
+    fitting = {
+        job.name for job in worker.JOBS
+        if job.run is not None and job.name != worker.BUNDLE_IMPORT_JOB
+        and _reaches_the_basis(job.run)
+    }
+
+    assert fitting == set(worker.MODEL_JOBS), (
+        "MODEL_JOBS and the jobs that acquire a basis through one of _BASIS_NAMES' doors "
+        "have diverged; "
+        f"only in the source: {sorted(fitting - set(worker.MODEL_JOBS))}, "
+        f"only in the set: {sorted(set(worker.MODEL_JOBS) - fitting)}"
+    )
+
+
+def test_the_boot_line_does_not_call_a_broken_install_legal(caplog, tmp_path):
+    """dd01, in the one line this process prints about its own basis.
+
+    `is_empty` is True for a household that has never imported a bundle and for one whose active
+    bundle's directory is gone, and this line said "(section 3.1: that is legal)" for both - so
+    an operator whose model jobs were all about to refuse read, at every `docker compose up`,
+    that the state was normal. Three cases because there are three, and the third is the one that
+    must stay silent: a loaded bundle is not news.
+    """
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        worker._report_basis(ArtifactStore.empty())
+    assert "that is legal" in caplog.text, "section 3.1's bundle-less household is still legal"
+    assert caplog.text.isascii(), caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        worker._report_basis(
+            ArtifactStore(version="v1", root=tmp_path / "artifacts" / "v1", broken=True)
+        )
+    line = caplog.text
+    assert "that is legal" not in line, (
+        "a broken install is not section 3.1's legal state: the files of the ACTIVE bundle are "
+        f"gone and every model job will refuse - {line}"
+    )
+    assert "restore /data/artifacts" in line and "import that bundle again" in line, (
+        f"the broken-install line has to name the repair, and both halves of it: {line}"
+    )
+    assert "Restarting this process does not help" in line, (
+        "restart is the instruction for a SWAP; it reloads the same empty store here"
+    )
+    assert line.isascii(), line
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
+        worker._report_basis(ArtifactStore(version="v1", root=tmp_path))
+    assert caplog.text == "", f"a healthy basis is not news at boot: {caplog.text}"
 
 
 def _census_line(caplog) -> str:
@@ -590,7 +999,7 @@ def test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed
     assert "runs-on-a-tap(spielplan.api.rate)" in line
     assert "runs-on-a-post(spielplan.importer.bundle)" in line
     assert "1 awaiting their milestone: nobody-has-written-it(M9)" in line
-    assert "fired-here" not in line, "the live jobs are counted, not listed - there are twelve"
+    assert "fired-here" not in line, "the live jobs are counted, not listed - there are fourteen"
     assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
 
 
@@ -612,7 +1021,15 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
     outside = line.split("run outside it: ", 1)[1].split(";", 1)[0]
     assert "ledger-incremental(spielplan.ledger.refit)" in outside
     assert "cold-tower-placement(spielplan.placement.tower)" in outside
-    assert "bundle-import(spielplan.importer.bundle)" in outside
+    # M4.14 moved the bundle import into this loop, so it is counted among the live and named
+    # nowhere - the census lists the two categories that are NOT running here. Asserted as an
+    # absence rather than deleted, because the line an operator reads would look the same if the
+    # row had simply been dropped from the registry, and that is the other way this sentence
+    # goes wrong. [M4.14 step E2]
+    assert "bundle-import" not in line, (
+        "bundle-import is live in this loop now, so the census must not list it as work that "
+        f"runs elsewhere or as work awaiting a milestone: {line}"
+    )
     assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
 
 

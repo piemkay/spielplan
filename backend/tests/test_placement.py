@@ -137,28 +137,49 @@ def _extend_text_embeddings(artifacts: Path, extra: list[int]) -> None:
              covered=np.ones(ids.size, dtype=bool), singular=npz["singular"])
 
 
-def _shrink_backbone(artifacts: Path, drop: int) -> None:
-    """A different Backbone: one title's row is gone, so its coverage shrank (§10).
+def _uncover_backbone_row(artifacts: Path, title_id: int) -> None:
+    """A different Backbone: one title's row carries no coordinate, so its WARM coverage is gone.
 
-    Every row-aligned array is filtered by the same mask rather than a named few: decision 162
-    added `title_identity` beside the ids, and a helper that rebuilt the file from a list of
-    arrays it remembered would silently drop it — which the validator would then refuse, and
-    for the right reason.
+    This deleted the row until M4.14. Decision 248 made a backbone that stops covering an
+    installed `origin='bundle'` title a refusal -- "a coordinate that exists today would stop
+    existing, which is a merged or dropped corpus row rather than a retrain" -- so a fixture that
+    removes the row now models an import the validator refuses, and the three rebuild-set tests
+    standing on it would be measuring that refusal instead of §10's four steps.
+
+    Flagging the row says what §10's step 4 is about while leaving intact the identity coverage
+    decision 248 checks. `warm_title_ids` excludes a flagged row exactly as it excludes an absent
+    one -- `scoring.backbone.cold_row_mask` is the one definition and the shipped mask is its
+    authority -- so the title is demoted out of `warm` and swept into the Cold Tower, which is
+    the same mechanism `test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm`
+    pins one layer down. E is zeroed beside the flag because a row whose mask and whose
+    coordinates disagree is a third state neither rule describes, and every other array keeps its
+    row: decision 162's `title_identity` sits beside the ids, and a coverage set that still names
+    this title is the whole point. [M4.14 decision 248]
     """
     with np.load(artifacts / "backbone.npz", allow_pickle=False) as npz:
         arrays = {k: npz[k] for k in npz.files}
-    keep = arrays["title_ids"] != drop
-    rows = arrays["title_ids"].shape[0]
-    np.savez(artifacts / "backbone.npz", **{
-        k: (v[keep] if getattr(v, "shape", ()) and v.shape[0] == rows else v)
-        for k, v in arrays.items()
-    })
+    row = np.asarray(arrays["title_ids"]).reshape(-1) == title_id
+    assert row.any(), f"title {title_id} has no Backbone row to uncover"
+    e = np.array(arrays["E"], copy=True)
+    e[row] = 0.0
+    arrays["E"] = e
+    mask = np.array(arrays.get("cold_mask", np.zeros(row.size, dtype=bool)), copy=True).reshape(-1)
+    mask[row] = True
+    arrays["cold_mask"] = mask
+    np.savez(artifacts / "backbone.npz", **arrays)
 
 
 def _make_bundle(root: Path, *, version: str = "test-v1", **contract_kwargs) -> Path:
     fx.make_bundle(root, version=version)
     _realistic_contract(root / "artifacts", **contract_kwargs)
     _extend_text_embeddings(root / "artifacts", [FULL_TITLE])
+    # Both rewrites above land AFTER `make_bundle` wrote BUNDLE.json, so this tree is no longer
+    # the tree its own inventory describes -- and M4.14 hashes every listed file before a row is
+    # written, which turns that from a detail into a `bundle-integrity` failure on top of
+    # whatever each test is actually about. `reinventory` re-states the three tree-derived keys
+    # and leaves every declaration alone, which is the same repair `fx`'s own `break_*` helpers
+    # take for the same reason. [M4.14 step B1]
+    fx.reinventory(root)
     return root
 
 
@@ -502,9 +523,14 @@ async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(
         " VALUES ('cold-v1', '{}'::jsonb, 'active')"
     )
     for title_id in (1, 2, 3):
+        # The stamp names the basis it was computed in. `title_placement_has_basis`
+        # (0023_import_state.sql) refuses a placed title with a NULL `placement_bundle`, because
+        # `title_unplaced_owned` counts such a row as placed while it carries no coordinate at
+        # all -- and the outgoing stamp this test demotes is exactly a stamp some bundle wrote.
+        # [M4.14 decision 249]
         await db.execute(
-            "INSERT INTO title (id, kind, name, is_owned, placement) "
-            "VALUES ($1, 'movie', $2, true, 'warm')",
+            "INSERT INTO title (id, kind, name, is_owned, placement, placement_bundle) "
+            "VALUES ($1, 'movie', $2, true, 'warm', 'cold-v1')",
             title_id, f"title {title_id}",
         )
 
@@ -1318,10 +1344,10 @@ async def reimported(db, placed, tmp_path):
     """A second bundle with a different Backbone and a changed column set, imported and staged.
 
     §10: "Bundle re-import (new vocabulary, retrained backbone) is a planned admin event." The
-    new Backbone has lost title 7 (coverage shrank) and the new contract renames the
-    `genre:comedy` column, so a title whose content did not change still gets a different
-    vector — which is what "feature vectors rebuilt from the staged bundle's feature contract,
-    whose column set may change" means in practice.
+    new Backbone no longer carries a coordinate for title 7 (its warm coverage shrank) and the
+    new contract renames the `genre:comedy` column, so a title whose content did not change
+    still gets a different vector — which is what "feature vectors rebuilt from the staged
+    bundle's feature contract, whose column set may change" means in practice.
     """
     await _seed_observations(db)
     second = _make_bundle(
@@ -1332,13 +1358,18 @@ async def reimported(db, placed, tmp_path):
         names={"genre": ["genre:crime", "genre:thriller", "genre:family", "genre:romance",
                          "genre:sci-fi", "genre:drama", "genre:comedy-drama"]},
     )
-    _shrink_backbone(second / "artifacts", drop=7)
+    _uncover_backbone_row(second / "artifacts", title_id=7)
     # decision 162: content seeds once and the corpus re-ships models. §10's "bundle re-import
     # (new vocabulary, retrained backbone)" is therefore a MODELS-ONLY bundle — which is exactly
     # what this test needs, because everything it asserts is about the new basis and the new
     # contract, not about content arriving a second time.
     (second / "content.sqlite").unlink()
     (second / "reviews.sqlite").unlink()
+    # Shrinking the Backbone and carving the two databases out both happen after BUNDLE.json was
+    # written, and a models-only bundle is DEFINED by not carrying files the seed's inventory
+    # lists -- so the inventory is re-stated once more here, for `_make_bundle`'s reason one
+    # carve-out further on. [M4.14 step B1]
+    fx.reinventory(second)
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(second), tmp_path / "artifacts"
     )

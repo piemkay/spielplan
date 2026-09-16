@@ -46,6 +46,13 @@ from typing import Any
 
 import asyncpg
 
+# The one derivation of the vocabulary version (§4.3 names it by the `dna_vocab/<version>/`
+# directory, decisions 163 and 256 refuse on it). `models` importing `importer` is a new
+# direction and a deliberate one: `importer/vocab.py` is stdlib-only, touches no database and
+# imports nothing from here, so it adds nothing to this module's dependency surface -- and the
+# alternative is a fourth private copy of the rule, which is the defect M4.14 collapsed.
+from spielplan.importer import vocab
+
 log = logging.getLogger("spielplan.artifacts")
 
 # §4.3 — the exhaustive file list. `required` files make a bundle loadable at all; the rest
@@ -253,10 +260,21 @@ class ArtifactStore:
         manifest_path = root / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
         present = {name: (root / name).exists() for name in BUNDLE_FILES}
-        vocab_version = manifest.get("vocabulary_version")
-        if vocab_version is None:
-            vocab_dirs = sorted((root / "dna_vocab").glob("*")) if (root / "dna_vocab").is_dir() else []
-            vocab_version = vocab_dirs[-1].name if vocab_dirs else None
+        # §4.3 names the vocabulary by its DIRECTORY, so the staged tree is the derivation and
+        # the manifest key was never a second one: `artifacts/manifest.json` is the ratings-model
+        # manifest -- the fitted cut-points and nothing else (M4.5) -- and no exported bundle has
+        # ever carried a `vocabulary_version` in it, so the line that preferred it did nothing but
+        # make the glob beneath it read as a fallback nobody reaches. That glob did not filter
+        # directories: with a stray `zz_notes.txt` beside `v1` this store answered
+        # `vocab_version = 'zz_notes.txt'` while the importer's reader answered `v1` -- two
+        # answers about one tree, and the answer decision 163's refusal is computed from.
+        #
+        # `vocab.version_of` is now that single derivation, for this store and for the two
+        # bundle-side readers alike, and it RAISES on a tree holding two vocabularies rather than
+        # picking one. The raise is loudest here and that is the point: this caller writes no
+        # import report, so a sentinel would arrive as `None` -- indistinguishable from §3.1's
+        # legal bundle-less install. [M4.14, decision 256]
+        vocab_version = vocab.version_of(root)
         return cls(version=version, root=root, manifest=manifest, present=present,
                    vocab_version=vocab_version, identity=dict(identity or {}))
 
@@ -296,7 +314,35 @@ class ArtifactStore:
             )
             return cls(version=row["version"], root=root, broken=True,
                        identity=_as_mapping(row["manifest"]))
-        return cls.open(root, row["version"], identity=_as_mapping(row["manifest"]))
+        try:
+            return cls.open(root, row["version"], identity=_as_mapping(row["manifest"]))
+        except vocab.VocabularyError:
+            # The same state from the other side: the row says active and the store cannot be
+            # loaded. `open` RAISES on a tree holding two `dna_vocab/<version>/` directories
+            # (decision 256, and the raise is right: this caller writes no import report, so a
+            # sentinel would arrive as `None` and be indistinguishable from section 3.1's legal
+            # bundle-less install) - and this function is called from `app.py`'s lifespan, from
+            # `worker.main` and from `active_backbone_coverage`, none of which had a handler. So
+            # a tree that BOOTED before this milestone stopped booting: no /api/health, no
+            # healthcheck, no Data tab, and a container that restart-loops on the one surface
+            # that could repair it. `app.py`'s own comment states the policy this violated - "a
+            # boot that dies on it would be the one outcome section 3.1 forbids here" - and its
+            # last-resort `OSError` handler cannot help, because this is a `RuntimeError`.
+            #
+            # The BROKEN store and not a new state: decision 258 keeps M4.13's two names, and
+            # broken is already "the row says active and no basis could be loaded from it" - the
+            # jobs refuse rather than fitting in a zero basis, `is_empty` is True, and the
+            # surfaces render the no-bundle state. What distinguishes the two causes is this
+            # line, which names the directory and both versions.
+            # [M4.14 cycle 2, M414-C2-VOCAB-01, decisions 256 and 258]
+            log.exception(
+                "artifact_bundle %s is active and %s could not be read as a bundle - a broken "
+                "install, not a bundle-less one: artifact-dependent surfaces render the "
+                "no-bundle state and the model jobs refuse rather than fitting in a zero basis",
+                row["version"], root,
+            )
+            return cls(version=row["version"], root=root, broken=True,
+                       identity=_as_mapping(row["manifest"]))
 
     def assert_matches(self, active_version: str | None) -> None:
         """§10: refuse to score or refit against a bundle other than the active one.

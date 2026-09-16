@@ -68,6 +68,12 @@ an entry in it therefore takes a `sudo`, and the file has to be readable by the 
 sudo install -o 1000 -g 1000 -m 644 spielplan-bundle.tar.zst data/import/
 ```
 
+An unpacked bundle directory works just as well as the archive, and the path field may be left
+empty either way: it defaults to `/data/import`, and a `/data/import` holding no `BUNDLE.json`
+and exactly one `.tar`/`.tar.zst` opens that archive and says so in the report. Two archives in
+there is a refusal naming the count rather than a guess — which is the one thing to know before
+leaving last month's bundle beside this month's.
+
 Then open `PUBLIC_URL` and walk the first-boot wizard: create admin → connectors → import the
 bundle. It ends there (decision 164): everyone else is added from **Admin > Users**, and each
 member's phone is walked through PWA install and push on its own first run.
@@ -178,11 +184,43 @@ Two things a dump does not contain:
 - **`/data/artifacts`.** The bundle is ~1 GB of files and §2's dump is the database only. The
   database still names a version as active, so a box that lost the directory boots with
   `artifact_bundle <version> is active but /data/artifacts/<version> does not exist` in
-  `docker compose logs backend` and serves every artifact-dependent surface in its no-bundle state
-  (§3.1). Re-import that same bundle version from **Admin > Data**. (§2 calls the bundle and the
-  raw store "already immutable files" as the reason for dumping Postgres alone. The staged bundle
-  is neither immutable nor backed up — a re-import of the same version overwrites it — so treat
-  that clause as "re-importable", which is what this paragraph is.)
+  `docker compose logs backend`, **Admin > Data** says the directory is missing, and the model
+  jobs refuse rather than refitting against a zero basis. That state has two ways out and both
+  are the operator's:
+
+  ```bash
+  # either: put the files back from wherever they were copied, then restart
+  sudo cp -a /mnt/backup/artifacts/<version> data/artifacts/
+  sudo chown -R 1000:1000 data/artifacts/<version>
+  docker compose restart backend worker
+  ```
+
+  …or re-import that same bundle version from **Admin > Data**, which now **restages** it: a
+  re-import of the ACTIVE version copies its files back and re-runs §10's rebuild set instead of
+  being refused by decision 162's seed-once rule, which is the repair this state previously had
+  none of. It loads no content — the row stays active throughout, and nothing is re-seeded.
+
+  **Copying `/data/artifacts` is a step §2's backup procedure has to include, because nothing
+  else does it.** The five `data/` directories are host bind mounts (`docker-compose.yml`), and
+  nothing scheduled copies any of them anywhere: the nightly job writes a `pg_dump` into
+  `data/backups` and that is the whole of what is automatic. So "database restored, files
+  missing" is a realistic recovery state rather than a hypothetical one: the nightly dump runs, the
+  restore works, and the box comes back with an active version whose gigabyte is gone. §2 calls
+  the bundle and the raw store "already immutable files" as the reason for dumping Postgres
+  alone; the staged bundle is neither immutable nor backed up — a re-import of the same version
+  overwrites it — so read that clause as "re-importable", and copy the directory anyway if the
+  household would rather not re-import a gigabyte over a domestic connection.
+
+  **And the row that names it is never deleted.** An `artifact_bundle` row is provenance: every
+  placement, prior, score and fit is stamped with the version it was computed in (§10), so the
+  row is what makes those stamps readable. `0023_import_state.sql` holds that as a rule rather
+  than a convention — a `DELETE` is refused unless the row is still `staged` or `failed` *and
+  nothing still cites it*, with an error naming the version and the state (decision 249). No
+  import this app runs leaves such a row behind, because the importer writes `validated` inside
+  the transaction that flips and a failed import rolls its row back, so in practice nothing here
+  is deletable at all. Superseded versions accumulate, and
+  that is correct; their *directories* under `/data/artifacts` are what an operator may remove
+  once nothing is on them, and the active one never is.
 
 ### Upgrade
 
@@ -339,18 +377,20 @@ about what a household sees tonight — `docs/TESTING.md` carries the full versi
 - `data/pg` — Postgres's own directory. Nothing else writes it.
 - `data/backups` — the nightly dumps, worker only.
 - `data/artifacts/<version>` — the staged bundle every scoring surface reads. Not in any dump.
-- `data/import` — where a bundle goes to be imported. Validating an *archive* extracts it to
-  `data/import/.unpacked-<name>/`, a full second copy including `content.sqlite` and
-  `reviews.sqlite` — 790 MB of a 1042 MB bundle. A committed import deletes that tree; a failed
-  one keeps it, because the retry needs it, and a bundle validated but never imported keeps it
-  too. That last one is yours to delete — with `sudo`, and so is putting the bundle there in the
-  first place. The chown below hands this directory to uid 1000, and creating or removing an entry
-  in a directory needs write on the directory: the operator can still list it and read what is in
-  it, and can do neither of the two things this bullet is about without borrowing root.
+- `data/import` — where a bundle goes to be imported. It takes a bundle DIRECTORY or a
+  `.tar`/`.tar.zst`, and validating an *archive* extracts it to
+  `data/import/.unpacked-<filename>/` — the whole filename, suffix included — a full second
+  copy including `content.sqlite` and `reviews.sqlite`, 790 MB of a 1042 MB bundle. A committed
+  import deletes that tree; a failed one keeps it, because the retry needs it, and a bundle
+  validated but never imported keeps it too. That last one is yours to delete — with `sudo`, and
+  so is putting the bundle there in the first place. The chown below hands this directory to uid
+  1000, and creating or removing an entry in a directory needs write on the directory: the
+  operator can still list it and read what is in it, and can do neither of the two things this
+  bullet is about without borrowing root.
 
   ```bash
   sudo install -o 1000 -g 1000 -m 644 spielplan-bundle.tar.zst data/import/
-  sudo rm -rf data/import/.unpacked-spielplan-bundle.tar
+  sudo rm -rf data/import/.unpacked-spielplan-bundle.tar.zst
   ```
 
 - `data/cache` — the model cache, and `worker.heartbeat`, whose age is what the worker's

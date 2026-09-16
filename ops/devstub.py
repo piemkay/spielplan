@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 # so a developer who has a real `.env` and wants the refusals can export it as 0.
 os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
+from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
 from spielplan.core.config import settings  # noqa: E402
@@ -50,6 +51,7 @@ from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's 
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
 from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
 from spielplan.importer.dna import app_facet  # noqa: E402 - the real facet rule, not a copy
+from spielplan.importer.report import ImportReport  # noqa: E402 - `_real_report`'s return type
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
 from spielplan.rank import board as rank_board  # noqa: E402 - the real badges
 from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10 selector
@@ -75,6 +77,13 @@ STATE: dict[str, Any] = {
     # `POST /_dev/restart` is the gesture `docker compose restart backend worker` stands in for.
     # [M4.7 test-14]
     "restarted": False,
+    # The one `job_run` row the Data tab polls, and the read counter that advances it.
+    # Beside `restarted` because the two are halves of one sequence: M4.14 took the import
+    # off the request (§5.3), so the flip happens while the page polls, and §10's restart
+    # is still owed after it. See `_import_job`. [M4.14 step E5, decision 253]
+    "import_job": None,
+    "import_reads": 0,
+    "next_job_id": 1,
     "users": {},
     "next_id": 1,
     "seen": {},
@@ -186,9 +195,13 @@ def config() -> dict[str, Any]:
     return {
         "public_url": "http://127.0.0.1:8080",
         "has_bundle": _bundle_live(),
+        # `ArtifactStore.summary()`'s keys, in its own order - the real `client_config` returns
+        # that object here and `bundle_state` returns it as `loaded`, so the harness owes the same
+        # shape twice. See the note on `loaded` below for why `owned` is not one of them.
         "bundle": (
-            {"version": "test-v1", "vocabulary_version": "v1", "titles": len(fx.TITLES),
-             "owned": len(fx.TITLES), "present": {}, "missing_required": []}
+            {"version": "test-v1", "broken": False, "missing_path": None,
+             "vocabulary_version": "v1", "present": {}, "missing_required": [],
+             "titles": len(fx.TITLES), "cold_eval": None}
             if _bundle_live() else None
         ),
     }
@@ -458,17 +471,112 @@ def set_preferences(
 
 # --- bundle ------------------------------------------------------------------
 
+# The terminal phase of an import, which is `worker.PHASE_ACTIVE`. A literal rather than an
+# import, for the reason `api/artifacts.py` gives for holding the job NAME as one: importing
+# `spielplan.worker` runs `logging.basicConfig` at module scope, and this harness is executed
+# inside pytest by `test_devstub_contract.py` - reconfiguring the root logger of whatever process
+# reads one string is a side effect a harness must not have. The two in-flight names above are
+# imported because `api/artifacts.py` costs nothing to import here (everything it pulls in is
+# already loaded) and `test_the_harness_reports_the_phases_the_app_writes` holds this one to the
+# worker's own constant. [M4.14 step E5, decision 253]
+IMPORT_ACTIVE = "active"
+
+# One phase per read of `/api/admin/bundle/state`, which is the whole of this harness's worker.
+#
+# A counter and not a clock, because nothing ticks in this process: there is no worker here, so
+# the Data tab's own poll is the only clock there is - and a schedule driven by reads is one a
+# test can assert without sleeping through it. Three reads at the front end's 2 s poll interval
+# is about four seconds of `running` on screen, which is the shape of the thing being mirrored:
+# the real worker claims a queued row within one TICK_SECONDS (20 s) and then holds it for the
+# 127 s the real bundle measured.
+IMPORT_PHASES = (QUEUED, RUNNING, IMPORT_ACTIVE)
+
+
+def _import_job() -> dict[str, Any] | None:
+    """The `job_run` row `/api/admin/bundle/state` answers with, advanced one phase per read.
+
+    The flip is performed on the read that first reports the terminal phase, so `imported` and
+    the phase cannot disagree inside one payload - and that payload is where the Data tab reads
+    both of them.
+
+    The stored report is the VALIDATOR's, which is the one half of decision 253 this harness
+    cannot mirror: the real worker stores a report carrying the staging, rebuild and swap
+    findings that only a real load produces, and there is no Postgres under this file to produce
+    them. `e2e/specs/01-first-boot.spec.js` asserts that half against the real backend, which is
+    where a claim about an import that wrote something belongs. [M4.14 step E5]
+    """
+    job = STATE["import_job"]
+    if job is None:
+        return None
+    STATE["import_reads"] += 1
+    job["phase"] = IMPORT_PHASES[min(STATE["import_reads"], len(IMPORT_PHASES)) - 1]
+    if job["phase"] == IMPORT_ACTIVE and job["finished_at"] is None:
+        STATE["imported"] = True
+        job["ok"] = True
+        report = _real_report()
+        job["report"] = report.as_dict()
+        # BESIDE the report and not after it: `worker._finish_bundle_import` closes every import
+        # - clean, refused or reaped - with `report.as_dict()` and `report.render()` in one
+        # `detail`, which `api/artifacts._running_import` reads back as this pair. Filling one
+        # and leaving the other None taught the Data tab that `job.text` never exists, which is
+        # the queued literal's own argument read from the terminal end: section 10's migration
+        # report is the pasteable half, and a harness is where a screen for it gets built.
+        # [M4.14 cycle 4, m414-c4-dim202-04]
+        job["text"] = report.render()
+        job["finished_at"] = datetime.now(UTC).isoformat()
+    return job
+
 
 @app.get("/api/admin/bundle/state")
 def bundle_state() -> dict[str, Any]:
+    """`api/artifacts.bundle_state`'s payload, key for key.
+
+    It carried four of the nine, and four of the five it omitted are what the Data tab decides
+    with: `routes/admin/data/+page.svelte` renders its whole active branch - the active line,
+    §10's restart banner and M4.13's bundle-directory-missing banner - inside
+    `{#if bundleState.active}`, so against this harness the one screen §6.6 gives an operator for
+    the swap sequence could not say that a swap had happened. The fifth is `import_job`, which is
+    where the answer to "did it work?" moved. [M4.14 step E5]
+    """
+    job = _import_job()
+    active = "test-v1" if STATE["imported"] else None
+    # `_bundle_live()` and not `STATE["imported"]`, which is the repair M4.7 test-14 made to
+    # `/api/health` and `/api/config` and did not make here. §10's flip is real in the database
+    # and invisible to this process until the restart; a harness that reports a loaded bundle in
+    # the same breath as an active row makes `restart_required` false and the banner unreachable,
+    # which is the one-step import the app does not have.
+    #
+    # Key for key with `ArtifactStore.summary()` as well, which is where the shape is stated.
+    # `owned` is not in it: §7.2 makes ownership a Jellyfin fact re-derived per install, so no
+    # bundle can know it, and `summary()` says exactly that where the key used to sit. A harness
+    # answering with a key the app deleted - and a plausible count in it - teaches the Data tab to
+    # render a field that is `undefined` the first time it meets the real backend, which is the
+    # whole argument `test_the_harness_bundle_payloads_carry_the_keys_the_routes_return` makes for
+    # equality over containment. `broken` and `missing_path` are the two constants below repeated
+    # one level down, and `cold_eval` is None because this harness ships no `cold_eval.json` -
+    # the honest answer for a bundle that carries none, and not a zero.
+    # [M4.14 cycle 3, m414-c3-waveE-devstub-loaded-disagrees-one-level-down]
+    loaded = ({"version": "test-v1", "broken": False, "missing_path": None,
+               "vocabulary_version": "v1", "present": {}, "missing_required": [],
+               "titles": len(fx.TITLES), "cold_eval": None}
+              if _bundle_live() else None)
+    # This harness stages nothing - no /data/artifacts, no ArtifactStore - so M4.13's data-03
+    # state, an active row whose directory is gone, is unreachable here. Named as the constant it
+    # is rather than omitted, because the page reads both keys and decision 258 makes the two
+    # banners mutually exclusive ON THE SERVER: written in the real route's own shape, that
+    # exclusion is visible in the harness too rather than being a property the harness lost.
+    # The missing-directory banner is asserted by `frontend/src/lib/bundleImport.test.js`.
+    broken = False
     return {
         "bundles": (
             [{"version": "test-v1", "state": "active", "imported_at": "2026-08-29T00:00:00Z",
               "activated_at": "2026-08-29T00:00:00Z"}] if STATE["imported"] else []
         ),
-        "loaded": ({"version": "test-v1", "vocabulary_version": "v1", "titles": len(fx.TITLES),
-                    "owned": len(fx.TITLES), "present": {}, "missing_required": []}
-                   if STATE["imported"] else None),
+        "active": active,
+        "loaded": loaded,
+        "restart_required": active != (loaded or {}).get("version") and not broken,
+        "broken": broken,
+        "missing_path": None,
         "import_dir": str(BUNDLE),
         "rebuild_set": [
             "user fold-in vectors (closed-form, ms)",
@@ -476,6 +584,7 @@ def bundle_state() -> dict[str, Any]:
             "full Personal Ledger MAP refit",
             "Cold Tower re-placement of every app-acquired title",
         ],
+        "import_job": job,
     }
 
 
@@ -514,27 +623,67 @@ def data_sources() -> dict[str, Any]:
     }
 
 
-def _real_report() -> dict[str, Any]:
-    """Use the REAL validator so the report the UI renders is the real thing."""
+def _real_report() -> ImportReport:
+    """Use the REAL validator so the report the UI renders is the real thing.
+
+    The report OBJECT rather than its `as_dict()`, because every payload that carries it carries
+    BOTH halves: `api/artifacts.py` answers `report.as_dict()` and `report.render()` together at
+    all three sites, and a harness that can produce one of them out of a genuine validator and
+    not the other is answering `text: ""` beside a real report. Rendering costs nothing here -
+    the validation above it is the work. [M4.14 cycle 4, m414-c4-dim202-04]
+    """
     from spielplan.importer import bundle as bundle_import
 
     fx.make_bundle(BUNDLE)
-    return bundle_import.validate(bundle_import.Bundle.open(BUNDLE)).as_dict()
+    return bundle_import.validate(bundle_import.Bundle.open(BUNDLE))
 
 
 @app.post("/api/admin/bundle/validate")
 def validate_bundle() -> dict[str, Any]:
-    return {"bundle_version": "test-v1", "report": _real_report(), "text": ""}
-
-
-@app.post("/api/admin/bundle/import")
-def import_bundle() -> dict[str, Any]:
     report = _real_report()
-    STATE["imported"] = True
-    return {"bundle_version": "test-v1", "report": report, "text": "",
-            "restart_required": True,
-            "note": "restart backend and worker — no process may score or refit with a loaded "
-                    "bundle version different from the active row"}
+    return {"bundle_version": "test-v1", "report": report.as_dict(), "text": report.render()}
+
+
+@app.post("/api/admin/bundle/import", status_code=202)
+def import_bundle() -> dict[str, Any]:
+    """202 and a job id, because §5.3 files the import as a job and M4.14 moved it there.
+
+    This answered 200 with the whole report, `restart_required` and §10's restart sentence - a
+    one-request import the app no longer has, and a shape the front end's poll cannot terminate
+    against: nothing in this payload can end `pollImportJob`, so the Data tab built on this
+    harness would have spun until its own deadline while the harness sat already imported.
+
+    The report here is the VALIDATION that let the job be queued, which is what the real route
+    sends too. The `restart_required`/`note` pair is gone with the request that used to answer
+    it: both facts now come from `/api/admin/bundle/state` after the poll, which is the single
+    endpoint the Data tab has to read. That also removes this file's copy of the restart
+    sentence, which `api/artifacts.RESTART_REQUIRED`'s own comment counts as one of its three.
+    [M4.14 steps E1 and E5, decision 253]
+    """
+    validation = _real_report()
+    job_id = STATE["next_job_id"]
+    STATE["next_job_id"] += 1
+    STATE["import_reads"] = 0
+    STATE["import_job"] = {
+        "job_id": job_id,
+        "phase": QUEUED,
+        "bundle_version": "test-v1",
+        "path": str(BUNDLE),
+        "started_at": datetime.now(UTC).isoformat(),
+        "finished_at": None,
+        "ok": None,
+        "report": None,
+        # None and not "". This object is `api/artifacts._running_import`'s, and that function
+        # reads `text` out of `job_run.detail` - which the import route's INSERT fills with
+        # `phase`, `path` and `bundle_version` alone, the worker writing the rendered report in
+        # at the terminal phase. A present-but-empty field is the key-set defect one level down:
+        # it teaches the Data tab that `job.text` exists before there is one.
+        # [M4.14 cycle 1, m414-c1-dim-waveE-04]
+        "text": None,
+    }
+    return {"bundle_version": "test-v1", "job_id": job_id, "phase": QUEUED,
+            "report": validation.as_dict(), "text": validation.render(),
+            "poll": "/api/admin/bundle/state"}
 
 
 # --- library -----------------------------------------------------------------

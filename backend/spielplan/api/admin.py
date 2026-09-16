@@ -664,6 +664,12 @@ JOB_NAMES: tuple[str, ...] = (
     "placement-reconciliation",
     "jellyfin-seen-sync",
     "jellyfin-sessions-poll",
+    # M4.14 gave §5.3's ninth row a `run`, so the import is a job this loop fires and the card
+    # answers for it like any other. Its own PHASE, and the report the Data tab renders while it
+    # waits, stay on `GET /api/admin/bundle/state` - decision 182 put job HEALTH here and the
+    # import's progress there, and a name in this tuple asks only for the newest `job_run` row.
+    # [M4.14 step E2, decision 253]
+    "bundle-import",
     BACKUP_JOB,
 )
 
@@ -738,7 +744,7 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
     is that list and nothing more: no control, no edit, no per-source page (plan step 8.3, "no
     UI beyond that list").
 
-    **The axes.** `importer/dna._load_axes` reads the TSVs of `dna_vocab/<version>/` and takes
+    **The axes.** `importer/dna.load_axes` reads the TSVs of `dna_vocab/<version>/` and takes
     each axis file's stem as the facet; the shipped `dna_vocab/v1/` carries no axis definition at
     all, so §6.4's eleven authored axes have never been authored anywhere and the loader's
     warning goes into an import report nobody re-reads. Decision 191 surfaced the gap here as an

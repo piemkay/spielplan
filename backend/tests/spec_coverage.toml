@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M4.13"
+current_milestone = "M4.14"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -70,7 +70,7 @@ milestone = "M0"
 kind = "integration"
 what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding, and the refusal is performed by production code rather than by the invariant's own unit test: the worker's model jobs raise rather than writing, so the tick advances nothing and records a failed `job_run` whose error names both versions, retried on the next tick, and the scoring and refit entrypoints answer 409 with the restart-required wording."
 why = "§10's invariant: everything expressed in the old Backbone's basis is garbage against a new one, so a half-swapped state must be unreachable and a stale in-process bundle must be fatal, not silent."
-tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs", "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing", "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording"]
+tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs", "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing", "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording", "backend/tests/test_import_integration.py::test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusal", "backend/tests/test_import_integration.py::test_no_import_path_turns_a_postgres_error_into_a_five_hundred"]
 # The last sentence is M4.13's, and it was in this row from the start with nothing in the app
 # able to perform it: `assert_matches` is the one enforcement point §10's invariant names, its
 # module docstring said "called by the scoring/refit entrypoints", and a grep over
@@ -84,6 +84,15 @@ tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_
 # a different operator signal from the "logged no-op" the rows promised, and this milestone spends
 # "no-op" four lines from the raise on the bundle-less branch instead. [M4.13, arch-03 and tq1;
 # review cycle 2: M413-C2-D1-04]
+# M4.14 adds the last two ids, for the two directions "no partially-flipped state is observable"
+# turned out to be reachable from. Nothing serialised the import at all, so two operators
+# pressing Import at once ran the same INSERTs on two connections and the loser died on
+# `title_alias_pkey` INSIDE the transaction -- a 500 rather than a refusal -- while whichever
+# `rmtree` ran second deleted a tree the other had already staged. And a refusal after staging
+# but before the row was written left `/data/artifacts/<version>` behind with no artifact_bundle
+# row naming it, which is the half-swapped directory this row says is unreachable. Neither is a
+# new rule: both are this row's own clause, that a failure before the flip leaves the previous
+# bundle active and nothing staged the install cannot account for. [M4.14 data-09, decision 253]
 
 [[requirement]]
 id = "platform-backup-rotation-and-ciphertext"
@@ -346,9 +355,18 @@ id = "data-rules-denylist-live-tables-only"
 spec = "§4.1 rule 7"
 milestone = "M0"
 kind = "backend"
-what = "Validation fails a bundle containing any table matching %_bak% or %_good, naming the offending tables in the report."
+what = "Validation fails a bundle containing any table matching %_bak% or %_good — in reviews.sqlite as well as content.sqlite, and with %_good anchored at the end of the name rather than matched as a substring — naming the offending tables in the report."
 why = "the _bak/_good tables predate the adjudication repairs; the importer enforces the deny-list."
-tests = ["backend/tests/test_bundle_validation.py::test_denylisted_table_fails"]
+# M4.14 widens the `what` above (the row itself stays M0): rule 7 ran over content.sqlite
+# only, so a `%_bak%` table in reviews.sqlite — the other database the bundle ships — was never
+# looked at, and `%_good` was matched as a substring, which is a different predicate from the
+# one §4.1 rule 7 states. The row already promised the offending tables would be named; the
+# message did not name them. [M4.14 cs-48]
+tests = [
+    "backend/tests/test_bundle_validation.py::test_denylisted_table_fails",
+    "backend/tests/test_bundle_validation.py::test_a_denied_table_in_the_reviews_database_is_found_too",
+    "backend/tests/test_bundle_validation.py::test_a_table_whose_name_merely_contains_good_is_not_denied",
+]
 
 [[requirement]]
 id = "data-rules-utf8-never-cleaned"
@@ -458,7 +476,15 @@ milestone = "M0"
 kind = "integration"
 what = "Import produces a retrievable migration report — per-table counts, validation failures grouped by the §4.1 rule that caught them, vocabulary version — and a re-import additionally produces a diff against the active bundle naming the recompute set (fold-in vectors, blend weights, Ledger MAP refit, Cold Tower re-placement) with no map rebuild in it; only the hot-swap step flips artifact_bundle.active, and it requires explicit confirmation."
 why = "§10 mandates both reports and 'never a silent sync', and states the v1 axis-scatter map needs no rebuild; today 'report' is a stage chip with nothing behind it."
-tests = ["backend/tests/test_import_integration.py::test_the_report_counts_every_loaded_table", "backend/tests/test_import_integration.py::test_an_unmapped_bundle_column_is_reported_not_dropped_silently", "backend/tests/test_import_integration.py::test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff", "backend/tests/test_bundle_validation.py::test_report_renders_human_readable", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written"]
+tests = ["backend/tests/test_import_integration.py::test_the_report_counts_every_loaded_table", "backend/tests/test_import_integration.py::test_an_unmapped_bundle_column_is_reported_not_dropped_silently", "backend/tests/test_import_integration.py::test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff", "backend/tests/test_bundle_validation.py::test_report_renders_human_readable", "e2e/specs/01-first-boot.spec.js::validation reports every §4.1 landmine rule before anything is written", "backend/tests/test_import_integration.py::test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_set", "backend/tests/test_import_report.py::test_render_encodes_to_ascii"]
+# M4.14 adds the last two ids, for the word this row leans on and never checked: "retrievable".
+# The report an operator comes back to is `artifact_bundle.report`, and it was written before the
+# staging, swap and rebuild-set findings were produced -- so the stored copy was missing exactly
+# the three rules that say what the import DID, while the rendering the operator had just watched
+# said them. A diff nobody can retrieve afterwards is decision 162's one content import with no
+# record of itself. The second id is the same promise at the console: `render()` carried two
+# non-ASCII glyphs and raises on the cp1252 terminal CLAUDE.md writes for, which is exactly where
+# a failing import prints it. [M4.14 imp-stored-report-omits-its-own-rebuild, finding 2.24]
 
 [[requirement]]
 id = "map-taste-admin-palette-facet-binding-and-accent"
@@ -2335,7 +2361,7 @@ id = "data-rules-fixture-matches-the-shipped-artifact"
 spec = "§10 (the bundle) + §4.3"
 milestone = "M4.5"
 kind = "backend"
-what = "A committed shape manifest, derived from a real corpus bundle, pins every structural fact the importer relies on: feature_contract.json's top-level keys and the type of feature_names, the header of corrections_v1.tsv, the column list of every content.sqlite table the importer maps, and the artifact file set. The test fixture is asserted against that manifest, so a fixture whose shapes were invented to match the importer fails. When CORPUS_BUNDLE_DIR points at a real bundle the same manifest is additionally checked against it."
+what = "A committed shape manifest, derived from a real corpus bundle, pins every structural fact the importer relies on: feature_contract.json's top-level keys and the type of feature_names, the header of corrections_v1.tsv, the column list of every content.sqlite table the importer maps, and the artifact file set. The test fixture is asserted against that manifest, so a fixture whose shapes were invented to match the importer fails. When CORPUS_BUNDLE_DIR points at a real bundle the same manifest is additionally checked against it. The manifest's own promise -- shapes only, no film title, no person's name, no review text -- is held by an allow-list rather than by a search for prose: a leaf string is admitted only as a path in the bundle's file set, a schema name, a reduced <s>/<n> column pattern, a type name, a frozen rating_source id or a share-cut grid, and anything else is named with its JSON path. Self-tests hold the allow-list to both halves: a one-word film title, a person's name, an external id and a two-word name are each rejected, while a column name, an artifact path, an npz array name and a reduced pattern are each admitted."
 why = "The fixture reproduced every measured landmine and invented every shape around them, so the whole import layer was verified against the implementation's own reading. test_the_vector_is_built_from_the_database_through_the_contracts_own_columns asserts contract.block('credit').column('3') — the person id the builder emits — and passes, while the shipped contract names that column p:director:Adam Arkin."
 tests = [
     "backend/tests/test_bundle_shapes.py::test_the_fixture_contract_declares_the_keys_the_shipped_contract_declares",
@@ -2348,6 +2374,8 @@ tests = [
     "backend/tests/test_bundle_shapes.py::test_the_fixture_invents_no_column_the_corpus_does_not_ship",
     "backend/tests/test_bundle_shapes.py::test_a_real_bundle_still_matches_the_committed_manifest",
     "backend/tests/test_bundle_shapes.py::test_the_committed_manifest_carries_no_prose",
+    "backend/tests/test_bundle_shapes.py::test_the_manifest_guard_rejects_the_values_it_promises_are_absent",
+    "backend/tests/test_bundle_shapes.py::test_the_manifest_guard_admits_what_a_shape_manifest_legitimately_carries",
     "backend/tests/test_bundle_shapes.py::test_the_manifest_covers_the_artifacts_the_app_reads",
 ]
 
@@ -2356,12 +2384,18 @@ id = "data-rules-import-reports-every-shipped-table"
 spec = "§10 (migration report) + §6.6 Data"
 milestone = "M4.5"
 kind = "integration"
-what = "The import report accounts for every table the bundle ships: each one is either loaded with a row count, or named as skipped with a reason. A table present in the bundle and absent from the importer's mapping produces a report line, never silence — asserted by importing a bundle carrying a table the mapping does not know."
+what = "The import report accounts for every table the bundle ships: each one is either loaded with a row count, or named as skipped with a reason. A table present in the bundle and absent from the importer's mapping produces a report line, never silence — asserted by importing a bundle carrying a table the mapping does not know. A view the bundle ships is accounted for on the same rule: counted and accounted, or not counted at all, never counted and then left unaccounted."
 why = "§10 requires 'counts per table'. ImportReport only tracked unmapped columns *within* mapped tables, so three shipped tables — title_meta (46,318 rows), title_list_membership (35,295) and imdb_ratings (14,858) — were dropped with no line anywhere, and nothing in the app could notice."
+# M4.14 widens the `what` above (the row itself stays M4.5): the rule was asserted over TABLES, and
+# a bundle also ships views, which `sqlite_master` returns and the count loop counts — so a view is
+# counted into `table_counts` and then accounted for by nothing, which is the silence this row was
+# written against wearing the one shape its own test could not see. Counted and accounted, or not
+# counted at all. [M4.14 imp-sqlite-view-counted-but-unaccounted]
 tests = [
     "backend/tests/test_title_meta.py::test_every_shipped_table_is_loaded_with_a_count_or_skipped_with_a_reason",
     "backend/tests/test_title_meta.py::test_a_shipped_table_the_mapping_does_not_know_fails_the_import",
     "backend/tests/test_title_meta.py::test_an_unmapped_bundle_column_is_still_only_a_report_line",
+    "backend/tests/test_title_meta.py::test_a_shipped_view_is_not_counted_as_a_table",
     "backend/tests/test_dna_import.py::test_every_shipped_dna_table_is_loaded_or_skipped_with_a_reason",
 ]
 
@@ -2422,7 +2456,17 @@ tests = [
     "backend/tests/test_dna_import.py::test_an_unrecognised_corrections_header_fails_the_report_naming_the_column",
     "backend/tests/test_dna_import.py::test_a_ledger_with_no_rows_is_reported_rather_than_loaded_as_zero",
     "backend/tests/test_dna_import.py::test_a_row_whose_title_id_is_not_a_number_is_reported_not_raised",
-    "backend/tests/test_dna_import.py::test_the_corrections_ledger_is_not_duplicated_by_a_re_import",
+    # M4.14's half of this row. The test below was titled "is not duplicated by a re-import",
+    # cited decision 162, and described a path `import_bundle` never took: `bundle.py` held
+    # `load_corrections` inside `if db is not None:`, a branch a models-only bundle never enters,
+    # so the ledger could not be appended twice because it was not loaded at all -- the six
+    # shipped corrections were dropped on every re-import instead, with no line in the report and
+    # a green test saying the opposite. Renamed to what it actually asserts, the loader's own
+    # idempotency, and the rename lands in the same commit as this line because a registered test
+    # that changes name breaks this gate by design. The importer's half is decision 247's row,
+    # `data-rules-a-models-only-import-loads-the-curated-ledgers-it-carries`.
+    # [M4.14 dd11-reimport-dedup-test-pins-a-path-the-importer-never-takes, decision 247]
+    "backend/tests/test_dna_import.py::test_loading_the_corrections_ledger_twice_leaves_one_copy",
     # M4.9's half of this row: the `why` above was rewritten when the milestone opened to say the
     # ledger is stored for a derive that does not exist yet, and the import report said the
     # opposite in as many words. The test below is what makes the rewritten `why` falsifiable.
@@ -2456,6 +2500,13 @@ tests = [
     "backend/tests/test_bundle_lifecycle.py::test_the_partition_is_a_constraint_not_a_convention",
     "backend/tests/test_bundle_lifecycle.py::test_an_id_reaching_into_the_app_range_is_refused_and_named",
     "backend/tests/test_bundle_lifecycle.py::test_the_id_partition_is_checked_before_anything_else_in_the_bundle",
+    # The fifth artifact names its own version - `adjudications_<version>.tsv`, the name decision
+    # 247 guard 3 makes the caller's - and the boundary check opened the literal
+    # `adjudications_v1.tsv` inside a directory named by the version. At any vocabulary but v1
+    # the check read a file that is not there and passed in silence while the loader loaded the
+    # one that is. The six cases above are all built at v1, so none of them can see it.
+    # [M4.14 cycle 3, m414-c3-dim247-guard3]
+    "backend/tests/test_bundle_validation.py::test_the_id_boundary_reads_the_adjudications_ledger_the_version_names",
 ]
 
 [[requirement]]
@@ -2463,8 +2514,19 @@ id = "platform-model-bundle-identity-is-checked-not-trusted"
 spec = "§10 + §4.3 backbone.npz (decision 162)"
 milestone = "M4.5"
 kind = "integration"
-what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. A models-only bundle -- the only kind decision 162 says will arrive again -- is refused outright when the vector is absent, because it carries no spine of its own and the check would otherwise be skipped exactly where it exists to run. A seed is checked against the spine in its own content.sqlite, which names every title rather than only those with a model row, and is warned that the vector is absent."
+what = "The model bundle carries an identity column (imdb_id, or tmdb_id plus kind) row-aligned to backbone.npz's title_id; the importer checks it against the title rows those ids name and fails the bundle when an id's identity disagrees, naming the title. A models-only bundle -- the only kind decision 162 says will arrive again -- is refused outright when the vector is absent, because it carries no spine of its own and the check would otherwise be skipped exactly where it exists to run. A seed is checked against the spine in its own content.sqlite, which names every title rather than only those with a model row, and is warned that the vector is absent. On a models-only bundle an id the installed spine does not carry is a counted note rather than a refusal — the corpus keeps its own catalogue and a retrained backbone covers whatever it has at export time (decision 248) — while an identity that disagrees and an unparseable identity token stay failures, and a backbone that stops covering a title the ACTIVE backbone covered is refused, naming the titles."
 why = "Range partitioning stops two minters colliding; it cannot detect the corpus *merging* two titles, which changes what an existing id means without changing the id. backbone.py:31 already records that a wrong index 'produces plausible numbers for the wrong films', and the ascending-ids check cannot see it."
+# M4.14 amends the `what` above (the row itself stays M4.5) because decision 248 changes what the
+# check MEANS rather than how strict it is. `absent` — a backbone id the installed spine does not
+# carry — was read as the merge this row exists to catch, and under decision 162 it is the corpus
+# going on growing a catalogue this install never seeded from (`sqlite_sequence` 21442 against
+# 19,071 exported), so the first retrained backbone is refused for doing what it was retrained to
+# do. The merge is observable from the other side, and that is where the refusal moves: coverage
+# that goes BACKWARDS against the ACTIVE backbone. Its registered
+# `test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused` asserts the old reading, so
+# the stage that changes the rule renames it and re-points this row in the same commit — which
+# breaks the build by design until both halves land.
+# [M4.14 imp-identity-check-refuses-a-model-bundle-that-covers-new-corpus-titles, decision 248]
 tests = [
     "backend/tests/test_bundle_validation.py::test_a_models_only_bundle_with_no_identity_vector_fails_validation",
     "backend/tests/test_bundle_validation.py::test_a_seed_with_no_identity_vector_is_checked_against_its_own_spine",
@@ -2472,9 +2534,19 @@ tests = [
     "backend/tests/test_bundle_validation.py::test_an_identity_that_disagrees_with_the_spine_names_the_title",
     "backend/tests/test_bundle_validation.py::test_a_title_with_no_imdb_id_is_identified_by_tmdb_and_kind",
     "backend/tests/test_bundle_validation.py::test_an_identity_vector_that_is_not_row_aligned_is_refused",
-    "backend/tests/test_bundle_validation.py::test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused",
+    "backend/tests/test_bundle_validation.py::test_a_seed_that_lost_a_title_its_backbone_names_is_still_refused",
     "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_s_identity_is_checked_against_the_installed_spine",
     "backend/tests/test_bundle_lifecycle.py::test_a_re_identified_backbone_row_is_refused_against_the_installed_spine",
+    # Decision 248's three ids, landing with the rename the comment above promised. The first is
+    # where the registered `test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused`
+    # went: it asserted the reading decision 248 retires, so it was renamed to what it now
+    # measures rather than deleted, and the rename and this line are one commit. The second is
+    # the verdict decision 248 deliberately does NOT move, named here so "an unparseable identity
+    # token stays a failure" is checked rather than remembered. The third is the refusal that
+    # takes the old one's place, from the side a merge is actually observable on.
+    "backend/tests/test_bundle_validation.py::test_an_identity_naming_a_title_the_spine_does_not_carry_is_a_counted_note",
+    "backend/tests/test_bundle_validation.py::test_a_backbone_whose_identity_token_is_neither_form_is_still_a_failure",
+    "backend/tests/test_bundle_lifecycle.py::test_a_backbone_that_stops_covering_an_installed_bundle_title_is_refused",
 ]
 
 [[requirement]]
@@ -2491,6 +2563,13 @@ tests = [
     "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_imports_and_hot_swaps_without_content",
     "backend/tests/test_bundle_lifecycle.py::test_a_models_only_bundle_cannot_take_over_the_seed_s_row",
     "backend/tests/test_bundle_lifecycle.py::test_validate_refuses_a_second_content_seed_before_the_operator_commits",
+    # Decision 247's lifecycle id. This row has two sides and only the refusing one was asserted:
+    # five of the ids above prove a models-only bundle does not seed content a second time, and
+    # none proved it carries anything forward. Decision 247 names what it does carry -- the four
+    # curated ledgers, loaded on every import, a models-only one included -- and this id is the
+    # single import that asserts both halves at once: the ledgers written, and the content tiers
+    # decision 162 forbids re-importing untouched.
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_import_loads_the_curated_ledgers_and_no_content_tier",
 ]
 
 [[requirement]]
@@ -2640,8 +2719,19 @@ id = "data-rules-validation-reports-rather-than-raises"
 spec = "§10 (migration report) + §6.6 Data"
 milestone = "M4.5"
 kind = "integration"
-what = "Validating a bundle whose schema the app does not expect produces a report naming the table and column, never an unhandled exception: the validator run over a real bundle yields a failure list an operator can read, and no query inside the validator references a column without the bundle having been checked for it first."
+what = "Validating a bundle whose schema the app does not expect produces a report naming the table and column, never an unhandled exception: the validator run over a real bundle yields a failure list an operator can read, and no query inside the validator references a column without the bundle having been checked for it first. The same rule reaches the artifact readers and the archive door: a latin-1 byte in a curated TSV, a malformed seed_list.json, an absent cold_tower.pt, feature_contract.json or backbone.npz (decision 251), and a bundle shipping DNA rows with no dna_vocab/ directory are each report failures reachable from POST /validate — never exceptions, and never deferred to the import."
 why = "§10 promises a migration report with 'validation failures'. Against the shipped bundle the content validator raises OperationalError: no such column: e.dna_tag_id, so the operator gets a stack trace instead of the report, and every genuine schema failure after that point is never reached — a validator that dies on the first surprise cannot enumerate the rest."
+# M4.14 widens the `what` above (the row itself stays M4.5): the rule was written about the content
+# validator's own queries and stopped there, so five artifact readers and the archive door sat
+# outside it and raise where this row promises a report — `dna.parse_corrections` on a latin-1 byte
+# in a curated TSV, `json.load` on a malformed `seed_list.json`, the tower and the contract that are
+# "optional" to validate and mandatory to the rebuild (decision 251 makes all three absences
+# failures on both bundle kinds), and a seed shipping DNA rows with no `dna_vocab/` directory, which
+# dies on the version FK inside the import transaction. Each is the same clause one layer further
+# out, and the reason is the one the `why` already gives: a validator that raises cannot enumerate
+# anything after the first surprise.
+# [M4.14 dd-imp-unguarded-artifact-readers-raise, dd-imp-optional-artifact-500-at-import,
+#  dd09-seed-without-dna-vocab-dies-on-version-fk, decision 251]
 tests = [
     "backend/tests/test_bundle_validation.py::test_a_column_the_validator_queries_but_the_bundle_lacks_is_reported_not_raised",
     "backend/tests/test_bundle_validation.py::test_the_report_names_every_violation_after_the_first_surprise",
@@ -2649,6 +2739,28 @@ tests = [
     "backend/tests/test_bundle_validation.py::test_an_artifact_json_the_app_cannot_parse_is_reported_not_raised",
     "backend/tests/test_bundle_validation.py::test_a_contract_field_of_the_wrong_type_is_reported_not_raised",
     "backend/tests/test_bundle_validation.py::test_the_validator_reports_over_a_real_bundle",
+    "backend/tests/test_bundle_validation.py::test_a_latin_1_byte_in_a_curated_ledger_is_a_report_line_not_an_exception",
+    "backend/tests/test_bundle_validation.py::test_a_curated_ledger_whose_header_is_not_the_shipped_one_is_named",
+    "backend/tests/test_bundle_validation.py::test_a_malformed_seed_list_is_a_report_line_not_an_exception",
+    "backend/tests/test_bundle_validation.py::test_an_absent_model_artifact_is_a_failure_on_both_bundle_kinds",
+    "backend/tests/test_bundle_validation.py::test_dna_rows_with_no_vocabulary_directory_are_refused_and_an_empty_one_is_not",
+    # The one call site `_read_tsv`'s own contract named and did not have. It runs FIRST inside
+    # validate(), so a byte in either hand-edited ledger raised ahead of every reader that was
+    # handled. [M4.14 cycle 1, M414-REV-247-05]
+    "backend/tests/test_bundle_validation.py::test_a_latin_1_byte_in_an_id_bearing_ledger_is_a_report_line_not_an_exception",
+    # Two more readers of the same class, found in cycle 4. `feature_contract.json`'s
+    # `content_blocks` sum raised on an entry that is not an object, and the parser one screen
+    # below it raised the same AttributeError past the arm written to catch exactly this - so a
+    # fix at the first site alone would only have moved the traceback one frame. And a
+    # `seed_list.json` `year` of NaN, which is how an unresolved year leaves a frame, raised
+    # ValueError inside the import transaction: an exception DEFERRED to the import, which is the
+    # half of this row's promise that had no test. Both halves of that seam are asserted, because
+    # `validate_for_install`'s contract is that the operator reads the shortfall before the 1.04 GB
+    # copy and not as a Python type name after it.
+    # [M4.14 cycle 4, M414-C4-REF-01, m414-c4-dim247-03]
+    "backend/tests/test_bundle_validation.py::test_a_feature_contract_block_with_no_size_is_reported_not_raised",
+    "backend/tests/test_dna_import.py::test_an_onboarding_year_this_app_cannot_read_loads_without_a_decade",
+    "backend/tests/test_bundle_validation.py::test_an_onboarding_year_this_app_cannot_read_is_a_note_and_not_a_crash",
 ]
 
 [[requirement]]
@@ -2656,11 +2768,24 @@ id = "platform-vocabulary-change-is-refused-not-degraded"
 spec = "§14 risk 7 + §10 (decision 163)"
 milestone = "M4.5"
 kind = "integration"
-what = "A bundle whose vocabulary version differs from the active one is refused at validation with a reason naming the missing migration, and nothing is staged, flipped or written; the active vocabulary, both DNA tiers and every title's DNA card are exactly as they were before the attempt. A bundle carrying the same vocabulary version imports normally, so the refusal is specific to the change rather than to the check."
+what = "A bundle whose vocabulary version differs from the active one is refused at validation with a reason naming the missing migration, and nothing is staged, flipped or written; the active vocabulary, both DNA tiers and every title's DNA card are exactly as they were before the attempt. A bundle carrying the same vocabulary version imports normally, so the refusal is specific to the change rather than to the check. A bundle that declares no vocabulary version into an install that has one is refused, not skipped (decision 256): the comparison decision 163 asks for cannot be made, and skipping it is how a v2-trained backbone lands on a v1 install."
 why = "Decision 163 defers vocabulary migration as a data problem in its own right. Under decision 162 a re-import carries models and not content, so a bundle shipping a new vocabulary would leave dna_tag and dna_projected at the old version while the feature builder filters on the active one -- both DNA blocks empty for every title, and empty is not an error anywhere in the read path. A refusal an operator can read is what keeps the deferral honest; a swap that silently empties the naming layer would surface as 'why is every DNA card blank' months later."
+# M4.14 widens the `what` above (the row itself stays M4.5): decision 163's refusal is guarded on
+# the bundle DECLARING a version, and the shipped BUNDLE.json declares none — sixteen top-level keys
+# and no vocabulary key among them — so on the one bundle kind decision 162 says will arrive again
+# the comparison is skipped rather than made. Skipped is exactly how a v2-trained backbone lands on
+# a v1 install with both DNA blocks empty, which nothing in the read path calls an error. Decision
+# 256 makes the undeclared case its own refusal naming both sides, and the row's promise that "a
+# bundle carrying the same vocabulary version imports normally" is what keeps it from being a
+# blanket one. [M4.14 cs-36, imp-vocabulary-version-derived-four-ways, decision 256]
 tests = [
     "backend/tests/test_bundle_lifecycle.py::test_a_vocabulary_change_is_refused_and_nothing_moves",
     "backend/tests/test_bundle_lifecycle.py::test_the_refusal_is_specific_to_the_change_not_to_the_check",
+    # Decision 256's refusal, which is the clause the comment above added to the `what` and the
+    # one the two ids beside it cannot reach: both of those hand the validator a bundle that
+    # DECLARES a vocabulary version, and the case that matters is the shipped BUNDLE.json, which
+    # declares none.
+    "backend/tests/test_bundle_lifecycle.py::test_a_bundle_declaring_no_vocabulary_into_an_install_that_has_one_is_refused",
 ]
 
 # --- M4.6: users, roles and the account surface ------------------------------------------
@@ -3589,14 +3714,23 @@ id = "platform-the-suite-says-whether-the-integration-layer-ran"
 spec = "§12 (a green suite is the evidence a milestone closes on)"
 milestone = "M4.8"
 kind = "backend"
-what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand."
+what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust. An id total published over three layers discloses how many of it are vitest ids, and a decision number the ledger publishes as still available is one the register has not already argued."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes", "backend/tests/test_static_contracts.py::test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent", "backend/tests/test_static_contracts.py::test_the_range_guard_reads_both_claims_the_ledger_can_make"]
 # The ledger guard is registered here rather than given an eleventh row, and the row it lands on
 # is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
 # run is published, so a count no run produced is the same defect as a silent skip, one document
 # further out. An eleventh row would also flip the published block to 11/11 and make that guard
 # fail on its own registration until the block was re-pasted. [M4.8 review cycle 3: m48-c3-cov-01]
+# M4.14's review cycle 3 adds two more on the same argument, and its self-test with them: the
+# ledger's id figure is a three-layer total published beside a two-layer clause, and its statement
+# of which decision numbers a lane has left was three numbers the register had already argued. The
+# self-test is registered because the range guard's live branch reads a claim the ledger need not
+# make, and rule 2 is then the only thing standing between a rename and a guard nobody runs. The
+# sibling that holds the REGISTER's own block headings is deliberately not registered here: this
+# row is about the suite and its ledger reporting truthfully on themselves, and the register is a
+# different document - `test_decision_244_names_every_file_the_parallel_lane_harness_repair_touched`
+# is the same class and sits on no row either. [M4.14 cycle 3, m414-c3-rec-01]
 #
 # The third lands here for the same two reasons, and it is that same silent skip taken literally:
 # M4.12's paragraph published "it takes the last `pytest.skip` out of a registered test" over a
@@ -3611,6 +3745,14 @@ tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the
 # cycle after the paragraph was written, and nothing compared the two. Decision 184 refuses to
 # invent a count no run produced; this refuses to leave one standing that the map has overtaken,
 # which is the same rule read from the other end. [M4.11 review cycle 2: m411-c2-ledger-02]
+#
+# `..._names_the_rows_it_says_it_amended` is the fourth, and it is that same defect one sentence
+# further out again: M4.14's banner published "Ten rows the map already had were amended in place"
+# over eleven, the eleventh -- M4.9's rail row -- disclosed by name one paragraph above it. This is
+# the only one of the four whose subject no field here holds and no diff restores, because once the
+# milestone commits `HEAD:spec_coverage.toml` IS the amended file; so the repair is an enumeration
+# in the ledger and a guard that reads it back, and the row this guard lands on is by that act the
+# twelfth amended row. [M4.14 review cycle 2: m414-c2-dim-record-03]
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -3925,6 +4067,10 @@ tests = [
     "backend/tests/test_rate_session.py::test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms",
     "backend/tests/test_home.py::test_every_declared_rail_kind_has_a_producer_or_is_declared_pending",
     "backend/tests/test_devstub_contract.py::test_the_harness_echoes_the_verdict_line_the_app_sends",
+    # Decision 263: M4.14 moved the import into the worker, so the two kinds decision 189 held to
+    # "has a producer" were writing into a buffer no request reads. The guard above walks call
+    # sites, so only this one can tell a narrated write from a write-only one. [M4.14 cycle 1]
+    "backend/tests/test_import_integration.py::test_the_import_writes_no_rail_line_because_the_rail_could_not_read_it",
 ]
 
 [[requirement]]
@@ -5792,4 +5938,545 @@ tests = [
     "backend/tests/test_layering_guards.py::test_the_guard_rejects_a_torch_import",
     "backend/tests/test_layering_guards.py::test_the_guard_rejects_an_import_of_the_refit_module",
     "backend/tests/test_layering_guards.py::test_the_hyperparams_leaf_imports_nothing_but_the_standard_library",
+]
+
+# --- M4.14: bundle import and artifact custody (decisions 247-266 and 287; M4.14-plan.md) ---
+#
+# One milestone because one machine: `importer/bundle.py`'s `validate()` /
+# `refuse_on_install_state()` / `import_bundle()`, `importer/validate.py`'s rule block and
+# `api/artifacts.py` are open, refuse, stage, load, rebuild, flip, and nothing else in the
+# codebase edits them. Twenty of the thirty-two findings in scope insert a new refusal into the
+# same thirty lines from different directions, each a two-line diff that conflicts with the other
+# four if they are scheduled apart. The relocation forces the rest: `POST /import` is either a
+# synchronous handler that returns a report or a 202 that hands back a version to poll, and
+# `BundleImport.svelte`, `ops/devstub.py`, `e2e/specs/01-first-boot.spec.js` and
+# `test_devstub_contract.py` each encode one of those two shapes. What makes the class expensive
+# is decision 162: content seeds once, so the first content import is the only one this household
+# will ever get, and a corrupted seed that passes validation can be undone only by dropping the
+# database.
+#
+# Every row below is written BEFORE its code and names the tests it owes, which is M4.13's opening
+# rather than a bare-row one. The layer each refusal is asserted at is not a choice left to
+# whichever wave arrives first: the plan already took it, row by row, in its "what must be asserted
+# where" section — `_unpack`'s three failure modes, `_resolve`'s boundary, `version_of`'s ordering
+# and the ASCII render are backend tests with no database; every refusal that needs an install is
+# an integration test; `01-first-boot.spec.js` is extended to the poll and no spec file is added,
+# because the suite is filename-ordered and single-worker. Naming them here is what makes that
+# allocation checkable rather than remembered, and a wave that finds a name wrong renames the
+# row's entry in the same commit as the test — the one edit this list invites.
+#
+# So the red list is rule 2 rather than rule 1: `pytest backend/tests/test_spec_coverage.py -q`
+# prints every named test that does not exist yet, one line per TEST rather than one per row, and
+# THAT is this milestone's test plan. It is closed by writing those tests under exactly these
+# names, never by a waiver, never by re-pointing a row at a test that happens to exist already,
+# and never by lowering `current_milestone`. Four of the files named do not exist yet either
+# (`test_bundle_import_job.py`, `test_import_vocab.py`, `test_import_report.py` and the vitest
+# `bundleImport.test.js`), which is the honest shape of a milestone that moves the import into the
+# worker. `docs/TESTING.md`'s ledger block is re-pasted once, when the last of them is green,
+# which is why the two ledger guards are red for the duration.
+#
+# Twelve rows this map already had are amended in place ABOVE rather than duplicated here, for
+# the reason M4.11's and M4.13's banners give: each is the same clause asserted against the fixture
+# instead of the corpus, and a second row would leave the easy one standing as a claim about the
+# app. Ten are the opening set - five amended for wording only, five gaining test names from the
+# stage that writes them, and two of those five renames of REGISTERED tests (decisions 247 and
+# 248), which break the build by design and whose toml edit therefore lands in the same commit as
+# the rename - and two arrived with the review: M4.9's rail row in cycle 1, M4.8's ledger row in
+# cycle 2. `docs/TESTING.md` names all twelve one by one, and that is the copy a guard reads
+# (`test_the_testing_ledger_names_the_rows_it_says_it_amended`); this is the same claim in the file
+# an auditor opens first, where "Ten" outlived both of them because nothing here re-derives it.
+# [M4.14 cycle 4, m414-c4-rec-04]
+# No row below is an e2e row: `01-first-boot.spec.js` is extended to the poll rather than joined by
+# a new spec file, because the suite is filename-ordered and single-worker.
+
+[[requirement]]
+id = "platform-bundle-import-is-a-worker-job-not-a-request"
+spec = "§5.3 (\"Bundle import validation + hot swap | admin action | minutes\") + §10 swap sequence + §6.6 Data"
+milestone = "M4.14"
+kind = "integration"
+what = "POST /api/admin/bundle/import validates and returns within seconds with the version to poll; the load, the rebuild set and the flip run in the worker, and GET /api/admin/bundle/state reports the phase until the bundle is active. A client that disconnects mid-import does not affect the outcome, and /api/health keeps answering throughout - the press hands the extraction and the validation to a thread, and the 213 s the clause is mostly about belongs to the worker process. A claim is measured from when it was claimed rather than from when it was enqueued, and the terminal report an abandoned claim produces states only what was observed: an import that committed before the process died is reported as the flip it was, and so it is by the other terminal writer - the crash arm reads the same row before it calls an import failed, because the import commits before the cleanup, the unlock and the return. The four phase names are pinned to the one reader that renders them, so a phase this build has never heard of cannot reach the screen behind a green suite. That report is reachable on a tick rather than only on the row's hourly fallback, which a restarted worker inherits already spent; and the import LEADS the tick whether the queue or the clock produced it, so no fit is spent on the basis the flip is about to supersede."
+why = "§5.3 files this as a job with a minutes budget and the worker exists for jobs. It is a 127 s await on the backend's event loop (M4.5's own exit record), inside one transaction, with the CPU-bound rebuild on the request loop. §2's origin is behind Cloudflare, which cuts a proxied request at 100 s, so the operator is told an import failed while it completes and flips — and the retry hits the seed-once refusal, which reads as corruption."
+tests = [
+    "backend/tests/test_bundle_import_job.py::test_the_import_route_returns_202_and_the_version_to_poll",
+    "backend/tests/test_bundle_import_job.py::test_the_load_and_the_flip_run_in_the_worker_tick",
+    "backend/tests/test_bundle_import_job.py::test_the_state_route_reports_the_phase_until_the_bundle_is_active",
+    "backend/tests/test_bundle_import_job.py::test_a_client_that_disconnects_does_not_change_the_outcome",
+    # The route enqueues under a name the registry has to be running, and neither module may
+    # import the other (`api/` would pull `logging.basicConfig` into the web process). This is
+    # what holds the pair, the way test_worker_jobs.py holds the backup budget against
+    # backup/nightly's own timeout. [M4.14 step E2]
+    "backend/tests/test_bundle_import_job.py::test_the_route_and_the_registry_name_one_job_and_one_set_of_phases",
+    # The reaper is the one report line nothing else can write, and it asserted two facts about
+    # the install it never read: `import_bundle` commits before the phase is written, so a kill
+    # in that tail leaves the bundle ACTIVE and the row `running`. [M4.14 cycle 1]
+    "backend/tests/test_bundle_import_job.py::test_the_reaper_reports_the_flip_it_can_see_rather_than_asserting_nothing_was_written",
+    # The same question at the other terminal exit. `import_bundle` commits and then removes 790
+    # MB of extraction, releases its session lock and returns, so an exception in that tail
+    # belongs to an import that happened - and the crash arm called it "the import did not run to
+    # a report" having read no row. One derivation, two writers. [M4.14 cycle 3, m414-c3-dimlock-03]
+    "backend/tests/test_bundle_import_job.py::test_a_crash_after_the_flip_is_reported_as_the_flip_and_not_as_a_failed_import",
+    "backend/tests/test_bundle_import_job.py::test_a_claim_is_reaped_from_when_it_was_claimed_and_not_from_when_it_was_queued",
+    # The four reaper tests above all call `_reap_abandoned_import` directly, so its one
+    # production call site executed in no test and would have passed against a worker that never
+    # reached it - which, after a restart, is what happened for up to an hour. The tick is what
+    # this one holds. And the ordering the docstring calls "the load-bearing half" was skipped in
+    # exactly the case `due` produces, where registry order puts the placement sweep first.
+    # [M4.14 cycle 2]
+    "backend/tests/test_bundle_import_job.py::test_an_abandoned_claim_is_reaped_on_a_tick_and_not_only_by_the_hourly_fallback",
+    "backend/tests/test_bundle_import_job.py::test_the_import_leads_the_tick_even_when_the_clock_produced_it",
+    # Decision 252's other half - torch out of the API process - was not built, and its record
+    # said otherwise. This ties the two: while no ProcessPoolExecutor exists under
+    # backend/spielplan, the decision's section has to say so. [M4.14 cycle 1, M414-C1-REC-01]
+    "backend/tests/test_static_contracts.py::test_decision_252_does_not_assert_a_subprocess_this_tree_does_not_have",
+    # And decision 287, which closed the residue that record was keeping: `validate` is a plain
+    # synchronous function reached from two `async def` routes, so the 1.04 GB hash pass and
+    # `load_tower`'s torch import ran on the API process's one loop. The instrument's check 9 saw
+    # exactly one 503 inside POST /import's validation window in every recorded run, and 12/13
+    # was structural. Measured here as check 9 measures it - the worst interval between two
+    # samples, because a blocked loop does not answer slowly, it does not answer at all.
+    # [M4.14 cycle 4, decision 287]
+    "backend/tests/test_bundle_lifecycle.py::test_validating_for_an_install_leaves_the_event_loop_answering",
+    # The other press on the same loop, and the one no recorded run of the instrument could see:
+    # `_open` extracted the 1.04 GB archive inline, and `ops/m414_exit_criterion.py`'s
+    # `build_install` opens the bundle before `create_app()`, so checks 8 and 9 have only ever
+    # measured the reuse path. Measured on a 1.04 GB archive: one heartbeat sample across 0.62 s
+    # of extraction on the loop, 55 across the same extraction in a thread.
+    # [M4.14 cycle 4, m414-c4-waveE-02, decision 287]
+    "backend/tests/test_bundle_import_loop.py::test_the_first_press_on_an_archive_leaves_the_loop_free_for_api_health",
+    # The budget this job is bounded by, and the argument beside it. "2.4x the 127 s measured on
+    # the real bundle" was M4.5's measurement of work that is no longer in the request; the job
+    # is 213 s, so the real margin is 1.4x and the number is a ceiling pinned to the worker's
+    # stop grace rather than a margin chosen for it. The same defect class as M4.7's grace
+    # period, which is why it is guarded in the same file. [M4.14 cycle 4, m414-c4-waveE-03]
+    "backend/tests/test_box_claims.py::test_the_bundle_imports_budget_is_argued_from_the_job_it_bounds",
+    "backend/tests/test_box_claims.py::test_the_import_budget_guard_sees_the_argument_it_was_written_for",
+    "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs",
+    # The screen's half of "the import outlives the request that started it", and decision 226's
+    # shape: named BESIDE the route's and the worker's tests, never instead of them. The 202
+    # carries the VALIDATION report, so the Data tab renders nothing true until it has polled for
+    # the one the worker stored; and the destructive button's rule gained a state nobody could
+    # click through before -- the minute while the load is running in the worker. Playwright sees
+    # one pass through the happy path on one machine; these are the six phases and the deadline.
+    "frontend/src/lib/bundleImport.test.js::renders the report the worker stored rather than the one the request returned",
+    "frontend/src/lib/bundleImport.test.js::holds the destructive button down while the import is still running",
+    "frontend/src/lib/bundleImport.test.js::does not re-arm the destructive button when the import request dies in transit",
+    "frontend/src/lib/bundleImport.test.js::says why a refusal refused, even with a report still on screen",
+    "frontend/src/lib/bundleImport.test.js::gives up at its own deadline, because the api client sets none",
+    "frontend/src/lib/bundleImport.test.js::stays dark on an idle screen, where nothing has been validated",
+    "frontend/src/lib/bundleImport.test.js::is armed by a positive validation report and by nothing else",
+    "frontend/src/lib/bundleImport.test.js::stays dark while the import is running in the worker",
+    "frontend/src/lib/bundleImport.test.js::stays dark once the bundle is imported",
+    "frontend/src/lib/bundleImport.test.js::stays dark after a failed import",
+    "frontend/src/lib/bundleImport.test.js::stays dark when the outcome of an import is unknown",
+    # Two holes cycle 1 found in the same reader, both of them in "the phase reaches the screen".
+    # The poll returned whatever row `/state` last named once its deadline passed, so a second
+    # operator's verdict could be rendered as this screen's report; and nothing on the page read
+    # `import_job` at all, so a reload during the load - the thing this milestone made possible -
+    # showed an idle wizard while the worker was mid-swap.
+    # [M4.14 cycle 1, m414-c1-dim-waveE-03 and -06]
+    "frontend/src/lib/bundleImport.test.js::will not take another import's row as this one's answer",
+    "frontend/src/lib/bundleImport.test.js::adopts an import that was already running when this page loaded",
+    "frontend/src/lib/bundleImport.test.js::does not adopt an import that already finished, on every later visit",
+    # The sibling button, which the adoption path left live: `watch()` writes `running`
+    # without setting `busy`, and `disabled={busy}` was the whole of the validate rule, so
+    # a reload during the load kept a control pressable that writes VALIDATED over the
+    # running phase -- re-arming the destructive one in the window E4 calls
+    # terminal-until-polled. [M4.14 cycle 2, m414-c2-waveE-03]
+    "frontend/src/lib/bundleImport.test.js::holds the validate button down for an import it adopted rather than pressed",
+    # Cycle 4's two repairs to the same reader, registered because each was the only assertion of
+    # a major and a rename would have dropped it silently. Section 3.1's wizard mounts this
+    # component with no row at all, so `phaseOfJob(null)` ended the adoption at mount and first
+    # boot showed an idle wizard mid-swap; and nothing cancelled the poll, so leaving the screen
+    # mid-import left one running and coming back started a second.
+    # [M4.14 cycle 4, m414-c4-dim202-01 and -02]
+    "frontend/src/lib/bundleImport.test.js::adopts a running import nobody handed it, the way the Data tab does",
+    "frontend/src/lib/bundleImport.test.js::leaves no poll behind when the operator walks away mid-import",
+]
+
+[[requirement]]
+id = "platform-bundle-import-is-serialised"
+spec = "§10 swap sequence + §5.3"
+milestone = "M4.14"
+kind = "integration"
+what = "Two imports started concurrently produce exactly one ok report and one report failure naming an import already in progress; exactly one directory is staged under /data/artifacts, the first import's staged files are untouched, and no raw Postgres constraint name reaches the operator. The worker's model jobs do not write across the flip, and the probe that asks whether an import is in flight READS the lock rather than taking it, so a reader can never be the reason a writer is told an import is already running. Every exit that leaves no artifact_bundle row removes the staged tree - a rollback, a database error raised inside the transaction, the cancellation the job budget delivers, and a failure of the rmtree or the copytree themselves, which run before the transaction opens; where a row does name the version its files stay, because those are the bundle a restore rolls back to (decision 249) - unless this attempt is what wrote them, because the rmtree runs first and half a copy is neither a bundle this install can serve nor one a restore can roll back to. Each of those exits says what it did rather than what it meant to do: a removal that the OS refused is not reported as a removal, a copy that never began does not report artifacts remaining on disk, and a replacement that destroyed the previous copy and could not finish says so."
+why = "Every install-state refusal, the already-active check and the rmtree+copytree run outside the transaction and outside any lock. Reproduced twice: the second import deleted and re-copied the tree the first was about to rebuild against, then died on UniqueViolationError title_alias_pkey; with two versions, /data/artifacts held a staged tree with no artifact_bundle row and nothing to clean it up. The operator-facing trigger is the retry after a proxy timeout."
+tests = [
+    "backend/tests/test_import_integration.py::test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusal",
+    "backend/tests/test_import_integration.py::test_the_loser_never_deletes_the_winners_staged_tree",
+    "backend/tests/test_bundle_import_job.py::test_the_worker_model_jobs_do_not_write_across_the_flip",
+    # The route's half of "one import at a time": the advisory lock covers a RUNNING import and
+    # the queued row covers the window before a worker claims it, and neither can wedge the queue.
+    "backend/tests/test_bundle_import_job.py::test_a_second_import_while_one_is_queued_is_refused_rather_than_queued_twice",
+    # The window the pair above cannot see: a row already CLAIMED, whose worker has not yet taken
+    # the lock. Neither question was true there and the second press was accepted. [M4.14 cycle 1]
+    "backend/tests/test_bundle_import_job.py::test_a_second_import_in_the_window_between_the_claim_and_the_lock_is_refused",
+    # MODEL_JOBS is a list kept by hand and this derives the same set from the source of every
+    # job's `run`, so a seventh job that fits against the active bundle cannot join the loop
+    # without joining the skip. [M4.14 step D1]
+    "backend/tests/test_worker_schedule.py::test_every_job_that_fits_against_the_active_bundle_is_named_in_model_jobs",
+    # And the derivation itself, which the row above cannot exercise: today's six name
+    # `_active_store` in their own first lines, so they agree under any rule that reads them.
+    # The seventh will be written by somebody with six to copy from, and a substring of one
+    # function's text does not see one that reaches the basis a frame out. [M4.14 cycle 1]
+    #
+    # `probe-one-out` is the sixth probe and the same shape one FILE out, which is where
+    # CLAUDE.md's own convention puts a shared rule: the walk was bounded by the file `run` is
+    # written in, and its assertion guards `run` itself, so that job was seen, cleared, and
+    # never skipped while an import held the lock. [M4.14 cycle 3, m414-c3-dimlock-04]
+    "backend/tests/test_worker_schedule.py::test_the_model_job_derivation_sees_a_basis_reached_through_a_helper",
+    # The copy happens before the transaction, so every way out of it owes the disk the same
+    # thing; the cleanup was reached from the `_Rollback` arm alone. [M4.14 cycle 1]
+    #
+    # The third exit this row enumerates - "the cancellation the job budget delivers" - was named
+    # in that test's docstring and asserted nowhere: both arms reach `except BaseException` through
+    # `Exception`, so narrowing it to `except Exception`, the obvious tidy-up on a handler that
+    # reads like a smell, left every named test green while the budget's abandonment leaked 205 MB
+    # of `/data/artifacts/<version>/`. It is now cancelled AT the rebuild, which is where
+    # `_tick`'s `asyncio.wait_for` finds this job. [M4.14 cycle 4, m414-c4-rec-03]
+    "backend/tests/test_import_integration.py::test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tree",
+    # And the two exits that arm cannot see either, because they run BEFORE the transaction: the
+    # rmtree and the copytree are the import's destructive filesystem statements and the arm's
+    # own comment names "a disk that fills" as a case it covers. [M4.14 cycle 2]
+    "backend/tests/test_import_integration.py::test_a_staging_failure_is_a_report_line_and_leaves_no_half_copied_tree",
+    # And the crossing case neither half of that test reaches, which is the one where the rule
+    # protects the wrong tree: the `rmtree` succeeds and the `copytree` then fails, so the files
+    # the row named are already gone and what "a row that names this version keeps its files"
+    # keeps is this attempt's own half copy. On the restage path the active row ALWAYS names the
+    # version, so the directory left behind then answered the retry "bundle <v> is already the
+    # active bundle" - D2's repair closed by its own output, under a note promising those files
+    # would be overwritten by the next import of this version. [M4.14 cycle 3]
+    "backend/tests/test_import_integration.py::test_a_failed_restage_leaves_no_half_tree_and_the_repair_stays_open",
+    "backend/tests/test_import_integration.py::test_a_replacement_that_fails_says_the_copy_it_removed_is_gone",
+    # The reader side of the same lock. A try-lock plus an unlock is how a session TAKES a lock,
+    # and for the ~1.4 ms it held it a real writer's own try-lock failed - which both writers
+    # turn into "an import is already running", recorded as a failed import of a bundle that
+    # would have imported. [M4.14 cycle 2]
+    "backend/tests/test_bundle_import_job.py::test_the_in_flight_probe_reads_the_lock_and_never_takes_it",
+    # The one exit whose report is never returned. That arm is right to re-raise - what happened
+    # is the caller's to report - but `_drop_orphan_staging` writes its conclusion into a report
+    # that dies with the frame, so on an abandonment at the job budget the could-not-remove case
+    # cycle 3 added went nowhere and the operator read only the reaper's generic sentence, which
+    # says nothing about a directory the next import of that version will meet.
+    # [M4.14 cycle 4, M414-C4-REF-06]
+    "backend/tests/test_import_integration.py::test_the_one_exit_that_returns_no_report_still_says_what_it_did_to_the_disk",
+]
+
+[[requirement]]
+id = "data-rules-bundle-files-are-hash-verified-before-any-row-is-written"
+spec = "§10 (\"the app's importer validates then loads\") + §4.3"
+milestone = "M4.14"
+kind = "integration"
+what = "Every entry in BUNDLE.json's `files` map is checked for size and sha256 before the first row is written; a mismatch, a listed-but-missing file, an unlisted file other than BUNDLE.json itself, and any `validations` entry with ok=false are each a named report failure. An entry that DECLARES no integer `bytes` and no sha256 string is one of them, because a declaration that is not there cannot be compared and the affirming note is written about what was: an inventory carrying no digests counted every file as verified and said so. A truncated content.sqlite or reviews.sqlite is a report line, not an exception, and so is a listed file that is present and cannot be read - the readable/unreadable boundary, which escaped both routes as a 500 while a file that is merely absent was reported correctly - and so is any value in either map that this app cannot read as a number. The bundle's `tables` counts are compared against the report's counts - reachable from POST /validate before anything is staged, and again after the load."
+why = "The real BUNDLE.json ships 42 files with bytes+sha256, 68 exporter self-checks and total_bytes 1,042,461,726; the importer reads bundle_version, vocabulary_version and tables.title and nothing else. So a zeroed equating_map.json validates clean and a truncated reviews.sqlite validates then dies inside the import transaction. Decision 162's seed-once plus artifact_bundle_one_seed make a corrupted-but-passing seed undoable only by dropping the database. Measured: hashing all 42 files costs 0.7 s."
+tests = [
+    "backend/tests/test_bundle_validation.py::test_every_listed_file_is_hashed_before_a_row_is_written",
+    "backend/tests/test_bundle_validation.py::test_a_listed_file_that_is_missing_and_an_unlisted_file_are_the_same_rule",
+    "backend/tests/test_bundle_validation.py::test_bundle_json_is_the_only_file_exempt_from_the_unlisted_rule",
+    "backend/tests/test_bundle_validation.py::test_a_validations_entry_that_is_not_ok_is_a_failure",
+    "backend/tests/test_bundle_validation.py::test_a_truncated_sqlite_file_is_a_report_line_not_an_exception",
+    "backend/tests/test_import_integration.py::test_the_bundles_table_counts_are_compared_against_the_report",
+    # The same comparison at the moment the operator decides. It needs nothing the load adds, and
+    # asking it only inside the transaction meant a 205 MB rmtree and copy before a refusal the
+    # Data tab could have made in milliseconds. [M4.14 cycle 1, m414-c1-dim-refusals-03]
+    "backend/tests/test_bundle_validation.py::test_a_table_count_bundle_json_gets_wrong_is_refused_before_anything_is_staged",
+    # The hash pass is this milestone's own new reader and it read every file in the bundle with
+    # no handler at all, while `_read_tsv` one screen above it catches exactly this class for
+    # step B2's stated reason. The reference box produces the state on its own: uid 1000 against
+    # a bundle root copied into the /data/import bind mount. [M4.14 cycle 2]
+    "backend/tests/test_bundle_validation.py::test_a_listed_file_that_cannot_be_read_is_a_report_line_not_an_exception",
+    # The LEAF of the two maps, which this pass guarded at every level except the one it read.
+    # `int(declared_bytes)` and `int(n)` raised out of both routes as "Internal Server Error", and
+    # `bool(declared_hash)` made the digest optional - so a size-only inventory counted 33 files
+    # as verified and the note said they were, over a zeroed equating_map.json padded back to its
+    # own length. Both measured on the fixture. [M4.14 cycle 4, M414-C4-REF-01 and -02]
+    "backend/tests/test_bundle_validation.py::test_a_manifest_value_this_app_cannot_read_is_a_report_line_not_an_exception",
+    "backend/tests/test_bundle_validation.py::test_an_inventory_entry_that_declares_no_digest_is_not_counted_as_verified",
+]
+
+[[requirement]]
+id = "data-rules-an-archive-that-does-not-open-leaves-nothing-behind"
+spec = "§10 (validate -> stage) + §6.6 Data"
+milestone = "M4.14"
+kind = "backend"
+what = "A truncated archive, an archive with a traversal member, and a regular file pointed at as a bundle are each refused with a 400 the Data tab renders, leave no .unpacked-* or .unpacking-* directory behind, and are refused identically on the second attempt; a good archive of the same name then validates. Truncated covers both classes: a cut inside a member's data, which tarfile raises on, and a cut ON a member's 512-byte header, which it returns from as if the archive had ended - an extraction is promoted only once the end-of-archive marker has been seen. A bundle staged under /data/artifacts/<version>/ is refused before anything is deleted and still exists afterwards. An archive dropped in /data/import is found by the default path rather than diagnosed as a models-only bundle, and that diagnosis holds on an install that HAS state - a first boot and a seeded one both name the path rather than answering a typo with decision 162's ordering refusal or decision 256's vocabulary one. HALF of section 4.3's two things is the same answer: a directory carrying BUNDLE.json and no artifacts/ is named as the partial copy it is, on both install states, rather than reaching either of those two sentences. The end-of-archive marker is measured on the tar's own stream, so a gzip, bzip2 or xz stream carried under a .tar name is not refused as a truncated transfer while a truncation inside one still is. A report about a reused extraction names that extraction, because every other line in it names a path inside the tree rather than the tree."
+why = "_unpack mkdir's before it opens the archive and never cleans up, and reuses any existing .unpacked-<stem> without checking it is complete — so the real corpus tar cut at 90% raised once and then validated ok over a 332-of-436 MB reviews.sqlite, and the fixture cut inside reviews.sqlite imported, flipped active and loaded zero review bodies behind one warn. The .tar and .tar.zst paths have no test at any layer."
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_truncated_archive_leaves_no_tree_and_is_refused_the_same_way_twice",
+    "backend/tests/test_bundle_lifecycle.py::test_an_archive_with_a_traversal_member_leaves_no_tree",
+    "backend/tests/test_bundle_lifecycle.py::test_a_regular_file_pointed_at_as_a_bundle_is_a_four_hundred",
+    "backend/tests/test_bundle_lifecycle.py::test_a_good_archive_of_the_same_name_validates_after_a_failed_one",
+    "backend/tests/test_bundle_lifecycle.py::test_a_bundle_staged_under_the_artifacts_root_is_refused_before_anything_is_deleted",
+    "backend/tests/test_bundle_lifecycle.py::test_an_archive_dropped_in_the_import_directory_is_found_by_the_default_path",
+    # The class the proportional cut cannot reach: `tarfile` swallows the three end-of-header
+    # errors at every offset but 0, so `extractall` RETURNS on a header-aligned truncation and
+    # `os.replace` promoted a partial tree whose first member is BUNDLE.json. [M4.14 cycle 1]
+    "backend/tests/test_bundle_lifecycle.py::test_a_truncation_at_a_member_boundary_is_refused_rather_than_extracted",
+    # That marker was measured as the FILE's size minus an offset into the DECODED stream, so
+    # every transparently decompressed archive came back as a truncated one - a refusal no copy
+    # could satisfy. Both halves on the same compression, because a predicate that passed
+    # everything would pass the first. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_a_compressed_tar_is_not_refused_as_a_truncated_one",
+    # A reuse is trusted on BUNDLE.json alone and everything else is caught by the hash pass -
+    # whose findings all name paths INSIDE the bundle, so a damaged extraction beside a perfect
+    # archive read as "the bundle is missing files" on every attempt. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_the_extraction_a_report_is_about_is_named_in_that_report",
+    # Decision 257's refusals and step A6's live in `validate()`, and `validate_for_install`
+    # returns the install-state report alone when that pass refuses - so on both install states
+    # that exist they were discarded unread. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_a_wrong_path_is_diagnosed_as_a_path_on_both_install_states",
+    # The reuse arm's own comment states the premise it never checked - "the archive it came from
+    # is right here" - and the `archive.is_file()` test sat eight lines below its `rmtree`. So an
+    # operator who deleted the archive to reclaim disk and retried lost the extraction as well
+    # and was answered with a sentence naming only the archive. [M4.14 cycle 4, M414-C4-REF-05]
+    "backend/tests/test_bundle_lifecycle.py::test_an_extraction_is_not_destroyed_before_the_archive_it_would_be_re_extracted_from",
+]
+
+[[requirement]]
+id = "data-rules-the-bundle-path-boundary-is-a-path-not-a-prefix"
+spec = "§6.6 Data + §10 step 1"
+milestone = "M4.14"
+kind = "backend"
+what = "_resolve accepts a path only when it is relative to DATA_DIR as a path, not as a string prefix: with DATA_DIR=<tmp>/data, <tmp>/data-other/x is a 400 while <tmp>/data/import/x resolves. A target under the artifacts root, and a regular file whose suffix is neither .tar nor .tar.zst, are also 400."
+why = "The check is `str(target).startswith(str(cfg.data_dir.resolve()))` under a comment promising 'a typo cannot make the app read arbitrary host files'. With DATA_DIR=/data, /database passes. Reproduced end to end with an admin session: validate and import of a bundle under <DATA_DIR>-other returned 200/200 and flipped it active. bundle.py already uses is_relative_to four hundred lines away."
+tests = [
+    "backend/tests/test_bundle_import_job.py::test_a_sibling_directory_sharing_the_data_dir_prefix_is_refused",
+    "backend/tests/test_bundle_import_job.py::test_a_target_under_the_artifacts_root_is_refused",
+    "backend/tests/test_bundle_import_job.py::test_a_regular_file_whose_suffix_is_not_an_archive_is_refused",
+]
+
+[[requirement]]
+id = "data-rules-referential-integrity-is-a-report-line-not-a-500"
+spec = "§10 (\"Importer enforces every §4.1 landmine rule and produces a migration report\") + §4.1 rule 6"
+milestone = "M4.14"
+kind = "integration"
+what = "An orphan child row, a NULL in a mapped NOT NULL column, and a duplicate group under an app key that is coarser than the corpus's are each a validation failure naming the table, the column, the count and the first offending ids — before anything is staged. BUNDLE.json's `validations` and `nullable_pk_columns` are read, and a declared-nullable PK component whose affinity is not TEXT fails. No import path turns a Postgres error into HTTP 500 with an empty report."
+why = "validate_content checks the eight landmine rules and nothing about referential integrity. Nine orphan variants and the NULL cases all validate ok and then raise ForeignKeyViolationError / NotNullViolationError inside the transaction, which app.py turns into 500 'database error' with the staged tree left behind and no line naming the table. Decision 162's seed-once makes this the household's first and only content import, the one moment the report is the product. The corpus already runs these checks at export and writes them into a list nothing reads. Measured cost: 0.2 s."
+tests = [
+    "backend/tests/test_bundle_validation.py::test_an_orphan_child_row_names_the_table_the_column_the_count_and_the_first_ids",
+    "backend/tests/test_bundle_validation.py::test_a_null_in_a_mapped_not_null_column_is_a_failure",
+    "backend/tests/test_bundle_validation.py::test_a_duplicate_group_under_the_apps_key_is_a_failure",
+    "backend/tests/test_bundle_validation.py::test_a_declared_nullable_pk_component_whose_affinity_is_not_text_fails",
+    "backend/tests/test_bundle_validation.py::test_an_onboarding_title_the_bundles_own_spine_lacks_is_refused",
+    "backend/tests/test_title_meta.py::test_every_mapping_declares_the_targets_primary_key",
+    "backend/tests/test_import_integration.py::test_no_import_path_turns_a_postgres_error_into_a_five_hundred",
+]
+
+[[requirement]]
+id = "platform-a-broken-install-says-so-and-can-be-restaged"
+spec = "§3.1 (bundle-less is legal) + §10 active-version invariant + §2 Backups"
+milestone = "M4.14"
+kind = "integration"
+what = "With an active artifact_bundle row and no directory on disk, GET /api/admin/bundle/state reports the missing path and does not report restart_required, the Data tab renders the restore instruction rather than the restart one, and re-importing that bundle restages the artifacts and re-runs the rebuild set instead of being refused by seed-once or by 'already the active bundle'. The active row is never auto-cleared, and a restage keeps that row's stored kind rather than the bundle's: restaging a seed from a models-only copy of its own version left no row of kind 'seed', which is the only record that content was ever seeded. An active row whose directory is present but cannot be read as a bundle - two dna_vocab/<version>/ trees, the shape a manual restore of /data/artifacts merges - is the same broken state and not a dead boot, and so is one that is present and holds no basis to serve from: the restage is gated on whether the version's backbone is there, not on whether a directory of that name exists, because an interrupted `cp -a` and a worker killed mid-copy both leave the second thing without the first."
+why = "ArtifactStore.load_active returns the empty store when the files are gone, so the page says 'restart backend and worker to load <version>' — an instruction that cannot help, because a restart reloads the same empty store — while the worker logs '(§3.1)' lines citing the section that makes the state legal. /data/artifacts is a host bind mount outside the nightly pg_dump, so 'database restored, files missing' is a realistic recovery state whose only cure today is an undocumented manual copy."
+tests = [
+    "backend/tests/test_bundle_import_job.py::test_a_missing_artifacts_directory_is_reported_and_restart_required_is_not",
+    "backend/tests/test_bundle_lifecycle.py::test_re_importing_the_active_bundle_with_no_files_on_disk_restages_it",
+    "backend/tests/test_bundle_lifecycle.py::test_the_restage_branch_loads_no_content_and_never_clears_the_active_row",
+    # Both tests above restage from a SEED bundle, so `EXCLUDED.kind` is 'seed' and the kind
+    # assertion passes for the wrong reason. The models-only copy is the natural repair - a
+    # restage keys on the version and does not use content.sqlite - and it rewrote the seed row
+    # to 'model', after which seed-once had nothing to find. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_restage_keeps_the_seed_row_s_kind_and_seed_once_still_refuses",
+    # The other way the store can fail to load: decision 256 made `ArtifactStore.open` raise, and
+    # `load_active` - which app.py's lifespan, worker.main and `active_backbone_coverage` all call
+    # bare - had no handler, so a tree that booted before this milestone restart-looped instead.
+    # [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_two_vocabularies_in_the_staged_tree_are_a_broken_install_and_not_a_dead_boot",
+    # The gate itself, which asked whether the DIRECTORY exists. README documents `cp -a` of that
+    # directory as one of the two ways out of this state, and an interrupted one - or a worker
+    # killed mid-copy - satisfied the predicate while holding no basis: the repair answered
+    # "already the active bundle" plus seed-once, and `load_active` keyed `broken` on
+    # `root.is_dir()`, so the install reported itself healthy while every fit ran against
+    # `Backbone.empty()`. [M4.14 cycle 3, m414-c3-dimlock-01]
+    "backend/tests/test_bundle_lifecycle.py::test_a_half_restored_artifacts_directory_is_restaged_rather_than_refused",
+    # The `why` above names the worker's own lines as half the defect: the boot line called a
+    # broken install section 3.1's legal state, which is the sentence an operator reads at every
+    # `docker compose up`. [M4.14 step D3, decision 258]
+    "backend/tests/test_worker_schedule.py::test_the_boot_line_does_not_call_a_broken_install_legal",
+    # The boundary of that change: the model jobs' own skip lines cite section 3.1 too, and
+    # cannot reach a broken install because `_active_store` raises first. Asserted so a later
+    # refactor of that guard cannot make them dishonest.
+    "backend/tests/test_bundle_import_job.py::test_the_jobs_that_cite_a_legal_no_bundle_state_never_meet_a_broken_one",
+    "frontend/src/lib/bundleImport.test.js::renders the restore instruction rather than the restart one when the directory is gone",
+    # The boundary of decision 258's change, asserted from the other side: a swap that has not
+    # been loaded yet is what the restart banner is FOR, and a fix that made the restore line
+    # win everywhere would pass the row above while making this page silent about every ordinary
+    # import. The pair is one rule, so it is one file's two cases.
+    "frontend/src/lib/bundleImport.test.js::renders the restart instruction alone once the files are there and the row has moved",
+]
+
+[[requirement]]
+id = "data-rules-the-vocabulary-version-has-one-derivation"
+spec = "§4.3 dna_vocab/<version>/ + decision 163 + decision 256"
+milestone = "M4.14"
+kind = "backend"
+what = "One helper derives the vocabulary version for the bundle reader, the validator and the artifact store: directories only, naturally ordered so v10 sorts above v2, a stray file ignored, more than one version directory refused - as a report line rather than an exception, and on a bundle that declares a version as much as on one that does not. A declaration that is not a string is not a declaration, so one bundle has one vocabulary whichever reader is asked. A bundle that declares no vocabulary version into an install that has one is refused, naming both, rather than skipping decision 163's comparison; and the version recorded on the artifact_bundle row is never NULL after a successful import that loaded a naming layer - the one exception being section 3.1's empty one, where no dna_vocabulary row is created either and the column records what the install has (decision 262). The import refuses a missing vocabulary on the question the validator asks - does the bundle ship DNA rows - and not on the bundle being a seed. Two version directories are a report line on the install path as well as the pre-flight one: an undeclared bundle shipping two has no version to declare, so the refusal it reads names the two rather than telling it to ship a tree it has already shipped twice. And where that pair lands in a STAGED tree, the store carries it as the broken install rather than raising out of a boot the operator needs in order to repair it."
+why = "Four derivations disagree: the store prefers a manifest key no bundle has and then globs including files (probed: vocab_version 'zz_notes.txt' while the bundle says 'v2'), and both bundle-side readers sort lexicographically. Decision 163's refusal is guarded on the bundle declaring a version, and the shipped BUNDLE.json declares none — its sixteen top-level keys contain no vocabulary key — so the refusal rests on a directory listing that a models-only bundle, the only kind that will arrive again, need not ship."
+tests = [
+    "backend/tests/test_import_vocab.py::test_only_directories_count_and_a_stray_file_is_ignored",
+    "backend/tests/test_import_vocab.py::test_v10_sorts_above_v2",
+    "backend/tests/test_import_vocab.py::test_more_than_one_version_directory_is_refused",
+    "backend/tests/test_artifact_store.py::test_the_store_derives_the_vocabulary_the_same_way_the_bundle_does",
+    "backend/tests/test_artifact_store.py::test_the_vocabulary_version_comes_from_the_directory_and_not_from_the_manifest",
+    "backend/tests/test_bundle_lifecycle.py::test_a_bundle_declaring_no_vocabulary_into_an_install_that_has_one_is_refused",
+    "backend/tests/test_bundle_lifecycle.py::test_the_recorded_vocabulary_version_is_never_null_after_a_successful_import",
+    # The two guards over one question asked it two different ways: the validator asks whether
+    # the bundle ships DNA rows, the importer asked whether it is a seed, and the sentence the
+    # importer printed could never be true where it printed. [M4.14 cycle 1, decision 262]
+    "backend/tests/test_bundle_lifecycle.py::test_a_seed_with_an_empty_naming_layer_imports_the_way_validate_said_it_would",
+    # The refusal the whole module exists to produce was a 500 for exactly the bundle shape
+    # decision 256 asks the corpus to start writing. [M4.14 cycle 1]
+    "backend/tests/test_bundle_validation.py::test_two_vocabulary_directories_are_a_report_line_even_when_the_bundle_declares_one",
+    "backend/tests/test_bundle_validation.py::test_a_vocabulary_declaration_that_is_not_a_string_leaves_one_answer_on_the_screen",
+    # The undeclared half of that same refusal, which is the one the install path suppressed: a
+    # bundle shipping two trees has `vocabulary_version is None`, so decision 256's branch fired
+    # and the operator was told to ship the tree it had already shipped twice. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_a_bundle_shipping_two_vocabularies_is_told_that_and_not_that_it_declared_none",
+    # The third shape of "one bundle, one vocabulary": a declaration that CONTRADICTS the tree.
+    # Both readers computed `version_of` and then discarded it whenever the key was present, so a
+    # models-only bundle retrained on v2 and declaring "v1" - the value decision 256's own
+    # refusal coaches an operator to write - passed decision 163's comparison on the declaration
+    # and staged a v2 tree onto an install whose every DNA row is v1. The seed kind was covered
+    # by the DNA-rows rule; this is the kind decision 162 makes recurring.
+    # [M4.14 cycle 3, M414-C3-VOCAB-01]
+    "backend/tests/test_bundle_validation.py::test_a_declaration_that_contradicts_the_shipped_tree_is_refused_rather_than_preferred",
+    # And the sentence the same branch printed about a bundle that named one and shipped none:
+    # "it names nothing", over a report whose header carried the name.
+    # [M4.14 cycle 3, M414-C3-VOCAB-03]
+    "backend/tests/test_bundle_validation.py::test_a_bundle_that_names_a_vocabulary_and_ships_none_is_not_told_it_names_nothing",
+]
+
+[[requirement]]
+id = "data-rules-the-stored-report-is-the-whole-report"
+spec = "§10 (\"a planned admin event with a diff report\") + §6.6 Data"
+milestone = "M4.14"
+kind = "integration"
+what = "artifact_bundle.report as stored carries every finding the import produced, including the rebuild, swap and rebuild-set notes, and render() encodes to ASCII for both the fixture and a real bundle."
+why = "The row is INSERTed with report.as_dict() before the rebuild runs and nothing updates it: measured, the stored copy is missing exactly {rebuild, swap, rebuild-set}, so the database's record of §10's planned admin event says the rebuild was not performed. Once the Data tab polls rather than reading the response, the stored report is the only thing it can render. render() emits '·' and '✓' and raises on a cp1252 console, which CLAUDE.md forbids for output an ops script or a failing test will print."
+tests = [
+    "backend/tests/test_import_integration.py::test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_set",
+    "backend/tests/test_import_report.py::test_render_encodes_to_ascii",
+    "backend/tests/test_import_report.py::test_a_failure_renders_a_line_per_detail_key",
+    # The report is the SET of statements an import made: two readings of one file is the design,
+    # two report lines for one problem is not. [M4.14 cycle 1, M414-REV-247-04]
+    "backend/tests/test_import_report.py::test_one_statement_said_twice_is_one_finding",
+    # `_ASCII_FOLD`'s own claim, which the test above cannot make: it builds its report by hand,
+    # so it measures the frame and the two glyphs it was written with. The messages are the
+    # surface that grows, and sixty-odd of them are written in the house voice.
+    # [M4.14 cycle 3, m414-c3-rec-05]
+    "backend/tests/test_import_report.py::test_every_message_this_package_writes_folds_to_ascii",
+    # "and a real bundle" is the other half of this row's ASCII clause, and neither test above
+    # renders one: the three build their reports by hand and the first renders the fixture's. The
+    # corpus-gated pass is where a real report already exists, so the assertion goes there rather
+    # than a second corpus pass being written to hold one line. [M4.14 cycle 3, m414-c3-rec-06]
+    "backend/tests/test_bundle_validation.py::test_the_validator_reports_over_a_real_bundle",
+]
+
+[[requirement]]
+id = "platform-bundle-row-lifecycle-is-one-rule"
+spec = "§10 + §4.2 artifact_bundle + decision 249"
+milestone = "M4.14"
+kind = "integration"
+what = "There is one rule for deleting an artifact_bundle row and the schema enforces it: the active row cannot be deleted, nor can a staged or failed one that a title, placement, score, prior, fit or session still cites, and no delete can leave a title claiming a coordinate with no basis — a placed title with a NULL placement_bundle is rejected by a CHECK rather than counted as placed. The rule asks every table that can be citing the row rather than a list kept by hand."
+why = "0015 says it is 'the migration that makes them prunable' while the DDL gives three answers — session RESTRICTs even for an ended session, title_prior/user_score/title_placement CASCADE, title.placement_bundle and ledger_fit SET NULL. Reproduced: the delete was refused by session_bundle_version_fkey; with the session removed it emptied every score and prior while the title still read as placed, so §12's M2 exit-criterion index reported 0 unplaced owned titles for a title with no coordinate at all."
+tests = [
+    "backend/tests/test_schema_contracts.py::test_the_active_bundle_row_cannot_be_deleted",
+    "backend/tests/test_schema_contracts.py::test_a_superseded_bundle_row_cannot_be_deleted_either",
+    "backend/tests/test_schema_contracts.py::test_a_staged_or_failed_row_may_be_deleted",
+    "backend/tests/test_schema_contracts.py::test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check",
+    # Decision 249's hatch asserted its own premise rather than asking it: `staged` and `failed`
+    # "never became anybody's basis" is true of the rows this app makes and a hand-built row
+    # falsifies it - measured on a fresh 0001-0023 database, the DELETE came back as
+    # `title_placement_has_basis` or `session_bundle_version_fkey`, the two raw constraint names
+    # the rule exists to replace. The second test holds the function's six-table list against
+    # `pg_constraint`, because a seventh FK to `artifact_bundle` would reopen the hole in silence.
+    # [M4.14 cycle 4, m414-c4-dim249-01]
+    "backend/tests/test_schema_contracts.py::test_a_staged_or_failed_row_something_still_cites_is_refused_with_the_rule",
+    "backend/tests/test_schema_contracts.py::test_the_rule_asks_every_table_that_can_be_citing_the_row",
+    #
+    # The `what` above no longer says the rule "is stated in the migration that establishes it".
+    # Six tests hold the enforcement and nothing in the tree reads 0023's prose, so that clause
+    # was a claim about the record with no guard under it - on the one migration still editable in
+    # place, whose stating paragraph is the half a reviewer would cut as commentary. The prose
+    # stays in 0023, README and `docs/TESTING.md`; what comes out is this row's promise that
+    # something checks it. [M4.14 cycle 4, m414-c4-rec-06]
+]
+
+[[requirement]]
+id = "data-rules-a-models-only-import-loads-the-curated-ledgers-it-carries"
+spec = "§4.3 corrections_v1.tsv (\"travels with the bundle and is applied at every derive\") + decision 162 + decision 171 + decision 247"
+milestone = "M4.14"
+kind = "integration"
+what = "A models-only re-import loads the four curated ledgers the bundle carries — corrections_v1.tsv, seed_list.json, adjudications_v1.tsv and the axis TSVs — and loads none of the content tiers: no load_vocabulary term tables, no load_tags, no load_projected. A refreshed onboarding list shorter than the installed one replaces it rather than merging with its tail (three entries loaded over the fixture's eight leave three rows, not eight with positions 3-7 carrying the old ids). A seed_list entry naming a title this install never seeded is counted and skipped in the report rather than aborting the import on seed_list.title_id's NOT NULL FK; a present-but-empty adjudications ledger is refused rather than silently replacing the curated verdicts, and so is a present-but-empty onboarding list (decision 260), a present-but-empty axis TSV (decision 264, which is the accepted-but-empty file the other two guards' shape had no equivalent for) and a present-but-empty corrections ledger - four ledgers, four guards, and the fourth is the one the other three are argued from; an absent ledger file stays a warning that changes nothing, and so does a bundle that names a vocabulary it ships no dna_vocab/<version>/ tree for (decision 266) and one whose ledgers name a vocabulary this install has no dna_vocabulary row for (decision 265) - one line per skip, and nothing installed changes on either. The test says in its docstring that it asserts against a model bundle the test constructs, because no real one exists."
+why = "bundle.py's `if db is not None:` holds load_corrections, load_seed_list and load_vocabulary, so under decision 162 — where the only recurring bundle is models-only — none of them ever runs again. Reproduced three times independently: after a models-only import of a bundle whose corrections_v1.tsv, seed_list.json and adjudications differed, credit_correction / seed_list / dna_adjudication / dna_axis_weight were byte-for-byte unchanged, report.table_counts was {} and the report carried no line at all — while validate_id_partition had just read two of those same files off the same bundle. The importer inspects artifacts it then discards. load_seed_list upserts ON CONFLICT (position) with no preceding DELETE where load_corrections deletes for exactly the stated reason, and rate/queue.py:272,375 reads the whole table. Real volumes: corrections 6 rows, adjudications 828 (817 title-scoped), seed_list 100 entries."
+tests = [
+    "backend/tests/test_bundle_lifecycle.py::test_a_models_only_import_loads_the_curated_ledgers_and_no_content_tier",
+    "backend/tests/test_bundle_lifecycle.py::test_a_shorter_onboarding_list_replaces_the_old_one_rather_than_merging",
+    "backend/tests/test_bundle_lifecycle.py::test_a_seed_list_entry_naming_an_unknown_title_is_counted_and_skipped",
+    "backend/tests/test_dna_import.py::test_an_empty_adjudications_ledger_is_refused_rather_than_replacing_the_verdicts",
+    "backend/tests/test_dna_import.py::test_loading_the_corrections_ledger_twice_leaves_one_copy",
+    # The loader half of the same four ledgers, asserted where the rules live rather than only
+    # through an import. Decision 247's three guards are one test each -- the clear (C1), the
+    # skipped-and-counted unknown title id (guard 1) and the version the caller names (guard 3),
+    # with the empty-ledger refusal (guard 2) already named above -- and the last is the axis
+    # loader, which on a models-only bundle has no `load_vocabulary` run to hand it a facet set
+    # and has to read `dna_facet` itself. Each builds the files it asserts against, because no
+    # real model bundle exists: this milestone deliberately does not build that fixture.
+    "backend/tests/test_dna_import.py::test_a_shorter_onboarding_list_leaves_no_tail_of_the_old_one",
+    "backend/tests/test_dna_import.py::test_an_onboarding_entry_naming_an_unseeded_title_is_skipped_and_counted",
+    "backend/tests/test_dna_import.py::test_the_adjudications_ledger_is_written_under_the_version_the_caller_names",
+    "backend/tests/test_dna_import.py::test_the_axis_loader_reads_the_installed_facets_when_no_vocabulary_ran",
+    # Decision 260: guard 2 on the third DELETE-first ledger, which is the one this milestone put
+    # on the recurring path and the one that gained a DELETE here. [M4.14 cycle 1]
+    "backend/tests/test_dna_import.py::test_an_empty_onboarding_list_is_refused_rather_than_clearing_the_installed_one",
+    # Decision 261: the fourth ledger's clear. It was the one of the four with none, so a term
+    # the corpus removed kept its weight at a version decision 163 pins. [M4.14 cycle 1]
+    "backend/tests/test_dna_import.py::test_a_re_authored_axis_that_drops_a_term_drops_its_weight",
+    # The clause's other half, which nine tests that each ship the file they assert about could
+    # not hold: three of these loaders clear before they write, and what keeps omission
+    # non-destructive is three separate early returns in three functions (`load_corrections`,
+    # `load_seed_list`, and decision 261's per-facet DELETE inside `load_axes`'s accepted
+    # branch). Measured by moving each clear in front of its guard in turn: credit_correction
+    # 1 -> 0, seed_list 8 -> 0, dna_axis_weight 6 -> 0, every other test on this row still green.
+    # [M4.14 cycle 1, M414-REV-247-03]
+    "backend/tests/test_bundle_lifecycle.py::test_an_absent_curated_ledger_leaves_the_installed_rows_standing",
+    # Decision 264: the fourth ledger's guard 2, which is the one the count left out. The two
+    # paths that DECLINE a file continue before the write; the third - accepted, and parsing to
+    # no weight at all - was the one that wrote, and it cleared the facet behind a note claiming
+    # the axis had loaded. [M4.14 cycle 2]
+    "backend/tests/test_dna_import.py::test_an_axis_file_that_parses_to_no_weight_leaves_the_facets_weights_standing",
+    # Decisions 265 and 266: the two ways this branch can carry ledgers it must not load, both of
+    # them created by putting it on the recurring path. One says the install has no row for the
+    # vocabulary they name (dna_adjudication's FK has no parent, and only a content import could
+    # make one); the other says the bundle ships no tree for the vocabulary it declares, which is
+    # what decision 256's own remediation invites. [M4.14 cycle 2]
+    "backend/tests/test_bundle_lifecycle.py::test_curated_ledgers_naming_a_vocabulary_this_install_lacks_are_skipped_with_a_line",
+    "backend/tests/test_bundle_lifecycle.py::test_a_bundle_that_names_a_vocabulary_and_ships_no_tree_says_which_ledgers_it_skipped",
+    # What those four skip lines SAY, which the test above could only count. Every one of them
+    # was written for a seed, where the install holds nothing, and read as a statement about the
+    # install on the recurring path decision 247 put them on: "the first rating queue falls back
+    # to P(seen) ordering alone" over a table `rate/queue.py` still joins and still prints "seed
+    # list position N of M" from, and "the Map surface has no axes to plot" over six weights this
+    # import had just declined to touch - the sentence decision 266's own Cost paragraph names as
+    # "the same defect from the other side". And decision 260's guard tested what guard 1 LEFT
+    # rather than what parsed, so a list naming only titles this install never seeded got the
+    # empty-export sentence with the skipped count and the ids dropped.
+    # [M4.14 cycle 4, m414-c4-dim247-01, -02 and -04]
+    "backend/tests/test_dna_import.py::test_an_absent_curated_ledger_names_what_is_still_installed",
+    "backend/tests/test_dna_import.py::test_a_bundle_with_no_axis_file_says_which_weights_it_left_standing",
+    "backend/tests/test_dna_import.py::test_an_onboarding_list_of_unknown_ids_is_told_apart_from_an_empty_one",
+]
+
+[[requirement]]
+id = "platform-a-model-bundle-may-cover-titles-the-install-never-seeded"
+spec = "§10 + §4.3 backbone.npz (decision 162) + decision 248"
+milestone = "M4.14"
+kind = "integration"
+what = "A models-only bundle whose backbone covers corpus titles this install never seeded imports, with the count of ids the installed spine does not carry reported as a note rather than a refusal; an identity that disagrees with the installed title and an unparseable identity token stay failures; and a backbone that stops covering a title the ACTIVE backbone covered is refused, naming the titles. The test says in its docstring that it asserts against a model bundle the test constructs, because no real one exists."
+why = "validate.py's identity check fails on `absent` — any backbone row whose title_id is not in the installed spine. Under decision 162 the corpus keeps its own catalogue (sqlite_sequence title 21442 against the bundle's 19,071 exported) and a retrained backbone.npz covers whatever it has at export time, so the first retrained backbone is refused: reproduced as seed, then a model bundle with one extra corpus id -> refused. Rows for titles the install lacks are inert — Backbone lookups are by id and never reach them — while the merge the check exists for is visible on the rows that do match, and coverage that goes BACKWARDS is the observable that actually means a title was merged away. The M4.5 close-out records that the model re-import path has never run against a real model bundle; this is met on the first one."
+tests = [
+    "backend/tests/test_bundle_validation.py::test_an_identity_naming_a_title_the_spine_does_not_carry_is_a_counted_note",
+    "backend/tests/test_bundle_validation.py::test_an_identity_that_disagrees_with_the_spine_is_still_a_failure",
+    "backend/tests/test_bundle_validation.py::test_a_backbone_whose_identity_token_is_neither_form_is_still_a_failure",
+    "backend/tests/test_bundle_lifecycle.py::test_a_backbone_that_stops_covering_an_installed_bundle_title_is_refused",
 ]

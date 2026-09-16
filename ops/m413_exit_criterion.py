@@ -112,6 +112,7 @@ from spielplan.api import rate as rate_api  # noqa: E402
 from spielplan.core.config import settings  # noqa: E402
 from spielplan.db import migrate, pool  # noqa: E402
 from spielplan.importer import bundle as bundle_import  # noqa: E402
+from spielplan.importer import validate as validator  # noqa: E402
 from spielplan.ledger import observations, refit  # noqa: E402
 from spielplan.ledger.hyperparams import load as load_hp  # noqa: E402
 from spielplan.models.artifacts import ArtifactStore  # noqa: E402
@@ -346,7 +347,56 @@ def stage_models_only(source: Path, target: Path, version: str, spine: dict[int,
     )
     (artifacts / "backbone.npz").unlink()
     np.savez(artifacts / "backbone.npz", **arrays)
+    # BUNDLE.json was copied from the source above and this function then rewrote the tree
+    # underneath it, which M4.14 turned from a detail into three refusals: `_verify_bundle_files`
+    # hashes every file the manifest lists BEFORE a row is written, and the corpus's inventory
+    # lists 42 entries including both sqlite files. Staged models-only, that inventory reports
+    # `artifacts/backbone.npz` mismatched -- this harness rewrote it on purpose -- and
+    # `content.sqlite` and `reviews.sqlite` missing, which a models-only bundle is DEFINED by not
+    # carrying. Three findings the harness created, arriving on top of the stamp check 1 exists
+    # to measure. [M4.14 step B1]
+    _reinventory(target)
     return target
+
+
+def _reinventory(root: Path) -> None:
+    """Rewrite BUNDLE.json's `files` and `total_bytes` over the tree as it is now.
+
+    A bundle whose files are edited after the corpus wrote its manifest IS a bundle whose
+    inventory no longer describes it -- correctly, and that is the rule M4.14 added rather than
+    a rule to route around. What a harness owes in return is to re-state the inventory over the
+    tree it just built, so the check under test reports on its own subject. Everything the
+    staging declared -- `bundle_version`, `vocabulary_version`, `validations`, `tables` -- is left
+    exactly as it is: `compare_table_counts` returns early when nothing was loaded, so a
+    models-only bundle carrying the seed's `tables` block says nothing and is not this function's
+    to edit.
+
+    `validator._sha256` is reached through the module rather than re-implemented, for the reason
+    `pool._init_connection` and `reconcile._vocab_version` are reached below: a harness measures
+    what the app does, and a second digest written here would be a second answer.
+    `backend/tests/fixtures/make_bundle.reinventory` and `ops/m414_exit_criterion._reinventory`
+    do the same thing for the fixture and for M4.14's refusal probes; this is neither of them,
+    because an ops script must not import the test fixtures it is meant to be independent of and
+    must not import a sibling criterion's private helper. [M4.14 step B1]
+    """
+    path = root / "BUNDLE.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    files: dict[str, dict[str, Any]] = {}
+    total = 0
+    for entry in sorted(root.rglob("*")):
+        if not entry.is_file():
+            continue
+        name = entry.relative_to(root).as_posix()
+        if name == "BUNDLE.json":
+            # The corpus writes the manifest last, over the tree it just described, so it is the
+            # one file never listed in its own `files` map.
+            continue
+        size = entry.stat().st_size
+        files[name] = {"bytes": size, "sha256": validator._sha256(entry)}
+        total += size
+    manifest["files"] = files
+    manifest["total_bytes"] = total
+    path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def discard_staging(data_root: Path | None, stores: list[ArtifactStore]) -> None:

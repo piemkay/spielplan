@@ -669,7 +669,12 @@ async def test_a_restored_install_refuses_a_second_content_seed(db, tmp_path, em
         ),
         refusal,
     )
-    assert [f.rule for f in refusal.failures] == ["seed-once"]
+    # Two rules now, and the second one is decision 256's: the restored install carries a DNA
+    # vocabulary and this Bundle declares none, which M4.14 made a refusal rather than a silent
+    # `or "v1"`. Listed rather than filtered, because an extra refusal appearing here is
+    # something a reader should be made to look at -- `seed-once` is this test's subject and the
+    # exactness is what keeps a third rule from arriving unnoticed. [M4.14 decision 256]
+    assert [f.rule for f in refusal.failures] == ["seed-once", "vocabulary-migration"]
 
     # Seeded, not *active*: the archive carries rows, never the artifacts tree. An 'active' row
     # naming a version with no files under /data/artifacts is `ArtifactStore.load_active`'s

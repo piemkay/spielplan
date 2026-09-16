@@ -108,6 +108,94 @@ def test_the_grace_period_guard_sees_the_argument_it_was_written_for():
     assert GRACE_EXCLUSION not in reason
 
 
+# --- the bundle import job's own budget ----------------------------------------------------
+
+# The measurement the registry entry has to be argued from: the seconds
+# `ops/m414_exit_criterion.py` recorded for the JOB, in all three runs, and the number
+# `docs/TESTING.md` carries. Required verbatim for `GRACE_EXCLUSION`'s reason - what a reader
+# needs is the fact stated, and a banned phrase would only forbid one spelling of arguing the
+# budget against a number this milestone superseded. [M4.14 cycle 4, m414-c4-waveE-03]
+IMPORT_JOB_MEASUREMENT = "213"
+
+WORKER = Path(__file__).resolve().parents[1] / "spielplan" / "worker.py"
+
+_GRACE_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def _seconds(value: str) -> float:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([smh])", value.strip())
+    assert match, f"a stop_grace_period this guard cannot read: {value!r}"
+    return float(match.group(1)) * _GRACE_UNITS[match.group(2)]
+
+
+def _registry_reason(source: str, entry: str) -> str:
+    """The comment block immediately above one `Job(...)` row in `worker.py`'s registry."""
+    lines = source.splitlines()
+    at = next((i for i, line in enumerate(lines) if line.strip().startswith(f"Job({entry}")), None)
+    assert at is not None, f"no `Job({entry}` row in worker.py's registry"
+    reason: list[str] = []
+    for line in reversed(lines[:at]):
+        if not line.strip().startswith("#"):
+            break
+        reason.append(line.strip().lstrip("#").strip())
+    return " ".join(reversed(reason))
+
+
+def test_the_bundle_imports_budget_is_argued_from_the_job_it_bounds():
+    """The same defect as the grace period above, one file over: a stated reason and an actual
+    effect that had come apart.
+
+    The registry entry argued "300 s is 2.4x the 127 s measured on the real bundle". 127 s is
+    M4.5's measurement of the work INSIDE THE REQUEST; the job this budget bounds is M4.14's,
+    which `ops/m414_exit_criterion.py` measured at 213 s from the press in all three recorded
+    runs. So the real margin is about 1.4x, not 2.4x, and a box a third slower than the reference
+    one cannot finish an import at all: `_tick` cancels at the budget, the staged tree is
+    dropped, `_reap_abandoned_import` closes the row, and the retry reproduces it exactly.
+
+    The number itself does not move, and the first assertion is why: it is PINNED to the worker's
+    `stop_grace_period` rather than sized against a measurement, because a budget past the grace
+    would promise time `docker compose stop` takes away. Plan step E2 asks for both "generously
+    above the measured" and "honour the stop grace"; with the grace at 5m only the second is
+    available, and the grace is M4.7's to change. A maintainer reading the entry has to be able to
+    see which of the two it is. [M4.14 cycle 4, m414-c4-waveE-03]
+    """
+    from spielplan import worker
+
+    worker_block = _service(COMPOSE.read_text(encoding="utf-8"), "worker")
+    grace = _seconds(worker_block.split("stop_grace_period:")[1].splitlines()[0])
+    assert grace == worker.BUNDLE_IMPORT_TIMEOUT, (
+        f"the registry argues this budget as the worker's stop_grace_period, which is {grace:g}s "
+        f"while BUNDLE_IMPORT_TIMEOUT is {worker.BUNDLE_IMPORT_TIMEOUT:g}s"
+    )
+
+    reason = _registry_reason(WORKER.read_text(encoding="utf-8"), "BUNDLE_IMPORT_JOB")
+    assert reason, "the bundle import job declares a timeout and argues nothing"
+    assert "stop_grace_period" in reason, (
+        "the budget is pinned to the stop grace rather than chosen for margin, and the entry has "
+        "to say so: " + reason
+    )
+    assert IMPORT_JOB_MEASUREMENT in reason, (
+        f'the entry must argue this budget against the {IMPORT_JOB_MEASUREMENT}s this milestone '
+        f"measured for the JOB, not against a number measured for work that is no longer in it: "
+        + reason
+    )
+
+
+def test_the_import_budget_guard_sees_the_argument_it_was_written_for():
+    """The synthetic violation is the historical one, the way the grace-period guard's is: the
+    sentence this finding replaced, which argued a 2.4x margin over a superseded measurement."""
+    historical = (
+        "    # 300 s is 2.4x the 127 s measured on the real bundle, and it is also this service's\n"
+        "    # `stop_grace_period` in `docker-compose.yml` - a budget past the grace would promise\n"
+        "    # time that `docker compose stop` takes away.\n"
+        "    Job(BUNDLE_IMPORT_JOB, \"M0\", \"admin action\", \"minutes\", _bundle_import,\n"
+    )
+    reason = _registry_reason(historical, "BUNDLE_IMPORT_JOB")
+    assert reason, "the self-test's own comment block was not read"
+    assert "stop_grace_period" in reason, "the historical comment did make the pin claim"
+    assert IMPORT_JOB_MEASUREMENT not in reason
+
+
 # --- the image's own install tree ---------------------------------------------------------
 
 # `chown`'s first argument is the owner and `chmod`'s is the mode; everything after is a target.

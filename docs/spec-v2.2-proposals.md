@@ -4258,6 +4258,795 @@ honesty the milestone owes a corpus author who reads the normative document rath
 
 ---
 
+## Decisions taken (owner, 2026-09-12, as M4.14 opened)
+
+Thirteen, taken under the owner's standing instruction to take each plan's recommended option and
+record it here rather than ask. M4.14 is the bundle-import milestone — the 127-second import taken
+off the backend's event loop and into M4.7's job registry, and every way the importer can refuse,
+crash or half-write turned into a named line in the report §10 promises. Three of these are the
+owner decisions `docs/milestones/M4.14-plan.md` §3 puts rather than settles inside a diff — and
+one of the three, 248, is offered there with no option marked, so it is settled by what the
+milestone's own exit criterion and its "deliberately does not do" list imply, and says so. Four
+more settle questions the plan opens elsewhere without a recommendation. The last six correct a
+premise the plan has outgrown: a migration number, two states the tree has grown since the plan
+was written, a harness, a frontend boundary this lane shares with M4.15, and a §12 row. M4.15 is
+being built in parallel in another worktree and holds 267-286, which is why this block stops at
+259 rather than running on. Thirteen is what this SITTING took, not what the milestone took: three
+review cycles sit under headings of their own below, carrying 260-266 and then 287, and a reader
+who stops here meets none of them.
+
+### 247. A models-only import loads the four curated ledgers, with decision 171's three guards
+
+**What the spec says.** §4.3 lists `corrections_v1.tsv` beside `dna_vocab/v1/` and says it "travels
+with the bundle and is applied at every derive, §8 stage 3". Decision 162 makes content seed once
+and models re-import, so the models-only bundle is the only kind that will ever arrive again.
+Decision 171 already ruled this question and deferred the work to the milestone that owns the
+loader.
+
+**Why it changes.** `importer/bundle.py:655` opens `if db is not None:` — the content branch — and
+`load_vocabulary`, `load_tags`, `load_projected`, `load_corrections` and `load_seed_list` are all
+inside it. Under decision 162 that branch runs exactly once in the life of an install, so "applied
+at every derive" and "applied exactly once, ever" have become the same code. Reproduced three times
+independently: after a models-only import of a bundle whose `corrections_v1.tsv`, `seed_list.json`
+and adjudications all differed from the installed ones, `credit_correction`, `seed_list`,
+`dna_adjudication` and `dna_axis_weight` were byte-for-byte unchanged, `report.table_counts` was
+`{}` and the report carried no line at all — while `validate_id_partition` had just read two of
+those same files off that same bundle and discarded them. The importer inspects artifacts it then
+throws away, and tells the operator nothing about either.
+
+**The decision.** Option (A), as decision 171 already ruled: `corrections_v1.tsv`, `seed_list.json`,
+`adjudications_v1.tsv` and the axis TSVs load on every import, models-only included, from one
+function called once OUTSIDE the `if db is not None:` block. Never `load_vocabulary`'s term tables,
+never `load_tags`, never `load_projected` — those are the content tiers decision 162 forbids
+re-importing, and their loaders are `ON CONFLICT DO NOTHING` besides. Three guards travel with the
+ruling and are part of this milestone rather than follow-up work. (1) `load_seed_list` DELETEs the
+table first and then skips — and counts in the report — any entry naming a title this install never
+seeded, because `seed_list.title_id` is a NOT NULL FK to `title(id)` and one unknown id aborts the
+whole import. (2) `_load_adjudications` gains the "parses to nothing, do not replace" guard
+`load_corrections` already carries, so a present-but-empty ledger cannot silently wipe 828 curated
+verdicts. (3) The version the ledgers are written under is the install's ACTIVE `dna_vocabulary`
+version when the bundle names none, never `bundle.py:662`'s `or "v1"` literal. An absent ledger file
+stays a warning that changes nothing: omission must never be destructive.
+
+**Cost.** The load path gains a branch that runs on a bundle carrying no content, which is the
+branch decision 162 makes the common case rather than the exception — so the risk is the reverse of
+the usual one: it is the seed path, run once, that now shares a function with the path run every
+time. The DELETE in guard (1) has to land before the model path calls `load_seed_list` at all, or a
+models-only import ships a merge of two onboarding lists — `load_seed_list` upserts `ON CONFLICT
+(position)` with no preceding DELETE where `load_corrections` deletes for exactly this reason, and
+`rate/queue.py` reads the whole table. Real volumes are small (corrections 6 rows, adjudications
+828, of which 817 are title-scoped, `seed_list` 100 entries), so nothing here is a performance
+question; it is a correctness one about which ledger the household is actually rated against.
+`dna.parse_corrections` is called from `validate()` for either bundle kind in the same change, so
+the header check happens before staging rather than after.
+
+### 248. An uncovered corpus id is a note; coverage that goes backwards is the refusal
+
+**What the spec says.** §10's invariant and §4.3's `backbone.npz`; decision 162 ("the corpus supplies
+trained models, movie data is seeded once, every later title is acquired by Spielplan"); the M4.5
+row `platform-model-bundle-identity-is-checked-not-trusted`, which promises the importer "fails the
+bundle when an id's identity disagrees, naming the title".
+
+**Why it changes.** `validate.py`'s identity check fails on `absent` — any backbone row whose
+`title_id` is not in the installed spine — as well as on `mismatched` and `unparsed`. Under decision
+162 the corpus keeps its own catalogue and goes on growing it: measured, `sqlite_sequence` names
+title 21442 against the 19,071 titles the bundle exported, so a retrained `backbone.npz` covers
+whatever the corpus has at export time. Reproduced as a seed followed by a model bundle carrying one
+extra corpus id: refused. That is the FIRST retrained backbone, refused for being newer than the
+install — the exact event decision 162 says will be the only recurring one.
+
+**The decision.** The corpus's catalogue is not frozen at export time. On a models-only bundle
+`absent` becomes a note carrying the count; `mismatched` and `unparsed` stay failures; and the
+reverse check is added and IS the refusal — every installed `origin='bundle'` title the ACTIVE
+backbone covers must still be covered by the new one, named when it is not. The plan offers this
+without marking a recommendation, so it is settled by what the milestone's own §8 implies: "making
+the two projects agree on one contract is a corpus-side conversation, not a Spielplan diff", which
+is precisely what the alternative — `mdc export-bundle` taking an id list from the install — would
+require.
+
+**Cost.** Rows for titles the install lacks are inert, because `Backbone` lookups are by id and never
+reach them; what the check exists to catch, a corpus that MERGED two titles, is still visible on the
+rows that do match, and decisively on coverage that goes backwards, which is what a merge actually
+looks like from inside the install. This rewrites a REGISTERED test, so it must precede the code:
+`test_an_identity_naming_a_title_the_spine_does_not_carry_is_refused` changes meaning and the
+`platform-model-bundle-identity-is-checked-not-trusted` row's `what` sentence changes with it, in
+the same commit, because renaming or re-pointing a registered test breaks the build by design. The
+stale comment at `validate.py:666-668` ("No bundle the corpus has ever built carries the array") is
+corrected in the same diff: what is true is that the export has not been re-run, not that
+`mdc export-bundle` cannot write it — `movie_data_curator@3666eaa` does. And since no real model
+bundle exists, the test asserts against one it constructs, and says so in its docstring (§8).
+
+### 249. `artifact_bundle` rows are provenance and are never deleted
+
+**What the spec says.** §4.2 lists `artifact_bundle(version, imported_at, manifest jsonb)` under §10,
+and §10 makes bundle import "a planned admin event with a diff report — never a silent sync".
+`0015_seed.sql:131-135` calls itself "the migration that makes them prunable".
+
+**Why it changes.** Nothing prunes today — there is no `DELETE FROM artifact_bundle` anywhere in the
+tree — and the DDL gives three different answers about what a prune would mean: `session` RESTRICTs
+even for an ended session, `title_prior` / `user_score` / `title_placement` CASCADE, and
+`title.placement_bundle` and `ledger_fit.bundle_version` SET NULL. Reproduced: the DELETE was refused
+by `session_bundle_version_fkey` both during and after a session; with the session row removed by
+hand it emptied every score and prior and left a title at `placement='cold_tower'` with
+`placement_bundle = NULL` — so `title_unplaced_owned` (`0008_placement.sql:64`), which is §12's M2
+exit-criterion index, reported 0 unplaced owned titles for a title with no coordinate at all. A rule
+that has never run is a rule nobody has had to be right about.
+
+**The decision.** The plan's recommended option: never deleted. A `BEFORE DELETE` trigger on
+`artifact_bundle` RAISEs unless `state IN ('staged','failed')` *and nothing still cites the version*
+— no title, placement, score, prior, fit or session — with `user_vector`'s SET NULL kept as
+the documented exception (decision 162's reasoning: `label_count` is vocabulary-independent and
+expensive to recover). The second half is this ruling's own premise, asked rather than assumed:
+those two states are deletable because they never became anybody's basis, which is true of every row
+this app writes and which a row made by hand at a psql prompt falsifies — measured on a fresh
+0001-0023 database, a title at the `placement_bundle` of a `failed` row brought the DELETE back as
+`title_placement_has_basis` and a session citing a `staged` row as `session_bundle_version_fkey`,
+which are the two raw constraint names the paragraph above names as the defect. The test is in the
+function body rather than the trigger's `WHEN` clause because a `WHEN` clause may not contain a
+subquery ("cannot use subquery in trigger WHEN condition"), and a `WHEN` that reads only `OLD.state`
+is exactly the assumption being replaced. [corrected M4.14 cycle 4, m414-c4-dim249-01]
+`session.bundle_version` keeps its NOT NULL and its RESTRICT. The placement
+hole closes in the same migration: `UPDATE title SET placement='unplaced', placement_at=NULL WHERE
+placement_bundle IS NULL AND placement <> 'unplaced'`, then `ALTER TABLE title ADD CONSTRAINT
+title_placement_has_basis CHECK ((placement = 'unplaced') = (placement_bundle IS NULL))`.
+
+**Cost.** One migration, `0023_import_state.sql` (decision 250), with the rule stated in its header
+and repeated in README and `docs/TESTING.md` — because a rule the schema enforces and no prose
+states is a rule the next operator meets as an error message. `test_schema_contracts.py` gains the
+enforcement tests. The prerequisite the plan names is ALREADY SATISFIED and must be verified rather
+than re-done: `backup/movie_data.py`'s `DROPPED_COLUMNS` already carries `placement_bundle`,
+`placement` and `placement_at`, so a restored archive satisfies the CHECK by arriving with every
+title unplaced. What the CHECK costs is that any fixture or test which stamps `placement` without a
+`placement_bundle` now fails at the INSERT — which is the point, since that is the state the
+reproduction produced, and `placement/reconcile.py` already writes both columns together in all
+three of its statements. Nothing in the tree writes `staged` or `failed` at all — the importer
+INSERTs `validated` inside the transaction that flips (decision 253) and a failed import rolls that
+row back with everything else — so the hatch costs an operator at a psql prompt one more error
+message and buys the state a later milestone may start writing a rule that is already right.
+[M4.14 cycle 4, m414-c4-dim249-02]
+
+### 250. The migration number is 0023, not the plan's 0016
+
+**What the spec says.** CLAUDE.md: "Never edit an applied migration (`backend/migrations/NNNN_*.sql`
+— sha256-checksummed; a mismatch is a hard startup error). Add a new numbered file."
+`docs/milestones/M4.14-plan.md` §5 says "write this file as `0016_*.sql`, assign its real number at
+merge". `ROADMAP-to-M5.md`'s migration ledger allocates a number per milestone.
+
+**Why it changes.** The plan was written when `0016` was the next free number and it says so in
+terms, naming M4.7 as another claimant. Six migrations have landed since — `0016_users.sql`,
+`0017_ops.sql`, `0018_read_layer.sql`, `0020_jellyfin_items.sql`, `0021_tonight_reserved_slot.sql`
+and `0022_model_basis.sql` — so the plan's instruction is stale against the tree, and the roadmap's
+ledger is binding over any plan's notion of "the next free number".
+
+**The decision.** `0023_import_state.sql`, the number the roadmap's ledger allocates to M4.14.
+`0016-0018` and `0020-0022` are applied and sha256-checksummed in this lane's database and none may
+be edited. `0019` was allocated to M4.10, which needed no schema, and was deliberately never written
+— it must NOT be reused, because the ledger keeps mapping a number to the milestone that owns it.
+`0024` is reserved for M4.16 and is not taken here.
+
+**Cost.** A gap in the sequence, which `db/migrate.py` does not care about: it keys
+`schema_migration` on the filename stem and errors only on a checksum change for the same stem, so
+the runner sorts a glob and a missing number costs nothing. Taking the allocated number now is free;
+renaming one later is not, because a file already applied to a development database silently re-runs
+under its new name and dies on the first `CREATE TABLE`. The migration's header states its number's
+provenance — the roadmap ledger and this decision — beside decision 249's rule, and
+`test_migrations.py`'s checksum enumeration and the PGlite schema tests are re-run immediately after
+it lands.
+
+### 251. `cold_tower.pt`, `feature_contract.json` and `backbone.npz` are validation failures when absent, on both bundle kinds
+
+**What the spec says.** §10 step 4 runs the rebuild set on every import — "user fold-in vectors,
+per-label-count blend weights, a full Ledger MAP refit, Cold Tower re-placement of every app-acquired
+title (feature vectors rebuilt from the staged bundle's feature contract)". §4.3 names all three
+files in `artifacts/`. The plan's B6 asks whether an absent `backbone.npz` should fail alongside the
+tower and the contract, and says to record the answer in the function rather than leave it implicit.
+
+**Why it changes.** The three files are "optional" to `validate` and mandatory to the rebuild, which
+means the operator reads `ok` and is refused after they have committed. `reconcile.py:382`'s
+`FeatureContract.from_store` is unconditional, so a missing contract is always a `ContractError` and
+therefore a 500; `load_tower` at `reconcile.py:407` sits inside `if ids:`, which on a real import is
+always non-empty because `titles_needing_placement` scope `'reimport'` adds every `origin='acquired'`
+title. `backbone.npz` is the same shape one layer up: `_rebuild_ledger_refit` composes the basis
+through `backbone.load_for(store)`, and an absent array fits every board from `zero_embeddings` —
+the e(t)=0 defect M4.13 spent a milestone on. A models-only bundle with no `backbone.npz` carries no
+models at all, which is not a bundle.
+
+**The decision.** All three fail. `validate._validate_model_artifacts` reports
+`report.fail('cold-tower', ...)`, `report.fail('feature-contract', ...)` and
+`report.fail('backbone', ...)` when the file is absent, on a seed and on a models-only bundle alike.
+`BUNDLE_FILES`' `required` flags in `models/artifacts.py` are NOT touched: they feed the Data tab's
+`missing_required` summary and mean something different — what the operator is told is missing, not
+what the importer refuses to proceed without.
+
+**Cost.** A fixture or test that builds a deliberately incomplete `artifacts/` directory now gets a
+failure where it used to get a warn; expect churn in `test_bundle_validation.py`'s artifact cases,
+and fix them rather than relaxing the rule — a warn that is followed by a 500 is not a softer
+refusal, it is a later one. The `data-rules-validation-reports-rather-than-raises` amendment names
+the tower and the contract; the backbone case is asserted in the same file.
+
+### 252. The Cold Tower is constructed in a one-shot subprocess, and the validate route stays synchronous
+
+**What the spec says.** §1's hard constraint is a 4 vCPU / 6-8 GB GPU-less box that also runs
+Postgres. §10 makes validate the decision point; `validate_for_install`'s own docstring says "every
+refusal an import can raise has to be reachable here — otherwise the operator reads ok and is
+refused after they have committed."
+
+**Why it changes.** The plan's E7 says this one does not need the owner but leaves two options —
+move the construction into the worker-side validation, or run it in a one-shot process pool — and
+the exit criterion decides it. Measure 1 is "POST /import wall time < 5 s" and measure 2 is
+"/api/health answers every second, each under 5 s, throughout"; both are about the API process, and
+the first option would make `POST /validate` stop performing a check the function's own docstring
+says must be reachable there. Measured in this worktree's venv (torch **2.13.0+cpu**, the version
+actually installed): importing torch costs **~1.05 s** in three fresh processes (1.040 / 1.011 /
+1.096), and the API process's working set goes 61 -> 222 MB and gains another 36 MB after one 512-row
+forward pass. The thread half of this paragraph as first written — `tower.py:101`'s
+`torch.set_num_threads(min(4, cpu_count))` claiming a global four-thread pool inside the API process
+— is **not true of this tree** and was carried over from `M4.14-plan.md:379` rather than re-derived:
+M4.7's decision 181 already replaced that body with `tower_threads()`, `max(1, min(2, cpu_count //
+2))`, before M4.14 opened. Only the resident-set half of the motivation stands, and it is enough for
+the ruling below. [corrected M4.14 cycle 1, M414-C1-REC-06]
+
+**The decision.** `concurrent.futures.ProcessPoolExecutor(max_workers=1)` with intra-op threads set
+to 2 inside the child, awaited from the route through `loop.run_in_executor`. The validate route
+stays synchronous — it is 1.0 s and the operator is standing in front of it — and the report line
+stays exactly where it is.
+
+**Cost.** The child is spawned per validate call and torn down with it, so the API process's resident
+set does not grow and its thread pool is not claimed; the price is process-spawn latency on a route
+that already takes a second. Windows spawn semantics mean the callable must be importable at module
+level rather than a closure, which is a real constraint on how the check is written. If the pool
+cannot start at all, the report carries a warn naming the reason rather than the route 500ing: a
+validate that cannot run one check must still enumerate the rest, which is the whole argument of the
+`data-rules-validation-reports-rather-than-raises` row.
+
+**NOT BUILT IN M4.14, and this is the record of it.** No `ProcessPoolExecutor`,
+`run_in_executor` or `max_workers` exists anywhere in `backend/spielplan`, `ops` or
+`backend/tests`: `validate._validate_model_artifacts` imports and calls `load_tower` inline, on the
+API process's event-loop thread, reached from `async def validate_bundle`. The half of this decision
+that DID ship is the one the exit criterion turns on — the validate route stayed synchronous and the
+report line stayed where it is. The half that did not is the child process. The reason is scope
+rather than judgement: its only seam is four call frames inside `importer/validate.py`, and the wave
+that owned the route did not own that file.
+
+What the residue measures, against the real `v20260828` inside an asyncio loop carrying a 1 Hz
+sampler on the same loop: `validate_artifacts` (the torch import plus `load_tower`) 1.20-1.23 s
+straight-line, `_verify_bundle_files` (42 files, 1.04 GB) 1.77 s, ~2.97 s combined, worst sampler gap
+3.97 s against `app._HEALTH_TIMEOUT_S = 2`. So `POST /validate` does block the loop past the health
+timeout, and about 1.2 s of the ~3.0 s is the piece this decision would have moved into a child; the
+rest is M4.14's own hash pass, which it never would have. `docs/TESTING.md`'s M4.14 paragraph,
+`ops/m414_exit_criterion.py`'s check 9 and `api/artifacts.py::import_bundle`'s docstring each stated
+the gap, and check 9 was red in every run recorded before cycle 4. Docker's HEALTHCHECK is
+`--interval=30s --timeout=5s --retries=5`, so a ~4 s window cannot mark the backend unhealthy; that
+bounds the operational cost and is not a reason the record may assert a construction that does not
+exist. [M4.14 cycle 1, M414-C1-REC-01 and M414-C1-REC-06]
+
+**The residue is closed, and the child process is not what closed it: see decision 287.** The
+paragraph above stays because the construction this section rules on is still absent — there is no
+`ProcessPoolExecutor` anywhere in `backend/spielplan`, and
+`test_decision_252_does_not_assert_a_subprocess_this_tree_does_not_have` ties the two together in
+both directions. What changed in cycle 4 is only the disposition of the residue: it was offered to
+"the next milestone that touches `importer/validate.py`", and the owner took it here instead.
+Decision 287 supersedes the subprocess half of the ruling above with one `await
+asyncio.to_thread(validate, …)` at `validate_for_install`'s single call site, and keeps the other
+half — the validate route stays synchronous from the operator's side — exactly as this section
+states it. [M4.14 cycle 4, decision 287]
+
+### 253. Wave E adds no schema: `job_run` carries the phase and `artifact_bundle` stays exactly as it is
+
+**What the spec says.** §5.3 files "Bundle import validation + hot swap" as an admin-triggered job
+with a minutes budget. §10 fixes the swap sequence: validate, stage, recompute against the staged
+bundle, transactionally flip. `perf-02`'s published mitigation proposes a new `artifact_bundle` state
+`'importing'` behind a widened CHECK.
+
+**Why it changes.** Verified against the current tree, two reasons, and both are fatal to the
+published mitigation. `artifact_bundle.kind` is NOT NULL DEFAULT `'seed'` under the partial unique
+index `artifact_bundle_one_seed` (`0015_seed.sql:105-121`), so a placeholder row inserted for a seed
+import that has not yet succeeded claims the one-and-only seed slot — permanently, and a failed
+attempt can then never be retried. And `placement.assert_staged` (`reconcile.py:520-533`) requires
+`state IN ('validated','active')` before it will rebuild, so a new state would have to widen that
+too. Meanwhile M4.7 shipped `job_run` (`0017_ops.sql:46`) and `worker.py` already carries
+`Job('bundle-import', 'M0', 'admin action', 'minutes', owner='spielplan.importer.bundle')` with no
+`run` — a pointer this milestone converts into a runner.
+
+**The decision.** No. `POST /api/admin/bundle/import` validates, enqueues an M4.7 `job_run` naming
+the bundle path and the version, and returns 202 with the version and the job id. It inserts NO
+`artifact_bundle` row. The row stays exactly where it is — written inside the transaction at
+`state='validated'`, flipped to `'active'` — and the `job_run` row carries the phase. No migration
+for Wave E.
+
+**Cost.** A published mitigation is contradicted on purpose, so the E1 comment says so and cites this
+decision: a reviewer reading `perf-02` must find the refusal in the code rather than file the finding
+again. `GET /api/admin/bundle/state` grows the running job's phase and its stored report, which is
+why C4 — the UPDATE that writes the whole report onto the row after the rebuild — has to land before
+Wave E: once the Data tab polls rather than reading the response, the stored report is the only thing
+it can render, and today the stored copy is missing exactly `{rebuild, swap, rebuild-set}`.
+
+### 254. This lane fixes one svelte-check error and expects the run to end at 27, not 0
+
+**What the spec says.** CLAUDE.md: "Frontend: Svelte 5 runes, JS not TS", and "Diffs are surgical:
+every changed line traces to the request."
+
+**Why it changes.** `npm --prefix frontend run check` reports 28 errors, and M4.15 — being built in
+parallel in another worktree — has a green run as part of its exit criterion. The 28 split by file:
+14 in `src/lib/api.test.js`, 12 in `src/lib/passkeys.js`, 1 in `vite.config.js`, and 1 in
+`src/routes/admin/data/+page.svelte` ("Block-scoped variable '$state' used before its declaration",
+line 14, where a module-local `let state = $state(null)` shadows the rune). That last file is one of
+this milestone's principal files — D3 renders the broken-install branch in it — so the error inside
+it is this lane's, and the other three files are the sibling's.
+
+**The decision.** Exactly one: `frontend/src/routes/admin/data/+page.svelte:14`, fixed by renaming
+the module-local `state` so it no longer shadows the rune, and updating its readers in that file and
+its template. The other 27 are not touched. M4.15's principal files are off-limits to this lane
+entirely: `+layout.svelte`, `+layout.js`, `app.html`, `service-worker.js`, `design.css`, `api.js`,
+`session.svelte.js`, `NavRail.svelte`, `AccountChip.svelte`, `fonts.css`, `frontend/package.json`,
+`.github/workflows/ci.yml`.
+
+**Cost.** Every later agent on this branch should expect `npm --prefix frontend run check` to print
+27 errors rather than 0, and must not read that as a regression or "helpfully" clear the rest: a lane
+that fixed all 28 would collide with the sibling in four files and make both branches unmergeable.
+Say the number in the stage report, every time, so the next reader does not re-derive it.
+
+### 255. `ops/m414_exit_criterion.py` drives the ASGI app and pumps the worker tick, and refuses the fixture
+
+**What the spec says.** `docs/TESTING.md` publishes each milestone's measured numbers and CLAUDE.md
+sends the next reader there "rather than assuming status". `ops/m45_exit_criterion.py` calls
+`import_bundle` directly on an asyncpg connection.
+
+**Why it changes.** This criterion's measures are HTTP-shaped and worker-shaped: POST wall time under
+5 s, `/api/health` answering every second throughout, the `/state` phase sequence
+`queued -> running -> active`, a client that disconnects at 5 s changing nothing. None of those is
+observable from a direct call to `import_bundle`. The M4.5 close-out's own lesson applies — three of
+its four failures were the harness rather than the app — and one trap is already named: without
+`db/pool._init_connection`, `title_meta.payload` dies with "expected str, got dict".
+
+**The decision.** It drives the real app over `httpx.ASGITransport` with an admin session and pumps
+`worker._tick`, on its own scratch database created and dropped by the script, and it refuses to run
+on the fixture for the same reason M4.5's does. It builds its own archive —
+`tar -C <CORPUS_BUNDLE_DIR>/.. -cf v20260828.tar v20260828`, about 1.04 GB, minutes — rather than
+pointing at the directory, because half of what this milestone fixes is in `_unpack` and the `.tar` /
+`.tar.zst` path has no test at any layer. It connects through `db/pool._init_connection`, never a
+bare `asyncpg.connect`. It imports `ops/m45_exit_criterion.py`'s helpers rather than editing that
+file, so M4.5's recorded 18/18 stays reproducible unchanged.
+
+**Cost.** It becomes the EIGHTH `ops/m*_exit_criterion.py`, so the five `assert len(EXIT_SCRIPTS) ==
+7` sites in `test_static_contracts.py` become 8 and the comment block above `EXIT_SCRIPTS` gains its
+paragraph. It must satisfy that file's guards, which bind the new script the moment it is named: no
+printed literal outside cp850 (the corpus's em-dashed finding messages and any real title name it
+prints are escaped), no `check()` predicate that is settled before the run, a computed terminal
+verdict, nothing that can fail between `CREATE DATABASE` and the block whose `finally` drops it, an
+`except Exception` around the measurement that reports rather than propagates, and both arms on every
+numbered heading. Building the archive costs minutes and about a gigabyte of scratch disk per run,
+which is the price of exercising the door the operator actually uses.
+
+**Correction: two of those six bind `m45` alone.** The scratch-database window guard
+(`test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it`) and the
+measurement-block guard (`test_the_m45_script_reports_a_failure_inside_its_measurement_block`) each
+read one hard-coded `ops/m45_exit_criterion.py`, unlike the five guards that
+iterate `EXIT_SCRIPTS` and that this milestone moved from 7 to 8. They are not widened here, and
+deliberately: the coverage row `platform-exit-scripts-can-report-their-own-failure` scopes the first
+of them to "the M4.5 script" in writing, and iterating `EXIT_SCRIPTS` would go red on the already
+merged `ops/m412_exit_criterion.py`, which strands two statements between its CREATE and its DROP.
+`ops/m414_exit_criterion.py` satisfies both rules, verified by running
+`_statements_between_create_and_drop` over all eight scripts (it returns `[]` for m414) and by the
+argued comment above its own `try`; that verification is BY HAND, and this sentence is what records
+it. [M4.14 cycle 1, M414-C1-REC-04]
+
+### 256. A bundle that declares no vocabulary version into an install that has one is refused
+
+**What the spec says.** §4.3: `dna_vocab/<version>/`. Decision 163: a vocabulary change is a
+migration, not an import, and a bundle carrying a different vocabulary is refused rather than
+activated. §10 promises a migration report carrying the "vocabulary version".
+
+**Why it changes.** Confirmed against the real `v20260828`: its sixteen top-level `BUNDLE.json` keys
+contain no vocabulary key at all, so decision 163's refusal rests entirely on a `dna_vocab/`
+directory listing — and decision 162 narrows every future re-import to a models-only bundle,
+precisely the kind least likely to ship that tree. Omit it and the version resolves to `None`, the
+refusal is skipped, `validate` emits a warning, and a v2-trained backbone lands on a v1 install:
+the silent catastrophe decision 163 exists to convert into a readable refusal. The
+`artifact_bundle` row records `vocabulary_version` NULL today for the same reason.
+
+**The decision.** Split the guard. When `active_vocab` is set and `bundle.vocabulary_version` is
+`None`, FAIL: "this bundle declares no DNA vocabulary version and the install is on <active>, so
+decision 163's comparison cannot be made". Not relaxed for models-only bundles — that is the case it
+matters in. `bundle.py:662`'s `vocab_version = report.vocabulary_version or "v1"` becomes a
+`report.fail` rather than a default, so no code path invents a vocabulary version, and the resolved
+vocabulary is stored on the `artifact_bundle` row rather than left NULL. The corpus is asked to write
+`vocabulary_version` into `BUNDLE.json` — the same exporter change already being asked for
+`title_identity` — and the directory listing stays the seed-time fallback, where `content.sqlite`'s
+own projection rows corroborate it.
+
+**Cost.** The four derivations collapse into `importer/vocab.py::version_of` — directories only,
+natural sort so `v10` sorts above `v2`, a stray file ignored, more than one version directory refused
+— called from `bundle._vocabulary_version`, `validate.py`'s repeat of the same logic and
+`ArtifactStore.open`, which is the M4.13 seam. Probed today: with `v1`, `v2` and `v10` present both
+bundle-side readers pick `v2`, and with a stray `zz_notes.txt` in `dna_vocab/` the store reports
+vocab_version `'zz_notes.txt'` while `Bundle` says `'v2'`. Until the corpus ships the key, a bundle
+whose `dna_vocab/` tree is absent is refused on an install that has a vocabulary — which is a real
+refusal an operator can hit, and the right one: it is the case where nothing in the bundle can
+answer the question decision 163 asks.
+
+### 257. The default import path finds an archive in `/data/import`, and a wrong path is never diagnosed as a decision-162 ordering problem
+
+**What the spec says.** §6.6 Data is the bundle import wizard (validate -> report -> hot-swap) and
+§10 step 1 is validate. The UI placeholder and README's first-boot line both tell the operator to
+put the bundle in `/data/import`.
+
+**Why it changes.** The only layout the default understands today is CI's, where `make_bundle` writes
+`BUNDLE.json` straight into `data/import`. An operator who copies `v20260828.tar.zst` there — which
+is what the documentation actually prescribes — gets "this is a models-only bundle and the install
+has no content", a decision-162 ordering refusal, for a tarball. That is the single most misleading
+sentence the importer can print, because it is a real refusal with a real meaning that has nothing to
+do with what went wrong.
+
+**The decision.** When the target is a directory with no `BUNDLE.json` and exactly one `*.tar` or
+`*.tar.zst` inside, open that archive and say so as a report note; with several, fail naming the
+count. And before the models-only branch in `validate()`, refuse "no BUNDLE.json and no artifacts/ -
+not a bundle". The Svelte placeholder becomes "a bundle directory or .tar/.tar.zst". No new config,
+no allow-list, no force flag.
+
+**Cost.** A2, A5 and A6 land in the same stage as A3's `_unpack` rewrite because they are the same
+function's neighbours and every one of them is a two-line diff that conflicts with the others if
+scheduled apart. The e2e first-boot spec and `ops/devstub.py` both exercise the directory form and
+must keep working unchanged — the new branch is reached only when there is no `BUNDLE.json`, so the
+fixture layout is untouched by construction, and a test asserting that is cheaper than finding out
+from the browser gate.
+
+### 258. The broken-install state keeps M4.13's `broken` / `missing_path` names; only `restart_required` changes
+
+**What the spec says.** §3.1: a bundle-less app is a legal state. §10's active-version invariant. §2
+Backups. The plan's D3 asks for a new `artifacts_missing` field on `GET /api/admin/bundle/state` and
+a third branch on the Data tab.
+
+**Why it changes.** The plan predates M4.13, which has since shipped most of it: `api/artifacts.py`
+already returns `broken` and `missing_path` with a comment citing `[M4.13, data-03]`, the Data tab
+already renders the bundle-directory-missing line, and `worker._active_store` already raises through
+`ArtifactStore.assert_not_broken`. Adding `artifacts_missing` now would put two names for one state
+on one payload, which is the defect D3 exists to fix rather than a repair of it.
+
+**The decision.** Keep M4.13's names; do NOT add `artifacts_missing`. What this milestone still owes
+is four things. `restart_required` becomes `active != store.version and not store.broken`, so the
+restart banner and the restore banner can never both render — today `active != store.version` is
+False only because `load_active` carries the broken row's version, so the page says "a bundle is
+active, none loaded, no restart needed", which describes nothing. `worker._active_store` and the
+fold-in / placement skip lines stop printing "(§3.1)" when a row exists and the store is empty,
+because that wording cites the section that makes a BUNDLE-LESS install legal and is only honest when
+there is no row. D2's restage branch ships — the repair this state has never had. And README's
+Backups section documents the manual copy and states that §2's procedure must cover `/data/artifacts`.
+
+**Cost.** The D3 stage's diff is much smaller than the plan implies, and a reviewer has to be told
+why or they will read the missing field as an omission — hence this decision, and hence the
+`platform-a-broken-install-says-so-and-can-be-restaged` row's `what` being written against
+`broken` / `missing_path` rather than `artifacts_missing`. Most of that row's weight sits in the
+restage branch, which is behaviour rather than payload: it runs only when the database says active
+and the files are gone, it loads no content, and it is not an exception to seed-once (§8).
+
+### 259. §12 gains an M4.14 row, on M4.6's and M4.7's argument and M4.9's at once
+
+**What the spec says.** §12's table schedules M0 through M7. Its M0 row owns "bundle importer +
+validation report, artifact loading" with the exit criterion "bundle imports clean". §5.3's job table
+carries a row reading "Bundle import validation + hot swap | admin action | minutes".
+
+**Why it changes.** `docs/milestones/M4.14-plan.md` opens with "This milestone is not in §12" and
+gives two reasons, and they are two different arguments this table has already accepted twice each.
+The first is M4.6's and M4.7's: §5.3 files bundle import as a job with a minutes budget and it is not
+one — it is a 127-second `await` inside `POST /api/admin/bundle/import`, on the backend's event loop,
+behind an ingress that cuts a proxied request at 100 s, so the operator is told the import failed
+while it completes and flips, and the retry hits decision 162's seed-once refusal and reads as
+corruption. This table scheduled none of that. The second is M4.9's: M0's criterion was closed
+against a fixture in which the real artifact's awkward shapes do not occur. The shipped `BUNDLE.json`
+carries 42 files with bytes and sha256, 68 exporter self-checks and `total_bytes` 1,042,461,726, and
+the importer reads three keys and none of the hashes — so a zeroed `equating_map.json` validates
+clean, a truncated `reviews.sqlite` validates and then dies inside the import transaction as a 500
+with the staged tree left behind, `_unpack` reuses a half-extracted tree it never checked, the
+`DATA_DIR` boundary is a string prefix under which `/database` passes, referential integrity is never
+checked at all, the vocabulary version is derived four ways that disagree, and a models-only
+re-import loads none of the four curated ledgers it carries.
+
+**The decision.** §12 gains an **M4.14** row after M4.12's and before M5's, with the explanatory
+paragraph M4.6's, M4.7's, M4.9's, M4.10's, M4.11's and M4.12's each carry, and
+`test_spec_coverage.py`'s `MILESTONES` gains `"M4.14"` immediately after `"M4.13"` — THE LIST IS
+AUTHORED, NOT SORTED, because `"M4.14"` string-sorts below `"M4.5"` and `_at_or_before` uses
+`MILESTONES.index`. The row's exit criterion is the plan's, stated over the 1.04 GB real-bundle
+archive and measured by `ops/m414_exit_criterion.py` (decision 255).
+
+**Cost.** M4.13 took no §12 row and M4.8 and M4.5 took none either, so a reader may reasonably ask
+why this one does: the answer is the paragraph itself, and it is the M4.9 test — this milestone
+repairs a promise the table MADE, not only the instrument that measures it, and it also ships the
+surface half of §6.6's Data tab that polls a job. The list in `test_spec_coverage.py` grows by one
+entry and the sentence recording which milestones are not in it yet is corrected to name M4.15 and
+M4.16. Both edits land in the same commit as this milestone's first coverage row, or the gate is red
+for every lane at once.
+
+---
+
+## Decisions taken (owner, 2026-09-12, M4.14 review cycle 1)
+
+Four decisions the adversarial review forced, all of them repairs to rules this milestone itself
+wrote. Numbered from 260 per the lane's range.
+
+### 260. Decision 247's guard 2 belongs to the third DELETE-first ledger as well
+
+**What the spec says.** §4.3 makes the four curated ledgers artifacts that travel with the bundle.
+Decision 247 gives them three guards, the second of which is "a ledger that parses to nothing is a
+refusal to REPLACE, not an instruction to delete". `importer/dna.py`'s own module docstring states
+the rule for all four by name.
+
+**Why it changes.** `load_corrections` returns before its DELETE when `parse_corrections` yields
+nothing, and `load_adjudications` gained the same guard here with a warn naming the stored count.
+`load_seed_list` did not — and it is the loader this milestone newly put on the RECURRING path
+(decision 247 wired it into the models-only branch) and the one that gained a DELETE this milestone
+(step C1). So a `seed_list.json` present and parsing to zero usable entries — `[]`, or
+`{"titles": []}`, which is what a half-finished upstream export writes — deleted the household's
+onboarding list and wrote nothing back, with the report's only line about it a NOTE reading "0-title
+decade-stratified seed list loaded". Measured on the fixture: eight rows to zero, `report.ok` true,
+end to end through `import_bundle`. Nothing upstream refuses it either: `validate._validate_seed_list`
+returns before any finding for an empty list. `rate/queue.py` counts this table for §6.1's first-run
+queue and LEFT JOINs it for the ordering, so the seed becomes the P(seen) fallback silently.
+
+**The decision.** `load_seed_list` reads the stored count and warns rather than deleting when the
+parse yields no rows, exactly as `load_adjudications` does. It does not contradict guard 1: a ledger
+that arrives SHORTER still ends shorter, because `rows` is non-empty there. Zero is the one length
+that cannot be told apart from an export that did not finish writing, which is why it is the one
+length a ledger may not ask for.
+
+**Cost.** One `if not rows:` and one extra `SELECT count(*)` on a path that is already inside the
+import transaction. `dna.py`'s module docstring is corrected: the rule is absent, unreadable OR
+empty, which is what `parse_corrections` has always enforced and what the sentence claimed.
+
+### 261. The axis ledger replaces its facet's weights rather than merging with them
+
+**What the spec says.** §6.4: "one TSV per vocabulary-v1 facet (left pole, right pole, term ->
+weight)". `importer/dna.py`'s docstring: each of decision 247's four ledgers "replaces what it finds
+rather than merging with it: the bundle's copy is the whole truth for its version, and a ledger that
+arrives shorter has to end shorter."
+
+**Why it changes.** `load_axes` was the one of the four with no clear: `INSERT ... ON CONFLICT
+(version, facet, term) DO UPDATE` with nothing deleting the facet's existing rows first, and no
+DELETE touching `dna_axis` or `dna_axis_weight` anywhere in the tree. So a term the corpus removes
+from a re-authored axis keeps its installed weight for ever — at a version decision 163 pins across
+every re-import, so the key it collides on never changes. `tonight/dna.axes_for` selects every row at
+the version and `combine.axis_position` sums over the terms a title and the axis share, so a stale
+weight moves both the numerator and the engaged-weight denominator of the position that feeds
+`contested_facet`, `session_result.conflict` and 54c's widest-axis tie-break. Latent today only
+because decision 173 ships no authored axis; the fixture ships three, and step C2 put the loader on
+the recurring path.
+
+**The decision.** `DELETE FROM dna_axis_weight WHERE version = $1 AND facet = $2` immediately before
+the insert, inside the per-facet branch that has already ACCEPTED the file. Per facet and not per
+version, because the facets this loop declined are not this file's to clear — and both paths that
+decline a file `continue` above the write, which is what keeps omission non-destructive.
+
+**Cost.** One statement. `dna_axis_weight`'s only inbound reference is its own `(version, facet)` FK
+to `dna_axis`, which the loader upserts rather than deletes, so nothing cascades; the whole import is
+one transaction, so a failure after it rolls the clear back with everything else.
+
+### 262. A seed with an empty naming layer imports, and its row records no vocabulary
+
+**What the spec says.** §3.1 makes an empty naming layer legal. §4.3 names the vocabulary by the
+`dna_vocab/<version>/` directory. `validate_for_install`'s docstring: every refusal an import can
+raise has to be reachable from validate, "otherwise the operator reads ok and is refused after they
+have committed."
+
+**Why it changes.** The two guards over one question asked it two different ways. `validate.py`
+refuses a missing `dna_vocab/` only when the bundle SHIPS DNA rows and warns otherwise, in a comment
+saying so — and the registered test
+`test_dna_rows_with_no_vocabulary_directory_are_refused_and_an_empty_one_is_not`, written by this
+milestone, asserts `report.ok` for exactly that bundle.
+The import-side guard was conditioned on the bundle being a SEED, so the one bundle the validator
+calls legal was refused after `load_content` had run — and with a sentence reading "this bundle
+carries DNA rows and names no vocabulary version" about a bundle whose `dna_tag` and `dna_projected`
+counts are both zero. That sentence could never be true where it printed: the validator fails any
+bundle that has rows and no tree, so every bundle reaching the import-side guard had none. The
+producing case is ordinary — a content seed exported before the DNA extraction pass has run — and on
+a fresh install decision 256's refusal is inert, because there is no active vocabulary to compare.
+
+**The decision.** The import-side guard asks the validator's question: it refuses only when
+`report.table_counts` shows `dna_tag` or `dna_projected` rows, counted apart and never summed (§4.1
+rule 1). Otherwise the import proceeds with no vocabulary, writes no `dna_vocabulary` row, and
+records NULL on the `artifact_bundle` row — which is what this install's naming layer is, and keeps
+the column and that table from drifting apart. Decision 256 is untouched: a bundle declaring nothing
+into an install that HAS a vocabulary is still refused.
+
+**Cost.** The coverage row `data-rules-the-vocabulary-version-has-one-derivation` says "never NULL
+after a successful import"; its `what` gains the one exception and the reason, and a test asserts it.
+Nothing else changes: `load_tags` and `load_projected` are still called on that branch, because the
+"bundle has no dna_tag table" refusals are statements about the bundle's shape rather than about its
+vocabulary, and both tiers are empty there so the DELETE matches nothing.
+
+### 263. `bundle_swap` and `reconcile` join `rail.AWAITING_PRODUCER`, because E2 moved their writer
+
+**What the spec says.** §6.7: the rail "narrates every model write in one human-readable line",
+"never persisted". Decision 189: the five worker-side kinds are declared pending in
+`rail.AWAITING_PRODUCER`, and `bundle_swap` and `reconcile` are recorded "from `importer/bundle.py`
+where the web process already performs them".
+
+**Why it changes.** Step E2 moved the import into the worker. `rail._BUFFERS` is a module-global ring
+buffer and `GET /api/home/model-log` is its only reader, so the two `rail.record` calls at the hot
+swap and the in-request rebuild sweep now write into a process with no HTTP surface — the one event
+that invalidates every fitted number in the app, narrated to nobody, under a comment still arguing
+that "`rail.recent` merges the household buffer into every member's rail, so it is the line that
+explains a Home page changing under all of them". `rail.py`'s own paragraph still said both kinds
+"reach a rail today". The producer guard could not catch it: it walks `rail.record` call sites, which
+still existed, so it went on reporting both kinds as narrated.
+
+**The decision.** Both kinds move into `AWAITING_PRODUCER` and the two `rail.record` calls are
+REMOVED rather than left write-only, so that "declared pending" goes on meaning "no call site" and
+the guard can go on checking exactly that. Decision 189's other half stands unchanged; this is its
+first clause re-decided on the facts E2 created. The one fact the `bundle_swap` line carried that
+nothing else did — the version it superseded — moves into the `swap` note's message and detail, which
+is persisted on `artifact_bundle.report` and is what the Data tab renders.
+
+**Cost.** `ModelRail.svelte`'s colour rules and the renderers stay, as decision 189 argued they
+should: the kinds are still declared, and the milestone that builds a cross-process channel inherits
+seven rather than five. `test_home.py`'s producer guard and its docstring are amended, and
+`test_import_integration.py`'s narration test is replaced by one asserting the rail is silent — it
+passed only because the test process was also the reader.
+
+---
+
+## Decisions taken (owner, 2026-09-12, M4.14 review cycle 2)
+
+Three more, taken in the second review cycle under the same standing instruction and recorded under
+a heading of their own because the cycle a decision was taken in is part of the record: every
+citation of these three in the tree is tagged `[M4.14 cycle 2, ...]`, and neither 264 nor 266 could
+have been taken in cycle 1 — 264 rules on the loader decision 261 shipped, and 266 on the refusal
+message decision 256 wrote. They exhaust the lane's range: **247-266 is spent**, and a later cycle
+needing a rule asks the owner for a number rather than reusing one.
+
+### 264. Decision 247's guard 2 belongs to the fourth DELETE-first ledger as well
+
+**What the spec says.** §6.4 makes the axis TSVs a shipped, authored artifact. `importer/dna.py`'s
+module docstring states decision 247's guard 2 for all four curated ledgers: "The one thing none of
+them may do is treat an absent, unreadable or EMPTY file as an instruction to delete ... Zero is not
+a length a ledger can ask for: it is indistinguishable from an export that did not finish writing."
+
+**Why it changes.** Decision 261 gave `load_axes` a per-facet `DELETE FROM dna_axis_weight` and no
+guard, and the comment defending it asserted that "both paths that decline a file `continue` before
+this block, which is what keeps omission non-destructive". There is a third path and it is the one
+that writes: a `<facet>.tsv` opening with a valid two-pole header whose body parses to no usable
+weight row is neither `not_an_axis` nor "not a vocabulary facet", so it fell through, cleared the
+facet's installed weights, inserted none, counted itself in `loaded` and reported `ok`. Measured on a
+scratch install, both through the loader (header alone, and every weight non-numeric) and end to end
+through a models-only `import_bundle`: `dna_axis_weight` for `mood` went from two rows to none behind
+a note reading "3 authored axis definition(s) loaded", and the transaction committed. Per this
+loader's own warning the cost is `tonight/dna.axes_for` returning nothing for the facet,
+`combine.contested_facet` unable to contest on it, `session_result.conflict` NULL and 54c's
+widest-axis tie-break 0.0 — and decision 163 pins the version across every re-import, so the key the
+next bundle would collide on never changes and the only cure is a corrected export.
+
+**The decision.** Guard 2, in the shape the other three keep: read the stored count for that
+`(version, facet)`, `report.warn` naming the file, the facet and the count in the wording the others
+use, do not DELETE, do not count the file in `loaded`, and `continue`. Placed before the `dna_axis`
+pole upsert as well as before the DELETE, because a file this loader will not read weights out of is
+a file it has no reason to believe the poles of either. It does not contradict decision 261: an axis
+re-authored SHORTER still ends shorter, because `weights` is non-empty there. The comment that
+claimed two paths is corrected to name three, and `dna.py`'s docstring now names four guards for four
+ledgers rather than three.
+
+**Cost.** One `if not weights:` and one extra `SELECT count(*)` per accepted-but-empty file, inside
+the import transaction. Latent in production on the same terms decision 261 shipped on — the corpus
+ships no authored axis TSV yet and the fixture ships three — which is an argument for the guard
+rather than against it: the hazard is strictly worse than the staleness 261 fixed, because it removes
+every live weight rather than one dead one.
+
+### 265. Curated ledgers naming a vocabulary the install has no row for are skipped, not refused
+
+**What the spec says.** §3.1 makes an empty naming layer legal and decision 262 makes it reachable
+and ordinary — a content seed exported before the DNA extraction pass has run. Decision 162 fixes the
+order: content seeds once, models re-import. Decision 247: "An absent ledger file stays a warning
+that changes nothing: omission must never be destructive."
+
+**Why it changes.** `dna_adjudication.version` is `NOT NULL REFERENCES dna_vocabulary(version)`
+(`0004_dna.sql`), and `dna.load_vocabulary` — the only writer of `dna_vocabulary` in the whole
+backend — runs inside `import_bundle`'s seed branch alone. Decision 247 newly calls
+`load_adjudications` from the models-only branch, where that parent row is not guaranteed, and
+decision 256's refusal is guarded on `active_vocab` being set, so it asks an install with no
+vocabulary nothing at all. Measured: seed a bundle with an empty naming layer (the shape
+`test_bundle_validation.py` registers as ok), then import a plain models-only bundle carrying
+`dna_vocab/v1/` — `validate_for_install` returns ok, the Data tab says the bundle is good, and the
+import dies mid-transaction on `dna_adjudication_version_fkey` after the 205 MB copy, caught only by
+the generic `except asyncpg.PostgresError` backstop whose own message concedes that "no rule in this
+importer named this refusal first". `validate_for_install`'s contract is that every refusal an import
+can raise is reachable from validate, "otherwise the operator reads ok and is refused after they have
+committed".
+
+**The decision.** The two ledgers are SKIPPED with one warn naming the fact, rather than the bundle
+being refused. A refusal is the option this milestone's own thesis rules out: decision 162 makes the
+naming layer fillable only by a content import and seed-once forbids a second one, so a refusal here
+is one that household could never satisfy and every later model bundle would meet it too — the same
+unactionable shape this cycle's `m414-c2-refusals-04` calls a defect in its own right. Nothing is
+lost by skipping, because an install with no `dna_vocabulary` row has no DNA rows for those verdicts
+to be about. The guard is one `SELECT version FROM dna_vocabulary WHERE version = $1` beside the
+existing `vocab_dir.is_dir()` test, so the load condition and the skip condition cannot disagree.
+
+**Cost.** One indexed lookup per models-only import, inside the transaction, and one report line.
+`load_axes` needed no guard of its own — `dna_facet` is empty on such an install, so every axis file
+is declined as "not a vocabulary facet" — but it is skipped with its sibling so the report carries
+one line rather than one per file.
+
+### 266. A bundle that names a vocabulary and ships no tree for it says which ledgers it skipped
+
+**What the spec says.** Decision 247: each of the four ledgers "reports its own absent file as a
+warning that changes nothing", and the coverage row states it as "an absent ledger file stays a
+warning that changes nothing" with the registered test's contract being one line per absence.
+
+**Why it changes.** Decision 256's refusal tells the operator to "export the bundle with
+`vocabulary_version` in BUNDLE.json, or ship its `dna_vocab/<version>/` tree". Take the first branch
+and the bundle imports green while `load_adjudications` and `load_axes` are never called at all: both
+are gated on that tree, so neither loader's own absent-file warning can fire and decision 247's "one
+line per absence" was satisfied with ZERO lines for two of the four. The only line the report carried
+was `validate.py`'s "no dna_vocab/ in the bundle - the naming layer will be empty", which is false
+twice over on a models-only re-import: the install's naming layer is whatever its last content import
+left, and that function has no connection with which to know. Measured on a seeded install: import
+ok, one warn, and nothing at all from either skipped loader.
+
+**The decision.** Two lines. The models-only branch emits one `report.warn` when the bundle names a
+vocabulary and ships no `dna_vocab/<version>/` tree, saying that it carries neither ledger and that
+the installed ones are left in place and not re-applied — so the coverage row's "one line per
+absence" holds for four ledgers rather than two. And `validate.py`'s sentence becomes a statement
+about the BUNDLE, which is the only thing that function has read: a seed from it leaves the naming
+layer empty (§3.1), and a re-import from it leaves the installed one exactly as it is.
+
+**Cost.** Report text and one branch. Nothing about what is loaded changes: with no tree there is no
+adjudications ledger and no axis TSV to apply, so the data outcome was already decision 247's — what
+was missing was the sentence saying so. Deliberately NOT fixed by calling the loaders
+unconditionally: `load_axes`'s own no-axis warning asserts that the Map has no axes to plot and that
+`session_result.conflict` is NULL on every evening, which is false of an install whose weights are
+intact — the same defect from the other side. (That warning is repaired in cycle 4 by the same rule
+this decision applies to `validate.py`'s sentence: the absence is the bundle's, the consequences are
+the install's, and the install's are said only when the install has them.)
+
+## Decisions taken (owner, 2026-09-12, M4.14 review cycle 4)
+
+One, and it re-opens a residue an earlier cycle recorded as deferred rather than settling something
+new. Under a heading of its own for the reason cycle 2's block gives — the cycle a decision was
+taken in is part of the record, and this one rules on a gap decisions 252 and its cycle-1 amendment
+had already adjudicated twice. The number is 287 rather than 267 because the lane's own range
+247-266 is spent and M4.15, built in parallel in another worktree, holds 267-286; so the register
+runs 247-266 here, 267-286 there, and resumes at 287.
+
+### 287. `validate_for_install` runs the synchronous validation in a worker thread
+
+**What the spec says.** §5.3 files bundle import as a job with a "minutes" budget and §1's hard
+constraint is one 4 vCPU box. `validate_for_install`'s own docstring says "every refusal an import
+can raise has to be reachable here — otherwise the operator reads ok and is refused after they have
+committed", which is why the validate step stays on the request rather than following the load into
+the worker.
+
+**Why it changes.** This is decision 252's unbuilt half, re-opened by the owner rather than left to
+the next milestone. The measurement is decision 252's own and this milestone's instrument agrees
+with it: `validate()` is a plain synchronous function reached from two `async def` routes, so
+FastAPI's threadpool never applies, and inside it `_verify_bundle_files` hashes 42 files and 1.04 GB
+(1.77 s) and `validate_artifacts` imports torch and builds the Cold Tower (1.20-1.23 s) — ~2.97 s
+straight-line on the API process's single loop, worst sampler gap 3.97 s against
+`app._HEALTH_TIMEOUT_S = 2`. `ops/m414_exit_criterion.py` printed `12/13 checks passed`, exit 1, in
+all three recorded runs, with check 9 seeing exactly one 503 inside `POST /import`'s validation
+window and none during the import itself. Decision 252's remedy was a one-shot subprocess for the
+Cold Tower, which would have moved about 1.2 s of the 3.0 and never proposed to move M4.14's own
+hash pass; its seam is four call frames inside `importer/validate.py`, which is the reason it was
+not built.
+
+**The decision.** `await asyncio.to_thread(validate, bundle, spine=spine, active_coverage=coverage)`
+at `importer/bundle.validate_for_install`'s single call site, with `active_backbone_coverage`'s
+await hoisted into a local first. This supersedes decision 252's subprocess half and keeps its other
+half exactly: the route still blocks on the await, so validation is synchronous from the operator's
+side and the report line stays where it is. No `ProcessPoolExecutor` is added, so decision 252's
+section keeps its "NOT BUILT IN M4.14" paragraph and
+`test_decision_252_does_not_assert_a_subprocess_this_tree_does_not_have` keeps holding in the
+direction it was written for.
+
+**Cost.** A thread does not buy the resident-set half of decision 252's argument — torch stays in
+the API process, which is why that ruling is superseded only in part — but the cost it was written
+against is a blocked loop, and hashlib, sqlite3 and torch all release the GIL for the work that
+blocks it. Nothing loop-bound crosses the boundary: `validate` takes no connection, both of its
+install-dependent inputs are awaited before the offload and cross as plain values, and every
+`sqlite3.connect` it makes is opened and closed inside the call on the calling thread. The exit for
+this cycle is the same criterion re-run under decision 246: `13/13 checks passed`, exit 0, zero
+non-200 health samples in either half, and a worst `/api/health` gap near the 1 s sample interval
+rather than 3.74 s.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

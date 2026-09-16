@@ -736,6 +736,51 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
 CREATED_AT = "2026-08-28T16:20:19.433025+00:00"
 
 
+def _inventory(root: Path) -> tuple[dict[str, dict[str, object]], int]:
+    """`files` and `total_bytes`: every file in the tree with its size and sha256.
+
+    BUNDLE.json is not in its own inventory, and the real one is not either: the corpus writes it
+    last, over the tree it has just described, so the tree it describes does not contain it.
+    `validate._verify_bundle_files` exempts it by PATH for the same reason - and without the
+    exemption a `reinventory` over an existing bundle would list the old file and then replace
+    it, publishing the hash of a file that no longer exists.
+    """
+    files: dict[str, dict[str, object]] = {}
+    total_bytes = 0
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or (path.parent == root and path.name == "BUNDLE.json"):
+            continue
+        payload = path.read_bytes()
+        total_bytes += len(payload)
+        files[path.relative_to(root).as_posix()] = {
+            "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    return files, total_bytes
+
+
+def _table_counts(root: Path) -> dict[str, int]:
+    """`tables`: the corpus's own per-table row counts, which `compare_table_counts` reads back.
+
+    A models-only bundle ships neither database, and `sqlite3.connect` CREATES the file it cannot
+    find - so inventorying one would put an empty `content.sqlite` back into the very bundle that
+    was made models-only by deleting it. Decision 162 makes that the recurring shape.
+    """
+    tables: dict[str, int] = {}
+    for db_name in ("content.sqlite", "reviews.sqlite"):
+        if not (root / db_name).is_file():
+            continue
+        db = sqlite3.connect(root / db_name)
+        try:
+            for (name,) in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ):
+                tables[name] = db.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
+        finally:
+            db.close()
+    return tables
+
+
 def _write_identity(root: Path, version: str) -> None:
     """`BUNDLE.json` — the corpus's own record of what a bundle is, in the shape it writes it.
 
@@ -748,28 +793,8 @@ def _write_identity(root: Path, version: str) -> None:
     without it) and against a real bundle resolves it only through the fallback to the
     `dna_vocab/<version>/` directory name.
     """
-    files: dict[str, dict[str, object]] = {}
-    total_bytes = 0
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        payload = path.read_bytes()
-        total_bytes += len(payload)
-        files[path.relative_to(root).as_posix()] = {
-            "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
-        }
-
-    tables: dict[str, int] = {}
-    for db_name in ("content.sqlite", "reviews.sqlite"):
-        db = sqlite3.connect(root / db_name)
-        try:
-            for (name,) in db.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            ):
-                tables[name] = db.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
-        finally:
-            db.close()
+    files, total_bytes = _inventory(root)
+    tables = _table_counts(root)
 
     (root / "BUNDLE.json").write_text(
         json.dumps(
@@ -1027,12 +1052,46 @@ def _write_cold_tower(root: Path, input_dim: int) -> None:
 # --- deliberately broken bundles, one rule each -----------------------------------------------
 
 
+def reinventory(root: Path) -> None:
+    """Rewrite `BUNDLE.json` over the tree as it now stands, keeping the version it names.
+
+    THE CORPUS WRITES BUNDLE.json LAST, and M4.14 made the importer read the 42 `{bytes, sha256}`
+    entries in it before a single row is written. So a fixture that edits `content.sqlite` after
+    `make_bundle` returned, or that makes a bundle models-only by deleting the two databases, has
+    produced a bundle whose own inventory no longer describes it — which is a real defect and now
+    a real refusal, just not the one those fixtures exist to provoke. A `break_*` helper that
+    breaks two things at once cannot tell a test which of them the importer caught, so each of
+    them re-inventories and goes on breaking exactly the rule it names.
+
+    The three TREE-DERIVED keys are recomputed and every other key is kept: `files`,
+    `total_bytes` and `tables` are three statements of one fact about the bytes on disk, and a
+    helper that updated one of them would be the same drift one layer down — while
+    `vocabulary_version`, `validations` and `nullable_pk_columns` are DECLARATIONS a fixture may
+    have planted on purpose, and regenerating the whole file would quietly undo them. That is
+    also why no caller is asked for the version: the bundle already knows what it is called.
+    [M4.14 step B1, finding 2.4]
+    """
+    path = root / "BUNDLE.json"
+    if not path.is_file():
+        # A bundle with no manifest has no inventory to refresh, and that absence is itself a
+        # shape under test: `validate` refuses it as "no usable bundle_version" rather than
+        # naming a directory "unknown". Writing one here would erase the case.
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    files, total_bytes = _inventory(root)
+    payload["files"] = files
+    payload["total_bytes"] = total_bytes
+    payload["tables"] = _table_counts(root)
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+
+
 def break_rating_source_ids(root: Path) -> None:
     """rule 4 — renumber a frozen id."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("UPDATE rating_source SET id = 99 WHERE id = 31")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_kind(root: Path) -> None:
@@ -1041,6 +1100,7 @@ def break_kind(root: Path) -> None:
     db.execute("UPDATE title SET kind = NULL WHERE id = 3")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_evidence(root: Path) -> None:
@@ -1051,6 +1111,7 @@ def break_evidence(root: Path) -> None:
     )
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_denylist(root: Path) -> None:
@@ -1059,6 +1120,7 @@ def break_denylist(root: Path) -> None:
     db.execute("CREATE TABLE title_bak (id INTEGER)")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_merged_tiers(root: Path) -> None:
@@ -1067,6 +1129,7 @@ def break_merged_tiers(root: Path) -> None:
     db.execute("DROP TABLE dna_projected")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_salience(root: Path) -> None:
@@ -1077,6 +1140,7 @@ def break_salience(root: Path) -> None:
     )
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_title_id_in_app_range(root: Path, app_min: int) -> None:
@@ -1090,6 +1154,7 @@ def break_title_id_in_app_range(root: Path, app_min: int) -> None:
     db.execute("UPDATE title SET id = ? WHERE id = 8", (app_min + 7,))
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_vocabulary_version(root: Path, version: str = "v2") -> None:
@@ -1098,11 +1163,31 @@ def break_vocabulary_version(root: Path, version: str = "v2") -> None:
     Deferred as a migration, refused in the meantime: swapping it would leave `dna_tag` and
     `dna_projected` at the old version while the feature builder filters on the active one, so
     both DNA blocks empty for every title — and empty is not an error anywhere in the read path.
+
+    THE TREE MOVES WITH THE DECLARATION, because §4.3 names the vocabulary by the directory. This
+    edited the BUNDLE.json key alone, so the bundle it produced declared v2 while shipping
+    `dna_vocab/v1` - which is a different defect with its own refusal since M4.14 cycle 3, and not
+    the one this helper's own docstring describes ("a models-only bundle shipping `dna_vocab/v2`",
+    in the test that reads it). A bundle with no `dna_vocab/` at all is left exactly as it is:
+    that is decision 266's case, a bundle naming a vocabulary it ships no tree for.
+    [M4.14 cycle 3, M414-C3-VOCAB-01]
     """
     path = root / "BUNDLE.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["vocabulary_version"] = version
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    vocab = root / "artifacts" / "dna_vocab"
+    shipped = sorted(p for p in vocab.iterdir() if p.is_dir()) if vocab.is_dir() else []
+    if not shipped or shipped[0].name == version:
+        return
+    was = shipped[0].name
+    shipped[0].rename(vocab / version)
+    for shipped_file in sorted((vocab / version).iterdir()):
+        if f"_{was}" in shipped_file.name:
+            shipped_file.rename(
+                shipped_file.with_name(shipped_file.name.replace(f"_{was}", f"_{version}"))
+            )
+    reinventory(root)
 
 
 def break_contract_block_grammar(root: Path) -> None:
@@ -1118,6 +1203,7 @@ def break_contract_block_grammar(root: Path) -> None:
         f"credit:{i}" if n.startswith("p:") else n for i, n in enumerate(names)
     ]
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    reinventory(root)
 
 
 def break_straddle_z(root: Path, value: float = 0.0) -> None:
@@ -1131,6 +1217,7 @@ def break_straddle_z(root: Path, value: float = 0.0) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["straddle_z"] = value
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    reinventory(root)
 
 
 def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
@@ -1144,6 +1231,7 @@ def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["tension_credible_mass"] = value
     path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    reinventory(root)
 
 
 def break_corrections_header(root: Path) -> None:
@@ -1157,6 +1245,7 @@ def break_corrections_header(root: Path) -> None:
         "1\tMichael Mann\tjob\tWriter\tDirector\tan invented shape\n",
         encoding="utf-8",
     )
+    reinventory(root)
 
 
 def break_backbone_id_array(root: Path) -> None:
@@ -1170,6 +1259,7 @@ def break_backbone_id_array(root: Path) -> None:
     z = dict(np.load(path, allow_pickle=False))
     z.pop("title_ids", None)
     np.savez(path, **z)
+    reinventory(root)
 
 
 def break_backbone_ids_unsorted(root: Path) -> None:
@@ -1182,6 +1272,7 @@ def break_backbone_ids_unsorted(root: Path) -> None:
     ids = z["title_ids"]
     z["title_ids"] = np.concatenate([ids[1:2], ids[:1], ids[2:]])
     np.savez(path, **z)
+    reinventory(root)
 
 
 def break_cold_tower_heads(root: Path) -> None:
@@ -1197,6 +1288,7 @@ def break_cold_tower_heads(root: Path) -> None:
     renamed = {k.replace("head_e", "embed").replace("head_b", "prior"): v
                for k, v in state.items()}
     torch.save(renamed, path)
+    reinventory(root)
 
 
 def break_unknown_table(root: Path) -> None:
@@ -1209,6 +1301,7 @@ def break_unknown_table(root: Path) -> None:
     db.execute("CREATE TABLE title_sentiment (title_id INTEGER, score REAL)")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_identity_missing(root: Path) -> None:
@@ -1222,6 +1315,7 @@ def break_identity_missing(root: Path) -> None:
     with np.load(path, allow_pickle=False) as npz:
         arrays = {k: npz[k] for k in npz.files if k != "title_identity"}
     np.savez(path, **arrays)
+    reinventory(root)
 
 
 def break_identity_mismatch(root: Path) -> None:
@@ -1235,6 +1329,7 @@ def break_identity_mismatch(root: Path) -> None:
     db.execute("UPDATE title SET imdb_id = 'tt0000001' WHERE id = 1")
     db.commit()
     db.close()
+    reinventory(root)
 
 
 def break_title_meta_only_source(root: Path) -> None:
@@ -1248,3 +1343,4 @@ def break_title_meta_only_source(root: Path) -> None:
     db.execute("DELETE FROM title_meta")
     db.commit()
     db.close()
+    reinventory(root)

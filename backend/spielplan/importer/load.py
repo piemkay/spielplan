@@ -52,6 +52,15 @@ class TableMap:
     # rating scale as two numeric bounds where the app keeps one label.
     transforms: dict[str, Callable[[object], object]] = field(default_factory=dict)
     required: bool = False
+    # The app's own key for this table, in `target` column names -- the PRIMARY KEY the
+    # migrations declare. `validate._validate_integrity` counts duplicate GROUPS under it and
+    # derives them from here rather than from a list of its own: a key that drifts from the DDL
+    # is exactly how 17,342 duplicate `title_language` groups reached a COPY that rolled the
+    # whole seed back (0015), and a second copy in the validator would drift the same way, one
+    # file further from the migration. Empty where the target carries a surrogate key and
+    # section 4.1 says "credit (dedupe at read time, never at import)" -- `credit` and `award`.
+    # [M4.14 step B3]
+    key: tuple[str, ...] = ()
 
     @property
     def pg_columns(self) -> list[str]:
@@ -95,6 +104,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     TableMap(
         target="title",
         source="title",
+        key=("id",),
         columns={
             "id": "id", "kind": "kind",
             # The corpus's names for the two title columns. `title.name` is this app's column;
@@ -124,6 +134,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     TableMap(
         target="title_alias",
         source="title_alias",
+        key=("title_id", "alias", "region", "language", "kind"),
         # The bundle has no `kind` on an alias; it has `source`, which is the droppable unit.
         columns={"title_id": "title_id", "alias": "alias", "region": "region",
                  "language": "language", "kind": "source"},
@@ -131,16 +142,19 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_genre", source="title_genre",
+        key=("title_id", "genre", "source"),
         columns={"title_id": "title_id", "genre": "genre", "source": "source"},
         coalesce_empty=("source",),
     ),
     TableMap(
         target="title_keyword", source="title_keyword",
+        key=("title_id", "keyword", "source"),
         columns={"title_id": "title_id", "keyword": "keyword", "source": "source"},
         coalesce_empty=("source",),
     ),
     TableMap(
         target="title_language", source="title_language",
+        key=("title_id", "source", "language", "role"),
         # Two different facts, and 0015 keys the row by both (owner decision 2026-09-02).
         # `role` is `is_primary` — whether this is the title's main language; `source` is who
         # said so. Dropping `source` collapsed the corpus's four language sources onto one row
@@ -153,12 +167,14 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_country", source="title_country",
+        key=("title_id", "source", "country"),
         # Same key correction, same reason: 19,092 duplicate groups under (title_id, country).
         columns={"title_id": "title_id", "source": "source", "country": "country"},
         coalesce_empty=("source",),   # rule 6
     ),
     TableMap(
         target="title_company", source="title_company",
+        key=("title_id", "source", "company", "role"),
         # The fourth per-source table, arriving four days after 0015 fixed the other three
         # (decision 193). The corpus keys it (title_id, source, company, role) and 0003 keyed it
         # (title_id, company, role), so this table was named in SKIPPED_TABLES and none of its
@@ -185,6 +201,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_video", source="title_video",
+        key=("title_id", "source", "key"),
         # No `official` upstream; it stays NULL rather than being invented as true.
         #
         # `source` is a key component from 0018 section 4 on. The corpus keys this table
@@ -200,6 +217,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="person", source="person",
+        key=("id",),
         columns={"id": "id", "name": "name", "imdb_id": "imdb_id", "tmdb_id": "tmdb_id",
                  "birth_year": "birth_year", "profile_path": "profile_path"},
     ),
@@ -225,6 +243,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="rating_source", source="rating_source",
+        key=("id",),
         # §4.1 rule 4's frozen ids. The corpus records the scale as two bounds, not one string.
         #
         # url/license/version/notes are the per-dataset TERMS, and they are the reason 0018
@@ -243,16 +262,19 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="rating_title_map", source="rating_title_map",
+        key=("source_id", "source_key"),
         # The corpus's name for the key it maps from is `external_id`; `source_key` is this
         # app's column and was being read from the bundle as well.
         columns={"source_id": "source_id", "source_key": "external_id", "title_id": "title_id"},
     ),
     TableMap(
         target="ml_genome_tag", source="ml_genome_tag",
+        key=("tag_id",),
         columns={"tag_id": "tag_id", "tag": "tag"},
     ),
     TableMap(
         target="ml_link", source="ml_link",
+        key=("ml_movie_id",),
         # `movie_id` is the MovieLens id under the corpus's name. There is no `title_id` here:
         # the corpus exports the link table as MovieLens publishes it, keyed by external ids,
         # and `_resolve_ml_links` below joins it to `title` after the load rather than mapping a
@@ -261,11 +283,13 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="ml_genome_score", source="ml_genome_score",
+        key=("ml_movie_id", "tag_id"),
         columns={"ml_movie_id": "movie_id", "tag_id": "tag_id", "relevance": "relevance"},
     ),
     # rule 3 — the display-only schema. Nothing else in this tuple targets it.
     TableMap(
         target="display.platform_rating", source="platform_rating",
+        key=("title_id", "platform", "metric"),
         # The corpus keys this (title_id, source, metric) and records several metrics per
         # source — user_score beside critic_score, and the unscaled popularity and vote-count
         # metrics. Keyed on (title_id, platform) alone that is 32,463 duplicate groups, and
@@ -281,6 +305,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     # rows into a NOT NULL primary key. The onboarding list is loaded from `seed_list.json`.
     TableMap(
         target="title_list", source="seed_list",
+        key=("id",),
         columns={"id": "id", "slug": "slug", "name": "name", "source": "source",
                  "kind": "kind", "category": "category", "weight": "weight",
                  "item_count": "item_count", "notes": "notes"},
@@ -288,6 +313,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     ),
     TableMap(
         target="title_list_membership", source="title_list_membership",
+        key=("list_id", "title_id"),
         columns={"list_id": "list_id", "title_id": "title_id", "rank": "rank"},
     ),
     # The corpus builds this table live at export time as `watchlist(rank, title_id, record)`
@@ -295,6 +321,7 @@ MAPPINGS: tuple[TableMap, ...] = (
     # and `rank`/`record` are reported as unmapped bundle columns like any others.
     TableMap(
         target="watchlist", source="watchlist",
+        key=("title_id",),
         columns={"title_id": "title_id"},
     ),
 )

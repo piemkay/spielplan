@@ -135,11 +135,15 @@ ANONYMOUS = frozenset(
 # escape routes DO — each produced its next card by replaying the whole round a second time — so the
 # test that closes it is an HTTP test of both handlers, which is exactly the assertion the two
 # entries said was missing. Found by the rule again, on the run that added that test. [M4.12]
+#
+# **M4.14 takes the entry it was holding, and the set below is four.** Its own note said "M4.14
+# owns the import state the route needs", and that is what landed: the route answers 202 and
+# enqueues the work as §5.3's job, so what it DOES is now a set of assertions about the response,
+# about what it deliberately leaves unwritten, and about the phase the Data tab then polls.
+# `test_bundle_import_job.py` drives it over HTTP with an admin session, which is the naming this
+# rule measures. Found by the rule on the run that added that file. [M4.14 step E1, decision 253]
 UNTESTED = frozenset(
     {
-        # M4.14 (bundle import and artifact custody). Its ~127 s POST is the finding that made the
-        # missing §5.3 registry row visible; M4.14 owns the import state the route needs.
-        "/api/admin/bundle/import",
         # M4.9 shipped the Data card's sources-and-terms list; M4.16's decision 172 settles where
         # that surface lives, and the assertion about its payload belongs with that ruling.
         "/api/admin/data/sources",
@@ -485,8 +489,8 @@ def test_the_untested_set_may_only_shrink():
         "these routes are named by a test now, so they are no longer untested - delete them from "
         f"UNTESTED: {sorted(closed)}"
     )
-    assert len(UNTESTED) == 5, (
-        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 5 - an entry leaves "
+    assert len(UNTESTED) == 4, (
+        f"UNTESTED holds {len(UNTESTED)} routes and the ratchet is pinned at 4 - an entry leaves "
         "when a test names its route, and lowering this number is how that is recorded; raising it "
         "is the edit this rule exists to make argue for itself"
     )

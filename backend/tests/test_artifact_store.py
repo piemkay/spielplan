@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from spielplan.importer import vocab
 from spielplan.models.artifacts import BUNDLE_FILES, ArtifactStore
 from tests.fixtures import make_bundle as fx
 
@@ -50,6 +51,31 @@ def test_open_reads_the_manifest_and_the_vocabulary_version(artifacts):
     assert store.version == "test-v1"
     assert store.vocab_version == "v1"
     assert set(store.manifest["fitted_cuts"]) == {str(i) for i in fx.RATING_SOURCE_IDS}
+
+
+def test_the_store_derives_the_vocabulary_the_same_way_the_bundle_does(artifacts):
+    """M4.14: one derivation — `importer/vocab.version_of` — or §10's invariant is checked
+    against whichever answer the reader that happened to run gave.
+
+    This test IS the probe that failed. The fixture ships `dna_vocab/v1`; drop a stray
+    `zz_notes.txt` beside it and this store answered `'zz_notes.txt'`, because its fallback was
+    `sorted((root / "dna_vocab").glob("*"))[-1].name` and a glob does not filter directories,
+    while the importer's reader answered `v1`. Agreement is asserted in BOTH shapes, because two
+    readers agreeing on a wrong answer would still be one derivation: with the stray alone both
+    name `v1`, and with a second vocabulary directory both refuse (decision 163), rather than one
+    refusing while the other quietly names a loser. The refusal reaches this caller as an
+    exception on purpose: `ArtifactStore.open` writes no import report, so there is nowhere for a
+    sentinel to be read. [M4.14, decision 256, imp-vocabulary-version-derived-four-ways]
+    """
+    (artifacts / "dna_vocab" / "zz_notes.txt").write_text("keeping v1\n", encoding="utf-8")
+    assert vocab.version_of(artifacts) == "v1"
+    assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
+
+    (artifacts / "dna_vocab" / "v2").mkdir()
+    with pytest.raises(vocab.VocabularyError):
+        vocab.version_of(artifacts)
+    with pytest.raises(vocab.VocabularyError):
+        ArtifactStore.open(artifacts, "test-v1")
 
 
 # M4.13 added `cold_eval.json` and `content_summary.json` to `BUNDLE_FILES` - the corpus ships
@@ -100,17 +126,27 @@ def test_json_is_cached_and_returns_the_file(artifacts):
     assert store.json("feature_contract.json") is contract    # second read is cached
 
 
-def test_vocabulary_version_falls_back_to_the_directory_when_the_manifest_omits_it(artifacts):
-    """Both branches, because M4.5 made the fallback the only one a real bundle takes: the
-    shipped manifest names no vocabulary at all. A manifest that does name one still wins, or
-    the fallback would be silently authoritative over the corpus's own statement."""
+def test_the_vocabulary_version_comes_from_the_directory_and_not_from_the_manifest(artifacts):
+    """M4.14: §4.3 names the vocabulary by `dna_vocab/<version>/`, so the tree is the derivation.
+
+    This test asserted the opposite half until M4.14 -- that a `vocabulary_version` in
+    `artifacts/manifest.json` WINS over the directory, "or the fallback would be silently
+    authoritative over the corpus's own statement". The corpus makes no such statement there:
+    M4.5 established that the shipped manifest is the ratings-model manifest and carries the
+    fitted cut-points and nothing else, and the real `v20260828` confirms it, so the preferred
+    branch was a derivation with no source -- while the branch every real bundle takes went
+    unchecked for being a fallback. Two derivations of one fact is the defect; a manifest key
+    that could quietly disagree with the staged tree is the shape of it, and §4.3 says which of
+    the two is the vocabulary. [M4.14, decision 256]
+    """
     manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
     assert "vocabulary_version" not in manifest, "the shipped manifest carries no such key"
     assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
 
     manifest["vocabulary_version"] = "v9"
     (artifacts / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v9"
+    assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
+    assert vocab.version_of(artifacts) == "v1"
 
 
 # --- §10: no process may score or refit with a bundle other than the active one --------

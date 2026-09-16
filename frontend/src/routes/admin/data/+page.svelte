@@ -11,7 +11,7 @@
   import AdminTabs from '$lib/components/AdminTabs.svelte';
   import BundleImport from '$lib/components/BundleImport.svelte';
 
-  let state = $state(null);
+  let bundleState = $state(null);
   let error = $state('');
   // Two read-only lists §6.6 owes an operator and this page could not previously show: the
   // per-dataset licence terms the loader dropped at the boundary until M4.9, and §6.4's axis
@@ -23,11 +23,11 @@
   // Joined in JS: Svelte collapses the whitespace around {#if} blocks, which ate the
   // separators and rendered "test-v1· vocabulary v1".
   const activeLine = $derived(
-    state?.active
+    bundleState?.active
       ? [
-          `active: ${state.active}`,
-          state.loaded ? `vocabulary ${state.loaded.vocabulary_version ?? '—'}` : null,
-          state.loaded?.titles ? `${state.loaded.titles.toLocaleString()} titles` : null
+          `active: ${bundleState.active}`,
+          bundleState.loaded ? `vocabulary ${bundleState.loaded.vocabulary_version ?? '—'}` : null,
+          bundleState.loaded?.titles ? `${bundleState.loaded.titles.toLocaleString()} titles` : null
         ]
           .filter(Boolean)
           .join(' · ')
@@ -43,7 +43,7 @@
 
   async function refresh() {
     try {
-      state = await get('/admin/bundle/state');
+      bundleState = await get('/admin/bundle/state');
     } catch (err) {
       error = err.message;
     }
@@ -66,11 +66,11 @@
 
 {#if error}
   <p class="err">{error}</p>
-{:else if state}
-  {#if state.active}
+{:else if bundleState}
+  {#if bundleState.active}
     <div class="bundle-active card">
       <div class="data-lg">{activeLine}</div>
-      {#if state.restart_required}
+      {#if bundleState.restart_required}
         <!-- §10: the swap sequence ends in a restart. Until it happens the flip is real in
              the database and invisible to this process, and saying so is the difference
              between "it worked" and "did it work?".
@@ -78,24 +78,38 @@
              is where an operator learns what to type, and it is the same string README's
              Recovery section gives so the two cannot drift. [M4.7 ops-09, ds10] -->
         <div class="warn data">
-          loaded in this process: {state.loaded?.version ?? 'none'} — restart backend and worker
-          to load {state.active}: docker compose restart backend worker
+          loaded in this process: {bundleState.loaded?.version ?? 'none'} — restart backend and worker
+          to load {bundleState.active}: docker compose restart backend worker
         </div>
       {/if}
-      {#if state.broken}
+      {#if bundleState.broken}
         <!-- The third state `restart_required` cannot express, and the one an operator has to
              act on fastest: the active row names a bundle whose directory is not there. The
              backend carries that row's version so every fit is stamped honestly, which also
              makes `active != loaded` false - so without this line the page reads "a bundle is
              active, none is loaded, no restart needed", and the only other report of it is one
-             ERROR line at boot. §6.6 makes this page the operator's data. [M4.13, data-03] -->
+             ERROR line at boot. §6.6 makes this page the operator's data. [M4.13, data-03]
+
+             The two banners can no longer render together, and that is settled on the server
+             rather than guarded a second time here: `restart_required` is now `active != loaded
+             AND NOT broken` (decision 258). A condition on this page as well would be two
+             definitions of one rule, which is the shape D3 exists to remove - so what this line
+             owes instead is the ACTION, in both its forms. §2 keeps /data/artifacts on a host
+             bind mount outside the nightly pg_dump - §2 calls the bundle "already immutable
+             files" and dumps Postgres alone - so "database restored, files missing" is a
+             realistic recovery state, and the copy back is a manual one no procedure performs.
+             The second half is new with this milestone: re-importing the ACTIVE version was
+             refused by seed-once and restages its files now, which is the repair this state had
+             none of. [M4.14 step D3, decision 258] -->
         <div class="warn data">
-          bundle directory missing: {state.missing_path} — the model jobs refuse rather than
-          refitting in a zero basis; restore the directory or import {state.active} again
+          bundle directory missing: {bundleState.missing_path} — the model jobs refuse rather than
+          refitting in a zero basis. Restore /data/artifacts from backup and restart backend and
+          worker, or import {bundleState.active} again: a re-import of the active version restages
+          its files and re-runs the rebuild set.
         </div>
       {/if}
-      {#if state.loaded?.missing_required?.length}
-        <div class="warn data">missing required: {state.loaded.missing_required.join(', ')}</div>
+      {#if bundleState.loaded?.missing_required?.length}
+        <div class="warn data">missing required: {bundleState.loaded.missing_required.join(', ')}</div>
       {/if}
     </div>
   {:else}
@@ -105,21 +119,28 @@
     </p>
   {/if}
 
+  <!-- `/admin/bundle/state` grew the running job's phase and its stored report in this milestone
+       (decision 253), and §6.6 makes this page the one place an operator reads them: an import
+       started here outlives the request that queued it, so a reload lands on a page the server is
+       still telling `running`. Handed down whole rather than inspected here -- which rows are
+       worth adopting is the import machine's rule, and it is stated once, where the phase names
+       are. [M4.14 review cycle 1, waveE-06] -->
   <BundleImport
+    importJob={bundleState.import_job}
     onImported={async () => {
       await refresh();
       await bootstrap();
     }}
   />
 
-  {#if state.bundles.length}
+  {#if bundleState.bundles.length}
     <h2>History</h2>
     <table>
       <thead>
         <tr><th class="data">VERSION</th><th class="data">STATE</th><th class="data">IMPORTED</th></tr>
       </thead>
       <tbody>
-        {#each state.bundles as b (b.version)}
+        {#each bundleState.bundles as b (b.version)}
           <tr>
             <td class="data-lg">{b.version}</td>
             <td class="data" class:active={b.state === 'active'}>{b.state}</td>
@@ -133,7 +154,7 @@
   <section class="rebuild">
     <div class="data heading">RECOMPUTED ON EVERY RE-IMPORT</div>
     <ul>
-      {#each state.rebuild_set as r}<li class="why">{r}</li>{/each}
+      {#each bundleState.rebuild_set as r}<li class="why">{r}</li>{/each}
     </ul>
     <p class="why">
       Everything expressed in the old Backbone’s basis is garbage against a new one, so a

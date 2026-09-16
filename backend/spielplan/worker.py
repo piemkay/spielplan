@@ -16,6 +16,7 @@ import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -683,6 +684,285 @@ async def _placement_reconciliation() -> dict[str, object] | None:
         return report.as_dict()
 
 
+# --- §5.3's ninth row: the bundle import, off the request path --------------------------------
+#
+# The name this loop claims work under, and the name `api/artifacts.py` enqueues it under. The
+# two are literals in two modules rather than one import, because that module imports FastAPI and
+# this one must not: `test_bundle_import_job.py` holds them in order, the way
+# `test_worker_jobs.py` holds this file's backup budget against `backup/nightly`'s own timeout.
+BUNDLE_IMPORT_JOB = "bundle-import"
+
+# `job_run.detail->>'phase'`, and the whole state machine. `queued` is written by the route,
+# `running` by the claim below, and the terminal pair by whichever of the three exits this job
+# takes. Four names in this module and two in `api/artifacts.py` (which only has to ask about the
+# in-flight pair), pinned together by the same test as the job name above.
+#
+# In `job_run` and NOT in `artifact_bundle`: decision 253, argued where the route enqueues.
+PHASE_QUEUED = "queued"
+PHASE_RUNNING = "running"
+PHASE_ACTIVE = "active"
+PHASE_FAILED = "failed"
+
+# One attempt's ceiling, and the registry entry below argues the number against the measurement
+# and against `docker-compose.yml`'s `stop_grace_period`. Named here as well as passed there
+# because `_reap_abandoned_import` is the other half of it: the age at which a claim nothing is
+# going to finish stops being "running" is the age at which this loop would have abandoned it.
+BUNDLE_IMPORT_TIMEOUT = 300.0
+
+
+async def _claim_bundle_import(conn) -> asyncpg.Record | None:
+    """Take the oldest queued import, exactly once, across every process that polls.
+
+    `FOR UPDATE SKIP LOCKED` rather than a read followed by a write: two loops is the ordinary
+    state during a rolling restart, and both would otherwise read the same row and start the same
+    import. `bundle.IMPORT_LOCK` would then serialise them and the loser would be told an import
+    was already running - correct, and recorded as a failed import of a bundle that imported
+    perfectly well. The claim is the write, so exactly one process can win it.
+
+    The row's `started_at` is left alone: it is the instant the operator pressed Import, which is
+    what the Data tab is measuring from, and M4.7's own reading of this table ("a row saying it
+    started and never finished") is about the same instant. [M4.14 step E2, decision 253]
+
+    `claimed_at` is the OTHER instant, written here because it is the one every budget in this
+    module is measured from and nothing recorded it. `_tick` bounds the attempt with
+    `asyncio.wait_for` from the moment the job starts, and `_reap_abandoned_import` argued from
+    the claim while comparing `started_at` - so the reap window and the run window overlapped by
+    exactly the enqueue-to-claim delay, which this sequential loop supplies freely: a row queued
+    behind the 2100 s nightly backup is past the budget at the instant it is claimed, and a
+    second loop's first tick then closed a live import as abandoned. In `detail` rather than in a
+    column, because decision 253 adds no schema for Wave E.
+    [M4.14 cycle 1, m414-c1-dim-lock-04]
+    """
+    return await conn.fetchrow(
+        "UPDATE job_run SET detail = jsonb_set("
+        "     jsonb_set(detail, '{phase}', to_jsonb($3::text)), '{claimed_at}', to_jsonb(now())"
+        " ) WHERE id = ("
+        "     SELECT id FROM job_run "
+        "      WHERE name = $1 AND finished_at IS NULL AND detail->>'phase' = $2 "
+        "      ORDER BY started_at LIMIT 1 FOR UPDATE SKIP LOCKED"
+        " ) RETURNING id, started_at, detail",
+        BUNDLE_IMPORT_JOB, PHASE_QUEUED, PHASE_RUNNING,
+    )
+
+
+# The one question either terminal writer has to ask before it calls an import failed, and the
+# one sentence either says when the answer is yes. Two callers, one derivation: `_bundle_import`'s
+# crash arm asked nothing at all, so a connection lost anywhere in `import_bundle`'s post-commit
+# tail closed a COMMITTED import `ok=false` - the outcome decision 253 exists to remove - while
+# `_reap_abandoned_import`, the other exit from the same failure, had been taught the question in
+# cycle 1. [M4.14 cycle 1, m414-c1-dim-lock-01; cycle 3, m414-c3-dimlock-03]
+_COMMITTED_UNREPORTED = (
+    "this import committed and {version} is the active bundle - the process was stopped before "
+    "it could report. Nothing needs importing again; restart the backend and the worker."
+)
+
+
+async def _committed_import(conn, version: str | None, since) -> object | None:
+    """The flip this job made, if it made one: an ACTIVE row for this version, activated after
+    the job started. `activated_at >= started_at` is what keeps a PREVIOUS import of the same
+    version from being read as this one's."""
+    if not version:
+        return None
+    return await conn.fetchval(
+        "SELECT activated_at FROM artifact_bundle "
+        " WHERE version = $1 AND state = 'active' AND activated_at >= $2",
+        version, since,
+    )
+
+
+async def _finish_bundle_import(job_id: int, detail: dict, report, *, ok: bool) -> None:
+    """Close one claimed row with the whole report, whatever the outcome was.
+
+    One writer for all three exits - a clean import, a refused one, and a crash - so the payload
+    the Data tab polls has ONE shape and the page never has to branch on how an import ended to
+    find out what happened. For a refusal this row is the only copy that survives: the import's
+    `artifact_bundle` row and the report on it roll back with the transaction that wrote them
+    (§10's "a failure at any step before the flip leaves the previous bundle active"), so a
+    report stored anywhere else would be a report of the import that did not happen.
+    [M4.14 steps E2/E3, decision 253]
+    """
+    closed = {
+        **detail,
+        "phase": PHASE_ACTIVE if ok else PHASE_FAILED,
+        "report": report.as_dict(),
+        "text": report.render(),
+    }
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE job_run SET finished_at = now(), ok = $2, detail = $3 WHERE id = $1",
+            job_id, ok, closed,
+        )
+
+
+async def _reap_abandoned_import(conn) -> None:
+    """Close a claim no process is going to finish.
+
+    The one exit `_bundle_import` cannot close for itself. `_tick` bounds every job with
+    `asyncio.wait_for`, which CANCELS the attempt - and a `CancelledError` is not an `Exception`,
+    so the handler that writes the terminal phase never runs; a SIGKILL past the stop grace, an
+    OOM and a power cut leave the same row. Without this the Data tab would poll a `running`
+    phase for ever and an operator would be watching an import that stopped hours ago.
+
+    Bounded by this job's own budget rather than by a number of its own: a claim younger than the
+    budget may still be running, and one older than it is one this loop would already have
+    abandoned. That argument is about the CLAIM, so `claimed_at` is what it compares - comparing
+    `started_at`, the enqueue instant, made the two windows overlap by the queue delay and let a
+    second loop reap an import that was still running. `coalesce` for the rows a build before
+    this one claimed.
+
+    Read on the poll that finds nothing to CLAIM, and `_import_is_queued` is what puts that poll
+    in the tick: this same predicate is its second branch, so a stale claim summons the job the
+    way a queued row does. It was guarded on `phase = 'queued'` alone, which an abandoned claim
+    is not, so the only thing that could reach this function was the row's hourly fallback - and
+    a restarted worker inherits a `last_run` seeded from the newest `ok` row, so for up to an
+    hour after the kill this line could not be written at all.
+    [M4.14 step E2; cycle 1, m414-c1-dim-lock-04; cycle 2, m414-c2-waveE-02]
+
+    IT REPORTS WHAT IT READ AND NOTHING ELSE. This line said "Nothing is half-written - the
+    database transaction rolled back with the process" for every stale claim, and it read no
+    `artifact_bundle` to know that. `import_bundle` COMMITS, and only then does `_clean_unpacked`
+    rmtree 790 MB of the 1.04 GB extraction, the session lock come off and a second
+    `pool.acquire()` write the terminal phase: a kill anywhere in that tail leaves the bundle
+    ACTIVE and the row `running`. An operator acting on the sentence either retries into
+    "already the active bundle" and seed-once - which reads as corruption - or restores /data
+    from a backup, rolling a completed import back. So the row is read, and one of two things
+    that were observed is said. [M4.14 cycle 1, m414-c1-dim-lock-01]
+    """
+    from spielplan.importer.report import ImportReport
+
+    stale = await conn.fetch(
+        "SELECT id, started_at, detail FROM job_run "
+        " WHERE name = $1 AND finished_at IS NULL AND detail->>'phase' = $2 "
+        "   AND coalesce((detail->>'claimed_at')::timestamptz, started_at) "
+        "       < now() - ($3::float8 * interval '1 second')",
+        BUNDLE_IMPORT_JOB, PHASE_RUNNING, BUNDLE_IMPORT_TIMEOUT,
+    )
+    for row in stale:
+        detail = dict(row["detail"] or {})
+        version = detail.get("bundle_version")
+        report = ImportReport(bundle_version=version)
+        flipped = await _committed_import(conn, version, row["started_at"])
+        if flipped:
+            # The flip is committed, so the import is what it says it is and only the report of
+            # it was lost. Section 10's restart is what is still owed, and the Data tab reads it
+            # from the same /state payload that carries this row.
+            report.note("import", _COMMITTED_UNREPORTED.format(version=version))
+            log.warning("bundle import: job %s committed and was never reported", row["id"])
+            await _finish_bundle_import(row["id"], detail, report, ok=True)
+            continue
+        report.fail(
+            "import",
+            f"no process reported the outcome of this import within {BUNDLE_IMPORT_TIMEOUT:g}s "
+            "of claiming it: the worker was stopped, killed or abandoned it at its budget, and "
+            "this install carries no active bundle at that version. Read "
+            "/api/admin/bundle/state and the bundle's own row before importing it again.",
+        )
+        log.warning("bundle import: job %s was abandoned and is recorded as failed", row["id"])
+        await _finish_bundle_import(row["id"], detail, report, ok=False)
+
+
+async def _bundle_import() -> dict[str, object] | None:
+    """§5.3: "Bundle import validation + hot swap | admin action | minutes", in the loop §5.3
+    files it under. Returns None when there is nothing queued.
+
+    The work has shipped since M0 and ran inside `POST /api/admin/bundle/import` on the web
+    process's event loop, measured at 127 s on the real bundle: the rmtree and copytree of the
+    artifacts tree, the COPY generators, `repair_mojibake` over 485,602 review bodies, and
+    `placement.run_rebuild`'s numpy refits and torch forward pass, all inside one transaction.
+    `/api/health` acquires a pooled connection on that same loop, so for those two minutes it did
+    not answer - against a HEALTHCHECK with a 5 s timeout, and behind §2's Traefik and Cloudflare,
+    which cut a proxied request at 100 s. The operator was told the import failed while it
+    completed and flipped, and the retry met `seed-once`, which reads as corruption.
+
+    This process is where that belongs: it already holds torch and the Backbone, and it is the
+    one §5.3 gives a "minutes" budget. The route keeps the validation - the operator is standing
+    in front of that - and writes a `job_run` row naming the path and the version.
+
+    Its OWN connection for the import, and not the one the claim was made on. `import_bundle`
+    holds a session-level advisory lock and one transaction for its whole run, so the connection
+    is busy for two minutes; the phase writes above and below it have to be committed and visible
+    to the Data tab's poll while that transaction is still open. The pool is max_size=4 here.
+
+    Serialisation is `bundle.IMPORT_LOCK`'s, inside `import_bundle`, and there is deliberately no
+    second mechanism: one lock covers this loop, the route's check-and-enqueue and an ops script
+    alike, which a flag or a queue depth in this module could not. [M4.14 step E2, decision 253]
+    """
+    from spielplan.importer import bundle as bundle_import
+    from spielplan.importer.report import ImportReport
+
+    async with pool.acquire() as conn:
+        claimed = await _claim_bundle_import(conn)
+        if claimed is None:
+            await _reap_abandoned_import(conn)
+            return None
+
+    job_id = claimed["id"]
+    claimed_from = claimed["started_at"]
+    detail = dict(claimed["detail"] or {})
+    path = Path(str(detail.get("path") or ""))
+    version = detail.get("bundle_version")
+    log.info("bundle import: claimed job %s - %s at %s", job_id, version, path)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        bundle = bundle_import.Bundle.open(path)
+        # The tree can change between the route's validation and this claim - an operator who
+        # copies the next export over the same path, or a `.unpacked-` tree removed by hand. The
+        # row names what was validated, so anything else is a different bundle and is refused
+        # rather than imported under a report that describes the first one.
+        if version and bundle.version != version:
+            raise RuntimeError(
+                f"{path} is bundle {bundle.version!r} now and was {version!r} when it was "
+                "validated, so nothing was imported"
+            )
+        async with pool.acquire() as work:
+            report = await bundle_import.import_bundle(
+                work, bundle, settings().artifacts_dir
+            )
+    except Exception as exc:
+        # Every way this job can fail before it has a report of its own becomes one, so the Data
+        # tab renders a finding rather than a spinner that never stops. Re-raised after it is
+        # recorded, because `_tick` owns the loop's own account of a failed job.
+        #
+        # AND THE ROW IS READ FIRST, which this arm did not do. `import_bundle` COMMITS and only
+        # then removes 790 MB of extraction, releases its session lock and returns, so an
+        # exception raised in that tail belongs to an import that happened: this arm called it
+        # "the import did not run to a report", the Data tab rendered a failure, and the
+        # operator's retry met "already the active bundle" and seed-once - which reads as
+        # corruption, and is the outcome decision 253 exists to remove. `_reap_abandoned_import`
+        # asks this same question for the same reason. Suppressed around the ask, because a
+        # failure to ANSWER must not cost the crash report this arm already wrote: an unreachable
+        # database is exactly the case that reaches here, and the row then stays `running` for
+        # the reaper, which is the correct outcome. [M4.14 cycle 3, m414-c3-dimlock-03]
+        crash = ImportReport(bundle_version=version)
+        flipped = None
+        with contextlib.suppress(Exception):
+            async with pool.acquire() as conn:
+                flipped = await _committed_import(conn, version, claimed_from)
+        if flipped:
+            crash.note("import", _COMMITTED_UNREPORTED.format(version=version))
+            crash.warn(
+                "import",
+                f"the process stopped after the flip on {type(exc).__name__}: {exc}",
+            )
+            log.warning("bundle import: job %s committed and then raised: %s", job_id, exc)
+            await _finish_bundle_import(job_id, detail, crash, ok=True)
+            raise
+        crash.fail(
+            "import",
+            f"the import did not run to a report: {type(exc).__name__}: {exc}",
+        )
+        await _finish_bundle_import(job_id, detail, crash, ok=False)
+        raise
+
+    await _finish_bundle_import(job_id, detail, report, ok=report.ok)
+    log.info(
+        "bundle import: job %s %s in %.1fs",
+        job_id, "imported" if report.ok else "refused", loop.time() - started,
+    )
+    return {"job_id": job_id, "bundle_version": bundle.version, "ok": report.ok}
+
+
 # §5.3's table, in order. `run=None` means the milestone that owns it has not arrived.
 #
 # ANCHOR_* are the household-local hours the six daily jobs fire at, spread one hour apart so a
@@ -775,21 +1055,80 @@ JOBS: tuple[Job, ...] = (
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,
         timeout=55),
     Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
-    # §5.3's ninth row, and the only one this table left out. The work ships —
-    # `importer/bundle.py` validates, loads and hot-swaps — but it runs inside
-    # `POST /api/artifacts/import` on the web process's event loop, measured at 127 s on the real
-    # bundle (`docs/milestones/M4.5-plan.md`). Registered with no `run` because this loop has no
-    # admin action to fire it from, and named here because a table that silently omits its
-    # longest-running row is exactly how a two-minute POST stayed invisible: a reader looking for
-    # the import in the jobs registry found nothing and concluded there was nothing to find.
-    # M4.14 owns moving it off the request path; the pointer is the whole value of this row until
-    # then. [M4.10 finding 35]
-    Job("bundle-import", "M0", "admin action", "minutes", owner="spielplan.importer.bundle"),
+    # §5.3's ninth row, which this table carried with no `run` and a pointer at the module that
+    # ran it inside `POST /api/admin/bundle/import` instead. M4.14 moved the work here and the
+    # pointer becomes an implementation: `_bundle_import` claims a `job_run` row the route wrote.
+    # `owner` is gone with it, and has to be - it means "this loop does not fire it", and a live
+    # job carrying one would make the boot census count this row twice and read as documentation
+    # that the loop is not the caller. [M4.10 finding 35; M4.14 step E2, decision 253]
+    #
+    # `milestone` stays M0 rather than becoming M4.14, because in this tuple that column is the
+    # milestone of the WORK and never of the diff that registered it: `ledger-refresh` is M2 and
+    # landed at M4.13, `job-run-prune` is M0 and landed at M4.7, `fold-in-tick` is M2 and landed
+    # at M4.13. §3.1 scopes this importer to M0 ("that one page is M0 scope"), so M4.14 here
+    # would make this the one row where the column means something else.
+    #
+    # THE ONE ROW WHOSE BUDGET IS NOT A FRACTION OF ITS INTERVAL, and the long comment above says
+    # exactly why that rule exists: this loop is sequential, so a job that can outrun its own
+    # cadence keeps that cadence only by eating the slot of everything behind it. This job has no
+    # cadence. Its §5.3 trigger is "admin action", so `every` is a FALLBACK poll and not a rate -
+    # `_tick` fires it the moment a row is queued, whatever `due` says, and the hour is how long
+    # a queued row could wait if that trigger query itself failed. What bounds the RUN instead is
+    # the trigger: one row per admin action, one claim per row (`FOR UPDATE SKIP LOCKED`), one
+    # import at a time per install (`bundle.IMPORT_LOCK`). And for the two minutes it does hold
+    # the loop, the starvation the rule exists to prevent is the REQUIREMENT rather than the
+    # cost: no fit may be written across §10's flip, which is why `_tick` also skips `MODEL_JOBS`
+    # while that lock is held instead of merely tolerating that they cannot run.
+    #
+    # 300 s IS THE STOP GRACE, AND IT IS NOT A MARGIN CHOSEN OVER A MEASUREMENT. This line read
+    # "2.4x the 127 s measured on the real bundle", and 127 s is M4.5's measurement of the work
+    # INSIDE THE REQUEST, which this milestone superseded with its own: `ops/m414_exit_criterion
+    # .py` recorded the job at 213 s from the press in all three runs (`docs/TESTING.md`), of
+    # which ~205 s is inside the `asyncio.wait_for` below once the 5 s disconnect, the child
+    # worker's start and the poll granularity are taken off. So the real margin is about 1.4x on
+    # an NVMe box with a warm page cache, not 2.4x, and a box a third slower cannot finish an
+    # import at all: `_tick` cancels, the arm below drops the staged tree, `_reap_abandoned
+    # _import` closes the row, and the retry reproduces it exactly.
+    #
+    # The number does not move, because it is pinned rather than sized: it is this service's
+    # `stop_grace_period` in `docker-compose.yml`, and a budget past the grace would promise time
+    # that `docker compose stop` takes away. Plan step E2 asks for both "generously above the
+    # measured" and "honour the stop grace", and with the grace at 5m only the second is
+    # available here - the grace itself is M4.7's, which plan §8 puts outside this milestone. So
+    # the honest statement is the ceiling and its cost, not an arithmetic that flattered it.
+    # [M4.14 step E2, finding 2.1; cycle 4, m414-c4-waveE-03; §5.3, §10]
+    #
+    # An abandonment at the budget cancels the attempt: asyncpg rolls the transaction back,
+    # `import_bundle`'s `except BaseException` arm drops the staged tree it had written, and the
+    # claim left behind is closed by `_reap_abandoned_import`.
+    Job(BUNDLE_IMPORT_JOB, "M0", "admin action", "minutes", _bundle_import,
+        every=3600, stage=0, timeout=BUNDLE_IMPORT_TIMEOUT),
     # §2's backup, not §5.3's table — see `_nightly_backup`. Budget from the corpus-scale
     # measurement §10 sizes: ~1.15 GB uncompressed, minutes of `pg_dump` on the reference box.
     Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400,
         anchor_hour=ANCHOR_BACKUP, timeout=2100),
 )
+
+# The jobs that fit against the ACTIVE bundle, and therefore the jobs that must not run across
+# §10's flip. Each one acquires its basis through `_active_store` and writes numbers expressed in
+# it: a fold-in started against v1 and committed after the flip to v2 stamps `user_vector` and
+# `ledger_fit` with a basis the app no longer serves, and §10's invariant ("no process may score
+# or refit with a loaded bundle version different from the active row") is exactly the thing that
+# cannot be checked from inside a job that began before the row moved.
+#
+# A list by name rather than a flag on `Job`, because it is a property of what the job's code
+# does and not a knob: `test_worker_schedule.py` derives the same set from the source of every
+# `run` and fails when the two disagree, so a seventh model job cannot join the loop without
+# joining this set. Named here rather than in `_tick` so the reader meets it beside the registry.
+# [M4.14 step D1, finding 2.2]
+MODEL_JOBS = frozenset({
+    "ledger-map-refit",
+    "ledger-refresh",
+    "fold-in-user-vectors",
+    "fold-in-tick",
+    "tier-set-refit",
+    "placement-reconciliation",
+})
 
 # The loop wakes far more often than any job runs; `due` decides what actually fires. A single
 # hourly tick would have made the 1-minute /Sessions poll a 1-hour one.
@@ -912,6 +1251,121 @@ def _report_registry() -> None:
     )
 
 
+async def _import_is_queued() -> bool:
+    """Whether the bundle-import job has work this tick that a clock cannot see.
+
+    §5.3's trigger column for that row is "admin action", and `due` can only ask a clock: it is
+    pure by design, so that the schedule stays testable without one. A clock answers this badly
+    at both ends. At the row's own hourly fallback the Data tab would sit on `queued` for up to
+    an hour after the operator pressed Import; at the tick rate the loop would write a `job_run`
+    row every twenty seconds for a job that does nothing on almost all of them - 4,320 rows a day
+    for one that fires on an admin action, against a table `JOB_RUN_KEEP_DAYS` is sized for. One
+    indexed lookup per tick answers it exactly instead.
+
+    TWO BRANCHES, because the job has two things to do and only one of them is a queued row.
+    `_bundle_import` reads `_reap_abandoned_import` on the poll that finds nothing to CLAIM, and
+    a claim nothing will finish is `running` rather than `queued` - so it was invisible here, the
+    job never entered the tick, and the reaper was reachable only through the hourly fallback. A
+    restarted worker does not even have that: `_seed_schedule` seeds `last_run` from the newest
+    `ok` row, every hourly poll that finds nothing queued writes one, and `every` is 3600 - so
+    after a SIGKILL past the stop grace, an OOM or a power cut, `due` refused to fire the job for
+    up to an hour while `/state` handed the stale `running` row to the Data tab and the page
+    adopted and polled it on every visit. Measured: due=False at 60 s, 300 s, 1800 s and 3500 s
+    after the last successful poll, True only past 3600 s. The second branch is the reaper's own
+    predicate, so the two cannot drift apart about what "abandoned" means.
+    [M4.14 cycle 2, m414-c2-waveE-02]
+
+    Never raises. A database this cannot reach is one the import could not run against either,
+    and the `every` on the row is what covers a query that failed. [M4.14 step E2]
+    """
+    try:
+        async with pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT true FROM job_run "
+                " WHERE name = $1 AND finished_at IS NULL "
+                "   AND (detail->>'phase' = $2 OR (detail->>'phase' = $3 "
+                "        AND coalesce((detail->>'claimed_at')::timestamptz, started_at) "
+                "            < now() - ($4::float8 * interval '1 second'))) LIMIT 1",
+                BUNDLE_IMPORT_JOB, PHASE_QUEUED, PHASE_RUNNING, BUNDLE_IMPORT_TIMEOUT,
+            ))
+    except Exception:
+        log.exception("could not ask whether a bundle import is queued")
+        return False
+
+
+async def _import_in_flight() -> bool:
+    """Whether a bundle import holds this install's import lock right now.
+
+    A READ of `pg_locks`, because a reader may not be able to refuse the thing it is asking
+    about. This was a `pg_try_advisory_lock` followed by an immediate unlock - which is how a
+    session TAKES a lock, not how it asks about one - and for the 1.4 ms it held (measured: min
+    1.22, median 1.36, max 1.55 on a warm pool) any real writer's own try-lock returned false.
+    Both writers turn false into "an import is already running": `api/artifacts.py` raises 409
+    IMPORT_IN_FLIGHT and `importer/bundle.py` returns the report failure that
+    `_finish_bundle_import` records as a FAILED import of a bundle that would have imported
+    perfectly well - the exact outcome `_claim_bundle_import`'s SKIP LOCKED claim exists to
+    avoid, and reachable across processes, which is the ordinary state during a rolling restart
+    and between this loop and the route. [M4.14 cycle 2, m414-c2-dimlock-probe-takes-the-writers-lock]
+
+    `hashtext` returns int4 and the single-argument `pg_try_advisory_lock` takes int8, so a
+    negative key sign-extends: `pg_locks` reports it split as `classid` = the high 32 bits (all
+    ones) and `objid` = the low 32, with `objsubid` = 1 for a bigint key. The two halves are
+    compared separately rather than reassembled with a shift, which would overflow int8 on the
+    all-ones half. The alternative was a flag in `app_setting` written inside the import
+    transaction, which would be a second mechanism saying the same thing and would be wrong in
+    the one case that matters: a process killed mid-import releases its advisory lock with its
+    connection and would never clear its flag.
+
+    Asked only when a `MODEL_JOBS` row is actually due, so a loop with nothing to fit costs
+    nothing, and asked once per tick rather than once per job. Never raises, for
+    `_import_is_queued`'s reason - and False is the right answer to a failed question here,
+    because an import that IS running holds the lock the job itself would then fail to take.
+    [M4.14 step D1, finding 2.2]
+    """
+    from spielplan.importer.bundle import IMPORT_LOCK
+
+    try:
+        async with pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT true FROM pg_locks "
+                " WHERE locktype = 'advisory' AND granted AND objsubid = 1 "
+                "   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+                "   AND classid::bigint = (hashtext($1)::bigint >> 32) & 4294967295 "
+                "   AND objid::bigint = hashtext($1)::bigint & 4294967295 LIMIT 1",
+                IMPORT_LOCK,
+            ))
+    except Exception:
+        log.exception("could not ask whether a bundle import is running")
+        return False
+
+
+def _report_basis(store: ArtifactStore) -> None:
+    """What this loop's model jobs have to fit against, said once at boot.
+
+    Two states, two sentences, and until M4.14 one line for both: `is_empty` is True for a
+    household that has never imported a bundle AND for one whose active bundle's directory is
+    gone, and the line printed "(§3.1: that is legal)" for both. It is legal for the first and is
+    the broken install for the second, whose model jobs all refuse - so the one line an operator
+    reads at `docker compose up` about this process's basis said a state was normal at exactly
+    the moment it was not.
+
+    `load_active` has already logged the ERROR naming the version and the directory, and this
+    does not repeat it: what it adds is the repair, which that message could not name because
+    until M4.14 there was none. Re-importing the active bundle now restages its artifacts and
+    re-runs §10's rebuild set instead of being refused by seed-once. A WARNING and not a second
+    ERROR, for the same reason. [M4.14 step D3, decision 258, finding 2.17]
+    """
+    if store.broken:
+        log.warning(
+            "the active bundle's files are missing, so every model job in this loop will refuse "
+            "rather than fit in a zero basis: restore /data/artifacts from backup, or import "
+            "that bundle again from the Data tab, which restages the artifacts and re-runs the "
+            "rebuild set. Restarting this process does not help - it reloads the same store"
+        )
+    elif store.is_empty:
+        log.info("no artifact bundle active - model jobs stay idle (section 3.1: that is legal)")
+
+
 def _touch_heartbeat() -> None:
     """Say the loop went round. Never raise: a heartbeat is evidence, not a dependency."""
     global _heartbeat_failed
@@ -1017,13 +1471,68 @@ async def _record_finish(run_id: int | None, *, ok: bool, detail: dict[str, obje
         log.exception("could not record the outcome of job run %s", run_id)
 
 
+async def _with_queued_import(ready: list[Job]) -> list[Job]:
+    """`due`'s answer, plus the one job whose trigger is not a clock, in front of the rest.
+
+    §5.3 gives the bundle import the trigger "admin action". `due` is pure - it reads a clock and
+    a dictionary and nothing else, which is what keeps the schedule testable without either - so
+    the question "has an admin queued one?" has to be asked here, where a database exists.
+
+    IN FRONT, and that is the load-bearing half. §10's flip replaces the basis every other job in
+    this tick would fit against, so a fold-in or a sweep run first spends its work on numbers the
+    import is about to express in a different basis, and `MODEL_JOBS` below then has to skip them
+    anyway once the lock is taken. `stage` sorts producers before consumers and the import is the
+    producer of the whole basis, so it would lead on stage alone - except among the other stage-0
+    row, where registry order (§5.3's table order) would put the placement sweep first. Stated
+    rather than left to that accident.
+
+    The row is MOVED rather than skipped when `due` already produced it, which is the half that
+    accident got back. `due` sorts stably by `stage` alone and the registry declares
+    `placement-reconciliation` before this job at the same stage, so on the tick where the hourly
+    fallback has elapsed - every tick of a restarted worker, since `_seed_schedule` seeds from
+    the newest successful run - the guard returned `ready` untouched and the sweep led after all.
+    The `MODEL_JOBS` skip cannot compensate: `_import_in_flight` is False while the import is
+    only queued, so the sweep re-places every coordinate-less owned title against the basis the
+    import is about to supersede, and the import then re-places them all again through its own
+    rebuild set. [M4.14 cycle 2, m414-c2-dimlock-import-not-in-front-when-due]
+
+    The registry is read for the row rather than closed over, because tests substitute `JOBS`
+    wholesale; a registry without this row asks the database nothing. [M4.14 steps E2 and D1]
+    """
+    job = next((j for j in JOBS if j.name == BUNDLE_IMPORT_JOB and j.run is not None), None)
+    if job is None:
+        return ready
+    # Asked only when `due` did not already produce the row: the answer cannot change what
+    # happens once the job is in the tick, and a tick that already holds it owes no query.
+    if not any(j.name == BUNDLE_IMPORT_JOB for j in ready) and not await _import_is_queued():
+        return ready
+    return [job, *(j for j in ready if j.name != BUNDLE_IMPORT_JOB)]
+
+
 async def _tick(
     now: float, local: datetime, last_run: dict[str, float], last_date: dict[str, date]
 ) -> None:
     _touch_heartbeat()
     loop = asyncio.get_running_loop()
     tick_started = loop.time()
-    for job in due(now, last_run, local=local, last_date=last_date):
+    # Asked once per tick and only when a model job is actually due, so that a household with
+    # nothing to fit pays nothing for it and the answer cannot change between two jobs of one
+    # tick. See `_import_in_flight`. [M4.14 step D1]
+    importing: bool | None = None
+    for job in await _with_queued_import(due(now, last_run, local=local, last_date=last_date)):
+        if job.name in MODEL_JOBS:
+            if importing is None:
+                importing = await _import_in_flight()
+            if importing:
+                # Neither stamped nor recorded: the job did not run, so the next tick owes it
+                # exactly as this one did. An import is minutes and this line is one per skipped
+                # job per tick, which is the narration an operator reading `docker compose logs
+                # worker` during an import wants and not spam on any other day.
+                log.info(
+                    "job %s skipped: a bundle import is in flight, and no fit may be written "
+                    "across the swap that ends it", job.name,
+                )
+                continue
         # Stamped before the call, not after: a job that fails in milliseconds would otherwise be
         # due again on every tick, and a job that takes minutes would have its interval measured
         # from the wrong end. The `except` below is what turns this into a retry rather than a
@@ -1210,9 +1719,7 @@ async def main() -> None:
                 conn, loop_now=asyncio.get_running_loop().time(), local=local
             )
 
-        if store.is_empty:
-            log.info("no artifact bundle active — model jobs stay idle (§3.1: that is legal)")
-
+        _report_basis(store)
         _report_registry()
 
         stop = asyncio.Event()

@@ -418,16 +418,49 @@ class Backbone:
         }
 
 
-_CACHE: dict[tuple[str | None, str], Backbone] = {}
+_CACHE: dict[tuple[str | None, str, int, int], Backbone] = {}
+
+
+def _file_stamp(store: ArtifactStore) -> tuple[int, int]:
+    """What the filesystem says `backbone.npz` is, or (-1, -1) when the store resolves no file.
+
+    One sentinel key for the three stores with no basis to read — §3.1's bundle-less install,
+    data-03's broken one, and a bundle that ships no `backbone.npz` — because `Backbone.open`
+    answers all three with `empty()`. A store that does resolve a file gets a different key by
+    construction, so the empty entry can never be handed to a caller that has a basis.
+    """
+    try:
+        stat = store.path(BACKBONE_FILE).stat()
+    except (RuntimeError, OSError):
+        return (-1, -1)
+    return (stat.st_size, stat.st_mtime_ns)
 
 
 def load_for(store: ArtifactStore) -> Backbone:
-    """The Backbone for a loaded store, read at most once per (version, root).
+    """The Backbone for a loaded store, read at most once per (version, root, size, mtime).
 
-    A bundle directory is immutable for the life of its version (§10 stages to
-    `/data/artifacts/<version>/` and flips), so caching on the version is caching on the file.
+    A VERSION'S DIRECTORY IS NOT WRITTEN ONCE. This cache was keyed on (version, root) alone,
+    under a sentence claiming a bundle directory is immutable for the life of its version — and
+    that sentence is what made ml10 invisible. `importer/bundle.py` stages a version by
+    `shutil.rmtree(staged)` and then `shutil.copytree(...)`, so every import of a version
+    rewrites that version's directory: a retry after a failed import does, and M4.14's restage
+    of a broken install does by definition, because the version it restages is the ACTIVE one.
+    §10 promises a swap sequence and a flip; it never promised that `<version>` names one set of
+    bytes for ever. Under the old key the second import served the first one's arrays for the
+    life of the process and said nothing anywhere: E[0, 0] 2.0 on disk, 1.0 out of `load_for`,
+    the same object both times.
+
+    So the key carries the file's own identity as well — size and st_mtime_ns of the
+    `backbone.npz` the store resolves — which is the shape `placement/tower.py` keys the Cold
+    Tower on one directory over, and two model caches keyed alike is one rule rather than two.
+    Preferred over having `import_bundle` call `forget_cached()`: that states the same fact a
+    second time, in the process that happens to write, and §5.3 files the import as a job, so
+    after M4.14 the process that rewrites the directory is the worker and the process serving
+    §5.1 is the backend — a call in the writer cannot reach the reader. A directory rewritten
+    with identical bytes and timestamps is the same basis, and is meant to go on hitting.
+    [M4.14, ml10]
     """
-    key = (store.version, str(store.root))
+    key = (store.version, str(store.root), *_file_stamp(store))
     if key not in _CACHE:
         if len(_CACHE) >= 2:      # the swap window holds two: the outgoing and the incoming.
             _CACHE.pop(next(iter(_CACHE)))

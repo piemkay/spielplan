@@ -40,7 +40,7 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # takes those three out of their milestones and ships them first, so the rows land here
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
-# "M4.5". M4.14 through M4.16 are not in the list yet — each is added
+# "M4.5". M4.15 and M4.16 are not in the list yet — each is added
 # by the milestone that opens it, in one commit with its first row.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
@@ -171,8 +171,49 @@ LEDGER = REPO / "docs" / "TESTING.md"
 # either milestone depends on the other: that table marks the two workable in parallel in both
 # directions, and they were built that way, in two worktrees on two branches.
 # See docs/milestones/M4.13-plan.md.
+#
+# M4.14 follows it and takes a §12 row (decision 259) on M4.6's and M4.7's argument and
+# M4.9's at once. §5.3 files "Bundle import validation + hot swap" as an admin-triggered job
+# with a minutes budget, and it is not one: it is a 127-second `await` inside
+# `POST /api/admin/bundle/import`, on the backend's event loop, inside one transaction, with
+# the CPU-bound rebuild on the request loop — behind an ingress that cuts a proxied request at
+# 100 s, so the operator is told the import failed while it completes and flips, and the retry
+# hits decision 162's seed-once refusal and reads as corruption. §12 scheduled none of that,
+# which is M4.6's and M4.7's shape. The other half is M4.9's: §12's M0 row owns "bundle
+# importer + validation report" and its criterion is "bundle imports clean", closed against a
+# fixture in which none of the real artifact's awkward shapes occur. The shipped `BUNDLE.json`
+# carries 42 files with bytes and sha256, 68 exporter self-checks and 1,042,461,726 total
+# bytes; the importer reads three keys and none of the hashes, so a zeroed `equating_map.json`
+# validates clean and a truncated `reviews.sqlite` validates and then dies inside the import
+# transaction as a 500 with the staged tree left behind; `_unpack` reuses a half-extracted tree
+# it never checked; the `DATA_DIR` boundary is a string prefix under which `/database` passes
+# for `/data`; referential integrity is never validated, so nine orphan variants validate clean
+# and raise inside the transaction; the vocabulary version is derived four ways that disagree;
+# and a models-only re-import — the only kind decision 162 says will arrive again — loads none
+# of the four curated ledgers it carries while the validator reads two of them off that same
+# bundle and discards them. It sits after M4.13 because this list needs a total order and
+# `ROADMAP-to-M5.md`'s table supplies one, NOT because it depends on M4.13: that table marks
+# M4.14 workable in parallel with M4.15, and the two are being built that way, in two worktrees
+# on two branches. Decisions 247-259 record the calls it needed, and decision 171 had already
+# ruled the first of them. Its one migration is 0023_import_state.sql (decision 250).
+#
+# THE ORDER IS AUTHORED, NOT SORTED is worth restating at this entry rather than only at the head
+# of the block, because this is the entry that breaks a reader's arithmetic: "M4.14" is a later
+# milestone than "M4.5" and sorts BEFORE it in every ordering a machine would reach for: `sorted()`
+# compares '1' against '5' and `float`-ing the tail compares 4.14 against 4.5. `_at_or_before`
+# asks `MILESTONES.index`, so the sequence here IS the schedule; an alphabetised or numerically
+# "tidied" list silently re-dates every row in the map.
+#
+# The sibling lane adds "M4.15" after this entry, on its own branch, while this one is being
+# written. Whichever merges second resolves the list to
+# [..., "M4.13", "M4.14", "M4.15", "M5", ...] -- both names, in that order -- rather than taking
+# one side of the conflict: the two are separate milestones that both shipped, and dropping either
+# name makes every row of the lost milestone fail `test_every_requirement_is_well_formed` with an
+# unknown milestone while `test_every_milestone_is_represented` says nothing, because the
+# requirements are the side that went missing from MILESTONES rather than the other way round.
+# See docs/milestones/M4.14-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
-              "M4.11", "M4.12", "M4.13", "M5", "M6", "M7"]
+              "M4.11", "M4.12", "M4.13", "M4.14", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 
 
@@ -498,6 +539,167 @@ def test_the_testing_ledger_counts_the_ids_the_map_actually_holds():
         f"the map holds {held[0]} distinct ids across {held[1]} pytest files and {held[2]} e2e "
         "specs. Restate the sentence -- a count nobody re-derived is decision 184's defect."
     )
+
+
+# "...and the count includes the seventeen vitest ids". The figure the guard above holds is the
+# ALL-LAYER total and the clause beside it names two of the three, so a reader reconciling it
+# against the twelve pytest files and the one e2e spec is short by exactly the vitest ids. That is
+# how M4.14's paragraph came to read "118 ids across twelve pytest files and one e2e spec, with
+# seventeen vitest ids beside them" over a figure that already held those seventeen: described
+# once inside the count and once as sitting next to it. The guard above cannot see it -- it
+# compares the figure with `len(ids)` over all three layers and the file counts over two, so both
+# halves pass while they are about different sets. What is held here is the disclosure M4.12's
+# paragraph made and M4.14's dropped, that the count INCLUDES them, and the number with it:
+# decision 226 admits a vitest id as supporting evidence beside a backend or Playwright test and
+# never instead of one, which is the distinction a reader cannot draw without knowing how many of
+# the published total are which. Matched word by word, because the ledger wraps its prose and
+# this clause is as likely to arrive with a newline inside it as not.
+_LEDGER_VITEST_COUNT = re.compile(r"the\s+count\s+includes\s+the\s+(\d+|[A-Za-z]+)\s+vitest\s+ids")
+
+
+def _ledger_paragraph(pattern: re.Pattern) -> str:
+    """The blank-line-delimited block `pattern` matches in -- one re-paste of the banner.
+
+    Scoped to the paragraph rather than the file because the ledger keeps every earlier
+    milestone's block below the current one, and M4.12's still carries its own disclosure in the
+    demoted "ids in ten pytest files" form.
+    """
+    text = LEDGER.read_text(encoding="utf-8")
+    match = pattern.search(text)
+    assert match, f"docs/TESTING.md publishes no sentence matching {pattern.pattern!r}"
+    start = text.rfind("\n\n", 0, match.start()) + 2
+    end = text.find("\n\n", match.end())
+    return text[start: end if end != -1 else len(text)]
+
+
+def test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes():
+    """The second ledger guard's blind spot: one figure over three layers, two of them named.
+
+    `docs/TESTING.md` published "**118 ids across twelve pytest files and one e2e spec**, with
+    seventeen vitest ids beside them" for a map whose 118 is 100 backend ids, 17 vitest ids and
+    one Playwright id -- so the thirteen files the sentence names hold 101, and an auditor doing
+    the obvious reconciliation (open the twelve pytest files, count the registered ids) is
+    seventeen short with no way to tell a stale figure from ids registered in files the sentence
+    does not name. Decision 226's point is exactly the distinction the wording blurred: a vitest
+    id is supporting evidence BESIDE a backend or Playwright test, never instead of one, and
+    "beside them" said that of the figure instead.
+
+    The repair is the disclosure M4.12's own paragraph carried one milestone earlier -- "and the
+    count includes the vitest ids" -- with the number added, because a count published alone is
+    decision 184's defect and this is the one layer figure nothing else in this file re-derives.
+    Read out of the paragraph the figure sits in, so a later milestone re-pasting the banner
+    restates its own count rather than inheriting M4.14's.
+    [M4.14 cycle 3, m414-c3-rec-07]
+    """
+    beside = sorted(
+        test_id
+        for requirement in REQUIREMENTS
+        if requirement["milestone"] == CURRENT
+        for test_id in requirement.get("tests", [])
+        if not test_id.startswith(("backend/tests/", "e2e/specs/"))
+    )
+    claims = _LEDGER_VITEST_COUNT.findall(_ledger_paragraph(_LEDGER_ID_COUNT))
+
+    if not beside:
+        assert not claims, (
+            f"docs/TESTING.md's {CURRENT} paragraph discloses vitest ids inside its figure and "
+            "the map registers none on this milestone"
+        )
+        return
+
+    assert len(claims) == 1, (
+        f"docs/TESTING.md's {CURRENT} paragraph publishes an id figure that includes "
+        f"{len(beside)} vitest id(s) and makes {len(claims)} 'the count includes the N vitest "
+        "ids' disclosures. The figure counts three layers and names two of them, so without that "
+        "clause the sentence cannot be reconciled against the files it does name."
+    )
+    published = _spelled(claims[0])
+    assert published == len(beside), (
+        f"docs/TESTING.md's {CURRENT} paragraph says the count includes {claims[0]} vitest ids "
+        f"and the map holds {len(beside)}: {beside}. Restate it -- a count nobody re-derived is "
+        "decision 184's defect."
+    )
+
+
+# "**Twelve rows the map already had were amended in place rather than duplicated,**" is the one
+# count in that block no field of this map holds. The two guards above re-derive what they check
+# from `REQUIREMENTS`; "amended" is a fact about a diff, and the diff stops existing the moment the
+# milestone commits -- `HEAD:spec_coverage.toml` is then the amended file itself, so anything
+# git-shaped would read zero forever and every historical banner with it. What does survive is an
+# enumeration: a count published beside the ids it counts stays checkable at any later date, and a
+# count published alone is exactly the number decision 184 refuses. So a banner making this claim
+# owes the list, and the list is what this reads back against the map.
+_LEDGER_AMENDED = re.compile(r"\*\*(\d+|[A-Za-z]+) rows the map already had were amended in place")
+_LEDGER_AMENDED_LIST = "named so an auditor can check each rather than take the count:"
+# The ledger wraps its prose, so the phrase introducing the list is as likely to arrive with a
+# newline in it as not: matched word by word, and the plain string above is what the failure
+# tells the editor to write.
+_LEDGER_AMENDED_MARK = re.compile(r"\s+".join(map(re.escape, _LEDGER_AMENDED_LIST.split())))
+# A row id is lowercase words joined by hyphens. A test id carries `::` and underscores and a
+# milestone carries a digit after `M`, so nothing else the paragraph backticks can be read as one.
+_LEDGER_ROW_ID = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
+
+
+def test_the_testing_ledger_names_the_rows_it_says_it_amended():
+    """The fourth ledger guard: the rows a milestone changed rather than the rows it added.
+
+    `docs/TESTING.md` published "Ten rows the map already had were amended in place" over a tree
+    in which eleven were, and the eleventh -- M4.9's rail row, gained in review cycle 1 -- is
+    disclosed by name one paragraph above, so the document held the fact while the count beside it
+    disagreed. An auditor reconciling which rows a milestone touched counts eleven in this file,
+    reads ten in the ledger, and cannot tell a stale sentence from a row amended without being
+    recorded: the ambiguity the sibling guards exist to remove, and the same class as M4.8's
+    `M4.8 9/9` beside a printed `10/10`.
+
+    The repair is not a bigger number but a checkable one. Nothing in the tree re-derives "was
+    amended" once the milestone is committed, so the banner names the ids it counts and this holds
+    the two together: the count is the length of its own list, every id in it is a row the map
+    holds, none of them sits on `current_milestone` -- a row there is one the milestone ADDED, and
+    the block publishes that count separately -- and each names at least one test, which is the
+    banner's other clause. [M4.14 review cycle 2: m414-c2-dim-record-03]
+    """
+    by_id = {r["id"]: r for r in REQUIREMENTS}
+    for banner in LEDGER.read_text(encoding="utf-8").split("\n\n"):
+        headline = _LEDGER_AMENDED.search(banner)
+        if not headline:
+            continue
+        published = _spelled(headline.group(1))
+        assert published is not None, (
+            "an amended-rows count in docs/TESTING.md is neither a figure nor a number word: "
+            f"{headline.group(1)!r}"
+        )
+        marker = _LEDGER_AMENDED_MARK.search(banner)
+        assert marker, (
+            f"docs/TESTING.md publishes '{published} rows the map already had were amended in "
+            "place' and names none of them. Nothing re-derives that count once the milestone is "
+            "committed, so a stale number cannot be told from a row amended and never recorded -- "
+            "which is how 'Ten' outlived an eleventh row. List the ids in that paragraph after "
+            f"'{_LEDGER_AMENDED_LIST}'."
+        )
+        named = _LEDGER_ROW_ID.findall(banner[marker.end() :])
+        twice = sorted({i for i in named if named.count(i) > 1})
+        assert not twice, f"docs/TESTING.md names the same amended row twice: {twice}"
+        unknown = [i for i in named if i not in by_id]
+        assert not unknown, (
+            f"docs/TESTING.md names amended rows this map does not hold: {unknown}. An id renamed "
+            "out from under the ledger is a count nobody can reconcile again."
+        )
+        added = [i for i in named if by_id[i]["milestone"] == CURRENT]
+        assert not added, (
+            f"docs/TESTING.md counts rows on {CURRENT} among the ones it amended in place: "
+            f"{added}. A row on the current milestone is one this milestone ADDED, and the ledger "
+            "publishes those two counts separately."
+        )
+        bare = [i for i in named if not by_id[i].get("tests")]
+        assert not bare, (
+            "docs/TESTING.md says every amended row now names the tests that assert the clause it "
+            f"gained, and these name none: {bare}"
+        )
+        assert published == len(named), (
+            f"docs/TESTING.md publishes {published} amended rows and names {len(named)}: {named}. "
+            "Restate the count against the list -- a number nobody re-derived is decision 184's "
+            "defect, and this one was ten over an eleventh row."
+        )
 
 
 # "...and it takes the last `pytest.skip` out of a registered Tonight test". The qualifier is

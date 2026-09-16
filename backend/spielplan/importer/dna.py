@@ -10,18 +10,40 @@ reading of §4.3: `terms.tsv`, `aliases.tsv`, `adjudications.tsv` — three file
 contains — and a `dna_tag` with an `id` column that upstream does not have. The naming layer
 therefore loaded nothing at all from a real bundle, and said so only as one "missing file"
 warning. `tests/fixtures/real_bundle_shapes.json` is the authority for every name below.
+
+**The four curated ledgers are this module's public surface for a models-only re-import.**
+Decision 247: `load_corrections`, `load_seed_list`, `load_adjudications` and `load_axes`, and
+nothing else — never `load_vocabulary`'s term tables, `load_tags` or `load_projected`, which
+are the content tiers decision 162 forbids a re-import from carrying. Those four are what
+travels with a model bundle and what §8 stage 3 re-applies at every derive, and each of them
+replaces what it finds rather than merging with it: the bundle's copy is the whole truth for its
+version, and a ledger that arrives shorter has to end shorter. The one thing none of them may do
+is treat an absent, unreadable or EMPTY file as an instruction to delete — omission is not
+destructive, which is the guard `parse_corrections` has always kept, `load_adjudications` keeps
+under decision 247, `load_seed_list` under decision 260 and `load_axes` under decision 264. Four
+ledgers, four guards: the count is written out because for one cycle this sentence named three
+of them while all four cleared. Zero is not a length a ledger can ask for: it is
+indistinguishable from an export that did not finish writing.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import NamedTuple
 
 import asyncpg
 
+# The validator owns the one opener of a curated TSV, and the three readers below borrow it
+# rather than each growing a handler of its own: §10 promises the operator a report, and one
+# latin-1 byte in a hand-edited ledger came out of a route as a `UnicodeDecodeError` instead.
+# The direction closes no cycle and is the only one that does not: `validate.py` imports
+# `report` at module scope, reaches `load` and `vocab` inside functions, and never imports this
+# module. [M4.14 step B2, finding 2.12]
+from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
 
 # §6.8: "A fixed colour per vocabulary facet (11)." Shipped with the vocabulary when the
@@ -150,10 +172,10 @@ async def load_vocabulary(
                 facets=len(facets), terms=len(terms))
 
     await _load_aliases(conn, vocab_dir / f"alias_map_{version}.tsv", version, report)
-    await _load_adjudications(conn, vocab_dir / f"adjudications_{version}.tsv", version, report)
+    await load_adjudications(conn, vocab_dir, version, report)
     # The axis definitions key on a facet the vocabulary has just declared -- `dna_axis` has an
     # FK to `dna_facet` -- so the set travels rather than being rediscovered from a file stem.
-    await _load_axes(conn, vocab_dir, version, report, set(facets))
+    await load_axes(conn, vocab_dir, version, report, set(facets))
 
 
 async def _load_aliases(
@@ -161,30 +183,33 @@ async def _load_aliases(
 ) -> None:
     """§8 stage 8 projects the second tier through this map, so a map that loads as empty makes
     `dna_projected` unreproducible in-app. The file is `alias_map_<version>.tsv` and its two
-    load-bearing columns are `raw_term` and `vocab_term`, not `alias` and `term`."""
+    load-bearing columns are `raw_term` and `vocab_term`, not `alias` and `term`.
+
+    Read through `validate._read_tsv` rather than opened here. This is one of the hand-edited
+    curated files, so a stray latin-1 byte is exactly what reaches it, and the header check is
+    the same rule one column over. Private, and staying private: the alias map belongs to the
+    vocabulary tier decision 162 forbids a models-only re-import from reloading, so it is not on
+    the surface decision 247 opens. [M4.14 step B2, finding 2.12]
+    """
     if not path.is_file():
         report.warn("vocabulary", f"{path.name} absent — the projected tier has no alias map")
         return
 
+    parsed = validator._read_tsv(path, report, "vocabulary", ("raw_term", "vocab_term"))
+    if parsed is None:
+        return
+
     rows: list[tuple[str, str, str]] = []
     unmapped = 0
-    with path.open(encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        if not {"raw_term", "vocab_term"} <= set(reader.fieldnames or []):
-            report.fail(
-                "vocabulary",
-                f"{path.name}: header {reader.fieldnames} carries no raw_term/vocab_term column",
-            )
-            return
-        for row in reader:
-            alias = (row.get("raw_term") or "").strip()
-            term = (row.get("vocab_term") or "").strip()
-            # The map also carries raw terms the vocabulary did not adopt; `dna_alias.term` is
-            # NOT NULL, so those are a constraint violation mid-transaction rather than a row.
-            if not alias or not term:
-                unmapped += 1
-                continue
-            rows.append((version, alias, term))
+    for row in parsed:
+        alias = (row.get("raw_term") or "").strip()
+        term = (row.get("vocab_term") or "").strip()
+        # The map also carries raw terms the vocabulary did not adopt; `dna_alias.term` is
+        # NOT NULL, so those are a constraint violation mid-transaction rather than a row.
+        if not alias or not term:
+            unmapped += 1
+            continue
+        rows.append((version, alias, term))
 
     await conn.executemany(
         "INSERT INTO dna_alias (version, alias, term) VALUES ($1, $2, $3) "
@@ -195,8 +220,8 @@ async def _load_aliases(
                 aliases=len(rows), unmapped=unmapped)
 
 
-async def _load_adjudications(
-    conn: asyncpg.Connection, path: Path, version: str, report: ImportReport
+async def load_adjudications(
+    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport
 ) -> None:
     """§8 stage 3 re-applies these at every derive; §14.5: "a derive that regenerates rows
     without re-applying them silently reverts curated fixes".
@@ -204,43 +229,87 @@ async def _load_adjudications(
     The ledger is keyed **per title**: `scope, title_id, term, action, …`. Keyed on
     (version, term) instead, an upsert keeps the last verdict for a term and drops every other
     title's — no failure, no count, and in the direction that loses data.
+
+    **Public, and taking the directory rather than the file**, because decision 247 makes this
+    one of the four curated ledgers a models-only re-import loads: `bundle.py` reaches it
+    directly on a bundle that carries no `content.sqlite` at all, where `load_vocabulary` —
+    whose term tables are the content tier decision 162 forbids re-importing — must not run.
+    The file is `adjudications_<version>.tsv`, so the directory and the version are what a caller
+    can supply; the version is the caller's and never a literal, because on a models-only import
+    it is the install's ACTIVE `dna_vocabulary` version (decision 247 guard 3) and
+    `dna_adjudication.version` is an FK to that table — a default of "v1" here would file 828
+    curated verdicts under a vocabulary the install may not be on. [M4.14 step C2, finding 2.15]
     """
+    path = vocab_dir / f"adjudications_{version}.tsv"
     if not path.is_file():
-        report.warn("adjudications", f"{path.name} absent — no curated DNA verdicts to re-apply")
+        # decision 266's shape, for the branch decision 247 newly put on the recurring path. This
+        # sentence and the two like it in this module read as statements about the INSTALL, and
+        # on a models-only re-import - the only kind decision 162 says will arrive again - all
+        # three are false: the loader returns before it touches anything, so what is stored is
+        # exactly what was stored. Measured through the real import: the three ledgers unlinked
+        # from a models-only bundle left credit_correction, seed_list and dna_adjudication at
+        # their counts and printed three losses. The file is what is absent, so the file is what
+        # the line names, and the count is what makes "nothing changed" checkable - the same
+        # vocabulary the parses-to-nothing branch below already uses.
+        # [M4.14 cycle 4, m414-c4-dim247-02, decisions 247 and 266]
+        stored = await conn.fetchval(
+            "SELECT count(*) FROM dna_adjudication WHERE version = $1", version
+        )
+        report.warn(
+            "adjudications",
+            f"{path.name} absent - this bundle carries no curated DNA verdicts; the {stored} "
+            f"already stored under {version} are left in place and not re-applied (decision 247)"
+            if stored else
+            f"{path.name} absent - no curated DNA verdicts to re-apply",
+            stored=stored,
+        )
+        return
+
+    parsed = validator._read_tsv(path, report, "adjudications", ADJUDICATION_COLUMNS)
+    if parsed is None:
         return
 
     rows: list[tuple] = []
-    with path.open(encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        missing = [c for c in ADJUDICATION_COLUMNS if c not in (reader.fieldnames or [])]
-        if missing:
-            report.fail(
+    for row in parsed:
+        scope = (row["scope"] or "").strip() or "global"
+        term = (row["term"] or "").strip()
+        verdict = (row["action"] or "").strip()
+        raw_id = (row["title_id"] or "").strip()
+        title_id = int(raw_id) if raw_id.isdigit() else None
+        if not term or not verdict:
+            report.warn("adjudications", f"{path.name}: a row carries no term or no action")
+            continue
+        if scope == "title" and title_id is None:
+            report.warn(
                 "adjudications",
-                f"{path.name}: header is not the shipped ledger — missing column(s) "
-                f"{', '.join(missing)}",
-                missing=missing,
+                f"{path.name}: a title-scoped verdict on {term} carries no title_id",
             )
-            return
-        for row in reader:
-            scope = (row["scope"] or "").strip() or "global"
-            term = (row["term"] or "").strip()
-            verdict = (row["action"] or "").strip()
-            raw_id = (row["title_id"] or "").strip()
-            title_id = int(raw_id) if raw_id.isdigit() else None
-            if not term or not verdict:
-                report.warn("adjudications", f"{path.name}: a row carries no term or no action")
-                continue
-            if scope == "title" and title_id is None:
-                report.warn(
-                    "adjudications",
-                    f"{path.name}: a title-scoped verdict on {term} carries no title_id",
-                )
-                continue
-            rows.append((
-                version, scope, title_id, term, verdict,
-                (row["target"] or "").strip() or None, (row["quote"] or "").strip() or None,
-                (row["source"] or "").strip() or None, (row["note"] or "").strip() or None,
-            ))
+            continue
+        rows.append((
+            version, scope, title_id, term, verdict,
+            (row["target"] or "").strip() or None, (row["quote"] or "").strip() or None,
+            (row["source"] or "").strip() or None, (row["note"] or "").strip() or None,
+        ))
+
+    # Decision 247 guard 2. `parse_corrections` has refused to let a ledger that parses to
+    # nothing pass as a silent zero since M4.5 and this loader did not, and the asymmetry is
+    # sharper here because this one DELETEs first: an `adjudications_v1.tsv` present and empty
+    # — the shape a half-finished upstream export writes — cleared 828 curated verdicts
+    # and inserted none, with the report saying "0 DNA adjudications loaded" and nothing saying
+    # what was lost. §14.5's scar is a derive that does not re-apply them; this was the import
+    # doing the deleting itself. Omission may not be destructive, and the count is what makes the
+    # refusal checkable rather than merely quiet.
+    if not rows:
+        stored = await conn.fetchval(
+            "SELECT count(*) FROM dna_adjudication WHERE version = $1", version
+        )
+        report.warn(
+            "adjudications",
+            f"{path.name} parses to no verdicts; the {stored} already stored under {version} "
+            "are left in place rather than replaced (decision 247)",
+            stored=stored,
+        )
+        return
 
     # The ledger is authored upstream and travels with the bundle, so the bundle's copy is the
     # whole truth for its version; replacing it is what makes a re-import idempotent without a
@@ -260,9 +329,9 @@ async def _load_adjudications(
     )
 
 
-async def _load_axes(
+async def load_axes(
     conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport,
-    facets: set[str],
+    facets: set[str] | None = None,
 ) -> None:
     """§6.4: 'Axis definitions are a shipped, authored artifact: one TSV per vocabulary-v1 facet
     (left pole, right pole, term → weight ∈ [−1, 1]) … shipped in `dna_vocab/v1/`'.
@@ -297,45 +366,130 @@ async def _load_axes(
     transaction. §10 promises the operator a report, and an uncaught exception is not one — and
     the stem is a real trap, because decision 191's own prose spells the artifact
     `axis_<facet>_v1.tsv`, which names a facet called `axis_mood_v1`.
+
+    **Public, and its facet set optional**, because decision 247 counts §6.4's axis TSVs among
+    the four curated ledgers a models-only re-import loads: on that bundle `load_vocabulary` does
+    not run, so there is no freshly declared facet set to travel and the authority is the one
+    `dna_axis`'s FK actually checks against — `dna_facet` at this version, which is the
+    vocabulary the install is already on (decision 163 refuses a bundle that would change it).
+    Read here rather than at the call site, so the rule that a stem must be a facet keeps one
+    statement and the FK cannot be satisfied against a set assembled somewhere else.
+    [M4.14 step C2, finding 2.15]
     """
+    if facets is None:
+        facets = {
+            r["facet"]
+            for r in await conn.fetch("SELECT facet FROM dna_facet WHERE version = $1", version)
+        }
     loaded = 0
     not_an_axis = 0
+    unreadable: list[str] = []
+    # This loader opens every TSV beside the vocabulary files — that IS the candidate rule, and
+    # the pole header is what tells an axis from its neighbours — so it reads files it does not
+    # own, and one latin-1 byte in the alias map or in the 828-row adjudications ledger came out
+    # of `load_vocabulary` as a `UnicodeDecodeError`, with the naming layer half loaded and no
+    # finding recorded. §10 promises a report. A warn and not a failure, because decision 173
+    # ships the release with no authored axis at all, so a neighbour this loader cannot decode is
+    # not a broken bundle; and it says only what this loader knows — that the file was not read
+    # as an axis — because where the file has an owner, that owner reports the byte itself
+    # (`_load_aliases` and `load_adjudications` both do). [M4.14 step B2, finding 2.12]
     for path in sorted(vocab_dir.glob("*.tsv")):
-        with path.open(encoding="utf-8", newline="") as fh:
-            reader = csv.reader(fh, delimiter="\t")
-            header = next(reader, None)
-            poles = [c.strip() for c in header] if header else []
-            if len(poles) != 2 or not all(poles):
-                not_an_axis += 1
-                continue
-            facet = path.stem
-            if facet not in facets:
-                report.warn(
-                    "axes",
-                    f"{path.name}: poles {poles[0]!r}/{poles[1]!r}, but {facet!r} is not a "
-                    "vocabulary facet — an axis file is named for the facet it turns",
-                )
-                continue
-            left, right = poles
-            weights: list[tuple[str, str, str, float]] = []
-            for row in reader:
-                if len(row) < 2 or not row[0].strip():
+        try:
+            with path.open(encoding="utf-8", newline="") as fh:
+                reader = csv.reader(fh, delimiter="\t")
+                header = next(reader, None)
+                poles = [c.strip() for c in header] if header else []
+                if len(poles) != 2 or not all(poles):
+                    not_an_axis += 1
                     continue
-                try:
-                    w = float(row[1])
-                except ValueError:
-                    report.warn("axes", f"{path.name}: non-numeric weight for {row[0]!r}; skipped")
+                facet = path.stem
+                if facet not in facets:
+                    report.warn(
+                        "axes",
+                        f"{path.name}: poles {poles[0]!r}/{poles[1]!r}, but {facet!r} is not a "
+                        "vocabulary facet — an axis file is named for the facet it turns",
+                    )
                     continue
-                if not -1.0 <= w <= 1.0:
-                    report.fail("axes", f"{path.name}: weight {w} for {row[0]!r} is outside [-1, 1]")
-                    continue
-                weights.append((version, facet, row[0].strip(), w))
+                left, right = poles
+                weights: list[tuple[str, str, str, float]] = []
+                for row in reader:
+                    if len(row) < 2 or not row[0].strip():
+                        continue
+                    try:
+                        w = float(row[1])
+                    except ValueError:
+                        report.warn(
+                            "axes", f"{path.name}: non-numeric weight for {row[0]!r}; skipped"
+                        )
+                        continue
+                    if not -1.0 <= w <= 1.0:
+                        report.fail(
+                            "axes", f"{path.name}: weight {w} for {row[0]!r} is outside [-1, 1]"
+                        )
+                        continue
+                    weights.append((version, facet, row[0].strip(), w))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            unreadable.append(path.name)
+            continue
+
+        # Decision 264: guard 2, on the fourth and last of the DELETE-first ledgers. The two
+        # paths above that DECLINE a file `continue` before any write, and there is a third that
+        # does not: a `<facet>.tsv` opening with a valid two-pole header whose body parses to no
+        # usable weight row is ACCEPTED here, and it is the one that WRITES. It reached the
+        # DELETE below with `weights == []`, cleared the installed weights for the facet,
+        # inserted none, counted the file in `loaded` and reported success - which is the shape a
+        # truncated or de-authored upstream export takes, and the exact loss the warning at the
+        # foot of this function describes: `tonight/dna.axes_for` returns nothing for the facet,
+        # `combine.contested_facet` cannot contest on it, `session_result.conflict` is NULL and
+        # 54c's widest-axis tie-break is 0.0. Decision 163 pins the version across every
+        # re-import, so the key the next bundle would collide on never changes and the only cure
+        # is a corrected export from the corpus.
+        #
+        # Not in tension with decision 261's replacement: an axis re-authored SHORTER still ends
+        # shorter, because `weights` is non-empty there. Zero is the one length indistinguishable
+        # from an export that did not finish writing - the rule the module docstring states for
+        # all four ledgers and that `parse_corrections`, `load_adjudications` (decision 247 guard
+        # 2) and `load_seed_list` (decision 260) each already keep. Before the pole upsert and
+        # not only before the DELETE, because a file this loader will not read weights out of is
+        # a file it has no reason to believe the poles of either.
+        # [M4.14 cycle 2, m414-c2-dim247-axes-empty-file-wipes-the-facet, decision 264]
+        if not weights:
+            stored = await conn.fetchval(
+                "SELECT count(*) FROM dna_axis_weight WHERE version = $1 AND facet = $2",
+                version, facet,
+            )
+            report.warn(
+                "axes",
+                f"{path.name} parses to no axis weights; the {stored} already stored for facet "
+                f"{facet!r} under {version} are left in place rather than replaced (decision 264)",
+                facet=facet, stored=stored,
+            )
+            continue
 
         await conn.execute(
             "INSERT INTO dna_axis (version, facet, left_pole, right_pole) VALUES ($1,$2,$3,$4) "
             "ON CONFLICT (version, facet) DO UPDATE SET left_pole = EXCLUDED.left_pole, "
             "right_pole = EXCLUDED.right_pole",
             version, facet, left, right,
+        )
+        # Decision 261: the bundle's copy is the whole truth for this FACET, which is the rule
+        # the module docstring states for all four of decision 247's ledgers and the one this
+        # loader did not keep. The upsert alone left a term the corpus had removed turning the
+        # axis at its installed weight for ever - decision 163 pins the version across every
+        # re-import, so the key it collides on never changes - and `tonight/dna.axes_for` reads
+        # every row at that version, so a stale weight moves both the numerator and the engaged
+        # weight of `combine.axis_position`, and with it `contested_facet` and 54c's tie-break.
+        #
+        # Per facet and not per version: this loop has already ACCEPTED this file (the pole
+        # header parsed and the stem is a facet the vocabulary knows), and the facets it skipped
+        # above are not this file's to clear. THREE paths reach this block or decline before it:
+        # the two that decline a file outright `continue` above, and the third - accepted, and
+        # parsing to no weight at all - is decision 264's guard, which returns the file to the
+        # declining side. Stated as three because it was stated as two, and the one the count
+        # left out is the one that writes.
+        # [M4.14 cycle 1, M414-REV-247-02, decision 261; cycle 2, decision 264]
+        await conn.execute(
+            "DELETE FROM dna_axis_weight WHERE version = $1 AND facet = $2", version, facet
         )
         await conn.executemany(
             "INSERT INTO dna_axis_weight (version, facet, term, weight) VALUES ($1,$2,$3,$4) "
@@ -353,12 +507,38 @@ async def _load_axes(
     # it is a warn and not a fail; it is said out loud so that "no split ever surfaced" is read
     # as the missing artifact rather than as a household that never disagreed.
     if not loaded:
+        # THE CONSEQUENCES ARE THE INSTALL'S AND THE ABSENCE IS THE BUNDLE'S, and this sentence
+        # asserted all three about an install it had not read. Decision 266's own Cost paragraph
+        # names it - "false of an install whose weights are intact - the same defect from the
+        # other side" - and it is reachable because decision 247's step C2 put this loader on the
+        # models-only path, where the install can already hold weights and every declining branch
+        # above leaves them exactly where they are. Measured: a models-only re-import with the
+        # three axis TSVs unlinked left all six `dna_axis_weight` rows byte-identical and printed
+        # that the Map had no axes to plot and that `session_result.conflict` is NULL on every
+        # evening. The Map/conflict/54c clause is kept for the install that HAS those
+        # consequences, which is the count coming back 0 - decision 173 makes that the shipped
+        # state, and it is the line an operator actually has to act on.
+        # [M4.14 cycle 4, m414-c4-dim247-01, decisions 247 and 266]
+        stored = await conn.fetchval(
+            "SELECT count(*) FROM dna_axis_weight WHERE version = $1", version
+        )
         report.warn(
             "axes",
-            f"no authored axis definition in dna_vocab/{version}/ — the Map surface has no axes "
+            f"no authored axis definition in dna_vocab/{version}/ in this bundle; the {stored} "
+            f"already stored under {version} are left in place and not re-applied (decision 247)"
+            if stored else
+            f"no authored axis definition in dna_vocab/{version}/ - the Map surface has no axes "
             "to plot and renders its no-axes state, and Tonight's split surfacing (§6.2 step 5) "
             "is off: session_result.conflict is NULL on every evening and 54c's widest-axis "
             "tie-break is 0.0 for every pair",
+            stored=stored,
+        )
+    if unreadable:
+        report.warn(
+            "axes",
+            f"{len(unreadable)} file(s) in dna_vocab/{version}/ are not readable as UTF-8 text "
+            "and were not read as axis definitions",
+            files=unreadable,
         )
     # §10 asks for counts, and zero is the count that matters here, so the line is unconditional.
     report.note(
@@ -505,37 +685,36 @@ def parse_corrections(path: Path, report: ImportReport) -> list[Correction]:
     Parsing is separate from the write because §10 promises a *report*: the loader read
     `r["field"]`, a column no shipped ledger has, so a real bundle raised `KeyError` — a stack
     trace where the operator was owed a validation failure naming the column.
-    """
-    with path.open(encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
-        header = reader.fieldnames or []
-        missing = [c for c in CORRECTIONS_COLUMNS if c not in header]
-        if missing:
-            report.fail(
-                "corrections",
-                f"{path.name}: header {header} is not the shipped ledger — missing column(s) "
-                f"{', '.join(missing)}",
-                missing=missing,
-            )
-            return []
 
-        rows: list[Correction] = []
-        for row in reader:
-            field = (row["kind"] or "").strip()
-            raw_id = (row["title_id"] or "").strip()
-            if raw_id and not raw_id.isdigit():
-                report.warn(
-                    "corrections", f"{path.name}: {field or 'a row'} names title {raw_id!r}, "
-                                   "which is not a title id; skipped",
-                )
-                continue
-            rows.append(Correction(
-                int(raw_id) if raw_id else None,
-                field,
-                (row["value"] or "").strip() or None,
-                (row["evidence"] or "").strip() or None,
-                (row["note"] or "").strip() or None,
-            ))
+    The open itself moved to `validate._read_tsv` for the same reason one column over: this is a
+    hand-edited six-row ledger, so a stray latin-1 byte in it is the likeliest thing that is not
+    a missing column, and until M4.14 that left `/validate` holding a `UnicodeDecodeError` with
+    no finding at all. Unreadable and empty stay different answers: the first records a failure,
+    the second the warning below, and `load_corrections` declines to replace the stored ledger on
+    either — which is the guard decision 247 then asks `load_adjudications` to keep as well.
+    [M4.14 step B2, finding 2.12]
+    """
+    parsed = validator._read_tsv(path, report, "corrections", CORRECTIONS_COLUMNS)
+    if parsed is None:
+        return []
+
+    rows: list[Correction] = []
+    for row in parsed:
+        field = (row["kind"] or "").strip()
+        raw_id = (row["title_id"] or "").strip()
+        if raw_id and not raw_id.isdigit():
+            report.warn(
+                "corrections", f"{path.name}: {field or 'a row'} names title {raw_id!r}, "
+                               "which is not a title id; skipped",
+            )
+            continue
+        rows.append(Correction(
+            int(raw_id) if raw_id else None,
+            field,
+            (row["value"] or "").strip() or None,
+            (row["evidence"] or "").strip() or None,
+            (row["note"] or "").strip() or None,
+        ))
 
     if not rows:
         # A ledger that parses to nothing has the same effect as one that was never applied,
@@ -548,15 +727,35 @@ def parse_corrections(path: Path, report: ImportReport) -> list[Correction]:
 async def load_corrections(conn: asyncpg.Connection, path: Path, report: ImportReport) -> None:
     """Write the parsed ledger. See `parse_corrections` for the shape and the §14.5 argument."""
     if not path.is_file():
-        report.warn("corrections", "corrections_v1.tsv absent — curated credit fixes will not "
-                                   "survive the next derive")
+        # The same repair as `load_adjudications`' absent branch, and argued there: "curated
+        # credit fixes will not survive the next derive" is §14.5's scar and is true of an
+        # install that has none, but on the models-only path this loader now runs on it was said
+        # over a `credit_correction` table this import had just declined to touch.
+        # [M4.14 cycle 4, m414-c4-dim247-02, decisions 247 and 266]
+        stored = await conn.fetchval("SELECT count(*) FROM credit_correction")
+        report.warn(
+            "corrections",
+            f"corrections_v1.tsv absent - this bundle carries no credit ledger; the {stored} "
+            "already stored are left in place and not re-applied (decision 247)"
+            if stored else
+            "corrections_v1.tsv absent - curated credit fixes will not survive the next derive",
+            stored=stored,
+        )
         return
     rows = parse_corrections(path, report)
     if not rows:
         return
-    # Decision 162 makes a model re-import a repeated event, and the INSERT below had no clear,
-    # so every re-import appended the whole ledger again. The bundle's copy is authoritative for
-    # the bundle, and nothing else writes this table yet, so it is replaced rather than merged.
+    # The bundle's copy is the whole truth: nothing else writes this table, so it is replaced
+    # rather than merged and the ledger a re-import ships is the ledger the install ends on.
+    #
+    # What this comment used to argue was the re-import path, and that path did not reach this
+    # function at all. Decision 162 makes a models-only bundle the recurring one, and `bundle.py`
+    # held this call inside `if db is not None:` — a branch a models-only import never enters —
+    # so the clear defended a repetition that could not happen while the six shipped corrections
+    # were dropped on every re-import, with `report.table_counts` empty and no line in the report
+    # to notice it by. Decision 247 puts the four curated ledgers back on the model path, which
+    # is what makes this argument true rather than merely plausible.
+    # [M4.14 finding 2.15, decision 247]
     await conn.execute("DELETE FROM credit_correction")
     await conn.executemany(
         "INSERT INTO credit_correction (title_id, field, new_value, evidence, note) "
@@ -592,31 +791,162 @@ def _decade(item: object) -> int | None:
     A title whose year the corpus never resolved keeps a NULL decade rather than failing the
     bundle: §6.1 still wants the title in the queue, and a hole in the stratification is a
     smaller loss than a refused seed.
+
+    AND THAT PROMISE COVERED ONE SPELLING OF "NEVER RESOLVED" OUT OF THREE. `year: null` returned
+    None correctly; `NaN` raised ValueError and `Infinity` raised OverflowError, neither of which
+    is an `asyncpg.PostgresError`, a `sqlite3.DatabaseError` or an `OSError` - so
+    `import_bundle`'s named-refusal arm could not see them, `except BaseException` re-raised, and
+    the operator's report line was `the import did not run to a report: ValueError: cannot
+    convert float NaN to integer`: a Python type name for a defect in a named file, after the
+    1.04 GB copy, for a refusal `/validate` had just said would not happen. `NaN` is precisely
+    how an unresolved year arrives from a frame - `json.dumps` writes the bare literal and
+    `json.loads` reads it back - so it is this docstring's own case, spelled the way the
+    exporter's language spells it.
+    The finite bound is the third: `seed_list.decade` is a smallint (`0003_content.sql`), so a
+    year outside it (an epoch stamp written into the field) derived a decade asyncpg refused with
+    a DataError - the named arm, but reported as "no rule in this importer named this refusal
+    first". A year this app cannot turn into a storable decade is the same case as a year the
+    corpus never resolved, and it takes the same answer.
+    [M4.14 cycle 4, m414-c4-dim247-03]
     """
     if not isinstance(item, dict):
         return None
     year = item.get("year")
-    return (int(year) // 10) * 10 if isinstance(year, int | float) else None
+    if not isinstance(year, int | float) or not math.isfinite(year):
+        return None
+    decade = (int(year) // 10) * 10
+    return decade if -32768 <= decade <= 32767 else None
 
 
 async def load_seed_list(conn: asyncpg.Connection, path: Path, report: ImportReport) -> None:
-    """§4.3: the 100-title decade-stratified onboarding list (§6.1 first-run queue seed)."""
+    """§4.3: the 100-title decade-stratified onboarding list (§6.1 first-run queue seed).
+
+    **The bundle's copy is the whole truth**, which is the rule `load_corrections` keeps one
+    function above and this one did not. The upsert it replaces was `ON CONFLICT (position) DO
+    UPDATE` with no preceding clear, so a refreshed list shorter than the installed one left its
+    own tail behind: executed, a three-entry list over the fixture's eight left eight rows with
+    positions 3-7 still naming the old ids. `rate/queue.py` joins the whole table and counts the
+    whole table, so §6.1's first run would have offered a merge of two onboarding lists — with
+    the same row count a correct load produces, which is why nothing noticed. Decision 162 makes
+    the models-only bundle the recurring one and decision 247 is what makes this loader run on
+    one at all, so the clear has to land first or the wiring ships the merge.
+    [M4.14 step C1, finding 2.15]
+
+    **An entry naming a title this install never seeded is skipped and counted.** `seed_list
+    .title_id` is a NOT NULL foreign key to `title(id)` (`0003_content.sql`), so a single unknown
+    id aborts the whole import on a violation that names a constraint rather than a file — and
+    decision 248 makes the case ordinary rather than exotic: the corpus's catalogue is not frozen
+    at this install's seed, so a later bundle's onboarding list can name a title this household
+    never acquired. §6.1 wants the titles it can offer, and the count is what keeps the shortfall
+    from being silent. `validate._validate_seed_list` says the same number before the transaction
+    opens; this is the half that happens inside it. (decision 247 guard 1)
+
+    **A list that parses to nothing is a refusal to replace, not an instruction to delete.**
+    Decision 260 extends decision 247's guard 2 to the third DELETE-first ledger: `[]` and
+    `{"titles": []}` are what a half-finished upstream export writes, and they wiped the
+    installed list behind a note reading "0-title decade-stratified seed list loaded". A shorter
+    list still ends shorter; zero is the one length indistinguishable from an export that did not
+    finish. [M4.14 cycle 1, M414-REV-247-01, decision 260]
+
+    The parse is deliberately not defensive. `validate_artifacts` has already refused a payload
+    that is not a list of objects carrying an integer `title_id`, so the `int(item)` fallback this
+    used to keep was a second, quieter reading of a shape the validator no longer admits — and
+    two readings of one file is how the two come to disagree. [M4.14 step B2]
+    """
     if not path.is_file():
-        report.warn("seed-list", "seed_list.json absent — the first rating queue falls back to "
-                                 "P(seen) ordering alone")
+        # The sharpest of the three, and argued at `load_adjudications`' absent branch: with rows
+        # still stored, "falls back to P(seen) ordering alone" is the INVERSE of what happens -
+        # `rate/queue.py` LEFT JOINs the table, orders on `s.seed_position ASC NULLS LAST` ahead
+        # of `p_seen DESC`, counts it for §6.1's first run and prints "seed list position N of M"
+        # on the very next card. The operator was told §6.1's onboarding seed was gone while the
+        # app's own why-line said it was in use, and their remedy - re-export, or restore - is
+        # work against a defect that does not exist.
+        # [M4.14 cycle 4, m414-c4-dim247-02, decisions 247 and 266]
+        stored = await conn.fetchval("SELECT count(*) FROM seed_list")
+        report.warn(
+            "seed-list",
+            f"seed_list.json absent - this bundle carries no onboarding list; the {stored} "
+            "already stored are left in place and not re-applied (decision 247)"
+            if stored else
+            "seed_list.json absent - the first rating queue falls back to P(seen) ordering alone",
+            stored=stored,
+        )
         return
     payload = json.loads(path.read_text(encoding="utf-8"))
     items = payload["titles"] if isinstance(payload, dict) else payload
-    rows = [
-        (i, int(item["title_id"]) if isinstance(item, dict) else int(item), _decade(item))
-        for i, item in enumerate(items)
-    ]
+    ids = [int(item["title_id"]) for item in items]
+    known = {
+        r["id"]
+        for r in await conn.fetch("SELECT id FROM title WHERE id = ANY($1::int[])", ids)
+    }
+
+    rows: list[tuple[int, int, int | None]] = []
+    unseeded: list[int] = []
+    for title_id, item in zip(ids, items, strict=True):
+        if title_id not in known:
+            unseeded.append(title_id)
+            continue
+        # Renumbered over what loaded rather than carried across from the bundle's own index:
+        # `position` is a smallint PRIMARY KEY meaning "the Nth title offered" and nothing reads
+        # it as a pointer back into the file, so a hole would only record a skip the report
+        # already carries by name.
+        rows.append((len(rows), title_id, _decade(item)))
+
+    if not rows:
+        # Decision 260: guard 2, extended to the third DELETE-first ledger. `load_corrections`
+        # returns before its own DELETE when the ledger parses to nothing and `load_adjudications`
+        # does the same naming the stored count, and this loader - the one decision 247 newly put
+        # on the recurring path, and the one that gained a DELETE this milestone - did not. A
+        # `seed_list.json` present and parsing to zero usable entries, which is the shape a
+        # half-finished upstream export writes, therefore cleared the household's onboarding list
+        # and wrote nothing back, behind a note reading "0-title decade-stratified seed list
+        # loaded". `rate/queue.py` counts this table for section 6.1's first run and LEFT JOINs
+        # it for the ordering, so the seed became the P(seen) fallback silently.
+        #
+        # Not in tension with guard 1: a ledger that arrives SHORTER still ends shorter, because
+        # `rows` is non-empty there. Zero is the one length that cannot be told apart from an
+        # export that did not finish. [M4.14 cycle 1, M414-REV-247-01, decision 260]
+        #
+        # AND THE TWO CAUSES ARE SAID APART, because `rows` is what is left after guard 1 has
+        # dropped every unknown id rather than what the file parsed to. A list that parsed
+        # perfectly and named only titles this install never seeded - decision 248's ordinary
+        # case taken to its limit, a corpus that renumbered its catalogue - reached this branch
+        # and reported "parses to no onboarding titles", byte-identical to the line an empty
+        # export gets, above guard 1's own warn and its `return`. The two have different
+        # remedies: re-export the file, or seed the titles it names. Measured: two well-formed
+        # entries naming unknown ids produced exactly the empty-file sentence with the skipped
+        # count and the ids dropped. [M4.14 cycle 4, m414-c4-dim247-04]
+        stored = await conn.fetchval("SELECT count(*) FROM seed_list")
+        if unseeded:
+            report.warn(
+                "seed-list",
+                f"all {len(unseeded)} of {path.name}'s onboarding entry(ies) name a title this "
+                f"install never seeded (first: {unseeded[:5]}); none is usable, so the {stored} "
+                "already stored are left in place rather than replaced (decisions 247 and 260)",
+                skipped=len(unseeded), title_ids=unseeded[:20], stored=stored,
+            )
+        else:
+            report.warn(
+                "seed-list",
+                f"{path.name} parses to no onboarding titles; the {stored} already stored are "
+                "left in place rather than replaced (decision 260)",
+                stored=stored,
+            )
+        return
+
+    await conn.execute("DELETE FROM seed_list")
     await conn.executemany(
-        "INSERT INTO seed_list (position, title_id, decade) VALUES ($1,$2,$3) "
-        "ON CONFLICT (position) DO UPDATE SET title_id = EXCLUDED.title_id, "
-        "decade = EXCLUDED.decade",
+        "INSERT INTO seed_list (position, title_id, decade) VALUES ($1,$2,$3)",
         rows,
     )
+    if unseeded:
+        report.warn(
+            "seed-list",
+            f"{len(unseeded)} onboarding entry(ies) name a title this install never seeded "
+            f"(first: {unseeded[:5]}); they are skipped and the first rating queue is that much "
+            "shorter (decision 247)",
+            skipped=len(unseeded), title_ids=unseeded[:20],
+        )
     undated = sum(1 for _, _, decade in rows if decade is None)
     report.note(
         "seed-list",

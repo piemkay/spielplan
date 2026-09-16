@@ -1968,7 +1968,7 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
 
 
-# --- §12: the seven exit scripts, and the console they print to ---------------------------
+# --- §12: the eight exit scripts, and the console they print to ---------------------------
 #
 # §12's M2, M3, M4, M4.9, M4.11 and M4.12 rows are measured by hand, by `ops/m*_exit_criterion.py`,
 # and a milestone is closed on what they print and the code they exit with. A verdict that
@@ -2021,6 +2021,27 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
 # is adding `ops/m412_exit_criterion.py` in a parallel worktree and bumps these same five
 # assertions to 6 for its own script, so whichever of the two merges second resolves them to 7
 # rather than taking one side. [M4.13]
+#
+# `ops/m414_exit_criterion.py` is the EIGHTH, and 7 became 8 in the five places below only after
+# every rule here had been read against it: no printed literal outside cp850 (it escapes what it
+# did not author twice over -- the importer's em-dashed finding messages, which it prints on every
+# refused probe, and the corpus's own file names and paths, which reach the console from a bundle
+# built on another machine), no `check()` predicate settled before the run, a computed terminal
+# verdict, no component read at all, nothing that can fail between its CREATE DATABASE and the
+# block whose finally drops it, an `except Exception` around the measurement that reports rather
+# than propagates, and both arms on every numbered heading it prints -- thirteen of them, each
+# naming the plan's own check number, because it runs them in the order the install state allows
+# rather than in the order the plan tabulates them. It has no `rate()` seeding path for the last
+# rule to exempt: it seeds through `POST /api/admin/bundle/import` and the worker's own tick,
+# which is `ops/m45_exit_criterion.py`'s exemption one layer up -- what it measures IS the import
+# route, so a harness that wrote rows another way would be measuring itself. It is also the first
+# of the eight to start a CHILD PROCESS: §5.3 gives the import to the worker and the criterion's
+# health check is that the BACKEND's loop is not the one it blocks, which a single-process harness
+# cannot measure at all. [M4.14, decision 255]
+#
+# THE HAND-MERGE LANDS ON 8 UNLESS THE SIBLING ADDS ONE: M4.15 is being built in a parallel
+# worktree and merges after this branch. If it brings a ninth script these five assertions move
+# again, and whichever of the two merges second resolves them rather than taking one side.
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2127,7 +2148,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 7, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2207,7 +2228,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 7, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2333,7 +2354,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 7, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2613,7 +2634,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 7, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3241,7 +3262,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 7, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3731,6 +3752,59 @@ def _decision(number: int) -> str:
     start = next(m for m in heads if m.group(1) == str(number))
     after = [m.start() for m in heads if m.start() > start.start()]
     return rows[0] + "\n" + body[start.start(): after[0] if after else len(body)]
+
+
+def _decision_section(number: int) -> str:
+    """One decision's argued section, for a decision the summary tables do not carry a row for.
+
+    `_decision` above wants both halves and asserts exactly one `| N |` row; the M4.14 block is
+    written as sections without a summary table, so this reads the section alone rather than
+    making the guard below depend on a table that does not exist.
+    """
+    body = REGISTER.read_text(encoding="utf-8")
+    heads = list(re.finditer(r"^### (\d+)\. ", body, re.M))
+    start = next(m for m in heads if m.group(1) == str(number))
+    after = [m.start() for m in heads if m.start() > start.start()]
+    return body[start.start(): after[0] if after else len(body)]
+
+
+def test_decision_252_does_not_assert_a_subprocess_this_tree_does_not_have():
+    """A decision is normative from the day it is taken (decision 177), so it may not describe a
+    construction that is not there.
+
+    252's ruling is `ProcessPoolExecutor(max_workers=1)` with two intra-op threads in the child,
+    awaited from the validate route through `loop.run_in_executor`, and its Cost paragraph
+    describes that child in the present tense. No executor of any kind exists in
+    `backend/spielplan`: `validate._validate_model_artifacts` imports and calls `load_tower`
+    inline, on the API process's event-loop thread, reached from an `async def` route. The gap is
+    stated in `docs/TESTING.md`, in `ops/m414_exit_criterion.py`'s check 9 and in
+    `api/artifacts.py`'s docstring - and it was stated in every place except the one a reader of
+    the decision meets, which is how the owner's own review brief came to ask what happens when
+    that child process dies.
+
+    So the two are tied together here: while the construction is absent the section says so, and
+    the day someone builds it this guard is what makes them delete the sentence rather than leave
+    a record that has gone stale in the other direction. Named symbols rather than prose on the
+    code side, because the ruling names them. [M4.14 cycle 1, M414-C1-REC-01]
+    """
+    built = [
+        path.relative_to(REPO).as_posix()
+        for path in (REPO / "backend" / "spielplan").rglob("*.py")
+        if "ProcessPoolExecutor" in path.read_text(encoding="utf-8")
+    ]
+    section = _decision_section(252)
+    disclosed = "NOT BUILT IN M4.14" in section
+
+    if built:
+        assert not disclosed, (
+            f"decision 252's subprocess is built ({', '.join(built)}) and its section still says "
+            "NOT BUILT IN M4.14 - delete that paragraph"
+        )
+    else:
+        assert disclosed, (
+            "no ProcessPoolExecutor exists under backend/spielplan, so decision 252 rules on a "
+            "construction this tree does not have and its section has to say so"
+        )
 
 
 def _derives_the_card_type_from_a_counter_called_seq(text: str) -> list[str]:
@@ -5120,3 +5194,185 @@ def test_the_clamp_control_arithmetic_moves_when_the_simulation_does():
     assert _tense_under_the_clamp(60, 7, 12) == 19
     assert _tense_under_the_clamp(60, 12, 12) == 0
     assert _tense_under_the_clamp(60, 7, 4) == 0
+
+
+# --- M4.14 review cycle 3: this lane's own decision range, published in two documents ---------
+#
+# The pair below holds one fact -- which decision numbers this lane has spent -- because the two
+# documents that state it disagreed and nothing in the tree re-derived either. They hold sentences
+# rather than symbols for the reason the M4.13 block above gives: the register and
+# `docs/TESTING.md` are what a later milestone reads BEFORE the code, and a number handed out
+# twice is two normative rules under one heading, over source files that already cite the first.
+
+_DECISION_HEADING = re.compile(r"^### (\d+)\. ", re.M)
+# "leaving **264-266** spare": the ledger's form for a number a later cycle may take. The end of
+# the range is optional because a single number is published as "**264** spare".
+_LEDGER_SPARE = re.compile(r"\*\*(\d+)(?:-(\d+))?\*\* spare")
+# "**247-266 is spent**": the claim that replaces it, and the half that can be wrong in the other
+# direction -- a range published as spent with a number nobody ever wrote in it, which is what
+# `0019` is in the migration ledger.
+_LEDGER_SPENT = re.compile(r"\*\*(\d+)-(\d+) is spent\*\*")
+
+# The register spells its own counts. Both spellings are read so the guard below rules on the
+# count rather than on how a preamble chose to write it.
+_COUNT_WORDS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+    "nineteen", "twenty",
+)
+
+
+def _register_decisions() -> set[int]:
+    """Every decision number the register carries as an argued section."""
+    return {int(n) for n in _DECISION_HEADING.findall(REGISTER.read_text(encoding="utf-8"))}
+
+
+def _range_claims(text: str) -> tuple[list[int], list[int]]:
+    """The decision numbers `text` publishes as still available, and the ones it calls spent."""
+    spare = [
+        number
+        for start, end in _LEDGER_SPARE.findall(text)
+        for number in range(int(start), int(end or start) + 1)
+    ]
+    spent = [
+        number
+        for start, end in _LEDGER_SPENT.findall(text)
+        for number in range(int(start), int(end) + 1)
+    ]
+    return spare, spent
+
+
+def test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent():
+    """The ledger says which numbers a lane has left; the register says which it has taken.
+
+    `docs/TESTING.md` published "leaving **264-266** spare" over a register carrying 264, 265 and
+    266 as argued sections, each cited by number from `importer/dna.py`, `importer/bundle.py`,
+    `importer/validate.py`, three test files and `spec_coverage.toml`. CLAUDE.md sends the next
+    reader to the ledger "rather than assuming status", so a cycle needing a rule takes 264 on the
+    ledger's word and writes a second `### 264.`: two normative decisions under one number, over
+    five files already citing the first, and nothing re-derives the count to say so. It is not a
+    hypothetical - this review run's own brief repeats that sentence's three numbers, and the
+    range had to be corrected by hand.
+
+    Both directions, because the repair introduces the other one. A number published as SPARE may
+    not exist in the register; a range published as SPENT must exist in it end to end, since a
+    hole in a spent range is a number allocated and never written - which is exactly what `0019`
+    is in the migration ledger and exactly what must not be reused. Decision 177 is why either
+    matters: a decision is normative from the day it is taken, so the register - not the ledger -
+    is the record of which numbers have been taken at all. [M4.14 cycle 3, m414-c3-rec-01]
+    """
+    spare, spent = _range_claims(TESTING_LEDGER.read_text(encoding="utf-8"))
+    taken = _register_decisions()
+
+    handed_out = sorted(set(spare) & taken)
+    assert not handed_out, (
+        "docs/TESTING.md publishes these decision numbers as available and the register has "
+        f"already argued them: {handed_out}. Restate the sentence over the register as it is - "
+        "a number handed out twice is two rules under one heading."
+    )
+    unwritten = sorted(set(spent) - taken)
+    assert not unwritten, (
+        "docs/TESTING.md publishes a decision range as spent and the register carries no section "
+        f"for these: {unwritten}. A number inside a spent range that was never written is one a "
+        "later cycle will reuse, which is the hole 0019 is in the migration ledger."
+    )
+
+
+def test_the_range_guard_reads_both_claims_the_ledger_can_make():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    Four shapes: the sentence that shipped, the sentence that replaces it, the single-number form,
+    and a paragraph making neither claim - which is the direction that keeps the guard honest,
+    because a ledger saying nothing about the range is not one this can report on.
+    """
+    assert _range_claims("join `rail.AWAITING_PRODUCER`), leaving **264-266** spare.") == (
+        [264, 265, 266],
+        [],
+    )
+    assert _range_claims("**247-266 is spent**: the sentence this one replaces") == (
+        [],
+        list(range(247, 267)),
+    )
+    assert _range_claims("and **264** spare after it") == ([264], [])
+    assert _range_claims("a paragraph that claims neither") == ([], [])
+
+
+def _decision_blocks_for(milestone: str) -> list[tuple[str, str]]:
+    """Every `## Decisions taken` block whose heading names `milestone`, as (heading, body)."""
+    body = REGISTER.read_text(encoding="utf-8")
+    heads = list(re.finditer(r"^## [^\n]*$", body, re.M))
+    out = []
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
+        if head.group(0).startswith("## Decisions taken") and milestone in head.group(0):
+            out.append((head.group(0), body[head.end():end]))
+    return out
+
+
+def _published_and_carried(block: str) -> tuple[int | None, int]:
+    """The count a block's preamble publishes, and the number of sections it carries.
+
+    `None` for a block whose preamble opens on something other than a number word: M4.12's
+    review-cycle block opens straight on its one `###` section, and a claim nobody made is not
+    this guard's to invent.
+    """
+    lead = next((line for line in block.splitlines() if line.strip()), "")
+    word = re.match(r"\**([A-Za-z]+)\b", lead)
+    published = (
+        _COUNT_WORDS.index(word.group(1).lower())
+        if word and word.group(1).lower() in _COUNT_WORDS
+        else None
+    )
+    return published, len(_DECISION_HEADING.findall(block))
+
+
+def test_the_registers_decision_blocks_count_the_decisions_they_carry():
+    """The register's own convention, held for the milestone under review.
+
+    Every block here opens by counting itself - "Thirteen", "Eight", "Three more" - and that count
+    is how a reader knows a block is whole. M4.14's review-cycle-1 heading said "Four decisions
+    the adversarial review forced" over seven sections, because review cycle 2 appended 264, 265
+    and 266 under it rather than opening a heading of its own: every citation of those three in
+    the tree is tagged `[M4.14 cycle 2, ...]`, 264 rules on code decision 261 had already shipped
+    and 266 on decision 256's refusal message, so neither could have been taken in the cycle the
+    heading names. An auditor reconciling the milestone's history then cannot tell a stale
+    preamble from three decisions filed under the wrong cycle with no owner sign-off, which is the
+    ambiguity decision 177 depends on being absent.
+
+    Scoped to the blocks whose heading names `current_milestone`, and that is a real scope rather
+    than a convenience: four older blocks carry the same drift from their own later cycles
+    (2026-09-07's "One" over three sections, 2026-09-09's "Seven" over twelve, 2026-09-10's "Ten"
+    over eleven, M4.11's "Three" over four), and rewriting history to satisfy a guard is the
+    opposite of what a register is for. What is repairable is the block a milestone is still
+    writing. [M4.14 cycle 3, m414-c3-rec-02]
+    """
+    milestone = tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["current_milestone"]
+    blocks = _decision_blocks_for(milestone)
+    assert blocks, (
+        f"the register carries no `## Decisions taken` heading naming {milestone}. Since M4.11 "
+        "every block names its milestone in the heading, and that is the only handle a reader - "
+        "or this guard - has on which block belongs to which milestone."
+    )
+    drift = [
+        f"  {heading}: publishes {published}, carries {carried}"
+        for heading, block in blocks
+        for published, carried in [_published_and_carried(block)]
+        if published is not None and published != carried
+    ]
+    assert not drift, (
+        "a decision block in docs/spec-v2.2-proposals.md counts itself wrong. A later cycle's "
+        "decisions appended under an earlier cycle's heading are recorded under the wrong cycle: "
+        "give that cycle its own heading, or restate the count.\n" + "\n".join(drift)
+    )
+
+
+def test_the_block_counter_reads_the_preamble_the_register_writes():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
+
+    The three shapes the register writes: the preamble that shipped, the same pair of blocks once
+    they are split, and a block that publishes no count at all.
+    """
+    shipped = "\n\nFour decisions the review forced.\n\n### 260. a\n\nwhy\n\n### 264. b\n\nwhy\n"
+    assert _published_and_carried(shipped) == (4, 2)
+    assert _published_and_carried("\n\nTwo decisions.\n\n### 260. a\n\n### 261. b\n") == (2, 2)
+    assert _published_and_carried("\n\n### 227. straight in\n\nwhy\n") == (None, 1)
