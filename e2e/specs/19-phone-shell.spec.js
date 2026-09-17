@@ -8,8 +8,14 @@ import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '
  * §6's preamble - "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
  * progressive enhancement, installable, service-worker shell cache" - is normative and had no
  * owner: §12 schedules screens, every surface milestone built its own and left the chrome
- * alone, and no coverage row at all named `06-responsive`. The three `02-shell` ids this map
- * held were M0's session-cookie contract and M4.9's model rail, neither of them the preamble.
+ * alone, and `06-responsive` was held by nothing in this map until M4.15's own two rows -
+ * `platform-every-touch-target-meets-the-token` and
+ * `platform-shell-clears-the-status-bar-and-the-toolbar` - took it. The three `02-shell` ids this
+ * map held were M0's session-cookie contract and M4.9's model rail, neither of them the preamble.
+ * (Re-scoped at M4.16: raising `current_milestone` past M4.15 put those two rows outside the
+ * current-milestone exclusion in `test_no_record_says_this_map_never_named_a_spec_it_did`, which
+ * is the outcome that guard calls right rather than a false alarm. This was the fourth and last
+ * copy of the universal; the map, the instrument and the ledger carry the other three.)
  * M4.15 decides those rules once, in the six files every other frontend milestone is forbidden
  * to touch, and this is where a browser is asked whether they hold.
  *
@@ -193,11 +199,44 @@ test('no form control on the member path zooms on focus', async ({ page, context
 // 2. The 48 px rule, on the controls no sweep had reached
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Measure a box only once nothing is still moving it.
+ *
+ * `boundingBox()` does not read layout. It reads the control's quads mapped through every
+ * ancestor transform, and that arithmetic is single precision. All three controls below open
+ * inside an overlay wearing `design.css`'s `fadeIn` - `transform: translateY(4px)`, 120 ms on
+ * `.menu` and on the model rail, 140 ms on the title panel - so a read landing inside that
+ * window maps the box through a fractional translate and rounds. At rest it cannot: every
+ * ordinate WebKit lays out is a multiple of 1/64 px, and every such value under 2^18 px is
+ * exact in binary32, so the corner subtraction is exact and a 48 px box measures 48.
+ *
+ * Which is why this waits rather than tolerating a near miss. On the M4.16 gate the account
+ * menu's first entry came back 47.99999237060547 px tall - 48 minus 2^-17, two binary32 ulps -
+ * from a rule that specifies `min-height: var(--touch)` on a border-box element with no border
+ * and 9 px of vertical padding, whose computed height is 48px and whose `offsetHeight` is 48.
+ * Nothing in the cascade subtracts, and nothing this milestone touched moved that box; the
+ * trace puts the read 71-98 ms into a 120 ms animation. A tolerance would have rounded away the
+ * floor M4.15 spent a milestone establishing in both dimensions to hide a box that was merely
+ * still arriving. [§6 preamble]
+ *
+ * The walk is up the ancestors because the transform is not on the control - it is on `.menu`,
+ * on `.panel` and on the rail. `frontend/src` declares one keyframe set and no infinite
+ * animation, so every promise waited on here settles.
+ */
+async function hasStoppedMoving(locator) {
+  await locator.evaluate(async (el) => {
+    const moving = [];
+    for (let node = el; node; node = node.parentElement) moving.push(...node.getAnimations());
+    await Promise.all(moving.map((a) => a.finished.catch(() => {})));
+  });
+}
+
 /** Both dimensions, always. `design.css`'s coarse block raises `min-height` and never
  *  `min-width`, so every control it reaches passes a height-only assertion by construction and
  *  the narrow axis is where this app's failures actually were: two overlay exits at 48 by 32,
  *  and a stack of account links at 34 that the block's selector list never named. */
 async function meetsTheTouchFloor(locator, what) {
+  await hasStoppedMoving(locator);
   const box = await locator.boundingBox();
   expect(box, `${what} is not on screen`).not.toBeNull();
   expect(
@@ -820,4 +859,81 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   // No ballot, no approvals, no reveal: all three live past the door, and `Back` is rendered
   // only when this device is somewhere past it.
   await expect(page.getByTestId('tonight-back')).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The notices the displayed data's own terms require (M4.16, decisions 293 and 298)
+// ---------------------------------------------------------------------------------------------
+
+/** Every source whose data this app puts on a screen, as one alternation, used below only as an
+ *  ABSENCE. The licences require a notice within the PRODUCT and none of them asks for a credit
+ *  on every tile, which is what makes 6.8's quiet register decisive here rather than merely
+ *  preferable: a source name stamped on a poster satisfies no licence and breaks the register in
+ *  the same line. [decision 293] */
+const SOURCE_NAMES = /IMDb|TMDB|TVmaze|Wikipedia|OMDb/i;
+
+test('the data sources are attributed once, on /account, and on no card', async ({ page }) => {
+  // HERE AND NOT IN `09-passkeys`, WHICH IS THE OTHER SPEC THAT DRIVES /account. The phone
+  // project's `testMatch` anchors its alternation on `\.spec\.js` immediately after
+  // (`playwright.config.js:79`), so only a filename ending in one of those five runs on a phone
+  // at all. Decision 293's claim is that the notice is reachable "by every signed-in member on a
+  // phone"; asserted in a desktop-only file it would be a desktop claim about a phone promise.
+  //
+  // Its position at the end of the file is free rather than load-bearing, which the paragraph at
+  // the top asks every test added here to say: it writes nothing - no observation, no member, no
+  // preference - and reads two surfaces.
+  await page.goto('/account');
+  const block = page.getByTestId('data-sources');
+  await expect(block.getByRole('heading', { name: 'Data sources' })).toBeVisible();
+
+  // Verbatim, all five, because the words ARE the permission: these are the sentences the terms
+  // make a condition of DISPLAYING the data, and a paraphrase of a licence notice is not one.
+  // Playwright normalises whitespace even under `exact`, so what this pins is the words and not
+  // the column the markup happens to wrap at. [decision 298]
+  for (const notice of [
+    'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
+    'This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise ' +
+      'approved by TMDB.',
+    'Plot summaries and overviews from Wikipedia, by its contributors, under CC BY-SA 4.0.',
+    'Series data from TVmaze, under CC BY-SA 4.0.',
+    'Ratings and plot text from OMDb, under CC BY-NC 4.0.'
+  ]) {
+    await expect(block.getByText(notice, { exact: true }), notice).toBeVisible();
+  }
+
+  // NO LOGO IS ASSERTED, deliberately and in both directions. Decision 298 makes the TMDB logo an
+  // owed asset the owner drops in from TMDB's own brand page - no agent here may fabricate or
+  // fetch a trademark file - so the block renders a named slot that is empty in this tree. An
+  // assertion that the image is present would be a claim outrunning its evidence, which is the
+  // defect this milestone exists to close; an assertion that it is ABSENT would go red on the day
+  // the debt is paid, which is the wrong thing for a test to punish. `docs/RELEASE.md` holds it.
+
+  // And the half the register owns, which nothing else in the suite holds: the notice is inside
+  // the product and the names are not on the tiles. The poster cards are measured
+  // unconditionally - `withABundle` refuses a stack with no bundle, and Home draws cards in
+  // either of its modes - while shelves render only in the mode a household's own data puts Home
+  // in, so that locator is named here and is empty when the grid is on screen. A loop over zero
+  // elements asserts nothing, and the card half is what stops this passing vacuously.
+  await withABundle(page);
+  await page.goto('/');
+  const cards = page.locator('.card-wrap');
+  // Web-first, because `expect(await cards.count())` is a snapshot with no retry and this is a
+  // client-rendered surface: `goto` resolves on `load`, and on the M4.16 gate the count ran
+  // 0.5 ms after it and answered 0 while the shell was still asking `/api/auth/me` - 5.6 ms
+  // BEFORE the app requested `/api/home` at all, which answered two shelves and nine cards
+  // 10 ms later and is the Home the failure snapshot then photographed. The payload was never
+  // the question. A precondition that cannot wait reinstates the exact vacuity the paragraph
+  // above is about, one line after naming it.
+  await expect(
+    cards.first(),
+    'Home drew no poster card, so nothing was checked for a source name'
+  ).toBeVisible();
+  await expect(
+    cards.filter({ hasText: SOURCE_NAMES }),
+    'a poster card names the source its data came from'
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-testid="shelf"]').filter({ hasText: SOURCE_NAMES }),
+    'a shelf names the source its data came from'
+  ).toHaveCount(0);
 });

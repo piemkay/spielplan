@@ -42,8 +42,15 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
+  // The `json` reporter is CI-only, and it is not a second copy of the HTML one: `ops/coverage_
+  // gate.py` reads it to answer whether the tests the coverage map NAMES actually ran. Rule 2 of
+  // the map asks only whether a named test exists, so an e2e row could be closed by a spec that
+  // skipped itself for the whole run — which is a green report over evidence nobody produced.
+  // Written beside the trace and video output it belongs with; `run.mjs` keeps phase 1's copy,
+  // because Playwright empties this directory at the start of phase 2.
   reporter: process.env.CI
-    ? [['github'], ['html', { open: 'never' }], ['list']]
+    ? [['github'], ['html', { open: 'never' }], ['json', { outputFile: '.results/report.json' }],
+       ['list']]
     : [['list'], ['html', { open: 'never' }]],
 
   use: {

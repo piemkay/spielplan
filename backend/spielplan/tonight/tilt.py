@@ -1,7 +1,14 @@
-"""The mood tilt. Spec v2.1 §6.2 steps 4-5, §0 row 4, §4.2 `session_participant.tilt`.
+"""The mood tilt. Spec v2.1 §6.2 step 4, §0 row 4, §4.2 `session_participant.tilt`.
 
-    "Each vote also yields a tilt observation — chosen-minus-rejected DNA, **centred on the
-     candidate-pool mean** (the measured centring lever)."
+    "The tilt is chosen-minus-rejected DNA **centred on the candidate-pool mean** (the
+     measured centring lever), and it skips terms the candidate's own vector does not carry
+     rather than centring against a zero it never had (decision 218)."
+
+M4.16's 54a-54h fold is why both citations moved: the old step 5 was Combine and carried the
+sentence above in its earlier wording, and the fold lifted the tilt whole into the round it is
+observed in. The quote is restated from the file rather than renumbered, because the sentence
+this docstring block-quoted no longer exists anywhere in the normative file.
+[M4.16 cycle 4, M416-C4D2-SPEC-02]
 
 §0 row 4 is the whole reason this module is three functions rather than none: the stored 8-axis
 mood profile is worth **0.000** for choose-tonight, while **3 shortlist-anchored answers ≈
@@ -62,7 +69,7 @@ class Frame:
     """The pool's own frame of reference: what an average candidate looks like tonight, and how
     much tonight's candidates differ from each other.
 
-    Built once per session from the candidate pool and carried, because §6.2 step 6 says
+    Built once per session from the candidate pool and carried, because §6.2 step 7 says
     nothing re-ranks within the evening — a frame that drifted as answers arrived would make
     the same answer mean different things at pair 3 and pair 13.
     """
@@ -124,7 +131,7 @@ def centred(vec: Vector, f: Frame) -> dict[str, float]:
     function, so a term the chosen film carries and the rejected one does not now contributes the
     chosen film's coordinate alone instead of that coordinate minus the absent one's fabricated
     negative. Answers already recorded were recorded under the old centring and are append-only;
-    they are not rewritten. [decision 218; §6.2 step 5]
+    they are not rewritten. [decision 218; §6.2 step 4]
     """
     out = {}
     for t, m in f.mean.items():
@@ -148,7 +155,7 @@ def observe(
     tilt: Mapping[str, float], *, chosen: Vector, rejected: Vector, f: Frame | None = None,
     frame: Frame | None = None,
 ) -> dict[str, float]:
-    """§6.2 step 5's separating answer: chosen minus rejected, both in the pool's frame.
+    """§6.2 step 4's separating answer: chosen minus rejected, both in the pool's frame.
 
     `frame` is the keyword the callers use; `f` is accepted so the module reads naturally from
     inside itself. Exactly one is required.
@@ -217,7 +224,7 @@ def applied(
     vectors: Mapping[int, Vector],
     frame: Frame,
 ) -> dict[str, float]:
-    """§6.2 step 5's observation for one answer, whichever of decision 154's four it is.
+    """§6.2 step 4's observation for one answer, whichever of decision 154's four it is.
 
     THE THIRD COPY IS WHAT MADE THIS A FUNCTION. The same four-branch dispatch stood in
     `play.record_answer`, in `play.retract` and in `solo.picks`, and the three had already drifted:

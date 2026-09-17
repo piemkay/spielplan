@@ -14,7 +14,13 @@ import (§10's "counts per table").
 Rules enforced during the load rather than after:
   * rule 6 — NULLable PK components are coalesced to '' as rows stream past.
   * rule 3 — platform_rating goes to the `display` schema and nowhere else.
-  * rule 8 — text is passed through untouched except for the 73 known-mojibake review rows.
+  * rule 8 — text is passed through untouched; the repair is `importer/reviews.py`'s, a
+             marker-guarded cp1252/UTF-8 round trip that fires only where it strictly reduces
+             the marker count and warns where markers repair nothing. Rule 8 as it read until
+             M4.16 named "the 73 known-mojibake review rows ... fixed individually in the
+             importer" — struck on a census of 86 marked rows and 0 repairs over 485,602, so a
+             reader taking that sentence for the rule has an argument for narrowing the round
+             trip to a row list this repository has never had.
   * rule 1 — dna_tag and dna_projected are loaded by two separate statements. There is no
              code path in this module that writes them from one query.
 """
@@ -267,25 +273,6 @@ MAPPINGS: tuple[TableMap, ...] = (
         # app's column and was being read from the bundle as well.
         columns={"source_id": "source_id", "source_key": "external_id", "title_id": "title_id"},
     ),
-    TableMap(
-        target="ml_genome_tag", source="ml_genome_tag",
-        key=("tag_id",),
-        columns={"tag_id": "tag_id", "tag": "tag"},
-    ),
-    TableMap(
-        target="ml_link", source="ml_link",
-        key=("ml_movie_id",),
-        # `movie_id` is the MovieLens id under the corpus's name. There is no `title_id` here:
-        # the corpus exports the link table as MovieLens publishes it, keyed by external ids,
-        # and `_resolve_ml_links` below joins it to `title` after the load rather than mapping a
-        # column the bundle does not have and loading NULLs.
-        columns={"ml_movie_id": "movie_id", "imdb_id": "imdb_id", "tmdb_id": "tmdb_id"},
-    ),
-    TableMap(
-        target="ml_genome_score", source="ml_genome_score",
-        key=("ml_movie_id", "tag_id"),
-        columns={"ml_movie_id": "movie_id", "tag_id": "tag_id", "relevance": "relevance"},
-    ),
     # rule 3 — the display-only schema. Nothing else in this tuple targets it.
     TableMap(
         target="display.platform_rating", source="platform_rating",
@@ -345,6 +332,41 @@ SKIPPED_TABLES: dict[str, str] = {
     # needed — the rows are per source and stay per source (decision 193).
     "imdb_ratings": "pre-selection signal for the corpus's own crawl; the app shows IMDb's "
                     "number from platform_rating, which §4.1 rule 3 keeps display-only",
+    # The MovieLens genome slice was mapped here until decision 291, which upholds
+    # `media-graph-spec_v1.1.md:175` -- "validation artifact only, never shipped or imported into
+    # the app" -- against three TableMaps that had reversed it with no note anywhere. The decision
+    # rests on a measurement, not on tidiness: `placement/contract.py` zero-imputes the genome
+    # block and `placement/features.py` states it is absent for every §8-acquired title by
+    # construction, so for the titles §8 acquires the 888,023 rows were loaded on every import and
+    # carried into the operator's movie-data archive as a block that reads as zero regardless.
+    #
+    # RE-MEASURED at M4.16 review cycle 1, because the sentence that stood here was wrong in a way
+    # that mattered. It claimed the block fed nothing for the whole corpus, on the ground that a
+    # Backbone ROW is a Backbone COORDINATE. It is not: on v20260828, 1,063 of the 5,315 titles
+    # carrying a genome vector are NOT warm by `reconcile.warm_title_ids`' own rule -- which is
+    # precisely the set §5.3's sweep hands to the Cold Tower -- and 1,055 of those carry a
+    # cold_mask row, whose E is written as zeros and which `scoring/backbone.py` treats as ABSENT
+    # in as many words. For those titles the block was a live tower input carrying a median third
+    # of their non-zero feature mass, and it is now permanently zero. The behaviour stands and the
+    # premise is corrected: §4.3 declares the block zero-imputed, the Cold Tower's dropout
+    # training saw all-zero blocks, and nothing reads `blocks_imputed`. What is refused is the
+    # record claiming the loss was nil. [decision 304; M4.16 cycle 1, M416-291-02]
+    #
+    # Named here rather than deleted from the file, because the corpus is NOT asked to re-cut the
+    # bundle: the tables still arrive, and §10's "counts per table" means a table this app
+    # declines owes the operator a line. `0003_content.sql`'s tables stay too -- empty on any
+    # install THIS BUILD seeds, which is what §4.3's zero-imputation already assumed, and not
+    # empty on one seeded before decision 291: no migration drops those rows, decision 162 seeds
+    # content once, and `placement/features.py`'s `_genome` still reads them. That is the correct
+    # outcome rather than a leak -- those titles are the cold-masked ones the Cold Tower is asked
+    # to place. The sentence that stood here claimed a property of every install from a change
+    # that only governs the ones this build seeds. [decision 311; M4.16 cycle 4, M416-C4-GEN-01]
+    "ml_genome_tag": "the genome's tag vocabulary; media-graph-spec_v1.1.md:175 makes the whole "
+                     "slice a corpus-side validation artifact (decision 291)",
+    "ml_link": "MovieLens ids for a genome this app no longer imports; "
+               "media-graph-spec_v1.1.md:175, decision 291",
+    "ml_genome_score": "the genome relevance scores for a block no import this build populates; "
+                       "media-graph-spec_v1.1.md:175, decisions 291 and 311",
     "dna_annotation": "curator working notes; no app surface reads one",
     "dna_term_signal": "vocabulary-building telemetry, superseded by the shipped vocabulary",
     "dna_exclusion": "the corpus's own extraction exclusions, applied before export",
@@ -458,7 +480,8 @@ async def _reap_display_orphans(conn: asyncpg.Connection) -> None:
     film nobody owns.
 
     The reload path is the one place that can see the id set change, and §10 calls a re-import "a
-    planned admin event with a diff report" -- so this runs once per import rather than on any read
+    planned admin event with a migration report" -- so this runs once per import rather than on any
+    read
     path. `NOT IN` is safe here because `title.id` is a NOT NULL primary key: the sub-select cannot
     produce the NULL that would make the predicate match nothing. [decision 239]
     """
@@ -496,64 +519,6 @@ async def _upsert_titles(
     return await conn.fetchval("SELECT count(*) FROM _import_title")
 
 
-async def _resolve_ml_links(conn: asyncpg.Connection, report: ImportReport) -> None:
-    """Join the MovieLens link table to `title` after the load.
-
-    `ml_link.title_id` is this app's column, not the corpus's: the bundle exports the table as
-    MovieLens publishes it. §4.3's genome block reads through this join, so leaving the column
-    NULL would empty a block without emptying anything the read path can notice — the failure
-    M4.5 exists for. `imdb_id` and nothing else: `tmdb_id` is legitimately duplicated across
-    titles (§4.1 rule 6, the movie/series pair), so a tmdb join would attach a genome vector to
-    an arbitrary one of them.
-
-    **This is the one join on the key §4.1 forbids as a join key** — "`imdb_id` … must never be
-    the join key" — and the exception is stated here rather than left as an inference from a
-    comment about rule 6. It is unavoidable: MovieLens keys its link table by external ids and
-    the corpus exports it as published, so there is no `title_id` to join on and rule 6 rules
-    out the only other candidate. What the ban protects against is a duplicated key silently
-    attaching one title's genome to another, so the check below buys that protection back: a
-    duplicated non-empty `imdb_id` FAILS the import naming the rule and the value, instead of
-    the join picking whichever row Postgres reached. Zero duplicates on the shipped bundle, so
-    on a clean artifact the check costs one aggregate. [M4.9 finding 31]
-    """
-    duplicated = await conn.fetch(
-        """
-        SELECT imdb_id, count(*) AS n
-          FROM title
-         WHERE imdb_id IS NOT NULL AND imdb_id <> ''
-         GROUP BY imdb_id HAVING count(*) > 1
-         ORDER BY imdb_id
-        """
-    )
-    if duplicated:
-        shown = ", ".join(f"{r['imdb_id']} ({r['n']}x)" for r in duplicated[:5])
-        report.fail(
-            "ml-link",
-            f"{len(duplicated)} imdb_id value(s) occur on more than one title, and the "
-            "MovieLens genome link has no other key to resolve on — §4.1: `imdb_id` must never "
-            f"be the join key. Duplicated: {shown}",
-            duplicated=len(duplicated),
-            values=[r["imdb_id"] for r in duplicated[:5]],
-        )
-        return
-    await conn.execute(
-        """
-        UPDATE ml_link l SET title_id = t.id
-          FROM title t
-         WHERE l.title_id IS NULL AND l.imdb_id IS NOT NULL AND t.imdb_id = l.imdb_id
-        """
-    )
-    linked = await conn.fetchval("SELECT count(*) FROM ml_link WHERE title_id IS NOT NULL")
-    total = await conn.fetchval("SELECT count(*) FROM ml_link")
-    if total:
-        report.note(
-            "ml-link",
-            f"{linked} of {total} MovieLens links resolved to a title by imdb_id; the rest "
-            "contribute no genome block",
-            linked=linked, total=total,
-        )
-
-
 def _account_for_shipped_tables(db: sqlite3.Connection, report: ImportReport) -> bool:
     """§10's "counts per table", for the tables the *bundle* ships rather than the ones mapped.
 
@@ -588,7 +553,7 @@ async def load_content(
 ) -> ImportReport:
     """Load the bundle's content tables into Postgres inside the caller's transaction.
 
-    Idempotent by construction: §10 calls a re-import "a planned admin event with a diff
+    Idempotent by construction: §10 calls a re-import "a planned admin event with a migration
     report", so a second import of the same or a newer bundle must succeed rather than collide
     on primary keys.
 
@@ -655,8 +620,6 @@ async def load_content(
     # this install no longer has -- and unconditionally, because a bundle that ships no
     # `platform_rating` table at all leaves the old rows in place for pass 1 to have skipped.
     await _reap_display_orphans(conn)
-
-    await _resolve_ml_links(conn, report)
 
     # §4.1's per-source meta rows, then §6.0's card resolved out of them per field. After the
     # derived tables, because the trailer key is read from `title_video`.

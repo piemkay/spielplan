@@ -141,7 +141,7 @@ def order(candidates: Iterable[Candidate]) -> list[Candidate]:
     """The pool, best first.
 
     Ties break by `title_id` rather than by input order: the pool is computed once at session
-    open and carried through the round (§6.2 step 6 — nothing re-ranks within the evening), so
+    open and carried through the round (§6.2 step 7 — nothing re-ranks within the evening), so
     a second build over the same numbers has to produce the same list, and a stable sort over
     an unordered query result is not stable at all.
     """
@@ -177,7 +177,7 @@ def over_budget_by(*, runtime_min: int | None, budget_min: int) -> int | None:
 
 
 def fit_line(*, runtime_min: int | None, budget_min: int, kind: str) -> str:
-    """§6.2 step 7's two branches, verbatim: "fits your 130 min" / "runs 21 min over" — and on a
+    """§6.2 step 8's two branches, verbatim: "fits your 130 min" / "runs 21 min over" — and on a
     series session, 54h's qualifier: "fits your 60 min per episode".
 
     `kind` is required rather than defaulted, because a default is how the qualifier would go

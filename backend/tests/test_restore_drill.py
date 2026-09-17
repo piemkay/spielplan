@@ -540,3 +540,69 @@ async def test_reset_then_a_put_with_a_new_api_key_ends_the_drill_on_a_working_c
         ) == 1, "the unreadable row was deleted rather than retired"
     finally:
         await conn.close()
+
+
+# --- cs-68: content restored, model bundle not yet, and what the card says then ----------------
+
+
+async def test_a_restored_install_with_no_model_bundle_says_so_on_the_title_card(
+    installed, target, tmp_path, monkeypatch
+):
+    """§3.1's explicit "no bundle imported" state, on the surface that has to render it, in the
+    state a restore actually leaves behind. §6.0 (the model line in the data voice), §3.1,
+    decision 162. [M4.16, cs-68]
+
+    The M0 row `library-rate-model-line-no-bundle` shipped with a waiver saying this branch was
+    unreachable — "with no bundle there are no titles, so there is no card to open" — and booked
+    it to M5. Decision 162 retired that premise without retiring the waiver: it split content
+    from models, so movie data restores on its own and the sibling row
+    `platform-backup-restore-ordering-is-explicit` makes "content present, model bundle absent"
+    the explicitly correct intermediate state rather than a corner. It is also the state every
+    recovering household is in on the way through — content back, bundle not re-imported yet —
+    so the first card opened after a restore was the untested path.
+
+    The seed marker is written here the way `backup/movie_data.py` writes it, 'superseded' and
+    never 'active', because the archive carries rows and never the artifacts tree. That is what
+    keeps the fixture from being merely "an install that has never imported anything": a reading
+    of §3.1's question as "has this household ever been seeded?" rather than as
+    `ArtifactStore.load_active`'s "is there an active row?" would print numbers it has no basis
+    for here and still pass against an install with no `artifact_bundle` row at all.
+
+    The reason string is asserted and not only the flag, because §3.1 asks for an *explicit*
+    state: a bare `available: false` leaves the household unable to tell which repair is theirs.
+    The key set is the other half of the row's claim — with no basis there is no honest b(t),
+    beta or gate, so the line carries no number at all.
+    """
+    assert _restore(installed["dump"], target, clean=True).returncode == 0
+
+    conn = await asyncpg.connect(target)
+    try:
+        await conn.execute(
+            "INSERT INTO artifact_bundle (version, manifest, state, kind) "
+            "VALUES ('v20260828', '{}'::jsonb, 'superseded', 'seed')"
+        )
+    finally:
+        await conn.close()
+
+    async with _boot(monkeypatch, target, tmp_path / "restored") as make:
+        # DATA_DIR is this test's own directory, so the artifacts tree is absent on disk as well
+        # as inactive in the database. Asked through the app's own words rather than through
+        # `app.state`: if this answered True the model-line assertion below would be vacuous.
+        config = await make().get("/api/config")
+        assert config.status_code == 200, config.text
+        assert config.json()["has_bundle"] is False, config.text
+
+        member = installed["members"][0]
+        phone = await _sign_in(make, str(member["name"]), MEMBER_PASSWORD)
+        card = await phone.get("/api/titles/1")
+        assert card.status_code == 200, card.text
+
+        body = card.json()
+        # Content present, which is the half of the state that makes the other half interesting.
+        assert body["title"]["name"] == "Title 1"
+        assert body["title"]["is_owned"] is True
+
+        line = body["model_line"]
+        assert line["available"] is False, line
+        assert line["reason"] == "no artifact bundle imported", line
+        assert set(line) == {"available", "reason"}, line

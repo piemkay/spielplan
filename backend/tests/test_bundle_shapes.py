@@ -279,7 +279,8 @@ def test_the_shipped_cold_eval_carries_the_arms_the_app_reads(shipped, built):
     assert ours["n_test.type"] == "int"
     assert "artifacts/cold_eval.json" not in built["json"], (
         "the fixture now writes cold_eval.json - compare it to the shipped shape here, and say so "
-        "loudly: e2e/run.mjs does not rebuild data/import"
+        "loudly: since decision 299 e2e/run.mjs rebuilds data/import from this fixture on every "
+        "browser run, so a file added here reaches every import the browser suite measures"
     )
 
 

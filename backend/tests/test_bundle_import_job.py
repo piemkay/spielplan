@@ -491,6 +491,15 @@ async def test_a_second_import_while_one_is_queued_is_refused_rather_than_queued
         await other.close()
 
 
+# "Older than the reaper's budget", derived rather than written down. It was the literal 400
+# against a `BUNDLE_IMPORT_TIMEOUT` of 300 s, and decision 300's move to 600 s -- taken with the
+# worker's `stop_grace_period`, for the box `.github/workflows/release.yml` imports the real
+# bundle on -- turned every one of those four cases into a claim the reaper considers IN FLIGHT.
+# Four tests then asserted the opposite of what they were written to assert, which is the cheapest
+# possible demonstration of why a number a rule depends on may not be spelled twice.
+ABANDONED_S = int(worker.BUNDLE_IMPORT_TIMEOUT) + 100
+
+
 async def _queue(db, version: str, *, phase: str, age_s: int, claimed_s: int | None = None):
     """A `job_run` row in whatever phase and at whatever age the case under test needs.
 
@@ -541,7 +550,8 @@ async def test_the_reaper_reports_the_flip_it_can_see_rather_than_asserting_noth
     )
 
     # The kill: a claim past the budget for the import that has already flipped.
-    killed = await _queue(db, "test-v1", phase=worker.PHASE_RUNNING, age_s=400, claimed_s=400)
+    killed = await _queue(db, "test-v1", phase=worker.PHASE_RUNNING,
+                          age_s=ABANDONED_S, claimed_s=ABANDONED_S)
     await worker._reap_abandoned_import(db)
 
     row = await db.fetchrow("SELECT ok, finished_at, detail FROM job_run WHERE id = $1", killed)
@@ -552,7 +562,8 @@ async def test_the_reaper_reports_the_flip_it_can_see_rather_than_asserting_noth
     assert "active" in text and "restart" in text, text
 
     # And with no flip to find, the failure states what it observed and nothing more.
-    orphan = await _queue(db, "test-v9", phase=worker.PHASE_RUNNING, age_s=400, claimed_s=400)
+    orphan = await _queue(db, "test-v9", phase=worker.PHASE_RUNNING,
+                          age_s=ABANDONED_S, claimed_s=ABANDONED_S)
     await worker._reap_abandoned_import(db)
     lost = await db.fetchrow("SELECT ok, detail FROM job_run WHERE id = $1", orphan)
     assert lost["ok"] is False
@@ -635,7 +646,8 @@ async def test_an_abandoned_claim_is_reaped_on_a_tick_and_not_only_by_the_hourly
     reads it executed in no test at all and would have passed against a worker that never called
     it. [M4.14 cycle 2, m414-c2-waveE-02]
     """
-    killed = await _queue(db, "test-v9", phase=worker.PHASE_RUNNING, age_s=400, claimed_s=400)
+    killed = await _queue(db, "test-v9", phase=worker.PHASE_RUNNING,
+                          age_s=ABANDONED_S, claimed_s=ABANDONED_S)
     now = time.monotonic()
     for age in (60.0, 300.0, 1800.0, 3500.0):
         assert worker.BUNDLE_IMPORT_JOB not in {
@@ -750,7 +762,7 @@ async def test_a_claim_is_reaped_from_when_it_was_claimed_and_not_from_when_it_w
     for an import that is mid-flight and about to flip.
     [M4.14 cycle 1, m414-c1-dim-lock-04]
     """
-    queued = await _queue(db, "test-v1", phase=worker.PHASE_QUEUED, age_s=400)
+    queued = await _queue(db, "test-v1", phase=worker.PHASE_QUEUED, age_s=ABANDONED_S)
 
     claimed = await worker._claim_bundle_import(db)
     assert claimed["id"] == queued
@@ -765,8 +777,8 @@ async def test_a_claim_is_reaped_from_when_it_was_claimed_and_not_from_when_it_w
     # Aged past the budget from the CLAIM, it is the reaper's after all.
     await db.execute(
         "UPDATE job_run SET detail = jsonb_set(detail, '{claimed_at}', "
-        "to_jsonb(now() - interval '400 seconds')) WHERE id = $1",
-        queued,
+        "to_jsonb(now() - ($2::float8 * interval '1 second'))) WHERE id = $1",
+        queued, float(ABANDONED_S),
     )
     await worker._reap_abandoned_import(db)
     assert await db.fetchval("SELECT finished_at FROM job_run WHERE id = $1", queued) is not None
@@ -807,8 +819,8 @@ async def test_a_second_import_in_the_window_between_the_claim_and_the_lock_is_r
     # accepted rather than wedged behind it.
     await db.execute(
         "UPDATE job_run SET detail = jsonb_set(detail, '{claimed_at}', "
-        "to_jsonb(now() - interval '400 seconds')) WHERE id = $1",
-        claimed["id"],
+        "to_jsonb(now() - ($2::float8 * interval '1 second'))) WHERE id = $1",
+        claimed["id"], float(ABANDONED_S),
     )
     accepted = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
     assert accepted.status_code == 202, accepted.text

@@ -5,11 +5,22 @@ embedding" — the DNA pack (§8 stage 5) is built from them and the review-text
 feature contract (§4.3) is an SVD over them. A bundle whose reviews are dropped on import
 cannot re-extract anything later.
 
-Rule 8 is the delicate part:
+Rule 8 is the delicate part, and the sentence this module was written against is no longer the
+sentence §4.1 carries. As it read until M4.16:
 
     "UTF-8 everywhere; never 'clean' non-ASCII (the corpus legitimately contains CJK, RTL
      scripts, ZWSP, emoji); the 73 known-mojibake review rows are fixed individually in the
      importer."
+
+The row list is struck. §4.1 rule 8 now states the conservative heuristic below and says in its
+own words that "fixed individually" was per-row knowledge this repository has never had. The
+quote stays because `load_reviews`' census is the measurement that retired it and only reads as
+an argument beside the claim it answers — but it is history here, not the requirement, and a
+reader who takes it for the requirement has an argument for narrowing the round trip below to a
+row list nothing in this tree enumerates. `0003_content.sql` block-quotes the same retired
+sentence over `review_store.review` and is applied and sha256-checksummed, so that copy cannot
+be corrected in place and is corrected here instead — the idiom `db/library.py` uses for
+`0004_dna.sql`. [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
 
 So: no normalisation, no stripping, no `errors='ignore'`. The only text this module changes is
 a row whose bytes are provably UTF-8 that was once decoded as cp1252 — and only when undoing

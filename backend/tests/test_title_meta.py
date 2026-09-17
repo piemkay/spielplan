@@ -352,7 +352,9 @@ async def test_every_mapping_declares_the_targets_primary_key(db, root):
 async def test_every_mapped_column_exists_on_both_sides(db, root):
     """The mapping is a claim about two schemas at once. Against the shipped manifest it named
     `ml_link.title_id`, `ml_genome_score.ml_movie_id`, `rating_title_map.source_key` and
-    `watchlist.source` — four columns the corpus does not export."""
+    `watchlist.source` — four columns the corpus does not export. Two of the four are history
+    rather than coverage since decision 291 declined the genome slice; the sweep is over whatever
+    `MAPPINGS` holds today, which is the only form of it that cannot go stale."""
     for tmap in load.MAPPINGS:
         shipped = SHIPPED_COLUMNS.get(tmap.source)
         assert shipped, f"{tmap.source} is not a table the corpus ships"

@@ -4,11 +4,22 @@
 "Media graph app mockups", file `Media Graph.dc.html`) against `spielplan-spec_v2.1.md`,
 surface by surface, with an adversarial pass over every claimed divergence.*
 
-**Status:** proposals, not spec. Nothing here is normative until it lands in a v2.2 of
-`spielplan-spec_v2.1.md`. 161 numbered proposals. **All seven owner decisions were taken on
-2026-08-29** and are recorded at the end; one of them (54) replaced the question with a
-redesign, written up as §6.2 — Tonight, rewritten. Proposals 148–161 were added by the
-completeness pass and sit in their spec section, so the numbering is not in document order.
+**Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
+there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
+amended in place, recording each wave as a dated point release in its own Status block. This
+file holds 303 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
+rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
+numbered owner decisions** - 142 of them, the latest 288-320 - and each is normative from the
+day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
+wave was folded into that file on 2026-09-03 and this one on 2026-09-17. The decision numbering
+is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
+on 2026-09-04, and 228-233 were reserved and never spent. Seven of the proposals were settled
+by the owner on 2026-08-29 and are indexed in the first decisions block below rather than
+numbered separately: six carry a **Decided (owner, 2026-08-29)** line inline, and the seventh
+(54) replaced the question with a redesign, written up as §6.2 — Tonight, rewritten. Proposals
+148–161 were added by the completeness pass and sit in their spec section, so the numbering is
+not in document order.
 
 **Method.** Six readers inventoried one surface cluster each and classified every item as
 spec-covered / spec-silent / spec-conflict / spec-only. A second agent per surface tried to
@@ -201,11 +212,11 @@ by the row editor of decision 166.
 
 **What the prototype does.** `setSurface` (2160) sets `{surface, sel:null, acctOpen:false}`; all eight surfaces are `sc-if` branches on one string. There is no URL, no history, no deep link, no back button, no per-surface scroll restoration (`grep -c "pushState|history\."` = 0).
 
-**What the spec says.** §6.2 step 8: "Optional **TV kiosk route** (`/tv`, room code)". §11: "a webhook/service to launch a watch-now session from an HA dashboard (**returns the session URL/room code**)". §2: `PUBLIC_URL`. §6 line 209 already fixes the names the routes derive from: "Surface names (prototype, normative): **Home / Rate / Tonight / Rank / Map / Taste** (+ Admin)". Real URLs are required and never enumerated.
+**What the spec says.** ~~§6.2 step 8: "Optional **TV kiosk route** (`/tv`, room code)".~~ **Out of scope, decision 165.** §11: "a webhook/service to launch a watch-now session from an HA dashboard (**returns the session URL/room code**)". §2: `PUBLIC_URL`. §6 line 209 already fixes the names the routes derive from: "Surface names (prototype, normative): **Home / Rate / Tonight / Rank / Map / Taste** (+ Admin)". Real URLs are required and never enumerated.
 
-**Proposed amendment.** Add to the §6 preamble: "Every surface is linkable, and the route names follow the normative surface names above: `/` (Home), `/rate`, `/tonight`, `/tonight/{code}`, `/rank`, `/map`, `/taste`, `/admin`, `/tv`, plus `/setup` (admin-gated; re-entering it resumes rather than restarts, §3.1) and `/me` (§6.9). §6.2's room-code joins and §11's returned session URL are the same route with a code segment. Selection is URL state: a title opens as `?title={id}` and a person filter as `?person={id}`, so 'Show on map' and 'filter to their filmography' produce shareable links."
+**Proposed amendment.** Add to the §6 preamble: "Every surface is linkable, and the route names follow the normative surface names above: `/` (Home), `/rate`, `/tonight`, `/tonight/{code}`, `/rank`, `/map`, `/taste`, `/admin`, ~~`/tv`,~~ plus `/setup` (admin-gated; re-entering it resumes rather than restarts, §3.1) and `/me` (§6.9). §6.2's room-code joins and §11's returned session URL are the same route with a code segment. Selection is URL state: a title opens as `?title={id}` and a person filter as `?person={id}`, so 'Show on map' and 'filter to their filmography' produce shareable links." **`/tv` is struck from the route list: decision 165 deletes the TV client, and a route derives from a surface.**
 
-**Cost.** Free text; SvelteKit gives file-based routes for nothing. The table is transcription — the surface names are already normative and `/tv` is already in §6.2. The one substantive clause is selection-as-URL-state, which decides whether "Show on map" and the person filter are shareable at all; adopting it late means retrofitting deep links into a single-string navigator.
+**Cost.** Free text; SvelteKit gives file-based routes for nothing. The table is transcription — the surface names are already normative ~~and `/tv` is already in §6.2~~ **- out of scope, decision 165**. The one substantive clause is selection-as-URL-state, which decides whether "Show on map" and the person filter are shareable at all; adopting it late means retrofitting deep links into a single-string navigator.
 
 ### 15. Three shell states nobody has drawn
 
@@ -689,7 +700,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 **What the prototype does.** A card headed "Waiting room" plus the code in ember mono, with a dotted `leave` link (`wnLeave` resets to lobby, clearing answers and votes). Two `waitCopy` variants (2844): host → "Start whenever you are ready. Anyone who joins before you start is in."; joiner → "{Host} starts when everyone is in." Seats (2853) show avatar, name, and a mono role of **host / joined / this phone**. The host sees the CTA "Start — three questions each" (492); a non-host sees a dashed "Waiting for {host} to start" (495) plus a demo affordance. Desktop 456–498; phone 1475–1504.
 
-**What the spec says.** §6.2 step 2 names the join channels; step 8 mentions a TV "lobby". §12 M4 scopes "lobby + open-rooms discovery". No lobby screen, seat model, role vocabulary or host/joiner copy exists in the spec.
+**What the spec says.** §6.2 step 2 names the join channels; ~~step 8 mentions a TV "lobby".~~ **Out of scope, decision 165.** §12 M4 scopes "lobby + open-rooms discovery". No lobby screen, seat model, role vocabulary or host/joiner copy exists in the spec.
 
 **Proposed amendment.** Insert **step 2b — Lobby**: "The room's own screen: the room code in the data voice, a live seat list (avatar, name, and one of `host` / `joined` / `this phone`), a guest stepper (proposal 59), `leave`, and a host-only **Start** control. Waiting copy: host — \"Start whenever you are ready. Anyone who joins before you start is in.\"; joiner — \"{Host} starts when everyone is in.\" Seats update over the WebSocket; a member who leaves is removed from the seat list, not from a started round."
 
@@ -767,7 +778,7 @@ And amend §4.1 rule 5, which the two-toggle control does *not* violate but does
 
 ### 64. Adopt the QR panel's join-equivalence caption
 
-**What the prototype does.** A 250px panel (500–505): mono eyebrow "SCAN TO JOIN", a 132×132 QR placeholder, the room code at 17px mono, and the caption **"Push is best effort. The room code, the in-app banner and the TV route all reach the same session."** The panel is desktop-only; the phone lobby shows the code and no QR.
+**What the prototype does.** A 250px panel (500–505): mono eyebrow "SCAN TO JOIN", a 132×132 QR placeholder, the room code at 17px mono, and the caption **"Push is best effort. The room code, the in-app banner and ~~the TV route~~ all reach the same session."** **Out of scope, decision 165 - and this proposal adopts the caption verbatim, so what it adopts is "Push is best effort. The room code and the in-app banner reach the same session."** The panel is desktop-only; the phone lobby shows the code and no QR.
 
 **What the spec says.** §6 preamble states the best-effort rule; §6.2 step 2 says "**Join channels, all equivalent**".
 
@@ -867,7 +878,7 @@ Under the adaptive round (§6.2 rewritten, 54c) `neither` earns its keep twice: 
 
 **Proposed amendment.** Add to step 4: "Per-device is the default and pass-the-phone is the fallback, and the round states which it is running. **Per-device:** each participant's ~10 pairs arrive on their own phone; the lobby becomes a progress view — `Patrick ✓ · Jenny 6/10 · Mia 2/10` — with no answer content, preserving blindness while showing motion. **Pass-the-phone:** used for guests always, and for members with no device in the room; the CTA reads \"Submit and pass on\" and names who is next (\"pass to Jenny\"), and the screen clears between participants. A session may mix the two; the reveal (step 6) waits for every seat either way."
 
-**Cost.** Real M4 work — the per-device path needs the session WebSocket to fan out pairs and collect sealed answers, which §12 M4 funds under "the ~10-vote round" but which no drawn screen covers. Naming the progress view also gives the TV route (step 8) its content.
+**Cost.** Real M4 work — the per-device path needs the session WebSocket to fan out pairs and collect sealed answers, which §12 M4 funds under "the ~10-vote round" but which no drawn screen covers. ~~Naming the progress view also gives the TV route (step 8) its content.~~ **Out of scope, decision 165.**
 
 ---
 
@@ -6067,6 +6078,1207 @@ buys a fixture with no other use — so the branch arithmetic is held in
 first-boot and lapsed-member cases beside it as the two things this must not undo. The gate's
 counts do not move: every spec in the suite answers `/setup/state`, so `landingUnknown` is false
 everywhere the suite looks.
+
+---
+
+## Decisions taken (owner, 2026-09-17, as M4.16 opened)
+
+Sixteen, 288 through 303, taken as M4.16 opened — the milestone's range runs to 320, because
+review cycles 1 through 4 took seventeen more in blocks of their own below — under the owner's standing
+instruction to take each
+plan's recommended option and record it here rather than ask. M4.16 is the last milestone before
+M5 and it runs alone, which is a property of what it holds rather than of the schedule: this
+register, `docs/spielplan-spec_v2.1.md`, `docs/TESTING.md`, `CLAUDE.md`, README's *Running it*
+block and the STRUCTURAL half of `backend/tests/spec_coverage.toml` - the waivers, the §12 table
+and `current_milestone` - and no second milestone may hold those at the same time, because a
+conflicted paragraph in a normative document is not a merge conflict but two readings of a
+requirement, and the loser is silently correct. Eight of the sixteen close questions
+`docs/milestones/M4.16-plan.md` left open (288, 289, 290, 291, 292, 293, 294, 295); three take
+work the road to M5 left on the record with no owner (298, 299, 300); and five record what this
+milestone refuses to do (296, 297, 301, 302, 303). The refusals are the method rather than the
+exception: a defect found and written where the owner reads it at release beats a defect repaired
+by a milestone that owns neither the surface nor its tests.
+
+The plan's numbers are stale in five places and each was re-measured here rather than copied.
+Its Phase A reserves 167-174 and all eight of those numbers have since been spent, so this block
+is 288-320 and every amendment below cites the number it actually carries. `ALLOWED_RESIDUE`'s
+per-module SQL counts have all moved. The nine rows resting on bare proposals are FOURTEEN on
+this tree (decision 295). `backend/tests/test_layering_guards.py` and `ops/fetch-fonts.py`
+already exist - the first holds M4.13's numpy-only contract for `ledger/model.py` and owes the
+residue and route halves, the second was written by M4.15 - and `push/send.py`'s import
+inversion is already repaired, so arch-13's import-direction guard lands green with no
+allow-list. One further premise was stale and is corrected inside decision 289 rather than
+inherited: §2's rotation is not unimplemented.
+
+**This milestone writes NO migration.** 0024 is not claimed - decision 292 says why - 0019 was
+allocated at M4.10 and deliberately never written and must never be reused, and 0016-0018 and
+0020-0023 are applied and sha256-checksummed in this lane's database.
+
+M4.16 ships exactly one surface, the /account **Data sources** block decision 293 places, so
+whether §12 gains a row for it is M4.6's and M4.7's question rather than M4.5's and M4.8's. It is
+not answered in this block. §12's own table is edited by decisions 290 and 165 in the same file,
+and one stage writes all three edits or none: the whole argument for running this milestone alone
+is that a normative table has one author per wave.
+
+### 288. The spec is amended in place; there is no v2.2
+
+**What the spec says.** `README.md:9-11` and `CLAUDE.md:8-11` make `docs/spielplan-spec_v2.1.md`
+normative - where the code and the spec disagree, the spec wins and the code is the bug - while
+`docs/spec-v2.2-proposals.md:7-8` disclaims itself in its own Status line: proposals rather than
+spec, nothing in it normative until it lands in a v2.2. Two documents, one authority, and the
+decisions that actually govern the shipped app are findable only in the one that disclaims itself.
+
+**Why it changes.** Roadmap decision 177 already ruled it, and the working tree has half-executed
+the ruling by action: the 2026-09-03 amendments for decisions 164, 165 and 166 were written into
+`spielplan-spec_v2.1.md` in place, not into a new file, and the spec now cites decisions up to
+259. Cutting a v2.2 would mean undoing that. The rename cost probe counted 165 source citations,
+24 milestone-plan citations and two bundle fixtures naming `spec v2.1`, all of which stay correct
+under this ruling and none of which would survive a rename unedited.
+
+**The decision.** No v2.2 file. `docs/spielplan-spec_v2.1.md` stays the one normative document,
+is amended in place, and records amendment waves as dated point releases in its own Status block -
+a new **v2.1.1 (2026-09-17)** line. `docs/spec-v2.2-proposals.md` stops calling itself
+provisional: proposals 1-161 are dated reasoning, citable as provenance only; entries 162 onward
+are numbered owner decisions, normative from the day they are taken until the amendment they
+mandate lands in the spec file. `CLAUDE.md`'s authority paragraph is rewritten once to say exactly
+that.
+
+**Cost.** What is given up is real: "v2.1" stops naming a frozen edition, so nobody can say
+"written against v2.1 as published". For a two-person household with one deployment that
+capability has no user, and a git tag on the document is the answer if it ever acquires one. It
+also means every later amendment in this milestone is a line edit to v2.1 and never a new file,
+which is what makes the merge surface survivable. The static half is a grep for the five words
+this file's Status line opens with, and it is worth stating where that grep can and cannot be
+empty: `docs/milestones/M3-plan.md:220`, `M4-plan.md:402` and `M4.16-plan.md:71` and `:467` all
+carry the phrase, and decision 296 forbids editing any of them - so the criterion is met over the
+documents this milestone may write, in the same scope `test_spec_coverage.py`'s range guard
+already excludes `docs/milestones/` for, and the register does not re-quote the phrase it retires.
+
+### 289. §2's `SECRETS_KEY` rotation is narrowed to what exists, not scheduled
+
+**What the spec says.** `spielplan-spec_v2.1.md:58` (§2): "rotating `SESSION_SECRET` invalidates
+sessions only and never touches stored secrets; rotating `SECRETS_KEY` is an explicit admin action
+that re-wraps the one DEK row." The coverage row `platform-key-rotation-semantics` is
+`kind = "integration"` and closed by a unit test of the wrapping algebra plus
+`test_auth_logic.py::test_rotating_session_secret_invalidates_every_cookie`.
+
+**Why it changes - and the premise the plan carried is stale.** The plan and the review that
+produced it both state that the rotation is "implemented nowhere", that `core/secrets.rewrap_dek`
+has no caller but a unit test, and that there is "no admin route, no CLI, no job". Measured on
+this tree that is false: `backend/spielplan/core/secrets_cli.py` is a declared console script
+(`backend/pyproject.toml:49`, `spielplan-secrets`), its `rewrap` subcommand calls
+`core/secrets.py:433 rewrap_dek` at `secrets_cli.py:104`, and its module docstring argues in §2's
+own terms why rotation is an operator command and not a route - both gestures need the OLD key,
+which a running process does not have, so "there is nowhere in the app to type the value being
+replaced". M4.7 shipped it under spec-08 and decision 181, and `.env.example` and README's
+Recovery block name it. What is genuinely absent is narrower than the finding claimed: an
+ADMIN-FACING rotation action inside the app, which is what "explicit admin action" invites a
+reader to look for and is what a household member would go to §6.6 to find.
+
+**The decision.** Narrow the sentence to the two rotations that exist and name where each lives.
+§2 states the wrapping algebra - `rewrap_dek` re-wraps the one DEK row and leaves every ciphertext
+and every `key_id` untouched - as the `spielplan-secrets rewrap` operator command, not as a UI
+action, and keeps the session-secret semantics as written. The absence of an operator-facing
+rotation SURFACE is recorded in `docs/RELEASE.md` as an unbuilt promise with its file:line, not
+scheduled at an invented milestone: M4.16 is the last milestone before M5, so a deferral would
+name a date nobody has planned, which is the same unmet promise wearing a schedule.
+
+**Cost.** The coverage row `platform-key-rotation-semantics` follows the decision rather than
+being edited to fit the code (`M4-open-points.md:212-213`): its `what` is restated to the two
+rotations that exist, including the command. Its `kind` is then re-checked against decision 295's
+kind-vs-layer rule, because `test_secrets_custody.py`'s rewrap test may already reach the database,
+in which case the row leaves the unit-only allow-list rather than being forgiven by it. The
+`.env.example` half belongs to spec-08's milestone and is verified here, not rewritten.
+
+### 290. §11's seams are designated, none is built, and §7.3's playback event belongs to M7
+
+**What the spec says.** `spielplan-spec_v2.1.md:404` (§11): "HA integration is additive via three
+existing seams: `POST /events/playback` ..., presence hints for session lobbies ..., and a
+webhook/service to launch a watch-now session". `:322` (§7.3) files the same route under Jellyfin,
+which §12 ships at **M1**, a shipped row.
+
+**Why it changes.** The app registers twelve routers (`backend/spielplan/app.py`) and none of them
+is an `/events` router; there is no presence input to the lobby and no session-launch webhook.
+`backend/migrations/0005_ledger.sql:117` already admits `playback_event.source = 'external'` with
+a comment naming "§7.3 theater path, §11 HA", so the column exists and the route does not. Calling
+three unbuilt seams "existing" is the defect this milestone is named for; filing the route at a
+milestone that closed years of work ago is the same defect inside §12, where it is worse, because
+§12 is the one table an auditor reads to learn what shipped.
+
+**The decision.** §11 is reworded to "additive via three **designated** seams, **none of which is
+built**", each named with the milestone that owes it. `POST /events/playback` moves out of M1 and
+is owed by M7 together with the presence input and the session-launch webhook; §7.3 says so in
+place, and §12's M1 row loses any implication that the route shipped. The seams are not built
+here. M7 is the only honest owner: the route is token-authed for a theater appliance, which IS the
+Home Assistant seam, and M7 is unbuilt by design.
+
+**Cost.** The M7 row `jellyfin-acquisition-eval-home-assistant-is-additive-only` has its `what`
+reworded to the designated-not-existing form, and a new M7 row is added for the playback route.
+Neither is armed at `current_milestone = "M4.16"`, so neither can be closed by this milestone -
+which is correct: the value here is that the two documents stop describing an integration surface
+the app does not have, and §13's rating-capture input for films watched outside Jellyfin is
+recorded as owed rather than as shipped.
+
+### 291. The MovieLens genome slice stops being imported
+
+**What the spec says.** `docs/media-graph-spec_v1.1.md:175` fixed the genome as a corpus-side
+artefact: "validation artifact only, never shipped or imported into the app."
+`spielplan-spec_v2.1.md`'s §4.1, §4.3 and §10 reversed that without a note and ship it as a
+983-column feature block.
+
+**Why it changes.** Roadmap decision 178(1) already ruled it on measurement, and the measurement
+holds on this tree: `placement/contract.py:97` is `ZERO_IMPUTED = ("genome",)` and
+`placement/features.py` states the block is absent for every §8-acquired title by construction;
+all 5,315 titles carrying a genome vector already have a Backbone coordinate, and the 19 owned
+titles placement actually runs on have none. So `importer/load.py` loads 888,023 `ml_genome_score`
+rows, `backup/movie_data.py:106-108` archives the three tables nightly, and they feed nothing -
+while shipping them reverses v1.1:175 with no note.
+
+**The decision.** Stop. The three `TableMap`s move into `importer/load.py`'s `SKIPPED_TABLES` with
+the `media-graph-spec_v1.1.md:175` reason, `_resolve_ml_links` goes with them,
+`backup/movie_data.py` loses the three `Table` entries, §4.3's 983 genome columns stay
+zero-imputed always, `0003_content.sql`'s empty Postgres tables stay, and the corpus is NOT asked
+to re-cut the bundle. `ops/m45_exit_criterion.py` already excludes genome from its empty-block
+check, so M4.5's exit criterion is unchanged by this.
+
+**Cost.** It retires `_resolve_ml_links`'s imdb_id join, so the M4.9 coverage row
+`data-rules-ml-link-imdb-join-is-unambiguous` and its named tests are STRUCK together with the
+code, in the map's own deletion idiom - deleted, not waived, the way `tonight-rank-tv-kiosk-route`
+was. `media-graph-spec_v1.1.md:175` is marked upheld rather than left contradicted, and §4.1,
+§4.3 and §10's genome sentences are amended in the same wave.
+
+### 292. The bundle is private household data, and no migration is taken
+
+**What the spec says.** §10 describes the bundle's manifest and says nothing about the terms its
+contents travel under. `LICENSE` is MIT and covers the code only.
+
+**Why it changes.** `content.sqlite` and `reviews.sqlite` carry verbatim MovieLens tables,
+scraped IMDb reviews and IMDb-derived tables, Metacritic and Trakt bodies whose own
+`rating_source` rows label them "not redistributed", whole critic articles, MPST synopses, OMDb
+CC BY-NC text and TMDB content under non-commercial terms. Private household use is permitted by
+every source; publishing the bundle, shipping it as a release asset, or handing the
+`/data/backups` movie-data archive to another household is not - and nothing in this repository
+told a contributor where that line is.
+
+**The decision.** §10 gains one sentence: the bundle is private household data assembled under
+personal and non-commercial terms, is never published with a release or shipped as a release
+asset, and the `/data/backups` movie-data archive inherits the same restriction. **No migration is
+taken.** 0024 is NOT claimed. The lane's conditional was "0024 ONLY if decision 178's
+`rating_source` licence columns prove necessary", and they are not necessary because they already
+exist: `backend/migrations/0018_read_layer.sql:128-131` adds `url`, `license`, `version` and
+`notes`, and `importer/load.py`'s `rating_source` `TableMap` maps all four with a comment that
+argues the terms case in these words. Taking a migration for columns that are already applied
+would be a checksummed file with nothing in it.
+
+**Cost.** Say it loudly, because the migration ledger is the one place a wrong assumption bricks
+every existing install: this milestone writes NO migration, 0024 stays free for whoever needs it
+next, 0019 remains permanently unused and must not be reused, and 0016-0018 and 0020-0023 are
+applied and checksummed and none of them is edited - including `0004_dna.sql`, whose stale
+`db/dna.py` reference is repaired by a docstring in `db/library.py` and never in place. The
+attribution surface reads its licence text out of `rating_source` where it can rather than
+hard-coding it, which is what those four columns were added for.
+
+### 293. The Data sources surface lives on /account
+
+**What the spec says.** §6.6 gives the admin view a Data card; §6.8 sets the copy register for
+every surface - quiet, data-voiced, never shouting a source name at a reader who wants a film.
+
+**Why it changes.** The licence conditions are conditions of DISPLAY, not of administration:
+every member sees the TMDB overviews and the IMDb scores, so every member must be able to reach
+the notice. The admin Data card is admin-only, which would leave the household's non-admin member
+looking at 9,866 TMDB overviews with no reachable notice at all.
+
+**The decision.** /account, as one designed **Data sources** block in §6.8's quiet data voice,
+reachable by every signed-in member on a phone. /account is also the one surface the phone shell
+already routes to from the tab bar, which is what makes the §6.8 register argument work: one
+notice on one surface, not a source name on every card.
+
+**Cost.** The e2e assertion runs on the `phone` project, so it must live in
+`e2e/specs/19-phone-shell.spec.js`: `playwright.config.js:79` anchors the phone `testMatch`
+alternation on `\.spec\.js`, `19-phone-shell.spec.js` matches it and `09-passkeys.spec.js` does
+not. No source names go on `PosterCard` or the shelves - §6.8's register argues against it and the
+terms require a notice within the product, not a credit on every tile.
+
+### 294. §5.2's fusion pointer is vendored, and its normative scope is stated
+
+**What the spec says.** `spielplan-spec_v2.1.md:183` (§5.2): "the objective is the four-arm
+likelihood of `ARCHITECTURE.md` §3". `docs/` does not hold `ARCHITECTURE.md`; it lives only at
+`C:/Users/pmk/Workspace/movie_data_curator/docs/ARCHITECTURE.md` (corpus commit `3666eaa`, §3 at
+line 94, Appendix C at line 276), unvendored and unchecksummed.
+
+**Why it changes.** The spec's own preamble vendors `media-graph-spec_v1.1.md` for exactly this
+reason. An unvendored pointer into another repository is a normative sentence nobody in this
+repository can read - and when it IS read it contradicts the section citing it: §3's model is a
+Crowd Head with a per-user low-rank head (R=16 basis deltas) that §4.3 ships no artifacts for,
+and §3 puts a random-walk prior on `b_i` where `ledger/model.py` applies a static ridge.
+Appendix C's checkable clauses all hold against the code; §3's model does not. The honest repair
+is to say which is which rather than to point at both.
+
+**The decision.** Vendor the pointer as `docs/ARCHITECTURE-extracts.md` (new): §3 and Appendix C
+copied under a provenance header in `media-graph-spec_v1.1.md`'s style - source path, date, corpus
+commit `3666eaa`. §5.2 is amended to name what is normative here: the four-arm likelihood,
+Appendix C's Davidson-with-ties form, the margin weighting, sigma inside the likelihood, the ridge
+anchor plus BT perturbation, and the ridge-Hessian preconditioner. What §5.2 supersedes is stated
+in the same sentence: §3's Crowd Head with its per-user low-rank head - the app ships no crowd head
+and no basis deltas and generalises through the 64-d user vector - and §3's random-walk prior on
+`b_i`, where the shipped model applies a static ridge under §4.3's tau.
+
+**Cost.** Documentation only. Nothing here licenses touching `ledger/model.py`: adopting §3's
+Crowd Head would need new §4.3 artifacts and is M5+ scope, and this milestone's own rule is that a
+document is repaired to match a measured code path, never the other way round.
+
+### 295. Fourteen shipped rows citing bare proposals: four constants adopted, ten re-cited, and the rule made mechanical
+
+**What the spec says.** `CLAUDE.md` requires every non-obvious choice to cite its clause, and this
+file's own header says that nothing in it is normative until it lands in the spec. Fourteen rows
+at or before `current_milestone` cite a bare proposal number as the requirement's authority.
+
+**Why it changes.** Four of them ship an invention no section states: proposal 71's 80% credible
+mass (`ledger/hyperparams.py:148 tension_credible_mass = 0.80` - the plan's `:111` has drifted),
+proposal 157's *recommended* branch as one shared `straddles()` predicate for badge and queue,
+proposal 76's end-of-scale clamp where the proposal says the spec is silent, and proposals 74/75's
+Cancel control where the proposal says "no cancel is specified". A constant findable only in a
+document that disclaims itself is a constant nobody can be held to. The scope has also grown since
+roadmap decision 176 ruled on nine: the probe on this tree selects FOURTEEN - M4.9 added two,
+M4.15 added two, and one is an M2 row - and the five extra are the same shape as the five the
+ruling called decoration.
+
+**The decision.** Adopt the four constants and re-cite the rest. The four are adopted here in one
+answer table and each is given a sentence in `spielplan-spec_v2.1.md` §6.3 so an implementer can
+be held to it; those rows re-cite as `decision 295 (proposal 71)`, exactly as the M4.5 rows cite
+decision 162. Every other row moves its proposal number out of `spec` and into `why` as provenance
+and cites the section or the adopted decision that already says the thing. Then the rule becomes
+mechanical: `test_spec_coverage.py` fails a row at or before `current_milestone` whose `spec`
+matches /proposals? \d/ unless the citation sits inside a phrase containing "rests only on".
+
+The answer table below is the probe's output on this tree, not the ruling's estimate, and it
+is one row per coverage row rather than one per constant. The four adopted constants are
+carried by three rows - 157 and 76 are both `tonight-rank-straddle-equals-eligible` - so the
+fourteen read as three adopting rows and eleven re-citing ones. The ruling is unchanged; only
+the arithmetic it is read with is stated, because a row is the unit the map amends and a
+constant is the unit §6.3 gains a sentence for.
+
+| Proposal | Coverage row (milestone) | What ships | Answer |
+|---|---|---|---|
+| 150 | `jellyfin-acquisition-eval-finish-prompt-banner-path` (M1) | the queued one-title finish prompt is a card of its own, distinct from Home's pending-verdicts banner, and its first tap writes `seen` | **Re-cite** §7.3 with decision 212, which already supersedes 150; the number moves to `why` |
+| 141, 111 | `jellyfin-acquisition-eval-reimport-rebuild-set` (M2) | a re-import against a different Backbone recomputes exactly four things and nothing else | **Re-cite** §10's rebuild set |
+| 50 | `jellyfin-acquisition-eval-silent-reask-stream` (M2) | ~10% of queue slots are silent re-asks, unmarked in the payload and distinguishable server-side, measuring the flip rate | **Re-cite** §13 stream (b) |
+| 146 | `jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes` (M3) | one duel in ten is drawn uniformly and carries `uniform_holdout`, excluded from the selector's inputs and from every refit | **Re-cite** §13 stream (a) with decision 54b |
+| 157, 76 | `tonight-rank-straddle-equals-eligible` (M3) | one `straddles()` predicate serves both the badge and the comparison queue, and the badge at either end of the scale names the one adjacent tier that exists | **Adopt both.** §6.3 states neither: 157 is the recommended branch of an open question and 76 says in as many words that the spec is silent on the clamp |
+| 71 | `tonight-rank-tension-not-snapback` (M3) | the assigned tier stands, and a tier outside the posterior's **80%** credible interval carries a tension badge naming both (`ledger/hyperparams.py:148`) | **Adopt.** 80% is the operational reading of §6.3's "disagrees strongly" and appears in no section |
+| 74, 75 | `tonight-rank-tap-to-tier-and-cancel` (M3) | tap-to-tier writes the same `tier_edit` the pointer path writes, and re-tapping the lifted title cancels the lift | **Adopt** the Cancel control: 75 records that no cancel is specified, and a modeless lift with no exit is the classic tap-to-move failure |
+| 58, 60, 68 | `tonight-rank-result-card-inventory` (M4) | the reveal beat before the winner, the approval share in the data voice, one match line per participant | **Re-cite** §6.2 step 7 as rewritten under decision 54e |
+| 59 | `tonight-rank-guest-not-borrowed-ledger` (M4) | a guest is ranked by the candidate pool's own member-average order and no member's Ledger is substituted | **Re-cite** §6.2 steps 1/3 with decision 54c |
+| 22 | `library-rate-home-greeting-uses-the-household-clock` (M2) | `/api/home`'s band is computed in §2's `TZ`, not merely in one of the four legal bands | **Re-cite** §2 (TZ) with §6.0 |
+| 24 | `library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned` (M4.9) | shelf 1's anchor is a rated title, and the tier the headline names is the owner's latest `tier_edit` | **Re-cite** §6.0 table row 1 with §6.3 |
+| 27 | `library-rate-runtime-is-formatted-in-one-place` (M4.9) | one exported `runtimeLabel` serves the title, poster, rate and winner cards | **Re-cite** §6.0 with §6.8's data voice |
+| 127, 131 | `platform-menus-and-overlays-dismiss` (M4.15) | every menu, panel and rail closes on an outside tap and on Escape, under one global focus ring | **Re-cite** §6's one-handed preamble with §6.8 |
+| 130 | `platform-shipped-font-weights-are-real` (M4.15) | every declared `@font-face` weight resolves to a woff2 in the repository | **Re-cite** §6.8 |
+
+**Cost.** Fourteen rows are amended, not nine - said here so the record is the measurement rather
+than the ruling's estimate. No code is reverted: four behaviours stay exactly as they ship, and
+the four implementations are not touched speculatively. The citation guard lands AFTER the
+re-citation or it is red on arrival, which is why the map's re-citation precedes the instrument's
+new rule inside this milestone. `platform-compose-http-port-and-volumes` already uses the
+permitted "rests only on unsettled proposal 138" form in `why` and must keep passing, which is
+what that escape hatch is for: a row may say out loud that it rests on nothing settled, and may not
+pretend otherwise.
+
+### 296. Corrections owed to the milestone records are written into RELEASE.md, not into the plans
+
+**What the spec says.** `M4-open-points.md:212-213` states the direction of repair - measure, take
+the decision, amend the spec, then re-point the row - and the build workflow forbids editing
+`docs/milestones/*.md`. The plan's Phase E4 asks for line edits to four of those files.
+
+**Why it changes.** The workflow forbids it, and `test_spec_coverage.py`'s own range guard already
+institutionalises the same exclusion in prose: the plan is the plan, the workflow forbids editing
+it, and a correction owed there goes to the owner by hand. A dated plan is a record of what was
+believed on its date; silently editing it destroys the very record the correction is about.
+
+**The decision.** Record them in `docs/RELEASE.md` under a "Corrections owed to the milestone
+records" section: one row per correction with the file, the line, the claim as written, and the
+measured truth. Do not edit any `docs/milestones/*.md`.
+
+**Cost.** Four corrections go to RELEASE.md rather than into the plans: `M4.5-plan.md:169` (the
+image installs `postgresql-client-16` from PGDG, not `libpq5` and `curl` only -
+`ops/backend.Dockerfile:39`); `M4.5-plan.md:366-370` (`ArtifactStore.summary()` reads
+`identity['tables']['title']` from `artifact_bundle.manifest`, filled by `importer/bundle.py`, and
+returns 19,071 against the real bundle - keeping the half that is still true, that no coverage row
+asserts it against a real bundle); `M3-open-points.md:389-392` (the backup waiver was discharged at
+M4.5; `worker.py` runs `nightly-backup` and `backup/nightly.py` keeps 14); and `M4-plan.md:368-373`
+(nothing sweeps an idle Tonight room - `worker.py`'s `session-prune` deletes expired auth
+sessions, not rooms - so it is still not built).
+
+### 297. M2's §12 criterion is recorded as unmeasured with an unfilled owner verdict
+
+**What the spec says.** §12's M2 exit criterion is "50-100 verdicts each produce visibly personal
+rankings". `docs/TESTING.md:111-112` defines closure as "the suite is green - which is a stronger
+statement than §12's exit criterion". It is not stronger; it is different.
+
+**Why it changes.** M2's criterion has never been measured. `README.md:148-149` says as much: the
+Ledger has never met a real corpus Backbone. Building the seeded two-member loop - two members with
+50+ verdicts through `/api/rate`, then `/api/home` and `/api/rank`, Spearman between the two
+orderings below a threshold and both differing from `title_prior.b` - is the largest single item in
+this plan and needs a stack this lane cannot start; and this milestone's exit criterion names five
+release legs, none of which is an M2 loop.
+
+**The decision.** Record it. `docs/RELEASE.md` carries M2's criterion as written, states that it
+has never been measured, names what a measurement would take, and leaves the owner's verdict column
+UNFILLED. A static guard asserts the verdict column is unfilled, in the idiom of
+`test_the_owed_device_checks_are_recorded_and_still_unsigned`, so nobody can quietly sign it.
+
+**Cost.** The guard goes red on the day the owner honestly fills the verdict, and the repair then
+is to delete the guard with its row entry in the same change - the same polarity as
+`e2e/specs/05-milestones.spec.js` and as M4.15's device checks. That polarity is deliberate: a
+pre-signed line tells the next reader to stop looking, and this is the criterion the spec itself
+defines the product by.
+
+### 298. The TMDB logo ships as an owed asset; the notices ship now
+
+**What the spec says.** §6.8 sets the copy register; §10 and decision 292 make the bundle's terms a
+recorded thing. TMDB's terms require its logo as well as the "not endorsed, certified, or otherwise
+approved by TMDB" notice.
+
+**Why it changes.** No agent in this repository may fabricate or download a trademark file, and a
+hand-drawn approximation would be a worse licence problem than a missing one. The alternative -
+claiming the logo in a coverage row's `what` and passing on a slot that renders nothing - is
+exactly the defect this milestone exists to close: a row whose `what` outruns what was proven.
+
+**The decision.** Ship the notices now, verbatim, on the /account Data sources block: IMDb's
+"Information courtesy of IMDb (https://www.imdb.com). Used with permission.", TMDB's "not
+endorsed, certified, or otherwise approved by TMDB", CC BY-SA credit for Wikipedia and TVmaze,
+OMDb's CC BY-NC, and the per-source licence text read out of `rating_source`. The logo is a named
+slot the block renders when `frontend/static/tmdb-logo.svg` exists - it does not today - and its
+absence is recorded in `docs/RELEASE.md` as an owed asset the owner drops in from TMDB's own brand
+page.
+
+**Cost.** The written-out `what` for `map-taste-data-sources-are-attributed` is amended on this
+point and only this point: the e2e row asserts the notices and the absence of source names on
+cards, and does NOT assert a logo that is not there. RELEASE.md's owed-asset line is held by the
+same static guard that holds the M2 verdict, so the debt cannot be closed by forgetting it.
+
+### 299. The browser harness rebuilds the fixture it measures
+
+**What the spec says.** §12 closes each milestone on a browser suite, and `docs/TESTING.md` makes
+`node e2e/run.mjs` the canonical full run. `e2e/run.mjs:33-35`'s phase 0 brings the stack up and
+runs `reset.mjs`; nothing in it rebuilds `data/import`.
+
+**Why it changes.** Only CI rebuilds the fixture. The local harness measures whatever the directory
+happens to hold, so the check lives in a person's head - and a stale fixture has now cost this
+project six round trips in one session. My exit criterion is that the instrument cannot silently
+measure the wrong thing, and a harness measuring last month's fixture is that defect at its own
+altitude. A mtime comparison that refuses is a second thing to keep true and still leaves the
+rebuild in a human's head; rebuilding is deterministic and costs seconds.
+
+**The decision.** Take it. `e2e/run.mjs` rebuilds `data/import` from
+`backend/tests/fixtures/make_bundle.py` in phase 0, before `reset.mjs`, using the backend venv's
+interpreter (`backend/.venv/Scripts/python.exe` on win32, `backend/.venv/bin/python` otherwise).
+If the interpreter or the fixture module cannot be found, the harness FAILS and says so - it never
+falls back to whatever is on disk, which is the same rule the coverage gate takes for `git
+ls-files`.
+
+**Cost.** One new static row, `platform-the-browser-harness-rebuilds-the-fixture-it-measures`.
+`make_bundle.py` itself is NOT changed by this milestone, so the committed fixture stays valid and
+no rebuild is owed to the owner. M4.8 owns `run.mjs` and has shipped, and M4.16 runs alone, so
+nothing collides.
+
+### 300. `BUNDLE_IMPORT_TIMEOUT` moves to 600 s, and the box's grace period moves with it
+
+**What the spec says.** §5.3 files bundle import as a worker job with a minutes budget.
+`backend/spielplan/worker.py:710` sets `BUNDLE_IMPORT_TIMEOUT = 300.0`, and
+`backend/tests/test_box_claims.py:166` pins it to `docker-compose.yml`'s worker
+`stop_grace_period`, which is `5m`.
+
+**Why it changes.** M4.14 measured the real-bundle import at 213 s on this box and left the owner
+decision open; a box a third slower cannot finish inside 300 s. This milestone builds the release
+workflow, and its leg 3/5 runs the compose stack with the REAL bundle through the worker's import
+job on a GitHub runner - a box slower than this one. A 300 s budget over a 213 s measurement is the
+leg failing spuriously on the first release run, which is the gate reporting on itself rather than
+on the build. Plan §8 puts the grace period outside M4.14, and the pinning test makes the pair one
+edit; M4.16 owns the release gate, so the pair belongs here.
+
+**The decision.** Move both to 600 s in one diff - `worker.py:710` and `docker-compose.yml`'s
+worker `stop_grace_period` - with the comments restated from the measured 213 s rather than from a
+claimed margin. `test_box_claims.py:166` already pins the two together and keeps them pinned.
+
+**Cost.** `api/artifacts.py`'s mirrored comments and `test_bundle_import_job.py`'s
+`IMPORT_CLAIM_BUDGET_S` assertion are read and left consistent, and the M4.14 row
+`platform-bundle-import-is-a-worker-job-not-a-request` has its measured margin restated in the map.
+Nothing about the job's behaviour changes: what moves is the deadline after which
+`_reap_abandoned_import` calls an import abandoned.
+
+### 301. M4.15's two filed frontend defects are recorded, not repaired here
+
+**What the spec says.** §6.8 makes the app's copy the household's own voice. Decision 285's last
+section filed two defects with file:line rather than repairing them: (a) a surface renders
+`err.message` for an anonymous 401, which is `api/deps.py:119`'s "not signed in" - the household
+reading the backend's words under its own name - and (b) `frontend/src/lib/rate.svelte.js:298-302`
+sets `booted = true` inside a `finally`, so a first read that FAILED counts as booted and the
+loading state never returns. The same latch is in Rank, Tonight and Home.
+
+**Why it changes.** They are still true today, and (b) is what makes (a) durable rather than a
+flash: without the latch the sentence would appear for one frame, with it the surface stays on the
+backend's words. A §6.8 promise the app does not keep is precisely the kind of sentence this
+milestone is meant to find.
+
+**The decision.** No for the repair, yes for the record. Both are written into `docs/RELEASE.md`
+as known unmet promises with their file:line and the milestone that owns each surface (M4.9,
+M4.10, M4.12), with (b) named as what makes (a) durable. The code is not touched here.
+
+**Cost.** The repair is five frontend modules plus their colocated tests plus coverage rows for
+four surfaces this milestone owns none of; plan §7 is explicit that M4.16 repairs no surface, and
+`CLAUDE.md`'s surgical-diff rule forbids it as drive-by work. If the owner wants the repair inside
+this release it is a separate diff and a separate milestone brief, and this decision makes that
+choice visible instead of silent.
+
+### 302. M4.15's three unsigned device checks stay unsigned and are carried by reference
+
+**What the spec says.** Decisions 281 and 284: facts no engine in this suite can produce are
+recorded in `docs/TESTING.md` as an OWED device check with an unfilled signature line, never
+pre-signed. `test_the_owed_device_checks_are_recorded_and_still_unsigned` holds exactly one
+signature line in exactly one document.
+
+**Why it changes.** Three of those checks are still owed - the header clearing the status bar and
+the tab bar clearing Safari's toolbar in installed standalone, focus zoom on real hardware, and the
+WebKit half of the installed cold boot with the appliance unreachable - because `env()` resolves to
+0 in every engine the suite drives and Playwright's viewport IS the visible viewport. A release
+record that does not name them would let a reader take "suite green" for a signed device check.
+
+**The decision.** Carry them by reference. `docs/RELEASE.md` names the three and points at the
+single `verified on ...` line in `docs/TESTING.md`. Nothing is copied, nothing is signed, and the
+TESTING.md block is not touched except by the ledger re-paste, which must leave it byte-identical.
+
+**Cost.** Duplicating the debt into a second document is the drift class the guard exists to
+prevent, so the reference is a pointer and not a copy. The ledger re-paste must not disturb the
+owed-check block's bullet count or its counting sentence: the guard sums the counted words against
+the bullets, and a bullet added or a sentence restated on its own turns a held debt into a red
+gate for the wrong reason.
+
+### 303. /login's PUBLIC-list gap is recorded, not closed
+
+**What the spec says.** §3.1: a box with no admin "serves the setup wizard".
+`frontend/src/routes/+layout.svelte:93` puts `/login` in `guard()`'s `PUBLIC` list, and nothing
+pulls a visitor at /login back to /setup while `setup.required` is true.
+
+**Why it changes.** A spurious arrival at /login on a box that still owes a wizard is
+unrecoverable - in an installed standalone web view there is no address bar to type /setup into.
+It is a first-boot unrecoverability, which is the class the browser gate has already caught once
+in this release, so it may not simply be forgotten.
+
+**The decision.** Record it. `docs/RELEASE.md` names it under known latent gaps with its file:line
+and the reason it is not live: after decision 282 nothing reaches /login in that state. The routing
+rule is not changed here.
+
+**Cost.** One RELEASE.md line. It is a frontend routing rule in M4.6's and M4.15's territory with
+no reachable path today, and closing it would be a second rule nobody asked for - the same reason
+M4.15 declined it. If the browser gate ever reaches /login on a box owing a wizard, this line is
+the first thing the owner reads.
+
+---
+
+## Decisions taken (owner, 2026-09-17, M4.16 review cycle 1)
+
+Three, 304-306, taken under the same standing instruction as the block above: the plan's
+recommended option, recorded rather than asked. All three are corrections to records this
+milestone itself wrote or landed, which is what a review cycle of a documents milestone finds —
+a milestone whose subject is that the project's records describe the app that shipped can fail by
+making a record TRUE IN THE WRONG DIRECTION, and each of these is an instance.
+
+Each replaces a sentence and none changes behaviour. **No migration is taken here either** — 0024
+stays unclaimed for decision 292's reason.
+
+The cycle also landed four spec amendments that needed no new number, because the decision
+mandating each had already been taken and only its amendment was outstanding: decision 167's three
+remaining example strings (§6.0 twice, §6.8 once), decision 169's *Ending a room* in §6.2 step 2,
+and decision 173's axis-absence clauses in §6.2 step 5 and §6.4. Decision 288's own rule is why
+they are amendments and not decisions: an entry from 162 on is normative from the day it is taken
+*until the amendment it mandates lands in the spec file*, so an unlanded mandate is a debt against
+the file rather than a question for the owner. Three of the four had been outstanding since M4.12.
+
+And one absence is recorded rather than decided: `.github/workflows/release.yml` has never been
+dispatched, no leg of it has ever been deliberately broken and watched to fail, and no runner
+carrying the `spielplan-corpus` label has ever been registered. That is `docs/RELEASE.md` §2.1's
+to say, in decision 297's idiom, and it says it — the milestone's own exit criterion asks for the
+record where the run cannot be had, and the record was the half this lane could produce.
+
+### 304. §4.1's reason for not importing the genome is corrected; the ruling stands
+
+**What the record says.** Decision 291 stopped importing the MovieLens slice and argued it from a
+universal: "every title carrying a genome vector already has a Backbone coordinate, so the block
+feeds nothing". That sentence was copied into three places — §4.1, `importer/load.py`'s
+`SKIPPED_TABLES` reason, and the **Upheld** note this milestone added under
+`media-graph-spec_v1.1.md:175`.
+
+**Why it changes.** It is false on the bundle the app ships against, and the codebase says why in
+its own words. `scoring/backbone.py` states that a `cold_mask` row "is treated as ABSENT" — E is
+written as zeros — so HAVING a row of E and having a Backbone COORDINATE are different facts.
+Re-measured on v20260828 with `reconcile.warm_title_ids`' own rule (WARM_SUPPORT 90.00000000000001,
+no bundle override): of the 5,315 titles carrying a genome vector, **1,063 are not warm** — which
+is precisely the set §5.3's sweep hands to the Cold Tower — and **1,055 of those carry a cold-masked
+row**. For them the genome block was a live tower input: median 0.356 of their non-zero features
+and 0.345 of their L2 norm, computed over `content_X.npz`'s genome span (columns 989-1971). It is
+now permanently zero.
+
+**The decision.** The behaviour stands and is not reverted: §4.3 already zero-imputes the block
+always, the Cold Tower's dropout training saw all-zero blocks, and the second leg of 291's
+argument — that §8's acquired titles carry no genome vector at all — is true and is the leg that
+survives. What is refused is the premise. All three records are restated to say what the loss
+actually is and that it is accepted; the change is recorded in `title_placement.blocks_imputed`
+and read by no surface, since the genome is one of the blocks `is_thin` ignores, so no badge and
+no acquisition job follows from it.
+
+**Not decided here.** Whether the corpus should ship a genome-derived feature the app CAN use is
+M5's or M6's, and nothing in this entry asks for it. Decision 291's entry above is left as the
+dated record it is; this one supersedes its premise rather than editing it, which is the register's
+own mechanism and the reason entries are numbered.
+
+**Cost.** Four sentences and a static guard that refuses the universal in all three records at
+once, because the sentence spread by being copied.
+
+### 305. Rule 5 asserts the authority it was already written to require
+
+**What the record says.** `platform-shipped-rows-cite-a-decision-not-a-bare-proposal`'s `what`
+ends "...and the requirement's authority is a section or a numbered decision". Neither named test
+asserts that clause. `_bare_proposal_citations` only REMOVES one spelling and `_malformed` only
+asks that `spec` be non-empty, so a shipped row could cite `TBD`, `because I said so` or a decision
+number that does not exist and the map printed it covered.
+
+**Why it changes.** It is exit criterion (2)'s own condition — "zero rows whose `what` outruns its
+named tests" — and the one row it lands on is the instrument this milestone built to make the map's
+authority honest. The milestone's method for an outrun clause is settled by its own precedent:
+prove it, or disclose it. This one can be proved.
+
+**The decision.** Assert the positive rather than narrow the `what`. MEASURED before it was
+written, which is what makes this the cheap option: over this tree **all 308 shipped rows** already
+name a section, a numbered decision or a document path, so the rule lands green and asserts the map
+as it is rather than inventing work. A document path is admitted alongside `§` and `decision N`
+because many rows answer to `CLAUDE.md`'s conventions or to `docs/TESTING.md` rather than to a
+section, and a rule that reddened those would be narrowed by the first person it stopped. The rule
+joins `test_every_rule_this_gate_enforces_can_fail`'s parametrised list with its own violation, and
+`test_spec_coverage.py`'s module docstring states both halves rather than only the negative one.
+
+**Cost.** One reader, one case, one docstring line. What is given up is the narrowing option, which
+would have moved a true sentence out of `what` and into `why` — cheaper, and it would have left the
+module docstring making the same unasserted promise one file over.
+
+### 306. §5.2's normative list is re-attributed, and its sigma clause states the half that carries
+
+**What the record says.** §5.2 and `ARCHITECTURE-extracts.md`'s "Normative in Spielplan" list
+promote six clauses. Two do not survive a read of the vendored text or of the code. (a) Appendix C
+contains no Davidson-with-ties form — its only comparison model is "ridge anchor +
+margin-weighted Bradley-Terry"; Davidson-with-ties is §3's observation arm 2, where the
+P(i≻j)/P(tie) equations actually are. (b) Appendix C's sigma is the **rank-Gaussian regression
+target's** per-level CDF band, and that target is not what shipped: Appendix C's own table marks
+ternary as shipped, `ledger/model.py` fits the ternary ordered logit, `_objective` carries no sigma
+term at all, and nothing in this repository computes a mid-CDF.
+
+**Why it changes.** Decision 294 vendored the two sections on the ground that "a normative sentence
+nobody in this repository can read is not normative". A reader who can now read it and chases
+either pointer into the section it names finds nothing — which is the same failure one step in, and
+the file contradicts itself: three lines above the disputed bullet the same list credits §3 with
+Davidson correctly. Worse for (b): under CLAUDE.md's rule that the spec wins, a normative sentence
+promoting sigma INSIDE the likelihood makes `ledger/observations.py`'s uniform `ord_weight` a bug —
+and Phase C's own non-goal says nothing here justifies touching `ledger/model.py`. A clause the
+milestone both asserts and forbids satisfying has to be restated.
+
+**The decision.** Documentation only, both halves. Davidson-with-ties is attributed to §3, where it
+lives and where the equations are. The sigma clause is restated as the **negative** result that does
+carry over — precision-weighting rows by 1/σ² measured −0.021, so sigma is never a sample weight —
+with the positive half named as belonging to a target that is not built, and Appendix C's
+rank-Gaussian target added to the extract's "NOT implemented here" list beside the Crowd Head,
+in the idiom that list already uses for the protocol-reversal guard: not superseded, simply unbuilt.
+A static guard holds both: a model name the list credits to a vendored section must occur in that
+section, and neither the extract nor the normative file may promote sigma inside the likelihood
+while `ord_weight` is ones.
+
+**Not decided here.** Whether to BUILD the rank-Gaussian target. Appendix C measures it beating
+ternary by +0.0151 within the liked class, which is a real result and a real milestone's work; on
+the day it ships, the guard's sigma assertion is deleted in the same change as the sentence it
+refuses, which is the polarity `test_the_unmeasured_criterion_and_the_owed_asset_stay_unsigned`
+already uses.
+
+**Cost.** Two sentences in two documents and one guard. The four clauses that DO hold are untouched:
+the four-arm likelihood, the margin weighting, the ridge anchor + BT fusion, and the ridge-Hessian
+preconditioner, which stays because fixed-step GD measurably diverges and that is a scar.
+
+---
+
+## Decisions taken (owner, 2026-09-17, M4.16 review cycle 2)
+
+Three, 307-309, taken under the same standing instruction as the two blocks above: the plan's
+recommended option, recorded rather than asked. 307 and 308 are the shape cycle 1 found and named — a
+sentence this milestone itself wrote into the normative file, true in the wrong direction — and
+both fail in the direction the milestone's own brief calls the dangerous one: a promise the app
+does not keep, rather than a promise it keeps and understates. Those two are documentation only and
+change no behaviour. 309 is the cycle's one behaviour change, and it is the same failure one layer
+down: not a sentence describing the app wrongly, but a strike this milestone made that left every
+movie-data archive any shipped build has ever written unreadable by this one — found by the brief's
+own instruction to check "that the backup's Table entries going away cannot orphan a restore", and
+measured before it was repaired. **No migration is taken here either** — 0024 stays unclaimed for
+decision 292's reason.
+
+Five further repairs landed with no new number, because none of them is a question for the owner:
+decision 305's rule 5 now RESOLVES the section a shipped row cites against the normative file's
+headings, which is what its own entry said the rule was for ("authority a reader can go and
+check") and which the map's one dangling citation — `§6.9`, a section v2.1 has never had, on the
+single new surface this milestone ships — walked straight past; the same rule now resolves the
+sentences a `spec` field QUOTES, which found a row quoting a sentence this wave had itself deleted
+from `docs/TESTING.md`; the map's one standing waiver now registers the two tests its own premise
+leans on, which rule 2 could not see while they were named in prose only; `docs/RELEASE.md` section
+5 gained the three escalated claims the map's own header block already said were in it; and
+decision 288's point release gained decision 306, whose amendment had landed in §5.2 while the wave
+block still said cycle 1 folded four. Every one of those is a record disagreeing with the tree it
+describes, which is this milestone's subject rather than a new call on it.
+
+### 307. §10's per-source licence clause states the half that is built and names the half that is not
+
+**What the record says.** Decision 293 put the Data sources block on /account and decision 298 said
+what ships now: the five notices, the CC BY-SA credits, the TMDB slot — "and the per-source licence
+text read out of `rating_source`". §10 then states that last clause as an accomplished fact, in two
+sentences this wave wrote. The bundle table's `rating_source` row reads "(mandatory always, and the
+source of the licence text §6.8's Data sources block displays)", and the Data-terms paragraph says
+that the contents of `url` / `license` / `version` / `notes` "are surfaced to every signed-in member
+on /account's **Data sources** block".
+
+**Why it changes.** Neither sentence is true, and one of them cites the wrong section.
+`frontend/src/lib/components/DataSources.svelte` imports nothing from `$lib/api.js`, makes no
+request and renders five strings this app wrote; `routes/account/+page.svelte` mounts it with no
+props. The only route serving those four columns is `api/admin.py`'s `data_sources`, which takes
+`AdminUser` — 403 to a member, and 401 with `X-Spielplan-Reauth: admin` to an admin past §3.2's 24
+hours, so a member surface that fetched it would put the admin re-prompt on the one page every
+member reaches. The component argues exactly that in its own header and then concludes the opposite
+of the spec: "the eleven datasets' own licence text stays on the admin card until one exists". And
+§6.8 is the design-language paragraph; the block it is credited with here is /account's, which §10
+itself gets right one paragraph further down.
+
+Two repairs were available and both are defects. NARROWING the clause to what exists would strike a
+promise decisions 292, 293 and 298 all make, and the coverage map refuses that move in as many
+words: "Not one of them is closed by a waiver, by a renamed test or by a narrowed sentence."
+LEAVING it standing is the other direction, and it is the one this milestone exists to end: a
+normative file promising a member-visible per-source licence display that no code serves, in the
+last milestone before M5, which inherits the sentence and has no plan document to correct it from.
+
+**The decision.** Neither. The clause stands and is marked unbuilt, in the idiom this same wave
+already uses three times — §10's own genome row ("shipped in the bundle and **not imported**"),
+§7.3's playback route ("It is not built") and §11's seams ("none of which is built"). §10's table
+row credits `rating_source` with CARRYING the per-source terms rather than with feeding a surface
+it does not feed. The Data-terms paragraph then says four things in order: the terms travel in the
+four columns; §6.6's admin **Data** card is the surface that reads them out today; /account's
+**Data sources** block carries this app's own notices in §6.8's quiet data voice; and a
+member-readable route for the per-source terms **is not built**. The debt goes to
+`docs/RELEASE.md` section 5 in decision 296's idiom, and the coverage row's escalation comment
+names that section number rather than the file, the way its own logo clause already names section
+7.1. A static guard holds the pair: while nothing under `frontend/src` reads a route serving those
+columns, the normative file may not assert that the member block displays them.
+
+**Not decided here.** Whether to BUILD the member-readable route, and which milestone owes it.
+M4.16 owns no route — its one code-and-UI item was the block itself — so RELEASE.md states what
+such a route would take rather than scheduling it at an invented milestone, which is decision 289's
+rule for the same shape. On the day it ships, the guard's assertion is deleted in the same change
+as the sentence it refuses, which is the polarity
+`test_the_unmeasured_criterion_and_the_owed_asset_stay_unsigned` already uses.
+
+**Cost.** Two sentences in the normative file, one section in RELEASE.md, one comment in the map
+and one guard. What is given up is the cheaper repair, which would have quietly reduced what three
+owner decisions promise and left the coverage row's `what` the only place the promise survived.
+
+### 308. §4.3's per-arm sensitivity clause states what the fit actually has
+
+**What the record says.** §4.3's `ledger_hyperparams.json` bullet closes: "Per-user cutpoints and
+per-arm sensitivities are **not** shipped — they are fitted in-app by design." §5.2 promotes "the
+four-arm likelihood of §3" to normative, and §3's arm 1, as vendored, is "ordered logit
+P(y≤c) = σ(κ_c − a_r·s), free per-user cutpoints κ, protocol sensitivity a_r".
+
+**Why it changes.** The cutpoints are fitted. The per-arm sensitivity is not, and there is no slot
+for one. `ledger/model.py` states its own parameter vector as `theta = (mu, v[64], gamma[2],
+cuts[K-1], psi)` and says in the next line that `gamma` are the verdict arm's two cutpoints and
+`cuts` the tier arm's K-1; `_ordinal_terms(s, level, cuts)` enters the latent with coefficient 1,
+and `_objective`'s arm loop hands the same unscaled `s` to both arms. Free cutpoints do not absorb
+the difference: with an ordered logit an arm-specific SHIFT is absorbable into κ and an arm-specific
+SCALE is not, so `a_r` is a parameter this model does not have rather than a re-parameterisation of
+one it does. Under CLAUDE.md's rule that the spec wins, a normative sentence saying the app fits one
+makes `ledger/model.py` the bug — which is precisely the reading decision 306 refused to ship for
+sigma one bullet over, and Phase C's non-goal forbids touching that file.
+
+**The decision.** Documentation only, and an AMENDMENT rather than a replacement. The first half of
+the sentence stays word for word, because `ledger/hyperparams.py` quotes it verbatim twice as the
+module's contract and Phase C's non-goal forbids editing that file — a restatement would leave two
+stale verbatim quotes in a module this milestone may not touch. Only the "fitted in-app" clause is
+corrected: the cutpoints are fitted, and no per-arm sensitivity is fitted either, the two ordinal
+arms sharing one unscaled latent with free cutpoints each, while a bundle that ships a
+`sensitivity` key is reported and ignored (`hyperparams.py`'s `PER_USER_KEY`).
+`ARCHITECTURE-extracts.md`'s "Normative in Spielplan" bullet for arm 1 says the same in one clause,
+so a reader chasing §5.2's pointer into §3 meets the gap at the equation rather than three bullets
+below it, beside Appendix C's protocol-reversal guard — the other per-arm term that is not
+superseded and simply unbuilt. Decision 306's guard gains a third rule: neither document may
+promote a per-arm sensitivity while `ledger/model.py`'s layout carries no term for one.
+
+**Not decided here.** Whether to FIT one. §3 has the equation and Appendix C's protocol-reversal
+guard is the diagnostic that would read it; both are already recorded in the extract's "NOT
+implemented here" list, and neither is this milestone's to build. On the day a scale enters the
+layout, the guard's assertion is deleted with the sentence it refuses.
+
+**Cost.** One clause in the normative file, one clause in the extract, one rule.
+`ledger/model.py`, `ledger/hyperparams.py`, `ledger/observations.py` and their tests are untouched,
+which is what keeps the two verbatim quotes accurate.
+
+### 309. An archive written before decision 291 restores, and the tables it retired are named
+
+**What the record says.** Decision 291 struck `ml_genome_tag`, `ml_link` and `ml_genome_score`
+from `backup/movie_data.py`'s `TABLES`. Its **Cost** paragraph names one consequence — the struck
+M4.9 coverage row — and nothing about the artifact's own readers. `FORMAT` stayed 1, over a note at
+`movie_data.py:64` saying that field is "bumped when the layout changes in a way a reader cannot
+infer".
+
+**Why it changes.** `restore_archive` compares the manifest's table set against this build's
+`TABLES` in both directions and refuses on either. Measured on this lane's Postgres: an archive
+written with the pre-291 `TABLES` and restored by this build answers `RestoreRefused: the archive's
+table set does not match this build's: unknown ['public.ml_genome_score', 'public.ml_genome_tag',
+'public.ml_link'], missing []`, and the install ends with zero titles — while an archive written
+*and* restored by this build round-trips, so the boundary is exactly the version one. The module
+has two commits in its life (M4.5, M4.7) and `TABLES` held the same 34 entries across both, so this
+is the first table-set change the artifact has ever seen and `FORMAT = 1` was a true statement about
+every archive ever written until it. What it breaks is the one gesture decision 162 leaves the
+household: README's *Recovery* block has the operator write an archive to a stick and restore it
+into a rebuilt box, which is by definition a build at least as new as the writer. The refusal names
+three tables and `missing []`, so what the operator reads is a corrupt or foreign file.
+
+**The decision.** Tolerate, by name, and say so. `RETIRED` stands beside `TABLES` naming the three
+qualified tables the archive has retired; `restore_archive` subtracts them from the manifest's
+entries once, ahead of the table-set check, so the member check, the occupancy scan and the COPY
+loop all see the archive as this build would have written it. The refusal is NOT widened — a table
+this build neither archives nor retired is refused exactly as before, because "an archive arrives on
+a stick, over a channel nobody controls" is the sentence the symmetric check was written for. The
+skipped entries are not loaded: decision 291's ruling is that the slice is not imported, and
+`0003_content.sql`'s three tables are empty on every install, so the restored install is precisely
+the one a post-291 archive would have produced — which is also why this needs no schema change, and
+0024 stays unclaimed for decision 292's reason. `FORMAT` stays 1 and gains its reason: a table
+LEAVING `TABLES` is inferable from the set the manifest names, and a table JOINING it is the case
+where `missing [...]` is a substantive answer rather than a nominal one. And the three are NAMED on
+the way past — `RestoreReport.retired`, and the operator's own printed line — because a line
+reporting 31 tables for an archive that named 34 is a record that is true and describes the wrong
+thing, which is the defect this milestone exists to stop shipping.
+
+**Not decided here.** Whether a release leg should restore a movie-data archive at stack level.
+`test_restore_drill.py` restores §2's `pg_dump` and never the archive, so this boundary is proved
+in-process only; the gap is recorded in `docs/RELEASE.md` section 6.3, in that section's own idiom
+for something owed rather than closed, instead of being shut by a leg this lane would write blind.
+
+**Cost.** One named set, one subtraction and one reported field, in a module whose only callers are
+its own tests and `spielplan-movie-data`. Two integration tests on
+`platform-movie-data-archive-is-a-snapshot-and-a-locked-restore`, one per direction — the older
+archive restores, an unknown table is still refused — and a static pair holding `RETIRED` and
+`TABLES` disjoint, because a name in both is a table whose rows are written and never read back.
+
+---
+
+## Decisions taken (owner, 2026-09-17, M4.16 review cycle 3)
+
+One, 310, under the same standing instruction as the three blocks above. It is cycle 2's shape
+exactly — a sentence this milestone itself wrote into the normative file, true about the
+restriction and false about the artifact — and it is the same premise-by-copying failure decision
+304 took a number for, on a different premise from the same wave. Documentation only; no behaviour
+changes and no migration is taken, 0024 staying unclaimed for decision 292's reason.
+
+The other repairs this cycle and review cycle 4 made landed with no new number, because none of
+them is a question for the owner and each is a record disagreeing with the tree it describes. Two
+are cycle 4's and both are the release gate's own published numbers: the release workflow now
+sizes all three silent-skip families in the published form cycle 2 established, so the guard that
+holds those counts reads the workflow too — it had been publishing two of the same numbers in
+prose the fixed clause could not match — and the count that justifies keeping phase 1's Playwright
+report is derived rather than typed in all three places that publish it, where it said seven,
+which is how many first-boot TESTS the map names, over eight ROWS. Decision 305's "all 308 shipped
+rows" is restated as the 309 this tree holds in the two copies that claim to describe this tree,
+its own entry above keeping the figure it was taken with. The two `test_layering_guards.py` rows
+now state the rules their own guards enforce: the import rule's `what` had no scope word although
+the walk roots at `backend/spielplan`, and the route rule's offered two classes over a classifier
+that has always had three — a reader who repaired the app to fit that sentence would have deleted
+decision 179's ways out of §3.1's first-login lock and bricked a locked account. And the opening
+sentence of the first M4.16 block above named an endpoint three decisions short of this
+register's own, eighteen lines above a sentence in that same preamble naming the right one; the
+guard that sweeps for a stale endpoint now reads the register's third spelling as well as its
+first.
+
+### 310. The movie-data archive is not nightly, and §10 stops saying it is
+
+**What the record says.** §10's terms-of-use paragraph, which decision 292 mandated and this
+milestone wrote, opens its second sentence "The **nightly** `/data/backups` movie-data archive
+inherits the same restriction". Four more records this wave wrote or edited carry the same cadence:
+`importer/load.py`'s `SKIPPED_TABLES` reason ("archived every night"), decision 291's own entry
+("archives the three tables nightly"), `test_backup.py` ("archived nightly while the importer
+filled them") and `test_load_mapping.py`, which says the genome rows were "loaded nightly" and is
+wrong twice over — decision 162 seeds content once and `importer/bundle.py` refuses a second
+content import.
+
+**Why it changes.** There is no nightly movie-data archive and there has never been one.
+`worker.py`'s `JOBS` holds exactly one backup job — `Job("nightly-backup", ..., _nightly_backup,
+every=86400)` — and it calls `backup/nightly.run`, which is `pg_dump`. The archive's own writer,
+`movie_data.write_archive`, has no job, no route and no scheduler; its only reachable caller
+is the console script `spielplan-movie-data` that `backend/pyproject.toml` declares, and
+`backup/__init__.py` says so in its own words ("two artifacts, on purpose"), giving only `nightly`
+a cadence. `nightly.prune(KEEP=14)` rotates by its own dump-name pattern, so nothing on a clock
+writes such an archive and nothing on a clock removes one. The project had measured this twice
+before this wave copied the opposite — `ROADMAP-to-M5.md`: "grep finds movie_data has no caller at
+all ... an operator one-shot, not a nightly cost" — and decision 309's own **Cost** paragraph, in
+the wave immediately above this one, says the module's "only callers are its own tests and
+`spielplan-movie-data`". The word was not in decision 292's own wording, not in the plan's and not
+in README's; it entered in the transcription into the one file that is normative. A reader of §10
+budgets disk and retention for a content archive in `/data/backups` and goes looking for the job
+that writes it, and M5 — which has no plan document — is the next reader.
+
+**The decision.** Strike the word, keep the clause. §10 reads "The `/data/backups` movie-data
+archive inherits the same restriction": the restriction is right and is decision 292's whole point,
+and an artifact an operator writes by hand is private household data exactly as one written on a
+timer would be. The three live copies go with it, `test_load_mapping.py`'s to "loaded on the one
+content seed" (decision 162) rather than to a different cadence. A static guard refuses the claim
+in all five records at once — anchored on the ARTIFACT rather than on the word, because §2's
+`pg_dump` really is nightly and is described that way across this tree — and is shown refusing
+three spellings and admitting two.
+
+**Not decided here.** Whether the movie-data archive SHOULD be scheduled. It is an operator gesture
+by design and decision 309 has just given it a restore path; putting it on a timer is a milestone's
+work with its own retention question, and nothing in this entry asks for it.
+
+**Cost.** One word in the normative file, three sentences in three records, one guard and its
+self-test. Decision 291's entry is left as the dated record it is and this one supersedes its
+premise rather than editing it — decision 304's mechanism, on the second premise of the same wave.
+
+---
+
+## Decisions taken (owner, 2026-09-17, M4.16 review cycle 4)
+
+Ten, 311-320, under the same standing instruction as the four blocks above. The first five are
+the owner's calls on cycle 4's findings; three correct reasons that three earlier
+decisions gave, in decision 304's mechanism — the ruling stands, the premise is refused, and the
+earlier entry is left as the dated record it is rather than edited; the ninth settles the one
+string on the one surface this milestone ships that a licence, and not this app, writes; and the
+tenth rules on the half of that surface's CC BY-SA credit the plan asked for and no record ever
+accounted for.
+
+Two of the ten change behaviour: 314, which narrows how `ops/coverage_gate.py` reads a
+Playwright result status, and 319, which replaces the sentence a member reads under TMDB. The rest
+are records. No migration is taken and 0024 stays unclaimed for
+decision 292's reason.
+
+### 311. The genome READ path survives decision 291, and the sentences that denied it are narrowed
+
+**What the record says.** Five records state, without condition, that the genome block is zero:
+§4.1 ("§4.3's 983 genome columns are zero-imputed always"), §4.3 ("The genome block is **never**
+populated ... so zero-imputation is the only path those 983 columns ever take"),
+`media-graph-spec_v1.1.md`'s **Upheld** note ("zero-imputed always"), `importer/load.py` ("they are
+empty by construction now") and `backup/movie_data.py` ("empty on every install").
+
+**Why it changes.** Decision 291 stopped the IMPORT. It emptied no table. No migration drops the
+888,023 `ml_genome_score` rows every shipped build up to M4.15 loaded, decision 162 seeds content
+once so nothing re-seeds them away, and `placement/features.py`'s `_genome` is still wired into
+`BLOCK_SOURCES` with `_META_SQL`'s `n_genome` still counting the same rows. `build_vector` reaches
+`impute == "zero"` only through `if not pairs`, so on any install seeded before this milestone the
+block is PRESENT with real relevance values — for exactly the 1,055 cold-masked titles decision
+304 re-measured as the set §5.3's sweep hands to the Cold Tower. This project's own rule is that
+where code and spec disagree the code is the bug, which makes a false universal in the normative
+file a licence to delete that reader as dead code and change those titles' placement inputs
+silently.
+
+**The decision.** Narrow the sentences; keep the read path, keep `_GENOME_MIN_RELEVANCE`'s cut and
+keep the `n_genome` count. Each record states what this build IMPORTS — no import this build
+performs populates those tables, so the block is zero for every title it seeds — and names the
+pre-291 install as the one case where rows survive and are read, with the Cold Tower's own dropout
+training cited for why reading them THERE is the better outcome rather than a leak. The scope is
+all five records and not §4.1 alone: the sentence spread by being copied, which is the mechanism
+decision 304's Cost paragraph named, and narrowing one of five would leave the normative file
+self-contradicting two sections apart. `placement/features.py` gains comment-only lines in `_genome`
+and above `_GENOME_MIN_RELEVANCE` saying why the reader stays. No query, no builder entry and no
+test behaviour changes.
+
+**Cost.** Five sentences, two comments, and a static guard that refuses the unconditional PATH
+across all five records at once — with a self-test in both directions, because the contract's RULE
+(`ZERO_IMPUTED = ("genome",)`) genuinely is unconditional and a record saying so must still pass.
+Decision 309's restore argument rests on the same universal and is left as the dated record it is;
+what it rules — that a restore passing over the three tables is correct — is unaffected. What the
+five records gain is the narrowing and nothing else: each states what this build IMPORTS rather
+than a property of every install. What that subtraction costs a pre-291 box is recorded where
+decision 309's ruling already lives, in `backup/movie_data.py`'s `RETIRED` block ("this
+subtraction does change that box's placement inputs from populated to zero"); no such clause is
+added to §4.1 or §4.3, because none is mandated here and both are statements about imports. If the
+household is owed one, that is a separate decision and this entry does not pre-empt it.
+**This paragraph claimed otherwise when it was first written** — it reported as landed an amendment
+to the normative file that nobody made, which is the defect this milestone exists to remove,
+standing inside its own record. [M4.16 cycle 4, M416-C4-GEN-07]
+
+### 312. "Executed at or above the row's declared kind" is two instruments, and each names the other
+
+**What the record says.** The one-sentence criterion reads as one instrument.
+`ops/coverage_gate.py` answers whether a named test RAN; whether a row's evidence sits at the layer
+its `kind` declares is `platform-coverage-rows-are-proven-at-their-kind`, a pytest rule with a
+different owner. Only one direction of that cross-reference had landed.
+
+**Why it changes.** The split is correct and is not being undone: a check on whether the suite ran
+cannot live inside the suite, and a check on what LAYER proved a row cannot live outside it. But
+the only thing the split buys is legibility, and a reader starting from the executed-coverage row,
+or from `docs/RELEASE.md`'s instrument table, was never told the other half existed.
+
+**The decision.** Keep the split and make it legible in four places.
+`ops/coverage_gate.py`'s module docstring and `platform-coverage-counts-only-executed-tests`'s
+`what` name the kind guard as the half they do not carry;
+`platform-coverage-rows-are-proven-at-their-kind`'s `what` names the gate the same way (this half
+had already landed); and `docs/RELEASE.md` section 2.1's instrument table gains a third row for the
+kind guard, so the criterion resolves to two named instruments with two owners.
+
+**Cost.** One paragraph, one clause, one table row. Nothing runs differently.
+
+### 313. Leg 2 is run once against a report a runner actually wrote, and the partial is recorded as a partial
+
+**What the record says.** `docs/RELEASE.md` section 2.1 recorded leg 2 as run "**no, never, in any
+form**", and said the gate "has been exercised against synthetic reports built out of the live map,
+which is what its self-tests are — never against a report a runner wrote".
+
+**Why it changes.** Leg 2 is the leg with the thinnest fallback reading, and every claim it rests on
+— the rootdir mapping, the absent `file=` attribute, parameter folding, the vitest exclusion — was
+held by fixtures this repository authored to MODEL the runner. `ops/coverage_gate.py` asserts in its
+own docstring that `_module_from_classname` "is the live path rather than the fallback", which is a
+claim about what a real runner emits. A gate believed because nobody made it speak over real input
+is cycle 1's opening blocker one instrument over, and it costs under a minute to discharge.
+
+**The decision.** Run it, scoped — never the whole suite — and record in section 2.1 exactly what it
+proves and exactly what it does not. Proved: the parser read a report pytest wrote; `xunit2` emitted
+no `file=` on ANY `<testcase>` element it wrote, so `_module_from_classname` is the live branch and
+mapped `tests.test_release_gate` back to `backend/tests/test_release_gate.py::<name>`; every outcome
+read was `executed`; parameterised cases folded, every element collapsing to the base ids the map
+spells; and the ids the map names in that file are exactly the ones confirmed, checked
+against the map rather than counted off the console. Not proved: the run was scoped, so the exit
+code is 1 by design over the rows whose evidence that run never touched; no Playwright report was
+involved; and the JOB has still never returned an exit code. The leg's substance cell becomes
+`partial — one scoped JUnit, by hand, from this lane` and its **By this job** cell stays `never`.
+
+**Cost.** One paragraph and one table cell, plus a guard that holds the whole **By this job** column
+at `never`, so the column exit criterion 4 is about cannot be moved by an edit. **The figures this
+entry first carried are struck rather than restated** (M4.16 cycle 5, M416-C5-REL-01): they were
+pasted into two documents, re-derived by nothing, and stale in both inside the same diff, because
+the review cycle that added tests to the file leg 2 was run over did not re-run the one command
+section 2.1 prints. The block there is dated and held by
+`test_the_leg_two_transcript_publishes_the_figures_this_map_would_print`, which counts four of its
+five figures off the live map; a second copy here would be a second thing to keep true, which is
+the defect this milestone exists to close.
+
+### 314. A report status the gate does not recognise is absent evidence, not proof
+
+**What the record says.** `ops/coverage_gate.py`'s `_walk_playwright` read
+`outcomes.add(SKIPPED if status == SKIPPED else "executed")` — inequality with one word rather than
+membership of a known set — so every status string that is not literally `skipped` counted as
+evidence that the row's test ran.
+
+**Why it changes.** Two shapes fall through it. `interrupted` is what a cancelled run, a killed
+worker or a shutdown mid-file writes, and the compound a cancelled two-project run produces —
+desktop `interrupted`, phone `skipped` — resolved to a set that is neither `None` nor `{skipped}`
+and so fell past both of `check()`'s failure arms, exactly as the empty-spec shape cycle 1 fixed
+did. And the unrecognised half is unbounded: `e2e/package.json` pins the reporter at `^1.49.0`, a
+caret range installed by `npm ci || npm install`, so the vocabulary this default depended on is a
+third-party dependency's and nothing here asserts it. The file's own CG-01 comment already rules
+that a guard holding only while a reporter keeps a shape nothing here asserts is a version pin
+rather than a rule — and the line four below it broke that rule.
+
+**The decision.** Narrow it, in the same polarity as the two absent-evidence branches cycle 1 added:
+an explicit `EXECUTED_STATUSES = {"passed", "failed", "timedOut"}`, and everything else reads as a
+skip. `timedOut` and `failed` stay executions because they RAN and leg 1 or the browser leg has
+already failed on them, which is the argument the module already makes for keeping a pytest
+`<error>` an execution: reporting it here as well would diagnose one defect twice.
+
+**Cost.** Two lines of code and five self-test cases — three refusals (`interrupted`, an
+unrecognised word, and the compound pair) and two admissions (`failed`, `timedOut`), because a
+narrowing that swallowed those two would be the same defect mirrored.
+
+### 315. The "rests only on" escape must record a debt, not only a form of words
+
+**What the record says.** Rule 5 refuses a shipped row that cites a bare proposal unless the
+citation sits inside a phrase containing "rests only on". As a mechanical rule, that is satisfiable
+by wording.
+
+**The decision.** Tighten it in one direction only, mechanically: a row at or before
+`current_milestone` using the escape must, in the same `spec` string, mark the proposal UNSETTLED —
+the idiom the map's two honest rows already use, "rests only on unsettled proposal 138" — so the
+escape reads as a published debt rather than a licence. And prove the other direction with an
+explicit false-negative case: a legitimate citation that happens to carry a number in its prose must
+pass, alongside the existing `test_the_synthetic_row_offends_no_rule`.
+
+**Cost.** One clause in the rule, two self-test cases, and whatever rows the tightened rule reddens
+— which is the point of it.
+
+### 316. Decision 300's reason named a machine nobody has run anything on; the 600 s stands
+
+**What the record says.** Decision 300's **Why it changes** says its leg "runs the compose stack
+with the REAL bundle through the worker's import job on a GitHub runner - a box slower than this
+one", and five records restate it as present fact: `release.yml` ("M4.14 measured that job at 213 s
+on the reference box, and this runner is slower than the reference box"), `worker.py` ("the box this
+release is now measured on"), `docker-compose.yml` ("now runs that same import on a runner slower
+than the reference one") and two comments in the coverage map.
+
+**Why it changes.** `release.yml:81` is `runs-on: [self-hosted, spielplan-corpus]` and the file's own
+header is titled "WHY THIS RUNS ON THE HOUSEHOLD'S OWN MACHINE" — decision 183's ruling, which
+excludes the hosted pool in terms. It is the household's Windows workstation reached through a
+runner registered inside WSL or a Linux VM (`docs/TESTING.md`, "Running it"), and `docs/RELEASE.md`
+section 2.1 records that no runner carrying that label has ever been registered. Nobody has timed
+anything on it, so the comparison was not a measurement. The other half fails under either reading:
+"the reference box" is a defined term here for §2's 4 vCPU GPU-less VM, while M4.14's 213 s was
+measured on the dev NVMe workstation with a warm page cache — so the sentence either names the wrong
+machine for the measurement or compares against one nobody ran the release on. Two of the five also
+put the import in leg 3, where `release.yml` itself says leg 4 is the only leg that runs the real
+bundle through the worker's import JOB rather than through a script.
+
+**The decision.** The number does not move. 600 s stands on the arithmetic that already carries it —
+the 213 s measured, plus the unmeasured cost of containerised I/O under a hypervisor, and the pin to
+the worker's `stop_grace_period`, which `test_box_claims.py` holds in both directions. What is
+refused is the comparative claim. All five restatements say what is true: the runner is the
+household's own box through WSL or a Linux VM, its speed has never been measured because the runner
+has never been registered, and the budget is sized off a measurement plus an unmeasured cost rather
+than off a comparison anybody made. The leg is named as leg 4. Decision 300's entry is left as the
+dated record it is and this one supersedes its premise, which is decision 304's mechanism.
+
+**Cost.** Five sentences, and a guard pairing the negative with its positive: while
+`docs/RELEASE.md` records that no such runner exists, no record may publish that runner's speed
+relative to anything. It stops applying — and comes out — the day a runner is registered and timed.
+
+### 317. `ci.yml`'s two JUnit artifacts are a per-push record, not the release gate's input
+
+**What the record says.** `ci.yml`'s backend job said "`ops/coverage_gate.py` reads these reports in
+`release.yml`'s leg 2", and its integration job said "This report is what lets the release gate tell
+'the database was there' from 'the database was there and the test ran'".
+
+**Why it changes.** Leg 2 passes one `--junit`, and it is `.reports/junit-release.xml`, which LEG 1
+wrote in the same job against its own Postgres service container. The workflow's single
+`download-artifact` step names `playwright-report` and nothing else, so `junit-backend` and
+`junit-integration` are consumed by no workflow anywhere in the repository. `ops/coverage_gate.py`'s
+own docstring and `test_release_gate.py` both state the true design, which left `ci.yml` the single
+outlier — a milestone whose thesis is that the records describe what shipped, carrying two files
+saying opposite things about the same leg.
+
+**The decision.** The wiring is the plan's and does not change: leg 2 reads leg 1's JUnit plus the
+browser report. The comments do. They now say what the two artifacts are actually for — a readable
+per-push record of which tests ran — and say plainly that no workflow downloads them, so the
+maintainer weighing that `--junitxml` step is not reasoning from a premise the file it names
+contradicts. The same sentence's count is corrected with it: the `test_migrations.py` family closes
+9 rows and eight of them go dark without `backend/tests/pglite/node_modules`, published in the form
+the family-size guard reads, and that guard now reads `ci.yml` as a fifth file.
+
+**Not decided here.** Whether leg 2 SHOULD also consume `junit-integration`. Leg 1 already runs the
+integration layer against its own stack, so the second report would add a reading of a different
+box rather than a missing layer; making that case is a milestone's work with its own argument.
+
+**Cost.** Two comments, one guard's file list, and one clause of a row's `what`.
+
+### 318. Decision 293's placement argument cited a navigation route the app does not have
+
+**What the record says.** Decision 293 put the Data sources block on /account and argued it partly
+from "/account is also the one surface the phone shell already routes to from the tab bar, which is
+what makes the §6.8 register argument work". Two comments this milestone wrote repeat it.
+
+**Why it changes.** The phone tab bar is `NavRail.svelte` under its narrow-width reflow, and it
+renders `session.user.nav.surfaces` and nothing else. That payload is `api/auth.py`'s `SURFACES`:
+six entries — home, rate, tonight, rank, map, taste — and /account is not among them. /account
+reaches a member through `_nav`'s separate `account` list, which `AccountChip` renders in its
+dropdown, and `AccountChip.svelte` already says so in as many words ("`api/auth.py`'s SURFACES
+carries neither").
+
+**The decision.** The conclusion stands: /account really is reachable by every signed-in member,
+admin and member alike, which is the property the §6.8 register argument needs. The reason is
+restated to what ships — the account chip's dropdown, not a tab — in the two live comments. Decision
+293's entry is left as the dated record it is (decision 304's mechanism). No test, spec clause or
+surface changes.
+
+**Cost.** Two comments, and a guard that reads the fact out of `api/auth.py` rather than restating
+it: while `SURFACES` lacks /account and `_nav` carries it, no record may argue the placement from a
+tab-bar route. It goes red the day /account becomes a tab — when the argument becomes true — and the
+day /account leaves the chip menu, when the conclusion stops being true for the other reason.
+
+### 319. The TMDB notice is TMDB's sentence, not a sentence about TMDB
+
+**What the record says.** Decision 298 ruled "Ship the notices now, verbatim" on the /account Data
+sources block; §10 names TMDB's "not endorsed, certified, or otherwise approved by TMDB" among the
+five; `docs/RELEASE.md` section 7.1 says they "ship now, verbatim, and are asserted"; and the row
+`map-taste-data-sources-are-attributed` quotes that same tail fragment as its `what`.
+
+**Why it changes.** What shipped was "This product uses the TMDB API but is not endorsed, certified,
+or otherwise approved by TMDB." TMDB publishes two attribution strings and that is neither. Its API
+Terms of Use section 3 fixes "This [website, program, service, application, product] uses TMDB and
+the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB." and licenses exactly
+one edit in it, the bracketed choose-one; its developer FAQ carries a shorter "This product uses
+the TMDB API but is not endorsed or certified by TMDB." The shipped sentence is the FAQ's head
+welded to the terms' tail, a quotation of neither - and the clause it dropped is the one that is
+true of this build, which uses TMDB CONTENT (9,866 overviews and 9,864 poster paths, out of the
+corpus bundle) and makes no TMDB request of any kind: `connectors/` holds jellyfin, registry and
+resolve, and its own `__init__` says TMDB arrives with M5. Four of the five notices were verbatim.
+The fifth was the one nothing could see, because all three carriers held the same literal - a
+vitest `toBe` and a Playwright `exact` compare a copy with a copy - and the row quoted only the
+tail, which the rewritten head satisfied.
+
+**The decision.** The terms form ships, with the bracket resolved to `product` out of TMDB's own
+list: "This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise
+approved by TMDB." The FAQ's shorter form is refused rather than preferred as the more accurate of
+the two, because section 3 is the document the permission is granted under. The alternative this
+review offered - keeping a head that drops "and the TMDB APIs" on the ground that this build calls
+no API - is refused for the same reason: the bracket is the only part TMDB licenses an integrator
+to write, and this milestone's own standard is that a licence notice is a string a licence fixes
+and a paraphrase of one is a breach rather than a copy edit. Nothing about the surface, the owed
+logo slot (decision 298) or the other four notices changes.
+
+**Cost.** The three carriers move in one change - `DataSources.svelte`, `data-sources.test.js` and
+`19-phone-shell.spec.js` - and the row's `what` is TIGHTENED from the tail fragment to the whole
+sentence, which is the second half of this decision rather than a tidy-up: a contract that quoted
+the part a paraphrase satisfies is what let the paraphrase stand for a milestone.
+`test_static_contracts.py`'s new guard DERIVES the sentence from the terms by taking the one edit
+they license, so it is not a fourth hand-typed copy, and it holds all three carriers at once so a
+correction cannot land in one file and stall in the other two. Section 7.1's "verbatim" sentence is
+true of five of five once this lands and is left as written.
+
+### 320. The CC BY-SA credit carries no material link, and the debt is published rather than argued
+
+**What the record says.** `docs/milestones/M4.16-plan.md:651` asks Phase J for "Wikipedia and
+TVmaze — CC BY-SA credit, linking to the article/show where `title_meta` carries it". What shipped
+is the credit and the licence deed: `DataSources.svelte` names the contributors for each source and
+links `creativecommons.org/licenses/by-sa/4.0/`, which is the licence's URI and not the material's.
+Decision 298's ruling enumerates the five notices that ship and omits the link without saying it is
+omitting one; `map-taste-data-sources-are-attributed`'s `what` stops at "CC BY-SA credit for
+Wikipedia and TVmaze"; and `grep -ni 'wikipedia\|tvmaze' docs/RELEASE.md` is empty over the whole
+file. The only argument anywhere was four lines of the component's own header citing no decision at
+all, in a docstring where every other argued departure cites 276, 293, 298, 318 or 319.
+
+**Why it changes.** The plan's clause is conditional on `title_meta` carrying the identifier, and
+this build has no reader for one either way. `grep -rn homepage backend/spielplan frontend/src` is
+empty; `importer/load.py`'s `title` mapping does not carry `wikipedia_title`, so that column lives
+only in the corpus; and `importer/meta.py` stores the whole corpus row as `payload` jsonb which
+`resolve_title_fields` reads back by field name and never by this one. `api/library.py`'s title
+payload is id/kind/name/original_name/year/runtime_min/overview, so `/api/titles/{id}` exposes no
+field an anchor could be built from, and `TitleDetail.svelte` — the surface the component's own
+paragraph forwards a reader to — renders no source link at all. The condition cannot be settled in
+this lane either: the only corpus either checkout holds is `make_bundle.py`'s synthetic bundle,
+whose ten `title_meta` rows carry `homepage` NULL across all three sources and whose eight titles
+carry `wikipedia_title` NULL, while `real_bundle_shapes.json` says of itself "Shapes only -- no
+values". So the honest statement is about this build, not about the corpus.
+
+Two facts narrow what a repair could even be. TVmaze's own field is `officialSite` — the show's
+marketing site rather than the TVmaze page — so for that source an anchor under a CC BY-SA credit
+would point at the wrong work, and the clause is unbuildable there rather than merely unbuilt. And
+CC BY-SA 4.0's material-URI item is qualified "to the extent reasonably practicable", under a
+chapeau attaching only to what the Licensor supplied; this build was supplied nothing it reads.
+
+**The decision.** The link is neither scheduled nor built, and that is RECORDED rather than argued.
+`docs/RELEASE.md` section 4 — where decision 296 routes a correction owed to a milestone record,
+and where 4.5 and 4.6 already correct this same plan — gains 4.7, giving the plan line, the claim
+as written and the truth measured on this branch. `DataSources.svelte`'s deep-link paragraph cites
+this decision instead of arguing from the licence text alone, which is the whole defect: a
+departure argued from a licence is one reader's reading, and a departure argued from a number is a
+record somebody took. `map-taste-data-sources-are-attributed`'s `what` is WIDENED and not narrowed
+— it gains the clause that the departure is recorded under a number, which is a promise this tree
+keeps — and it is not edited to stop where the code stops (`M4-open-points.md:212-213`). Section 5
+is deliberately not used: it is scoped to promises a NORMATIVE document makes, and neither §10 nor
+the map ever promised a link.
+
+**Cost.** One paragraph in the component, one record entry, one widened `what`, and a guard whose
+premise is the measurement rather than the prose: it re-runs the `homepage` / `wikipedia_title`
+reading and goes red the day either is read, because that is the day the link becomes reasonably
+practicable, section 4.7 becomes the false record, and the two come out in one change. That is
+decision 307's polarity, which section 5.4 already uses. Nothing about the five notices, the owed
+logo slot (decision 298) or the block's placement (decisions 293 and 318) changes. M5 inherits the
+clause with a number attached rather than with nothing.
 
 ---
 

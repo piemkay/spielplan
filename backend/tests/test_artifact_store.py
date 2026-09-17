@@ -81,10 +81,12 @@ def test_the_store_derives_the_vocabulary_the_same_way_the_bundle_does(artifacts
 # M4.13 added `cold_eval.json` and `content_summary.json` to `BUNDLE_FILES` - the corpus ships
 # both, §4.3 calls that list exhaustive, and until then nothing could read the one reference value
 # the bundle carries for `user_vector.cv_rho`. `make_bundle.py` writes neither, and deliberately
-# stays that way here: the corpus-shaped fixture is M4.8's train, `e2e/run.mjs` does not rebuild
-# `data/import`, and both files are optional precisely because a bundle without them is older
-# rather than broken. Named rather than counted, so the next file added to either side fails this
-# test instead of widening a tolerance. [M4.13 step 35, cs-31]
+# stays that way here: the corpus-shaped fixture is M4.8's train, and both files are optional
+# precisely because a bundle without them is older rather than broken. Since decision 299 that
+# choice reaches past this test: `e2e/run.mjs` phase 0 rebuilds `data/import` from this same module
+# on every browser run, so what `make_bundle.py` writes IS what the browser suite then imports.
+# Named rather than counted, so the next file added to either side fails this test instead of
+# widening a tolerance. [M4.13 step 35, cs-31; decision 299]
 NOT_IN_THE_FIXTURE = frozenset({"cold_eval.json", "content_summary.json"})
 
 

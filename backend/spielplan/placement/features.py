@@ -292,12 +292,29 @@ async def _dna_p(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
 # shipped `content_X.npz` proves it: the genome block's minimum nonzero is exactly 0.5. Reading
 # every row instead feeds 587,502 of the bundle's 888,023 scores into columns the tower was
 # trained to see as zero.
+#
+# THE CUT IS STILL LOAD-BEARING AFTER DECISION 291, which is why this constant did not go with the
+# import. Decision 291 stopped LOADING the slice; it emptied no table. An install seeded by any
+# shipped build up to M4.15 still holds its 888,023 rows -- no migration drops them and decision
+# 162 seeds content once -- so on that box this cut is what keeps the block to the columns
+# `content_X.npz` was counted from. Reading it wider there would be the 587,502-row error against
+# a live tower input rather than against a dead one. [decisions 291, 304 and 311]
 _GENOME_MIN_RELEVANCE = 0.5
 
 
 async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
     """MovieLens genome relevance, through the link slice. Absent for every §8-acquired title
-    by construction — which is exactly why §4.3 zero-imputes this block and no other."""
+    by construction — which is exactly why §4.3 zero-imputes this block and no other.
+
+    KEPT DELIBERATELY AFTER DECISION 291, and §4.1/§4.3 were narrowed to say so rather than this
+    reader being deleted to fit them (decision 311). Decision 291 stopped the IMPORT; nothing
+    stops the READ, and nothing empties the three tables an earlier build filled. On a pre-291
+    install this returns real relevance values, `build_vector` puts `genome` in `blocks_present`,
+    and the Cold Tower is handed the input it was fitted over for precisely the cold-masked titles
+    §5.3's sweep asks it to place (decision 304's re-measurement: 1,055 of them). Deleting this as
+    dead code on the strength of a universal would change those titles' placement inputs silently,
+    which is why the universal is the thing that went.
+    """
     rows = await conn.fetch(
         """
         SELECT l.title_id, 'g:' || g.tag AS key, s.relevance::float8 AS value

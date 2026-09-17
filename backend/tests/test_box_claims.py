@@ -148,16 +148,19 @@ def test_the_bundle_imports_budget_is_argued_from_the_job_it_bounds():
     The registry entry argued "300 s is 2.4x the 127 s measured on the real bundle". 127 s is
     M4.5's measurement of the work INSIDE THE REQUEST; the job this budget bounds is M4.14's,
     which `ops/m414_exit_criterion.py` measured at 213 s from the press in all three recorded
-    runs. So the real margin is about 1.4x, not 2.4x, and a box a third slower than the reference
-    one cannot finish an import at all: `_tick` cancels at the budget, the staged tree is
+    runs. So the real margin was about 1.4x, not 2.4x, and a box a third slower than the reference
+    one could not finish an import at all: `_tick` cancels at the budget, the staged tree is
     dropped, `_reap_abandoned_import` closes the row, and the retry reproduces it exactly.
 
-    The number itself does not move, and the first assertion is why: it is PINNED to the worker's
-    `stop_grace_period` rather than sized against a measurement, because a budget past the grace
-    would promise time `docker compose stop` takes away. Plan step E2 asks for both "generously
-    above the measured" and "honour the stop grace"; with the grace at 5m only the second is
-    available, and the grace is M4.7's to change. A maintainer reading the entry has to be able to
-    see which of the two it is. [M4.14 cycle 4, m414-c4-waveE-03]
+    The first assertion is the PIN, and it is what makes this pair one edit: the budget is fixed
+    to the worker's `stop_grace_period` rather than sized against a measurement, because a budget
+    past the grace would promise time `docker compose stop` takes away. M4.14 could only honour
+    the grace, because the grace was M4.7's and plan §8 put it outside that milestone; decision
+    300 moves both to 600 s in one diff, for the box `.github/workflows/release.yml` imports the
+    real bundle on. So both halves of M4.14 step E2 now hold - 2.8x the measured 213 s, and still
+    equal to the grace - and this assertion is what stops a later edit taking one without the
+    other. A maintainer reading the entry has to be able to see which of the two the number is.
+    [M4.14 cycle 4, m414-c4-waveE-03; decision 300]
     """
     from spielplan import worker
 
@@ -194,6 +197,119 @@ def test_the_import_budget_guard_sees_the_argument_it_was_written_for():
     assert reason, "the self-test's own comment block was not read"
     assert "stop_grace_period" in reason, "the historical comment did make the pin claim"
     assert IMPORT_JOB_MEASUREMENT not in reason
+
+
+# --- the box the 600 s is sized for, which nobody has ever run anything on -----------------
+
+# Decision 300's number is right and the reason six records gave for it was not. They stated, as
+# present fact, a measured property of a machine that has never existed: "this runner is slower
+# than the reference box", "the box this release is now measured on", "now runs that same import
+# on a runner slower than the reference one". `.github/workflows/release.yml:81` is
+# `runs-on: [self-hosted, spielplan-corpus]` -- the household's OWN Windows workstation reached
+# through a runner registered inside WSL or a Linux VM (`docs/TESTING.md`, "Running it") -- and
+# `docs/RELEASE.md` section 2.1 records that no runner carrying that label has ever been
+# registered. So nobody has timed anything on it, and the comparison could not have been made.
+#
+# Worse under either reading of the other half: "the reference box" is a DEFINED term here for
+# §2's 4 vCPU GPU-less VM (`scoring/tower.py`, `importer/validate.py`), while M4.14's 213 s was
+# measured on the dev NVMe workstation -- so the sentence either names the wrong machine for the
+# measurement or compares against one nobody ran the release on.
+#
+# The BUDGET is untouched: 600 s stands on the 213 s measurement plus the unmeasured cost of
+# containerised I/O under a hypervisor, and on the pin above. What this refuses is the comparative
+# claim, which is decision 184's rule ("a figure published as measured must be derived") applied to
+# a comparison rather than to a number. It stops applying the day a runner is registered and timed,
+# which is the day `docs/RELEASE.md` section 2.1 stops saying no such runner exists -- and this
+# guard comes out with that sentence. [decisions 300, 316; M4.16 cycle 4, REL-C4-01]
+#
+# SIX SENTENCES IN FIVE FILES, since review cycle 4, and the sixth is why the list is a list of
+# files rather than a copy of decision 316's census. `ops/m414_exit_criterion.py` argued its own
+# `IMPORT_DEADLINE_S` from decision 300's retired reason and was invisible here twice over: the
+# file was not read, and the claim was spelled the other way round. The two spellings are one
+# claim -- "this runner is slower than X" states it as a predicate, "the release workflow's
+# slower box" states it as a fact already agreed -- and a rule that knew only the first is the
+# shape decision 304's Cost paragraph names, a guard over four of five files one cycle later.
+# `worker.py`'s own "once claimed the release runner WAS slower than a machine ..." stays
+# admitted: a sentence recording the retired claim as history is what the repair reads like.
+# [decisions 300, 316; M4.16 cycle 4]
+_RUNNER_SPEED_RECORDS = (
+    ".github/workflows/release.yml",
+    "backend/spielplan/worker.py",
+    "docker-compose.yml",
+    "backend/tests/spec_coverage.toml",
+    "ops/m414_exit_criterion.py",
+)
+_RUNNER_SPEED_CLAIM = re.compile(
+    r"(?:runner|box) (?:is |that is )?slower than|slower than (?:the reference|this box)"
+    r"|slower (?:box|runner)\b",
+    re.I,
+)
+_NO_RUNNER = "No such runner exists"
+
+
+def test_no_record_compares_the_release_runner_against_a_box_nobody_timed_it_on():
+    """The positive half first, because it is what makes the negative one temporary rather than a
+    ban: while `docs/RELEASE.md` records that no `spielplan-corpus` runner has ever been
+    registered, no record may publish that runner's speed relative to anything."""
+    repo = Path(__file__).resolve().parents[2]
+
+    def flat(path: Path) -> str:
+        """Whitespace and comment furniture off, so a claim that wrapped mid-sentence in a prose
+        paragraph or a `#` block still reads as one sentence. Every one of the five sentences this
+        rule is about wrapped somewhere, and three wrapped between the two words that matter."""
+        return " ".join(path.read_text(encoding="utf-8").replace("#", " ").split())
+
+    assert _NO_RUNNER in flat(repo / "docs" / "RELEASE.md"), (
+        "docs/RELEASE.md no longer records that no `spielplan-corpus` runner exists. If one has "
+        "been registered and TIMED, the comparison below becomes a measurement and this guard "
+        "comes out in the same change as that sentence; if it was merely deleted, put it back"
+    )
+    guilty = []
+    for name in _RUNNER_SPEED_RECORDS:
+        found = _RUNNER_SPEED_CLAIM.search(flat(repo / name))
+        if found:
+            guilty.append(f"{name}: {found.group(0)!r}")
+    assert not guilty, (
+        "a record states the release runner's speed as a measured fact:\n  "
+        + "\n  ".join(guilty)
+        + "\n\nNobody has run anything on that runner -- it has never been registered. 600 s is "
+        "sized off the 213 s measurement plus an unmeasured virtualisation cost, and off the pin "
+        "to the stop grace, not off a comparison (decision 316)."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "caught"),
+    [
+        ("the sentence release.yml carried",
+         "M4.14 measured that job at 213 s on the reference box, and this runner is slower than "
+         "the reference box.", True),
+        ("the sentence docker-compose.yml carried",
+         "release.yml now runs that same import on a runner slower than the reference one", True),
+        ("the honest replacement",
+         "that runner has never been registered, so its speed under containerised I/O has never "
+         "been measured", False),
+        ("a measurement of a box somebody did run on",
+         "213 s on the dev NVMe workstation with a warm page cache", False),
+        # Cycle 4's sixth carrier, and the spelling that makes the claim without a verb: an
+        # adjective in front of the noun asserts it as settled rather than arguing it, which is
+        # why it read past a rule anchored on "slower than".
+        ("the sentence ops/m414_exit_criterion.py carried",
+         "moved it there from 300 s, with the worker's `stop_grace_period`, for the release "
+         "workflow's slower box", True),
+        ("the same shape about the runner",
+         "600 s is what a slower runner needs", True),
+        # And the direction that keeps the repair writable: the retired claim NAMED as retired.
+        ("the retired claim recorded as history",
+         "this comment once claimed the release runner was slower than a machine the measurement "
+         "was not taken on", False),
+    ],
+)
+def test_the_runner_speed_guard_reads_the_comparison_and_not_the_measurement(name, text, caught):
+    """Both directions. Refusing the two shipped spellings is the repair; ADMITTING the other two
+    is what keeps the rule usable, since the budget still has to be argued from a measurement and
+    the repair still has to be able to say the runner is unmeasured."""
+    assert bool(_RUNNER_SPEED_CLAIM.search(text)) is caught, name
 
 
 # --- the image's own install tree ---------------------------------------------------------

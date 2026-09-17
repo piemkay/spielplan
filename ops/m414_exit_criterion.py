@@ -145,9 +145,18 @@ INTEGRITY_BUDGET_S = 60.0
 # must complete and flip anyway.
 DISCONNECT_AFTER_S = 5.0
 
-# §5.3 budgets this job in "minutes" and `worker.BUNDLE_IMPORT_TIMEOUT` is 300 s. The deadline
-# here is that budget plus the child's own start-up (torch, numpy, the pool) and a wide margin,
-# because a deadline that fires is a run with no measurement rather than a failed measurement.
+# §5.3 budgets this job in "minutes" and `worker.BUNDLE_IMPORT_TIMEOUT` is 600 s (decision 300
+# moved it there from 300 s, with the worker's `stop_grace_period`, which `test_box_claims.py`
+# pins to it). `release.yml`'s leg 4 is what runs this import through that job, on a
+# `[self-hosted, spielplan-corpus]` runner nobody has registered and therefore nobody has timed:
+# the 600 s is sized off the 213 s measured plus the unmeasured cost of containerised I/O under a
+# hypervisor, and not off any comparison between machines. This comment gave that runner's speed
+# as decision 300's reason until M4.16 cycle 4, which is the claim decision 316 refuses -- a
+# measured property of a box that has never existed. [decision 316]
+# The deadline here is that budget plus the child's own start-up (torch, numpy, the
+# pool) and a margin, because a deadline that fires is a run with no measurement rather than a
+# failed measurement. It is 2x the budget now rather than 4x, which is still a margin over a job
+# measured at 213 s: what it must outlast is the worker's own cancellation, not the import.
 IMPORT_DEADLINE_S = 1200.0
 PUMP_INTERVAL_S = 1.0
 

@@ -18,6 +18,9 @@ frontend/.vite/
 e2e/.results/
 e2e/playwright-report/
 coverage/
+# JUnit XML for ops/coverage_gate.py: written by `pytest --junitxml` in CI and in the release
+# workflow, and by anyone running those commands by hand to reproduce a gate failure.
+.reports/
 
 # runtime data (docker volumes are host-mounted here in dev)
 /data/

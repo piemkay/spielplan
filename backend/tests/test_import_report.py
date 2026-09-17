@@ -2,8 +2,8 @@
 Spec v2.1 §10.
 
     "Importer enforces every §4.1 landmine rule and produces a migration report (counts per
-     table, validation failures, vocabulary version). Bundle re-import ... is a planned admin
-     event with a diff report -- never a silent sync."
+     table, validation failures, vocabulary version). Model re-import ... is a planned admin
+     event with a migration report -- never a silent sync."
 
 Two properties of that text, both measured false against the shipped code:
 
@@ -15,7 +15,7 @@ Two properties of that text, both measured false against the shipped code:
 * A failure must render its `detail`. Rule 7 says "N denied table(s)" in the message and puts
   the names in `detail` (`validate.py`), and `render()` dropped every one of them -- so the only
   human-readable record of a refused import named nothing to go and fix, which is the opposite
-  of what §10 asks a diff report to be. [M4.14 finding 2.22]
+  of what §10 asks a migration report to be. [M4.14 finding 2.22]
 
 No database and no bundle: both assert about `ImportReport` itself, so the report under test is
 built here rather than validated out of a fixture.

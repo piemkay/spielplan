@@ -43,8 +43,11 @@ dev = [
 
 [project.scripts]
 spielplan-migrate = "spielplan.db.migrate:main"
-# §2 makes rotating SECRETS_KEY an explicit admin action, and both of its gestures need the key
-# that is being replaced — which no running process holds, so this is a command and not a route.
+# §2 makes rotating SECRETS_KEY an explicit admin action, and the rewrap needs the key that is
+# being replaced beside the one replacing it — which no running process holds, so this is a command
+# and not a route. `reset` is a command for its own reason (it destroys secrets, on an install whose
+# custody is already broken); only one of the two gestures declares `--old-key`. [M4.16 cycle 4,
+# M416-C4D2-SPEC-03]
 # .env.example's rotation paragraph and README's Recovery block name it. [M4.7 spec-08]
 spielplan-secrets = "spielplan.core.secrets_cli:main"
 # decision 162 makes the household's movie data the only copy there is, and M4.5 shipped the

@@ -561,9 +561,9 @@ async def test_an_unmapped_bundle_column_is_reported_not_dropped_silently(db, bu
 
 
 async def test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff(db, bundle, tmp_path):
-    """§10: "a diff report — never a silent sync". The diff only means something if the counts
-    are comparable, and under decision 162 the two sides of it are no longer two imports of the
-    same tables.
+    """§10: "a planned admin event with a migration report — never a silent sync". The
+    comparison only means something if the counts are comparable, and under decision 162 the two
+    sides of it are no longer two imports of the same tables.
 
     The re-import ships no content, so it states no content counts — and the seed's counts are
     what the install is still described by. That makes two things load-bearing: the seed's
@@ -1103,49 +1103,108 @@ async def test_the_data_card_reads_the_terms_the_import_carried(db, tmp_path):
     } == shipped, "the terms reach the card exactly as the bundle stated them"
 
 
-def _add_ml_links(root: Path) -> None:
-    """MovieLens's link table as the corpus exports it — keyed by external ids, with no
-    `title_id` for the app to read.
+def _add_genome_slice(root: Path) -> None:
+    """The three MovieLens tables as the corpus exports them, on a fixture that ships none.
 
-    One row names an imdb_id the fixture's spine does not have, because `_resolve_ml_links`
-    reports how many of the shipped links resolved and a run where every one resolves cannot
-    tell that number apart from a count of rows.
+    `ml_link` is keyed by external ids with no `title_id` for the app to read, which is how
+    MovieLens publishes it and therefore how the bundle carries it. The rows exist so the
+    refusal below is falsifiable: a bundle that ships the slice must be *declined with a
+    reason*, and a test fed an empty table cannot tell a decline from an import of nothing.
+
+    One `ml_genome_score` row names a `tag_id` the slice does not carry. That is the shape a cut
+    which dropped a tag produces, and the corpus's own DDL admits it -- MovieLens declares no
+    foreign key on the score table, which is why it is reproduced here rather than asserted. It
+    is here because `validate.py` went on gating the slice after decision 291 declined it, so a
+    bundle carrying that row was refused before anything was written, over a table no COPY
+    reaches; the plan's clause is that the importer "accept a bundle with or without them", and
+    a fixture of perfectly clean rows cannot tell acceptance from a refusal that never fires.
+    [decision 291; M4.16 cycle 1, M416-291-03]
     """
     db = sqlite3.connect(root / "content.sqlite")
     imdb = [r[0] for r in db.execute("SELECT imdb_id FROM title WHERE imdb_id IS NOT NULL")]
-    assert len(imdb) >= 3, "the fixture spine must carry imdb ids for the link to resolve on"
+    assert len(imdb) >= 3, "the fixture spine must carry imdb ids for the slice to look loadable"
     with db:
         db.execute(
             "CREATE TABLE ml_link (movie_id INTEGER PRIMARY KEY, imdb_id TEXT, tmdb_id INTEGER)"
         )
         db.executemany(
             "INSERT INTO ml_link (movie_id, imdb_id, tmdb_id) VALUES (?,?,?)",
-            [(i + 1, value, None) for i, value in enumerate(imdb[:3])]
-            + [(9001, "tt0000000", None)],
+            [(i + 1, value, None) for i, value in enumerate(imdb[:3])],
+        )
+        db.execute("CREATE TABLE ml_genome_tag (tag_id INTEGER PRIMARY KEY, tag TEXT NOT NULL)")
+        db.executemany(
+            "INSERT INTO ml_genome_tag (tag_id, tag) VALUES (?,?)",
+            [(1, "heist"), (2, "dread")],
+        )
+        db.execute(
+            "CREATE TABLE ml_genome_score (movie_id INTEGER NOT NULL, tag_id INTEGER NOT NULL,"
+            " relevance REAL NOT NULL, PRIMARY KEY (movie_id, tag_id))"
+        )
+        db.executemany(
+            "INSERT INTO ml_genome_score (movie_id, tag_id, relevance) VALUES (?,?,?)",
+            [(1, 1, 0.9), (1, 2, 0.6), (2, 1, 0.7), (2, 4242, 0.5)],
         )
     db.close()
     fx.reinventory(root)
 
 
-async def test_the_ml_link_resolution_reports_how_many_links_landed(db, tmp_path):
-    """§4.3's genome block reads through this join, so §10 owes a count of it.
+async def test_a_bundle_carrying_the_genome_slice_is_declined_with_the_clause_it_upholds(
+    db, tmp_path
+):
+    """Decision 291, and §10's "counts per table" is what makes declining it auditable.
 
-    The join is on `imdb_id`, the key §4.1 names as one that "must never be the join key", and
-    the exception is unavoidable: MovieLens keys its links by external ids and rule 6 rules out
-    `tmdb_id`, which is legitimately duplicated across the movie/series pair. What makes the
-    exception safe is the refusal in `test_bundle_validation.py` plus this line — 8,022 of 9,826
-    on the shipped bundle, and a number that moves is a bundle whose spine changed under its
-    links.
+    `media-graph-spec_v1.1.md:175` fixed the genome as a corpus-side artefact — "validation
+    artifact only, never shipped or imported into the app" — and three `TableMap`s had reversed
+    that silently. The bundle still ships the tables (the corpus is not asked to re-cut it), so
+    the importer meets them on every real import and the only question is what it says. Not
+    nothing: an unloaded table with no line is how `title_meta`'s 46,318 rows went missing for
+    five milestones. A skip note carrying the clause is a decision an operator can read.
+
+    The counts are asserted in Postgres, not only in the report, because `0003_content.sql`'s
+    three tables stay in the schema (decision 291) and a report that said "skipped" over rows
+    that landed anyway would be the worse of the two failures.
     """
     root = fx.make_bundle(tmp_path / "bundle")
-    _add_ml_links(root)
+    _add_genome_slice(root)
     report = await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
 
-    assert await db.fetchval("SELECT count(*) FROM ml_link WHERE title_id IS NOT NULL") == 3
-    notes = [f for f in report.findings if f.rule == "ml-link"]
-    assert [f.severity for f in notes] == ["note"]
-    assert notes[0].detail == {"linked": 3, "total": 4}
-    assert "3 of 4 MovieLens links resolved to a title by imdb_id" in notes[0].message
+    for table in ("ml_genome_tag", "ml_link", "ml_genome_score"):
+        assert "media-graph-spec_v1.1.md:175" in report.skipped_tables[table]
+        assert f"loaded:{table}" not in report.table_counts
+        assert await db.fetchval(f"SELECT count(*) FROM {table}") == 0
+    skipped = {f.detail["table"] for f in report.findings if f.rule == "table-skipped"}
+    assert {"ml_genome_tag", "ml_link", "ml_genome_score"} <= skipped
+    # And the decline does not depend on what the slice CONTAINS. `validate.py`'s integrity gates
+    # key off the bundle's own schema rather than off `load.MAPPINGS`, so they went on checking a
+    # table the app had declined: the orphan `tag_id` the fixture carries above refused this whole
+    # import -- the household's one content seed -- before a row was written, over a table no COPY
+    # reaches. [decision 291; M4.16 cycle 1, M416-291-03]
+    integrity = [f.message for f in report.findings if f.rule.startswith("integrity-")]
+    assert not [m for m in integrity if "ml_" in m], integrity
+    # Declined, not unaccounted for. `_import` above already asserts `report.ok`, and that is
+    # the half this needs: `unaccounted_tables` FAILS the import, so a slice routed there instead
+    # of to `SKIPPED_TABLES` would take every real import down with it.
+
+
+async def test_a_bundle_without_the_genome_slice_says_nothing_about_it(db, bundle, tmp_path):
+    """The other half of decision 291, and the half a warning would have broken.
+
+    While the three tables were optional MAPPINGS, the committed fixture — which ships none of
+    them — produced three "bundle has no `ml_link` — target left empty" warnings on every run.
+    §10's report is what the wizard and the Data tab render, and a warning about a table this app
+    has decided it does not want is noise that teaches an operator to skim the one place the
+    import speaks.
+    """
+    report = await _import(db, bundle, tmp_path / "artifacts")
+
+    named = [f.message for f in report.findings
+             if "ml_link" in f.message or "ml_genome" in f.message]
+    assert not named, f"a bundle without the slice is not a bundle with a problem: {named}"
+    assert not {"ml_genome_tag", "ml_link", "ml_genome_score"} & set(report.skipped_tables), (
+        "only tables the bundle actually ships are reported skipped "
+        "(load.py `_account_for_shipped_tables`); a decline over an absent table is an "
+        "invented line"
+    )
 
 
 async def test_the_import_writes_no_rail_line_because_the_rail_could_not_read_it(
@@ -1393,7 +1452,7 @@ async def test_the_loser_never_deletes_the_winners_staged_tree(
 async def test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_set(
     db, bundle, tmp_path
 ):
-    """§10 calls a re-import "a planned admin event with a diff report", and the row is the diff.
+    """§10 calls a re-import "a planned admin event with a migration report" and this row is it.
 
     `artifact_bundle.report` was INSERTed with `report.as_dict()` before §10's rebuild ran and
     nothing updated it afterwards: measured, the set difference between the returned report's

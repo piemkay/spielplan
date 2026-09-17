@@ -212,6 +212,14 @@ async def _seed_extra_titles(db) -> None:
         " VALUES (10, 'Academy Awards', 'Best Picture', 1986, false),"
         "        (10, 'Academy Awards', 'Directing', 1986, true)"
     )
+    # Written by hand because no import this build performs writes them any more: decision 291
+    # moved the three MovieLens tables into the importer's `SKIPPED_TABLES`, so
+    # `0003_content.sql`'s tables are empty on any install THIS BUILD seeds -- and not on one
+    # seeded before it, which is the state these INSERTs reproduce and which decision 311 names as
+    # the one case where the block is populated. `features._genome` is kept and exercised here
+    # because §4.3's 983 columns are unchanged and the read path is live on exactly that install:
+    # a block whose reader silently stopped working is exactly the M4.5 failure.
+    # [decisions 291, 311; M4.16 cycle 4, M416-C4-GEN-01]
     await db.execute(
         "INSERT INTO ml_genome_tag (tag_id, tag) VALUES (1, 'heist'), (2, 'dread'), (3, 'cooking')"
     )

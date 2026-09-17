@@ -112,7 +112,18 @@ BUNDLE_DERIVED = {"artifact_bundle", "title_placement", "title_prior"}
 # its own library. [M4.11]
 APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "job_run", "title_jellyfin_item"}
 
-EXCLUDED = USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
+# Decision 291: the MovieLens genome slice stops being imported, upholding
+# `media-graph-spec_v1.1.md:175` ("validation artifact only, never shipped or imported into the
+# app"). `0003_content.sql`'s three tables stay in the schema and are empty on every install THIS
+# BUILD seeds, so an archive entry for each would be three empty COPY streams and, on the next
+# restore, a promise that the household's genome travelled with its spine. It did not, and §4.3
+# zero-imputes the block wherever those rows are absent -- which is the measurement the decision
+# rests on, not a tolerance for the gap. On a box seeded BEFORE 291 they are not absent and
+# `placement/features.py` still reads them (decision 311); `backup/movie_data.py`'s `RETIRED`
+# carries what a restore does there. Said unconditionally here until M4.16 cycle 4.
+GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
+
+EXCLUDED = USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE | GENOME_NOT_IMPORTED
 
 
 # --- the postgres client binaries -------------------------------------------------------------
@@ -471,6 +482,129 @@ async def test_the_archive_carries_nothing_user_specific(db, tmp_path, monkeypat
                    MARKER_PASSKEY, MARKER_PUSH):
         assert marker.encode("utf-8") not in blob, marker
     assert ciphertext not in blob
+
+
+def test_the_genome_slice_is_left_out_of_the_archive():
+    """Decision 291, on the artifact that outlives the bundle.
+
+    Decision 162 made this archive the household's only copy of its content, so what is in it is
+    what a restore can ever have -- which is exactly why an entry here for a table nothing writes
+    is worse than no entry. The three tables were in `movie_data.TABLES` while the importer
+    filled them; with the importer declining the slice they would carry nothing, and a `manifest.json`
+    naming them would state that a genome was preserved.
+
+    Paired with the guard below rather than replacing it: that one refuses a table classified
+    neither way, and this one refuses the reclassification going back without the decision going
+    with it.
+    """
+    archived = {t.name for t in movie_data.TABLES}
+    assert not archived & GENOME_NOT_IMPORTED, (
+        f"the archive carries a table the importer no longer fills: "
+        f"{sorted(archived & GENOME_NOT_IMPORTED)}"
+    )
+    assert GENOME_NOT_IMPORTED <= EXCLUDED, "left out on purpose, and the reason is written down"
+    # And the other end of the same strike. Decision 309: the three names leave `TABLES` and are
+    # picked up by `RETIRED`, because an archive written before decision 291 names them in its
+    # manifest and the restore checks that table set in both directions. Struck from one without
+    # being named in the other is the refusal this pair exists to prevent.
+    assert {f"public.{name}" for name in GENOME_NOT_IMPORTED} <= movie_data.RETIRED, (
+        "struck from TABLES and not named in RETIRED: every archive written before decision 291 "
+        "names these three in its manifest, and a restore reads that manifest"
+    )
+    assert not movie_data.RETIRED & {t.qualified for t in movie_data.TABLES}, (
+        "a table named in RETIRED is skipped by every restore, so re-archiving one while it is "
+        "still listed there would write its rows and load none of them back"
+    )
+
+
+# The archive as an older build wrote it. `TABLES` is a module global that `_layout` and
+# `write_archive`'s loop read at call time, so substituting it produces a real archive -- a real
+# manifest, real COPY members, real sequence positions -- rather than a hand-edited one, which is
+# the difference between testing the version boundary and testing `_with_edited_manifest`. The
+# three entries go back where `git show HEAD:backend/spielplan/backup/movie_data.py:106-108`
+# carries them, after `award` and before `rating_source`: `ml_genome_score` references
+# `ml_genome_tag` and a restore replays the manifest in order, so the position is part of the
+# shape being reproduced.
+def _pre_291_tables() -> tuple[movie_data.Table, ...]:
+    retired = tuple(
+        movie_data.Table("public", name)
+        for name in ("ml_genome_tag", "ml_link", "ml_genome_score")
+    )
+    at = [t.name for t in movie_data.TABLES].index("award") + 1
+    return movie_data.TABLES[:at] + retired + movie_data.TABLES[at:]
+
+
+async def test_a_restore_reads_an_archive_written_before_the_genome_slice_was_retired(
+    db, tmp_path, empty_install, monkeypatch
+):
+    """Decision 309. An archive outlives the build that wrote it, so narrowing `TABLES` is a
+    version boundary and not an edit.
+
+    Decision 162 makes this archive the household's copy of its content, and README's Recovery
+    block has the operator write one and keep it off-box. The gesture it exists for is the box
+    dying and the archive going back into a rebuilt one -- which is by definition a build at
+    least as new as the one that wrote it, and usually newer. Decision 291 struck three tables
+    from `TABLES`; the manifest's table set is checked in both directions and `FORMAT` stayed 1,
+    so every archive written by every shipped build up to M4.15 arrived here as "unknown
+    ['public.ml_genome_score', 'public.ml_genome_tag', 'public.ml_link'], missing []" -- a
+    refusal that reads as a corrupt or foreign file and is neither.
+
+    The second half is what keeps tolerance from being a back door: the restored install is the
+    one a post-291 archive would have produced. The slice is skipped rather than loaded, so
+    decision 291's ruling survives the recovery path instead of being reversed by it.
+    """
+    await _seed_movie_data(db)
+    # The slice as the pre-291 importer left it: `_resolve_ml_links` joined `ml_link` to `title`,
+    # so a row here carries a real title id and the restore would have a foreign key to satisfy.
+    await db.execute("INSERT INTO ml_genome_tag (tag_id, tag) VALUES (1, 'melancholy')")
+    await db.execute(
+        "INSERT INTO ml_link (ml_movie_id, title_id, imdb_id, tmdb_id) "
+        "VALUES (1, 11, 'tt0079944', 101)"
+    )
+    await db.execute(
+        "INSERT INTO ml_genome_score (ml_movie_id, tag_id, relevance) VALUES (1, 1, 0.75)"
+    )
+
+    with monkeypatch.context() as older_build:
+        older_build.setattr(movie_data, "TABLES", _pre_291_tables())
+        report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
+    assert "public.ml_genome_score" in report.tables, "the fixture is not a pre-291 archive"
+
+    restored = await movie_data.restore_archive(empty_install, report.path)
+
+    assert await empty_install.fetchval("SELECT name FROM title WHERE id = 11") == CONTENT_MARKER
+    assert await empty_install.fetchval("SELECT count(*) FROM review_store.review") == 1
+    # Named in the report rather than dropped in silence: the operator handed over an archive
+    # naming 34 tables, and is told which three of them this build no longer keeps, and why.
+    assert restored.retired == tuple(sorted(movie_data.RETIRED))
+    assert not set(restored.tables) & movie_data.RETIRED
+    for table in sorted(GENOME_NOT_IMPORTED):
+        assert await empty_install.fetchval(f"SELECT count(*) FROM {table}") == 0, table
+
+
+async def test_a_restore_still_refuses_a_table_this_build_neither_archives_nor_retired(
+    db, tmp_path, empty_install
+):
+    """The half decision 309 does not spend. `RETIRED` is a named set, not a tolerance.
+
+    The symmetric check exists because "a table this build does not archive has no business
+    being COPYed into the install from a file" -- an archive arrives on a stick, over a channel
+    nobody controls. Widening the refusal to anything the manifest happens to name would hand
+    that sentence away to buy backward compatibility, so the retired three are subtracted by
+    name and every other unknown table is refused exactly as before.
+    """
+    await _seed_movie_data(db)
+    report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
+
+    def plant(manifest):
+        manifest["tables"].append(
+            {"schema": "public", "name": "app_user", "columns": ["id", "name"], "rows": 0}
+        )
+
+    tampered = _with_edited_manifest(report.path, tmp_path / "tampered.zip", plant)
+    with pytest.raises(movie_data.RestoreRefused, match="app_user"):
+        await movie_data.restore_archive(empty_install, tampered)
+    assert await empty_install.fetchval("SELECT count(*) FROM title") == 0
 
 
 async def test_every_table_is_either_archived_or_deliberately_left_out(db):
@@ -1275,7 +1409,7 @@ def _once(table: str, body):
 async def test_a_title_minted_during_the_write_is_wholly_out_of_the_archive(
     db, pg_url, tmp_path, empty_install
 ):
-    """Thirty-three COPYs with no enclosing transaction are thirty-three snapshots.
+    """A COPY per archived table with no enclosing transaction is a snapshot per table.
 
     The pause is placed after `title` and before its children because that is the gap the second
     snapshot arrived in: `title` copied two rows, the sync minted two more with a genre and a
@@ -1662,6 +1796,108 @@ async def test_the_operator_command_writes_an_archive_and_restores_it(
         settings.cache_clear()
 
 
+async def test_the_operator_restoring_a_pre_291_archive_is_told_what_was_passed_over(
+    db, pg_url, tmp_path, empty_install, monkeypatch, capsys
+):
+    """Decision 309's other half: the field is carried, and the operator is told what it holds.
+
+    `test_a_restore_reads_an_archive_written_before_the_genome_slice_was_retired` asserts
+    `RestoreReport.retired`, and `as_dict()` has no caller anywhere in the tree -- so `_run`'s
+    printed line is the only thing that ever shows that field to anyone, and nothing executed
+    it. Delete the clause and the suite stays green while the operator restoring a pre-291
+    archive after a box death reads "restored ...: N rows into 31 tables" for an archive whose
+    manifest named 34, with no account of the other three: a record that is true and describes
+    the wrong thing, on the single recovery gesture decision 162 leaves the household.
+
+    Asserted by name and not by count, because naming them is the whole point -- "3 tables were
+    passed over" satisfies a count and still leaves the operator unable to check it against the
+    manifest in their hand. ASCII too: this line is read off a Windows console, and a decorative
+    glyph in it crashes the command that just restored the household's only copy of its content.
+    [M4.16 cycle 3, M416-C3-291-02]
+    """
+    await _seed_movie_data(db)
+    with monkeypatch.context() as older_build:
+        older_build.setattr(movie_data, "TABLES", _pre_291_tables())
+        report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
+    assert "public.ml_genome_score" in report.tables, "the fixture is not a pre-291 archive"
+
+    # `empty_install`'s own database, addressed the way the command addresses it. Driving `main`
+    # is the point: `restore_archive` returns the report and is covered twice over already, and
+    # `_run` is the only thing that turns it into the sentence the row's `what` promises.
+    monkeypatch.setenv("DATABASE_URL", _sibling(pg_url, "_restore")[2])
+    settings.cache_clear()
+    try:
+        assert await _run_cli("restore", str(report.path)) == 0
+    finally:
+        settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    unnamed = sorted(name for name in movie_data.RETIRED if name not in printed)
+    assert not unnamed, f"the restore line does not name {unnamed}: {printed!r}"
+    assert "decision 291" in printed, printed
+    assert printed.isascii(), f"a restore line a cp1252 console cannot print: {printed!r}"
+
+
+async def test_an_archive_written_on_a_pre_291_install_names_what_it_leaves_behind(
+    db, pg_url, tmp_path, monkeypatch, capsys
+):
+    """Decision 309's rule, on the leg it was not spent on -- and the common case, not the rare one.
+
+    The sibling above is an archive written by an OLDER BUILD and restored by this one. This is the
+    other order and the one every existing household meets: pre-291 DATA, archived by THIS build.
+    Any box seeded up to M4.15 still holds the slice (decision 311; `placement/features.py:295-300`
+    says so and still reads it), so `write_archive` passes over three populated tables and reports
+    "31 tables" for an install holding 34 -- true, and a description of a different install. And it
+    is the path decision 309's own mechanism cannot reach: `RestoreReport.retired` is computed from
+    the MANIFEST, so the post-291 archive this build writes carries nothing to name on the way back
+    either.
+
+    What it costs is a record, not the rows: section 2's nightly `pg_dump` is the whole database and
+    carries them (`backup/nightly.py:281`, no `--exclude`), and this build's restore would decline
+    them anyway. So the clause points at the dump the operator already has rather than implying an
+    archive that could hold them -- and the negative half below is what keeps it from becoming
+    noise on every post-291 box.
+
+    Asserted by name, ASCII, and through `_run`: `ArchiveReport.as_dict()` has no caller in the
+    tree, so the printed line is the only thing that shows the field to anyone.
+    [decisions 291, 309, 311; M4.16 cycle 4, M416-C4-GEN-08]
+    """
+    await _seed_movie_data(db)
+
+    # The negative direction first, on the install THIS build seeds: nothing to name, nothing said.
+    clean = await movie_data.write_archive(db, tmp_path / "post-291.zip")
+    assert clean.retired == ()
+    assert clean.as_dict()["retired"] == []
+
+    # The slice as the pre-291 importer left it, the same three rows the restore's fixture uses.
+    await db.execute("INSERT INTO ml_genome_tag (tag_id, tag) VALUES (1, 'melancholy')")
+    await db.execute(
+        "INSERT INTO ml_link (ml_movie_id, title_id, imdb_id, tmdb_id) "
+        "VALUES (1, 11, 'tt0079944', 101)"
+    )
+    await db.execute(
+        "INSERT INTO ml_genome_score (ml_movie_id, tag_id, relevance) VALUES (1, 1, 0.75)"
+    )
+
+    report = await movie_data.write_archive(db, tmp_path / "pre-291-data.zip")
+    assert report.retired == tuple(sorted(movie_data.RETIRED))
+    assert report.as_dict()["retired"] == sorted(movie_data.RETIRED)
+    assert not set(report.tables) & movie_data.RETIRED, "the slice must still not be archived"
+
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    settings.cache_clear()
+    try:
+        assert await _run_cli("write", str(tmp_path / "by-hand.zip")) == 0
+    finally:
+        settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    unnamed = sorted(name for name in movie_data.RETIRED if name not in printed)
+    assert not unnamed, f"the write line does not name {unnamed}: {printed!r}"
+    assert "decision 291" in printed, printed
+    assert printed.isascii(), f"a write line a cp1252 console cannot print: {printed!r}"
+
+
 async def test_a_destination_the_command_cannot_write_is_a_refusal_and_not_a_traceback(
     db, pg_url, tmp_path, monkeypatch, capsys
 ):
@@ -1864,3 +2100,64 @@ def test_the_archive_command_guard_sees_the_container_that_cannot_write_it():
     )
     assert named == {("synthetic", "backend")}
     assert ("/data/backups", "rw") not in _mounts(COMPOSE.read_text(encoding="utf-8"), "backend")
+
+
+# --- M4.16 cycle 3: the size of the COPY loop is `len(TABLES)` and nowhere else ----------------
+
+# Prose that spells the size of the COPY loop has been wrong at every reading it has ever had.
+# `write_archive`'s docstring spelled thirty-three of them when `TABLES` held 34 (M4.7,
+# c771f07), and went on spelling it after decision 291 narrowed the set to 31 -- so a reader
+# auditing the archive's table set against this module met 33, 34 and 31 within 170 lines and
+# had to run the code to learn which one was live. The argument that docstring makes -- one
+# repeatable-read snapshot, the sequence positions read after the rows -- never depended on the
+# number, so the count was only ever a second copy of something the code already holds. Decision
+# 309 applies exactly this standard to the same two numbers in the same module: a line that is
+# true and describes the wrong thing is the defect this milestone exists to stop shipping. The
+# sentence now states the shape, one COPY per archived table, and this refuses the count back in.
+# [M4.16 cycle 3, M416-C3-291-04]
+_TENS_WORDS = ("twenty", "thirty", "forty", "fifty", "sixty")
+_ONES_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+_SPELLED_COUNTS = frozenset(
+    _ONES_WORDS
+    + _TENS_WORDS
+    + tuple(f"{tens}-{ones}" for tens in _TENS_WORDS for ones in _ONES_WORDS)
+)
+_COUNTED_COPIES = re.compile(r"\b([\w-]+) COPYs\b")
+
+# Both files, because both carried the same sentence: the docstring and the test that quotes it
+# back as its own first line. Repairing one alone leaves the other asserting the stale number.
+# A bare `write_archive` COPYs into ... is not a count and is not matched.
+_COPY_PROSE = ("backend/spielplan/backup/movie_data.py", "backend/tests/test_backup.py")
+
+
+def _copies_counted_in(sources: dict[str, str]) -> list[str]:
+    return sorted(
+        f"{name}: {match.group(0)}"
+        for name, text in sources.items()
+        for match in _COUNTED_COPIES.finditer(text)
+        if match.group(1).isdigit() or match.group(1).lower() in _SPELLED_COUNTS
+    )
+
+
+def test_no_prose_counts_the_copies_the_archive_writes():
+    counted = _copies_counted_in(
+        {name: (_REPO / name).read_text(encoding="utf-8") for name in _COPY_PROSE}
+    )
+    assert not counted, (
+        f"these spell the size of the COPY loop: {counted}. It is len(TABLES) = "
+        f"{len(movie_data.TABLES)} today, it has been narrowed once already (decision 291), and "
+        f"the sentence reads the same without it: a COPY per archived table."
+    )
+
+
+def test_the_copy_count_guard_sees_the_sentence_this_module_actually_shipped():
+    """The synthetic violation is the real one, assembled rather than quoted.
+
+    This file is one of the two the guard reads, so a literal of the shipped sentence here would
+    be an offence against the rule it is demonstrating -- the guard would fail on its own
+    fixture. Assembling it from the vocabulary the rule is built out of is the same sentence and
+    is not one the scan can find.
+    """
+    shipped = f"{_TENS_WORDS[1]}-{_ONES_WORDS[2]} COPYs with no enclosing transaction"
+    assert _copies_counted_in({"synthetic": shipped}), "the guard misses the sentence it exists for"
+    assert not _copies_counted_in({"reworded": "A COPY per archived table is a snapshot per table"})

@@ -20,6 +20,7 @@
   import { get, post, api } from '$lib/api.js';
   import { session, bootstrap } from '$lib/session.svelte.js';
   import { registerPasskey, supported } from '$lib/passkeys.js';
+  import DataSources from '$lib/components/DataSources.svelte';
   import Onboarding from '$lib/components/Onboarding.svelte';
 
   let credentials = $state([]);
@@ -316,6 +317,19 @@
       </p>
     {/if}
   </section>
+
+  <!-- Decision 293. The licence conditions behind the posters and overviews are conditions of
+       DISPLAY, so they bind every member who sees them rather than the admin who imported them,
+       and §6.6's Data card is admin-only. This page is the one surface the account chip routes
+       to for everybody, admin and member alike — it is not a tab, and `api/auth.py`'s `SURFACES`
+       carries neither /account nor /admin (decision 318) — which is what makes §6.8's register
+       argument work: one notice on one surface, not a source name on every card. Last on the
+       page because it is reference
+       material — nothing here is a control, and the four things above are all things a person
+       came here to do. Its own component for the same reason `Onboarding` is: the block owns a
+       licence text that has to be exact, and a page this long is where an exact string goes to
+       be edited by accident. -->
+  <DataSources />
 </div>
 
 <style>

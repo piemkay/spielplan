@@ -8,6 +8,7 @@ per-source keys at the end are the exception and say why: a dropped key componen
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -76,7 +77,9 @@ def test_no_mapping_names_a_column_the_corpus_does_not_ship():
     report line because the corpus owns its own names; a mapping naming a column upstream does
     not have is this app asserting a name, and NULLs are the wrong answer to it. The manifest
     is the ground truth, and against it the mapping named `ml_link.title_id`,
-    `ml_genome_score.ml_movie_id`, `rating_title_map.source_key` and `watchlist.source`.
+    `ml_genome_score.ml_movie_id`, `rating_title_map.source_key` and `watchlist.source`. The
+    first two are history since decision 291 declined the genome slice; the loop is over
+    `MAPPINGS` as it stands, so the assertion cannot outlive the mappings it was written for.
     """
     shipped = json.loads(
         (Path(__file__).parent / "fixtures" / "real_bundle_shapes.json").read_text(
@@ -100,7 +103,8 @@ def test_load_order_puts_parents_before_children():
     order = [m.target for m in load.MAPPINGS]
     assert order.index("title") == 0
     assert order.index("person") < order.index("credit")
-    assert order.index("ml_genome_tag") < order.index("ml_genome_score")
+    # `ml_genome_tag` before `ml_genome_score` was asserted here until decision 291 declined the
+    # slice; the pair that survives is the one §4.1 rule 4's frozen ids depend on.
     assert order.index("rating_source") < order.index("rating_title_map")
 
 
@@ -116,6 +120,117 @@ def test_the_three_per_source_tables_carry_the_corpus_key(content):
     assert platform.columns["platform"] == "source"
     assert platform.columns["metric"] == "metric"
     assert platform.columns["scale"] == "scale"
+
+
+def test_the_genome_slice_is_named_as_skipped_rather_than_mapped():
+    """Decision 291: `media-graph-spec_v1.1.md:175` fixed the genome as a corpus-side artefact --
+    "validation artifact only, never shipped or imported into the app" -- and this mapping had
+    reversed that without a note.
+
+    A data-structure test because the reversal was a data structure: three `TableMap`s, no
+    argument anywhere, 888,023 `ml_genome_score` rows loaded on the one content seed (decision 162)
+    into a block `placement/contract.py` DECLARES zero-imputed and `features._genome` populated
+    wherever the rows existed -- a live tower input for the 1,055 cold-masked titles decision 304
+    re-measured, which is why decision 311 states the rule and the path as two claims.
+    The move is into `SKIPPED_TABLES` rather than out of the file entirely, because §10 owes "counts per
+    table" and a table this app declines must still produce a line an operator can read -- the
+    lesson `title_meta`'s missing 46,318 rows taught.
+    """
+    slice_tables = {"ml_genome_tag", "ml_link", "ml_genome_score"}
+    assert slice_tables <= set(load.SKIPPED_TABLES)
+    assert not slice_tables & {m.source for m in load.MAPPINGS}
+    assert not slice_tables & {m.target for m in load.MAPPINGS}
+    for table in sorted(slice_tables):
+        reason = load.SKIPPED_TABLES[table]
+        assert "media-graph-spec_v1.1.md:175" in reason, (
+            f"`{table}`'s reason must cite the clause it upholds, not merely decline the table"
+        )
+        # `decisions 291 and 311` is the narrowed spelling: decision 311 restated what the skip
+        # COSTS -- the tables are empty on any install THIS BUILD seeds and not on one seeded
+        # before it -- and left decision 291's ruling exactly as it stands. Both spellings name the
+        # decision that skipped the table, which is the whole of what this asserts.
+        # [decision 311; M4.16 cycle 4, M416-C4-GEN-03]
+        assert "decision 291" in reason or "decisions 291 and 311" in reason, (
+            f"`{table}`'s reason no longer cites the decision that skipped it: {reason}"
+        )
+
+
+# A corpus figure in the corpus's own idiom: `888,023`, or the ungrouped `888023` a re-cut would
+# print. Three-digit decision numbers and `media-graph-spec_v1.1.md:175` are deliberately outside
+# it -- those are citations, and the rule is about a MEASUREMENT standing where the report puts
+# its own. [decision 184; M4.16 cycle 4, M416-C4-GEN-09]
+_COUNTED = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d{4,}\b")
+
+
+def test_no_skip_reason_states_a_row_count_the_import_did_not_measure():
+    """§10 owes "a migration report (counts per table)", and that is `report.table_counts`.
+
+    `load._account_for_shipped_tables` renders each reason verbatim into a `table-skipped` note,
+    and `importer/report.py`'s `render()` says in as many words that the string "is what the
+    wizard and the Data tab show" -- in the same report whose counts block prints what the bundle
+    in front of the operator actually holds. `ml_genome_score`'s reason carried "888,023 relevance
+    rows", which is v20260828's corpus figure and not a reading of anything: on the fixture this
+    suite imports the two numbers sit in one report five orders of magnitude apart. The other two
+    slice reasons name no count, which is the shape this holds them all to.
+
+    The figure is not lost -- it is argued where it belongs, in the `SKIPPED_TABLES` comment above
+    the dict and in decisions 291, 304 and 311. `validate.py`'s EXPECTED block states the house
+    rule this is the inverse of: a corpus figure is presented "with the observed value next to the
+    expected one, so a re-import diff shows drift instead of hiding it". An unpaired one beside
+    the real measurement is the drift hidden. [decision 309's rule; M4.16 cycle 4, M416-C4-GEN-09]
+    """
+    guilty = {
+        table: _COUNTED.findall(reason)
+        for table, reason in load.SKIPPED_TABLES.items()
+        if _COUNTED.search(reason)
+    }
+    assert not guilty, (
+        f"a skip reason states a count no import measured: {guilty}. The operator reads this "
+        "string beside `report.table_counts` for the bundle in hand, which is what section 10's "
+        "'counts per table' means; argue the corpus figure in the comment above the dict instead."
+    )
+
+
+def test_the_skip_reason_guard_sees_the_corpus_figure_come_back():
+    """The reason exactly as it shipped, and the ungrouped spelling a re-cut would produce.
+
+    Held against the citations the reasons legitimately carry, because a rule that also refused
+    `media-graph-spec_v1.1.md:175` or `decisions 291 and 311` would have to be narrowed by the
+    first person it stopped rather than satisfied. [M4.16 cycle 4, M416-C4-GEN-09]
+    """
+    shipped = ("888,023 relevance rows for a block no import this build populates; "
+               "media-graph-spec_v1.1.md:175, decisions 291 and 311")
+    assert _COUNTED.search(shipped), "the guard no longer sees the string this repaired"
+    assert _COUNTED.search(shipped.replace("888,023", "888023")), "an ungrouped count escapes"
+    for innocent in load.SKIPPED_TABLES.values():
+        assert not _COUNTED.search(innocent), innocent
+    assert not _COUNTED.search(
+        "the genome relevance scores; media-graph-spec_v1.1.md:175 makes the whole slice a "
+        "corpus-side validation artifact (decisions 291 and 311)"
+    ), "the repaired reason's own citations are not counts"
+
+
+def test_no_loader_path_joins_titles_on_imdb_id():
+    """§4.1: "`imdb_id` ... must never be the join key" -- and until decision 291 this module held
+    the one exception to it, `_resolve_ml_links`, joining `ml_link` to `title` on `imdb_id`
+    because MovieLens keys its link table by external ids and rule 6 ruled out `tmdb_id`.
+
+    The exception was defensible while the genome was imported; it is not an exception this app
+    needs once the slice is declined, and the M4.9 requirement that policed it goes with the code
+    (decision 291's cost paragraph). Static, over the source, because what must not come back is
+    a *join* rather than a function name: re-adding the resolution under any name would restore
+    the one read of a key §4.1 forbids, and the rule then has nothing enforcing it at all.
+    """
+    assert not hasattr(load, "_resolve_ml_links")
+    source = Path(load.__file__).read_text(encoding="utf-8")
+    # Qualified reads and bare JOINs, not the mere word: `title.imdb_id` is a mapped column and
+    # `"imdb_id": "imdb_id"` must stay. What must not come back is a statement that *resolves*
+    # through it -- `t.imdb_id = l.imdb_id`, or any JOIN naming the column at all.
+    offenders = [
+        line.strip() for line in source.splitlines()
+        if "imdb_id" in line and (".imdb_id" in line or "JOIN " in line.upper())
+    ]
+    assert not offenders, f"the loader resolves through imdb_id again: {offenders}"
 
 
 def test_title_company_is_mapped_rather_than_skipped():

@@ -11,10 +11,16 @@ normative; where this code and the spec disagree, the spec wins and the code is 
 non-obvious decision in the source cites the section that mandates it.
 
 - [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) — current spec
-- [`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) — proposed amendments from the
-  UI-prototype review. Proposals, not spec; 161 of them. All seven owner decisions were taken on
-  2026-08-29 and are recorded at the end, along with **§6.2 — Tonight, rewritten**, which
-  replaces the fixed ten-vote round with an adaptive one
+- [`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) — the decision record, amended
+  in place and never forked into a v2.2 (decision 288). **303 numbered entries** in two registers:
+  proposals 1-161 are dated reasoning from the UI-prototype review, citable as provenance and
+  nothing more, and entries **162-320 are the numbered owner decisions** — 142 of them over
+  eleven dated sittings, 2026-09-01 to 2026-09-17 — each normative from the day it is taken
+  until the amendment it mandates lands in the spec file. The register holds twelve sittings in
+  all; the first, on 2026-08-29, is seven answers
+  indexed there rather than numbered, one of which is **§6.2 — Tonight, rewritten**,
+  replacing the fixed ten-vote round with an adaptive one. The numbering is neither contiguous nor
+  confined to that file, and the file's own header says where the gaps went
 - [`docs/media-graph-spec_v1.1.md`](docs/media-graph-spec_v1.1.md) — superseded, vendored because
   v2.1 cites its surviving interaction designs by section
 
@@ -347,6 +353,10 @@ docker compose exec worker spielplan-movie-data write /data/backups/movie-data.z
 The worker and not the backend: `/data/backups` is mounted on the worker alone, because the process
 that serves §6's anonymous SPA fallback has no reason to hold every night's dump (§14.3).
 
+That archive carries the review bodies, so it carries their terms with them: it is this
+household's second copy and never a hand-off to another one. [Data terms](#data-terms) says what
+is in it and under what conditions (decision 292).
+
 The restore refuses an install that already holds movie data, and it locks every archived table for
 its duration, so it is a stop-the-stack event:
 
@@ -449,10 +459,17 @@ npm --prefix frontend test               # client helpers
 node e2e/run.mjs                         # the whole stack, desktop and phone
 ```
 
-The integration layer needs a real Postgres and skips without one; the e2e layer needs the
-compose stack. `backend/tests/spec_coverage.toml` is the contract that says which requirement
-each milestone owes a test, and `test_spec_coverage.py` fails the build when a shipped
-milestone has an uncovered one.
+The integration layer needs a real Postgres and **skips without `TEST_DATABASE_URL`**
+(auto-loaded from `.env.test`); the e2e layer needs the compose stack. A pytest run says which of
+the two it is on its own first line, rather than leaving a silence to be interpreted —
+`integration layer: ARMED against 127.0.0.1:5432/spielplan_test_p1234 (source: .env.test)` or
+`integration layer: UNARMED (TEST_DATABASE_URL is unset) -- db/app/pg_url tests skip`. It is
+printed from `pytest_sessionstart` and not only from the report header, because `-q` — the
+verbosity this project actually runs at — suppresses the header, so the hook that was supposed
+to say it said nothing on every run anyone performs. `--no-db` disarms the layer on purpose and
+reports itself in the same words. `backend/tests/spec_coverage.toml` is the contract that says
+which requirement each milestone owes a test, and `test_spec_coverage.py` fails the build when a
+shipped milestone has an uncovered one.
 
 **[`docs/TESTING.md`](docs/TESTING.md)** is the whole picture, including the mechanical routine
 for opening a milestone: raise `current_milestone`, run the suite, and the failure *is* the
@@ -477,10 +494,57 @@ vocabulary and the tuned hyperparameters are built and measured in the corpus pr
 as a versioned artifact bundle (§10). This app imports it, validates it against every schema
 landmine, and fits per-user state on CPU.
 
-Re-importing a bundle is a planned admin event with a diff report, never a silent sync:
-everything expressed in the old model's basis is garbage against a new one, so a re-import
-recomputes user vectors, blend weights, a full ledger refit, and re-places every locally
-acquired title.
+Re-importing a bundle is a planned admin event with a **migration report** — counts per
+table, validation failures, vocabulary version — and never a silent sync. As §10 read until
+M4.16 it called this a diff report; no diff report was ever written, and §10 now names the one
+the importer produces. What re-imports is models: content seeds once (decision 162), so the re-import that
+arrives carries a retrained backbone and not a second copy of the spine. A bundle whose DNA
+vocabulary version differs from the active one is **refused by name** rather than activated
+(decision 163) — that migration is real work with a plan of its own, and swapping it in would
+strand both DNA tiers at the old version, which is a silent catastrophe rather than an error.
+What a model re-import does recompute is everything expressed in the old basis, because all of it
+is garbage against a new one: user fold-in vectors, blend weights, a full ledger refit, and the
+placement of every locally acquired title.
+
+## Data terms
+
+The bundle is **private household data**, and that is the line nothing in this repository used to
+draw. It is assembled under personal and non-commercial terms; private household use is permitted
+by every source in it, and **publishing it, shipping it as a release asset, or handing the
+`/data/backups` movie-data archive to another household is not** (§10, decision 292).
+`LICENSE` is MIT over this repository's code and covers nothing in the bundle.
+
+| what the bundle carries | the terms it travels under |
+|---|---|
+| MovieLens genome and link tables, verbatim (GroupLens) | no redistribution without separate permission |
+| 29,362 scraped IMDb reviews and the IMDb-derived tables | personal, non-commercial; no republishing into a database |
+| 92,449 Metacritic and 43,532 Trakt review bodies | their `rating_source` rows read "not redistributed" |
+| 4,199 whole critic articles from four blogs | whole articles, not excerpts |
+| 4,440 MPST synopses | research dataset |
+| OMDb plot and metadata text | CC BY-NC |
+| TMDB overviews and poster URLs (9,866 of 11,012) | non-commercial; "not endorsed, certified, or otherwise approved by TMDB" |
+| 8,409 Wikipedia plots and 27 overviews | CC BY-SA, credit required |
+| 1,619 TVmaze `title_meta` rows | CC BY-SA, credit required |
+
+The MovieLens row is in the table because the bundle still carries those tables; the importer no
+longer loads them (decision 291), so nothing but the archive file itself holds them here. The
+table is also a summary rather than the authority: the per-dataset terms travel **with the data**,
+in `rating_source`'s `url`, `license`, `version` and `notes`, which the importer keeps
+(`0018_read_layer.sql`) — so an operator reads the terms off their own install rather than off
+this file. The notices those terms require are rendered for every signed-in member on /account's
+**Data sources** block in §6.8's quiet data voice: one notice on one surface, never a source
+name on a poster card (decisions 293 and 298).
+
+One gap, stated rather than left to be discovered: `reviews.sqlite`'s largest slice by row count
+is 295,578 Rotten Tomatoes bodies, and it is not in the table because no record in this repository
+states terms for it. That is a hole in the record, not a permission.
+
+Nothing tracked here is a bundle artefact and nothing tracked here may become one. `/data/` is
+excluded by `.gitignore` and kept out of the build context by `.dockerignore`, and the coverage
+map's `platform-the-private-bundle-is-never-tracked-or-shipped` holds the rest: `git ls-files`
+contains no `*.sqlite`, no `*.npz` and no `BUNDLE.json`. The
+movie-data archive under `data/backups` copies the review bodies, so it inherits every restriction
+above — it is this household's second copy, not a way to hand the data on.
 
 ## Build order
 
@@ -497,7 +561,11 @@ Full table with exit criteria: spec §12.
 **M0** is in place and verified end to end against Postgres 16 in Docker: `docker compose up`
 brings up db + backend + worker, the first-boot wizard creates the admin, the importer runs the
 §10 swap sequence as far as code can take it (validate → stage → load → transactional flip), and
-the Library and title detail card render the imported titles. Both §12 exit criteria are met. The
+the Library and title detail card render the imported titles. §12's exit criterion —
+"bundle imports clean; Library list and title card render imported titles" — was met **against
+the fixture** here and **against the real bundle at M4.5**, and the distance between those two is
+the whole of the M4.5 paragraph below. The release verdict for this row and every other §12 row
+is in [`docs/RELEASE.md`](docs/RELEASE.md), which also carries the criteria nobody has run. The
 restart §10 ends with is the operator's — `docker compose restart backend worker`, above under
 Recovery — and the Data tab says so until it happens.
 
@@ -526,6 +594,25 @@ exactly the caveat §12 says M2 exists to settle. M2's second caveat has since b
 the push **sender** was M4's and shipped there, so §2's VAPID keypair is generated at first
 boot and §7.3's prompt is carried as a real web push, with the in-app banner still the
 guaranteed fallback.
+
+**M3** is in place: §6.3's Rank board — the seven tiers, drag-and-drop between them, the
+filters, the straddle badge, and the comparison queue that feeds §5.2's pairwise arm. §12's
+exit criterion — "stable tier lists both users endorse" — is, like M2's first, a claim about
+a household rather than something a test can settle; what ships is the board and the assertion
+that the order it draws is the Ledger's. Everything the milestone left open is collected at close,
+in [`docs/milestones/M3-open-points.md`](docs/milestones/M3-open-points.md) — owner decisions,
+spec defects, defects found and deliberately not fixed, and the debt that looks like coverage.
+
+**M4** is in place: §6.2's Tonight — the lobby and the open-rooms list, push-carried joins,
+the round of this-or-that pairs, the guest hand-off on the initiator's phone, the group combine
+with its split surfacing, the blind reveal, the result card, and solo mode. Two things
+have moved under it since: the round is **adaptive in length** rather than a fixed ten votes
+(a median of about eleven pairs, capped at twenty), and nothing about a session renders on a TV
+— the phone is the only surface and the `/tv` route is deleted rather than deferred
+(decision 165, carried out by M4.12). §12's exit criterion — "a real Friday night resolved
+by the app" — is another household claim; M4.12 is what rebuilt the flow against the real pool
+rather than the fixture's. Open points:
+[`docs/milestones/M4-open-points.md`](docs/milestones/M4-open-points.md).
 
 **M4.5** is not in §12. It exists because the sentence that used to stand here — "the corpus
 bundle does not exist in this repo" — was false, and the importer had been written accordingly:

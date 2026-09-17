@@ -1,8 +1,15 @@
 """Rule 8's mojibake repair. Spec v2.1 §4.1 rule 8.
 
+The clause these cases were written against, as it read until M4.16:
+
     "UTF-8 everywhere; never 'clean' non-ASCII (the corpus legitimately contains CJK, RTL
      scripts, ZWSP, emoji); the 73 known-mojibake review rows are fixed individually in the
      importer."
+
+The row list is struck; §4.1 now states the conservative heuristic `importer/reviews.py` ships.
+Nothing below changes with it, which is the point — not one of these cases ever named a row, and
+a suite that asserted the retired sentence would be the argument for narrowing the repair back to
+an enumeration this repository has never possessed. [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
 
 The dangerous failure here is not missing a broken row — it is "repairing" a correct one. Most
 of these tests are about text the repair must leave alone.

@@ -11,7 +11,13 @@ Three rules are enforced here rather than trusted to callers:
   measured failure is a shared *ranking*, not a shared screen.
 * **rule 1** — the two DNA tiers are returned as two labelled lists. Nothing here unions them.
 * **rule 2** — `salience`, `confidence` and `n_sources` appear in ORDER BY and in the payload,
-  never in a WHERE. `tests/test_no_weight_filters.py` greps this package to keep it that way.
+  never in a WHERE. `test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter` greps
+  this package to keep it that way.
+
+`0004_dna.sql`'s comment names `db/dna.py` as the read layer that holds rule 2; the reads live
+here and in `home/why.py`, and there is no `db/dna.py`. The migration is applied and
+sha256-checksummed, so correcting it in place is a hard startup error rather than an edit — the
+correction is therefore recorded here, where the reads actually are. [M4.16 spec-15]
 """
 
 from __future__ import annotations

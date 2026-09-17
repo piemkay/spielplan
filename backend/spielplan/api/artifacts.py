@@ -94,7 +94,7 @@ RUNNING = "running"
 # a kill left behind, which is the question the door below has to ask about a `running` row:
 # younger than this is a worker mid-import, older than this is `_reap_abandoned_import`'s.
 # [M4.14 cycle 1, m414-c1-dim-waveE-02]
-IMPORT_CLAIM_BUDGET_S = 300.0
+IMPORT_CLAIM_BUDGET_S = 600.0
 
 IMPORT_IN_FLIGHT = (
     "another bundle import is already running on this install - wait for it to finish and read "
@@ -286,7 +286,7 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
     can be here. Decision 182 put JOB HEALTH - which jobs ran, when, whether the dump is stale -
     on section 6.6's System card at `GET /api/admin/system`, and none of that is in this key: it
     carries one running import's phase and that import's own report. Section 10 makes the import
-    a planned admin event with a diff report, and after M4.14 the event outlives the request that
+    a planned admin event with a migration report, and after M4.14 the event outlives the request that
     started it, so the page that started it needs ONE endpoint to poll - and it already polls
     this one. The alternative was a second route beside the one the Data tab is written against,
     which is how two screens come to disagree about one import. [M4.14 step E3, decision 253]

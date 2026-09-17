@@ -106,6 +106,25 @@ inside one run's window leaves the middle commit with no completed run at all. R
 completed run rather than off the absence of a red one. Five jobs run there:
 lint, backend, integration, frontend and e2e.
 
+**A second workflow decides whether the build SHIPS**, `.github/workflows/release.yml`, and the
+two questions are not the same one: `ci.yml` asks on every branch push whether every requirement
+written down has a test that can fail, which is a verdict on the MAP. This asks whether what
+exists today is releasable. Five legs, in order, as STEPS of one job so that "in order" is a fact
+rather than a diagram — each leg consumes the tree, the containers and the database the one
+before it left behind: the full pytest suite against Postgres 16 with `--junitxml`;
+`ops/coverage_gate.py` over that JUnit and the browser report `ci.yml` produced for the same
+commit, which fails a row whose named test never RAN or ran skipped; the real-bundle legs against
+`CORPUS_BUNDLE_DIR`, `ops/m45_exit_criterion.py` among them; the restore drill at stack level — a
+real import, a dump the worker's own code wrote, `pg_restore` into a freshly created database,
+and `/api/health` answering with a bundle; and the compose stack under `node e2e/run.mjs` over
+both browser projects. Each uploads its artifact under `always()`, `continue-on-error` appears
+nowhere, and no leg can pass by skipping its body, which `backend/tests/test_release_gate.py`
+reads the file to hold. It runs on `workflow_dispatch` and a weekly tick, on the same
+`[self-hosted, spielplan-corpus]` box as the corpus check below and for decision 183's reason —
+legs 1, 3 and 4 need the bundle, and a corpus reaches a runner by already being on its disk. It
+gates no branch; its answer is written down in `docs/RELEASE.md`, and §2.1 there is where the
+answer currently is that it has never been dispatched — same unregistered runner as below.
+
 **The corpus check has a workflow of its own**, `.github/workflows/real-bundle.yml`. It is the only
 place `CORPUS_BUNDLE_DIR` is set and therefore the only place the two tests that key off it stop
 skipping; decision 183 puts it on a self-hosted runner with the ~1.15 GB export already on
@@ -145,15 +164,49 @@ why = "a tag without its quote is unfalsifiable."
 tests = ["backend/tests/test_bundle_validation.py::test_tag_without_evidence_fails"]
 ```
 
-`test_spec_coverage.py` enforces two rules:
+`test_spec_coverage.py` enforces seven rules, and `test_every_rule_this_gate_enforces_can_fail`
+feeds each one a synthetic map carrying exactly its own violation — a rule nothing has been
+watched refuse reads as coverage while providing none. A row fails when it is:
 
-1. **Every requirement at or before `current_milestone` names at least one test.**
-2. **Every named test exists** — checked against the real pytest functions, Playwright titles and
-   vitest titles, so a renamed or deleted test breaks the build rather than silently uncovering a
-   requirement.
+1. **a shipped row with no test** — at or before `current_milestone` and naming none;
+2. **a named test that does not exist** — checked against the real pytest functions, Playwright
+   titles and vitest titles, so a renamed or deleted test breaks the build rather than silently
+   uncovering a requirement;
+3. **a named test in a file `git ls-files` does not list** — a test that closes a row on one
+   machine and on no other is not committed evidence, and the remedy is `git add`, never a wider
+   gate;
+4. **a `kind` below the layer its own tests reach** — an `integration` row none of whose tests
+   resolves a fixture that reaches Postgres is a unit test wearing an integration row's name;
+5. **an authority nobody can go and check** — a bare proposal number, because entries 1-161
+   of `docs/spec-v2.2-proposals.md` are dated reasoning and a shipped row resting only on one
+   rests on nothing the owner ever agreed to (decision 295); a `§N` the normative file has
+   no heading for; a sentence quoted from a document that does not carry it; or a citation
+   anchored on a line number, since the sentence a row rests on is stable where its line
+   number is not (decision 305);
+6. **an unknown `kind`**, or a milestone `MILESTONES` does not carry;
+7. **a waiver with no reason**, or one leaning on a test the map registers nowhere —
+   `waived = "an honest reason"` is the whole of what a waiver is, and the report counts
+   every waived row and PRINTS ITS ID rather than letting it vanish. A waiver that says which
+   half it does NOT waive names the tests asserting that half in `tests`, or rule 2 cannot
+   see them and the next rename empties the claim in silence.
 
-A row that genuinely should not be tested yet carries `waived = "an honest reason"` and appears
-in the report as waived rather than vanishing.
+**There is no `frontend` kind, and its absence is a decision rather than an oversight.** A `kind`
+is the layer rule 4 measures a row's evidence at, and decision 226 already settles what a vitest
+id may do: stand BESIDE a backend or Playwright test, never instead of one. So there is no layer
+a vitest-only row could be proven at that `npm --prefix e2e run fresh` would then run, and adding
+a kind for one is an owner scope call rather than an instrument repair. The four are `backend`,
+`integration`, `e2e` and `static`.
+
+**One waiver stands, and this paragraph is the current set.**
+`data-rules-platform-rating-display-only` is waived because no migration creates a database role
+the app could be refused by, and it was re-read at M4.16 by running the grep again rather than by
+trusting the last reading: `grep -rniE "create role|grant |revoke "` over `backend/migrations/` is
+still empty, so the premise holds and the waiver stays.
+`library-rate-model-line-no-bundle` was RETIRED there and now names an integration test beside the
+restore drill: its waiver argued the branch was unreachable because an install with no bundle has
+no titles to draw a card for, which is true of a FRESH install and false of a RESTORED one — and a
+restored install is the install §3.1's model line is about. Two older paragraphs below state a
+different pair; both are dated, both are marked where they stand, and neither is the standing set.
 
 ### This is what "updated every milestone" means
 
@@ -171,8 +224,14 @@ The update is mechanical, and it happens *before* the code:
    skeptic told to refute it. What survived was real: a duplicate Jellyfin item silently
    erasing a person's explicit `seen`, three inputs rendering white-on-white, a broken link
    reporting itself healthy. None of them would have failed a test that existed.
-5. **The milestone is closed when the suite is green** — which is a stronger statement than
-   §12's exit criterion, because every requirement behind it is named.
+5. **The milestone is closed when the suite is green** — which is a DIFFERENT statement from
+   §12's exit criterion rather than a stronger one, and reading it as stronger is how five §12
+   rows went a year without ever being run. Green closes the MAP: every requirement this
+   repository has written down names a test that exists, is committed, ran, and could have
+   failed. §12 is closed by a measurement somebody made against a real bundle, a real dump on a
+   real stack, a built image or a real phone — and that answer lives in `docs/RELEASE.md`, one
+   row per §12 milestone, each naming the output file it is closed by or carrying an UNFILLED
+   owner verdict. A milestone can be green here and still owe §12 a run.
 
 Two things happen on the way that are easy to miss:
 
@@ -186,7 +245,7 @@ Two things happen on the way that are easy to miss:
 ### Current state
 
 ```
-> M0   34/35  covered (1 waived)
+> M0   34/35  covered (1 waived: data-rules-platform-rating-display-only)
 > M1   10/10  covered
 > M2   27/27  covered
 > M3   15/15  covered
@@ -195,19 +254,21 @@ Two things happen on the way that are easy to miss:
 > M4.6   12/12  covered
 > M4.7   17/17  covered
 > M4.8   10/10  covered
-> M4.9   23/23  covered
+> M4.9   22/22  covered
 > M4.10   10/10  covered
 > M4.11   17/17  covered
 > M4.12   18/18  covered
 > M4.13   17/17  covered
 > M4.14   12/12  covered
 > M4.15   11/11  covered
-  M5    0/10  covered
+> M4.16   17/17  covered
+  M5    0/11  covered
   M6    0/12  covered
-  M7    0/1   covered
+  M7    0/2   covered
 ```
 
-**M4.5's other 18/18 is now one check short, and this is the whole of what is known about it.**
+**M4.5's other 18/18 was one check short, and until M4.16 this was the whole of what was known
+about it.**
 The `18/18` above is a coverage count and is unaffected; the collision is a coincidence worth
 naming, because `docs/milestones/M4.5-plan.md:320` publishes a second **18/18** — the checks
 `ops/m45_exit_criterion.py` printed against `v20260828`. Two of those eighteen had a constant for a
@@ -220,13 +281,222 @@ count is invented here: restating it needs the 1.15 GB bundle, a scratch databas
 import, so **the count is restated at the next real run** (decision 184). The same note is owed by
 hand at `M4.5-plan.md:320`, which the milestone workflow may not edit.
 
-**M4.15 is the milestone this block was last re-pasted for, and its `11/11` is the red list it
-opened with, closed.** Eleven rows were written before any source edit and `current_milestone` was
+**That run happened at M4.16, and the number is committed rather than promised: `17/17 checks
+passed`, exit 0.** `ops/m45_exit_criterion.py` was pointed at `v20260828` on the household box and
+its whole output is committed at `docs/milestones/M4.5-exit.txt`, which is what makes the count
+checkable rather than quotable — a figure in a paragraph is one nobody can re-read, and this file
+carried an unrestatable one for eight milestones. Seventeen rather than eighteen for the reason
+above and for no other: the script was not edited in the change that ran it, so the number cannot
+have been arranged to fit the sentence. Decision 291 costs the criterion nothing, measured rather
+than assumed — section 2 reports `29 shipped, 9 skipped with a reason` where it reported six
+skipped, and section 5 reports `genome=0` where it reported 781, and both still pass, because the
+accounted-table check asks for a count OR a reason and the empty-block check already excluded
+`genome` by name.
+
+**M4.16 is the milestone this block was last re-pasted for, and its `17/17` is the red list it
+opened with, closed — sixteen rows, plus the one review cycle 1 added for decision 294's vendored
+extract, which shipped with no row at all.** Those sixteen were written before any source edit, `current_milestone` was
+raised and `MILESTONES` gained the name in that same commit — either one alone is a red build for
+everyone, since a milestone in one and not the other fails `covered != set(MILESTONES)`. Every one
+of those rows landed with NO `tests` key, which is M4.10's and M4.11's opening rather than
+M4.15's, and the reason is particular to this milestone rather than a change of house style: its
+subject IS this map, so a row naming a test that did not exist yet would have been the instrument
+describing work it had not done, inside the one milestone written to stop records doing exactly
+that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
+waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
+reach **144 ids across four pytest files and one e2e spec**, and the count includes the three
+vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
+never instead of one — they sit in the frontend's suite rather than in the five files the figure
+names, so an auditor reconciling the two subtracts them first. The series is published rather than
+left as a total to take on trust (decision 184): **18 ids** in `test_layering_guards.py` for the
+two layering rules, **42 ids** in `test_release_gate.py` for the release workflow, the
+executed-coverage gate and the harness's own fixture, **61 ids** in `test_static_contracts.py` for
+the documents this milestone rewrote, **19 ids** in `test_spec_coverage.py` for the rules the
+instrument gained, and **1 id** in `19-phone-shell.spec.js` beside **3 ids** in
+`data-sources.test.js` for the /account attribution block. It decomposed by instrument rather than
+by review cycle because no review cycle had run when it was first written, and it is restated here
+from the map rather than grown: review cycle 1 added twenty-three ids across the three instrument files
+— the workflow's per-leg body and job-condition rules, the executed-coverage gate's third absence
+shape and its own console encoding, the record's release-gate row, the waiver count and the device
+checks, the normative file's two omitted surfaces and the genome premise, the vendored extract's
+attributions, rule 5's positive half and the join-key guard its deleted row left behind. Its second
+round added the rest: what a release leg's BODY does rather than what its label says, the rebuild
+guard's two statements and the sentences elsewhere that still reasoned from the harness decision
+299 replaced, the residue scanner's reach into a subpackage, the route rule read against the app
+that SHIPS rather than the one pytest builds, and rule 5's mirror clause beside the range spelling
+it had been reporting as a proposal nobody wrote. Review cycle 2 added four more, and every
+one of them is a rule that had been named for a property it did not hold: the provenance strip
+read a decision NUMBER and never the entry, so any real decision could carry a proposal nobody
+adopted; rule 5 read a list of proposals as a citation of its head alone; the residue scanner
+stopped at `api/` while the composition root declares a route and runs a query; and the
+executed-coverage gate was proved against a JUnit carrying a `file` attribute pytest's own
+default family filters out, so ten tests exercised the branch the release workflow never
+takes. Its second round added ten more, and every one of those is a record disagreeing with
+the tree it describes: the normative file promising a member-visible per-source licence
+display that no route serves, the map's three escalated claims pointing at a `docs/RELEASE.md`
+section that did not exist, a never-run count published smaller than the record beside it
+measured, rule 5 accepting a section the spec has never had and a sentence a wave had
+deleted, the one standing waiver leaning on two tests no row registered, the three
+silent-skip family sizes nobody had counted, the browser report leg 2 downloads expiring on
+the very cadence that reads it, and the point-release line naming four of the five decisions
+its own wave landed. Review cycle 3 added two, and they are the
+same lesson one step further out than any cycle before: every rule the release guard held reads
+what a leg RUNS, and none read what reads the leg's ANSWER. Three legs pipe their own command
+into `tee`, a pipeline exits with its last command's status, and `defaults.run.shell: bash` is
+the only thing that makes the runner see the gate's exit code rather than `tee`'s — measured, by
+deleting the block and watching all four readers return nothing. Its second round added two, its
+third four — the two rows whose `what` shipped byte-identical to the plan's draft and described a
+narrower rule than the guard beside them, rule 5's own measured count once decision 306's row had
+overtaken it, and §10's movie-data archive called nightly over a module with no job, no route and
+no scheduler (decision 310). Review cycle 4 added one and had already been a round of guard HOLES
+rather than a round of guards missing: the residue scanner counted five verbs while its row said
+raw SQL, and rule 5 admitted a decision number nobody had taken, so each of those bought a test,
+while fifteen
+synthetic violations went onto tests that already existed — the job's own `continue-on-error` an
+indent above what `_steps` can see, the step key written first where a column anchor ends, a piped
+leg opting out of the job's shell, phase 0's three refusals exiting green, four certificates a
+predicate rule that read two AST shapes could not settle, and five surfaces re-promised in words
+nobody had retired. Its second round added one more, and it is the round's own subject one
+layer in: the TMDB notice is the one string on the one surface this milestone ships that a
+licence fixes rather than this app writing it, and it shipped as a hybrid of TMDB's two
+published forms that three assertions pinned and none could see, because a `toBe` and a
+Playwright `exact` against the same literal compare a copy with a copy (decision 319). Its third
+round added four, and three of them are everything above pointed the other way: not a record that
+outruns the code but a comment that outruns the SPEC. This milestone replaced rule 8 with the
+heuristic `importer/reviews.py` ships and left the struck row list standing as the rule in the
+loader, in the validator's expectations, in the module the rule is about and in that module's
+test — one of the five carriers a checksummed migration that can never be corrected in place,
+which is why the rule is that the words may not stand undated rather than that they must be gone.
+The fourth is the positive half of decision 311: the two genome readers it kept rather than
+deleted named no decision where they stand, so the one file saying that path is live read as an
+oversight. Review cycle 5 added four, and every one of them is a rule that could not refuse the
+case it was named for: the unsigned-verdict rule read the verdict field's presence and never its
+value, so fifteen of `docs/RELEASE.md`'s sixteen rows could be signed off one cell at a time while
+the summary table above them — the first statement of each row a reader meets — was read by
+nothing; the shared reader under both beside-the-blank guards sliced forward from the blank, so a
+signature written one line ABOVE it was outside the paragraph the comment said was being read; and
+the executed-coverage gate's two JUnit rulings, that an `xfail` is a skip and an `<error>` is an
+execution, were each held by prose because the fixture could write neither element. A guard
+shown failing against one spelling of the case it was written for is
+widened rather than replaced, and the widening is not a new id. That is
+what `test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` is for. Its second
+round added fourteen, and they are about the instruments' own records rather than about the app:
+the gate's failure summary counted (row, test) PAIRS and printed them as rows, so a partial report
+told an operator more requirements had failed than the map holds rows; decision 312's
+cross-naming, which is the only thing its split buys, was read by neither row's tests; §2's
+rotation clause named more gestures needing the old key than `spielplan-secrets` has and §14 risk
+7 pinned a second vocabulary on the re-import decision 163's refusal forbids; decision 311's Cost
+paragraph reported a §4.1 and §4.3 amendment nobody wrote; four of `docs/RELEASE.md`'s own
+citations pointed at lines their subjects are not on; the one leg whose first command can only
+skip in this lane was recorded as run; and the transcript decision 313 pasted went stale inside
+the diff that published it. Its third round added five, and they are the two directions a
+record can be wrong at once. §10's replacement DENIES the referent rather than dropping a
+phrase, and sixteen live carriers went on citing the clause it replaced — one of them the
+sentence /admin/data renders to an operator, one a shipped row's `spec` field, where the
+authority rule reads the section number and cannot see that the quotation beside it is what
+that section now refuses. The other two are Phase J's CC BY-SA material link, which shipped
+as neither built nor deferred and is ruled on in decision 320 and published as a debt rather
+than argued away in a component comment. A milestone whose thesis is that the records
+describe what shipped ends by holding its own records to it. Its fourth round added five, and
+they are what the milestone's own edits left behind. The 54a-54h fold did not only
+renumber §6.2 -- it moved the tilt and its centring lever into step 4, the no-re-ranking
+clause into step 7 and the budget-fit copy into step 8 -- and the audit this map records
+at :2404-2407 scopes itself to "all fifty step citations in THIS MAP". Eight of the 146
+under `backend/spielplan/` and `frontend/src/` resolved correctly before this milestone
+and to the wrong paragraph after it, `pool.py` promising a quote is "verbatim" from a step
+that does not contain it, which is the failure the fold existed to end reproduced one
+directory over by the fold itself. The other two are the release workflow's own output:
+`.gitignore` gained `.reports/` this milestone and `.dockerignore` did not, so leg 4's
+`up -d --build` uploads the run's JUnit and its unpacked browser report to the daemon on
+the corpus runner. Both guards derive what they hold from the file that moved -- the step
+numbers from the normative file, the directory from the workflow -- so the next fold and
+the next scratch directory re-point them rather than outliving them. M4.15's own series,
+below, keeps its numbers and loses its bold for the same reason M4.14's figure lost the word
+"across": those two guards read every match in this file against the CURRENT milestone's map, so
+only one milestone's arithmetic may stand in the form at a time. Demoted is not unheld, since
+review cycle 4: `test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes` reads the
+demoted sentence against the milestone whose BLOCK it sits in, so a figure goes on being
+re-derived after the milestone that published it closes. Nothing did that until this cycle, and
+M4.14's figure said 134 over a map holding 138 -- the four extra added to M4.14's own rows by this
+milestone, so the sentence was overtaken rather than neglected. [M4.16 cycle 4, M416-C4-LEDGER-01]
+
+**What it repairs is this project's record of itself, which is why it is the only milestone in the
+list whose subject is this file.** The normative document still described a TV client nobody can
+reach, a wizard step nobody can take, a key rotation with no surface and three Home Assistant
+seams the code does not have; fourteen shipped rows rested their authority on a register whose own
+status line disclaimed it; a comment named a module that was never written; the report hid exactly
+the partial waivers it was built to show; and rule 2 asked whether a named test EXISTS and never
+whether it RAN. Every one of them was survivable for the same reason — nothing read it — and the
+answer is the rule decision 184 states for measurements, generalised to prose: a document that
+states a fact about this tree is held to the tree by a guard, or it is a sentence that was true
+once. Decisions **288-320** record the calls it needed, five of them recording an unmet promise or
+an owed correction rather than repairing it here (296, 297, 301, 302, 303); 304-306 are review
+cycle 1's and are corrections to records this milestone itself wrote, which is the failure mode a
+documents milestone has — a record made true in the wrong direction. 307-309 are cycle 2's, and
+309 is the wave's one behaviour change: decision 291 struck three tables from the movie-data
+archive, which left every archive any shipped build had written refused by this one. 310 is cycle
+3's only number and is the same failure one artifact along: §10 called that archive **nightly**,
+over a module with no worker job, no route and no scheduler. The same cycle landed four
+spec amendments that needed no new number, because the decision mandating each had already been
+taken and only its amendment was outstanding: 167's three example strings, 169's *Ending a room*
+and 173's two axis-absence clauses, three of them owed since M4.12. It writes **NO
+migration**: 0024 was allocated to it by the roadmap's ledger and is NOT taken, because decision
+178's `rating_source` licence columns had already landed in `0018_read_layer.sql`, and 0019 stays
+permanently unused. **No waiver was added and the milestone was not lowered** — the standing set
+moved the other way, and is stated once under **The coverage map** above rather than a fourth time
+here. It ships one surface, decision 293's Data sources block on /account, and takes no §12 row.
+
+**And it adds the one instrument this build has never had.** `.github/workflows/release.yml` runs
+five legs in order, described under **Running it** above, and `docs/RELEASE.md` is where their
+answer is written down: the milestone gate returns a verdict on the MAP, and until this milestone
+nothing in the repository returned one on the BUILD. `ops/coverage_gate.py` is the same argument
+one level in — rule 2 could be satisfied by a test that skipped, and a `13/13` printed over a
+suite in which one of the thirteen never executed is the same defect as a document describing a
+surface the code does not have, surviving for the same reason.
+
+**28 rows the map already had were amended in place rather than duplicated,** twenty-one at field
+level and seven in their comments alone, for the reason M4.11's, M4.12's and M4.13's banners give:
+a second row would leave the stale sentence standing as a claim about the app. The twenty-eighth
+arrived in review cycle 2 and is the one standing waiver, `data-rules-platform-rating-display-only`:
+it had been listed as an exception here, on the ground that a waived row names no test, and that
+was the defect rather than the reason. Its waiver leans on two tests by name and neither was in
+any row's `tests`, so rule 2 could not hold them; registering them changes no count and gives the
+half the waiver does NOT waive something a rename cannot silently empty. One further row was
+amended and sits deliberately outside the list below, because the list's own clause is that each
+of its members names the tests asserting what it gained, and this one cannot:
+`jellyfin-acquisition-eval-home-assistant-is-additive-only`,
+the M7 row decision 290 reworded from three seams §11 called existing to three that are designated
+and none of which is built, which is unbuilt and owes none. One row was STRUCK rather than
+amended — M4.9's ml-link join row, deleted with its code and its two tests under decision 291, in
+the idiom the TV kiosk row's deletion set — and a struck row is not in this count either. The 28,
+named so an auditor can check each rather than take the count: `data-rules-platform-rating-display-only`,
+`data-rules-utf8-never-cleaned`,
+`library-rate-model-line-no-bundle`, `map-taste-admin-bundle-report-and-diff`,
+`platform-admin-gating-and-reprompt`, `platform-key-rotation-semantics` and
+`platform-session-cookie-contract` on M0;
+`jellyfin-acquisition-eval-finish-prompt-banner-path` on M1;
+`jellyfin-acquisition-eval-cpu-job-budgets`, `jellyfin-acquisition-eval-reimport-rebuild-set`,
+`jellyfin-acquisition-eval-silent-reask-stream` and
+`library-rate-home-greeting-uses-the-household-clock` on M2;
+`jellyfin-acquisition-eval-uniform-holdout-stream-never-tunes`,
+`tonight-rank-straddle-equals-eligible`, `tonight-rank-tap-to-tier-and-cancel` and
+`tonight-rank-tension-not-snapback` on M3; `tonight-rank-guest-not-borrowed-ledger`,
+`tonight-rank-no-within-evening-reranking` and `tonight-rank-result-card-inventory` on M4;
+`data-rules-rating-source-terms-survive-import`, `library-rate-runtime-is-formatted-in-one-place`
+and `library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned` on M4.9;
+`tonight-a-split-slate-reads-in-slate-order` on M4.12;
+`platform-a-model-bundle-may-cover-titles-the-install-never-seeded` and
+`platform-bundle-import-is-a-worker-job-not-a-request` on M4.14; and
+`platform-menus-and-overlays-dismiss`, `platform-shipped-font-weights-are-real` and
+`platform-the-frontend-type-check-runs-in-ci` on M4.15.
+
+**M4.15 shipped before it, and its `11/11` closed the red list it opened with.** Eleven rows were
+written before any source edit and `current_milestone` was
 raised in the same change, each naming the exact tests it owes rather than leaving `tests` off —
 M4.9's and M4.13's opening rather than M4.10's and M4.11's, because a row with no tests tells you
 only that a row is bare, while a row naming a test that does not exist yet tells you which stage
 owes what. That mattered more here than in either of them: the names spread over
-**49 ids across three pytest files and five e2e specs**, and half of these rules can be asserted at the
+**49 ids in three pytest files and five e2e specs**, and half of these rules can be asserted at the
 source or nowhere — `env()` resolves to 0 in every engine this suite runs unless one is asked to
 report an inset, and a coarse pointer is not something a headless desktop has — so a bare list would
 have hidden which layer each rule is held at. Three of the first twenty-five already existed and were repaired rather than written:
@@ -239,10 +509,10 @@ fifth e2e spec in the count above. The milestone wrote the other twenty-one, plu
 it adds to that M0 row, and those **twenty-two names were the test plan**
 (`docs/milestones/M4.15-plan.md`). The figure moved while they were being written, so the series is
 published in full here rather than left as a total a reader has to take on trust (decision 184):
-**21 ids** written against the plan's own rows, **3 ids** registered by the stages that wrote them
-onto rows that already stood, **1 id** the browser gate added, **10 ids** the first adversarial
-review cycle registered, **8 ids** the second and **6 ids** the third. That decomposition stood at "six more" for the
-first cycle until review cycle 2 added it up — a figure published as measured that the map had
+21 ids written against the plan's own rows, 3 ids registered by the stages that wrote them
+onto rows that already stood, 1 id the browser gate added, 10 ids the first adversarial
+review cycle registered, 8 ids the second and 6 ids the third. That decomposition stood at "six
+more" for the first cycle until review cycle 2 added it up — a figure published as measured that the map had
 overtaken, which is the id total's own defect one granularity down, and
 `test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` now sums the parts against
 the map rather than leaving the arithmetic to the reader. Cycle 1's ten are also what bring the
@@ -269,9 +539,15 @@ M4.13 it ships no new surface.** §6's preamble - "responsive PWA, phone-first (
 one-handed, swipe), desktop as progressive enhancement, installable, service-worker shell cache" — is
 normative, is the only sentence in the document that describes that box, and has never had an owner.
 §12 schedules screens; every surface milestone built its own correctly and left the chrome alone; and
-until these eleven rows this map named `06-responsive.spec.js` in no row at all. Its three
+`06-responsive.spec.js` was held by nothing in this map until M4.15's own two rows,
+`platform-every-touch-target-meets-the-token` and
+`platform-shell-clears-the-status-bar-and-the-toolbar`, took it. Its three
 `02-shell.spec.js` ids were held by M0's session-cookie contract and M4.9's model rail, neither of
-them the preamble, so nobody owed the box a test [review cycle 3: M415-C3-COV-01]. What the box
+them the preamble, so nobody owed the box a test [review cycle 3: M415-C3-COV-01; re-scoped at
+M4.16, when raising `current_milestone` past M4.15 put those two rows outside the
+current-milestone exclusion that had been hiding them, which
+`test_no_record_says_this_map_never_named_a_spec_it_did` calls the right outcome rather than a
+false alarm]. What the box
 turned out to contain is the
 milestone: an installed app whose header renders under the status bar and whose bottom tab bar
 renders under Safari's toolbar, because `app.html` asks for `viewport-fit=cover` and a translucent
@@ -295,7 +571,8 @@ instead is `ops/fetch-fonts.py` — the generator `fonts.css:4` had named since 
 exist — and a guard that asserts the rule rather than the bytes: a face declared against a file that
 does not carry that weight in its name is honest only where the file carries a wght axis. Decisions
 **267-286** record the calls it needed, four of them refusals, and it writes **no migration** — 0022
-is the highest applied, 0023 is M4.14's and 0024 is M4.16's. Two rows the map already had are
+is the highest applied, 0023 is M4.14's, and 0024 was allocated to M4.16, which did not take it
+(decision 292), so it joins 0019 as a number nobody may reuse. Two rows the map already had are
 amended in place rather than duplicated: M0's palette row, which forbade "no facet colour or user
 identity colour reuses the ember accent" while its own named guard whitelists `facet-mood` in as
 many words and reads `design.css` alone (decision 276), and M3's
@@ -352,18 +629,27 @@ shape of claim and then did not use it for either:
 this repository can fill it; the owner does, after the browser gate, and until then this milestone
 closes with a visible debt rather than a quiet one.
 
-**One of its ten exit measures is not reachable on this branch at all, and that is stated rather
-than engineered around (decision 273).** `npm --prefix frontend run check` stood at 28 errors and 1
-warning on a clean tree while the only static signal the frontend has was buried among them, and
-this milestone adds the step that runs it in CI. Twenty-seven of those errors are this lane's and
-all twenty-seven are gone: the branch closes at **1 error and 1 warning across 275 files**, the
-error being `src/routes/admin/data/+page.svelte:14`, which M4.14 owns in the sibling worktree this
-wave and which this lane did not open, and the warning `PosterCard.svelte`'s `line-clamp`, which
-the criterion does not count. So the frontend CI job is RED here until the two branches merge, and
-the check is neither narrowed nor suppressed to make the number look right: clause 10 of the exit
-criterion is met on the merge and not before. M4.14 is being built in parallel on its own stack and
-inserts itself into `MILESTONES` between M4.13 and M4.15 when the branches meet; the one-line
-conflict here and in that list is expected.
+**One of its ten exit measures was not reachable on the branch it was written on, and that was
+stated rather than engineered around (decision 273).** `npm --prefix frontend run check` stood at
+28 errors and 1 warning on a clean tree while the only static signal the frontend has was buried
+among them, and this milestone adds the step that runs it in CI. Twenty-seven of those errors were
+this lane's and all twenty-seven went; the twenty-eighth, `src/routes/admin/data/+page.svelte:14`,
+was M4.14's in the sibling worktree of that wave and this lane did not open it. So the frontend CI
+job closed RED here and said so, and the check was neither narrowed nor suppressed to make the
+number look right.
+
+**M4.14 merged at c31ef3d and its error went with it. RE-MEASURED AT M4.16 by running the command
+rather than by restating the branch's figure: 0 errors and 1 warning across 279 files** — the
+warning `PosterCard.svelte`'s `line-clamp`, which the criterion does not count — so clause 10 is
+met on this tree rather than on a merge yet to come. The 275 this paragraph published until M4.16
+was M4.15's own run and was already two files short by the time M4.16's Data sources component and
+its vitest file landed. The map's comment on `platform-the-frontend-type-check-runs-in-ci`
+publishes the same reading, and `test_the_two_records_publish_one_svelte_check_measurement`
+compares the two DOCUMENTS rather than re-deriving the number from a run — decision 184 owes that
+figure to a run and not to a guard, since `svelte-check` is a node command over a tree this suite
+does not build. Which is why both records had to move in one wave, and why this pair is the
+clearest small example of what M4.16 exists for: a guard that cross-checks two records agrees
+happily while both of them are stale, and the suite stays green over a number nobody has read.
 
 **M4.14 shipped before it, and its `12/12` closed the red list it opened with.** Twelve rows were
 written before any source edit and `current_milestone` was
@@ -373,10 +659,13 @@ rather than rule 1: `test_every_named_test_exists` printed one line per *test* t
 yet rather than one per bare row. That list — forty-seven names when the rows were filled, four of
 the files holding them not yet written — *was* the test plan (`docs/milestones/M4.14-plan.md`), and
 it was closed by writing those tests under those names: all twelve rows now name tests that exist —
-**134 ids in fourteen pytest files and one e2e spec**, and the count includes the nineteen
+**138 ids in fourteen pytest files and one e2e spec**, and the count includes the nineteen
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and never
 instead of one — they sit in the frontend's suite rather than in the fifteen files the figure
-names, so an auditor reconciling the two subtracts them first.
+names, so an auditor reconciling the two subtracts them first. Four of the 138 are M4.16's,
+added to two of these rows by its review cycles rather than by M4.14: the figure is what the map
+holds now and not what M4.14 closed with. It read 134 until a guard re-derived it, which is the
+whole argument for re-deriving one (decision 184). [M4.16 cycle 4, M416-C4-LEDGER-01]
 Review cycle 1's are appended to the rows they belong to rather than given rows of their own: the
 four-shape Postgres guard and the crash that leaves no staged tree, the
 reaper's two claims and the door's third window, the seed list's and the axis ledger's clears and
@@ -427,7 +716,7 @@ list beside the ids it names stays checkable at any later date, which is the rep
 count got in cycle 2 and the one thing a count published alone cannot offer.
 [M4.14 cycle 4, m414-c4-rec-05]
 Two more of cycle 1's tests sit on M4.5's and M4.9's rows rather than on this milestone's, so
-they are outside the 134: the ledger opened outside `_read_tsv`, and the rail line the import stopped
+they are outside the 138: the ledger opened outside `_read_tsv`, and the rail line the import stopped
 being able to write. Cycle 2 adds a third, on M4.8's row: the guard that holds this milestone's
 own amended-row count against the map; cycle 3 a fourth, on M4.5's: decision 162's boundary read
 over the adjudications ledger the bundle's own version names rather than over a literal `v1`, and
@@ -506,7 +795,9 @@ coordinate at all. 0023 backfills those to `unplaced` and adds `title_placement_
 ((placement = 'unplaced') = (placement_bundle IS NULL))`. Its number is the roadmap ledger's rather
 than the plan's (decision 250): 0016-0018 and 0020-0022 are applied and sha256-checksummed and none
 may be edited, 0019 was allocated to M4.10 and stays unused rather than being recycled, and 0024 is
-reserved for M4.16. README's `/data/artifacts` bullet carries the same rule for the operator.
+reserved for M4.16 — which took no migration either (decision 292), so 0024 stays unwritten on the
+same terms as 0019 rather than falling free. README's `/data/artifacts` bullet carries the same
+rule for the operator.
 
 **Its exit criterion is `ops/m414_exit_criterion.py` — the eighth `ops/m*_exit_criterion.py`, so the
 five guards in `test_static_contracts.py` that open with `assert len(EXIT_SCRIPTS) == …` move to 8 —
@@ -1200,6 +1491,12 @@ waiver is removed rather than narrowed and the row owes real tests. One waiver s
 feature-builder DB role, re-read again and still true — `grep -rni "create role|grant |revoke "`
 over `backend/migrations/` is still empty.
 
+[SUPERSEDED at M4.16: two stood, not one. That sentence counts
+`data-rules-platform-rating-display-only` and omits `library-rate-model-line-no-bundle`, which
+carried `waived` from M0 until M4.16 retired it. The grep it publishes is still the right one and
+was re-run; the count beside it was not. The standing set is stated once, under **The coverage
+map** above.]
+
 Two owner decisions were taken during it and are numbered in `docs/spec-v2.2-proposals.md`:
 **162** (the corpus supplies models; movie data seeds once; Spielplan owns all ids, minted from a
 range disjoint from the corpus's) and **163** (a DNA vocabulary change is a data migration, not
@@ -1209,7 +1506,8 @@ anywhere in the read path).
 
 Decision 162 rewrote two shipped-M0 rows rather than being weakened to fit them. Both said a
 second *content* bundle imports over the first; under 162 a re-import carries models, so the
-swap sequence, the diff report and the rebuild set all survive and only the content half goes.
+swap sequence, the migration report and the rebuild set all survive and only the content half
+goes.
 The rows were changed with the owner's approval, never to match what was built.
 
 M2's gate was red for most of the milestone, on purpose: that is what an in-progress milestone
@@ -1218,7 +1516,14 @@ gate closed, which is the rule this section describes rather than an exception t
 
 The two standing M0 waivers are backup rotation (no backup job exists yet) and the title
 card's no-bundle model line (unreachable until M5, when a locally acquired title can outlive a
-deactivated bundle). M1 closed the third — connector env-seeding, which was an implementation
+deactivated bundle). [SUPERSEDED at M4.16, and wrong twice over the tree it describes rather than
+merely overtaken by it: `platform-backup-rotation-and-ciphertext` carries fourteen tests and no
+`waived` key — M4.5 discharged it — and the two rows that actually carried one at the M4.16 branch
+point were `data-rules-platform-rating-display-only` and `library-rate-model-line-no-bundle`, the
+first of which this sentence never names at all. What the pair was on the day the paragraph was
+written is not re-derivable from this tree and is not invented here (decision 184). The standing
+set is under **The coverage map** above; the M3 and M4 re-reads below are real and both greps
+still answer as recorded.] M1 closed the third — connector env-seeding, which was an implementation
 gap, not a test gap, and now has both. M3 re-read both survivors and both still hold, checked
 rather than assumed: `grep -rn "backup\|pg_dump"` over `ops/`, `docker-compose.yml` and the
 worker still finds only the two volume mounts, and `grep -rni "create role\|grant \|revoke "`
@@ -1316,10 +1621,26 @@ it — proposal 120's exact bug — passed the entire suite.
 
 This is not the milestone gate, and the difference is the point of having both. The gate asks
 whether every requirement this repository has written down has a test that can fail; it is
-mechanical, it runs in CI on every push, and `test_spec_coverage.py` is its judge. The checklist
-asks the four questions the suite cannot answer at all, because each one needs something no CI job
-has: a real bundle, a real dump on a real stack, a built image, and a real phone. Run it before a
-release, not before a merge. A failure here is a finding, not a red build.
+mechanical, it runs in CI on every branch push, and `test_spec_coverage.py` is its judge. The
+checklist asks the four questions the suite cannot answer at all, because each one needs something
+no hosted CI job has: a real bundle, a real dump on a real stack, a built image, and a real phone.
+Run it before a release, not before a merge. A failure here is a finding, not a red build.
+
+**Since M4.16 the first two are also legs of `.github/workflows/release.yml`,** which is written to
+run on the household's own box where the corpus already is — so items 1 and 2 become a machine's
+answer, plus the halves a machine cannot take: the second restore pass under a different
+`SECRETS_KEY`, and Jellyfin authenticating against a real server. **Become, not are.** That
+workflow wants the same unregistered `[self-hosted, spielplan-corpus]` runner as the corpus check
+below, and until one exists it is dead YAML that has never been dispatched: no leg of it has ever
+returned an exit code, and `docs/RELEASE.md` §2.1 records that absence rather than this file
+implying a run. Until then every item below is a person's, exactly as it was. The browser pass is a
+leg too, over the fixture
+bundle rather than the corpus, which is what `e2e/run.mjs` measures and what `10-home.spec.js`
+asserts counts against. Items 3 and 4 stay entirely a person's: nothing in this repository has
+ever built a layer of `ops/backend.Dockerfile`, and no runner installs a PWA or receives a real
+web push. What the workflow buys is that the legs it does run cannot be skipped, forgotten or
+reported green from a partial run, and that each hands back its artifact either way; what it does
+not buy is a verdict, which is `docs/RELEASE.md`'s and the owner's.
 
 1. **Real-bundle import smoke.** Point `CORPUS_BUNDLE_DIR` at a real bundle and run the backend
    suite, so `test_bundle_shapes.py` holds the actual bundle to the committed manifest; then import

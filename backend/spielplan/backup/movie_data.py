@@ -62,6 +62,12 @@ from spielplan.db import pool as db_pool
 
 # Bumped when the layout changes in a way a reader cannot infer. A restore refuses a format it
 # does not know rather than mis-reading it: half a restored content spine is worse than none.
+#
+# A table LEAVING `TABLES` is not such a change and does not bump this: `RETIRED` below names
+# every one that has, so an older archive is read exactly as far as this build still has a use
+# for it and the reader infers nothing. A table JOINING `TABLES` is a different fact -- the older
+# archive really is missing a layer, and `missing [...]` is a substantive answer rather than a
+# nominal one. [decision 309]
 FORMAT = 1
 MANIFEST = "manifest.json"
 
@@ -102,10 +108,19 @@ TABLES: tuple[Table, ...] = (
     Table("public", "title_video"),
     Table("public", "credit"),
     Table("public", "award"),
-    # The MovieLens genome + link slice named in §10's manifest.
-    Table("public", "ml_genome_tag"),
-    Table("public", "ml_link"),
-    Table("public", "ml_genome_score"),
+    # The MovieLens genome + link slice stood here while the importer filled it. Decision 291
+    # stops importing it, upholding `media-graph-spec_v1.1.md:175` -- "validation artifact only,
+    # never shipped or imported into the app" -- so `0003_content.sql`'s three tables stay in the
+    # schema and are empty on every install THIS BUILD seeds. Three entries writing three empty
+    # COPY streams would cost nothing but say something false: `manifest.json` is what a restore
+    # reads back, and a table named there is a table the household is told travelled with its
+    # spine. Zero-imputation is the path those 983 columns take wherever the rows are absent,
+    # which is the measurement decision 291 rests on -- and on a box seeded BEFORE 291 they are
+    # not absent, which is why this paragraph says what this build imports rather than a property
+    # of every install. `RETIRED` below carries what the subtraction costs that box; this half
+    # said it unconditionally until M4.16 cycle 4 and contradicted its own file fifty lines down.
+    # [decisions 291, 309 and 311]
+
     # §10 calls `rating_source` "mandatory always", and §4.1 rule 4 freezes its ids — they key
     # `fitted_cuts`, `equating_map` and the dataset arrays, so losing the table loses the
     # meaning of every calibration artifact that survives alongside it.
@@ -137,6 +152,33 @@ TABLES: tuple[Table, ...] = (
     Table("display", "platform_rating"),
     # §10: the review bodies, "needed for future re-extraction and text embedding".
     Table("review_store", "review"),
+)
+
+# Tables this archive used to carry and no longer does.
+#
+# An archive outlives the build that wrote it, and that is the whole point of it: decision 162
+# makes it the household's copy of its content, and README's Recovery block has the operator write
+# one to a stick and restore it into a rebuilt box -- a build at least as new as the writer and
+# usually newer. So `TABLES` narrowing is a version boundary rather than an edit. The manifest's
+# table set is checked below in both directions, and without this set every archive written by
+# every shipped build up to M4.15 is refused by this one as "unknown ['public.ml_genome_score',
+# 'public.ml_genome_tag', 'public.ml_link'], missing []" -- a sentence that reads as a corrupt or
+# foreign file and is neither, on the one recovery gesture decision 162 leaves the household.
+#
+# Named rather than tolerated by class, and skipped rather than loaded. Named, because the other
+# direction of that check is load-bearing: an archive arrives on a stick, over a channel nobody
+# controls, and a table this build does not archive has no business being COPYed into the install
+# from a file. Skipped, because decision 291's ruling is that the slice is not imported, and a
+# recovery path that loaded it anyway would reverse a decision through the back door.
+# `0003_content.sql` keeps the three tables and they are empty on every install THIS BUILD seeds,
+# so a restore that passes over them leaves precisely the install a post-291 archive would have
+# produced. On an install seeded BEFORE decision 291 the rows survive and `placement/features.py`
+# still reads them, so this subtraction does change that box's placement inputs from populated to
+# zero -- which is the restore doing what decision 309 rules, not a silent loss, and is why §4.1
+# and §4.3 now state what this build IMPORTS rather than a property of every install.
+# [decisions 291, 309, 311; M4.16 cycle 4, M416-C4-GEN-01]
+RETIRED: frozenset[str] = frozenset(
+    {"public.ml_genome_tag", "public.ml_link", "public.ml_genome_score"}
 )
 
 # Columns of an archived table that the archive deliberately does not carry.
@@ -172,6 +214,16 @@ class ArchiveReport:
     tables: dict[str, int]
     sequences: dict[str, int]
     bytes: int
+    # What this install still HOLDS and this archive does not carry (`RETIRED`). Decision 309
+    # gave the restore leg the named set, the field and the operator's line, on the ground
+    # that a count reporting 31 tables for an archive that named 34 is a record that is true
+    # and describes the wrong thing. This leg is where that mismatch is the COMMON case
+    # rather than the rare one: 309's own is an archive written by an older build, while any
+    # box seeded up to M4.15 still holds the slice (decision 311) and hands this build three
+    # populated tables to pass over. It is also the case 309's mechanism cannot reach --
+    # `RestoreReport.retired` is read off the MANIFEST, so the post-291 archive written here
+    # carries nothing to name on the way back either. [decisions 291, 309, 311]
+    retired: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -180,6 +232,7 @@ class ArchiveReport:
             "rows": sum(self.tables.values()),
             "tables": len(self.tables),
             "sequences": self.sequences,
+            "retired": list(self.retired),
         }
 
 
@@ -189,6 +242,11 @@ class RestoreReport:
     tables: dict[str, int]
     sequences: dict[str, int]
     seeded: str | None = None
+    # What the archive named and this build no longer keeps (`RETIRED`). Reported rather than
+    # passed over in silence: the operator handed in an archive naming 34 tables, and a line
+    # saying 31 with no account of the other three is the quiet half of the defect 309 repairs
+    # -- a record that is true and describes the wrong thing. [decision 309]
+    retired: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -197,6 +255,7 @@ class RestoreReport:
             "tables": len(self.tables),
             "sequences": self.sequences,
             "seeded": self.seeded,
+            "retired": list(self.retired),
         }
 
 
@@ -355,8 +414,8 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
     One `repeatable_read` read-only transaction around every read below, and the sequence
     positions taken *after* the rows rather than before them. Both are about the same concurrent
     writer — the worker's Jellyfin sync, which mints a title the moment it meets a library item
-    it does not know. Thirty-three COPYs with no enclosing transaction are thirty-three
-    snapshots, and a title minted between two of them lands in the archive as a `credit` row
+    it does not know. A COPY per archived table with no enclosing transaction is a snapshot
+    per table, and a title minted between two of them lands in the archive as a `credit` row
     referencing a `title` that is not there: the restore's single transaction aborts on the
     foreign key, at the far end, on an install with nothing in it. Sequence state is not
     transactional, so reading the positions after the loop is what makes each one an upper bound
@@ -384,6 +443,7 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
     created_at = datetime.now(UTC).isoformat()
     positions: dict[str, dict[str, object]] = {}
     counts: dict[str, int] = {}
+    retired: list[str] = []
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".partial")
     try:
@@ -406,6 +466,25 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
 
                 for sequence in sequences:
                     positions[sequence] = await _position(conn, sequence, owners[sequence])
+
+                # Inside the same repeatable_read snapshot as the counts above, so the two
+                # halves of the sentence `_run` prints are one reading of one install rather
+                # than two taken a minute apart. What is at stake is the record and not the
+                # rows: section 2's nightly `pg_dump` is the whole database with no
+                # `--exclude` and carries these three, which is where the printed line sends
+                # the operator -- this archive could not carry them without reversing
+                # decision 291, and the restore leg would decline them if it did.
+                # Interpolated from this module's own literals, the way `_LOCK` below is
+                # built and the restore's occupancy scan is, never from anything an operator
+                # types; a migration dropping one of these tables edits `RETIRED` in the same
+                # change, which is the rule `TABLES` already lives under.
+                # [decisions 291, 309, 311; M4.16 cycle 4, M416-C4-GEN-08]
+                for qualified in sorted(RETIRED):
+                    schema, _, table = qualified.partition(".")
+                    if await conn.fetchval(
+                        f'SELECT EXISTS (SELECT 1 FROM "{schema}"."{table}")'
+                    ):
+                        retired.append(qualified)
 
             archive.writestr(
                 MANIFEST,
@@ -452,6 +531,7 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
         tables=counts,
         sequences=_positioned(positions),
         bytes=path.stat().st_size,
+        retired=tuple(retired),
     )
 
 
@@ -579,6 +659,13 @@ async def restore_archive(conn: asyncpg.Connection, path: Path) -> RestoreReport
 
         entries, carried_positions = _shape(manifest)
         known = {t.qualified for t in TABLES}
+        # Subtracted once, here, so that everything below -- the table-set check, the member
+        # check, the occupancy scan and the COPY loop -- sees the archive as this build would
+        # have written it. The occupancy scan going with them is deliberate and not a hole: an
+        # install holding genome rows holds titles too (the importer never filled one without
+        # the other), `title` is scanned either way, and the refusal names it. [decision 309]
+        retired = sorted({f"{e['schema']}.{e['name']}" for e in entries} & RETIRED)
+        entries = [e for e in entries if f"{e['schema']}.{e['name']}" not in RETIRED]
         named = [f"{e['schema']}.{e['name']}" for e in entries]
         # Both directions. A table this build does not archive has no business being COPYed
         # into the install from a file, and a table it does archive going missing from the
@@ -695,6 +782,7 @@ async def restore_archive(conn: asyncpg.Connection, path: Path) -> RestoreReport
         tables=counts,
         sequences=_positioned(carried_positions),
         seeded=None if seed is None else seed["version"],
+        retired=tuple(retired),
     )
 
 
@@ -731,6 +819,19 @@ async def _run(command: str, path: Path) -> int:
                     f"{len(written.tables)} tables, {written.bytes} bytes. It carries no user "
                     "state and no connector secret -- section 2's nightly dump is what backs "
                     "those up."
+                    # Conditional, for the reason the restore branch below is: a box this
+                    # build seeded holds nothing to name, and a clause printed on every write
+                    # is a clause nobody reads by the third one. Named rather than counted --
+                    # "3 tables were passed over" is a number the operator cannot check
+                    # against the install in front of them. [decisions 291, 309, 311]
+                    + (
+                        " This install still holds rows in "
+                        + ", ".join(written.retired)
+                        + ", loaded by a build before decision 291; this archive does not "
+                        "carry them, and that same nightly dump is where they are."
+                        if written.retired
+                        else ""
+                    )
                 )
                 return 0
             restored = await restore_archive(conn, path)
@@ -738,6 +839,13 @@ async def _run(command: str, path: Path) -> int:
                 f"restored {restored.path}: {sum(restored.tables.values())} rows into "
                 f"{len(restored.tables)} tables, sequences positioned"
                 + (f", seeded by {restored.seeded}" if restored.seeded else "")
+                + (
+                    ". This archive was written by a build that still archived "
+                    f"{', '.join(restored.retired)}; this one does not keep them, and "
+                    "their entries were passed over (decision 291)"
+                    if restored.retired
+                    else ""
+                )
                 + ". Restart the backend and the worker."
             )
             return 0
@@ -795,6 +903,7 @@ if __name__ == "__main__":  # pragma: no cover - console-script entry point
 
 
 __all__ = [
+    "RETIRED",
     "TABLES",
     "ArchiveReport",
     "RestoreRefused",

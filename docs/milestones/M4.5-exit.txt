@@ -1,0 +1,43 @@
+
+M4.5 exit criterion -- bundle v20260828
+
+1. Validation (§10 step 1)
+  [PASS] the bundle the corpus built validates clean (3.8s)
+
+2. Import (§10; the migration report's counts per table)
+  [PASS] the import reports ok (126s)
+  [PASS] every shipped table is loaded with a count or skipped with a reason
+         29 shipped, 9 skipped with a reason
+  [PASS] title loaded 19,071 rows
+  [PASS] title_meta loaded 46,318 rows
+  [PASS] credit loaded 281,655 rows
+  [PASS] person loaded 84,881 rows
+  [PASS] dna_tag loaded 31,540 rows
+  [PASS] dna_projected loaded 223,136 rows
+
+3. The id partition (decision 162)
+  [PASS] every seeded title id is below the app's floor (max 21,442 < 1e9)
+  [PASS] the next app-minted id is 1,000,000,000 -- above the floor and above the seed
+
+4. The title card (§4.1 title_meta; §6.0)
+  [PASS] the card's text and artwork resolved from title_meta / title_video
+         of 19,071 titles: 11,003 overview, 6,827 tagline, 10,021 poster, 8,303 trailer
+  [PASS] 9,941 titles kept meta rows from more than one source
+
+5. Stage 9's input (§4.3; §8 stage 9)
+  [PASS] sampled 5 titles that carry every block's inputs
+  [PASS] every content block puts values in the columns the contract declares
+         dna_x=150 dna_p=347 genome=0 genre=50 keyword=970 credit=14 country=17 award=10 meta=20
+  the count-encoded blocks, trained max against ours:
+         genre: trained max 6, ours max 4
+         keyword: trained max 7, ours max 6
+         credit: trained max 5, ours max 4
+         country: trained max 3, ours max 3
+         award: trained max 142, ours max 91
+
+6. Seed once, models re-import (decision 162)
+  [PASS] a second content import is refused at validation, before it writes
+         movie data was already seeded by bundle 'v20260828' (decision 162: content is exported once and imported once; every later title is acquired by this app). A sec
+  [PASS] owned titles still unplaced after import: 0
+
+17/17 checks passed

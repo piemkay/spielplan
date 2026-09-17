@@ -39,11 +39,18 @@ def denied_tables(tables: Iterable[str]) -> list[str]:
 
 # Measured expectations from the spec. Present as *notes* with the observed value next to the
 # expected one, so a re-import diff shows drift instead of hiding it.
+#
+# Rule 8's row count is no longer one of them. Rule 8 as it read until M4.16 named "the 73
+# known-mojibake review rows", and `mojibake_review_rows: 73` sat in this dict as a fourth
+# expectation that nothing read and nothing could check: `dna_shared_pairs` is the only key this
+# module ever prints, and no artifact in this tree enumerates those rows. The amended clause is a
+# heuristic whose census is 86 marked rows and 0 repairs over 485,602, which `importer/reviews.py`
+# reports as a warning; a second place to read 73 from was only ever a second place to believe it.
+# [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
 EXPECTED = {
     "dna_shared_pairs": 14_181,      # rule 1
     "dna_extracted_titles": 2_016,   # rule 1
     "dna_projected_titles": 11_324,  # rule 1
-    "mojibake_review_rows": 73,      # rule 8
 }
 
 # decision 162: "the model bundle carries an identity column row-aligned to its title ids so a
@@ -602,6 +609,20 @@ def validate_reviews(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
 # 0015:80 keys a membership row to `title_list(id)`, which is `seed_list` under the corpus's
 # name. A list of "the app's FKs" that omits two of them checks what it happens to remember.
 # [M4.14 step B3, finding 2.9]
+#
+# Both this tuple and `_NOT_NULL_COLUMNS` below are about what a COPY will hit, so both name only
+# tables this app actually loads. They did not: decision 291 declined the MovieLens slice and left
+# one foreign key and five NOT NULL expectations standing over `ml_genome_score` and
+# `ml_genome_tag`. Neither loop keys off `load.MAPPINGS` -- the duplicate loop does, which is why
+# that one disarmed itself and these two did not -- and the tables still arrive on every real
+# import, because the corpus is NOT asked to re-cut the bundle. So an export whose cut dropped a
+# tag one score row still names would have refused the household's ONE content seed (decision 162)
+# over a table this build has decided it does not want, leaving the operator an export-side fix to
+# data the app will never read. Decision 291's own clause is that the importer accepts a bundle
+# with or without the slice. The rule, not the two names, is held by
+# `test_bundle_validation.py::test_every_table_the_integrity_gates_name_is_one_this_app_actually_loads`,
+# so the next declined table cannot leave a gate behind it. [decision 291; M4.16 cycle 1,
+# M416-291-03]
 _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("dna_tag", "title_id", "title", "id"),
     ("dna_projected", "title_id", "title", "id"),
@@ -622,7 +643,6 @@ _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("rating_title_map", "title_id", "title", "id"),
     ("rating_title_map", "source_id", "rating_source", "id"),
     ("watchlist", "title_id", "title", "id"),
-    ("ml_genome_score", "tag_id", "ml_genome_tag", "tag_id"),
 )
 
 # Bundle columns COPY will hit that are NOT NULL on the Postgres side and have no rule 6
@@ -630,12 +650,18 @@ _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
 # the one transaction that carries the whole seed, which `app.py:113-117` turns into the same
 # empty-report 500 as the orphans above. Named as the corpus names them, against the migration
 # that declares the target NOT NULL. [M4.14 step B3, finding 2.9]
+#
+# The five `ml_genome_*` entries that stood here went with the slice. `0003_content.sql` still
+# declares those columns NOT NULL and its tables stay (decision 291), but no import this build
+# performs writes a row into them -- they are empty on every install THIS BUILD seeds, and only a
+# box seeded before 291 still carries rows there (decision 311) -- so the failure message's own
+# sentence -- "the column this app loads them into is NOT NULL" -- had stopped being true of
+# them. Until M4.16 cycle 4 this gave that emptiness as unconditional, which is the universal
+# decision 311 narrowed everywhere else; the phrase is not repeated here, because the rule that
+# now reads for it is a substring search and a quotation would redden the repair. See the tuple
+# above for the argument.
+# [M4.16 cycle 1, M416-291-03; decision 311, cycle 4]
 _NOT_NULL_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("ml_genome_score", "movie_id"),        # 0003: PRIMARY KEY (ml_movie_id, tag_id)
-    ("ml_genome_score", "tag_id"),          # 0003: and a FK to ml_genome_tag(tag_id)
-    ("ml_genome_score", "relevance"),       # 0003: relevance real NOT NULL
-    ("ml_genome_tag", "tag_id"),            # 0003: tag_id integer PRIMARY KEY
-    ("ml_genome_tag", "tag"),               # 0003: tag text NOT NULL
     ("award", "award"),                     # 0003: award.body text NOT NULL
     ("title_video", "key"),                 # 0018: PRIMARY KEY (title_id, source, key)
     ("dna_tag", "facet"),                   # 0004: facet text NOT NULL (bespoke loader)
@@ -1405,7 +1431,7 @@ def _read_bundle_identity(bundle_root: Path, report: ImportReport) -> None:
         report.fail(
             "bundle-identity",
             "BUNDLE.json records no `bundle_version`; an import stamped 'unknown' cannot be "
-            "told apart from the next one (§10's diff report), and the artifact directory it "
+            "told apart from the next one (§10's migration report), and the artifact directory it "
             "names would be shared by every bundle",
         )
     else:
@@ -1449,10 +1475,11 @@ def _validate_nullable_pk_columns(payload: dict[str, Any], report: ImportReport)
 
     Measured on v20260828, which is why the rule is not the shorter "not TEXT is a failure": the
     real bundle declares four entries and two of them are INTEGER (`ml_genome_score.movie_id`
-    and `.tag_id`). This app coalesces neither - they are NOT NULL on both sides and carry no
-    rule 6 answer at all - and `_validate_integrity`'s NOT NULL scan is what stands behind them,
-    as the corpus's own note does when it asserts every listed column NULL-free in that bundle.
-    Failing on affinity alone would refuse the only bundle that exists. [M4.14 step B3]
+    and `.tag_id`). This app coalesces neither, and since decision 291 it does not load them at
+    all - the slice is declined, so no COPY reaches those columns and nothing here can be owed
+    about them. Failing on affinity alone would refuse the only bundle that exists.
+    [M4.14 step B3; corrected at M4.16 cycle 1, M416-291-03, where the same decision removed
+    `_validate_integrity`'s NOT NULL scan over the slice that this paragraph used to lean on]
     """
     declared = payload.get("nullable_pk_columns")
     if not isinstance(declared, dict):

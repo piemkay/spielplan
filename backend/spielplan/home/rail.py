@@ -374,7 +374,7 @@ def duel_line(a: str, b: str, outcome: str, *, context: str, selection: str) -> 
 
 
 def session_answer_line(participant: str, pair: int, answer: str) -> str:
-    """`session_answer(p, pair 4) = A — pool-centred tilt` (§6.7, §6.2 step 5's centring lever)."""
+    """`session_answer(p, pair 4) = A — pool-centred tilt` (§6.7, §6.2 step 4's centring lever)."""
     return f"session_answer({participant}, pair {pair}) = {answer} — pool-centred tilt"
 
 

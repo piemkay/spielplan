@@ -169,9 +169,21 @@ services:
     # §2 budgets the nightly dump in minutes and §10 makes "restart backend + worker" a routine
     # gesture, so Docker's 10s default SIGKILLs mid-`pg_dump`: a `.partial` left behind, the pool
     # never closed, the "worker stopped" line never written, and the child `pg_dump` orphaned.
-    # 5m covers the corpus dump with room. It costs nothing on a normal stop — SIGTERM sets the
-    # stop event and the loop exits at the next tick boundary. This milestone does not cancel a
-    # *running* job (that needs `dump()` to hold the Popen); the grace period is what buys the
-    # time instead. [M4.7 ops-08]
-    stop_grace_period: 5m
+    # It costs nothing on a normal stop — SIGTERM sets the stop event and the loop exits at the
+    # next tick boundary. This milestone does not cancel a *running* job (that needs `dump()` to
+    # hold the Popen); the grace period is what buys the time instead. [M4.7 ops-08]
+    #
+    # 10m, not 5m, and the pair is one edit. `worker.BUNDLE_IMPORT_TIMEOUT` is PINNED to this
+    # value — a budget past the grace would promise time that `docker compose stop` takes away —
+    # and `backend/tests/test_box_claims.py` asserts the two equal in both directions, so moving
+    # either alone is a red build. M4.14 measured the real-bundle import job at 213 s on the dev
+    # NVMe workstation with a warm page cache, which left a 1.4x margin;
+    # `.github/workflows/release.yml`'s leg 4 is WRITTEN to run that same import on a runner
+    # registered inside WSL or a Linux VM on the household's own box, and that runner has never
+    # been registered, so its speed under containerised I/O has never been measured. 1.4x over an
+    # unmeasured virtualisation cost is a release leg failing on the hardware rather than on the
+    # build. 600 s is 2.8x the measurement. The corpus dump, which is what this number was
+    # originally sized for, is unaffected: it was measured at 35s.
+    # [decisions 300 and 316; M4.14 cycle 4, m414-c4-waveE-03; M4.16 cycle 4, REL-C4-01]
+    stop_grace_period: 10m
     restart: unless-stopped

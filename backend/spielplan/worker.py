@@ -707,7 +707,7 @@ PHASE_FAILED = "failed"
 # and against `docker-compose.yml`'s `stop_grace_period`. Named here as well as passed there
 # because `_reap_abandoned_import` is the other half of it: the age at which a claim nothing is
 # going to finish stops being "running" is the age at which this loop would have abandoned it.
-BUNDLE_IMPORT_TIMEOUT = 300.0
+BUNDLE_IMPORT_TIMEOUT = 600.0
 
 
 async def _claim_bundle_import(conn) -> asyncpg.Record | None:
@@ -1080,23 +1080,36 @@ JOBS: tuple[Job, ...] = (
     # cost: no fit may be written across §10's flip, which is why `_tick` also skips `MODEL_JOBS`
     # while that lock is held instead of merely tolerating that they cannot run.
     #
-    # 300 s IS THE STOP GRACE, AND IT IS NOT A MARGIN CHOSEN OVER A MEASUREMENT. This line read
+    # 600 s IS THE STOP GRACE, AND IT IS NOT A MARGIN CHOSEN OVER A MEASUREMENT. This line read
     # "2.4x the 127 s measured on the real bundle", and 127 s is M4.5's measurement of the work
-    # INSIDE THE REQUEST, which this milestone superseded with its own: `ops/m414_exit_criterion
-    # .py` recorded the job at 213 s from the press in all three runs (`docs/TESTING.md`), of
-    # which ~205 s is inside the `asyncio.wait_for` below once the 5 s disconnect, the child
-    # worker's start and the poll granularity are taken off. So the real margin is about 1.4x on
-    # an NVMe box with a warm page cache, not 2.4x, and a box a third slower cannot finish an
-    # import at all: `_tick` cancels, the arm below drops the staged tree, `_reap_abandoned
-    # _import` closes the row, and the retry reproduces it exactly.
+    # INSIDE THE REQUEST, which M4.14 superseded with its own: `ops/m414_exit_criterion.py`
+    # recorded the job at 213 s from the press in all three runs (`docs/TESTING.md`), of which
+    # ~205 s is inside the `asyncio.wait_for` below once the 5 s disconnect, the child worker's
+    # start and the poll granularity are taken off. At 300 s the real margin was about 1.4x on an
+    # NVMe box with a warm page cache, and a box a third slower could not finish an import at
+    # all: `_tick` cancels, the arm below drops the staged tree, `_reap_abandoned_import` closes
+    # the row, and the retry reproduces it exactly.
     #
-    # The number does not move, because it is pinned rather than sized: it is this service's
-    # `stop_grace_period` in `docker-compose.yml`, and a budget past the grace would promise time
-    # that `docker compose stop` takes away. Plan step E2 asks for both "generously above the
-    # measured" and "honour the stop grace", and with the grace at 5m only the second is
-    # available here - the grace itself is M4.7's, which plan §8 puts outside this milestone. So
-    # the honest statement is the ceiling and its cost, not an arithmetic that flattered it.
-    # [M4.14 step E2, finding 2.1; cycle 4, m414-c4-waveE-03; §5.3, §10]
+    # Which is the box this release leg will be run on, whenever it first runs.
+    # `.github/workflows/release.yml`'s leg 4 imports the real bundle through this job, and its
+    # runner is the household's own workstation reached through a `[self-hosted,
+    # spielplan-corpus]` runner registered inside WSL or a Linux VM (`docs/TESTING.md`, "Running
+    # it"). NOBODY HAS TIMED IT: no such runner has ever been registered, so the budget is sized
+    # off the 213 s measurement plus the unmeasured cost of containerised I/O under a hypervisor,
+    # and not off a comparison anyone made. At 300 s a leg one third slower than an NVMe host
+    # fails on the build's hardware rather than on the build - the gate reporting on itself -
+    # which is the risk the number buys out. Decision 300 moves the ceiling to 600 s and moves
+    # this service's
+    # `stop_grace_period` in `docker-compose.yml` with it, in one diff, because the number is
+    # PINNED rather than sized: a budget past the grace would promise time that `docker compose
+    # stop` takes away, and `test_box_claims.py` holds the two equal in both directions. Stated
+    # against the measurement rather than as an arithmetic that flatters it: 600 s is 2.8x the
+    # 213 s this job was measured at, which is a box roughly two and a half times slower, and the
+    # cost of the larger number is a longer `docker compose stop` when a SIGTERM lands mid-import.
+    # The 213 s itself was measured on the dev NVMe workstation with a warm page cache and NOT on
+    # "the reference box", which in this codebase is §2's 4 vCPU GPU-less VM; the sentence above
+    # once claimed the release runner was slower than a machine the measurement was not taken on.
+    # [M4.14 step E2, finding 2.1; cycle 4, m414-c4-waveE-03; decisions 300 and 316; §5.3, §10]
     #
     # An abandonment at the budget cancels the attempt: asyncpg rolls the transaction back,
     # `import_bundle`'s `except BaseException` arm drops the staged tree it had written, and the

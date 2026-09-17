@@ -71,8 +71,31 @@ jobs:
       - run: uv pip install -e "backend[dev]"
       - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - run: npm --prefix backend/tests/pglite ci || npm --prefix backend/tests/pglite install
+      # `--junitxml`, and that is the whole of this job's change. The report is the per-push record
+      # of WHICH tests ran, in the form `ops/coverage_gate.py` reads -- the question rule 2 of the
+      # coverage map cannot answer: not whether a named test EXISTS, but whether it RAN.
+      #
+      # What it is NOT is the release gate's input, and this comment said it was. Leg 2 of
+      # `release.yml` reads the JUnit LEG 1 wrote in its own job, against its own Postgres, plus
+      # the `playwright-report` artifact this workflow uploads; its single `download-artifact`
+      # step names that report and nothing else, so `junit-backend` and `junit-integration` are
+      # downloaded by no workflow at all. They are kept for a reader. Claiming otherwise gave the
+      # maintainer weighing this step's worth a premise the file it named contradicts, which is
+      # the defect class this milestone exists to remove.
+      #
+      # The `test_migrations.py` family closes 9 rows, and eight of them go dark without
+      # `backend/tests/pglite/node_modules`, which is why this job installs it; leg 2 installs it
+      # for itself, for its own stated reason. The clause stays on ONE line because the guard that
+      # holds it flattens whitespace and a YAML `#` would land between the count and its noun.
+      # [decision 317; M4.16 cycle 4: M416-C4-CI-01, M416-C4-CI-02]
       - name: pytest (no database)
-        run: python -m pytest backend/tests -q
+        run: python -m pytest backend/tests -q --junitxml=.reports/junit-backend.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-backend
+          path: .reports/junit-backend.xml
+          retention-days: 7
 
   integration:
     # The tests that only exist against a real server: COPY resolves its encoders from the
@@ -95,10 +118,23 @@ jobs:
       - run: uv venv
       - run: uv pip install -e "backend[dev]"
       - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      # The second half of the pair above, and the one that matters more to whoever opens it: the
+      # integration layer is where a row's evidence disappears quietly, because a fixture that
+      # cannot reach Postgres skips rather than fails (`tests/conftest.py`), and `-rs` is not on
+      # by default. This report is what tells "the database was there" from "the database was
+      # there and the test ran" -- for a reader of this run, not for the release gate, which
+      # reaches the same layer through leg 1's own compose stack and reads leg 1's own JUnit.
+      # [decision 317; M4.16 cycle 4, M416-C4-CI-01]
       - name: pytest (real Postgres 16)
         env:
           TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5432/spielplan_test
-        run: python -m pytest backend/tests -q
+        run: python -m pytest backend/tests -q --junitxml=.reports/junit-integration.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-integration
+          path: .reports/junit-integration.xml
+          retention-days: 7
 
   frontend:
     runs-on: ubuntu-latest
@@ -187,10 +223,21 @@ jobs:
       # It runs before the stack because Docker creates a missing mount source as root, and it is
       # spent once: `e2e/reset.mjs` empties `data/artifacts` rather than removing it, precisely so
       # that this step still holds after the reset it runs in the middle of. [M4.7 sec-08]
+      #
+      # And data/import comes straight back, since decision 299: `node e2e/run.mjs` below rebuilds
+      # that directory with `make_bundle` as THIS runner's user, and creating `content.sqlite` or
+      # an entry under `artifacts/` needs write on the DIRECTORY rather than on a file. Handing it
+      # to uid 1000 and stopping there killed the e2e job at run.mjs's first statement on every
+      # hosted runner, whose user is 1001. The container only ever reads it: a directory bundle is
+      # opened in place, and the one uid-1000 write this directory takes is `_unpack`'s
+      # `.unpacked-*` beside an ARCHIVE, which the fixture never is. The `chown -R` above stays as
+      # it is, because what it protects against is Docker creating a missing mount source as root.
+      # [M4.16 cycle 1, M416-REL-05]
       - name: give the container's uid the bind mounts it writes
         run: |
           mkdir -p data/raw data/artifacts data/cache data/import data/backups
           sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
+          sudo chown -R "$(id -u):$(id -g)" data/import
 
       # ops/compose.e2e.yml adds the fake Jellyfin §7.3's two-way sync is tested against.
       - run: >
@@ -217,6 +264,11 @@ jobs:
         if: failure()
         run: docker compose logs --no-color --tail 200
 
+      # `include-hidden-files`, because `e2e/.results` is a dotted directory and v4 drops those by
+      # default: the traces and videos `playwright.config.js` retains on failure, and now the JSON
+      # report `release.yml`'s leg 2 reads to answer whether the map's e2e rows actually ran, were
+      # all being uploaded as an empty half of this artifact. The HTML report survived, which is
+      # why nobody noticed.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -224,4 +276,13 @@ jobs:
           path: |
             e2e/playwright-report
             e2e/.results
-          retention-days: 7
+          include-hidden-files: true
+          # Thirty, not seven, and the number answers to `release.yml`'s cadence rather than
+          # to this job's. Leg 2 of the release gate downloads THIS artifact for the commit
+          # under test and its lookup reads no date, so on a Monday when this workflow is
+          # red it falls through to the previous Monday's successful run -- which, at seven
+          # days, is expiring the same morning. The download then fails and the release gate
+          # reports a red build for a reason that is not the build. Every artifact
+          # `release.yml` uploads already keeps thirty; this is its one input catching up.
+          # [M4.16 cycle 2, M416-C2-REL-04]
+          retention-days: 30

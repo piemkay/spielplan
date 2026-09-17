@@ -767,7 +767,7 @@ async def record_answer(
             row["session_id"], participant_id, written_seq,
             pair.title_a, pair.title_b, answer, pair.selection, latency_ms,
         )
-        # §6.2 step 5's tilt. Held-out answers move it as little as they move the posterior:
+        # §6.2 step 4's tilt. Held-out answers move it as little as they move the posterior:
         # 54b says they are "used for neither selection nor stopping", and the tilt feeds the
         # tonight score the shortlist is built from, so it is the same stream.
         tilt = dict(row["tilt"] or {})

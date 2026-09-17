@@ -29,3 +29,6 @@ README.md
 ops/devstub.py
 e2e/
 .github/
+# .github/workflows/release.yml writes its JUnit, the Playwright report it downloads and
+# three tee'd logs here, and then leg 4 builds the image from this same workspace.
+.reports/

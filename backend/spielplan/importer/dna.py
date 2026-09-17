@@ -586,7 +586,7 @@ async def load_tags(
     # The arbiter fires now — 0018 collapses NULL to '' and makes the column NOT NULL — and the
     # DELETE stays anyway: an upsert would leave behind the rows of a *previous* vocabulary
     # revision that this bundle no longer ships, and §10 calls a re-import a planned admin event
-    # with a diff report, so replacing the tier is the behaviour that report describes.
+    # with a migration report, so replacing the tier is the behaviour that report describes.
     await conn.execute("DELETE FROM dna_tag WHERE version = $1", version)
     await conn.executemany(
         "INSERT INTO dna_tag "

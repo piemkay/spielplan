@@ -1,8 +1,15 @@
 """The import report. Spec v2.1 §10.
 
 "Importer enforces every §4.1 landmine rule and produces a migration report (counts per table,
-validation failures, vocabulary version). Bundle re-import … is a planned admin event with a
-diff report — never a silent sync."
+validation failures, vocabulary version). Model re-import (retrained backbone) is a planned admin
+event with a migration report — never a silent sync."
+
+As §10 read until M4.16 that second sentence named "a planned admin event with a diff report", and
+`backend/migrations/0001_system.sql:32` block-quotes it above `artifact_bundle`. That migration is
+applied and sha256-checksummed, so an edit there is a hard startup error on every install that has
+run it and its copy cannot be corrected in place: this paragraph is where the correction lives.
+No second document was ever written. One report is produced per import, and the diff §10 asks a
+re-import for is the rebuild set this report carries (decisions 162 and 163).
 
 A report has three severities and only one of them stops an import:
 
@@ -40,7 +47,7 @@ class Finding:
 # shipped detail value is a scalar or a list of names -- the denied tables, the columns a mapping
 # names and the bundle lacks, the first offending title ids -- and the referential checks count
 # rows in the thousands, so five names and the total say where to look without pasting a corpus
-# into a console. An excerpt that admits its own size is still §10's diff report; a wall of five
+# into a console. An excerpt that admits its own size is still §10's migration report; a wall of
 # hundred ids is one nobody reads.
 _DETAIL_ITEMS = 5
 _DETAIL_CHARS = 96
@@ -215,7 +222,7 @@ class ImportReport:
                 # A failure's `detail` is its remediation information, and dropping it left the
                 # operator holding rule 7's "N denied table(s)" with no table named to go and fix,
                 # while the names sat in a dict only the JSON surfaces ever read. §10 calls a
-                # re-import "a planned admin event with a diff report", and an event whose one
+                # re-import "a planned admin event with a migration report", and an event whose
                 # readable record omits what went wrong is not one anybody can act on. Warnings
                 # and notes keep their single line: a clean import already renders fourteen
                 # findings, and only a failure is a surface anyone has to act on.

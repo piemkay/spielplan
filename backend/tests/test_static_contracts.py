@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import io
+import operator
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tokenize
 import tomllib
 from pathlib import Path
 
@@ -1164,7 +1167,22 @@ def test_the_backups_guard_leaves_a_read_only_mount_alone(mode):
 
 
 def test_the_grace_period_guard_sees_a_service_without_one():
-    stripped = _compose().replace("    stop_grace_period: 5m\n", "")
+    """The mutation removes the worker's own line, whatever number it currently carries.
+
+    It read the literal `stop_grace_period: 5m` until decision 300 moved the worker to 10m to
+    cover `BUNDLE_IMPORT_TIMEOUT`, after which the replace matched nothing, `_without_grace_period`
+    was handed an unmutated file and this self-test asserted `[] == ["worker"]` -- red, but only
+    by luck: had the strip removed some *other* service's line the assertion would have gone
+    quietly green over a guard that had stopped being exercised. A self-test whose violation is
+    spelled as a literal stops being a violation the day the file moves, which is the M4.16 defect
+    class in miniature. The line is read off the worker's own block and its removal asserted, so a
+    later bump cannot make this vacuous again. [decision 300]
+    """
+    worker = _service(_compose(), "worker")
+    line = re.search(r"^ +stop_grace_period:.*\n", worker, re.M)
+    assert line, "the worker declares no stop_grace_period for this mutation to take away"
+    stripped = _compose().replace(worker, worker.replace(line.group(0), "", 1), 1)
+    assert stripped != _compose(), "the mutation removed nothing, so the guard is untested"
     assert _without_grace_period(stripped) == ["worker"]
 
 
@@ -2033,11 +2051,26 @@ def test_the_router_mount_guard_notices_a_dropped_include():
 
 
 def _self_mounted_routers(root: Path) -> list[str]:
-    """Test files that mount a router themselves."""
+    """Test files that mount a router THE APPLICATION OWNS, which is the rule's own wording.
+
+    Any `.include_router(` at all was the first reading, and it convicts a router the test file
+    builds in the same function out of `APIRouter()` -- which the application has never heard of
+    and `create_app` therefore cannot drop. `test_layering_guards.py` mounts exactly such a probe,
+    on purpose: FastAPI 0.141 stops flattening an included router, so a probe assembled any other
+    way would not reproduce the nesting that hid the Tonight channel from the route walk, and the
+    rule meant to stop a suite testing a router instead of the application was refusing the one
+    construction that tests the real nesting. A router the file constructs itself is exonerated by
+    name; anything else -- including a bare `home_api.router` the scanner cannot resolve -- stays
+    an offence, because the scaffolds this was written against all mounted an imported one.
+    [M4.7 tq2-router-mount; M4.16]
+    """
     offenders = []
     for path in sorted(root.rglob("test_*.py")):
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.match(r"^\s*[\w.]+\.include_router\(", line):
+        source = path.read_text(encoding="utf-8")
+        built_here = set(re.findall(r"^\s*(\w+)\s*=\s*APIRouter\(", source, re.M))
+        for number, line in enumerate(source.splitlines(), 1):
+            mounted = re.match(r"^\s*[\w.]+\.include_router\(\s*([\w.]+)", line)
+            if mounted and mounted.group(1).split(".")[0] not in built_here:
                 offenders.append(f"{path.name}:{number}: {line.strip()}")
     return offenders
 
@@ -2064,6 +2097,31 @@ def test_the_scaffold_guard_catches_a_re_mounted_router(tmp_path):
     )
     caught = _self_mounted_routers(tmp_path)
     assert len(caught) == 1 and "test_scaffold.py:3" in caught[0], caught
+
+
+def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tmp_path):
+    """The other direction, and the reason the narrowing is not a hole.
+
+    A router assembled in the same file is not one `create_app` can drop an include for, so
+    convicting it bought no coverage and cost the route walk the only probe that reproduces
+    FastAPI's real nesting. The second file is what keeps the exoneration from swallowing the
+    rule: the same mount, of a router that came from somewhere this scanner cannot see, is still
+    an offence -- so the allowance is "the file built it", never "the line looks like a probe".
+    """
+    (tmp_path / "test_probe.py").write_text(
+        "def test_x():\n    router = APIRouter(prefix='/api')\n"
+        "    probe = FastAPI()\n    probe.include_router(router)\n",
+        encoding="utf-8",
+    )
+    assert _self_mounted_routers(tmp_path) == []
+
+    (tmp_path / "test_imported.py").write_text(
+        "def test_y():\n    router = APIRouter(prefix='/api')\n"
+        "    probe = FastAPI()\n    probe.include_router(rate_api.router)\n",
+        encoding="utf-8",
+    )
+    caught = _self_mounted_routers(tmp_path)
+    assert len(caught) == 1 and "test_imported.py:4" in caught[0], caught
 
 
 # --- §12: the eight exit scripts, and the console they print to ---------------------------
@@ -2280,27 +2338,102 @@ def test_the_console_encoding_guard_catches_a_non_ascii_print():
     assert len(_not_encodable(_all_literals(innocent), "probe.py")) == 1
 
 
+# What "a constant predicate" means in this project's own words, which is wider than `ast.Constant`
+# and is the reading every record of it takes: decision 240 glosses it "a check whose predicate
+# cannot be evaluated", `docs/RELEASE.md` "a check that cannot fail", and the comment heading this
+# section "no `check()` whose answer is settled before the run". The rule held two AST SHAPES --
+# a truthy literal, and a BoolOp with a literal operand -- so `check(1 == 1, ...)`,
+# `check(not False, ...)`, `check(True and True, ...)` and `check(placed == 0 or [1], ...)` all
+# passed, the last because a truthy list is not an `ast.Constant`. Measured against the real
+# scripts: the two shapes M4.8 recorded as repaired are caught, and those four are not.
+#
+# A CLOSED NODE SET, and the closure is the point rather than a limitation to apologise for. What
+# is decidable here is a predicate built out of literals, `not`, `and`/`or` and a comparison
+# between two of those; the moment a name, a call, an attribute or a subscript appears, the run
+# decides the answer and this rule must say nothing, because that is what a check is. So
+# `check(placed >= 0, ...)` -- a live predicate widened until it cannot fail -- is outside what any
+# static reader can reach, and the row's `what` says so rather than promising it.
+# [decision 240; M4.16 cycle 4, M416-C4-REL-05]
+_UNSETTLED = object()
+_COMPARISONS = {
+    ast.Eq: operator.eq, ast.NotEq: operator.ne,
+    ast.Lt: operator.lt, ast.LtE: operator.le,
+    ast.Gt: operator.gt, ast.GtE: operator.ge,
+    ast.Is: operator.is_, ast.IsNot: operator.is_not,
+}
+
+
+def _settled(node: ast.expr):
+    """The value a reader can work out from the source alone, or `_UNSETTLED`."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
+        try:
+            return ast.literal_eval(node)
+        except ValueError:
+            return _UNSETTLED
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        value = _settled(node.operand)
+        return _UNSETTLED if value is _UNSETTLED else (not value)
+    if isinstance(node, ast.BoolOp):
+        values = [_settled(operand) for operand in node.values]
+        if any(value is _UNSETTLED for value in values):
+            return _UNSETTLED
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.Compare):
+        left = _settled(node.left)
+        for op, node_right in zip(node.ops, node.comparators, strict=True):
+            compare = _COMPARISONS.get(type(op))
+            right = _settled(node_right)
+            if left is _UNSETTLED or right is _UNSETTLED or compare is None:
+                return _UNSETTLED
+            if not compare(left, right):
+                return False
+            left = right
+        return True
+    return _UNSETTLED
+
+
 def _fixed_predicate(node: ast.expr) -> str | None:
     """Why this predicate's answer is settled before the run, or None if it can vary.
 
-    Rejected: a truthy literal, which records a PASS whatever happened, and a boolean
-    expression with an operand that pins the result (`x or True`, `x and False`) -- a predicate
-    that was written to vary and no longer does.
+    Rejected: a predicate that settles TRUE -- a truthy literal, which records a PASS whatever
+    happened, and every expression over literals that comes out the same way -- and a boolean
+    expression with an operand that pins the result (`x or True`, `x and False`), which is a
+    predicate that was written to vary and no longer does.
 
-    Allowed: a falsy literal. `ops/m45_exit_criterion.py`'s block loop reports one per block
-    that trains on counts and arrives as a presence bit; the surrounding `if` has already
-    established that failure and the literal is only how it gets recorded. A deliberate FAIL is
-    a report, an unconditional PASS is a certificate, and only the second one is a lie.
+    Allowed: a predicate that settles FALSE. `ops/m45_exit_criterion.py`'s block loop reports one
+    per block that trains on counts and arrives as a presence bit; the surrounding `if` has
+    already established that failure and the literal is only how it gets recorded. A deliberate
+    FAIL is a report, an unconditional PASS is a certificate, and only the second one is a lie.
     """
     if isinstance(node, ast.Constant):
         return f"the literal {node.value!r}" if node.value else None
+    settled = _settled(node)
+    if settled is not _UNSETTLED:
+        return (f"`{ast.unparse(node)}` is settled before the run and comes out true"
+                if settled else None)
     if isinstance(node, ast.BoolOp):
         pin = isinstance(node.op, ast.Or)
         for operand in node.values:
-            if isinstance(operand, ast.Constant) and bool(operand.value) is pin:
+            value = _settled(operand)
+            if value is not _UNSETTLED and bool(value) is pin:
                 joiner = "or" if pin else "and"
-                return f"`{joiner} {operand.value!r}` pins the answer to {pin}"
+                return f"`{joiner} {ast.unparse(operand)}` pins the answer to {pin}"
     return None
+
+
+def _check_verdict(node: ast.Call) -> ast.expr | None:
+    """The expression a `check()` call hands in as its verdict, positionally or by keyword.
+
+    `not node.args` was a `continue`, so `check(ok=True, label='x')` was skipped outright -- and
+    `ok` is the name every one of these scripts declares that parameter with, so it is a legal
+    call this reader simply did not read. The premise is asserted beside the rule.
+    [M4.16 cycle 4, M416-C4-REL-05]
+    """
+    if node.args:
+        return node.args[0]
+    return next((kw.value for kw in node.keywords if kw.arg == "ok"), None)
 
 
 def _constant_check_predicates(source: str, label: str) -> list[str]:
@@ -2309,11 +2442,14 @@ def _constant_check_predicates(source: str, label: str) -> list[str]:
     for node in ast.walk(ast.parse(source)):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
             continue
-        if node.func.id != "check" or not node.args:
+        if node.func.id != "check":
             continue
-        fixed = _fixed_predicate(node.args[0])
+        verdict = _check_verdict(node)
+        if verdict is None:
+            continue
+        fixed = _fixed_predicate(verdict)
         if fixed:
-            out.append(f"{label}:{node.lineno}: check({ast.unparse(node.args[0])}) -- {fixed}")
+            out.append(f"{label}:{node.lineno}: check({ast.unparse(verdict)}) -- {fixed}")
     return out
 
 
@@ -2351,10 +2487,49 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
         # repaired predicate.
         ("the loop's deliberate failure", "check(False, 'a count arrived as a bit')", 0),
         ("a predicate that can vary", "check(placed == 0, 'unplaced')", 0),
+        # Review cycle 4, and every one of these passed while the rule read two AST shapes. The
+        # first four are the same certificate written without a truthy `ast.Constant` at the
+        # position the rule looked; the fifth is the call spelled with the parameter name the
+        # scripts themselves declare. [M4.16 cycle 4, M416-C4-REL-05]
+        ("a comparison that settles true", "check(1 == 1, 'x')", 1),
+        ("the literal negated", "check(not False, 'x')", 1),
+        ("two literals joined", "check(True and True, 'x')", 1),
+        ("a truthy literal that is not a Constant", "check(placed == 0 or [1], 'x')", 1),
+        ("the verdict passed by keyword", "check(ok=True, label='x')", 1),
+        # And the other direction, which is what keeps the widening from becoming a rule about
+        # taste: a comparison that settles FALSE is the deliberate report the loop writes, and a
+        # comparison over anything the run decides is exactly what a check is.
+        ("a comparison that settles false", "check(1 == 2, 'a count arrived as a bit')", 0),
+        ("a comparison against a name", "check(placed >= floor, 'unplaced')", 0),
+        ("a call the run answers", "check(bool(rows), 'rows')", 0),
+        ("membership in a literal the run indexes", "check(state in ('ok', 'warm'), 'state')", 0),
     ],
 )
 def test_the_constant_predicate_guard_catches_a_real_violation(name, source, expected):
     assert len(_constant_check_predicates(source + "\n", "probe.py")) == expected, name
+
+
+def test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare():
+    """The keyword arm's premise, asserted rather than assumed.
+
+    `_check_verdict` falls back to the keyword named `ok`, and that name is not this file's
+    choice: it is what every `check` these scripts declare calls its first parameter. A script
+    that renamed it would leave the fallback reading a keyword nobody passes, which is a rule
+    quietly holding nothing. [M4.16 cycle 4, M416-C4-REL-05]
+    """
+    declared = [
+        (path.name, node)
+        for path in EXIT_SCRIPTS
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check"
+    ]
+    assert declared, "no exit script declares check() any more, so this rule reads nothing"
+    wrong = [f"{name}:{node.lineno}: {node.args.args[0].arg}" for name, node in declared
+             if not node.args.args or node.args.args[0].arg != "ok"]
+    assert not wrong, (
+        "an exit script's check() no longer takes its verdict as `ok`, so the keyword arm of "
+        "_check_verdict reads a name nobody passes:\n  " + "\n  ".join(wrong)
+    )
 
 
 def _main(tree: ast.Module) -> ast.FunctionDef | ast.AsyncFunctionDef:
@@ -5174,8 +5349,31 @@ def _decision_section(number: int) -> str:
     return body[start.start(): after[0] if after else len(body)]
 
 
+def _carries_the_lane(path: Path) -> bool:
+    """Whether a file CARRIES the lane repair, rather than citing its lesson in passing.
+
+    The two markers are a proxy for the repair, and read off raw text the proxy convicts a comment.
+    M4.16's `test_release_gate.py` argues decision 299's interpreter lookup by pointing at
+    `env.mjs`'s lesson "one value over" -- provenance, in a single `#` line, resolving nothing
+    per-checkout. Decision 244 cannot name it without claiming an M4.16 file for M4.13's
+    `chore(e2e):` commit, so the only ways to a green build were to make the register false or to
+    delete a true citation: a guard forcing the record to lie in order to stay quiet, which is the
+    inversion this milestone exists to remove. Python is tokenized because that is where the
+    ambiguity arose and where a comment can be told from a string exactly; every other file in the
+    lane names a marker in code, so the distinction takes nothing away from them. A repair lives in
+    code by definition -- a file that only ever mentions the lane in prose is not in it.
+    [decision 244; M4.16]
+    """
+    source = path.read_text(encoding="utf-8")
+    if path.suffix == ".py":
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        commented = "".join(t.string for t in tokens if t.type == tokenize.COMMENT)
+        return any(source.count(m) > commented.count(m) for m in LANE_MARKERS)
+    return any(marker in source for marker in LANE_MARKERS)
+
+
 def _lane_files() -> list[str]:
-    """Every file in the tree that names one of the lane's two symbols."""
+    """Every file in the tree carrying one of the lane's two symbols."""
     roots = [
         *(REPO / "e2e").glob("*.mjs"),
         *(REPO / "e2e").glob("*.js"),
@@ -5189,8 +5387,7 @@ def _lane_files() -> list[str]:
         for path in roots
         # This file names both markers in order to look for them, exactly as the retired-claim
         # sweep above states the phrases it forbids.
-        if path != Path(__file__).resolve()
-        and any(marker in path.read_text(encoding="utf-8") for marker in LANE_MARKERS)
+        if path != Path(__file__).resolve() and _carries_the_lane(path)
     )
 
 
@@ -5231,6 +5428,27 @@ def test_the_lane_guard_sees_a_file_the_register_does_not_name():
     six = "the harness the lane ran on -- `e2e/helpers.js`, `e2e/run.mjs`"
     assert _unnamed_in(six, lane) == ["backend/tests/test_backup.py"]
     assert _unnamed_in(six + " and `backend/tests/test_backup.py`", lane) == []
+
+
+def test_the_lane_sweep_reads_a_citation_apart_from_the_repair(tmp_path):
+    """The narrowing, held in both directions so it cannot quietly become an exemption.
+
+    A file resolving a per-checkout value IS in the lane however the marker is spelled, and a file
+    whose only mention of it is a `#` line is not -- otherwise every future comment citing the
+    lane's lesson would owe decision 244 a name it cannot truthfully give. The third case is the
+    one that matters most: a comment does not launder the repair when the code is there too.
+    """
+    carrier = tmp_path / "test_carrier.py"
+    carrier.write_text("PATH = 'e2e/env.mjs'\n", encoding="utf-8")
+    assert _carries_the_lane(carrier)
+
+    citer = tmp_path / "test_citer.py"
+    citer.write_text("X = 1  # the lesson `env.mjs` taught, one value over\n", encoding="utf-8")
+    assert not _carries_the_lane(citer)
+
+    both = tmp_path / "test_both.py"
+    both.write_text("# env.mjs\ndef _inside_the_container():\n    return True\n", encoding="utf-8")
+    assert _carries_the_lane(both)
 
 
 def _tense_under_the_clamp(drops: int, k_fitted: int, k_to: int) -> int:
@@ -7936,7 +8154,9 @@ def _coarse_declarations(path: Path, selector: str) -> dict[str, str]:
 
 
 # Every interactive control this app draws that `design.css`'s coarse block cannot reach, and the
-# axis each one was short on. That block names `.pill, .btn-primary, .btn-ghost, button, select,
+# axis each one was short on -- or, since review cycle 2, an axis its own component declares under
+# a coarse block and nothing else holds. That block names `.pill, .btn-primary, .btn-ghost,
+# button, select,
 # [role='button']` and raises `min-height` only -- so a bare `<a>` is outside the selector list
 # entirely (deliberately: adding one would grow every inline prose link), and every `button` in
 # the app clears a height-only assertion by construction while its narrow axis goes unmeasured.
@@ -7953,6 +8173,28 @@ def _coarse_declarations(path: Path, selector: str) -> dict[str, str]:
 # `testMatch` at all -- though `02-shell` and `14-tonight` both ARE, and both open /rate on an
 # iPhone 13, so the 25 px control is painted on the primary form factor during a phone run and
 # measured by nothing. [review cycle 3: M415-C3-CSS-01, M415-C3-COMP-01]
+#
+# M4.16 adds the tenth, and it is the first entry on a surface built AFTER the rule existed.
+# Decision 293's Data sources block draws three licence deeds as bare `<a>`s wearing `.data`, so
+# design.css reaches them with none of its six primitives and sizes them at 11 px under a coarse
+# pointer. The component declares the floor for itself and argues for it in a comment that names
+# `19-phone-shell.spec.js`'s `meetsTheTouchFloor` as the instrument -- which never measures this
+# file: that helper's six calls stop at the wizard, and `06-responsive.spec.js`'s sweep reaches
+# the nav links and the kind toggles and never opens /account. A floor a component asks for and
+# nothing holds is the shape this tuple exists for.
+#
+# BOTH AXES ARE ENTERED, which cycle 1 decided against and cycle 2 reverses. The argument then was
+# this tuple's own header -- these are the axes a control was SHORT on -- and `CC BY-SA 4.0` is
+# twelve characters of a mono face that clears 48 wide on content alone, so the width was said to
+# be "held by the string rather than by the rule". A string is content, not a floor. The component
+# declares `min-width: var(--touch)` and argues for it in the comment beside it, and NOTHING in
+# this repository read that declaration: deleting it as redundant was invisible to every test
+# here and to every sweep in the browser suite, and then one copy edit inside section 6.8's quiet
+# register -- `CC BY-SA 4.0` to `deed` -- puts three controls under the floor with the whole gate
+# green. The two-step is what makes it worth an entry, because the first step is the one that
+# looks harmless. So the header is widened rather than this entry excused: an axis a component
+# declares inside a coarse block is one this rule holds, whether the control was short on it or
+# not. [M4.16 cycle 1, M416-C1-D3-05; M4.16 cycle 2, M416-C2-ATTR-03]
 COARSE_FLOOR_SITES = (
     (
         "frontend/src/routes/+layout.svelte",
@@ -8022,6 +8264,25 @@ COARSE_FLOOR_SITES = (
         "wide and 26 tall, inside the overlay whose only other exit this milestone repaired, and "
         "a bare `<a>` so design.css's list cannot reach it on either axis",
     ),
+    (
+        "frontend/src/lib/components/DataSources.svelte",
+        ".licence",
+        "min-height",
+        "decision 293's three licence deeds are bare `<a>`s wearing `.data`, which design.css "
+        "sizes at 11 px under a coarse pointer and reaches with none of its six primitives -- so "
+        "without this rule a deed is its own line box and nothing more, on the one surface §6.8 "
+        "makes every signed-in member reach and no sweep in the browser suite opens",
+    ),
+    (
+        "frontend/src/lib/components/DataSources.svelte",
+        ".licence",
+        "min-width",
+        "the same three deeds on the narrow axis, which is the axis every real failure in this "
+        "app has been on -- two overlay exits at 48 by 32, a rail filter at 48 by 36. This one is "
+        "not short today: `CC BY-SA 4.0` measures about 79 px of an 11 px mono face, and the "
+        "component declares the floor anyway. What the entry holds is the declaration, against "
+        "the day somebody deletes it as redundant and somebody else shortens the deed text",
+    ),
 )
 
 
@@ -8046,7 +8307,15 @@ def test_every_control_the_coarse_selector_list_misses_declares_the_floor_itself
     is one), Rank's CTA needs a member below the tier threshold, and the rail's filter row is
     `{#if kinds.length > 1}`. A control a sweep steps over is a control a sweep cannot hold, which
     is the argument decision 280 already makes for the wizard's hairline.
-    [§6 preamble; row `platform-every-touch-target-meets-the-token`; M4.15 review cycle 1]
+
+    The three licence deeds are the exception to that sentence and are held here anyway. They are
+    unconditional markup on a surface `19-phone-shell.spec.js` already opens on the phone project,
+    so the stronger holder is a browser measurement and this is the weaker one: it reads what the
+    component DECLARES rather than what an engine computes. It is here because a source rule is
+    what this milestone can measure and a browser rule is what it cannot, and because the axis
+    nobody held was the one every real failure has been on.
+    [§6 preamble; row `platform-every-touch-target-meets-the-token`; M4.15 review cycle 1;
+     M4.16 cycle 2, M416-C2-ATTR-03]
     """
     missing = []
     for where, selector, prop, why in COARSE_FLOOR_SITES:
@@ -8773,3 +9042,4231 @@ def test_no_record_says_this_map_never_named_a_spec_it_did():
                 "rows held the other, or the next auditor greps the map and finds the record "
                 "refuted by the file it is written in."
             )
+
+
+# --- M4.16: the records this milestone rewrote, held against the tree they describe ------------
+#
+# Every guard below reads a DOCUMENT rather than a symbol, which is the shape the decision guards
+# and the two ledger guards above already have. What is new is why there are five of them at once.
+# M4.16 exists because this project's own records had drifted from the app that shipped: a
+# normative file still describing a TV client nobody can reach and a wizard step nobody can take,
+# a register calling itself provisional under fourteen shipped rows that cite it as authority, a
+# comment pointing at a module that was never written, an exit criterion nobody had ever run. Each
+# was survivable for the same reason -- nothing read it -- and each would drift again on the next
+# wave, because a record is only as true as the last person who happened to look.
+#
+# So the rule decision 184 states for measurements is generalised here to prose: a document that
+# states a fact about this tree is held to the tree. These are the cheap half of that; the half a
+# person reads is the documents themselves.
+
+README = REPO / "README.md"
+DOCS = REPO / "docs"
+RELEASE_RECORD = DOCS / "RELEASE.md"
+SPIELPLAN = REPO / "backend" / "spielplan"
+FRONTEND_STATIC = REPO / "frontend" / "static"
+
+# `docs/milestones/` is excluded from every sweep below, for the reason the company-claim sweep
+# 4,700 lines up gives and decision 296 then made a rule: the plan is the plan, the workflow
+# forbids editing it, and a correction owed to a milestone record goes to `docs/RELEASE.md` under
+# "Corrections owed to the milestone records" rather than into the plan it corrects. Four plans
+# and the roadmap quote the retired phrase below in full, and all five are quoting history.
+MILESTONE_RECORDS = DOCS / "milestones"
+
+
+# --- M4.16 spec-01: the file README calls normative describes the surface that shipped ----------
+
+# The four surfaces the normative file promised and the code does not have. `/tv` is the route
+# decision 165 deleted and M4.12 carried out; "TV kiosk" is the same client under the name
+# §6.2's old step 8 gave it; "member-account creation" is the wizard step decision 164
+# struck (everyone after the admin is added from Admin > Users); "three existing seams" is
+# §11's claim about Home Assistant, which decision 290 narrowed to three DESIGNATED seams,
+# none of them built. Read case-insensitively because the file spelled the client three ways and
+# the guard is about the promise, not the capitalisation.
+#
+# A FIFTH since review cycle 4, and it is not a client but a COUNT: "the ~10-vote round" is the
+# fixed-length round the app has not had since M4.12. `tonight/round.py` ships `BOUNDARY_Z = 0.6`,
+# `CAP_PAIRS = 20`, an escape from the sixth pair and `ended_by` in {converged, cap, escape}, and
+# this milestone rewrote every other site of the figure -- §0's row, §6.2's preamble ("and so is
+# the fixed count"), §6.2 step 4, §14 risk 6 and §14's pointer table -- leaving the one table
+# decision 290 calls "the one table an auditor reads to learn what shipped". Anchored on the exact
+# spelling rather than on `~10`, because §0's superseded v2.1 line keeps the old figure on purpose
+# under decision 288's amend-in-place convention and a looser fingerprint would redden it.
+# [decision 290; M4.16 cycle 4, M416-C4-SPEC-02]
+_STRUCK_SURFACES = re.compile(
+    r"\btv kiosk\b|/tv\b|member-account creation|three existing seams|the ~10-vote round", re.I
+)
+
+# The two words the 54a-54h fold put into the file, and the reason this guard is stated positively
+# as well as negatively. A negative check alone is satisfied by deleting §6.2, which is not
+# the repair: `NEITHER` is the round's abstain verdict and `uniform_holdout` is §13's
+# hold-out draw, both of which the schema and `tonight/round.py` have shipped since M4.12 while
+# the normative file still described a fixed ten-vote round. The pair is the cheapest proof that
+# the fold landed rather than that the offending sentences were cut.
+_FOLD_TERMS = ("NEITHER", "uniform_holdout")
+
+# Review cycle 1 adds two more, and they are the other direction of the same defect: a normative
+# file that OMITS a surface the app has, and one that promises a branch release data cannot reach.
+# "Ending a room" is decision 169's §6.2 step 2 amendment, owed since M4.12 -- `api/tonight.py`'s
+# `POST /sessions/{id}/end` shipped with six integration tests and a coverage row citing a clause
+# that was not in the file. "ships no axis artifact" is decision 173's, owed since the same
+# milestone: §6.2 step 5 described a reserved opposite-pole slot and named conflict copy for every
+# D >= 0.20 evening, while `combine.contested_facet` returns None over an empty `dna_axis_weight`
+# and no axis TSV has ever been authored. [M4.16 cycle 1, SPEC-02 and SPEC-03]
+_FOLD_TERMS += ("Ending a room", "ships no axis artifact")
+
+# And the four sentences decisions 164, 289 and 290 actually WROTE, held the way the two words
+# above hold the fold. The negative half is a fingerprint on four RETIRED spellings, which is a
+# rule calibrated to the defect rather than to the claim -- the same reading this file already
+# applied to the sigma rule one cycle earlier. Measured over the file that ships: §11 re-promised
+# as "three seams the app already serves", §7.3's "It is not built" replaced by "It ships with
+# §12's M1 row", §2's rotation re-promised as a control in Admin > System, and the whole of §11
+# deleted, are four mutations a person would actually write and every one of them left
+# `_normative_problems` empty. Nothing else in the tree reads these clauses: the two coverage rows
+# that name the seams are M7 with no tests, and `_unresolvable_sections` skips a row above
+# `current_milestone`.
+#
+# Kept as their own tuple rather than folded into `_FOLD_TERMS` because the message differs: a
+# missing fold term says the fold is not in the file, and a missing clause here says a strike was
+# undone. `_FOLD_TERMS`' own comment already argues the mechanism -- "a negative check alone is
+# satisfied by deleting §6.2, which is not the repair" -- and this is that argument applied to the
+# other three surfaces the same test names. [decisions 164, 289, 290; M4.16 cycle 3, M416-C3-SPEC-01]
+_STRIKE_CLAUSES = (
+    ("is the only place they are made",
+     "§3.1's wizard stops at the bundle import and the household's other accounts are made in "
+     "§6.6 Users (decision 164)"),
+    ("there is no admin-facing rotation surface",
+     "§2's `SECRETS_KEY` rotation is the operator command and nothing else, because the rewrap "
+     "needs the old key at the same time as the new one (decision 289)"),
+    ("It is not built, and it is not part of",
+     "§7.3's `POST /events/playback` is owed by M7 and no router serves it (decision 290)"),
+    ("none of which is built",
+     "§11's three Home Assistant seams are DESIGNATED rather than existing, which is the word "
+     "that decision closed (decision 290)"),
+)
+
+# The data voice prints every model number through `{:.2f}` (`home/shelves.py`, `scoring/serve.py`),
+# so `b(t) 0.52 . beta 0.8 . gate 0.93` is an example of a line the app cannot render -- one
+# decimal where it always prints two. Decision 167 mandated the correction and only its §5.1 half
+# landed, leaving the file contradicting itself on the one constant a member reads. Matched only in
+# the data-voice form, a bare number after the symbol: §5.1's prose says `beta = 0.2` and
+# `beta_app = 1 - beta_corpus`, which are statements about the algebra rather than renderings.
+# [decision 167; M4.16 cycle 1, SPEC-01]
+_DATA_VOICE_BETA = re.compile(r"β (\d+(?:\.\d+)?)")
+
+# The universal that a re-measurement disproved. `scoring/backbone.py` says in its own words that
+# a cold-masked row "is treated as ABSENT", so HAVING a Backbone row and having a Backbone
+# COORDINATE are different facts -- and on v20260828, 1,055 of the 5,315 genome-carrying titles
+# have the first and not the second. Decision 291's behaviour stands; the sentence it was argued
+# from does not, and it had been copied into three records.
+# [decision 304; M4.16 cycle 1, M416-291-02]
+_GENOME_UNIVERSAL = re.compile(
+    r"\b(?:every|all)\b[^.\n]{0,40}titles?[^.\n]{0,80}(?:genome|vector)[^.\n]{0,60}"
+    r"(?:already )?ha(?:s|ve) a Backbone coordinate",
+    re.I,
+)
+
+# Decision 288: the spec is amended IN PLACE and never forked, so each wave is a dated point
+# release in the Status block. Matched by shape rather than by the version this wave wrote, so the
+# next wave's `v2.1.2` satisfies it and a wave that amends the file silently does not.
+_POINT_RELEASE = re.compile(r"^\*\*v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\).*$", re.M)
+
+# And the line has to say WHICH decisions it folded in. A dated line that names none is a wave
+# that happened and cannot be audited: the register is the provenance, the spec is the normative
+# text, and the point release is the only thing that joins one to the other.
+_FOLDED_DECISIONS = re.compile(r"decisions? \d+")
+
+# TIGHT on purpose. `grep -rn 'not spec' docs/` matches "not specified" and is never empty, so a
+# guard anchored on that phrase would either fail forever or be quietly narrowed by the first
+# person it inconvenienced. The anchor is the sentence decision 288 retired, verbatim.
+_PROVISIONAL = "proposals, not spec"
+
+
+def _normative_file() -> Path:
+    """The file README names as normative, resolved from README rather than named here.
+
+    Hard-coding `spielplan-spec_v2.1.md` would make this guard agree with itself: the claim being
+    held is README's -- "the spec is the authority" -- and a guard that picks its own subject
+    cannot notice the day README starts pointing somewhere else.
+    """
+    claim = re.search(
+        r"\*\*The spec is the authority\.\*\*(.*?)(?:\r?\n\r?\n|\Z)",
+        README.read_text(encoding="utf-8"),
+        re.S,
+    )
+    assert claim, (
+        "README no longer opens with `**The spec is the authority.**`, which is the sentence that "
+        "says which file this repository answers to. Every assertion below reads what it names."
+    )
+    named = re.search(r"docs/[\w.-]+\.md", claim.group(1))
+    assert named, f"README's authority paragraph names no file under docs/:\n  {claim.group(1)}"
+    path = REPO / named.group(0)
+    assert path.exists(), f"README names {named.group(0)} as normative and it is not in the tree"
+    return path
+
+
+def _status_block(text: str) -> str:
+    """The run of `**Key:**` lines under the title, which is where the file dates itself."""
+    start = re.search(r"^\*\*Status:\*\*", text, re.M)
+    if start is None:
+        return ""
+    rest = text[start.start():]
+    end = re.search(r"\r?\n\s*\r?\n", rest)
+    return rest[: end.start()] if end else rest
+
+
+def _normative_problems(text: str) -> list[str]:
+    """Everything wrong with a candidate normative file, as sentences a reader can act on."""
+    problems = []
+    for hit in dict.fromkeys(match.group(0) for match in _STRUCK_SURFACES.finditer(text)):
+        problems.append(f"still describes a surface the code does not have: {hit!r}")
+    for term in _FOLD_TERMS:
+        if term not in text:
+            problems.append(f"does not contain {term!r}, so the Tonight fold is not in it")
+    for clause, why in _STRIKE_CLAUSES:
+        if clause not in text:
+            problems.append(
+                f"does not contain {clause!r}, so a strike this file recorded has been undone: "
+                f"{why}. The four spellings above are the RETIRED ones; re-promising a surface in "
+                "plain English, or deleting the section that carries the strike, walks past them."
+            )
+    for example in dict.fromkeys(_DATA_VOICE_BETA.findall(text)):
+        if len(example.partition(".")[2]) != 2:
+            problems.append(
+                f"prints the blend weight as `β {example}` in the data voice, which the app "
+                "cannot render: every model number goes through `{:.2f}` (decision 167)"
+            )
+    wave = _POINT_RELEASE.search(_status_block(text))
+    if wave is None:
+        problems.append("its Status block carries no dated point-release line (decision 288)")
+    elif not _FOLDED_DECISIONS.search(wave.group(0)):
+        problems.append("its point-release line names none of the decisions it folded in")
+    return problems
+
+
+def _provisional_records() -> list[str]:
+    """Files under docs/ that still say of themselves what decision 288 stopped being true."""
+    found = []
+    for path in sorted(DOCS.rglob("*.md")):
+        if MILESTONE_RECORDS in path.parents:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if _PROVISIONAL in line:
+                found.append(f"{path.relative_to(REPO).as_posix()}:{number}")
+    return found
+
+
+def test_the_normative_file_describes_the_surface_that_shipped():
+    """CLAUDE.md's own rule, turned on the file that states it.
+
+    "Where code and spec disagree, the code is the bug" was this project's operating law for four
+    milestones while the normative file described a TV client (§6.2's old step 8), a wizard
+    step that creates the household's other accounts (§3.1), a §2 key rotation with
+    no operator gesture, and three Home Assistant seams it called existing. By that law the whole
+    M4 surface was a bug, which is the reading nobody took, because the honest reading is that the
+    file was stale and no gate could say so. Decisions 164, 165, 289 and 290 struck or narrowed
+    each promise and decision 288 settled the mechanism: one normative file, amended in place,
+    each wave a dated point release in its own Status block.
+
+    Stated in both directions deliberately. The negative half alone is satisfied by deleting
+    §6.2, and the positive half alone by pasting two words into a file that still promises
+    a kiosk. Together they say the fold landed.
+
+    The last clause is the register's, and it sits here rather than beside the register guards
+    because it is the same claim one file over: while `spec-v2.2-proposals.md` described itself as
+    "proposals, not spec. Nothing here is normative", fourteen shipped coverage rows cited it as
+    the authority for a constant. `docs/milestones/` is excluded because four plans and the
+    roadmap quote that sentence as history and decision 296 forbids editing them.
+    [§0 header; §3.1, §4.2, §6.2, §11, §12; decisions 164, 165, 288, 289, 290;
+     row `platform-the-normative-file-describes-the-shipped-surface`]
+    """
+    spec = _normative_file()
+    problems = _normative_problems(spec.read_text(encoding="utf-8"))
+    assert not problems, (
+        f"{spec.relative_to(REPO).as_posix()} is the file README calls normative, and it:\n  "
+        + "\n  ".join(problems)
+        + "\n\nThe direction is measure, take the decision, amend the spec -- never narrow this "
+        "guard. A promise the code does not keep is struck with a numbered decision, or built."
+    )
+    provisional = _provisional_records()
+    assert not provisional, (
+        'a document under docs/ still describes itself as "proposals, not spec", which is what '
+        "decision 288 retired: proposals 1-161 are provenance, entries 162 onward are numbered "
+        "owner decisions and each is normative from the day it is taken. Fourteen shipped rows "
+        "cited that file as authority while it said nothing in it was authority:\n  "
+        + "\n  ".join(provisional)
+    )
+
+
+# --- M4.16 review cycle 1: the vendored extract attributes what it promotes -------------------
+#
+# Decision 294 vendored §3 and Appendix C of the corpus project's ARCHITECTURE.md precisely because
+# "a normative sentence nobody in this repository can read is not normative". The authored header
+# then promoted six clauses to normative and got two of the attributions wrong -- Davidson-with-ties
+# is §3's arm 2 and Appendix C's only comparison model is the ridge anchor plus margin-weighted BT,
+# and Appendix C's sigma belongs to the rank-Gaussian target, which is not what shipped. A reader
+# chasing either pointer into the file it names finds nothing, which is the exact failure vendoring
+# was meant to end. [decision 306; M4.16 cycle 1, SPEC-05]
+
+EXTRACTS = DOCS / "ARCHITECTURE-extracts.md"
+
+# Short and explicit, for `_STRUCK_SURFACES`' reason: a rule over every noun in the list would
+# redden on prose. These are the model names a reader actually goes and looks up.
+_VENDORED_ATTRIBUTIONS = (
+    ("Davidson", "3"),
+    ("margin", "Appendix C"),
+    ("preconditioned", "Appendix C"),
+)
+
+# "- section 3's four-arm likelihood - ..." / "- Appendix C's margin weighting ...": one bullet's
+# credit and everything it claims under it, up to the next bullet.
+_CREDIT = re.compile(
+    r"(?P<where>section 3|Appendix C)'s(?P<claim>.*?)(?=\n- |\Z)", re.S
+)
+
+# The claim the shipped fit does not keep. `ledger/observations.py` writes `ord_weight` as ones and
+# `ledger/model.py`'s `_objective` carries no sigma at all -- sigma is a Laplace-diagonal OUTPUT.
+# Appendix C's measured result is the NEGATIVE half ("never as a sample weight"), which does carry
+# over; the positive half belongs to a regression target nobody built. If it is ever built, this
+# assertion is deleted in the same change as the sentence it refuses.
+#
+# READ OVER THE AUTHORED REGIONS, AND SPELLED AS A CLAIM RATHER THAN AS A FINGERPRINT. The
+# rule was the deleted sentence's own characters -- the literal word "inside", one space
+# either side, no line break -- so it was calibrated to the defect's fingerprint and not to
+# the claim, and three re-introductions a person would actually write walked past it:
+# `sigma-in-the-likelihood`, which is how this project's own plan writes this clause;
+# "keep sigma in the likelihood, never as sample weights", which is Appendix C's own sentence
+# and therefore the wording somebody restating the vendored text would copy; and the caught
+# phrase broken over a line, which is how the authored header in that file already wraps.
+#
+# Widening alone could not be done, which is why the SCOPE moves with it: the guard read
+# `_src(EXTRACTS)` whole, vendored body included, and Appendix C's verbatim line carries that
+# exact sentence -- so the wider rule would redden the file over text the header says is never
+# edited. The authored region is everything above the first vendored heading, which
+# `_vendored_bodies` already computes the boundary of; the normative file has no vendored text
+# and is still read whole. Measured: one hit in the vendored body, none in either scanned
+# region, so the scoping is load-bearing rather than a convenience -- the self-test below
+# asserts both halves.
+#
+# What it still does not reach is a paraphrase that changes the verb -- "sigma belongs in the
+# likelihood" -- and that is the honest limit rather than an oversight: a rule over every verb
+# is a rule over prose, and the negative sentence this extract MUST keep stating ("there is no
+# sigma in this app's likelihood to keep there") sits one word away from every widening of it.
+# [decision 306; M4.16 cycle 2, SPEC-C2-05]
+_SIGMA_IN_LIKELIHOOD = re.compile(
+    r"(?:sigma|σ)[\s*-]+(?:inside|in|within)[\s*-]+the[\s*-]+likelihood", re.I
+)
+
+
+_VENDORED_HEAD = re.compile(r"^## (?:3\.|Appendix C)", re.M)
+
+# Decision 308, and the same class as the sigma clause one bullet over. Section 3's arm 1 is
+# `sigma(kappa_c - a_r * s)` and `ledger/model.py` has no term for `a_r`: the layout line below is
+# the module's own statement of its parameter vector, `_ordinal_terms` enters the latent with
+# coefficient 1, and `_objective` hands the same unscaled `s` to both ordinal arms. Free cutpoints
+# do not absorb it -- an arm-specific SHIFT goes into kappa and an arm-specific SCALE does not --
+# so a record saying the app fits one makes `ledger/model.py` the bug under CLAUDE.md's rule,
+# which Phase C's non-goal forbids repairing.
+#
+# Written as a REQUIREMENT rather than as a ban, because the sentence that has to go on being said
+# contains the words a ban would look for: section 4.3 keeps "per-arm sensitivities" in its first
+# clause so `ledger/hyperparams.py`'s two verbatim quotes stay accurate. So any record naming a
+# per-arm sensitivity has to say, in place, that none is built. On the day one enters the layout,
+# this assertion is deleted together with the clauses it refuses.
+# [decision 308; M4.16 cycle 2, SPEC-C2-01]
+_PER_ARM_SENSITIVITY = re.compile(r"per-arm sensitivit(?:y|ies)|protocol sensitivity", re.I)
+_PER_ARM_UNBUILT = re.compile(r"not built|no per-arm sensitivity is fitted", re.I)
+LEDGER_MODEL = SPIELPLAN / "ledger" / "model.py"
+_MODEL_LAYOUT = "theta = (mu, v[64], gamma[2], cuts[K-1], psi)"
+
+
+def _per_arm_promises(text: str) -> list[str]:
+    """Every mention of a per-arm sensitivity that does not say, in place, that none is built."""
+    flat = " ".join(text.split())
+    return [
+        flat[max(0, m.start() - 60): m.end() + 120]
+        for m in _PER_ARM_SENSITIVITY.finditer(flat)
+        if not _PER_ARM_UNBUILT.search(flat[max(0, m.start() - 60): m.end() + 280])
+    ]
+
+
+def _authored_extract() -> str:
+    """`ARCHITECTURE-extracts.md` down to its first vendored heading -- the part this repo wrote.
+
+    The rule below is about what a RECORD promises, and the vendored bodies are not this
+    repository's record: the file's own header says "Nothing in this file is edited". Reading them
+    with the same rule would fail the file over Appendix C's measured sentence, which is the one
+    thing vendoring exists to make readable. [decision 294; M4.16 cycle 2, SPEC-C2-05]
+    """
+    text = _src(EXTRACTS)
+    head = _VENDORED_HEAD.search(text)
+    return text[: head.start()] if head else text
+
+
+def _vendored_bodies() -> dict[str, str]:
+    """The vendored sections of `ARCHITECTURE-extracts.md`, keyed by the name the header uses."""
+    text = _src(EXTRACTS)
+    heads = list(re.finditer(r"^## (?P<name>.+)$", text, re.M))
+    bodies = {}
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(text)
+        name = head.group("name")
+        key = "Appendix C" if name.startswith("Appendix C") else name.split(".", 1)[0]
+        bodies[key] = text[head.end():end]
+    return bodies
+
+
+# The extract's own heading, and the two subjects §5.2's "What this section supersedes" sentence
+# names. The heading carried five bullets, three of which said in their own text that they are NOT
+# superseded -- the rank-Gaussian target ("simply unbuilt"), the "Guests" paragraph (superseded by
+# decision 166 and §0's deletion of the mood round) and the protocol-reversal guard ("It is not
+# superseded, it is simply unbuilt"). A reader of the file §5.2 promotes to normative was told,
+# under a heading, that §5.2 had decided against two debts nobody has scheduled; the bullets
+# self-correct in prose, and the heading is what an index reads.
+# [decisions 294, 307; M4.16 cycle 4, M416-C4-SPEC-04]
+_SUPERSEDED_HEADING = "**Superseded by section 5.2, and NOT implemented here:**"
+_SELF_DENIAL = re.compile(r"not superseded|simply unbuilt", re.I)
+
+
+# Decision 293 put the Data sources block on /account and argued it, in part, from a navigation
+# fact the app does not have: "/account is also the one surface the phone shell already routes to
+# from the tab bar". It does not. `api/auth.py`'s `SURFACES` is six entries -- home, rate, tonight,
+# rank, map, taste -- and `NavRail.svelte` renders `nav.surfaces` and nothing else; /account lives
+# in `_nav`'s separate `account` list, which `AccountChip` renders in its dropdown, and
+# `AccountChip.svelte` already says so in as many words. The CONCLUSION survives -- /account really
+# is reachable by every signed-in member -- but the reason given for it was false, and two comments
+# this milestone wrote repeat it. Decision 318 corrects the premise; decision 293's own entry is
+# left as the dated record it is, which is decision 304's mechanism.
+#
+# Scoped to the two live records rather than to the register, for that reason: an entry is a dated
+# record and a later number supersedes it. The positive half is what makes this more than a
+# fingerprint -- it fails the day /account moves out of the chip menu, which is the day these
+# comments stop being true for the other reason. [decisions 293, 318; M4.16 cycle 4, M416-C4-ATTR-02]
+_ATTRIBUTION_RECORDS = (
+    "frontend/src/lib/components/DataSources.svelte",
+    "frontend/src/routes/account/+page.svelte",
+)
+_TAB_BAR_ROUTE = re.compile(r"tab bar (?:already )?routes to", re.I)
+
+
+def _flat_comment(path: Path) -> str:
+    """One file's text with its comment furniture taken off, so a claim split across two lines of
+    a `/* ... */` block reads as one sentence. Both offending sentences wrapped mid-claim -- one
+    between "already" and "routes", the other between "routes" and "to" -- and a rule that only
+    saw them unwrapped would have passed the file it was written for."""
+    return " ".join(_src(path).replace("*", " ").split())
+
+
+def test_no_record_says_the_tab_bar_routes_to_the_account_surface():
+    """The navigation fact first, then the records that are about it.
+
+    Read out of `api/auth.py` rather than restated here, because the claim is about what the
+    server sends: the tab bar is `NavRail.svelte` rendering `nav.surfaces`, so a surface absent
+    from `SURFACES` is a surface no tab reaches, whatever a comment says.
+    """
+    auth_source = _src(REPO / "backend" / "spielplan" / "api" / "auth.py")
+    surfaces = next(
+        ast.literal_eval(node.value)
+        for node in ast.walk(ast.parse(auth_source))
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "SURFACES"
+    )
+    hrefs = [entry["href"] for entry in surfaces]
+    assert "/account" not in hrefs, (
+        f"/account is now one of the tab bar's surfaces ({hrefs}), so decision 293's argument has "
+        "become true and these records may say so -- and decision 318's correction, plus this "
+        "guard, come out in the same change"
+    )
+    nav_body = auth_source.partition("def _nav")[2].partition("\ndef ")[0]
+    assert '"href": "/account"' in nav_body, (
+        "/account is no longer in `_nav`'s account list either, so nothing routes a member to the "
+        "surface the Data sources block lives on and decision 293's conclusion has gone with its "
+        "premise"
+    )
+    guilty = [
+        f"{name}: {found.group(0)!r}"
+        for name in _ATTRIBUTION_RECORDS
+        if (found := _TAB_BAR_ROUTE.search(_flat_comment(REPO / name)))
+    ]
+    assert not guilty, (
+        "a record still argues the Data sources block's placement from a tab-bar route that does "
+        "not exist:\n  " + "\n  ".join(guilty)
+        + "\n\n/account is reached from the ACCOUNT CHIP's dropdown, for every signed-in member "
+        "(decision 318). The conclusion is unchanged; the reason is."
+    )
+
+
+# TMDB's API Terms of Use section 3 (Attribution) does not ask for a notice to this effect, it
+# FIXES the sentence -- and licenses exactly one variation in it: the bracketed list is a
+# choose-one for the integrator's own category, and nothing else in it is theirs to write. The
+# block shipped "This product uses the TMDB API but is not endorsed, certified, or otherwise
+# approved by TMDB." for the whole of the milestone that added it: the head of TMDB's
+# developer-FAQ form ("uses the TMDB API but is not endorsed or certified by TMDB") welded to the
+# tail of the terms form, verbatim to neither published string, on a build that makes no TMDB
+# request of any kind -- `connectors/` holds jellyfin, registry and resolve, and the TMDB
+# overviews and poster paths arrive inside the corpus bundle. `docs/RELEASE.md` section 7.1 says
+# all five notices "ship now, verbatim, and are asserted"; four of five did.
+#
+# The sentence is DERIVED from the terms here rather than pasted beside the component, because the
+# three assertions that already pinned the paraphrase are the reason it survived a milestone:
+# `expect(...).toBe(literal)` cannot tell a quotation from a rewrite, and a fourth hand-typed copy
+# would be a fourth thing to edit in step. Resolving the bracket is the one edit TMDB licenses, so
+# the rule takes that one and refuses every other.
+# [decisions 298, 319; M4.16 cycle 4, M416-C4-ATTR-01]
+_TMDB_TERMS_SENTENCE = (
+    "This [website, program, service, application, product] uses TMDB and the TMDB APIs but is "
+    "not endorsed, certified, or otherwise approved by TMDB."
+)
+_TMDB_CATEGORY = "product"
+_TMDB_NOTICE_CARRIERS = (
+    "frontend/src/lib/components/DataSources.svelte",
+    "frontend/src/lib/components/data-sources.test.js",
+    "e2e/specs/19-phone-shell.spec.js",
+)
+# Anything of the notice's SHAPE, so a rewritten head is caught by the same rule that catches a
+# rewritten tail. TMDB's own shorter FAQ form matches this pattern too, which is the point: it is
+# a TMDB-published string and still not the one the terms make a condition of display.
+_TMDB_NOTICE_SHAPED = re.compile(r"This [A-Za-z]+ uses (?:TMDB|the TMDB)[^.]*\.")
+_JS_CONCAT = re.compile(r"'\s*\+\s*'|\"\s*\+\s*\"")
+
+
+def _flat_notice_text(path: Path) -> str:
+    """One file's words, with markup wrapping and JS string concatenation taken off.
+
+    Both halves are load-bearing here. The component wraps the sentence across two lines of markup
+    and the two test files write it as two adjacent literals, because 104 characters plus quoting
+    and indentation does not fit the line this repository holds to -- and a rule that only saw the
+    sentence unsplit would pass every file it was written for.
+    """
+    return _JS_CONCAT.sub("", " ".join(_src(path).split()))
+
+
+def _tmdb_notice() -> str:
+    """TMDB's sentence with its one licensed variation taken."""
+    head, _, rest = _TMDB_TERMS_SENTENCE.partition("[")
+    options, _, tail = rest.partition("]")
+    assert _TMDB_CATEGORY in [word.strip() for word in options.split(",")], (
+        f"{_TMDB_CATEGORY!r} is not one of the categories TMDB's bracket offers ({options!r}), and "
+        "the bracket is the only part of the sentence an integrator is licensed to write"
+    )
+    return f"{head}{_TMDB_CATEGORY}{tail}"
+
+
+def test_the_tmdb_notice_is_tmdbs_own_sentence_and_not_a_paraphrase_of_one():
+    """The one notice on this surface that is not its licence's own string was the one that drifted.
+
+    Held over all three carriers at once, and not over the component alone, because the component
+    is the only one of them a member reads and the other two are what make a correction expensive:
+    a vitest `toBe` and a Playwright `exact` both go red on the fix, so the three move together or
+    the surface and the assertions that pin it have come apart. [decision 319]
+    """
+    required = _tmdb_notice()
+    wrong = []
+    for name in _TMDB_NOTICE_CARRIERS:
+        found = _TMDB_NOTICE_SHAPED.findall(_flat_notice_text(REPO / name))
+        assert found, (
+            f"{name} no longer carries a TMDB attribution notice at all, so either the surface has "
+            "dropped a condition of displaying TMDB content or one of the two assertions that hold "
+            "it to the licence's words has gone"
+        )
+        wrong += [(name, sentence) for sentence in found if sentence != required]
+    assert not wrong, (
+        "the TMDB notice is not the sentence TMDB's API terms fix:\n  "
+        + "\n  ".join(f"{name}: {sentence!r}" for name, sentence in wrong)
+        + f"\n\nrequired: {required!r}\n"
+        "Section 3 licenses exactly one edit, the bracketed category. A notice that is TMDB-shaped "
+        "but not TMDB's words is a breach rather than a copy edit (decision 319)."
+    )
+
+
+def test_the_extract_files_each_debt_under_a_heading_that_is_true_of_it():
+    """A bullet that denies its own heading is a heading that is wrong about it.
+
+    Held both ways. Negatively: nothing under the §5.2 heading may say it is not superseded or is
+    simply unbuilt, which is what three of the five bullets said. Positively: the two clauses §5.2
+    does name must still be there, so the repair cannot be "delete the heading", which would take
+    the §5.2 attribution away from the two things it is true of.
+    """
+    text = _src(EXTRACTS)
+    assert _SUPERSEDED_HEADING in text, (
+        "ARCHITECTURE-extracts.md no longer carries the section 5.2 supersedes heading this guard "
+        "reads; re-read it against whatever replaced it before narrowing this rule"
+    )
+    start = text.index(_SUPERSEDED_HEADING) + len(_SUPERSEDED_HEADING)
+    block = text[start:].split("\n**", 1)[0]
+    denials = sorted({found.lower() for found in _SELF_DENIAL.findall(block)})
+    assert not denials, (
+        f"a bullet under {_SUPERSEDED_HEADING!r} denies that heading in its own words: {denials}. "
+        "Section 5.2 supersedes the Crowd Head and the random-walk prior on b_i and nothing else "
+        "(decision 294); a debt nobody has scheduled is unbuilt, which is not the same claim."
+    )
+    for subject in ("Crowd Head", "random-walk prior"):
+        assert subject in block, (
+            f"{subject!r} is no longer filed under the section 5.2 heading, so the one attribution "
+            "that sentence does make has been lost with the ones that were wrong"
+        )
+
+
+def test_the_vendored_extract_promotes_nothing_from_a_section_that_does_not_carry_it():
+    """A normative pointer is only normative if the thing it points at is there.
+
+    Two rules, and the second is the one that cost a reader a wasted search: a term the authored
+    header attributes to a vendored section must occur in THAT section, and no record may claim
+    sigma sits inside this app's likelihood while `ord_weight` is ones and `_objective` has no
+    sigma term in it. Both the extract and the normative file are read, because §5.2 states the
+    same list in its own words and the two went wrong together. [decision 306]
+    """
+    bodies = _vendored_bodies()
+    assert set(bodies) >= {"3", "Appendix C"}, (
+        f"ARCHITECTURE-extracts.md no longer carries both vendored sections: {sorted(bodies)}"
+    )
+    header = _src(EXTRACTS).split("**Normative in Spielplan**", 1)
+    assert len(header) == 2, "the extract no longer marks what of it is normative in Spielplan"
+    promoted = header[1].split("**Superseded", 1)[0]
+    misattributed = []
+    for term, home in _VENDORED_ATTRIBUTIONS:
+        for credit in _CREDIT.finditer(promoted):
+            where = "Appendix C" if credit.group("where").startswith("Appendix") else "3"
+            if term not in credit.group("claim"):
+                continue
+            if where != home or term not in bodies[where]:
+                misattributed.append(
+                    f"the list credits section {where!r} with {term!r}; it is section {home!r}'s, "
+                    f"and a reader who goes to {where!r} to read the equations finds none"
+                )
+    assert not misattributed, "\n  ".join(["ARCHITECTURE-extracts.md:", *dict.fromkeys(misattributed)])
+
+    # Whitespace collapsed first, because a claim that wraps is still the claim: the authored
+    # header in this very file breaks a sentence mid-phrase at about column 100.
+    spec = _normative_file()
+    claimed = [
+        path.relative_to(REPO).as_posix()
+        for path, text in ((EXTRACTS, _authored_extract()), (spec, _src(spec)))
+        if _SIGMA_IN_LIKELIHOOD.search(" ".join(text.split()))
+    ]
+    assert not claimed, (
+        f"{claimed} still promote sigma INSIDE the likelihood to normative. Appendix C's sigma is "
+        "the rank-Gaussian target's per-level CDF band and that target is not what shipped: "
+        "`ledger/observations.py` writes `ord_weight` as ones with a comment saying why, and "
+        "`ledger/model.py`'s `_objective` has no sigma term. The measured result that DOES carry "
+        "over is the negative one -- never a sample weight. If the target is ever built, delete "
+        "this assertion in the same change as the sentence it refuses."
+    )
+
+    assert _MODEL_LAYOUT in _src(LEDGER_MODEL), (
+        f"`ledger/model.py` no longer states its parameter vector as `{_MODEL_LAYOUT}`, so the "
+        "premise below is unread rather than false. Re-read the layout: if a per-arm scale has "
+        "landed, delete this assertion together with section 4.3's and the extract's `not built` "
+        "clauses in one change."
+    )
+    unbuilt = {
+        path.relative_to(REPO).as_posix(): promises
+        for path, text in ((EXTRACTS, _authored_extract()), (spec, _src(spec)))
+        if (promises := _per_arm_promises(text))
+    }
+    assert not unbuilt, (
+        "a record names a per-arm sensitivity without saying none is built. Section 3's arm 1 "
+        "carries `a_r` and this app has no term for it: the two ordinal arms share one unscaled "
+        "latent with free cutpoints each, and a free cutpoint absorbs an arm-specific shift but "
+        "never an arm-specific scale. Under CLAUDE.md's rule a sentence saying the app fits one "
+        "makes `ledger/model.py` the bug, which is the reading decision 306 refused for sigma:\n  "
+        + "\n  ".join(
+            f"{where}: {found}"
+            for where, promises in sorted(unbuilt.items())
+            for found in promises
+        )
+    )
+
+
+def test_the_attribution_guard_reads_the_section_and_not_the_word():
+    """The self-test, and the direction that keeps it honest: a term genuinely in the section it is
+    credited to passes, and the spelling that shipped does not."""
+    bodies = _vendored_bodies()
+    assert "Davidson" in bodies["3"] and "Davidson" not in bodies["Appendix C"], (
+        "the vendored bodies no longer place Davidson-with-ties in section 3 alone, so the "
+        "attribution this guard is about has stopped being wrong in the way it was"
+    )
+
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    # The spelling that shipped, and the three this rule missed while being named for the
+    # claim rather than for them. The first is how `docs/milestones/M4.16-plan.md` writes this
+    # very clause; the second is Appendix C's own sentence, which is what a person restating
+    # the vendored text would copy; the third is the caught phrase wrapped, which is how the
+    # authored header in that file already breaks its lines. [M4.16 cycle 2, SPEC-C2-05]
+    for refused in (
+        "sigma inside the likelihood and never as a sample weight",
+        "σ **inside** the likelihood and never as a weight",
+        "the margin weighting, sigma-in-the-likelihood, the ridge-anchor + BT fusion",
+        "keep sigma in the likelihood, never as sample weights",
+        "the preconditioner, and keep sigma inside\nthe likelihood",
+    ):
+        assert _SIGMA_IN_LIKELIHOOD.search(flat(refused)), refused
+    # And the two sentences this extract MUST go on stating, one word from every widening of
+    # the rule above: the negative result that DOES carry over, and the denial itself.
+    assert not _SIGMA_IN_LIKELIHOOD.search(flat("σ never as a sample weight; a Laplace output"))
+    assert not _SIGMA_IN_LIKELIHOOD.search(
+        flat("there is no sigma in this app's likelihood to keep there")
+    )
+    # Decision 308's rule, both ways round. The first is the sentence section 4.3 shipped, which
+    # says the app fits something it has no term for; the second is the repair, which keeps the
+    # words `ledger/hyperparams.py` quotes verbatim and adds the one clause that makes them true.
+    # [decision 308; M4.16 cycle 2, SPEC-C2-01]
+    assert _per_arm_promises(
+        "Per-user cutpoints and per-arm sensitivities are **not** shipped - they are fitted "
+        "in-app by design."
+    )
+    assert not _per_arm_promises(
+        "Per-user cutpoints and per-arm sensitivities are **not** shipped - the cutpoints are "
+        "fitted in-app by design, and no per-arm sensitivity is fitted either."
+    )
+    assert not _per_arm_promises(
+        "section 3's arm 1 carries a protocol sensitivity a_r, and it is not built here."
+    )
+    # The scope is load-bearing and not a convenience: Appendix C's vendored line carries the
+    # refused claim verbatim, so a rule this wide read over the whole file would fail it over
+    # text the header says is never edited -- and the authored region, which is this
+    # repository's own record, carries none of it.
+    assert _SIGMA_IN_LIKELIHOOD.search(flat(bodies["Appendix C"])), (
+        "Appendix C no longer carries the sentence this guard is scoped around, so the scoping "
+        "above has stopped proving anything: re-read the vendored body before narrowing it"
+    )
+    assert not _SIGMA_IN_LIKELIHOOD.search(flat(_authored_extract()))
+
+
+# The three records decision 291's premise was copied into. All three are this milestone's own
+# text: the normative clause, the loader's SKIPPED_TABLES reason, and the `Upheld` block quote
+# M4.16 added under the vendored v1.1 sentence it upholds.
+_GENOME_RECORDS = (
+    "docs/spielplan-spec_v2.1.md",
+    "backend/spielplan/importer/load.py",
+    "docs/media-graph-spec_v1.1.md",
+)
+
+# The SECOND universal in the same paragraph, and the one decision 304's guard was never about. It
+# is not a claim about why the block fed nothing; it is a claim about the PATH those 983 columns
+# take -- "zero-imputed always", "never populated", "empty by construction", "the only path those
+# 983 columns ever take" -- and it is false on any install seeded before decision 291. That
+# decision stopped the IMPORT and emptied no table: no migration drops the rows, decision 162
+# seeds content once, and `placement/features.py`'s `_genome` is still wired into `BLOCK_SOURCES`,
+# so on such a box `build_vector` reaches `impute == "zero"` only via `if not pairs` and the block
+# is PRESENT. Under this house's own rule -- where code and spec disagree, the code is the bug --
+# a false universal in the normative file is a licence to delete that reader.
+#
+# A FIXED CLAUSE RATHER THAN A SWEEP, for `_FAMILY_SIZE`'s reason one file over: a rule over every
+# way an unconditional path can be phrased is a rule over prose. And it reads the PATH and not the
+# RULE, because the contract's rule genuinely IS unconditional -- `contract.py`'s
+# `ZERO_IMPUTED = ("genome",)` -- so a sentence saying the contract declares the block zero-imputed
+# must pass, and one saying the columns are zero-imputed ALWAYS must not.
+#
+# More records than the decision's own census named, which is why the count below is DERIVED from
+# the tuple rather than written into this paragraph: decision 304 held its own universal over the
+# three files that had it, decision 311 found it copied into three more, and review cycle 4 found
+# two more again. A guard scoped to a census goes stale the moment the census does, and the count
+# in prose here said "five" over a tuple of six before it was derived -- the defect class this
+# whole milestone exists to close, inside the guard written to close it.
+#
+# READ FLATTENED, since cycle 4. `_src` returns raw text, so a claim that wrapped across two
+# comment lines -- which every one of these does at 108 columns -- was never one string to search.
+# `importer/validate.py` and `tests/test_backup.py` each stated the path unconditionally and were
+# invisible twice over: not in the tuple, and spelled across a `#`.
+# [decisions 304 and 311; M4.16 cycle 4: M416-C4-GEN-01, M416-C4-SPEC-01, M416-C4-GEN-03]
+_GENOME_PATH_RECORDS = _GENOME_RECORDS + (
+    "backend/spielplan/backup/movie_data.py",
+    "backend/tests/test_placement.py",
+    "backend/tests/test_load_mapping.py",
+    "backend/spielplan/importer/validate.py",
+    "backend/tests/test_backup.py",
+)
+_GENOME_PATH_CLAIMS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"zero-imputed always",
+    r"\*{0,2}never\*{0,2} populated",
+    r"empty by construction",
+    # The one spelling with a legitimate narrowed neighbour: "empty on every install THIS BUILD
+    # seeds" is the repair, and a bare match would redden the sentence that fixed it.
+    r"empty on every install(?! this build)",
+    r"the only path those 983 columns ever take",
+    r"zero-imputes for every title",
+    # The two cycle 4 found. `stay empty` has no plural 's' ON PURPOSE: `test_placement.py` says
+    # "`blocks_dropped` stays empty" and "`blocks_empty` stays empty" of the vector build's own
+    # diagnostic fields, which are not these tables, and a rule that reddened those would be a
+    # rule about the word rather than about the claim.
+    r"\bstay empty\b",
+    r"zero-imputes? [^.]{0,40}either way",
+))
+
+
+def _flattened(text: str) -> str:
+    """Comment furniture off and whitespace collapsed, over text from anywhere.
+
+    Split out of `_genome_src` in review cycle 5 so that the self-tests below can be handed the
+    same reading the records get. A flattener asserted only through a file is a flattener nobody
+    has shown a wrapped sentence to. [M4.16 cycle 5, M416-C4-GEN-06]
+    """
+    return " ".join(re.sub(r"(?m)^\s*(#|--)\s?", " ", text).split())
+
+
+def _genome_src(name: str) -> str:
+    """One record, flattened: comment furniture off and whitespace collapsed.
+
+    The claims this rule is about are sentences, and every file that carries one wraps it -- two
+    of them between the two words that matter. Reading raw text asks whether a sentence happens to
+    fit on one line, which is a question about the formatter. [M4.16 cycle 4]
+    """
+    return _flattened(_src(REPO / name))
+
+
+def test_no_record_claims_the_genome_fed_nothing_for_every_title():
+    """Decision 291 stopped importing the MovieLens slice, and argued it from a universal that a
+    grep of the shipped artifacts disproves.
+
+    "Every title carrying a genome vector already has a Backbone coordinate, so the block feeds
+    nothing" was written into §4.1, into `importer/load.py`'s SKIPPED_TABLES reason and into the
+    `Upheld` note under `media-graph-spec_v1.1.md:175`. Re-measured on v20260828 with the app's own
+    rule: 1,063 of the 5,315 genome-carrying titles are NOT warm -- precisely the set §5.3's sweep
+    hands to the Cold Tower -- and 1,055 of those carry a `cold_mask` row, which `scoring/
+    backbone.py` states in its own comment "is treated as ABSENT". Having a row of E and having a
+    coordinate are different facts, and the sentence conflated them.
+
+    The behaviour is not the defect and is not reverted: §4.3 zero-imputes the block always, the
+    Cold Tower's dropout training saw all-zero blocks, and nothing reads `blocks_imputed`. What is
+    refused is a record that makes a true ruling out of a false premise, because the next reader
+    inherits the premise. Held over all three records together, since the sentence spread by being
+    copied. [decision 304; M4.16 cycle 1, M416-291-02]
+
+    READ FLATTENED, since review cycle 5, which is the repair the sibling rule below got in cycle 4
+    and this one did not. `_GENOME_UNIVERSAL`'s gap classes are `[^.\\n]`, so no match crosses a
+    line break; two of the three records are single-long-line Markdown and the third,
+    `importer/load.py`, wraps every comment at 108 columns. The sentence is 104 characters, 110
+    with that module's comment indent, so E501 forbids the one-line form the rule could see and
+    admits only the form it could not. Measured: over forty word-boundary placements of the
+    retired sentence inside one wrapped comment paragraph, the raw read missed 26 and the
+    flattened read missed none. Reading raw text asks whether a sentence happens to fit on one
+    line, which is a question about the formatter. [decision 304; M4.16 cycle 5, M416-C4-GEN-06]
+    """
+    guilty = [
+        f"{name}: {_GENOME_UNIVERSAL.search(_genome_src(name)).group(0)!r}"
+        for name in _GENOME_RECORDS
+        if _GENOME_UNIVERSAL.search(_genome_src(name))
+    ]
+    assert not guilty, (
+        "a record still argues decision 291 from a universal the bundle disproves:\n  "
+        + "\n  ".join(guilty)
+        + "\n\nThe ruling stands; the premise is corrected. A cold-masked Backbone row is not a "
+        "coordinate -- scoring/backbone.py says so -- and a fifth of the genome-carrying titles "
+        "are exactly the ones the Cold Tower is asked to place."
+    )
+
+
+def test_no_record_says_the_genome_block_is_zero_on_every_install():
+    """The second universal in the same paragraph, and the one no guard has ever read.
+
+    Decision 291 stopped the IMPORT of the MovieLens slice. It emptied no table: no migration
+    drops the 888,023 `ml_genome_score` rows a shipped build up to M4.15 loaded, decision 162
+    seeds content once so nothing re-seeds them away, and `placement/features.py`'s `_genome` is
+    still wired into `BLOCK_SOURCES`. `build_vector` only reaches `impute == "zero"` through
+    `if not pairs`, so on such an install the block is PRESENT with real relevance values -- for
+    exactly the 1,055 cold-masked titles decision 304 re-measured as the set the Cold Tower is
+    asked to place.
+
+    So "zero-imputed always" and "never populated" are false there, and this house's own rule --
+    where code and spec disagree, the code is the bug -- makes a false universal in the normative
+    file a licence to delete `_genome` as dead code. Decision 311's repair is to state what this
+    build IMPORTS instead, and to name the pre-291 install as the one case the sentence does not
+    cover. Held over every record the tuple names rather than over decision 311's census, because
+    by the time this was written the sentence had been copied into more files than any census had
+    counted -- twice, one cycle apart. That is the mechanism decision 304's own Cost paragraph
+    named, and the reason the tuple is the count.
+    [decision 311; M4.16 cycle 4: M416-C4-GEN-01, M416-C4-SPEC-01, M416-C4-GEN-03]
+    """
+    guilty = [
+        f"{name}: {found.group(0)!r}"
+        for name in _GENOME_PATH_RECORDS
+        for claim in _GENOME_PATH_CLAIMS
+        if (found := claim.search(_genome_src(name)))
+    ]
+    assert not guilty, (
+        "a record still states the genome block's PATH as unconditional:\n  "
+        + "\n  ".join(guilty)
+        + "\n\nThe contract's RULE is unconditional and may be said so; the path is not. An "
+        "install seeded before decision 291 keeps its rows, `features._genome` still reads them, "
+        "and the block is populated there. Say what this build IMPORTS (decision 311)."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "refused"),
+    [
+        ("the sentence as it shipped in section 4.3",
+         "The genome block is **never** populated - the slice is not imported", True),
+        ("the loader's own spelling",
+         "`0003_content.sql`'s tables stay too -- they are empty by construction now", True),
+        ("the archive's spelling",
+         "the three tables and they are empty on every install, so a restore", True),
+        ("the narrowed sentence that replaced it",
+         "the three tables and they are empty on every install THIS BUILD seeds, so a restore",
+         False),
+        ("a statement about the contract's declared rule, which IS unconditional",
+         "`placement/contract.py` declares the genome block zero-imputed for the whole run",
+         False),
+    ],
+)
+def test_the_genome_path_guard_reads_the_path_and_not_the_contracts_rule(name, text, refused):
+    """Both directions, because either one alone would be a rule nobody can satisfy.
+
+    Refusing the four spellings is the repair. ADMITTING the fifth and sixth is what keeps it
+    honest: `ZERO_IMPUTED = ("genome",)` really is unconditional, so a record that says the
+    contract declares the block zero-imputed is true and must pass -- and so must the narrowed
+    sentence that fixed the third case, which differs from it by two words.
+    """
+    assert any(claim.search(text) for claim in _GENOME_PATH_CLAIMS) is refused, name
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("the sentence as it shipped",
+         "every title carrying a genome vector already has a Backbone coordinate, so the block"),
+        ("the plural it was copied as",
+         "all 5,315 titles carrying a vector already have a Backbone coordinate and the 19"),
+        ("the honest replacement",
+         "a fifth of the titles carrying a genome vector are not warm, and nearly all of those "
+         "carry a cold-masked row that §5.1 already treats as no coordinate"),
+        ("the sentence as `importer/load.py` can legally carry it, wrapped across a `#`",
+         "    # word word word word word word word every title carrying a genome vector already "
+         "has a Backbone\n    # coordinate, so the block feeds nothing."),
+    ],
+)
+def test_the_genome_premise_guard_reads_the_claim_and_not_the_subject(name, text):
+    """Two spellings refused, one accepted. The third is the direction that keeps this honest: a
+    sentence that talks about genome vectors and Backbone coordinates without asserting the
+    universal is what the repair looks like, and a guard that reddened on it would be a guard
+    nobody could satisfy except by deleting the paragraph.
+
+    The fourth is the flattener, made load-bearing. `importer/load.py` is one of the three records
+    and wraps every comment at 108 columns, so the only form the retired sentence can legally take
+    there is a wrapped one -- and `_GENOME_UNIVERSAL` refuses newlines by construction. The case
+    is read through `_flattened`, which is what the records are read through, so a repair that
+    reverted to raw text would fail HERE rather than silently on the one record that wraps.
+    [M4.16 cycle 5, M416-C4-GEN-06]
+    """
+    assert bool(_GENOME_UNIVERSAL.search(_flattened(text))) is (name != "the honest replacement"), name
+
+
+# The other half of decision 311, and the one no record can carry: the two readers it KEPT. The
+# five sentences were narrowed rather than `_genome` deleted to fit them, which leaves this one
+# file the only place in the tree saying the path is live -- live on exactly the installs every
+# other record describes as empty. A maintainer opening it for M5's flywheel finds a 0.5 relevance
+# cut argued from 888,023 bundle rows this build declines and a docstring whose only stated absence
+# is the §8-acquired one decision 304 upheld, and concludes the slice is still imported. Both acts
+# that follow are expensive: re-adding the import, which `test_load_mapping.py` refuses, or
+# deleting the reader as dead code, which nothing refuses and which changes the placement inputs of
+# the 1,055 cold-masked titles §5.3's sweep hands the Cold Tower on every pre-291 install.
+#
+# Held on the decision NUMBER at both sites and not on the argument, because the argument is prose
+# and the number is what a reader follows. The premise is asserted first: if `_genome` has left
+# `BLOCK_SOURCES` then the reader really is gone, and that is a re-read of decision 311 rather than
+# a line to delete here. [decision 311; M4.16 cycle 4, M416-C4-GEN-04]
+#
+# AND THE NUMBER IS 311, since review cycle 5. The rule shipped holding 291 -- the decision that
+# STOPPED the import, which is the number a deletion argument cites -- while the row's `what` and
+# this guard's own name say 311, the decision that kept the readers. Both directions were
+# measured: a docstring reading "Dead code since decision 291 stopped the import: nothing populates
+# these tables, so this reader can be deleted at M5" passed the guard written to refuse exactly
+# that sentence, and the repair the `what` asks for -- naming 311 alone -- went red. Nothing else
+# reads this file's prose, `features.py` not being in `_GENOME_PATH_RECORDS`, so the one sentence
+# was unchallenged in the tree.
+#
+# A PATTERN RATHER THAN A SUBSTRING, because the two sites spell the citation differently and a
+# naive flip would redden a clean tree: `_genome`'s docstring writes `(decision 311)` while the
+# constant's comment writes `[decisions 291, 304 and 311]`, which does not contain the string
+# "decision 311" at all. `test_load_mapping.py:152` already admits two spellings of the same
+# citation by hand, which is this tree's own precedent for the hazard.
+# [decision 311; M4.16 cycle 5, M416-C4-GEN-05]
+_KEPT_BY_311 = re.compile(r"\bdecisions?[\d,\s]*(?:and\s*)?311\b", re.I)
+
+
+def _comment_block_above(text: str, needle: str) -> str:
+    """The run of `#` lines immediately above the line that starts with `needle`."""
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(needle)]
+    assert starts, f"no line in this file starts with {needle!r}, so there is no block to read"
+    start, block = starts[0], []
+    while start and lines[start - 1].lstrip().startswith("#"):
+        start -= 1
+        block.append(lines[start])
+    return " ".join(reversed(block))
+
+
+def test_the_surviving_genome_readers_carry_the_decision_that_kept_them():
+    """A reader kept against five records that read as denying it says so where it stands.
+
+    This is the positive half of the guard above. That one refuses the unconditional path in the
+    records; this one holds the code those records are now narrowed around, because the narrowing
+    only works if the reader itself says why it survived. Comment-only, and that is the point --
+    nothing about the query changes, and the whole defect is that a correct query read like an
+    oversight. [decision 311]
+    """
+    source = _src(SPIELPLAN / "placement" / "features.py")
+    assert '"genome": _genome' in source, (
+        "`_genome` is no longer wired into BLOCK_SOURCES, so the reader decision 311 kept is gone. "
+        "Re-read that decision before accepting this: the five records were narrowed rather than "
+        "the reader deleted, precisely so a pre-291 install's placement inputs could not change on "
+        "the strength of a universal the bundle disproves."
+    )
+    docs = [
+        ast.get_docstring(node) or ""
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_genome"
+    ]
+    assert docs, "`features.py` no longer defines `_genome`, which the assertion above should have said"
+    sites = {
+        "_genome's docstring": docs[0],
+        "the comment above _GENOME_MIN_RELEVANCE": _comment_block_above(source, "_GENOME_MIN_RELEVANCE"),
+    }
+    silent = sorted(where for where, prose in sites.items() if not _KEPT_BY_311.search(prose))
+    assert not silent, (
+        "these read the MovieLens slice and no longer say why they are allowed to:\n  "
+        + "\n  ".join(silent)
+        + "\n\nDecision 291 stopped the import and emptied no table, so both sites are live on any "
+        "install seeded before it. Naming decision 311 -- the one that KEPT them, not the one that "
+        "stopped the import -- is what stops the next reader taking the reader for dead code or "
+        "the cut for a leak. Citing 291 alone sends them to the entry that argues for the deletion."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "prose", "silent"),
+    [
+        ("the docstring's spelling, as it ships",
+         "KEPT DELIBERATELY AFTER DECISION 291, and §4.1/§4.3 were narrowed to say so rather than "
+         "this reader being deleted to fit them (decision 311).", False),
+        ("the constant comment's spelling, as it ships",
+         "THE CUT IS STILL LOAD-BEARING AFTER DECISION 291 [decisions 291, 304 and 311]", False),
+        ("the two-number spelling the loader's reason uses",
+         "the slice is not imported (decisions 291 and 311)", False),
+        ("the sentence this guard exists to refuse",
+         "Dead code since decision 291 stopped the import: nothing populates these tables, so "
+         "this reader can be deleted at M5.", True),
+        ("prose that argues the reader and names nothing",
+         "Reads the MovieLens genome relevance through the link slice, above a relevance cut.",
+         True),
+    ],
+)
+def test_the_kept_reader_guard_reads_the_decision_that_kept_them(name, prose, silent):
+    """Both directions, and the wrong-number direction is the one this rule shipped with.
+
+    The refusal is the repair: a comment declaring `_genome` dead code while citing 291 is the
+    sentence the guard above exists to stop, and a rule holding 291 admitted it word for word.
+    The three ACCEPTED cases are what keeps the repair from being a rule about a string -- the two
+    sites spell the citation differently, and the second of them carries no substring
+    "decision 311" at all, so a guard written as one would redden the tree it was written to
+    protect. [decision 311; M4.16 cycle 5, M416-C4-GEN-05]
+    """
+    assert (not _KEPT_BY_311.search(prose)) is silent, name
+
+
+# The second premise decision 291's wave spread by copying, and the one that reached §10. There is
+# no scheduled movie-data archive: `worker.py`'s JOBS holds exactly one backup job, the one named
+# `nightly-backup`, and `_nightly_backup` calls `backup/nightly.run` -> pg_dump. The writer here
+# has no job, no route and no scheduler, its only reachable caller being the console script
+# `backend/pyproject.toml` declares, and `backup/__init__.py` states that split in
+# its own words. `nightly.prune` rotates by its own dump-name pattern (`_is_own`), so nothing on a
+# clock writes such an archive and nothing on a clock removes one. Decision 292 mandated §10's
+# sentence WITHOUT a cadence -- the plan, README and the decision entry all carry it without the
+# word -- and the word arrived with the transcription into the one file that is normative.
+#
+# Anchored on the SUBJECT rather than on the word, because §2's nightly pg_dump is real and is
+# described as nightly all over this tree; what is refused is a cadence attached to the movie-data
+# archive or to the three tables it used to hold. The register is not read: decision 291's entry is
+# a dated record and is superseded rather than edited, which is decision 304's mechanism.
+# [decision 310; M4.16 cycle 3, M416-C3-291-01]
+_ARCHIVE_CADENCE = re.compile(
+    r"(?:movie-data archive|ml_genome_score|three tables|archived)[^.\n]{0,60}"
+    r"(?:nightly|every night)"
+    r"|(?:nightly|every night)[^.\n]{0,60}(?:movie-data archive|ml_genome_score|three tables)",
+    re.I,
+)
+
+# Where that premise was written. The normative clause, the loader's SKIPPED_TABLES reason, the two
+# tests decision 291 landed with, and the module that owns the archive -- which claims no cadence
+# today and is the first place the next copy would go.
+_ARCHIVE_RECORDS = (
+    "docs/spielplan-spec_v2.1.md",
+    "backend/spielplan/importer/load.py",
+    "backend/spielplan/backup/movie_data.py",
+    "backend/tests/test_backup.py",
+    "backend/tests/test_load_mapping.py",
+)
+
+
+def test_no_record_puts_the_movie_data_archive_on_a_schedule():
+    """§10 called the movie-data archive nightly, and nothing writes it at all.
+
+    A reader of the normative file budgets disk and retention for a content archive in
+    `/data/backups` and goes looking for the job that produces it; there is none, and
+    `nightly.prune(KEEP=14)` would not rotate one if there were. The restriction the sentence
+    states is right and stands -- the bundle is private household data and so is anything cut from
+    it -- so what is refused is the cadence and not the clause. Held over five records together,
+    because this sentence spread the same way decision 291's other premise did: by being copied.
+    [decision 310; M4.16 cycle 3, M416-C3-291-01]
+    """
+    guilty = [
+        f"{name}: {_ARCHIVE_CADENCE.search(_src(REPO / name)).group(0)!r}"
+        for name in _ARCHIVE_RECORDS
+        if _ARCHIVE_CADENCE.search(_src(REPO / name))
+    ]
+    assert not guilty, (
+        "a record puts the movie-data archive on a schedule this app does not run:\n  "
+        + "\n  ".join(guilty)
+        + "\n\n`backup/movie_data` has no worker job, no route and no scheduler - its only caller "
+        "is the `spielplan-movie-data` console script. Section 2's pg_dump is the nightly one; "
+        "this artifact is an operator gesture, and decision 162 seeds content once."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("the sentence as it shipped",
+         "The nightly `/data/backups` movie-data archive inherits the same restriction"),
+        ("the loader's copy",
+         "the 888,023 rows were loaded on every import and archived every night into a block"),
+        ("the test's copy",
+         "The three tables were archived nightly while the importer filled them"),
+        ("section 2's dump, which really is nightly",
+         "the nightly pg_dump under /data/backups keeps fourteen days of the whole database"),
+        ("the honest replacement",
+         "The `/data/backups` movie-data archive inherits the same restriction, and an operator "
+         "writes it by hand"),
+    ],
+)
+def test_the_archive_cadence_guard_reads_the_claim_and_not_the_subject(name, text):
+    """Three spellings refused, two accepted, and the two acceptances are what keep this usable.
+
+    Section 2's dump IS nightly and is described that way in a dozen places, so a guard anchored on
+    the word rather than on the artifact would either fail forever or be narrowed by the first
+    person it stopped -- `_PROVISIONAL`'s argument, one rule over. The last case is the repair
+    itself: the restriction with the cadence taken off it. [M4.16 cycle 3, M416-C3-291-01]
+    """
+    refused = name not in ("section 2's dump, which really is nightly", "the honest replacement")
+    assert bool(_ARCHIVE_CADENCE.search(text)) is refused, name
+
+
+@pytest.mark.parametrize(
+    ("name", "mutation"),
+    [
+        ("the kiosk route", lambda t: t + "\n\nThe slate also renders at `/tv` for the room.\n"),
+        ("the kiosk by name", lambda t: t + "\n\nA TV kiosk shows the slate to the room.\n"),
+        ("the wizard step", lambda t: t + "\n\nStep 5 is member-account creation for the rest.\n"),
+        ("the seams as existing", lambda t: t + "\n\nAdditive via three existing seams.\n"),
+        # Review cycle 4: the count, not a client. Stated as a REPLACEMENT of the amended cell
+        # rather than an append, so the case stops passing the day somebody rewords that row --
+        # which is the assertion above this docstring's whole point. [M4.16 cycle 4, M416-C4-SPEC-02]
+        ("the fixed-count round back in the milestone table",
+         lambda t: t.replace("the adaptive round (median ~11 pairs", "the ~10-vote round (median")),
+        ("the abstain verdict", lambda t: t.replace("NEITHER", "neither")),
+        ("the hold-out draw", lambda t: t.replace("uniform_holdout", "holdout")),
+        ("the dated point release", lambda t: _POINT_RELEASE.sub("**v2.1.1 undated:**", t)),
+        ("the decisions it folded in", lambda t: _POINT_RELEASE.sub("**v2.1.2 (2026-10-01):**", t)),
+        # Review cycle 3, and these are the four the negative half above cannot see: a surface
+        # re-promised in words nobody retired, and a section deleted along with its strike. Every
+        # one was measured green against the file that ships. [M4.16 cycle 3, M416-C3-SPEC-01]
+        ("the seams re-promised as served",
+         lambda t: t.replace("three **designated** seams, **none of which is built**, each owed "
+                             "by **M7**", "three seams the app already serves")),
+        ("the playback route re-filed to the milestone that shipped",
+         lambda t: t.replace("**It is not built, and it is not part of §12's M1 row:**",
+                             "**It ships with §12's M1 row:**")),
+        ("the whole Home Assistant section deleted",
+         lambda t: re.sub(r"\n## 11\. .*?(?=\n## 12\.)", "\n", t, flags=re.S)),
+        ("the key rotation re-promised as an admin control",
+         lambda t: t.replace("there is no admin-facing rotation surface",
+                             "the System card carries the control")),
+        ("the wizard's member-creation step put back",
+         lambda t: t.replace("which is the only place they are made",
+                             "which is where the wizard's fourth step makes them")),
+    ],
+)
+def test_the_normative_file_guard_sees_each_promise_come_back(name, mutation):
+    """docs/TESTING.md: a guard that cannot fail reads as coverage while providing none.
+
+    Thirteen mutations, and six of them are the file as it stood when this milestone opened. Two
+    are what a later wave reaches for when it amends the file in a hurry: a point release with no
+    date, and one with a date and no decisions. Decision 288's mechanism is both -- the date says
+    which wave, the numbers say what the wave was answering to, and a line carrying neither
+    records that the file changed and nothing else.
+
+    The last five are review cycle 3's and they are the reason the positive half exists at all:
+    the negative half is four RETIRED spellings, so the surfaces come back the moment somebody
+    writes them in their own words -- which is what M7 will be doing to §7.3, §11 and §12's rows,
+    after M5 opens with no plan document. [M4.16 cycle 3, M416-C3-SPEC-01]
+    """
+    original = _normative_file().read_text(encoding="utf-8")
+    text = mutation(original)
+    # A mutation that no longer matches proves the guard against a file that has gone. Five of
+    # these quote the normative file verbatim, and a wave that rewords one of those sentences
+    # would otherwise leave its case passing over an edit it never made.
+    # [`test_release_gate.py`'s idiom; M4.16 cycle 3, M416-C3-SPEC-01]
+    assert text != original, (
+        f"the {name!r} mutation no longer changes the normative file -- restate it from the file "
+        "rather than leaving it to pass over a sentence nobody has any more"
+    )
+    assert _normative_problems(text), f"{name} came back and this guard read the file as clean"
+
+
+def test_the_normative_file_guard_leaves_the_words_around_it_alone():
+    """The other half of a self-test: what it must NOT say.
+
+    "TV series" is half of what this app is about and appears on nearly every page of the file;
+    `tvmaze` is a rating source; "not specified" is the string that makes the naive grep for the
+    register's retired sentence useless. None of the three is a promise, and a guard that read one
+    as a promise would be narrowed by the first person it stopped.
+    """
+    innocent = (
+        "Kind is a selection of movies and TV series, never a merge (§4.1 rule 5).\n"
+        "TVmaze credits are CC BY-SA; the join key is not specified by that source.\n"
+        "**Status:** implementation spec.\n"
+        "**v2.1.1 (2026-09-17):** amended in place; this wave folds in decisions 288-303.\n\n"
+        "NEITHER is the abstain verdict; uniform_holdout draws §13's hold-out.\n"
+        "Ending a room is the host's, and the corpus bundle ships no axis artifact.\n"
+        "The model line reads `b(t) 0.52 · β 0.20 · gate 0.93` in the data voice.\n"
+        "Accounts are made in §6.6 Users, which is the only place they are made.\n"
+        "Rotation is the operator command; there is no admin-facing rotation surface.\n"
+        "It is not built, and it is not part of §12's M1 row; three seams, none of which is "
+        "built, are owed by M7.\n"
+    )
+    assert not _normative_problems(innocent)
+
+
+# The one §6.2 figure the normative file borrows from `tonight/round.py`'s calibration paragraph,
+# held under decision 184: a published figure is the one a run produced. §6.2 step 4 said "at the
+# shipped 1.0 no round could ever report `converged`" -- an IMPOSSIBILITY, where the module beside
+# the constant records 0-2 in 20 and `test_tonight_round.py::test_the_sweep_this_constant_was_
+# calibrated_against_still_reads_this_way` asserts that range rather than zero. The sentence was
+# true of decision 175's older sweep ("z = 1.0: cap 10/10") and M4.12 re-measured at the shipped
+# owned-pool scale; round.py, docs/TESTING.md and docs/RELEASE.md all carry the newer figure and
+# the normative file, which CLAUDE.md makes the authority, was the one record never updated. A
+# reader re-deriving `BOUNDARY_Z` from §6.2 -- which is that paragraph's stated purpose -- starts
+# from a false absolute, and a retune that produced a rare `converged` at z = 1.0 reads as a
+# regression against the spec rather than as the documented behaviour.
+#
+# Two groups and a denominator rather than a phrase, so an en dash in prose and a hyphen in a
+# comment are one measurement. [decision 184; M4.16 cycle 4, M416-C4-SPEC-05]
+_CONVERGED_AT_ONE = re.compile(
+    r"z = 1\.0[^.\n]{0,40}?`?converged`? fires (\d+)\D{1,4}(\d+) times? in (\d+)"
+)
+
+
+def test_the_spec_and_the_round_publish_one_convergence_measurement_at_z_one():
+    """The normative file may not state as impossible what this project measured at up to 2 in 20.
+
+    Held against `tonight/round.py`'s own paragraph rather than against a number written here,
+    because that paragraph is the one the calibration harness re-runs -- which is what makes this
+    a comparison of two records of one run rather than a third place for the figure to be wrong.
+    """
+    source = _src(REPO / "backend" / "spielplan" / "tonight" / "round.py")
+    measured = _CONVERGED_AT_ONE.search(source)
+    assert measured, (
+        "`tonight/round.py` no longer publishes the z = 1.0 convergence figure this guard reads, "
+        "so re-read the calibration paragraph before restating it in the spec"
+    )
+    published = _CONVERGED_AT_ONE.search(_normative_file().read_text(encoding="utf-8"))
+    # ASCII in the message, not because the file avoids the section mark but because THIS one is
+    # printed: a cp1252 console is what the operator reads a failing suite on (CLAUDE.md).
+    assert published, (
+        "section 6.2 step 4 no longer states the z = 1.0 convergence figure. It once said no "
+        "round could EVER report `converged` at 1.0, which the project's own sweep disproves at "
+        f"up to 2 in 20 -- state the measurement `tonight/round.py` publishes: {measured.group(0)!r}"
+    )
+    assert published.groups() == measured.groups(), (
+        f"section 6.2 step 4 publishes {published.group(0)!r} and `tonight/round.py` measured "
+        f"{measured.group(0)!r}: one run produced one number (decision 184)"
+    )
+
+
+# --- M4.16 cycle 4: the fold moved subjects BETWEEN steps, and the source cites step numbers ---
+
+# The 54a-54h fold inserted the blind ballot as step 6, which renumbered everything after it --
+# and it also MOVED three subjects: the tilt and its centring lever out of the old "Combine" into
+# the new step 4, the no-re-ranking clause out of the old "Result" into step 7, and the budget-fit
+# copy out of the old "Solo mode" into step 8. `spec_coverage.toml:2404-2407` records an audit of
+# "all fifty step citations in this map" and two repairs, and stops at the map's edge. Nobody
+# audited the 146 citations under `backend/spielplan/` and `frontend/src/`: eight resolved to the
+# right paragraph BEFORE this milestone and to the wrong one after it, which is the failure
+# `ROADMAP-to-M5.md:534-538` measured before the fold (21 of 30 map rows misresolving) and the
+# fold's stated purpose was to end -- reproduced one directory over, by the fold itself.
+#
+# Written as (what the source calls the subject, the phrase in the normative file that fixes which
+# step carries it) rather than as a table of step numbers, because a table of step numbers is the
+# artifact that just went stale. The number is RE-DERIVED from the file on every run, so the
+# owner's next fold re-points these citations' guard instead of outliving it; the only escape is
+# to restate the phrase, which is a change to what is being asserted and reads as one in a diff.
+# ASCII in every message below -- the citations interpolated into them carry a section mark, and
+# a cp1252 console is what a failing suite is read on (CLAUDE.md).
+# [CLAUDE.md Conventions; ROADMAP-to-M5.md:534-538; M4.16 cycle 4, M416-C4D2-SPEC-02]
+_FOLDED_STEP_CITATIONS: tuple[tuple[str, str], ...] = (
+    (r"step (\d)'s centring lever", "centred on the candidate-pool mean"),
+    (r"step (\d)'s separating answer", "chosen-minus-rejected DNA"),
+    (r"step (\d)'s observation for one answer", "(decision 154)"),
+    (r"decision 218; §6\.2 step (\d)", "(decision 218)"),
+    (r"step (\d)'s tilt\b", "a **mood tilt** learned from this round's answers"),
+    (r"step (\d).{0,15}?nothing re-ranks within the evening",
+     "nothing re-ranks within the evening"),
+    (r"step (\d)'s two branches", "fits your 130 min"),
+)
+
+
+def _step_citation_sources() -> list[Path]:
+    """The population `spec_coverage.toml`'s own audit note stops short of: the shipped source."""
+    return [
+        *sorted(SPIELPLAN.rglob("*.py")),
+        *[p for p in sorted(FRONTEND.rglob("*")) if p.suffix in {".js", ".svelte"}],
+    ]
+
+
+def _flat_citations(source: str) -> str:
+    """One line, comment markers dropped, so a citation that wraps is still one sentence.
+
+    `tilt.py` puts "because section 6.2 step 7 says" at the end of one line and "nothing re-ranks
+    within the evening" at the start of the next, which is the shape a line-oriented reader misses
+    and the shape the house comment style produces on every long argument.
+
+    Not `_flattened` above, which reads RECORDS -- `#` and `--` furniture, the two shapes a
+    markdown or TOML record comes in. This reads SOURCE, where the marker is also `*` and `//`
+    and where `*/` is furniture rather than text. Sharing one reader between the two would make
+    the records guard strip a JSDoc terminator it bounds a paragraph at.
+    """
+    return " ".join(
+        re.sub(r"^\s*(?:#+|\*|//)\s?", "", line).strip() for line in source.splitlines()
+    )
+
+
+def _printable(text: str) -> str:
+    """The matched citation, on a console that is cp1252 (CLAUDE.md).
+
+    This is the one guard here whose message QUOTES the source, and the thing it quotes is a
+    section mark followed by a step number, inside sentences this codebase writes with em
+    dashes -- so it is guaranteed to interpolate both. Two named substitutions because those
+    two have readable ASCII spellings the rest of this file already uses, then a hard fallback:
+    a failure message that crashes the console is a failure message nobody reads.
+    """
+    spelled = text.replace("\u00a7", "section ").replace("\u2014", "--")
+    return spelled.encode("ascii", "replace").decode("ascii")
+
+
+def _spec_62_steps() -> dict[int, str]:
+    """Section 6.2's numbered steps, keyed by the number the normative file gives them today."""
+    body = _normative_file().read_text(encoding="utf-8")
+    section = re.search(r"^### 6\.2 .*?(?=^### 6\.3 )", body, re.S | re.M)
+    assert section, (
+        "the normative file no longer carries a section 6.2, so no step citation in the source "
+        "resolves to anything -- read the file before restating this rule"
+    )
+    steps: dict[int, str] = {}
+    current: int | None = None
+    for line in section.group(0).splitlines():
+        head = re.match(r"(\d+)\. \*\*", line)
+        if head:
+            current = int(head.group(1))
+            steps[current] = ""
+        if current is not None:
+            steps[current] += line + "\n"
+    assert len(steps) >= 2, "section 6.2 no longer reads as a numbered list of steps"
+    return steps
+
+
+def _step_citation_problems(name: str, source: str) -> list[str]:
+    """Every citation in `source` naming a step whose text does not carry the subject cited."""
+    steps = _spec_62_steps()
+    flat = _flat_citations(source)
+    problems: list[str] = []
+    for pattern, phrase in _FOLDED_STEP_CITATIONS:
+        owning = sorted(n for n, text in steps.items() if phrase in text)
+        if len(owning) != 1:
+            problems.append(
+                f"{phrase!r} occurs in {len(owning)} of section 6.2's steps {owning}, so it "
+                "cannot fix a step number: re-anchor this rule on a phrase the file carries once"
+            )
+            continue
+        for match in re.finditer(pattern, flat):
+            if int(match.group(1)) != owning[0]:
+                problems.append(
+                    f"{name} cites {_printable(match.group(0))!r}, and section 6.2 carries "
+                    f"{phrase!r} in step {owning[0]}"
+                )
+    return problems
+
+
+def test_no_source_citation_names_a_step_the_fold_moved_its_subject_out_of():
+    """CLAUDE.md makes these citations load-bearing: they are how a reader checks a rule.
+
+    The map audited itself and the source was left as it stood. `pool.py`'s fit line promises its
+    two branches are "verbatim" from a step that does not contain them, and a reader following
+    `tilt.py` to the "separating answer" lands on the shortlist paragraph, which has no
+    chosen-minus-rejected rule in it at all. [M4.16 cycle 4, M416-C4D2-SPEC-02]
+    """
+    guilty = [
+        problem
+        for path in _step_citation_sources()
+        for problem in _step_citation_problems(path.relative_to(REPO).as_posix(), _src(path))
+    ]
+    assert not guilty, (
+        "a source citation names a section 6.2 step that does not carry what it cites:\n  "
+        + "\n  ".join(guilty)
+        + "\n\nThe fold renumbered the steps AND moved three subjects between them. Re-point the "
+        "citation; the step numbers above are read from the normative file on every run."
+    )
+
+
+def test_every_folded_step_citation_rule_still_has_a_citation_to_hold():
+    """A rule about a subject nobody cites any more reads as coverage while providing none.
+
+    The other half of the same worry: `_FOLDED_STEP_CITATIONS` is seven hand-written patterns over
+    a source tree that moves, and a pattern matching nothing would go on passing for ever over a
+    comment somebody reworded. Held per pattern rather than in total, because six live patterns
+    hide the seventh. [docs/TESTING.md; M4.16 cycle 4, M416-C4D2-SPEC-02]
+    """
+    flat = [_flat_citations(_src(path)) for path in _step_citation_sources()]
+    idle = [
+        pattern
+        for pattern, _ in _FOLDED_STEP_CITATIONS
+        if not any(re.search(pattern, text) for text in flat)
+    ]
+    assert not idle, (
+        "these step-citation rules match nothing under `backend/spielplan` or `frontend/src` and "
+        f"hold nothing: {idle}. Re-anchor each on the wording that replaced it, or delete it in "
+        "the same change as the comment it was about."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "relative", "mutation"),
+    [
+        # Each case is the citation exactly as it stood before this cycle repaired it, so a case
+        # that stops changing the file is a case whose site was reworded -- which is why the
+        # assertion below reads the mutation as well as the guard. [`test_release_gate.py`'s idiom]
+        ("the centring lever back in the old Combine", "backend/spielplan/home/rail.py",
+         lambda t: t.replace("§6.2 step 4's centring lever",
+                             "§6.2 step 5's centring lever")),
+        ("the separating answer back in the old Combine", "backend/spielplan/tonight/tilt.py",
+         lambda t: t.replace("§6.2 step 4's separating answer",
+                             "§6.2 step 5's separating answer")),
+        ("the four-branch observation back in the old Combine",
+         "backend/spielplan/tonight/tilt.py",
+         lambda t: t.replace("§6.2 step 4's observation for one answer",
+                             "§6.2 step 5's observation for one answer")),
+        ("decision 218's own citation back in the old Combine",
+         "backend/spielplan/tonight/tilt.py",
+         lambda t: t.replace("decision 218; §6.2 step 4]",
+                             "decision 218; §6.2 step 5]")),
+        ("the tilt back in the old Combine", "backend/spielplan/tonight/play.py",
+         lambda t: t.replace("§6.2 step 4's tilt", "§6.2 step 5's tilt")),
+        ("the no-re-ranking clause back in the old Result", "backend/spielplan/tonight/pool.py",
+         lambda t: t.replace("§6.2 step 7 — nothing re-ranks",
+                             "§6.2 step 6 — nothing re-ranks")),
+        ("the wrapped no-re-ranking clause back in the old Result",
+         "backend/spielplan/tonight/tilt.py",
+         lambda t: t.replace("§6.2 step 7 says", "§6.2 step 6 says")),
+        ("the budget-fit copy back in the old Solo mode", "backend/spielplan/tonight/pool.py",
+         lambda t: t.replace("§6.2 step 8's two branches",
+                             "§6.2 step 7's two branches")),
+    ],
+)
+def test_the_step_citation_guard_sees_a_citation_the_fold_left_behind(name, relative, mutation):
+    """The eight sites as they stood, restored one at a time.
+
+    Not a synthetic string: this guard exists because these exact comments were green, and a
+    self-test over invented text would prove a regex rather than the rule. [M4.16 cycle 4,
+    M416-C4D2-SPEC-02]
+    """
+    path = REPO / relative
+    original = _src(path)
+    text = mutation(original)
+    assert text != original, (
+        f"the {name!r} mutation no longer changes {relative} -- restate it from the file rather "
+        "than leaving it to pass over a comment nobody has any more"
+    )
+    assert not _step_citation_problems(relative, original), f"{relative} is not clean to start with"
+    assert _step_citation_problems(relative, text), (
+        f"{name} came back and this guard read the source as clean"
+    )
+
+
+# --- M4.16 spec-10: the decision register counts itself, and two documents publish that count ---
+
+# `### 7. ...`, `### 288. ...`: one heading per numbered entry, proposals and owner decisions in
+# one sequence. This is the population; everything below is a claim about it.
+_REGISTER_ENTRY = re.compile(r"^### (\d+)\. ", re.M)
+
+# The figure both documents publish, in the one wording they share. Counted as well as read,
+# because a document publishing it twice is two claims to keep in step and this guard would
+# otherwise hold whichever it met first.
+_ENTRY_COUNT = re.compile(r"(\d+) numbered entries")
+
+# A decision range as either document spells it -- `162-303`, and the en dash a markdown editor
+# substitutes. Three digits each side on purpose: `2026-09-17` and `1-161` are not decision
+# ranges, and a line reference like `:126-134` never appears inside the two blocks read here.
+_DECISION_RANGE = re.compile(r"\b(\d{3})\s*[-\u2013]\s*(\d{3})\b")
+
+
+def _publication_block(path: Path) -> tuple[str, int]:
+    """The block of prose in which a document publishes the register's size, and its first line.
+
+    A markdown list item in README and a paragraph in the register's header, so the walk stops on
+    a blank line or the next `- ` bullet rather than assuming either shape. The block matters
+    because the range clause is read inside it: README states `187-193` and `167-178` elsewhere --
+    both real decision ranges, neither a claim about where the register ends -- and a sweep over
+    the whole file would hold this guard to a sentence it is not about.
+    """
+    lines = _src(path).splitlines()
+    anchor = [i for i, line in enumerate(lines) if _ENTRY_COUNT.search(line)]
+    assert len(anchor) == 1, (
+        f"{path.relative_to(REPO).as_posix()} publishes the register's size in {len(anchor)} "
+        "places. One file states it once, or this guard holds whichever it read first."
+    )
+    first = last = anchor[0]
+    while first > 0 and lines[first - 1].strip() and not lines[first].startswith("- "):
+        first -= 1
+    while last + 1 < len(lines) and lines[last + 1].strip() and not lines[last + 1].startswith("- "):
+        last += 1
+    return "\n".join(lines[first: last + 1]), first + 1
+
+
+# The THIRD claim in the same sentence, and the one nothing read. README published "132 of them
+# over fourteen dated sittings, 2026-08-29 to 2026-09-17" beside two figures that ARE derived, so
+# it inherited their credibility -- and 14 is neither the 24 `## Decisions taken` blocks the
+# register holds nor the 12 distinct dates they fall on nor the 11 dates that carry a numbered
+# decision. The range was wrong with it: entry 162 sits on 2026-09-01, and the 2026-08-29 sitting
+# holds none of the numbered decisions at all, being the seven answers indexed rather than
+# numbered. A SITTING is a distinct date, which is the idiom this file already uses one guard over
+# ("286 entries across twelve sittings"), and the count is over the sittings that actually carry
+# one of the entries the sentence is about. [decision 184; M4.16 cycle 4, REL-C4-03]
+_SITTINGS = re.compile(
+    r"(?P<count>[A-Za-z]+) dated sittings?, (?P<first>\d{4}-\d{2}-\d{2}) to "
+    r"(?P<last>\d{4}-\d{2}-\d{2})"
+)
+_SITTING_BLOCK = re.compile(r"^## Decisions taken \(owner, (\d{4}-\d{2}-\d{2})", re.M)
+
+
+def _held_sittings() -> tuple[int, str, str]:
+    """The dates on which a numbered owner decision was actually taken, counted off the register."""
+    text = _src(REGISTER)
+    blocks = list(_SITTING_BLOCK.finditer(text))
+    dates = set()
+    for index, block in enumerate(blocks):
+        end = blocks[index + 1].start() if index + 1 < len(blocks) else len(text)
+        numbers = [int(n) for n in _REGISTER_ENTRY.findall(text[block.end():end])]
+        if any(number >= 162 for number in numbers):
+            dates.add(block.group(1))
+    assert dates, "the register carries no dated sitting holding a numbered owner decision"
+    return len(dates), min(dates), max(dates)
+
+
+def _publication_claims(block: str) -> tuple[int, int, tuple[int, str, str] | None]:
+    """What a block claims about the register: how many entries it holds, where its numbering ends,
+    and -- where it states one -- over how many dated sittings and between which dates."""
+    count = _ENTRY_COUNT.search(block)
+    sittings = _SITTINGS.search(block)
+    spelled = sittings.group("count").lower() if sittings else ""
+    return (
+        int(count.group(1)) if count else 0,
+        max((int(end) for _, end in _DECISION_RANGE.findall(block)), default=0),
+        (
+            _COUNT_WORDS.index(spelled) if spelled in _COUNT_WORDS else -1,
+            sittings.group("first"),
+            sittings.group("last"),
+        ) if sittings else None,
+    )
+
+
+def _register_drift(held: int, highest: int, published: dict[str, tuple]):
+    """The three ways a published figure goes stale, kept apart because they fail differently."""
+    wrong = [f"{where} publishes {n} entries" for where, (n, *_) in published.items() if n != held]
+    stale = [
+        f"{where} states a decision range ending at {end}"
+        for where, (_, end, *_) in published.items() if end != highest
+    ]
+    sittings = []
+    derived = _held_sittings()
+    for where, claim in published.items():
+        if claim[2] is None:
+            continue
+        count, first, last = claim[2]
+        if (count, first, last) != derived:
+            spelled = _COUNT_WORDS[count] if 0 <= count < len(_COUNT_WORDS) else "an unreadable"
+            sittings.append(
+                f"{where} states {spelled} dated sittings, {first} to {last}, and the register "
+                f"holds {_COUNT_WORDS[derived[0]]} carrying a numbered decision, "
+                f"{derived[1]} to {derived[2]}"
+            )
+    if not any(claim[2] for claim in published.values()):
+        sittings.append(
+            "neither document states the sittings the decisions were taken over any more, so the "
+            "one figure in that sentence a grep disproves is now unpublished rather than derived"
+        )
+    return wrong, stale, sittings
+
+
+def _register_publications() -> tuple[int, int, dict[str, tuple[int, int]]]:
+    numbers = [int(match.group(1)) for match in _REGISTER_ENTRY.finditer(_src(REGISTER))]
+    assert numbers, "docs/spec-v2.2-proposals.md holds no `### N.` entries at all"
+    published = {}
+    for path in (README, REGISTER):
+        block, line = _publication_block(path)
+        published[f"{path.relative_to(REPO).as_posix()}:{line}"] = _publication_claims(block)
+    return len(numbers), max(numbers), published
+
+
+def test_the_proposal_ledger_counts_itself():
+    """Decision 184's rule applied to a number two documents had both typed rather than read.
+
+    README and the register's own header said "161 proposals" and "all seven owner decisions were
+    taken on 2026-08-29" over a file that had grown to 286 entries across twelve sittings -- while
+    README itself cited decisions 162 and 163 five hundred lines further down and the coverage map
+    cited 303. Nothing was wrong with the file; what was wrong is that its size was published
+    twice and derived never, so a reader could not tell which of the two was the measurement.
+
+    Two claims, and they fail differently. The COUNT catches a block of decisions landing without
+    the header being restated -- the ordinary drift, and the one that happens every wave. The
+    RANGE catches the subtler version: a wave that restates the count and leaves the range ending
+    where the previous wave stopped, which reads as precise and is the form an auditor trusts
+    most. Both are re-derived from the headings, so a review cycle taking decision 304 turns this
+    red until both documents say so, which is the intended cost rather than an accident.
+    [README.md; docs/spec-v2.2-proposals.md header; decision 184;
+     row `platform-the-proposal-ledger-counts-itself`]
+    """
+    held, highest, published = _register_publications()
+    wrong, stale, sittings = _register_drift(held, highest, published)
+    assert not wrong, (
+        f"docs/spec-v2.2-proposals.md holds {held} `### N.` entries and:\n  "
+        + "\n  ".join(wrong)
+        + "\n\nRe-derive it (`grep -cE '^### [0-9]+\\.'`) rather than adjusting whichever figure "
+        "looks wrong. A count nobody re-derived is a measurement nobody made."
+    )
+    assert not stale, (
+        f"the register's highest numbered entry is {highest} and:\n  "
+        + "\n  ".join(stale)
+        + "\n\nA range ending one wave back is worse than no range: it is the form an auditor "
+        "trusts, and it sends them looking for the newest decisions in a file that has them."
+    )
+    assert not sittings, (
+        "the decomposition of that same sentence is typed rather than counted:\n  "
+        + "\n  ".join(sittings)
+        + "\n\nA SITTING is a distinct date carrying a numbered owner decision. The 2026-08-29 "
+        "block holds none of them -- it is the seven answers indexed rather than numbered -- so a "
+        "range that starts there sends a reader looking for entry 162 in a sitting without it."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "claim", "expect_count", "expect_range", "expect_sittings"),
+    [
+        ("a wave landed and nobody restated the count", (270, 303, None), True, False, True),
+        ("the count moved and the range did not", (286, 287, None), False, True, True),
+        ("a document states neither", (0, 0, None), True, True, True),
+        ("both are current and neither states a sitting", (286, 303, None), False, False, True),
+        ("every figure derived", (286, 303, (11, "2026-09-01", "2026-09-17")), False, False, False),
+        # Review cycle 4: the sentence as README published it. Two derived figures and a third
+        # that matched no available reading -- not the 24 blocks, not the 12 dates, not the 11
+        # dates carrying a decision -- inside the same clause, which is what lent it their
+        # credibility. The range was wrong with it. [decision 184; M4.16 cycle 4, REL-C4-03]
+        ("the sittings count typed beside two derived figures",
+         (286, 303, (14, "2026-08-29", "2026-09-17")), False, False, True),
+        ("the count right and the range starting a sitting too early",
+         (286, 303, (11, "2026-08-29", "2026-09-17")), False, False, True),
+    ],
+)
+def test_the_ledger_count_guard_reads_all_three_halves(
+        name, claim, expect_count, expect_range, expect_sittings):
+    """Each claim shown refusing, and shown not refusing what the others are about.
+
+    The third case is the one an earlier draft passed: a block that publishes nothing at all reads
+    as agreeing with every figure unless the absence is itself a drift, and "the header stopped
+    saying how big the file is" is exactly how this record went quiet the first time. The fourth
+    and fifth are the sittings clause's version of the same pair -- nobody states it, and it is
+    right -- and the last two are the two ways it was wrong at once.
+    """
+    wrong, stale, sittings = _register_drift(286, 303, {"docs/somewhere.md:1": claim})
+    assert bool(wrong) is expect_count, name
+    assert bool(stale) is expect_range, name
+    assert bool(sittings) is expect_sittings, name
+
+
+# --- M4.16 spec-15: a comment that names a file names one that is there ------------------------
+#
+# CLAUDE.md makes these citations load-bearing -- "comments argue why and cite the spec", and in
+# practice they also cite the guard that enforces the rule, which is how the next reader finds it.
+# A citation to a file that does not exist costs that reader the same hour every time, and there
+# is no way to notice one except by following it.
+#
+# Scope is the four shapes the coverage row names, resolved the way this repository spells them.
+# Everything else a comment mentions is deliberately NOT read: `Lib/asyncio/mixins.py` is CPython,
+# `mdc/export.py` and `scripts/build_content.py` are the corpus project, `artifacts/manifest.json`
+# is a path inside the bundle and `_app/version.json` is a URL SvelteKit serves. None of them is a
+# file this tree could be asked to hold, and a guard that demanded them would be switched off.
+
+_COMMENT_SOURCES = {".py", ".js", ".svelte", ".css", ".html"}
+
+# A path with at least one directory in it, ending in a source extension. The lookbehind refuses a
+# preceding `/`, which is what keeps `https://example.com/app.js` from being read as `com/app.js`.
+#
+# `+` IS IN THE FINAL SEGMENT since review cycle 5, and without it this rule could not see a single
+# SvelteKit route file. `+` was outside `[\w.-]` and the `(?:[\w.-]+/)+` prefix forces the last
+# segment to start immediately after a `/` -- which is where the `+` sits -- so no backtrack
+# reached `page.svelte` and `frontend/src/routes/admin/data/+page.svelte`, named in
+# `api/artifacts.py`'s `bundle_state` docstring as a fully qualified `frontend/...` path, was
+# invisible to the guard whose row promises exactly that shape exists. It is not a deliberate
+# non-read either: the scope comment above enumerates what this knowingly does not follow --
+# CPython, the corpus project, a path inside the bundle, a URL SvelteKit serves -- and route files
+# are in none of those. Measured: the widening takes the candidate set from 98 to 101, all three
+# new ones exist, and `_missing_named_files` stays empty. It does not make the guard red; it makes
+# it able to go red. [M4.16 cycle 5, M416-C5-SPEC15-01]
+_QUALIFIED_PATH = re.compile(
+    r"(?<![\w./-])((?:[\w.-]+/)+[\w.+-]+\.(?:py|js|mjs|svelte|css|json|html|svg))(?![\w])"
+)
+# And the one unqualified shape this codebase uses constantly: `test_landmine_guards.py`, named
+# without its directory because there is only one place tests live.
+_BARE_TEST = re.compile(r"(?<![\w./-])(test_\w+\.py)(?![\w])")
+
+# The first frontend segments a comment writes: `frontend/...` in full, or relative to the app.
+_FRONTEND_ROOTS = ("frontend/", "src/", "static/", "lib/", "routes/")
+
+# Dated exceptions. Each names a path a comment states is ABSENT, together with the reason it
+# cannot simply be repaired -- and each is held NOT STALE in both directions below: the entry is
+# only allowed while the file is still missing AND still named. The day either changes, the entry
+# goes in the same change as the comment that needed it.
+COMMENT_PATH_EXCEPTIONS = {
+    "db/dna.py": (
+        "2026-09-17: `0004_dna.sql:11` names it as the read layer holding §4.1 rule 2. It "
+        "was never written -- the reads are in `db/library.py` and `home/why.py` -- and the "
+        "migration is applied and sha256-checksummed, so correcting the comment in place is a "
+        "hard startup error for every existing install. The correction is recorded in "
+        "`db/library.py`'s module docstring instead, which is why this path is named twice in "
+        "the tree and cannot be made to resolve."
+    ),
+    "frontend/static/tmdb-logo.svg": (
+        "2026-09-17: decision 298's owed asset. TMDB's terms ask for the logo beside the notice "
+        "and no agent may fabricate a trademarked file, so `DataSources.svelte` renders a named "
+        "slot when the file is there and nothing when it is not -- a comment about an absence "
+        "rather than a citation to follow. `docs/RELEASE.md` section 7.1 carries the debt, and "
+        "the day the owner drops the file in this entry and that section go together."
+    ),
+    "sync/resolve.py": (
+        "2026-09-17: `backup/movie_data.py:32` means `connectors/resolve.py`, which is where "
+        "`resolve_title_id` mints a title for a Jellyfin item nobody has seen before. The "
+        "sentence is right about the mechanism and wrong about the module, and it is repeated in "
+        "`test_backup.py:1367`. Both files belong to the milestone that owns `backup/`; this is "
+        "recorded here rather than repaired across an ownership line."
+    ),
+}
+
+
+def _comment_prose(path: Path) -> list[tuple[int, str]]:
+    """Every comment in one source file, as (line, text).
+
+    Python is tokenized rather than scanned, so a trailing `# see api/deps.py` is read and a `#`
+    inside a string is not; docstrings come from the AST, because in this codebase the docstring
+    IS the argued comment and most citations live there. Everything else is scanned for `//`,
+    `/* */` and `<!-- -->`, which over-reads a `//` inside a string literal -- harmless here, since
+    the only consequence is holding one more sentence to the tree.
+
+    The markup form arrived in review cycle 5, and it is the one shape unique to the files
+    `.svelte` and `.html` were added to `_COMMENT_SOURCES` for: this frontend writes 142 argued,
+    spec-citing `<!-- -->` blocks and none of them was read, so a rule whose own self-test is named
+    "reads every shape a citation comes in" was blind to roughly half the comment mass of the
+    surfaces it scans. Three of those blocks already name an in-scope module. The tree is green
+    either way today -- both paths happen to be named in a Python comment as well -- which is the
+    point: the guard was passing by coincidence rather than by looking.
+    [M4.16 cycle 5, M416-C5-SPEC15-02]
+    """
+    text = _src(path)
+    found: list[tuple[int, str]] = []
+    if path.suffix == ".py":
+        try:
+            tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            tokens = []
+        found += [(tok.start[0], tok.string) for tok in tokens if tok.type == tokenize.COMMENT]
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
+        if tree is not None:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                    doc = ast.get_docstring(node, clean=False)
+                    if doc:
+                        found.append((getattr(node, "lineno", 1), " ".join(doc.split())))
+        return found
+    for block in re.finditer(r"/\*.*?\*/|<!--.*?-->", text, re.S):
+        found.append((text.count("\n", 0, block.start()) + 1, " ".join(block.group(0).split())))
+    for line_number, line in enumerate(text.splitlines(), 1):
+        for slashes in re.finditer(r"(?<![:/])//", line):
+            found.append((line_number, line[slashes.start():]))
+    return found
+
+
+def _named_in_scope(named: str, packages: set[str]) -> Path | None:
+    """Where this repository would keep `named`, or None when it is not this repository's to keep."""
+    head = named.split("/", 1)[0]
+    if named.startswith("backend/tests/") and named.endswith(".py"):
+        return REPO / named
+    # The same path with the `backend/` left off, which is how this package actually writes it.
+    # `db/library.py:14` cited `tests/test_no_weight_filters.py` -- a file that has never existed
+    # on any branch -- and this reader returned None for it, so `_comment_named_files` dropped the
+    # candidate unplaced and the guard reported nothing: `_QUALIFIED_PATH` extracts the path,
+    # `_BARE_TEST`'s lookbehind refuses it for the slash, and no branch here knew the prefix. The
+    # shape the row was opened for was the one shape it could not see, and that comment was
+    # repaired by hand rather than by this guard catching it. There is exactly one tests directory
+    # in the tree -- `_BARE_TEST`'s own argument -- so the resolution is not a guess; `.py` only,
+    # because `tests/fixtures/*.json` is wider than what the row's `what` claims.
+    # [M4.16 cycle 4, M416-C4-SPEC15-01]
+    if named.startswith("tests/") and named.endswith(".py"):
+        return REPO / "backend" / named
+    if _BARE_TEST.fullmatch(named):
+        return REPO / "backend" / "tests" / named
+    if named.startswith("ops/") and named.endswith(".py"):
+        return REPO / named
+    if named.startswith("backend/spielplan/") and named.endswith(".py"):
+        return REPO / named
+    if named.startswith("spielplan/") and named.endswith(".py"):
+        return REPO / "backend" / named
+    if head in packages and named.endswith(".py"):
+        return REPO / "backend" / "spielplan" / named
+    if named.startswith("frontend/"):
+        return REPO / named
+    if named.startswith(_FRONTEND_ROOTS):
+        here = REPO / "frontend" / named
+        return here if here.exists() else REPO / "frontend" / "src" / named
+    return None
+
+
+def _spielplan_packages() -> set[str]:
+    """`api`, `db`, `home`, `sync`, ... read off the tree, because the relative spelling is what
+    the citations use: `db/library.py`, never `spielplan/db/library.py`."""
+    return {p.name for p in SPIELPLAN.iterdir() if p.is_dir() and not p.name.startswith("_")}
+
+
+def _comment_named_files(roots) -> dict[str, list[str]]:
+    """Every in-scope path named by a comment under `roots`, mapped to where it is named."""
+    packages = _spielplan_packages()
+    named: dict[str, list[str]] = {}
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in _COMMENT_SOURCES:
+                continue
+            where = path.name if REPO not in path.parents else path.relative_to(REPO).as_posix()
+            for line, prose in _comment_prose(path):
+                found = _QUALIFIED_PATH.findall(prose) + _BARE_TEST.findall(prose)
+                for candidate in found:
+                    if _named_in_scope(candidate, packages) is not None:
+                        named.setdefault(candidate, []).append(f"{where}:{line}")
+    return named
+
+
+def _missing_named_files(roots) -> list[str]:
+    packages = _spielplan_packages()
+    return [
+        f"{candidate} (named at {', '.join(sorted(set(sites)))})"
+        for candidate, sites in sorted(_comment_named_files(roots).items())
+        if candidate not in COMMENT_PATH_EXCEPTIONS
+        and not _named_in_scope(candidate, packages).exists()
+    ]
+
+
+COMMENTED_TREES = (SPIELPLAN, FRONTEND, FRONTEND_STATIC)
+
+
+def test_every_file_a_comment_names_exists():
+    """The citation a reader follows resolves, or it costs them the hour it cost the last one.
+
+    Three named files did not exist when this milestone opened, and the reason the count is three
+    rather than zero is that nothing had ever followed one mechanically. `ops/fetch-fonts.py` was
+    the ordinary case and M4.15 wrote the script, which is the repair; two of the standing
+    exceptions below are the shapes that cannot be repaired that way -- a comment inside an
+    applied, checksummed migration, and a comment about an asset the project deliberately does
+    not hold. The list holds THREE, and the third is neither: `sync/resolve.py` is an ordinary
+    wrong citation (it means `connectors/resolve.py`) that happens to sit across an ownership
+    line, in two files the milestone that owns `backup/` will touch next, so it is recorded here
+    rather than repaired there. That is the count a reader auditing this list needs, and it went
+    unsaid in the file whose whole subject is a record claiming something the object beneath it
+    does not hold; `docs/RELEASE.md` section 5.6 carries the same three against the row's
+    deliberate ONE. Note which SITE each entry is held at, too: `.sql` is not in
+    `_COMMENT_SOURCES`, so `0004_dna.sql:11` is never read here at all -- the `db/dna.py` entry
+    stays live because `db/library.py`'s repair docstring names the path a second time.
+    [M4.16 cycle 4, M416-C4-SPEC15-02]
+
+    The scope is the row's four shapes, resolved the way this codebase spells them: a bare
+    `test_x.py` because there is one tests directory, and `db/library.py` because inside the
+    package nobody writes the package name. What is NOT read is everything a comment mentions
+    that this tree could not hold -- CPython's `Lib/asyncio/mixins.py`, the corpus project's
+    `mdc/export.py`, the bundle's internal `artifacts/manifest.json`, SvelteKit's served
+    `_app/version.json`. Demanding those would make this guard wrong on arrival, and a guard that
+    is wrong on arrival is switched off rather than obeyed.
+    [CLAUDE.md Conventions; row `platform-comments-name-files-that-exist`]
+    """
+    missing = _missing_named_files(COMMENTED_TREES)
+    assert not missing, (
+        "a comment names a file that is not in the tree:\n  "
+        + "\n  ".join(missing)
+        + "\n\nCorrect the citation, or write the file. An entry in COMMENT_PATH_EXCEPTIONS is "
+        "for a path that cannot be made to resolve at all -- it is dated, it carries its reason, "
+        "and it is held to the absence it describes."
+    )
+
+
+def test_the_comment_path_exceptions_are_not_stale():
+    """An exception list nobody re-reads becomes an allow-list, which is one indirection worse
+    than the defect it was written for.
+
+    Held in both directions. A path that now EXISTS is no longer an exception, and leaving the
+    entry would quietly exempt a real citation from the guard the day somebody re-used the name.
+    A path no comment names any more is an entry describing nothing, which is the same record
+    drift this milestone exists to close, in the file that closes it.
+    """
+    packages = _spielplan_packages()
+    named = _comment_named_files(COMMENTED_TREES)
+    landed = [
+        f"{candidate}: {COMMENT_PATH_EXCEPTIONS[candidate].split(':', 1)[0]}"
+        for candidate in COMMENT_PATH_EXCEPTIONS
+        if _named_in_scope(candidate, packages).exists()
+    ]
+    assert not landed, (
+        "these paths are excepted from the comment-citation guard and now exist, so the exception "
+        "is exempting a live citation rather than recording an absence. Delete the entry, in the "
+        "same change as whatever landed the file:\n  " + "\n  ".join(landed)
+    )
+    unnamed = [candidate for candidate in COMMENT_PATH_EXCEPTIONS if candidate not in named]
+    assert not unnamed, (
+        "these exceptions describe a citation no comment makes any more; the comment was fixed "
+        "and the exception outlived it:\n  " + "\n  ".join(sorted(unnamed))
+    )
+    # And the third direction, which is neither the dict nor the tree but the sentence ABOVE
+    # them: the guard's docstring enumerated "the two shapes that cannot be repaired that way"
+    # over a dict holding three, and the third -- an ordinary wrong citation sitting across an
+    # ownership line -- was described nowhere. A reader auditing the list counted two, found
+    # three, and could not tell whether the extra entry was argued or merely added. That is the
+    # record-versus-object gap this milestone exists to close, two lines apart, in the file that
+    # closes it. Held as a count rather than as prose so the sentence cannot go stale again the
+    # next time an entry is added. [decision 184; M4.16 cycle 4, M416-C4-SPEC15-02]
+    doc = test_every_file_a_comment_names_exists.__doc__ or ""
+    published = re.search(r"The list holds ([A-Za-z]+)", doc)
+    word = published.group(1).lower() if published else None
+    counted = _COUNT_WORDS.index(word) if word in _COUNT_WORDS else -1
+    assert counted == len(COMMENT_PATH_EXCEPTIONS), (
+        f"the comment-path guard's docstring publishes {word!r} standing exceptions and the list "
+        f"holds {len(COMMENT_PATH_EXCEPTIONS)}. The docstring is what a reader audits this list "
+        "against, so it states the count as a word -- \"The list holds THREE\" -- and says what "
+        "shape each entry beyond the two unrepairable ones is."
+    )
+    # And the fourth, which is the identical drift twenty-five lines down and was left there by the
+    # repair above. The self-test's docstring opened "Seven shapes" over a parametrize list of
+    # eight, cycle 4 having added the eighth and not the word -- so a reader auditing whether that
+    # guard reads "every shape a citation comes in" counted seven, found eight, and could not tell
+    # which case was argued and which was merely added. Held as a count for the same reason, off
+    # the decorator rather than off a second sentence, so the two cannot disagree again.
+    # [decision 184; M4.16 cycle 5, M416-C5-SPEC15-03]
+    shapes = test_the_comment_path_guard_reads_every_shape_a_citation_comes_in
+    cases = [
+        len(mark.args[1]) for mark in getattr(shapes, "pytestmark", [])
+        if mark.name == "parametrize"
+    ]
+    assert len(cases) == 1, (
+        f"the shape self-test carries {len(cases)} parametrize decorators, and this rule reads its "
+        "case count off exactly one. Re-read it before trusting the number below."
+    )
+    published = re.search(r"([A-Za-z]+) shapes", shapes.__doc__ or "")
+    word = published.group(1).lower() if published else None
+    counted = _COUNT_WORDS.index(word) if word in _COUNT_WORDS else -1
+    assert counted == cases[0], (
+        f"the shape self-test's docstring publishes {word!r} shapes and its parametrize list holds "
+        f"{cases[0]}. That sentence is the only statement anywhere of what 'every shape a citation "
+        "comes in' means, so it is stated as a word and re-derived here rather than restated by "
+        "hand the next time a shape is added."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "filename", "body"),
+    [
+        ("a hash comment", "m.py", "# the write is claimed in `api/nowhere.py` first\nX = 1\n"),
+        ("a docstring", "m.py", '"""Reads §4.1. See `spielplan/db/nowhere.py`."""\nX = 1\n'),
+        ("a trailing comment", "m.py", "X = 1  # measured by ops/nowhere.py against the bundle\n"),
+        ("a bare test name", "m.py", '"""test_nowhere.py greps this package to keep it that way."""\n'),
+        ("a tests/-prefixed path", "m.py", "# greps this package: tests/test_nowhere.py\nX = 1\n"),
+        ("a JSDoc block", "S.svelte", "<script>\n/** see frontend/src/lib/nowhere.js */\n</script>\n"),
+        ("a line comment", "S.svelte", "<script>\n// finished in lib/nowhere.js\n</script>\n"),
+        ("a css comment", "f.css", "/* written by backend/tests/test_nowhere.py */\nbody { color: red }\n"),
+        ("a markup comment", "S.svelte", "<!-- the write is claimed in lib/nowhere.js first -->\n"),
+        ("a SvelteKit route file", "m.py",
+         "# rendered by frontend/src/routes/admin/nowhere/+page.svelte\nX = 1\n"),
+    ],
+)
+def test_the_comment_path_guard_reads_every_shape_a_citation_comes_in(tmp_path, name, filename, body):
+    """docs/TESTING.md: a guard that cannot fail reads as coverage while providing none.
+
+    Ten shapes, and five of them are ones an earlier draft of this reader missed. A trailing
+    `#` comment is why Python is tokenized rather than scanned line by line; a docstring is where
+    most of this codebase's citations actually live; and a bare `test_x.py` is the spelling that
+    makes the guard worth having, since a registered test file being renamed is the drift most
+    likely to happen next. The `tests/`-prefixed path is the fourth, the shape this row was opened
+    for and the one it could not see (M416-C4-SPEC15-01).
+
+    The last two arrived in review cycle 5 and are the two shapes unique to the frontend. A
+    `<!-- -->` block is the comment form of Svelte markup -- the reason `.svelte` and `.html` are
+    in `_COMMENT_SOURCES` at all -- and was read by nothing, while both of this function's other
+    `.svelte` cases sit inside `<script>`. And a `+page.svelte` could not be extracted by
+    `_QUALIFIED_PATH` at all, because `+` was outside its final segment's character class: every
+    SvelteKit route file in the tree was invisible, including the one `api/artifacts.py`'s
+    docstring names in full. [M4.16 cycle 5: M416-C5-SPEC15-01, M416-C5-SPEC15-02]
+    """
+    (tmp_path / filename).write_text(body, encoding="utf-8")
+    assert _missing_named_files([tmp_path]), f"{name} named a file that is not there, unnoticed"
+
+
+def test_the_comment_path_guard_leaves_the_citations_around_it_alone(tmp_path):
+    """The other half: four things it must NOT call a broken citation.
+
+    A path this tree really holds; the corpus project's own modules, which this repository has no
+    copy of by design (README: the bundle is not vendored); a URL, which is `//` and a path and
+    neither a comment nor a citation; and CPython's source, cited in `core/auth.py` to explain why
+    a semaphore is re-made. A guard that failed on any of these would be narrowed by the first
+    person it stopped, and a narrowed guard is the thing this file keeps arguing against.
+    """
+    (tmp_path / "m.py").write_text(
+        "# resolved in `connectors/resolve.py` and archived by `backup/movie_data.py`\n"
+        "# `mdc/export.py:34-45`, verbatim; the corpus is not vendored here\n"
+        "# CPython `Lib/asyncio/mixins.py` binds it; the bundle's own artifacts/manifest.json\n"
+        '"""See https://example.com/app.js and the served _app/version.json."""\n',
+        encoding="utf-8",
+    )
+    assert not _missing_named_files([tmp_path])
+
+
+# --- M4.16 cycle 4: rule 8 is quoted as it reads, or dated as it read --------------------------
+#
+# Phase B item 8 replaced §4.1 rule 8 with the conservative heuristic `importer/reviews.py` has
+# always applied, and the amended clause closes by saying that "fixed individually" was per-row
+# knowledge this repository has never had. The sentence it replaced had been copied into five
+# places and none of them moved with it. `load.py:17` was the expensive one: it listed the row
+# count under "Rules enforced during the load", with nothing anywhere in that module to say the
+# clause had been struck -- so a maintainer following CLAUDE.md's "where code and spec disagree,
+# the code is the bug" reads the retired sentence as the requirement and `reviews.py`'s
+# marker-guarded round trip as over-broad. What that reading licenses is narrowing the repair to a
+# row list this repository has never possessed, which is the amendment's own direction inverted.
+#
+# The rule is NOT "the words must be gone", because three carriers have to keep them.
+# `importer/reviews.py` and `test_review_mojibake.py` were written against the sentence and the
+# census that retired it only reads as an argument beside the claim it answers; the third,
+# `0003_content.sql`, is applied and sha256-checksummed, so an edit there is a hard startup error
+# on every install that has run it and the correction has to live somewhere else. So the rule is
+# that the words may not stand UNDATED: every occurrence sits within a paragraph of `_RULE8_DATED`,
+# a phrase nobody types by accident, and the sealed one is an exception held to the module that
+# carries its correction -- the shape `0004_dna.sql`'s entry takes one section up.
+#
+# A form of words IS the mechanism here, and what stops it being only a form of words is the
+# premise asserted first: the normative file must still carry the heuristic and must not carry the
+# row list. The day the strike is undone the escape stops being available, rather than quietly
+# outliving the amendment it dates. [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
+
+# Two spellings of one retired claim: the sentence as §4.1 carried it, and the expectation
+# `importer/validate.py` kept as a dict key that nothing read and nothing could check.
+_RULE8_ROW_LIST = re.compile(r"73 known[- ]mojibake review rows|mojibake_review_rows", re.I)
+_RULE8_DATED = "as it read until M4.16"
+_RULE8_WINDOW = 700
+_RULE8_HEURISTIC = "conservative heuristic, not a row list"
+
+# The carrier that cannot be dated and cannot be deleted. `0003_content.sql:236-237` block-quotes
+# rule 8 above `review_store.review`, and the file is applied and sha256-checksummed. It is held
+# in both directions below: the quote must still be there, because its disappearance means the
+# migration was edited, and the module that owns the rule must name it.
+_RULE8_SEALED = "backend/migrations/0003_content.sql"
+_RULE8_SEALED_CORRECTION = "backend/spielplan/importer/reviews.py"
+
+
+def _rule8_flat(text: str) -> str:
+    """One file's prose with wrapping, indentation and `#` / `--` comment markers taken off."""
+    return " ".join(" ".join(re.sub(r"^\s*(?:#+|--)\s?", "", line) for line in text.splitlines()).split())
+
+
+def _rule8_undated(text: str) -> list[str]:
+    """The retired row list wherever it stands in one body with nothing above it dating it.
+
+    Read flat, and read case-insensitively, because both halves of this sentence wrap: `load.py`
+    splits the dating heading across two lines of a docstring and `validate.py` splits the claim
+    itself across two `#` lines, so a rule that saw either only unsplit would pass every file it
+    was written for. `_flat_notice_text` two sections up flattens for the same reason. The heading
+    also opens a sentence in two carriers and sits mid-sentence in the third, and a capital A is
+    not a different claim -- a rule that turned on it would be a rule about punctuation.
+    """
+    flat = _rule8_flat(text)
+    undated = []
+    for found in _RULE8_ROW_LIST.finditer(flat):
+        window = flat[max(0, found.start() - _RULE8_WINDOW):found.start()].lower()
+        if _RULE8_DATED.lower() not in window:
+            undated.append(found.group(0))
+    return undated
+
+
+def _rule8_carriers() -> list[Path]:
+    """Everything the sweep reads: the package, the suite, the migrations, and the map.
+
+    The map is in scope because it is where this repository writes down what a rule requires, and
+    its rows quote spec sentences by design; the normative file is not swept but asserted directly,
+    since the one thing it may not do is carry the sentence at all. `docs/milestones/*.md` is out,
+    the way `test_no_file_repeats_a_retired_claim_about_the_company_table` puts it out: the plans
+    are dated records the workflow forbids editing, so a sweep over them could never be satisfied.
+    """
+    return sorted(
+        [*SPIELPLAN.rglob("*.py"),
+         *(REPO / "backend" / "tests").rglob("*.py"),
+         *(REPO / "backend" / "migrations").glob("*.sql"),
+         REPO / "backend" / "tests" / "spec_coverage.toml"]
+    )
+
+
+def test_no_file_states_rule_8_as_the_row_list_the_spec_stopped_carrying():
+    """A struck normative sentence restated as the rule is worse than a stale file name.
+
+    `docs/milestones/*.md` is not swept -- it is the plan, the workflow forbids editing it, and
+    the corrections owed there go to the owner by hand -- which is the same scope
+    `test_no_file_repeats_a_retired_claim_about_the_company_table` takes for the same reason.
+    [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
+    """
+    spec = _src(_normative_file())
+    assert _RULE8_HEURISTIC in spec, (
+        f"the normative file no longer says rule 8 is repaired by a {_RULE8_HEURISTIC!r}, so the "
+        "amendment this guard dates against has been undone or reworded. Re-read rule 8 in the "
+        "normative file first: the dating escape is only honest while the strike holds."
+    )
+    assert not _RULE8_ROW_LIST.search(spec), (
+        "the normative file carries rule 8's row list again. The strike rests on a census of 86 "
+        "marked rows and 0 repairs over 485,602 -- 'fixed individually' was per-row knowledge "
+        "this repository has never had, and no artifact here enumerates those rows."
+    )
+    offenders = []
+    scanned = 0
+    for path in _rule8_carriers():
+        if path == Path(__file__).resolve():
+            continue        # this file states the sentence in order to refuse it
+        where = path.relative_to(REPO).as_posix()
+        if where == _RULE8_SEALED:
+            continue        # sealed; held by the test below, which is the only repair available
+        scanned += 1
+        offenders += [f"{where}: {spelling!r}" for spelling in _rule8_undated(_src(path))]
+    assert scanned > 150, f"the sweep read {scanned} files and is not covering the tree"
+    assert not offenders, (
+        "rule 8's retired row list stands here as the rule:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nRule 8 states a heuristic, not an enumeration. Either say what ships, or head the "
+        f"quote with {_RULE8_DATED!r} so it reads as history rather than as the requirement."
+    )
+
+
+def test_the_sealed_migration_that_quotes_rule_8_is_corrected_where_it_can_be():
+    """The one copy that cannot be repaired in place, and the module that answers for it.
+
+    Both halves matter. If the quote leaves `0003_content.sql`, an applied and sha256-checksummed
+    migration has been edited, and every install that has run it fails its next boot on a checksum
+    mismatch -- so the guard reports that rather than quietly passing on a file that got "tidied".
+    If the naming leaves `importer/reviews.py`, the sealed copy is again a sentence with nothing
+    anywhere saying it was struck, which is the defect this section exists for.
+    """
+    sealed = _src(REPO / _RULE8_SEALED)
+    assert _RULE8_ROW_LIST.search(sealed), (
+        f"{_RULE8_SEALED} no longer quotes rule 8's row list, which means an applied, checksummed "
+        "migration has been edited in place. That is a hard startup error for every install that "
+        "has run it; restore the file. The quote is why this exception exists."
+    )
+    correction = _rule8_flat(_src(REPO / _RULE8_SEALED_CORRECTION))
+    assert _RULE8_DATED.lower() in correction.lower() and "0003_content.sql" in correction, (
+        f"{_RULE8_SEALED_CORRECTION} no longer dates rule 8's retired sentence and names "
+        f"{_RULE8_SEALED}, so the one copy that cannot carry its own correction has lost it. The "
+        "module that owns the rule is where it goes, the way `db/library.py` answers for "
+        "`0004_dna.sql`."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "refused"),
+    [
+        ("the loader's bullet as it stood",
+         "  * rule 8 - text is passed through untouched except for the 73 known-mojibake review "
+         "rows.", True),
+        ("the validator's dict key",
+         '    "mojibake_review_rows": 73,      # rule 8', True),
+        ("the claim wrapped across two comment lines, undated",
+         "# text is passed through untouched except for the 73\n# known-mojibake review rows.",
+         True),
+        ("the loader's bullet, dated mid-sentence and wrapped between the two",
+         '  * rule 8 - rule 8 as it read until\n             M4.16 named "the 73 known-mojibake '
+         'review rows".', False),
+        ("the block quote, dated by a heading that opens a sentence",
+         'As it read until M4.16:\n\n    "... the 73 known-mojibake review rows are fixed '
+         'individually in the importer."', False),
+        ("the module's own refusal of the phrase",
+         'Rule 8\'s "fixed individually" is per-row knowledge this repository does not have', False),
+        ("a census, which states rows and a count and no enumeration",
+         "486 of 485,602 review rows carry a mojibake marker and 73 of those are truncated", False),
+    ],
+)
+def test_the_rule_8_guard_reads_an_undated_claim_and_not_the_prose_around_it(name, text, refused):
+    """Both directions, because either alone would be a rule nobody can satisfy.
+
+    Refusing the first three is the repair, and the third is the one a 108-column file produces by
+    itself: the claim wrapped over two comment lines is the same claim. ADMITTING the last four is
+    what keeps the rule usable. The module that implements rule 8 has to be able to quote the
+    sentence it was written against -- dated mid-sentence or under a heading, and wrapped either
+    way -- it has to be able to say in its own words that "fixed individually" is knowledge nobody
+    here has, and a census that happens to count 73 of something is prose about a measurement
+    rather than the enumeration §4.1 stopped promising. A guard that reddened on those would be
+    narrowed by the first person it stopped, and a narrowed guard is what this file keeps arguing
+    against.
+    """
+    assert bool(_rule8_undated(text)) is refused, name
+
+
+# --- M4.16 review cycle 4: the diff report §10 replaced with its own denial ---------------------
+#
+# Phase B item 4 replaced §10's re-import sentence with decisions 162/163's reading, and unlike
+# rule 8's strike one section up it does not merely drop the old words - it denies the referent:
+# "Model re-import (retrained backbone) is a planned admin event with a migration report - never a
+# silent sync, and never a diff report, which does not exist." The sentence it replaced had been
+# copied into sixteen live carriers across thirteen files, and Phase E moved exactly one of them
+# (README, which the phase names by line). Two of the sixteen are why this is a guard and not a
+# one-off sweep: `frontend/src/routes/admin/data/+page.svelte` RENDERS the retired clause to the
+# operator inside §6.6's Data card, and `data-rules-the-stored-report-is-the-whole-report` quoted
+# it in its `spec` field - so an auditor following a shipped row's authority to §10 met the
+# phrase's explicit denial with the map green.
+#
+# Decision 305's authority rule is the one that should have caught that row and provably cannot:
+# it asks a `spec` string to NAME a section, a decision or a document path, and "§10" is named.
+# The quotation reader beside it resolves a quoted sentence only against a `spec` field that also
+# names a FILE, which the section-only idiom most rows use never does. So neither half of the map
+# guard could see a row citing the sentence its own section refuses.
+#
+# The rule is NOT "the words must be gone", for rule 8's reason: three carriers have to keep them.
+# `0001_system.sql:32` block-quotes the sentence above `artifact_bundle` and is applied and
+# sha256-checksummed, so an edit there is a hard startup error on every install that has run it;
+# README's "Where the model comes from" paragraph and `importer/report.py`'s docstring both state
+# the phrase in order to say it was retired. So the rule is that the words may not stand UNDATED:
+# every occurrence sits within a paragraph of `_DIFF_REPORT_DATED`, a phrase nobody types by
+# accident, and the sealed one is answered for in the module that owns §10's report - the shape
+# `importer/reviews.py` takes for `0003_content.sql` one section up, and `db/library.py` for
+# `0004_dna.sql`.
+#
+# A form of words IS the mechanism here, and what stops it being only a form of words is the
+# premise asserted first: the normative file must carry the migration report AND the denial. The
+# day the amendment is undone the escape stops being available rather than quietly outliving the
+# sentence it dates. [§10; M4.16 cycle 4, M416-C4D2-SPEC-01]
+_DIFF_REPORT = re.compile(r"diff report", re.I)
+_DIFF_REPORT_DATED = "as §10 read until M4.16"
+_DIFF_REPORT_WINDOW = 700
+_DIFF_REPORT_KEPT = "a planned admin event with a migration report"
+_DIFF_REPORT_STRUCK = "never a diff report, which does not exist"
+
+# The carrier that cannot be dated and cannot be deleted, and the module that answers for it.
+# `0001_system.sql` creates `artifact_bundle` under the retired sentence; `importer/report.py` is
+# the module §10's report belongs to and the only other file that has to quote the clause.
+_DIFF_REPORT_SEALED = "backend/migrations/0001_system.sql"
+_DIFF_REPORT_CORRECTION = "backend/spielplan/importer/report.py"
+
+
+def _diff_report_flat(text: str) -> str:
+    """One body's prose with wrapping, indentation and comment furniture taken off.
+
+    Wider than `_rule8_flat` because these carriers are not all Python: the clause travels through
+    `#` and `--` comments, through a JSDoc block's leading `*`, through `//`, through a `<!-- -->`
+    markup comment and through Markdown emphasis, and at 108 columns either word can end a line.
+    A rule that saw only the unsplit spelling would pass most of the files it was written for.
+    """
+    stripped = re.sub(r"(?m)^\s*(?:#+|--|//|\*+|<!--|-->)\s?", " ", text)
+    return " ".join(stripped.split())
+
+
+def _diff_report_undated(text: str) -> list[str]:
+    """§10's retired clause wherever it stands in one body with nothing above it dating it.
+
+    Two words are all the spelling there is, so the excerpt rather than the match is what comes
+    back: a list of matches would say how many and never where, and sixty characters of lead-in is
+    what a reader needs to find the line.
+
+    The second escape is not a form of words the way the dating one is. §10's replacement DENIES
+    the referent rather than dropping a phrase, so the live sentence contains the retired words --
+    and a record quoting that denial is quoting the spec as it stands, not citing the clause it
+    replaced. Held to the denial's own span rather than to a window, which is the tight reading: a
+    stale sentence elsewhere in a file that also quotes the denial is a separate match outside it
+    and stays refused, so the escape cannot be spent on a sentence it does not cover.
+    """
+    flat = _diff_report_flat(text)
+    quoting = [
+        (found.start(), found.end())
+        for found in re.finditer(re.escape(_DIFF_REPORT_STRUCK), flat, re.I)
+    ]
+    undated = []
+    for found in _DIFF_REPORT.finditer(flat):
+        if any(lo <= found.start() and found.end() <= hi for lo, hi in quoting):
+            continue        # §10's own current words, not the clause they replaced
+        window = flat[max(0, found.start() - _DIFF_REPORT_WINDOW):found.start()].lower()
+        if _DIFF_REPORT_DATED.lower() not in window:
+            undated.append(flat[max(0, found.start() - 60):found.end() + 40])
+    return undated
+
+
+def _diff_report_carriers() -> list[Path]:
+    """Everything the sweep reads: the package, the suite, the migrations, the map, the surface
+    and the two satellite documents Phase E owns.
+
+    `frontend/src` is in scope because the headline carrier is markup an operator READS, which is
+    where a stale citation stops being a maintainer's problem and becomes a false statement to the
+    household. `docs/milestones/*.md` and `docs/spec-v2.2-proposals.md` are out, for the reasons
+    the two sweeps above give: the plans are dated records the workflow forbids editing, and the
+    register is dated reasoning decision 304 keeps as written. The normative file is not swept but
+    asserted directly, since the one thing it has to do is carry the denial.
+    """
+    return sorted(
+        [*SPIELPLAN.rglob("*.py"),
+         *(REPO / "backend" / "tests").rglob("*.py"),
+         *(REPO / "backend" / "migrations").glob("*.sql"),
+         *(p for p in FRONTEND.rglob("*") if p.suffix in {".svelte", ".js", ".css"}),
+         REPO / "backend" / "tests" / "spec_coverage.toml",
+         REPO / "README.md",
+         REPO / "docs" / "TESTING.md"]
+    )
+
+
+def test_no_file_cites_the_diff_report_the_spec_replaced_with_its_denial():
+    """A retired clause is worse than a stale file name when the section now denies the referent.
+
+    `docs/milestones/*.md` is not swept -- it is the plan, the workflow forbids editing it, and
+    the corrections owed there go to `docs/RELEASE.md` section 4 under decision 296 -- which is
+    the scope `test_no_file_states_rule_8_as_the_row_list_the_spec_stopped_carrying` takes for the
+    same reason. [§10; M4.16 cycle 4, M416-C4D2-SPEC-01]
+    """
+    spec = _src(_normative_file())
+    assert _DIFF_REPORT_KEPT in spec, (
+        f"the normative file no longer says a re-import is {_DIFF_REPORT_KEPT!r}, so the "
+        "amendment this guard dates against has been undone or reworded. Re-read §10 first: the "
+        "dating escape is only honest while the replacement holds."
+    )
+    assert _DIFF_REPORT_STRUCK in spec, (
+        f"the normative file no longer says {_DIFF_REPORT_STRUCK!r}. The point of this amendment "
+        "is that it denies the referent rather than dropping a phrase, and a carrier dated "
+        "against a denial the file stopped making is dated against nothing."
+    )
+    offenders = []
+    scanned = 0
+    for path in _diff_report_carriers():
+        if path == Path(__file__).resolve():
+            continue        # this file states the clause in order to refuse it
+        where = path.relative_to(REPO).as_posix()
+        if where == _DIFF_REPORT_SEALED:
+            continue        # sealed; held by the test below, which is the only repair available
+        scanned += 1
+        offenders += [f"{where}: ...{excerpt}..." for excerpt in _diff_report_undated(_src(path))]
+    assert scanned > 200, f"the sweep read {scanned} files and is not covering the tree"
+    assert not offenders, (
+        "§10 says a re-import produces a migration report and that a diff report does not exist, "
+        "and these cite the clause it replaced as the live authority:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nName the report the importer actually writes, or head the quote with "
+        f"{_DIFF_REPORT_DATED!r} so it reads as history rather than as the requirement."
+    )
+
+
+def test_the_sealed_migration_that_quotes_the_diff_report_is_corrected_where_it_can_be():
+    """The one copy that cannot be repaired in place, and the module that answers for it.
+
+    Both halves matter. If the quote leaves `0001_system.sql`, an applied and sha256-checksummed
+    migration has been edited, and every install that has run it fails its next boot on a checksum
+    mismatch -- so the guard reports that rather than quietly passing on a file that got "tidied".
+    If the dating leaves `importer/report.py`, the sealed copy is again a sentence with nothing
+    anywhere saying it was retired, which is the defect this section exists for.
+    """
+    sealed = _src(REPO / _DIFF_REPORT_SEALED)
+    assert _DIFF_REPORT.search(sealed), (
+        f"{_DIFF_REPORT_SEALED} no longer quotes §10's retired clause, which means an applied, "
+        "checksummed migration has been edited in place. That is a hard startup error for every "
+        "install that has run it; restore the file. The quote is why this exception exists."
+    )
+    correction = _diff_report_flat(_src(REPO / _DIFF_REPORT_CORRECTION))
+    assert _DIFF_REPORT_DATED.lower() in correction.lower() and "0001_system.sql" in correction, (
+        f"{_DIFF_REPORT_CORRECTION} no longer dates §10's retired clause and names "
+        f"{_DIFF_REPORT_SEALED}, so the one copy that cannot carry its own correction has lost "
+        "it. The module that owns §10's report is where it goes, the way `importer/reviews.py` "
+        "answers for `0003_content.sql`."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "refused"),
+    [
+        ("the Data card's rendered sentence, as it shipped",
+         "      re-import is a planned event with a diff report - never a silent sync.", True),
+        ("the shipped row's spec field",
+         'spec = "§10 (\\"a planned admin event with a diff report\\") + §6.6 Data"', True),
+        ("the claim wrapped across two comment lines, undated",
+         "    # §10 calls a re-import a planned admin event\n    # with a diff report, so "
+         "replacing the tier is what that report describes.", True),
+        ("a JSDoc line, undated",
+         " * The operator reads §10's diff report on the Data card.", True),
+        ("README's sentence, dated",
+         "As §10 read until M4.16 it called this a diff report; no diff report was ever written, "
+         "and §10 now names the one the importer produces.", False),
+        ("the module's dated correction, naming the sealed migration",
+         'As §10 read until M4.16 this was "a planned admin event with a diff report"; '
+         "`backend/migrations/0001_system.sql:32` block-quotes it and is checksummed.", False),
+        ("the report §10 now names",
+         "§10 calls a re-import a planned admin event with a migration report.", False),
+        ("a diff that is not a report",
+         "the stored report is compared against the previous one, and that diff is the rebuild "
+         "set the swap recomputes.", False),
+        ("a record quoting §10's denial as §10 now writes it",
+         "§10 now says in as many words that what the importer writes is a migration report, "
+         "\"never a diff report, which does not exist\".", False),
+        ("a stale sentence in a body that also quotes the denial",
+         "the row is §10's diff report. Elsewhere: §10 says never a diff report, which does not "
+         "exist.", True),
+    ],
+)
+def test_the_diff_report_guard_reads_an_undated_claim_and_not_the_prose_around_it(
+    name, text, refused
+):
+    """Both directions, because either alone would be a rule nobody can satisfy.
+
+    Refusing the first four is the repair, and two of them are shapes `_rule8_flat` cannot see:
+    the rendered markup line and the JSDoc `*`, which is why this section flattens wider than that
+    one. ADMITTING the last four is what keeps the rule usable. README and the report module have
+    to be able to say what the clause used to be; the sentence §10 now carries must not be read as
+    the thing it replaced; and the last case is the false negative that matters most -- "diff" is
+    still the right word for the comparison the rebuild set IS, and a rule that reddened on it
+    would be a rule about a word rather than about the retired claim.
+
+    The last pair is the denial escape held in both directions: a record quoting §10's current
+    sentence is quoting the spec, and the SAME body carrying a stale citation as well is still
+    refused for that citation -- otherwise one quotation of the denial would buy silence for every
+    retired claim in the file.
+    """
+    assert bool(_diff_report_undated(text)) is refused, name
+
+
+# --- M4.16 review cycle 5: the CC BY-SA credit links no material, and says so under a number ----
+#
+# Phase J asked two things of the Wikipedia and TVmaze credits -- "CC BY-SA credit, linking to the
+# article/show where `title_meta` carries it" -- and only the credit shipped. The second half fell
+# between the plan and decision 298, whose ruling enumerates the five notices and omits the link
+# without saying it is omitting one, so the only argument anywhere was four lines of
+# `DataSources.svelte` citing no decision at all, in a header where every other argued departure
+# cites 276, 293, 298, 318 or 319. Decision 320 rules on it, and the ruling rests on a measurement
+# this guard RE-RUNS rather than restates: nothing under `backend/spielplan` or `frontend/src`
+# reads `title_meta`'s `homepage` or the corpus's `wikipedia_title`, so this build holds no article
+# identifier outside a `payload` jsonb nothing queries and `/api/titles/{id}` exposes no field a
+# link could be built from.
+#
+# The polarity is decision 307's, which section 5.4 already uses: the guard goes red the day a
+# reader lands, because that is the day `docs/RELEASE.md` section 4.7 becomes the false record and
+# the two come out in one change. What it does NOT assert is the absence of an anchor in the
+# markup -- the block may carry one the moment there is something to link, and the deferral is
+# about the identifier, not about the design. [decision 320; M4.16 cycle 5, M416-C5-ATTR-01]
+_MATERIAL_LINK_ARGUMENT = "CREDITED, NOT DEEP-LINKED"
+_MATERIAL_LINK_DECISION = 320
+_MATERIAL_LINK_WINDOW = 600      # only for a body with no closing `*/`; see below
+
+# An ACCESS, not a mention, for `_SOURCES_READ`'s reason one section down: the paragraph that
+# argues why this build carries no material link has to NAME the columns it cannot read, so a rule
+# over the bare word reads the argument for this guard as the thing that discharges it -- measured,
+# on the first run after that paragraph landed. An attribute or a string literal is every shape a
+# read comes in here: `payload["homepage"]` and `.get("homepage")` in the importer, `->>'homepage'`
+# in a query, `meta.homepage` on the surface. Prose spells a column in backticks, which is none of
+# them. The two names are `title_meta`'s own field and the corpus's `title` column -- `load.py`
+# does not map the second onto `title` at all, and `importer/meta.py` keeps the whole corpus row as
+# `payload` jsonb that only `resolve_title_fields` reads back, by field name and never by either.
+_ARTICLE_CARRIER = re.compile(
+    r"""\.(?:homepage|wikipedia_title)\b|['"](?:homepage|wikipedia_title)['"]"""
+)
+
+
+def _reads_the_article_carrier() -> list[str]:
+    """Package and surface files that read the column a CC BY-SA material link would come from."""
+    found = []
+    for root in (SPIELPLAN, FRONTEND):
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix not in {".py", ".svelte", ".js"}:
+                continue
+            if _ARTICLE_CARRIER.search(_src(path)):
+                found.append(path.relative_to(REPO).as_posix())
+    return found
+
+
+def _material_link_argument(text: str) -> str:
+    """The stretch of `DataSources.svelte`'s header that argues the credit carries no link.
+
+    Bounded at both ends, and the ends are doing different work. It OPENS at the marker because
+    this header is a run of argued paragraphs each closing on its own decision number, so a rule
+    reading the whole block would be discharged by the paragraph above -- which argues placement,
+    under decision 318, and says nothing about a link. It CLOSES at the JSDoc block's `*/` because
+    a citation outside the argument is a citation to something else: the next block down cites
+    decision 298 for the logo slot, and that must not answer for this one. The window is the
+    fallback for a body with no closing marker, which is what the self-tests hand it.
+    """
+    flat = _flattened(text)
+    found = flat.find(_MATERIAL_LINK_ARGUMENT)
+    if found < 0:
+        return ""
+    closes = flat.find("*/", found)
+    return flat[found:closes if closes >= 0 else found + _MATERIAL_LINK_WINDOW]
+
+
+def test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry():
+    """A departure argued from a licence is a reading; a departure argued from a decision is a
+    record somebody signed.
+
+    Decision 320 refused both easy repairs. BUILDING the link is unavailable: this build imports
+    no article identifier at all, and for TVmaze the corpus's `homepage` is the show's own
+    marketing site rather than the TVmaze page, so an anchor under a CC BY-SA credit would point
+    at the wrong work. EDITING `map-taste-data-sources-are-attributed`'s `what` to stop at the
+    credit is the move `M4-open-points.md:212-213` forbids, and that `what` never promised the
+    link anyway. So the clause is recorded as not reasonably practicable on this build, under a
+    number, in `docs/RELEASE.md` section 4, where decision 296 routes a plan-versus-tree
+    correction.
+
+    The escape hatch is the point, and it is the one section 5.4 uses: import the identifier and
+    this guard goes red of its own accord, because then the record is the false statement and the
+    two are deleted together. [decision 320; row `map-taste-data-sources-are-attributed`]
+    """
+    reads = _reads_the_article_carrier()
+    assert not reads, (
+        f"{reads} now read the corpus's article identifier, so decision 320's premise -- that "
+        "this build holds none -- no longer holds and the CC BY-SA material link has become "
+        "reasonably practicable. Delete this guard and docs/RELEASE.md section 4.7 in the same "
+        "change as the anchor, and let the block carry the link."
+    )
+    argument = _material_link_argument(_src(FRONTEND / "lib" / "components" / "DataSources.svelte"))
+    assert argument, (
+        "DataSources.svelte no longer argues why the CC BY-SA credits carry no material link. "
+        "That paragraph is the only thing standing between a reader and the conclusion that the "
+        "link was forgotten; if the link shipped, this guard comes out with it."
+    )
+    assert f"decision {_MATERIAL_LINK_DECISION}" in argument, (
+        f"the paragraph arguing the credit carries no material link cites no decision "
+        f"{_MATERIAL_LINK_DECISION}:\n  "
+        + argument[:200]
+        + "\n\nEvery other argued departure in this header cites the ruling that took it. A "
+        "departure argued from the licence text alone is this milestone's own defect class: a "
+        "record that owes a debt with nowhere for a reader to find it."
+    )
+    register = _src(REGISTER)
+    assert re.search(rf"(?m)^### {_MATERIAL_LINK_DECISION}\.", register), (
+        f"DataSources.svelte cites decision {_MATERIAL_LINK_DECISION} and the register heads no "
+        f"`### {_MATERIAL_LINK_DECISION}.` entry. A citation to a number nobody took is the trap "
+        "this milestone's plan opens with."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "cited"),
+    [
+        ("the paragraph that shipped, arguing from the licence alone",
+         "   * WIKIPEDIA AND TVMAZE ARE CREDITED, NOT DEEP-LINKED. CC BY-SA wants the licence\n"
+         "   * identified and, where reasonable, the material linked; the material here is a\n"
+         "   * per-title article, which belongs on the title card.", False),
+        ("the same paragraph under the ruling that took it",
+         "   * WIKIPEDIA AND TVMAZE ARE CREDITED, NOT DEEP-LINKED. This build imports no article\n"
+         "   * identifier, so the link is not reasonably practicable here (decision 320).", True),
+        ("a decision number in the block below it",
+         "   * WIKIPEDIA AND TVMAZE ARE CREDITED, NOT DEEP-LINKED. The material link is a\n"
+         "   * per-title article and this block is household-wide.\n   */\n\n  /**\n"
+         "   * The logo slot (decision 320).\n   */", False),
+        ("a decision number that belongs to the paragraph above it",
+         "   * WHY /account. The account chip routes here (decision 318).\n   *\n"
+         "   * WIKIPEDIA AND TVMAZE ARE CREDITED, NOT DEEP-LINKED. The material link is a\n"
+         "   * per-title article and this block is household-wide.", False),
+    ],
+)
+def test_the_material_link_guard_reads_the_citation_and_not_the_argument(name, text, cited):
+    """Both directions. Refusing the first is the repair; ADMITTING the second is what makes the
+    rule satisfiable at all.
+
+    The last two are the ones that matter, and they are the two ends of the reader. A citation
+    in the NEXT block answers for the next block -- the real header's is decision 298's logo
+    slot -- and one in the PREVIOUS paragraph answers for placement, under decision 318. Either
+    would discharge this rule while saying nothing about a link, which is how a citation guard
+    turns into a rule about whether a number appears anywhere nearby.
+    """
+    assert (f"decision {_MATERIAL_LINK_DECISION}" in _material_link_argument(text)) is cited, name
+
+
+# --- M4.16 dd26-bundle: the private bundle is never tracked and never shipped -------------------
+#
+# The release is MIT source plus a ~1 GB bundle assembled under personal and non-commercial terms
+# -- GroupLens's no-redistribution clause, IMDb's personal-use licence, four blogs' whole
+# articles, TMDB's non-commercial terms -- and until decision 292 nothing in this repository told
+# a contributor where that line runs. The terms section in README is the half a person reads; this
+# is the half that notices a `git add` nobody meant.
+
+# The three shapes a bundle artefact arrives in: the review corpus (`reviews.sqlite`), the model
+# arrays (`content_X.npz`, the backbone factors) and the manifest that names a cut of them.
+_BUNDLE_ARTEFACT = re.compile(r"\.sqlite$|\.npz$|(?:^|/)BUNDLE\.json$", re.I)
+
+# Where the bundle lives when it is on this box: `docker-compose.yml` bind-mounts `./data` for
+# every `/data/*` path, so `data/` is the directory both ignore files have to exclude.
+_BUNDLE_HOME = "data"
+
+
+def _ignores_directory(text: str, directory: str) -> bool:
+    """True when an ignore file excludes `directory` and nothing below it re-includes it.
+
+    Spelled once per file and differently in each -- `/data/` in `.gitignore`, anchored at the
+    repository root, and `data/` in `.dockerignore`, which has no anchoring syntax -- so the entry
+    is normalised rather than matched literally. The two sides are deliberately not symmetric: an
+    entry excludes the directory only when it IS the directory, since `data/artifacts/` leaves the
+    bundle itself tracked, while a NEGATION anywhere underneath re-includes part of it. That is
+    how the rule comes back without anybody touching the line that states it.
+    """
+    ignored = False
+    for line in text.splitlines():
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        candidate = entry.lstrip("!").strip("/")
+        if entry.startswith("!"):
+            if candidate == directory or candidate.startswith(directory + "/"):
+                ignored = False
+        elif candidate == directory:
+            ignored = True
+    return ignored
+
+
+def _bundle_artefacts(tracked) -> list[str]:
+    return sorted(path for path in tracked if _BUNDLE_ARTEFACT.search(path))
+
+
+def _tracked_files() -> list[str]:
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, timeout=300,
+    )
+    assert out.returncode == 0, (
+        "`git ls-files` did not answer, so this guard is reading nothing:\n" + out.stderr
+    )
+    return [line for line in out.stdout.splitlines() if line.strip()]
+
+
+def test_the_private_bundle_is_never_tracked_or_shipped():
+    """Decision 292, held by something other than a contributor's care at `git add` time.
+
+    The bundle is private household data. It is not published with a release, it is not a release
+    asset, and the `/data/backups` movie-data archive inherits the same restriction because it
+    carries the review bodies. What makes that easy to break is that the bundle lands in `data/`
+    on every developer's box by default, and a single `git add -f` or a widened ignore rule puts
+    a licensed corpus into a public MIT repository permanently -- git keeps it whether or not the
+    next commit removes it.
+
+    Both halves are asserted because they fail independently. The ignore files are the rule, and
+    the tracked list is the outcome: `-f` beats the rule, and a file added before the rule existed
+    was never subject to it. README's Data terms section is the third half, and it is here because
+    a guard tells a contributor they cannot do something while only that section says why.
+    [§10; LICENSE (MIT, code only); decision 292;
+     row `platform-the-private-bundle-is-never-tracked-or-shipped`]
+    """
+    for ignore in (REPO / ".gitignore", REPO / ".dockerignore"):
+        assert _ignores_directory(_src(ignore), _BUNDLE_HOME), (
+            f"{ignore.name} no longer excludes `{_BUNDLE_HOME}/`, which is where the bundle, the "
+            "artifacts tree and every nightly dump live on a developer's box. The next `git add "
+            "-A` or `docker build` takes a licensed corpus with it."
+        )
+    tracked = _tracked_files()
+    assert tracked, "`git ls-files` returned nothing, so this guard is reading an empty tree"
+    artefacts = _bundle_artefacts(tracked)
+    assert not artefacts, (
+        "these tracked files are bundle artefacts, and the bundle is private household data "
+        "assembled under personal and non-commercial terms (decision 292):\n  "
+        + "\n  ".join(artefacts)
+        + "\n\nGit keeps them after a later delete, so the repair is a history rewrite rather "
+        "than a commit. See README's Data terms section for what travels under which licence."
+    )
+    assert "## Data terms" in _src(README), (
+        "README no longer carries the Data terms section. The guard above is the cheap half of "
+        "decision 292 and this is the half a person reads: which source allows what, and that "
+        "the MIT LICENSE covers the code and nothing in the bundle."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "tracked"),
+    [
+        ("the review corpus", ["data/import/reviews.sqlite"]),
+        ("a model array", ["data/artifacts/v1/content_X.npz"]),
+        ("the manifest", ["BUNDLE.json"]),
+        ("the manifest one directory down", ["data/import/BUNDLE.json"]),
+        ("a capitalised extension", ["fixtures/Reviews.SQLite"]),
+    ],
+)
+def test_the_tracked_bundle_guard_sees_each_artefact(name, tracked):
+    """Five shapes, and the last two are what an earlier draft of this reader missed: a manifest
+    at the repository root rather than inside a bundle directory, and an extension a case-folding
+    filesystem hands back differently from how it was written."""
+    assert _bundle_artefacts(tracked + ["README.md", "backend/spielplan/app.py"]), name
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "ignored"),
+    [
+        ("anchored", "/data/\n", True),
+        ("unanchored", "data/\n", True),
+        ("a child", "data/artifacts/\n", False),
+        ("absent", "node_modules/\n*.log\n", False),
+        ("re-included underneath", "/data/\n!data/import/\n", False),
+        ("commented out", "# /data/\n", False),
+    ],
+)
+def test_the_ignore_guard_reads_both_spellings_and_the_way_back(name, text, ignored):
+    """The rule is spelled differently in the two files, and the interesting failure is neither
+    spelling: a `!data/...` negation added years later re-includes the directory without touching
+    the line that excludes it, and nothing above would have read the pair."""
+    assert _ignores_directory(text, _BUNDLE_HOME) is ignored, name
+
+
+# --- M4.16 spec-11: an exit criterion is closed by a committed measurement, or it is open -------
+#
+# "The suite is green" was written down as a stronger statement than §12's exit criterion.
+# It is not stronger, it is different: five of the fifteen rows describe shipped surfaces and have
+# never been run at all, seven are measured by an `ops/` script and not one of those scripts had a
+# committed output anywhere in the tree, and M4.5's criterion contained a check whose predicate
+# was the literal `True` until M4.8 repaired it. `docs/RELEASE.md` is where that is recorded, row
+# by row, with the owner's verdict column left to the owner.
+
+# The statuses that mean "no output file, and that is the honest answer". A row with none of these
+# and no file is a row claiming a measurement nobody can find.
+_UNMEASURED = {"UNMEASURED", "NOT BUILT", "RUN, OUTPUT NOT COMMITTED"}
+
+_RELEASE_HEADING = re.compile(r"^### (M[\d.]+)\s", re.M)
+_RELEASE_FIELDS = re.compile(
+    r"\*\*Status:\*\*\s*(.+?)\.\s*\*\*Output file:\*\*\s*(.+?)\.\s*\*\*Blocking:\*\*", re.S
+)
+_RELEASE_VERDICT = re.compile(r"\*\*Owner verdict:?\*\*:?\s*`([^`\n]*)`")
+# Section 1's summary table: `| M4.5 | MEASURED | `docs/...` | yes | `________` |`. Five cells,
+# and the three this file has rules about are the first, the second and the last.
+_RELEASE_TABLE_ROW = re.compile(
+    r"^\|\s*(M[\d.]+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$", re.M
+)
+# And section 3's own verdict, which is spelled the other way round -- `**Owner verdict:
+# `________`**`, with the bold closing AFTER the blank -- so `_RELEASE_VERDICT` cannot match it.
+# M2's row says "See §3 below", which makes that section the place a reader is sent to and the
+# second place M2 can be signed. [decision 297; M4.16 cycle 5, M416-C4-REL-08]
+_RELEASE_INLINE_VERDICT = re.compile(r"\*\*Owner verdict:?\s*`([^`\n]*)`\*\*")
+
+# The row M4.5 is: §12 does not carry it, and the milestone measured the criterion section
+# 12 gives M0's importer against the real corpus rather than the fixture. RELEASE.md carries it
+# beside the fifteen because it is the one row with a committed output to point at.
+_EXTRA_RELEASE_ROWS = ("M4.5",)
+
+# Decision 298's owed asset, and the sentence that has to survive with it. Named here rather than
+# inside the test so the two halves -- the record and the absence -- cannot drift apart.
+TMDB_LOGO = FRONTEND_STATIC / "tmdb-logo.svg"
+
+
+def _section_12_milestones() -> list[str]:
+    """The build order's own rows, read off the normative file rather than restated here."""
+    spec = _src(_normative_file())
+    table = spec.split("## 12. Build order", 1)
+    assert len(table) == 2, "the normative file no longer has a `## 12. Build order` section"
+    body = re.split(r"^## ", table[1], maxsplit=1, flags=re.M)[0]
+    rows = re.findall(r"^\|\s*\*\*(M[\d.]+)\*\*\s*\|", body, re.M)
+    assert rows, "§12's table has no milestone rows, so this guard is reading nothing"
+    return rows
+
+
+def _release_section_one() -> str:
+    """Section 1, whole -- the summary table AND the blocks under it.
+
+    Split out in review cycle 5 because the table was the half nothing read. `_release_rows` keys
+    off `^### M`, so everything above the first heading was discarded, and section 1 opens with a
+    sixteen-row table restating every row's Status, Output file and verdict. That is the FIRST
+    statement a reader meets of each of them, and it could disagree with the block below it in
+    every cell without a guard anywhere noticing. [M4.16 cycle 5, M416-C4-REL-08]
+    """
+    body = _src(RELEASE_RECORD).split("## 1. ", 1)
+    assert len(body) == 2, "docs/RELEASE.md has no `## 1.` section"
+    return re.split(r"^## \d", body[1], maxsplit=1, flags=re.M)[0]
+
+
+def _release_rows() -> dict[str, str]:
+    """Section 1's blocks, one per milestone, keyed by the milestone they are about."""
+    section = _release_section_one()
+    heads = list(_RELEASE_HEADING.finditer(section))
+    return {
+        head.group(1): section[head.start(): heads[i + 1].start() if i + 1 < len(heads) else len(section)]
+        for i, head in enumerate(heads)
+    }
+
+
+def _release_summary(section: str) -> dict[str, tuple[str, str, str]]:
+    """Section 1's summary table, keyed by milestone: (Status, Output file, Owner verdict)."""
+    return {
+        row.group(1): tuple(row.group(i).strip().strip("`") for i in (2, 3, 5))
+        for row in _RELEASE_TABLE_ROW.finditer(section)
+    }
+
+
+def _release_summary_problems(summary: dict[str, tuple[str, str, str]],
+                              rows: dict[str, str]) -> list[str]:
+    """Every way the table at the top of section 1 can say something the blocks below do not.
+
+    A duplicated record read by no rule is the defect this milestone exists to close, and this one
+    is a duplicate of the three fields the rule is ABOUT: a cell flipped to `MEASURED` against an
+    output file that is not in the tree, or a verdict cell signed while the block below it still
+    says `UNMEASURED`, satisfied every guard here -- measured, one cell at a time, over all
+    sixteen rows. Held against the blocks rather than re-deriving the answer, because the blocks
+    are where the criterion is quoted and the table is the summary OF them; and the same
+    unfilled-verdict rule is applied to the cell, because a reader who stops at the table has read
+    a verdict either way. [M4.16 cycle 5, M416-C4-REL-08]
+    """
+    problems = [
+        f"the summary table names {name}, which has no block in section 1"
+        for name in sorted(set(summary) - set(rows))
+    ]
+    problems += [
+        f"{name} has a block in section 1 and no row in the summary table above it"
+        for name in sorted(set(rows) - set(summary))
+    ]
+    for name, (status, output, verdict) in sorted(summary.items()):
+        fields = _RELEASE_FIELDS.search(rows.get(name, ""))
+        if fields is None:
+            continue
+        for label, cell, stated in (
+            ("Status", status, fields.group(1).strip()),
+            ("Output file", output, fields.group(2).strip().strip("`")),
+        ):
+            if cell != stated:
+                problems.append(
+                    f"the summary table gives {name} the {label} {cell!r} and its own block says "
+                    f"{stated!r}; the table is the first of the two a reader meets"
+                )
+        if status in _UNMEASURED and not re.fullmatch(r"_+", verdict):
+            problems.append(
+                f"the summary table records {name} as {status!r} and signs its verdict {verdict!r}"
+            )
+    return problems
+
+
+def _release_row_problems(rows: dict[str, str], owed: list[str]) -> list[str]:
+    """Every way the record can claim more than the tree holds, as one list.
+
+    The verdict was read for its PRESENCE and never for its value until review cycle 5, so half of
+    the rule `docs/RELEASE.md` publishes in its own voice -- "every §12 row either names an output
+    file that exists in the tree, or is recorded as `UNMEASURED` / `NOT BUILT` / `RUN, OUTPUT NOT
+    COMMITTED` with an unfilled verdict" -- was enforced by nothing. Measured: signing any of the
+    sixteen section-1 rows one at a time left this function returning `[]` every time. Only M2's
+    value was held, by a bespoke guard below, which is decision 297's scope rather than the row's:
+    the `what` states the universal, and a row is repaired by widening its guard rather than by
+    narrowing its claim. [docs/RELEASE.md "How to read this file"; M4.16 cycle 5, M416-C4-REL-08]
+    """
+    problems = [f"{name} has no row in section 1" for name in owed if name not in rows]
+    for name, block in sorted(rows.items()):
+        fields = _RELEASE_FIELDS.search(block)
+        if fields is None:
+            problems.append(f"{name} states no Status / Output file / Blocking line")
+            continue
+        status, output = fields.group(1).strip(), fields.group(2).strip().strip("`")
+        verdict = _RELEASE_VERDICT.search(block)
+        if verdict is None:
+            problems.append(f"{name} carries no Owner verdict field")
+        elif status in _UNMEASURED and not re.fullmatch(r"_+", verdict.group(1)):
+            problems.append(
+                f"{name} is recorded as {status!r} and carries the verdict {verdict.group(1)!r}; "
+                "nothing in this repository can produce one, so it was filled in from memory"
+            )
+        if output == "none":
+            if status not in _UNMEASURED:
+                problems.append(
+                    f"{name} is {status!r} and names no output file; a measured row points at one"
+                )
+        elif not (REPO / output).exists():
+            problems.append(f"{name} names the output file {output!r} and it is not in the tree")
+    return problems
+
+
+def test_exit_criteria_are_closed_by_a_committed_measurement():
+    """Decision 184 one level up: not "is this figure re-derived" but "was this run at all".
+
+    §12's criteria are the only statement this project has about whether it is shippable,
+    and `current_milestone` -- the lever the build actually had -- answers a different question:
+    whether the map is covered. A green suite over a covered map says nothing about whether fifty
+    verdicts produce a visibly personal ranking, which is the sentence §12 calls the gate.
+
+    What this holds is the shape that makes the difference visible. A row either points at an
+    output file that is IN THE TREE, or it says in so many words that it was not measured. Both
+    are acceptable answers and the second one is the honest one; what is refused is the third,
+    a row that reads as measured and names nothing a reader can open.
+    [§12; docs/TESTING.md; decision 296;
+     row `platform-exit-criteria-are-closed-by-a-committed-measurement`]
+    """
+    rows = _release_rows()
+    owed = _section_12_milestones() + list(_EXTRA_RELEASE_ROWS)
+    problems = _release_row_problems(rows, owed)
+    problems += _release_summary_problems(_release_summary(_release_section_one()), rows)
+    assert not problems, (
+        "docs/RELEASE.md is the record of what §12 actually measured, and:\n  "
+        + "\n  ".join(problems)
+        + "\n\nA criterion nobody ran is recorded as unmeasured, with the verdict left to the "
+        "owner. That is an honest row; a row implying a run whose output nobody committed is not."
+    )
+
+
+def test_the_unmeasured_criterion_and_the_owed_asset_stay_unsigned():
+    """Decisions 297 and 298, in the idiom of `test_the_owed_device_checks_are_recorded_and_still_unsigned`.
+
+    M2 is the gate -- "50-100 verdicts each produce visibly personal rankings", §12's own
+    "first real-user validation of the whole corpus project" -- and it has never been measured by
+    anybody. The record says so and leaves the verdict column empty, because the alternative shape
+    is the one this milestone exists to end: a column filled in from memory, which tells the next
+    reader to stop looking. Nothing in this repository can fill it; only a seeded stack, two
+    members with fifty verdicts each and a Spearman the owner sets a threshold for can.
+
+    The TMDB logo is the same polarity over an artefact. No agent may fabricate a trademarked
+    file, so the Data sources block renders a named slot and `docs/RELEASE.md` section 7.1 carries
+    the debt. Both halves are asserted together: a record of an absence stops being true the
+    moment the absence ends, and the repair then is to delete this test with its row entry in the
+    same change -- which is the point. Filling either one costs a deletion that quotes the
+    decision at you.
+    [decisions 297, 298; row `platform-exit-criteria-are-closed-by-a-committed-measurement`]
+    """
+    rows = _release_rows()
+    assert "M2" in rows, "docs/RELEASE.md carries no M2 row, and M2 is the row §12 calls the gate"
+    fields = _RELEASE_FIELDS.search(rows["M2"])
+    assert fields and fields.group(1).strip() == "UNMEASURED", (
+        "docs/RELEASE.md no longer records M2's criterion as UNMEASURED. If it was measured, the "
+        "run's output belongs in the tree beside `M4.5-exit.txt` and this guard goes with it; if "
+        "the marker was simply deleted, that is decision 297's defect wearing a status."
+    )
+    verdict = _RELEASE_VERDICT.search(rows["M2"])
+    assert verdict and re.fullmatch(r"_+", verdict.group(1)), (
+        "M2's owner verdict carries a value, and no run in this repository can produce one: "
+        "nothing here seeds two members with fifty verdicts, reads both orderings and compares "
+        f"them against `title_prior.b`. Found: {verdict.group(1) if verdict else None!r}. If the "
+        "owner has signed it, delete this guard and its coverage row entry in the same change."
+    )
+    # And the same blank signed BESIDE itself, which the rule above cannot see: it reads what is
+    # between the backticks and nothing else, so `**Owner verdict:** `________` -- PASS, signed by
+    # the owner on 2026-09-17.` satisfied it, measured, and reads as a verdict to every human
+    # being. Held over the FIELDS paragraph rather than the whole row, because M2's row
+    # legitimately discusses runs that did happen -- and only over M2, because M4.5's row carries
+    # a date and a PASS for the honest reason that somebody ran it. The reader is shared with
+    # `test_the_owed_device_checks_are_recorded_and_still_unsigned`, which is the same mechanism
+    # one document over. [decisions 281 and 297; M4.16 cycle 4, M416-C4-COV-04]
+    from tests.test_spec_coverage import _paragraph_at, _signature_prose
+
+    fields = rows["M2"].index("**Status:**")
+    beside = _signature_prose(_paragraph_at(rows["M2"], fields), _RELEASE_VERDICT)
+    assert not beside, (
+        "M2's verdict is left blank and signed in the prose beside it, which discharges the "
+        f"criterion for every reader while the blank stays blank: {', '.join(dict.fromkeys(beside))}. "
+        "Decision 297 leaves the column empty because nothing here can fill it; a verdict written "
+        "next to the column is that column filled."
+    )
+
+    # And M2's SECOND verdict site, which is the one M2's own row sends the reader to ("See §3
+    # below"). Section 3 states the criterion and what a measurement would take, and ends in a
+    # verdict of its own -- spelled `**Owner verdict: `________`**`, the bold closing after the
+    # blank rather than before it, which `_RELEASE_VERDICT` cannot match. So the one row decision
+    # 297 is written about could be signed off in the section it points at, with the row above
+    # left honest and every guard in this file green. Held as a count as well as a value, because
+    # a second blank added beside it is a second place to sign. [M4.16 cycle 5, M416-C4-REL-08]
+    third = _src(RELEASE_RECORD).split("## 3. ", 1)
+    assert len(third) == 2, "docs/RELEASE.md has no `## 3.` section, and M2's row points at it"
+    inline = _RELEASE_INLINE_VERDICT.findall(re.split(r"^## \d", third[1], maxsplit=1, flags=re.M)[0])
+    assert len(inline) == 1, (
+        f"docs/RELEASE.md section 3 holds {len(inline)} owner-verdict blanks: {inline}. M2's row "
+        "points a reader at this section, so it carries exactly one, and it is the same one."
+    )
+    assert re.fullmatch(r"_+", inline[0]), (
+        f"docs/RELEASE.md section 3 signs M2's criterion {inline[0]!r}. It is the section M2's own "
+        "row sends a reader to, and the section's own sentence says the verdict is \"fillable only "
+        "by a run\" -- a run this repository cannot make. Decision 297's repair on the day the "
+        "owner honestly signs is to delete this guard with its coverage row entry, in one change."
+    )
+
+    owed = _src(RELEASE_RECORD).split("### 7.1 ", 1)
+    assert len(owed) == 2, "docs/RELEASE.md section 7.1 -- the TMDB logo debt -- is gone"
+    claim = re.split(r"^### ", owed[1], maxsplit=1, flags=re.M)[0]
+    assert TMDB_LOGO.relative_to(REPO).as_posix() in claim and "Owed" in claim, (
+        "docs/RELEASE.md section 7.1 no longer names `frontend/static/tmdb-logo.svg` as owed. The "
+        "notice ships without it and the e2e row asserts neither its presence nor its absence, so "
+        "this record is the only thing that remembers the debt exists."
+    )
+    assert not TMDB_LOGO.exists(), (
+        "`frontend/static/tmdb-logo.svg` is in the tree, so decision 298's debt is paid and the "
+        "record that it is owed is now false. Delete section 7.1, this assertion and the "
+        "COMMENT_PATH_EXCEPTIONS entry above in one change, and let the Data sources slot fill."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "block", "owed", "caught"),
+    [
+        ("a row that vanished", {}, ["M2"], True),
+        (
+            "measured, naming nothing",
+            {"M2": "**Status:** MEASURED. **Output file:** none. **Blocking:** yes.\n"
+                   "**Owner verdict:** `________`\n"},
+            [], True,
+        ),
+        (
+            "naming a file that is not there",
+            {"M2": "**Status:** MEASURED. **Output file:** `docs/nowhere.txt`. **Blocking:** yes.\n"
+                   "**Owner verdict:** `shipped`\n"},
+            [], True,
+        ),
+        (
+            "unmeasured, with no verdict field at all",
+            {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"},
+            [], True,
+        ),
+        (
+            "unmeasured, with a verdict nobody in this repository could have produced",
+            {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"
+                   "**Owner verdict:** `PASS`\n"},
+            [], True,
+        ),
+        (
+            "not built, and signed as shipped",
+            {"M5": "**Status:** NOT BUILT. **Output file:** none. **Blocking:** no.\n"
+                   "**Owner verdict:** `shipped`\n"},
+            [], True,
+        ),
+        (
+            "unmeasured and honest",
+            {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"
+                   "**Owner verdict:** `________`\n"},
+            [], False,
+        ),
+        (
+            "measured, pointing at a file the tree holds",
+            {"M4.5": "**Status:** MEASURED. **Output file:** `README.md`. **Blocking:** yes.\n"
+                     "**Owner verdict:** `________`\n"},
+            [], False,
+        ),
+        (
+            "measured, pointing at a file the tree holds, and honestly signed",
+            {"M4.5": "**Status:** MEASURED. **Output file:** `README.md`. **Blocking:** yes.\n"
+                     "**Owner verdict:** `PASS, owner, 2026-09-17`\n"},
+            [], False,
+        ),
+    ],
+)
+def test_the_release_record_guard_sees_a_row_claiming_more_than_the_tree_holds(name, block, owed, caught):
+    """Eight rows, five of them refused. The fourth is the shape that matters most: a row recorded
+    as unmeasured with the verdict field deleted rather than left empty reads as complete to
+    every sweep that counts fields, and decision 297's whole mechanism is that the column is
+    there and blank.
+
+    The fifth and sixth are that mechanism's other spelling, and the one the rule shipped unable
+    to refuse: the column left in place and FILLED, over a status that says the run never
+    happened. The last case is why the rule fires on `_UNMEASURED` and not on every verdict --
+    M4.5 was measured, its output is in the tree, and the owner may sign it whenever they read it.
+    A rule that refused that would be narrowed by the first person it stopped.
+    [M4.16 cycle 5, M416-C4-REL-08]
+    """
+    assert bool(_release_row_problems(block, owed)) is caught, name
+
+
+@pytest.mark.parametrize(
+    ("name", "table", "rows", "caught"),
+    [
+        ("the table and the block agreeing",
+         "| M2 | UNMEASURED | none | owner's call | `________` |\n",
+         {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"}, False),
+        ("a cell flipped to MEASURED against a file that is not there",
+         "| M2 | MEASURED | `docs/nowhere.txt` | owner's call | `________` |\n",
+         {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"}, True),
+        ("the table's verdict signed while the block below stays unmeasured",
+         "| M2 | UNMEASURED | none | owner's call | `PASS, owner, 2026-09-17` |\n",
+         {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"}, True),
+        ("a row in the table and no block under it",
+         "| M8 | NOT BUILT | none | no | `________` |\n", {}, True),
+        ("a block with no row in the table",
+         "",
+         {"M2": "**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes.\n"}, True),
+    ],
+)
+def test_the_release_summary_table_says_what_the_blocks_under_it_say(name, table, rows, caught):
+    """The table was read by nothing, and it restates every field the rules below are about.
+
+    Five cases, four refused. The second and third are the reachable edits -- one cell, one line,
+    no other change -- and both left every guard over this document green while the table told a
+    reader the opposite of the block beneath it. The first is the direction that keeps the rule
+    from being satisfied by deleting the table: agreement passes, and a summary that agrees with
+    what it summarises is the whole point of having one. [M4.16 cycle 5, M416-C4-REL-08]
+    """
+    assert bool(_release_summary_problems(_release_summary(table), rows)) is caught, name
+
+
+# --- M4.16 review cycle 1: the record covers the instrument the milestone exists to add ---------
+#
+# Everything above holds §12's fifteen rows plus M4.5. None of it reaches the release workflow
+# itself, so the file whose declared contract is "the fact of a run, or the fact of its absence"
+# said neither about the one instrument this milestone was written for -- while `docs/TESTING.md`
+# twice pointed a reader at this file for that workflow's answer, and once asserted in the present
+# tense that two checklist items "are now a machine's answer". They are not: the workflow has never
+# been dispatched, and the runner it names has never been registered. [M4.16 cycle 1, M416-REL-01]
+
+RELEASE_GATE_SECTION = "### 2.1 "
+# THREE and not two since review cycle 5, which is decision 312's fourth place and the one a
+# guard could reach. The criterion the table resolves -- "counts only rows whose named tests
+# actually executed AT OR ABOVE the row's declared kind" -- is two claims with two owners, and
+# the kind guard's row in that table was the half nothing held: deleting it leaves a reader of
+# section 2.1 told the criterion resolves to one instrument reading in one direction, with both
+# coverage rows still asserting the cross-naming in the present tense.
+# [decision 312; M4.16 cycle 5, M416-C5-GATE-01]
+_GATE_INSTRUMENTS = (".github/workflows/release.yml", "ops/coverage_gate.py",
+                     "backend/tests/test_spec_coverage.py")
+
+# The sentences section 2.1 states its polarity IN, which is where a reader actually reads it.
+# The guard read four things -- the `Status:` word, the `Output file:` value, the verdict's
+# underscores and the two instrument paths -- and the section's own prose was read by nothing:
+# the heading's verdict, the bolded never-run sentence and the job's exit code all survived
+# being rewritten into a record of a dispatch that never happened, measured, with `UNMEASURED`
+# and the underscored verdict sitting above them and the whole suite green. A reader takes away
+# the paragraph, not the field, so a record honest in its fields and false in its sentences is
+# the shape decision 297 exists to refuse.
+#
+# FIXED CLAUSES rather than a rule over prose, in the idiom section 7.2's guard already uses one
+# section down: each is the claim exit criterion 4 is about, and the second carries BOTH of its
+# halves -- no dispatch, and no leg deliberately broken and watched to fail. The middle column of
+# the per-leg table is deliberately not here: decision 313 moved leg 2's cell to a recorded
+# partial this cycle and that column moves again as work lands by hand, while these three and
+# the "By this job" column below can only move when a workflow returns an exit code. ONE cell of
+# that middle column is held, at the bottom of this file: leg 3's, because its first command can
+# only skip in this lane, which is a fact about the tree rather than about what somebody has got
+# round to running (`test_the_release_record_does_not_record_the_real_bundle_leg_as_run`).
+# [decision 297; M4.16 cycle 4: REL-C4-02, REL-C4-10]
+_GATE_POLARITY = (
+    ("never dispatched", "the heading's own verdict on the workflow"),
+    ("has never run, and no leg of it has ever been deliberately broken and watched to fail",
+     "exit criterion 4's two halves, which is the sentence this section exists to carry"),
+    ("has never returned an exit code",
+     "the job's own answer, which is what five legs in order add up to"),
+)
+
+# "**Exactly one standing waiver remains**", and the bold is what makes it the record's claim
+# rather than a passing mention. `_COUNT_WORDS` is the register guard's list, reused here for the
+# reason it exists there: the guard rules on the count, not on how a paragraph chose to spell it.
+_STANDING_WAIVERS = re.compile(r"\*\*(?P<count>[A-Za-z ]+?) standing waivers? remains?\b")
+
+
+def _gate_record(text: str) -> str:
+    """Section 2.1 of `docs/RELEASE.md`, the release gate's own row."""
+    parts = text.split(RELEASE_GATE_SECTION, 1)
+    return re.split(r"^#{2,3} ", parts[1], maxsplit=1, flags=re.M)[0] if len(parts) == 2 else ""
+
+
+def _gate_record_problems(text: str) -> list[str]:
+    """Every way that row can claim, or imply, a run nobody made."""
+    block = _gate_record(text)
+    if not block:
+        return ["docs/RELEASE.md carries no `### 2.1` section for the release workflow itself"]
+    problems = []
+    fields = _RELEASE_FIELDS.search(block)
+    if fields is None:
+        problems.append("section 2.1 states no Status / Output file / Blocking line")
+    else:
+        status, output = fields.group(1).strip(), fields.group(2).strip().strip("`")
+        if status not in _UNMEASURED:
+            problems.append(
+                f"section 2.1 records the release workflow as {status!r}. A dispatch happened, or "
+                "the marker was deleted; if it happened, its artifacts belong in the tree and this "
+                "guard goes with them in the same change"
+            )
+        if output != "none":
+            problems.append(f"section 2.1 names the output file {output!r} for a job nobody ran")
+    verdict = _RELEASE_VERDICT.search(block)
+    if not (verdict and re.fullmatch(r"_+", verdict.group(1))):
+        problems.append(
+            "section 2.1's owner verdict is filled or missing, and no run in this repository can "
+            "fill it: nothing here registers a runner or dispatches a workflow"
+        )
+    for instrument in _GATE_INSTRUMENTS:
+        if instrument not in block:
+            problems.append(f"section 2.1 does not name `{instrument}`")
+    # Whitespace-collapsed, because every one of these sentences wraps in the document and a
+    # rule pinned to a physical line would stop at the wrap. [M4.16 cycle 4, REL-C4-02]
+    flat = " ".join(block.split())
+    for sentence, carries in _GATE_POLARITY:
+        if sentence.lower() not in flat.lower():
+            problems.append(
+                f'section 2.1 no longer says "{sentence}", which is where it records '
+                f"{carries}. If the workflow HAS run, its artifacts belong in the tree and this "
+                "guard goes with them in the same change"
+            )
+    # The per-leg table's LAST column is "By this job", and every cell in it says `never`. That
+    # column is the one exit criterion 4 is actually about: the middle column records what has been
+    # run by hand from this lane and moves as work lands -- decision 313 moved leg 2's to a partial
+    # this cycle -- while the right-hand column can only move when a workflow returns an exit code,
+    # which nothing in this repository can make happen. Held as a rule over the whole column rather
+    # than over one leg, because the sentence a reader takes away is the column and not a row.
+    # [decision 297's idiom; M4.16 cycle 4, M416-C4-GATE-02]
+    # The cell rather than the row, and ASCII-escaped: this message reaches whatever console the
+    # suite is read on, and the table's own em dashes crash a cp1252 one (CLAUDE.md).
+    ran = [
+        f"leg {row.group('leg')} says "
+        + row.group("by").strip().encode("ascii", "backslashreplace").decode()
+        for row in re.finditer(
+            r"^\| *(?P<leg>\d+) [^|\n]*\|[^|\n]*\|(?P<by>[^|\n]*)\|", block, re.M
+        )
+        if row.group("by").strip().strip("*`") != "never"
+    ]
+    if ran:
+        problems.append(
+            "section 2.1's per-leg table claims a leg was run BY THIS JOB: " + "; ".join(ran)
+            + ". The job has never returned an exit code; if it has, its artifacts belong in the "
+            "tree and this guard goes with them in the same change"
+        )
+    return problems
+
+
+def test_the_release_gate_records_its_own_unrun_status():
+    """The half of §12's criterion this lane could satisfy, which is the half it owed.
+
+    A dispatch needs a push, a registered `spielplan-corpus` runner and Docker, none of which
+    exists here -- and the criterion says so: where a leg has never been executed from this lane,
+    that absence is RECORDED rather than implied to have happened. It was not, and the omission was
+    louder than an ordinary gap because `docs/TESTING.md` sends the reader here for exactly this
+    answer. A gate that has never produced an exit code and is believed to is worse than no gate.
+    [decision 297's idiom; row `platform-exit-criteria-are-closed-by-a-committed-measurement`]
+    """
+    problems = _gate_record_problems(_src(RELEASE_RECORD))
+    assert not problems, (
+        "docs/RELEASE.md is where the release workflow's answer is written down, and:\n  "
+        + "\n  ".join(problems)
+    )
+
+
+# The honest record every case below spoils in exactly one place, so each case proves the rule it
+# is named for rather than another rule's absence -- `_synthetic`'s argument, one module over. It
+# carries the three polarity sentences and a per-leg row because the guard reads all of them, and
+# the never-run sentence is written ACROSS a line break, which is how the document writes it and
+# what the flattening in the guard is for. [M4.16 cycle 4, REL-C4-02]
+_HONEST_GATE_RECORD = (
+    "### 2.1 The release workflow itself - **never dispatched**\n\n"
+    "**Status:** UNMEASURED. **Output file:** none. **Blocking:** no.\n"
+    "**Owner verdict:** `________`\n\n"
+    "**`.github/workflows/release.yml` has never run, and no leg of it has ever been\n"
+    "deliberately broken and watched to fail.** **The JOB has never returned an exit code.**\n\n"
+    "| Leg | Substance run from this lane | By this job |\n"
+    "|---|---|---|\n"
+    "| 1 - the full suite | yes, every cycle | never |\n\n"
+    "ops/coverage_gate.py\n"
+    "backend/tests/test_spec_coverage.py's kind guard\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "caught"),
+    [
+        ("the section deleted", "## 2. scripts\n\nnothing about the workflow\n", True),
+        ("recorded as run, with nothing to open",
+         _HONEST_GATE_RECORD.replace("UNMEASURED", "MEASURED"), True),
+        ("signed by nobody who could have",
+         _HONEST_GATE_RECORD.replace("`________`", "`green`"), True),
+        # Review cycle 4. These four are where section 2.1 actually STATES the polarity, and all
+        # four were rewritten into a record of a dispatch nobody made -- with a date, a broken leg
+        # and a table saying every leg ran -- while the fields above them stayed honest and every
+        # guard in this file stayed green. [M4.16 cycle 4, REL-C4-02]
+        ("the never-run sentence rewritten into a dispatch",
+         _HONEST_GATE_RECORD.replace(
+             "has never run, and no leg of it has ever been\n"
+             "deliberately broken and watched to fail.**",
+             "was dispatched on 2026-09-18 and leg 3 was deliberately broken and watched to "
+             "fail.**",
+         ), True),
+        ("the heading's own verdict deleted",
+         _HONEST_GATE_RECORD.replace(" - **never dispatched**", ""), True),
+        ("the job given an exit code it has never returned",
+         _HONEST_GATE_RECORD.replace(
+             "The JOB has never returned an exit code.", "The JOB returned 0 on run 41."
+         ), True),
+        ("a leg claimed for the job in the column that can only say never",
+         _HONEST_GATE_RECORD.replace("| yes, every cycle | never |", "| yes | yes, run 41 |"),
+         True),
+        # Review cycle 5, and decision 312's fourth place: the instrument table's third row.
+        # [decision 312; M4.16 cycle 5, M416-C5-GATE-01]
+        ("the kind guard dropped from the instrument table",
+         _HONEST_GATE_RECORD.replace(
+             "backend/tests/test_spec_coverage.py's kind guard\n", ""), True),
+        ("honest, and naming all three instruments", _HONEST_GATE_RECORD, False),
+    ],
+)
+def test_the_gate_record_guard_sees_a_workflow_recorded_as_having_run(name, text, caught):
+    """The shapes that cost nothing to write and everything to believe.
+
+    Four of the eight are review cycle 4's, and they are the half that is not a field: a reader
+    takes away the heading, the bolded sentence and the table, and each of those could be turned
+    into a record of a run nobody made without touching the `Status:` word above them.
+    [M4.16 cycle 4, REL-C4-02]
+    """
+    assert text != _HONEST_GATE_RECORD or not caught, (
+        f"the {name!r} mutation no longer changes the record, so it would pass over an edit it "
+        "never made"
+    )
+    assert bool(_gate_record_problems(text)) is caught, name
+
+
+def test_the_release_record_states_the_waivers_the_coverage_map_actually_holds():
+    """§12's criterion for this milestone is that EXACTLY ONE waiver stands. This file said two.
+
+    It was true when the sentence was written and false by the time the milestone closed: the
+    second waiver was retired inside the same change set, and the paragraph naming it kept
+    instructing a reader to perform the retirement -- an instruction to redo work already done,
+    which invites either a duplicate edit or a revert of the test that replaced the waiver.
+    `docs/TESTING.md` faced the identical hazard and solved it with dated `[SUPERSEDED ...]`
+    markers; this file simply went stale, and nothing read it.
+
+    Held both ways. An id this record calls waived must carry `waived` in the map, and the count
+    word it publishes must be the map's. [M4.16 cycle 1, M416-C1-REL-02]
+    """
+    text = _src(RELEASE_RECORD)
+    waived = {
+        row["id"]
+        for row in tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["requirement"]
+        if "waived" in row
+    }
+    claim = _STANDING_WAIVERS.search(text)
+    assert claim, (
+        "docs/RELEASE.md no longer publishes how many standing waivers the map holds, in the form "
+        "`**<count> standing waiver(s) remain(s)**`. §12's criterion for this milestone IS that "
+        "count, so the record either states it or this guard is reading nothing."
+    )
+    published = _COUNT_WORDS.index(claim.group("count").lower().split()[-1])
+    assert published == len(waived), (
+        f"docs/RELEASE.md publishes {published} standing waiver(s) and the map holds "
+        f"{len(waived)}: {sorted(waived)}"
+    )
+    # The same paragraph, because that is where the ids belong and where they went stale: the
+    # sentence naming two ids survived the retirement of one of them and kept instructing a
+    # reader to perform an edit that had already landed.
+    paragraph = text[claim.start():].split("\n\n", 1)[0]
+    named = set(re.findall(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`", paragraph))
+    assert named == waived, (
+        f"docs/RELEASE.md's standing-waiver paragraph names {sorted(named)} and the map waives "
+        f"{sorted(waived)}. A record that calls a retired waiver standing is an instruction to "
+        "redo work already done, which invites a duplicate edit or a revert of the test that "
+        "replaced it."
+    )
+
+
+def test_the_release_record_carries_the_owed_device_checks_by_reference_only():
+    """7.2 says of itself "carried here by reference and by reference only ... Nothing is copied
+    here", and then copied a list: three bullets over a ledger carrying six, plus a sentence
+    saying a fourth check had been "retired rather than signed".
+
+    Nothing was retired. Review cycle 2's CDP injection put the ARITHMETIC of the status-bar rule
+    into CI and decision 281's own amendment says in terms that not one of the owed facts is
+    discharged by it. So the record understated the debt AND reported a discharge that did not
+    happen, in the section written to keep the debt visible -- which is a record made true in the
+    wrong direction, the failure mode this milestone exists to remove.
+
+    The repair is the one the section already claims: no list, no count, one pointer. This holds
+    that, because a list is what went stale. [decisions 281, 302; M4.16 cycle 1, M416-C1-REL-05]
+    """
+    owed = _src(RELEASE_RECORD).split("### 7.2 ", 1)
+    assert len(owed) == 2, "docs/RELEASE.md section 7.2 -- the owed device checks -- is gone"
+    block = re.split(r"^### ", owed[1], maxsplit=1, flags=re.M)[0]
+    assert "docs/TESTING.md" in block, (
+        "section 7.2 no longer points at the file that holds the checks and the signature line, "
+        "so the reference it says it is has nowhere to land"
+    )
+    bullets = [line for line in block.splitlines() if line.startswith("- ")]
+    assert not bullets, (
+        "section 7.2 lists the owed checks rather than pointing at them, and a copied list is what "
+        f"went stale last time: {bullets}. docs/TESTING.md is the one place they are counted."
+    )
+    stale = [
+        phrase
+        for phrase in ("retired rather than signed", "Three facts", "three unsigned",
+                       "the three unsigned")
+        if phrase in block
+    ]
+    assert not stale, (
+        f"section 7.2 states {stale} over a ledger that counts the checks itself and retires none "
+        "of them. Decision 281's amendment: the CDP work discharges no owed fact and the signature "
+        "line does not move."
+    )
+
+    # And the OTHER half of the section's own sentence, which nothing read: "no second signature
+    # line is written anywhere, because a second one would let the debt be discharged in one file
+    # while the guard reads the other". `test_the_owed_device_checks_are_recorded_and_still_
+    # unsigned` counts `verified on ...` lines in docs/TESTING.md and only there, and the three
+    # rules over this file read section 1, section 2.1 and section 7.1 -- so a filled signature
+    # inserted under this heading left every gate green while README sends a reader here for
+    # release verdicts. Read over the WHOLE file, because the split-record failure the sentence
+    # names is about a line appearing anywhere in it, not under one heading.
+    #
+    # FILLED fields, not the idiom: decision 302's own wording quotes `verified on ...` as a
+    # pointer, and a rule that reddened on the pointer would be a rule nobody could satisfy
+    # except by never naming the thing. The day the debt is honestly signed this goes red and
+    # comes out with section 7.2 in one change, which is the same polarity as its siblings.
+    # [decisions 281, 302; M4.16 cycle 4, REL-C4-05]
+    from tests.test_spec_coverage import _OWED_SIGNATURE
+
+    signatures = [
+        found.group(0)
+        for found in _OWED_SIGNATURE.finditer(_src(RELEASE_RECORD))
+        if not re.fullmatch(r"[_\s.]*", found.group(1))
+    ]
+    assert not signatures, (
+        f"docs/RELEASE.md carries a filled device-check signature line: {signatures}. Section 7.2 "
+        "says of itself that no second signature line is written anywhere, because a second one "
+        "lets the debt be discharged in one file while the guard reads the other -- and the guard "
+        "reads docs/TESTING.md."
+    )
+
+
+# --- M4.16 review cycle 2: the point release names the wave it actually was ---------------------
+#
+# Decision 288 makes the dated point release the ONE join between the register and the normative
+# text -- the date says which wave, the numbers say what the wave was answering to -- and
+# `_FOLDED_DECISIONS` above only asks that the line name at least one decision. So a line naming
+# four of five passes: review cycle 1 landed decision 306's amendment in section 5.2, ending
+# "- decision 306", while the Status block went on saying the cycle "folded four more" and naming
+# 304 as its last. An auditor reading section 5.2 back to the wave that applied it is told the
+# decision was not in it, and an auditor reading the register forward gets no confirmation from the
+# file that is supposed to carry the amendment.
+#
+# Scoped to the wave, not to the register: only decisions taken on the point release's own DATE are
+# owed a mention, because sections 1-14 cite decisions 174 and 183 from earlier waves and a rule
+# that demanded those would be asking this line to restate the whole register. And only decisions
+# the body actually CITES are owed one, because 296 and 297 mandate records rather than spec text
+# and belong to no wave clause at all. [decision 288; M4.16 cycle 2, SPEC-C2-06]
+_WAVE_DATE = re.compile(r"\((\d{4}-\d{2}-\d{2})\)")
+_REGISTER_BLOCK_HEAD = re.compile(r"^## Decisions taken \((?P<head>[^)]*)\)\s*$", re.M)
+_BLOCK_DECISION = re.compile(r"^### (\d+)\. ", re.M)
+# `decisions 292 and 293`, `decisions 164, 165, 288`, `decision 307` -- a citation of one number or
+# of a list, which is how sections 1-14 write them.
+_BODY_DECISIONS = re.compile(r"\bdecisions?\s+(\d+(?:\s*(?:,|and|\+)\s*\d+)*)", re.I)
+# What the line itself names: singles, and the ranges a wave collapses its own block into.
+# `_DECISION_RANGE` above is reused rather than respelled -- it already carries the en dash a
+# markdown editor substitutes, and two spellings of one range are how the ledger guards say
+# this goes wrong.
+_WAVE_SINGLE = re.compile(r"\b(\d{3})\b")
+
+
+def _numbers_named(line: str) -> set[int]:
+    """Every decision number a point-release line names, ranges expanded."""
+    named = set()
+    for low, high in _DECISION_RANGE.findall(line):
+        named.update(range(int(low), int(high) + 1))
+    named.update(int(n) for n in _WAVE_SINGLE.findall(line))
+    return named
+
+
+def _wave_decisions(date: str) -> set[int]:
+    """Every decision the register heads under a block dated `date`."""
+    register = _src(REGISTER)
+    heads = list(_REGISTER_BLOCK_HEAD.finditer(register))
+    held = set()
+    for index, head in enumerate(heads):
+        if date not in head.group("head"):
+            continue
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(register)
+        held.update(int(m.group(1)) for m in _BLOCK_DECISION.finditer(register[head.end(): end]))
+    return held
+
+
+def _unnamed_wave_decisions(text: str, wave: set[int]) -> list[str]:
+    """Decisions of this wave that sections 1-14 cite and the point-release line does not name."""
+    point = _POINT_RELEASE.search(_status_block(text))
+    if point is None:
+        return ["the Status block carries no dated point-release line"]
+    named = _numbers_named(point.group(0))
+    body = re.split(r"^## 0\.", text, maxsplit=1, flags=re.M)[-1]
+    cited = set()
+    for match in _BODY_DECISIONS.finditer(body):
+        cited.update(int(n) for n in re.findall(r"\d+", match.group(1)))
+    return [
+        f"decision {n} is cited in the body and the point-release line does not name it"
+        for n in sorted((cited & wave) - named)
+    ]
+
+
+def test_the_point_release_names_every_decision_of_its_own_wave_the_body_cites():
+    """Decision 288's join, held in the direction it actually broke.
+
+    The mechanism is that the dated line is the only thing connecting the register to the normative
+    text, and the existing guard asks only that it name SOME decision. A line naming four of five
+    reads as precise -- this one even says the counts above it are "left as first taken rather than
+    quietly grown", which makes the short number look deliberate -- so a later reader has no signal
+    that the wave was bigger than its own record of itself.
+    [decision 288; row `platform-the-normative-file-describes-the-shipped-surface`]
+    """
+    spec = _normative_file()
+    text = _src(spec)
+    point = _POINT_RELEASE.search(_status_block(text))
+    assert point, "the normative file's Status block carries no dated point-release line"
+    date = _WAVE_DATE.search(point.group(0))
+    assert date, f"the point-release line carries no date: {point.group(0)[:120]!r}"
+    wave = _wave_decisions(date.group(1))
+    assert wave, (
+        f"the register heads no `## Decisions taken` block dated {date.group(1)}, so this guard "
+        "reads nothing. Either the wave's own block is missing or its header stopped carrying the "
+        "date the point release is stamped with."
+    )
+    missing = _unnamed_wave_decisions(text, wave)
+    assert not missing, (
+        f"{spec.relative_to(REPO).as_posix()} was amended under decisions this wave took and its "
+        "point-release line does not say so:\n  "
+        + "\n  ".join(missing)
+        + "\n\nThe date says which wave and the numbers say what the wave was answering to "
+        "(decision 288). A clause naming four of five is the shape an auditor trusts and cannot "
+        "reconcile."
+    )
+
+
+def test_the_wave_guard_reads_the_line_and_not_the_register():
+    """Both halves, and the second is what keeps the rule scoped.
+
+    A decision this wave took, cited in the body and missing from the line, is caught. A decision
+    from an EARLIER wave cited in the body is not -- sections 1-14 cite 174 and 183 that way, and a
+    rule that demanded them would be asking one line to restate the whole register.
+    """
+    body = (
+        "**Status:** implementation spec.\n"
+        "**v2.1.1 (2026-09-17):** this wave folds in decisions 288-303 and 304.\n\n"
+        "## 0. What changed\n\n"
+        "## 5. Scoring\n\nThe form is attributed to section 3 - decision 306.\n"
+        "The sweep may overwrite what decision 174 allows.\n"
+    )
+    assert _unnamed_wave_decisions(body, {304, 305, 306}) == [
+        "decision 306 is cited in the body and the point-release line does not name it"
+    ]
+    assert not _unnamed_wave_decisions(body, {304, 305})
+
+# --- M4.16 review cycle 2: the records do not promise a surface nothing serves ------------------
+#
+# Decision 307. The one code-and-UI item this milestone shipped is /account's Data sources block,
+# and section 10 described it twice in sentences this wave wrote: `rating_source` as "the source of
+# the licence text 6.8's Data sources block displays", and the four licence columns as "surfaced to
+# every signed-in member". Neither is true. `DataSources.svelte` imports nothing from
+# `$lib/api.js`, makes no request and renders five strings this app wrote, because the only route
+# serving those columns is `api/admin.py`'s `data_sources` behind `AdminUser` -- 403 to a member,
+# 401 with `X-Spielplan-Reauth: admin` to a lapsed admin. The component argues exactly that in its
+# own header and then concludes the opposite of the spec.
+#
+# The rule is a CLAIM check and not a fingerprint, for the reason the sigma rule above gives: it
+# fires on any paragraph saying the member surface DISPLAYS what `rating_source` carries, and it
+# stops applying the day something under `frontend/src` reads such a route -- at which point the
+# promise is kept, `docs/RELEASE.md` section 5.4 is the false record, and both come out in one
+# change. That is the polarity `test_the_unmeasured_criterion_and_the_owed_asset_stay_unsigned`
+# already uses. [decision 307; M4.16 cycle 2, M416-C2-ATTR-01]
+_LICENCE_CARRIER = re.compile(r"licen[cs]e text|licence terms|rating_source", re.I)
+_MEMBER_SURFACE = re.compile(r"/account|signed-in member|Data sources\*{0,2} block", re.I)
+_DISPLAY_VERB = re.compile(r"\bdisplay(?:s|ed|ing)?\b|\bsurfaced\b|\bshown\b|\brenders\b", re.I)
+# The marker this same wave uses for section 10's genome row, 7.3's playback route and 11's seams.
+# A paragraph may make the promise as long as it says, in the file's own idiom, that it is not kept.
+_NOT_BUILT = re.compile(r"\bnot built\b|\bnone of which is built\b", re.I)
+
+# Where a member-readable answer would have to be read from: a CALL, not a mention. The
+# component's own header names `GET /api/admin/data/sources` in the paragraph explaining why
+# it does not fetch it, and `bundleImport.test.js` names the path twice inside a double that
+# refuses it -- so a rule over the bare path would read the argument for this guard as the
+# thing that discharges it. `routes/admin/` is excluded because that is where the admin Data
+# card legitimately calls it, and `*.test.js` for `_frontend_sources`' reason: a vitest
+# double is a falsifier, not a surface.
+_SOURCES_READ = re.compile(r'''(?:get|post|fetch)\(\s*["'`][^"'`]*data/sources''')
+
+
+def _member_reads_the_source_licences() -> list[str]:
+    """Files under `frontend/src`, outside the admin routes, that read the licence columns."""
+    found = []
+    for path in sorted(FRONTEND.rglob("*")):
+        if not path.is_file() or path.suffix not in {".svelte", ".js"}:
+            continue
+        rel = path.relative_to(REPO).as_posix()
+        if "/routes/admin/" in rel or path.name.endswith(".test.js"):
+            continue
+        if _SOURCES_READ.search(_src(path)):
+            found.append(rel)
+    return found
+
+
+def _member_licence_promises(text: str) -> list[str]:
+    """Paragraphs asserting the member surface displays what `rating_source` carries, unqualified."""
+    problems = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        flat = " ".join(paragraph.split())
+        if not (_LICENCE_CARRIER.search(flat) and _MEMBER_SURFACE.search(flat)):
+            continue
+        if not _DISPLAY_VERB.search(flat) or _NOT_BUILT.search(flat):
+            continue
+        problems.append(flat[:180])
+    return problems
+
+
+def test_the_spec_does_not_promise_member_licence_text_nothing_serves():
+    """A promise marked unbuilt is honest; the same promise in the present indicative is not.
+
+    Decision 307 refused both obvious repairs. NARROWING the clause would strike something
+    decisions 292, 293 and 298 all say, and the map refuses that move in as many words -- "Not one
+    of them is closed by a waiver, by a renamed test or by a narrowed sentence". LEAVING it is the
+    direction this milestone exists to end, and the one M5 inherits with no plan document to
+    correct it from: a normative file describing a member-visible per-source licence display that
+    no code serves. So the clause stands and says it is not built, which is what section 10's own
+    genome row, 7.3's playback route and 11's seams already do within a few paragraphs of it.
+
+    The escape hatch is the point. Build the member-readable route and this guard goes red of its
+    own accord, because then `docs/RELEASE.md` section 5.4 is the false record and the two are
+    deleted together. [decision 307; section 10; row `map-taste-data-sources-are-attributed`]
+    """
+    served = _member_reads_the_source_licences()
+    assert not served, (
+        f"{served} now read a route serving `rating_source`'s licence columns to a member, so "
+        "decision 307's debt is paid. Delete this guard, docs/RELEASE.md section 5.4 and section "
+        "10's `is not built` clause in one change, and let the spec make the promise plainly."
+    )
+    spec = _normative_file()
+    promises = _member_licence_promises(_src(spec))
+    assert not promises, (
+        f"{spec.relative_to(REPO).as_posix()} says the member Data sources block displays what "
+        "`rating_source` carries, and nothing under frontend/src reads such a route -- the one "
+        "route serving `url`/`license`/`version`/`notes` is `api/admin.py`'s `data_sources`, "
+        "behind `AdminUser`:\n  "
+        + "\n  ".join(promises)
+        + "\n\nThe direction is measure, take the decision, amend the spec. A promise the code "
+        "does not keep is marked not built under a numbered decision, or it is built -- never "
+        "narrowed, which is what decisions 292, 293 and 298 each said out loud."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "caught"),
+    [
+        (
+            "the paragraph that shipped",
+            "The per-source terms travel in `rating_source`'s `url` / `license` / `version` / "
+            "`notes`, and are surfaced to every signed-in member on /account's **Data sources** "
+            "block in 6.8's quiet data voice.",
+            True,
+        ),
+        (
+            "the table cell that shipped",
+            "`rating_source` (mandatory always, and the source of the licence text 6.8's "
+            "Data sources block displays)",
+            True,
+        ),
+        (
+            "the same promise, marked unbuilt",
+            "The per-source terms travel in `rating_source`'s four columns and the admin Data card "
+            "reads them out; /account's **Data sources** block carries this app's own notices, and "
+            "a member-readable route for the per-source terms is not built.",
+            False,
+        ),
+        (
+            "a sentence about the block that promises no licence display",
+            "/account's **Data sources** block is reachable by every signed-in member and carries "
+            "one notice rather than a credit line under every poster.",
+            False,
+        ),
+    ],
+)
+def test_the_member_licence_guard_reads_the_claim_and_not_the_subject(name, text, caught):
+    """Two spellings refused and two accepted, and the fourth is what keeps this honest: a sentence
+    about the block that promises no per-source display has to pass, or the guard would be narrowed
+    by the first person it stopped."""
+    assert bool(_member_licence_promises(text)) is caught, name
+
+
+# The map escalates a claim it may not edit by saying, in prose, that the claim is recorded in
+# `docs/RELEASE.md`. Three such claims stood and not one of them was there: section 5 held 5.1-5.3
+# and section 7 held the logo, the device checks and a discharged restore. An escalation whose
+# mitigation does not exist is a row's `what` outrunning its tests with an extra step in front of
+# it -- an auditor follows the pointer, finds nothing, and either concludes the claim was met or
+# re-discovers the gap from scratch. The parallel clause one line down, the TMDB logo's "its
+# absence is recorded in docs/RELEASE.md as owed", resolves to section 7.1 AND is held by a guard,
+# so the shape was already available. [M4.16 cycle 2, M416-C2-ATTR-02]
+_ESCALATION_HEADER = re.compile(
+    r"^# (?P<count>[A-Z]+) CLAIMS? (?:IS|ARE) ESCALATED RATHER THAN EDITED", re.M
+)
+_ESCALATED_ROW = re.compile(r"^#\s+-\s+`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`", re.M)
+
+
+def test_every_escalated_claim_names_a_record_that_exists():
+    """The map's own header block says of its escalated claims "each is in `docs/RELEASE.md`".
+
+    That sentence is a factual claim about another file, and it is the only mitigation a widened
+    `what` has: the row stays red prose because the owner has not agreed to change it, and what
+    makes that acceptable rather than a quiet overclaim is that the gap is written where a release
+    reader meets it. Read off the block rather than restated, so a claim repaired and removed from
+    the list stops being owed a section on the same day. [decision 296; row
+    `platform-exit-criteria-are-closed-by-a-committed-measurement`]
+    """
+    text = _src(COVERAGE)
+    header = _ESCALATION_HEADER.search(text)
+    assert header, (
+        "spec_coverage.toml no longer carries an `N CLAIMS ARE ESCALATED RATHER THAN EDITED` "
+        "header block. If the escalations are discharged, the RELEASE.md sections recording them "
+        "come out in the same change; if the block was only reworded, this guard reads nothing."
+    )
+    block = text[header.start():].split("\n\n", 1)[0]
+    ids = _ESCALATED_ROW.findall(block)
+    assert ids, f"the escalation block names no row ids:\n{block}"
+
+    spelled = _COUNT_WORDS.index(header.group("count").lower())
+    assert spelled == len(ids), (
+        f"spec_coverage.toml's escalation block opens {header.group('count')!r} and names "
+        f"{len(ids)} rows: {ids}. Decision 184 -- restate the count against the list."
+    )
+
+    known = {row["id"] for row in tomllib.loads(text)["requirement"]}
+    unknown = [i for i in ids if i not in known]
+    assert not unknown, f"the escalation block names rows this map does not hold: {unknown}"
+
+    missing = [i for i in ids if i not in _src(RELEASE_RECORD)]
+    assert not missing, (
+        "spec_coverage.toml's escalation block says each escalated claim is in `docs/RELEASE.md`, "
+        f"and these are not in it by name: {missing}. An escalation is a row whose `what` outruns "
+        "its tests, standing because the owner has not agreed to change it; the record is the only "
+        "thing that makes that acceptable rather than a claim a grep disproves."
+    )
+
+
+# The `why` of the row that is ABOUT this record published a never-run count of its own, inherited
+# from the plan's pre-milestone diagnosis and never re-measured: "three of five criteria have never
+# been run" beside a record that counts fifteen build-order rows and five never run, and beside
+# docs/TESTING.md, which says five in the same wave. Decision 184 refuses a figure nobody derived,
+# and this is that rule applied to the one figure this record exists to establish.
+# [M4.16 cycle 2, M416-C2-REL-05]
+_NEVER_RUN_CLAIM = re.compile(
+    r"(?P<count>\w+) of (?:the )?(?P<total>\w+) criteria have never been run", re.I
+)
+
+
+def _count_word(token: str) -> int | None:
+    lowered = token.lower()
+    if lowered.isdigit():
+        return int(lowered)
+    return _COUNT_WORDS.index(lowered) if lowered in _COUNT_WORDS else None
+
+
+def test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured():
+    """One milestone, one fact, three documents, two answers.
+
+    `docs/RELEASE.md` counts the build order's rows on this branch and finds five never run of
+    fifteen; `docs/TESTING.md` says five in the same wave; and the coverage row that GOVERNS both
+    said "three of five", which is the plan's own pre-milestone sentence carried in unrevised. The
+    denominator is wrong in the direction that reads harsher and the numerator in the direction
+    that reads kinder, so neither half is a measurement.
+
+    Derived from the record's own Status fields rather than from a number typed anywhere, which is
+    the shape `test_the_gate_and_its_guard_publish_the_vitest_count_the_map_actually_holds` uses
+    for the same failure one file over.
+    [decision 184; row `platform-exit-criteria-are-closed-by-a-committed-measurement`]
+    """
+    rows = _release_rows()
+    owed = _section_12_milestones()
+    never = sorted(
+        name
+        for name in owed
+        if (fields := _RELEASE_FIELDS.search(rows.get(name, ""))) is not None
+        and fields.group(1).strip() == "UNMEASURED"
+    )
+    claim = _NEVER_RUN_CLAIM.search(_src(COVERAGE))
+    assert claim, (
+        "spec_coverage.toml no longer states how many build-order criteria have never been run, "
+        "in the form `<count> of the <total> criteria have never been run`. That sentence is "
+        "the `why` of the row this record answers to, so it states the figure or this guard "
+        "reads nothing."
+    )
+    published = (_count_word(claim.group("count")), _count_word(claim.group("total")))
+    assert published == (len(never), len(owed)), (
+        f"spec_coverage.toml publishes {claim.group(0)!r}; docs/RELEASE.md records {len(never)} of "
+        f"the build order's {len(owed)} rows as UNMEASURED ({never}). Re-derive it from the record "
+        "rather than adjusting whichever figure looks wrong -- a count nobody re-derived is a "
+        "measurement nobody made."
+    )
+
+
+# --- M4.16 review cycle 4: a normative clause with more gestures than the command has ----------
+#
+# Decision 289 replaced a rotation §2 had promised since M0 with the one that ships, and the
+# replacement sentence justified command-over-route by saying both of the command's gestures need
+# the old key at the same time as the new one. `spielplan-secrets` has exactly two gestures and
+# only one of them takes an old key: `rewrap` declares `--old-key` and `--new-key`, both required,
+# while `reset` declares no arguments at all and reads the key the install should use from now on
+# out of the environment. The source decision 289 cites for the argument -- `core/secrets_cli.py`'s
+# own module docstring -- says "both HALVES need the old key", meaning the two halves of one
+# rewrap, and the coverage row says it correctly too ("because both keys have to be in hand at
+# once"). The normative file, the console-script declaration and this file's own strike message
+# were the three that said it of the gestures, which is the one reading with no true referent: an
+# operator sent to `spielplan-secrets reset` by `SecretsUnreadable` goes looking for an old-key
+# argument that is not there, on an install whose custody is already broken.
+#
+# Read off the parser rather than restated, because a record restating it is the defect. The rule
+# is two-sided by construction: give `reset` an `--old-key` and the claim becomes true and this
+# goes quiet. [decision 289; M4.16 cycle 4, M416-C4D2-SPEC-03]
+SECRETS_CLI = SPIELPLAN / "core" / "secrets_cli.py"
+
+# The published form, in the two spellings the tree had. A fixed clause for `_STRIKE_CLAUSES`'
+# reason: a rule over every way a sentence can phrase it is a rule over prose. The pattern cannot
+# match its own source -- what follows `both ` here is a bracket.
+_BOTH_GESTURES = re.compile(r"both (?:of (?:its|the) )?gestures need the", re.I)
+
+# Every record that argues the rotation is a command: the normative file, the declaration of the
+# console script, the module the argument is about, the map's row and this file's strike message.
+_ROTATION_RECORDS = (
+    "docs/spielplan-spec_v2.1.md",
+    "backend/pyproject.toml",
+    "backend/spielplan/core/secrets_cli.py",
+    "backend/tests/spec_coverage.toml",
+    "backend/tests/test_static_contracts.py",
+)
+
+
+def _secrets_gestures() -> dict[str, set[str]]:
+    """Each `spielplan-secrets` subcommand and the option strings it declares, read with `ast`."""
+    tree = ast.parse(_src(SECRETS_CLI))
+    bound: dict[str, str] = {}
+    gestures: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        call = node.value if isinstance(node, ast.Assign) else node
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            continue
+        if call.func.attr == "add_parser" and call.args and isinstance(call.args[0], ast.Constant):
+            name = str(call.args[0].value)
+            gestures.setdefault(name, set())
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bound[target.id] = name
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if (node.func.attr == "add_argument" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in bound):
+            gestures[bound[node.func.value.id]].add(str(node.args[0].value))
+    return gestures
+
+
+def _gesture_claim_problems(records: dict[str, str], gestures: dict[str, set[str]]) -> list[str]:
+    """Records claiming two gestures need the key being replaced, while fewer than two do."""
+    holders = sorted(name for name, options in gestures.items() if "--old-key" in options)
+    if len(holders) > 1:
+        return []
+    problems = []
+    for name, text in sorted(records.items()):
+        match = _BOTH_GESTURES.search(" ".join(text.split()))
+        if match is None:
+            continue
+        problems.append(
+            f"{name} says {match.group(0)!r}, and of the {len(gestures)} `spielplan-secrets` "
+            f"gestures {sorted(gestures)} only {holders} declares `--old-key`"
+        )
+    return problems
+
+
+def test_no_record_gives_the_secrets_command_two_gestures_that_need_the_old_key():
+    """§2's reason for command-over-route, held against the command.
+
+    The sentence is the load-bearing justification for the only key-custody gesture an operator
+    ever performs, and it sits inside `_STRIKE_CLAUSES`' neighbourhood, so it is read closely.
+    Held over every record that argues it rather than over the normative file alone: the clause
+    spread by being copied, which is the mechanism decision 304's Cost paragraph named.
+    [decision 289; M4.16 cycle 4, M416-C4D2-SPEC-03]
+    """
+    gestures = _secrets_gestures()
+    assert len(gestures) > 1, (
+        f"`spielplan-secrets` no longer declares more than one subcommand ({sorted(gestures)}), "
+        "so a claim about what both of them need has stopped being about anything"
+    )
+    assert any("--old-key" in options for options in gestures.values()), (
+        "no `spielplan-secrets` gesture declares `--old-key` any more, so §2's whole rotation "
+        "argument is about a command that does not exist: amend the clause with the CLI"
+    )
+    problems = _gesture_claim_problems(
+        {name: _src(REPO / name) for name in _ROTATION_RECORDS}, gestures
+    )
+    assert not problems, "\n  ".join(
+        ["a record gives the rotation more gestures than the command has:", *problems]
+    )
+
+
+def test_the_gesture_guard_sees_the_two_spellings_the_tree_shipped():
+    """The sentences as they shipped, kept as the synthetic violations they were -- and the third
+    case is the other direction: the day `reset` takes an old key the claim becomes true, and a
+    guard that went on refusing it would be a line nobody could remove honestly.
+
+    Both are spelled in halves because this file is inside the sweep above, and a synthetic
+    violation written whole would make the guard report its own test data as an offender. Joined
+    at run time they are the two sentences verbatim.
+    """
+    gestures = _secrets_gestures()
+    shipped = "because both " + "gestures need the **old** key at the same time as the new one"
+    declared = "and both of its " + "gestures need the key that is being replaced"
+    assert _gesture_claim_problems({"the normative file": shipped}, gestures), (
+        "the guard passed §2's sentence as it shipped"
+    )
+    assert _gesture_claim_problems({"the declaration": declared}, gestures), (
+        "the guard passed the console script's declaration as it shipped"
+    )
+    assert not _gesture_claim_problems(
+        {"the normative file": shipped}, {"rewrap": {"--old-key"}, "reset": {"--old-key"}}
+    ), "the guard still refuses the claim on a command where it would be true"
+
+
+# --- M4.16 review cycle 4: a normative premise the importer forbids ----------------------------
+#
+# Phase B rewrote section 14's risk 7 to the refusal decision 163 rules, and the rewrite kept the
+# conclusion it had while inverting the premise under it: "the importer REFUSES a vocabulary
+# version change ... two vocabularies may THEREFORE coexist in the tables after a re-import". The
+# refusal is what makes that unreachable, not what implies it. `importer/bundle.py` fails the
+# report on both routes in - a bundle declaring a different version, and (decision 256) a bundle
+# declaring none against an install that has one - and `import_bundle` returns before staging when
+# the report is not ok, so no import this build performs can leave two versions in `dna_tag` and
+# `dna_projected`. The rule the paragraph exists to carry is real and implemented (`fetch_blocks`
+# takes `vocab_version`); only its stated premise is not, and the paragraph's own first clause -
+# "a vocabulary change is a migration, not an import" - contradicts it three sentences later.
+#
+# Held against the importer rather than against the sentence, and two-sided by construction: the
+# day the refusal comes out, a re-import can produce the state again and this goes quiet. What is
+# NOT held here is the five code comments that quote the same claim from a section 10 sentence
+# this wave retired; they belong to the milestones that own those modules and are reported rather
+# than repaired across the ownership line. [decision 163; M4.16 cycle 4, M416-C4D2-SPEC-04]
+VOCAB_IMPORTER = SPIELPLAN / "importer" / "bundle.py"
+# The refusal id both arms of `refuse_on_install_state` fail the report with.
+_VOCAB_REFUSAL = '"vocabulary-migration"'
+
+# The published form: coexistence pinned on a re-import. A fixed clause for `_STRIKE_CLAUSES`'
+# reason, and the gap is a character class so the pattern cannot match its own source.
+_COEXIST_AFTER_REIMPORT = re.compile(r"coexist[^.]{0,80}after a re-import", re.I)
+
+
+def _coexistence_problems(spec: str, importer: str) -> list[str]:
+    """The normative file pinning two vocabularies on a re-import the importer refuses."""
+    if _VOCAB_REFUSAL not in importer:
+        return []
+    match = _COEXIST_AFTER_REIMPORT.search(" ".join(spec.split()))
+    if match is None:
+        return []
+    return [
+        f"the normative file says {match.group(0)!r}, and `importer/bundle.py` fails the report "
+        "with `vocabulary-migration` on both routes in, before `import_bundle` stages anything"
+    ]
+
+
+def test_the_normative_file_pins_no_second_vocabulary_on_a_re_import():
+    """Section 14 risk 7's premise, held against the code that makes it unreachable.
+
+    A reader deriving the version-scoping requirement from risk 7 was handed a premise the
+    importer contradicts one paragraph earlier, and an M5 agent building the extraction flywheel -
+    the one path that could actually mint a second vocabulary - was pointed at "after a re-import"
+    as the case to handle, which is the case that cannot happen.
+    [decision 163; M4.16 cycle 4, M416-C4D2-SPEC-04]
+    """
+    importer = _src(VOCAB_IMPORTER)
+    assert _VOCAB_REFUSAL in importer, (
+        "importer/bundle.py no longer fails a report with `vocabulary-migration`. If decision "
+        "163's refusal has genuinely gone, risk 7's premise becomes reachable again and this "
+        "guard comes out with it rather than being narrowed."
+    )
+    problems = _coexistence_problems(_src(_normative_file()), importer)
+    assert not problems, "\n  ".join(
+        ["a normative sentence rests on a state this build's importer refuses:", *problems]
+    )
+
+
+def test_the_coexistence_guard_sees_the_premise_that_shipped():
+    """The sentence as it shipped, kept as the synthetic violation it was, and the other
+    direction: with the refusal gone the claim is admissible again."""
+    shipped = (
+        "Until a migration plan exists the importer refuses a vocabulary version change and says "
+        "why (decision 163). Two vocabularies may therefore coexist in the tables after a "
+        "re-import, so every read is scoped to one version."
+    )
+    importer = _src(VOCAB_IMPORTER)
+    assert _coexistence_problems(shipped, importer), "the guard passed risk 7 as it shipped"
+    assert not _coexistence_problems(shipped, "no refusal here"), (
+        "the guard still refuses the premise on an importer that has stopped refusing, where it "
+        "would be true"
+    )
+    assert not _coexistence_problems(_src(_normative_file()), importer)
+
+
+# --- M4.16 review cycle 4: the record's own citations, re-derived ------------------------------
+#
+# CLAUDE.md makes a `file:line` citation load-bearing - it is how a reader follows an argument to
+# the object beneath it - and this milestone filed stale ones as a numbered defect. The document
+# that CORRECTS them had four of its own, and three had drifted twice: they matched neither the
+# tree they ship with nor `HEAD`. Section 5.6's was the worst, because that section is one of the
+# three claims escalated to the owner rather than edited into the map, and its whole content is
+# where the third exception lives: it pointed 105 lines away. Section 7.3's four are the numbers
+# the paragraph immediately below them says "moved once while this file was being written"; they
+# had moved again, in the one section that discharges §12's M4.7 criterion by inspection.
+#
+# Re-derived rather than re-typed, which is that paragraph's own ruling ("headings are the anchor
+# and line numbers are the convenience") turned into a rule: each citation is held against the
+# literal it is a citation TO, so the next edit above it reddens the sentence rather than leaving
+# it to be believed. Scoped to the citations this cycle measured rather than to all forty-five in
+# the file: a table entry per citation is a needle somebody has to write, and a rule that demanded
+# one for every path would be a rule nobody could satisfy honestly.
+# [decision 184; CLAUDE.md Conventions; M4.16 cycle 4, REL-C4-11]
+_RELEASE_CITATIONS = (
+    (r"`backend/spielplan/worker\.py:(\d+)` registers", "backend/spielplan/worker.py",
+     'Job("nightly-backup"'),
+    (r"`backend/tests/test_backup\.py:(\d+)`", "backend/tests/test_backup.py", "sync/resolve.py"),
+    (r"`frontend/src/routes/account/\+page\.svelte:(\d+)` mounts it",
+     "frontend/src/routes/account/+page.svelte", "<DataSources />"),
+)
+
+# Section 7.3 names four README headings and then their four line numbers, in the same order. Both
+# lists are read out of the paragraph rather than restated here, so the pairing is the document's.
+_README_HEADING = re.compile(r"`(#{2,3} [^`]+)`")
+_README_LINE = re.compile(r"`:(\d+)`")
+
+
+def _md_subsection(text: str, heading: str) -> str:
+    """One `### N.M` block of a Markdown record, in `_gate_record`'s idiom."""
+    parts = text.split(heading, 1)
+    return re.split(r"^#{2,3} ", parts[1], maxsplit=1, flags=re.M)[0] if len(parts) == 2 else ""
+
+
+def _cites(path: str, line: int, needle: str) -> str | None:
+    """None when `needle` is on that line of that file, else where it actually is.
+
+    The line it DID find is quoted, because "1112 is not 1121" sends a reader back to count and
+    the line itself says at a glance what moved. Escaped rather than quoted raw for the reason
+    `_gate_record_problems` gives one section up: this message reaches whatever console the suite
+    is read on, and the first of these citations landed on a comment carrying a section mark.
+    """
+    lines = _src(REPO / path).splitlines()
+    if 1 <= line <= len(lines) and needle in lines[line - 1]:
+        return None
+    found = [i + 1 for i, text in enumerate(lines) if needle in text]
+    reads = lines[line - 1].strip() if 1 <= line <= len(lines) else "<past the end of the file>"
+    return (
+        f"docs/RELEASE.md cites {path}:{line} for {needle!r}; that line reads "
+        f"{reads.encode('ascii', 'backslashreplace').decode()!r} and the subject is at "
+        f"{found or 'no line in that file'}"
+    )
+
+
+def _citation_problems(record: str) -> list[str]:
+    """Every citation in the record that no longer lands on its subject."""
+    problems = []
+    for pattern, path, needle in _RELEASE_CITATIONS:
+        matches = list(re.finditer(pattern, record))
+        if not matches:
+            problems.append(
+                f"docs/RELEASE.md no longer cites {path} in the form this guard reads, so the "
+                "citation it held is held by nothing"
+            )
+            continue
+        problems += [p for p in (_cites(path, int(m.group(1)), needle) for m in matches) if p]
+
+    readme = _md_subsection(record, "### 7.3 ")
+    if not readme:
+        problems.append("docs/RELEASE.md carries no `### 7.3` section, and README's anchors are it")
+        return problems
+    headings = _README_HEADING.findall(readme)
+    numbers = [int(n) for n in _README_LINE.findall(readme)]
+    if not headings or len(headings) != len(numbers):
+        problems.append(
+            f"section 7.3 names {len(headings)} README heading(s) and {len(numbers)} line "
+            "number(s); they are published as two lists in one order, so they pair or neither can "
+            "be checked"
+        )
+        return problems
+    pairs = zip(headings, numbers, strict=True)
+    problems += [p for p in (_cites("README.md", n, h) for h, n in pairs) if p]
+    return problems
+
+
+def test_the_release_record_cites_the_lines_its_subjects_are_on():
+    """The corrections document, held to the standard it exists to enforce.
+
+    A citation that lands 105 lines from its subject costs the next reader the hour it cost the
+    last one, and these four were published inside the same diff as the corrections they carry.
+    Held by re-derivation rather than by re-typing, because re-typed numbers go stale on the next
+    edit above them - which is exactly how three of these four came to match neither this tree nor
+    `HEAD`. [decision 184; M4.16 cycle 4, REL-C4-11]
+    """
+    problems = _citation_problems(_src(RELEASE_RECORD))
+    assert not problems, "\n  ".join(
+        ["docs/RELEASE.md points a reader at a line its subject is not on:", *problems]
+    )
+
+
+def test_the_citation_guard_sees_a_subject_that_moved():
+    """Each half fed the number it published before this cycle re-derived it."""
+    record = _src(RELEASE_RECORD)
+    assert _citation_problems(record) == [], "the guard does not pass the record it describes"
+    for stale, shipped in (
+        ("backend/spielplan/worker.py:1121", "backend/spielplan/worker.py:1112"),
+        ("backend/tests/test_backup.py:1367", "backend/tests/test_backup.py:1262"),
+        ("account/+page.svelte:332", "account/+page.svelte:330"),
+        ("(`:94`, `:102`", "(`:93`, `:101`"),
+    ):
+        moved = record.replace(stale, shipped)
+        assert moved != record, f"docs/RELEASE.md no longer spells {stale!r}"
+        assert _citation_problems(moved), f"the guard passed a citation published as {shipped!r}"
+
+
+# --- M4.16 review cycle 4: the one leg cell that claimed a run nothing has made -----------------
+#
+# Leg 3 is two commands, and the table recorded it as a `yes` naming the second one's artefact.
+# The first is `pytest test_bundle_shapes.py test_bundle_validation.py -k real_bundle`, whose two
+# tests are `skipif`-gated on `CORPUS_BUNDLE_DIR`; nothing in this repository sets that variable
+# outside `real-bundle.yml`, whose runner has never been registered, so those two tests have never
+# once reported as run - decision 183 has owed that since M4.8. Leg 1's cell is qualified and
+# decision 313 moved leg 2's to a partial for a strictly WEAKER reason (its pytest half HAS been
+# run once by hand), so the unqualified `yes` was the odd one out in a record whose stated job is
+# "the fact of a run, or the fact of its absence".
+#
+# Held against the skip rather than against the sentence, and two-sided: the day those tests stop
+# being gated, the cell may say `yes` and this goes quiet. The middle column is otherwise
+# deliberately unguarded (`_GATE_POLARITY`'s comment says why: it moves as work lands by hand);
+# what is held here is the one cell whose subject cannot be run at all from this lane.
+# [decision 183; decision 313's idiom; M4.16 cycle 4, REL-C4-10]
+_REAL_BUNDLE_MODULES = ("test_bundle_shapes.py", "test_bundle_validation.py")
+_CORPUS_SKIP = re.compile(
+    r"@pytest\.mark\.skipif\(\s*not os\.environ\.get\(\"CORPUS_BUNDLE_DIR\"\)"
+)
+_LEG_THREE_ROW = re.compile(r"^\| *3 [^|\n]*\|(?P<substance>[^|\n]*)\|", re.M)
+
+
+def _leg_three_problems(block: str, gated: int) -> list[str]:
+    """The leg-3 substance cell recorded as run while its first command can only skip."""
+    if not gated:
+        return []
+    row = _LEG_THREE_ROW.search(block)
+    if row is None:
+        return ["section 2.1's per-leg table has no leg 3 row, and leg 3 is the one with a skip"]
+    cell = row.group("substance").strip().strip("*`")
+    if "partial" in cell.lower() or "skip" in cell.lower() or cell.startswith("no"):
+        return []
+    return [
+        f"leg 3's substance cell reads "
+        f"{cell.encode('ascii', 'backslashreplace').decode()!r}, and the {gated} test(s) its "
+        "first command selects are skipif-gated on CORPUS_BUNDLE_DIR, which nothing outside "
+        "real-bundle.yml sets and no registered runner has ever supplied"
+    ]
+
+
+def test_the_release_record_does_not_record_the_real_bundle_leg_as_run():
+    """Exit criterion 4's own half, one cell in.
+
+    A reader weighing that criterion reads down the middle column and concludes leg 3's substance
+    has been exercised. `test_a_real_bundle_still_matches_the_committed_manifest` - the one test
+    that holds a real bundle to the committed manifest, and the thing `real_bundle_shapes.json`
+    exists for - has no record of ever having been run anywhere, and the cell that would say so
+    said `yes`. [decision 183; M4.16 cycle 4, REL-C4-10]
+    """
+    gated = sum(
+        len(_CORPUS_SKIP.findall(_src(REPO / "backend" / "tests" / name)))
+        for name in _REAL_BUNDLE_MODULES
+    )
+    assert gated, (
+        f"no test in {list(_REAL_BUNDLE_MODULES)} is skipif-gated on CORPUS_BUNDLE_DIR any more. "
+        "If leg 3's first command can now run unattended, its cell may say so and this guard "
+        "comes out in the same change."
+    )
+    problems = _leg_three_problems(_gate_record(_src(RELEASE_RECORD)), gated)
+    assert not problems, "\n  ".join(
+        ["docs/RELEASE.md records a leg as run whose first command can only skip here:", *problems]
+    )
+
+
+def test_the_leg_three_guard_sees_the_cell_that_shipped():
+    """The cell as it shipped, and the other direction."""
+    shipped = (
+        "| Leg | Substance run from this lane | By this job |\n|---|---|---|\n"
+        "| 3 - the real-bundle legs and M4.5's criterion | yes - "
+        "`docs/milestones/M4.5-exit.txt` | never |\n"
+    )
+    assert _leg_three_problems(shipped, 2), "the guard passed leg 3's cell as it shipped"
+    assert not _leg_three_problems(shipped, 0), (
+        "the guard still refuses the cell on a tree where those tests no longer skip"
+    )
+    assert _leg_three_problems(_gate_record(_src(RELEASE_RECORD)), 2) == []
+
+
+# --- M4.16 review cycle 4: a record reporting an amendment nobody made -------------------------
+#
+# Decision 311's Cost paragraph closed by saying that §4.1 and §4.3 "now say plainly that such a
+# restore does change a pre-291 box's placement inputs". They say nothing of the kind: neither
+# section carries the word restore, archive or /data/backups, and the substance exists only in
+# `backup/movie_data.py`'s `RETIRED` block, which is not normative. The register is the file this
+# milestone made normative for entries 162 onward, so a decision there stated as DONE an amendment
+# to the normative file that was never written - and the same entry's own code comment carried the
+# weaker true version ("and is why §4.1 and §4.3 now state what this build IMPORTS"), so the two
+# records of one decision disagreed about what landed. A reader auditing 311 against §4.1 cannot
+# tell a dropped amendment from a wrong decision.
+#
+# Held as a fixed clause over the family rather than over the one sentence, which would be a guard
+# that can only pass: no record may attribute a RESTORE consequence to §4.1 or §4.3 while neither
+# section names one. Two-sided by construction - the day either section gains a restore clause the
+# claim becomes true and this goes quiet - and the order matters, because the true sentences in
+# this tree put the restore BEFORE the sections it explains ("which is the restore doing what
+# decision 309 rules ... and is why §4.1 and §4.3 now state what this build IMPORTS").
+# [decisions 309 and 311; M4.16 cycle 4, M416-C4-GEN-07]
+_GENOME_SECTIONS = ("### 4.1 ", "### 4.3 ")
+_RESTORE_IN_SECTION = re.compile(r"\brestore|\barchive|/data/backups", re.I)
+_SECTION_SAYS_RESTORE = re.compile(
+    r"§4\.[13][^.]{0,120}\b(?:say|says|state|states)\b[^.]{0,200}\brestore\b", re.I
+)
+
+
+def _restore_attribution_problems(records: dict[str, str], sections: str) -> list[str]:
+    """Records putting a restore's consequence in §4.1's or §4.3's mouth while neither says it."""
+    if _RESTORE_IN_SECTION.search(sections):
+        return []
+    problems = []
+    for name, text in sorted(records.items()):
+        for match in _SECTION_SAYS_RESTORE.finditer(" ".join(text.split())):
+            problems.append(
+                f"{name} says {match.group(0).encode('ascii', 'backslashreplace').decode()!r}"
+            )
+    return problems
+
+
+def test_no_record_says_the_genome_sections_speak_about_a_restore():
+    """Decision 311's Cost paragraph, held against the sections it reported on.
+
+    §4.1 is where a reader goes, and what the household is actually handed is README's Recovery
+    gesture: write a movie-data archive, restore it into a rebuilt box. On a pre-291 install that
+    zeroes the genome block. Whether the normative file should say so is an owner's call and no
+    decision has taken it; what it may not do is have a record say it already does.
+    [decisions 309 and 311; M4.16 cycle 4, M416-C4-GEN-07]
+    """
+    spec = _src(_normative_file())
+    sections = "".join(_md_subsection(spec, heading) for heading in _GENOME_SECTIONS)
+    assert sections.strip(), (
+        f"the normative file no longer carries {list(_GENOME_SECTIONS)}, so this guard cannot "
+        "tell whether a record describing them is right"
+    )
+    records = {
+        name: _src(REPO / name)
+        for name in (*_GENOME_PATH_RECORDS, "docs/spec-v2.2-proposals.md", "docs/RELEASE.md")
+    }
+    problems = _restore_attribution_problems(records, sections)
+    assert not problems, "\n  ".join(
+        [
+            "a record puts a restore's consequence in the genome sections' mouth, and neither "
+            "section mentions one:",
+            *problems,
+        ]
+    )
+
+
+def test_the_attribution_guard_sees_the_sentence_decision_311_shipped():
+    """The Cost paragraph as it shipped, kept as the synthetic violation it was, and the other
+    direction: the day §4.1 gains the clause, the same sentence becomes true."""
+    shipped = {
+        "the register": "what it rules is unaffected, and \u00a74.1 and \u00a74.3 now say plainly that "
+                        "such a restore does change a pre-291 box's placement inputs"
+    }
+    assert _restore_attribution_problems(shipped, "no such clause here"), (
+        "the guard passed decision 311's Cost paragraph as it shipped"
+    )
+    assert not _restore_attribution_problems(
+        shipped, "a /data/backups movie-data archive passes over the three tables"
+    ), "the guard still refuses the claim on a spec that has since said it"

@@ -1180,7 +1180,8 @@ async def test_the_reload_path_reaps_a_display_row_whose_title_is_gone(db):
     `0003:177-184` keeps `display.platform_rating` un-referenced on purpose, so nothing in the
     database can clear the orphan the test above leaves. The reload path is the one place that can:
     it is the only code that sees the catalogue's id set change, and §10 calls a re-import "a
-    planned admin event with a diff report", which is exactly when a stale display row should go.
+    planned admin event with a migration report", which is exactly when a stale display row
+    should go.
     """
     from spielplan.importer import load
 

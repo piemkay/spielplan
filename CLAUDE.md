@@ -3,10 +3,16 @@
 Household media graph: FastAPI backend + worker (same codebase), Postgres 16, SvelteKit PWA
 served by the backend. Architecture and status: [README.md](README.md).
 
-**The spec is the authority.** `docs/spielplan-spec_v2.1.md` is normative; where code and spec
-disagree, the code is the bug. Cite sections as `§N.M` (or `decision N` / `proposal N` from
-`docs/spec-v2.2-proposals.md`) in comments and commit bodies — every non-obvious choice here
-does, and work that can't cite its clause reads as off-convention.
+**The spec is the authority.** `docs/spielplan-spec_v2.1.md` is the one normative document;
+where code and spec disagree, the code is the bug. It is amended **in place** and never forked
+into a v2.2 (decision 288), each wave recorded as a dated point release in its own Status block.
+`docs/spec-v2.2-proposals.md` is a decision record and not a queue: proposals 1-161 are dated
+reasoning, citable as provenance only — a requirement resting only on one rests on nothing the
+owner agreed to — and entries 162 onward are numbered owner decisions, normative from the day
+each is taken until the amendment it mandates lands in the spec file. Cite sections as `§N.M`
+(or `decision N` / `proposal N` from `docs/spec-v2.2-proposals.md`) in comments and commit
+bodies — every non-obvious choice here does, and work that can't cite its clause reads as
+off-convention.
 
 ## Commands
 
@@ -65,7 +71,7 @@ app: `backend/spielplan/api/` wins on any disagreement.
 - **Never edit an applied migration** (`backend/migrations/NNNN_*.sql` — sha256-checksummed;
   a mismatch is a hard startup error). Add a new numbered file.
 - Static guard tests read source files and reject spec-violating edits: CPU-only torch index
-  in the Dockerfile, frozen `rating_source` ids, one plain-HTTP port, named `/data/*` volumes.
+  in the Dockerfile, frozen `rating_source` ids, one plain-HTTP port, the `/data/*` bind mounts.
   A guard failure after touching compose/Dockerfile/deps is the contract working, not flake.
 - WebAuthn binds passkeys to the **origin**: e2e runs against `http://localhost:8080`
   (= `PUBLIC_URL`), never `127.0.0.1:8080` — same server, different origin, passkeys fail.

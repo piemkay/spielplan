@@ -360,8 +360,9 @@ def test_the_shipped_model_artifacts_load_from_the_bundle_the_corpus_produces(cl
 
 
 def test_a_bundle_that_records_no_version_is_refused_rather_than_named_unknown(clean):
-    """§10's re-import is "a planned admin event with a diff report". Two imports both stamped
-    "unknown" are not a diff, and `unknown` is also the artifact directory they would share."""
+    """§10's re-import is "a planned admin event with a migration report". Two imports both
+    stamped "unknown" cannot be told apart, and `unknown` is also the artifact directory they
+    would share."""
     (clean / "BUNDLE.json").unlink()
 
     report = _validate(clean)
@@ -762,44 +763,16 @@ def test_a_series_runtime_that_is_a_total_is_named_in_the_report(clean):
     assert "rather than minutes per episode" in notes[0].message
 
 
-# --- M4.9: the one join on the key §4.1 forbids ------------------------------------------------
+# --- M4.9's one join on the key §4.1 forbids: DELETED with the code ---------------------------
 #
-# Needs a server, unlike everything above it: the check runs after the spine is loaded, because
-# `imdb_id` is UNIQUE in the corpus's own sqlite and the duplicate this refuses is one a *merged*
-# or hand-repaired spine would carry. Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-
-
-async def test_a_duplicated_imdb_id_fails_the_import_naming_the_rule(db):
-    """§4.1: "`imdb_id` … must never be the join key", and `_resolve_ml_links` uses it as one.
-
-    The exception is unavoidable — MovieLens keys its link table by external ids, so there is no
-    `title_id` to join on, and rule 6 rules out `tmdb_id` because 315 tmdb_ids are legitimately
-    duplicated across the movie/series pair. What the ban protects against is a duplicated key
-    silently attaching one title's genome vector to another, and until M4.9 the only thing
-    standing in for it was a comment about rule 6. Zero duplicates on the shipped bundle, so the
-    refusal costs one aggregate and buys the guarantee the join was assuming.
-    """
-    await db.executemany(
-        "INSERT INTO title (id, kind, name, imdb_id) VALUES ($1, $2, $3, $4)",
-        [
-            (1, "movie", "Heat", "tt0113277"),
-            # The same external id on a second row: a merged spine, or a hand-repaired one.
-            (2, "movie", "Heat (1995)", "tt0113277"),
-            # Empty is not a duplicate — rule 6 coalesces absent ids and thousands share ''.
-            (3, "movie", "Untracked One", ""),
-            (4, "movie", "Untracked Two", ""),
-        ],
-    )
-    report = ImportReport()
-
-    await load._resolve_ml_links(db, report)
-
-    assert not report.ok, report.render()
-    failure = report.failures[0]
-    assert failure.rule == "ml-link"
-    assert "imdb_id must never be the join key" in failure.message.replace("`", "")
-    assert "tt0113277 (2x)" in failure.message, "the operator has to be told which value"
-    assert failure.detail["values"] == ["tt0113277"]
+# `test_a_duplicated_imdb_id_fails_the_import_naming_the_rule` stood here. It guarded
+# `load._resolve_ml_links`, the single place this app joined `ml_link` to `title` on `imdb_id` --
+# the key §4.1 says "must never be the join key" -- and it refused a duplicated id rather than
+# letting the join attach one title's genome vector to another. Decision 291 declines the genome
+# slice, so the join and the exception it needed go together; deleted, not waived, because the
+# requirement stopped existing rather than stopping being tested. What replaces it is a static
+# refusal one file over: `test_load_mapping.py::test_no_loader_path_joins_titles_on_imdb_id`
+# rejects the join coming back under any name, which is the half of the guarantee §4.1 still owes.
 
 
 # --- M4.14 step B1: BUNDLE.json ships 42 hashes and nothing read them --------------------------
@@ -1478,6 +1451,41 @@ def test_a_declared_nullable_pk_component_whose_affinity_is_not_text_fails(clean
     assert "title_alias.region" in named.message and "INTEGER" in named.message
     assert "ml_genome_score" not in named.message, (
         "the rule is about the columns this importer coalesces, not about every declared one"
+    )
+
+
+def test_every_table_the_integrity_gates_name_is_one_this_app_actually_loads():
+    """Decision 291's other half: a gate standing over a table no COPY can reach.
+
+    Both integrity loops key off the BUNDLE's schema -- `if child not in schema: continue` --
+    and not off `load.MAPPINGS`, which the duplicate loop three lines below them does. So moving
+    a table into `SKIPPED_TABLES` disarms nothing: the MovieLens slice left one foreign key and
+    five NOT NULL expectations standing after decision 291 declined it, on tables the bundle
+    still ships because the corpus is not asked to re-cut it. Every real import went on checking
+    them, and an export whose cut dropped a tag one `ml_genome_score` row still names would have
+    refused the household's one content seed (decision 162) over a table this build has decided
+    it does not want -- with an `integrity-null` line saying "the column this app loads them
+    into is NOT NULL" about a column nothing loads at all. The plan's own clause for decision
+    291 is that the importer "accept a bundle with or without them".
+
+    The predicate is COPY's reach and not `MAPPINGS` alone: `title_meta` and the DNA tables are
+    loaded by bespoke paths and are gated here for exactly the reason the mapped ones are.
+    Written as a rule rather than as a list of two names, so the next declined table cannot leave
+    a gate behind it either. [decision 291; M4.16 cycle 1, M416-291-03]
+    """
+    gated = (
+        {child for child, _, _, _ in validator._FOREIGN_KEYS}
+        | {parent for _, _, parent, _ in validator._FOREIGN_KEYS}
+        | {table for table, _ in validator._NOT_NULL_COLUMNS}
+    )
+    loaded = {tmap.source for tmap in load.MAPPINGS} | set(load.BESPOKE_TABLES)
+
+    stale = sorted(gated - loaded)
+    declined = sorted(t for t in stale if t in load.SKIPPED_TABLES)
+    assert not stale, (
+        f"the integrity gates declare expectations for {stale}, which no COPY reaches; "
+        f"{declined} are tables this app has declined, so the gate can only refuse a seed "
+        "over rows nothing would have loaded"
     )
 
 

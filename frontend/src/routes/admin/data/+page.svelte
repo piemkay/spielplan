@@ -156,9 +156,12 @@
     <ul>
       {#each bundleState.rebuild_set as r}<li class="why">{r}</li>{/each}
     </ul>
+    <!-- §10 after decisions 162/163: the importer writes ONE report and the section now denies
+         the second one this line used to name, so what an operator reads here is the name of the
+         thing they can actually open. [§10; M4.16 cycle 4, M416-C4D2-SPEC-01] -->
     <p class="why">
       Everything expressed in the old Backbone’s basis is garbage against a new one, so a
-      re-import is a planned event with a diff report — never a silent sync.
+      re-import is a planned event with a migration report — never a silent sync.
     </p>
   </section>
 

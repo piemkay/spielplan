@@ -1793,7 +1793,7 @@ async def import_bundle(
                     )
                     # C4: the stored report is the WHOLE report. The row above was INSERTed with
                     # `report.as_dict()` before any of §10's rebuild ran and nothing updated it, so
-                    # the database's copy of "a planned admin event with a diff report" was missing
+                    # the database's copy of "a planned admin event with a migration report" was missing
                     # exactly {rebuild, swap, rebuild-set} — measured as that set difference after a
                     # clean fixture import — and therefore said the rebuild had not been performed.
                     # Last statement in the transaction, because every finding above it is part of

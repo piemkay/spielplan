@@ -1,0 +1,451 @@
+name: release
+
+# WHETHER THIS BUILD SHIPS, WHICH IS NOT THE QUESTION `ci.yml` ANSWERS.
+#
+# The milestone gate in `ci.yml` asks whether every requirement written down has a test that can
+# fail. `current_milestone` was the only lever this project had, and raising it answers whether
+# the MAP is covered -- never whether what exists today is shippable. The word "release" appeared
+# in none of README.md, CLAUDE.md or docs/TESTING.md when this file was written, and three of
+# section 12's five exit criteria had never been run at all. This is the instrument that runs
+# them, in one place, with an exit code.
+#
+# FIVE LEGS, IN ORDER, EACH UPLOADING ITS ARTIFACT, AND NONE OF THEM ABLE TO PASS BY SKIPPING:
+#
+#   1  the full pytest suite against Postgres 16, with --junitxml
+#   2  ops/coverage_gate.py over that JUnit and over the browser report ci.yml produced
+#   3  the real-bundle legs against CORPUS_BUNDLE_DIR, m45's exit criterion among them
+#   4  the restore drill at stack level: a real import, a dump the worker's own code wrote,
+#      pg_restore into a freshly created database, and /api/health answering with a bundle
+#   5  the compose stack and `node e2e/run.mjs` over both browser projects
+#
+# They are STEPS of one job rather than five jobs, and that is what makes "in order" a fact
+# rather than a diagram: `needs:` orders jobs, but each of these legs consumes the tree, the
+# containers and the database the leg before it left behind. `continue-on-error` appears nowhere,
+# and no step carries an `if:` except the uploads, which carry `always()` so that a failing leg
+# still hands back the evidence of its failure. A leg that could skip its whole body and report
+# green is the same defect one level up from the one this milestone exists to close, which is why
+# `backend/tests/test_release_gate.py` reads this file and fails the build over each of those
+# properties. [§12 exit criteria; docs/RELEASE.md; `platform-release-gate-runs-every-leg`]
+#
+# WHY THIS RUNS ON THE HOUSEHOLD'S OWN MACHINE. Decision 183: the corpus bundle is ~1.15 GB of
+# private data assembled under personal and non-commercial terms, so it reaches a runner by
+# already being on that runner's disk and never through a download URL in a repository secret --
+# a secret that leaks is a corpus that leaks. Legs 1, 3 and 4 all need it -- the
+# `CORPUS_BUNDLE_DIR` family closes 3 rows, through two tests, one of which is named by two rows
+# on its own, and each skips itself when the variable is unset, which is precisely what leg 2
+# then refuses to call coverage -- so the whole job goes where the bundle is, using the
+# same `[self-hosted, spielplan-corpus]` label `.github/workflows/real-bundle.yml` already
+# defines. THE RUNNER MUST BE LINUX WITH DOCKER: the `services:` block below is a GitHub service
+# container, every `run:` is sh, and legs 4 and 5 drive `docker compose`.
+
+on:
+  workflow_dispatch:
+  # Weekly, on the tick `ci.yml` and `real-bundle.yml` already carry. A release gate that only
+  # runs when somebody decides to cut a release first learns of a broken leg on the day of the
+  # cut; this way the answer is a week old at worst. Twenty-four minutes after the other two so
+  # that three workflows are not asking one household box for Docker at the same minute.
+  schedule:
+    - cron: '41 5 * * 1'
+
+# No `concurrency:` block, and its absence is deliberate for `real-bundle.yml`'s reason: a
+# workflow-level group is held until the run's LAST job finishes, and a self-hosted job nobody has
+# registered a runner for queues for 24 hours before GitHub cancels it. Two triggers a week apart
+# have nothing worth superseding, and a group is the one thing this job must not be holding --
+# `test_harness_contracts.py::test_no_self_hosted_job_queues_inside_the_group_a_push_to_main_waits
+# _in` reads every workflow in this directory for exactly that pairing.
+
+permissions:
+  contents: read
+  # Leg 2 reads the browser report `ci.yml` uploaded for THIS commit. Nothing else here talks to
+  # the API, and this is the narrowest scope that lets it.
+  actions: read
+
+env:
+  # The same five test-only values `ci.yml` and `real-bundle.yml` carry, for the same reason: the
+  # three that matter are section 2's required config, and a process that reads them and finds
+  # nothing is a process falling back to whatever the household machine has exported.
+  PUBLIC_URL: http://localhost:8080
+  SESSION_SECRET: ci-session-secret-not-a-real-one
+  SECRETS_KEY: ci-secrets-key-not-a-real-one-at-all
+  POSTGRES_USER: spielplan
+  POSTGRES_PASSWORD: spielplan
+  POSTGRES_DB: spielplan
+
+jobs:
+  release:
+    # The second reading of decision 183, exactly as `real-bundle.yml` writes it: the `on:` block
+    # above already excludes `push` and `pull_request`, and this is what would still keep every
+    # branch's push off the household's machine on the day somebody widens that trigger. It can
+    # never be false as the file stands, so it cannot turn this job into a skipped-green one.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: [self-hosted, spielplan-corpus]
+    defaults:
+      run:
+        # `-e -o pipefail`, which the default shell does not give. Three legs below pipe a command
+        # into `tee` so that its output can be uploaded, and without pipefail the exit code read
+        # by the runner would be `tee`'s -- every one of those legs would pass whatever it printed.
+        shell: bash
+    services:
+      # Provisioning rather than scenery, and the same argument the pglite install below makes:
+      # the `pg_dump` family closes 3 rows, through eight tests in `test_backup.py` and
+      # `test_restore_drill.py` that skip themselves unless `pg_dump` is on PATH or a postgres:16
+      # container publishes TEST_DATABASE_URL's port. This is that container.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: spielplan
+          POSTGRES_PASSWORD: spielplan
+          POSTGRES_DB: spielplan_test
+        # 5434 on the host, not 5432. This container lives for the whole job, and legs 4 and 5
+        # bring up the compose stack whose own `db` publishes 5432 through `ops/compose.dev.yml`;
+        # two Postgres containers asking for one host port is a leg that fails on the harness.
+        ports: ['5434:5432']
+        options: >-
+          --health-cmd "pg_isready -U spielplan -d spielplan_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # A repository variable, not a secret: it is a path on this machine's own disk, and the
+      # bundle it names never leaves the machine. Read-only here, always: this job stages copies
+      # of it and never writes into it.
+      CORPUS_BUNDLE_DIR: ${{ vars.CORPUS_BUNDLE_DIR }}
+      TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5434/spielplan_test
+      BASE_URL: http://localhost:8080
+      # The drill's own account. A password long enough for `AdminInit`'s `min_length=10`, on a
+      # stack that is dropped at the end of the run.
+      DRILL_PASSWORD: a-release-drill-password
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # A venv, not `--system`, for the reason every other job in this repository has one: the
+      # runner's interpreter is externally managed (PEP 668) and the CPU torch index lives under
+      # `[tool.uv.*]` keys only uv reads.
+      - run: uv venv
+      - run: uv pip install -e "backend[dev]"
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      # The `test_migrations.py` family closes 9 rows, and eight of them go dark without this
+      # directory: the PGlite `schema` fixture is what skips, and the ninth row is closed by the
+      # one test in that file that takes `tmp_path` instead. Leg 2 fails the build over exactly
+      # that skip, so installing it here is not a convenience: it is the difference between the
+      # gate reporting on the build and reporting on the runner.
+      - run: npm --prefix backend/tests/pglite ci || npm --prefix backend/tests/pglite install
+
+      # Loud, and before leg 1. A workflow whose purpose is to un-skip the corpus tests must not
+      # be able to report green having skipped them, and an unset variable or a moved directory
+      # skips them exactly as silently here as everywhere else.
+      - name: the corpus bundle must actually be on this runner's disk
+        run: |
+          if [ ! -d "${CORPUS_BUNDLE_DIR:-}" ]; then
+            echo "CORPUS_BUNDLE_DIR is unset or is not a directory: '${CORPUS_BUNDLE_DIR:-}'"
+            echo "set the repository variable to the corpus bundle's path on this runner"
+            exit 1
+          fi
+          mkdir -p .reports
+
+      # --- leg 1 -------------------------------------------------------------------------------
+      # Every layer at once, against a real Postgres 16 and with the corpus reachable, so that
+      # nothing in the map's evidence is skipped for want of something this runner could have
+      # provided. `-rs` prints the reason for any skip that survives rather than folding it into a
+      # count, and the JUnit is what leg 2 then reads.
+      - name: leg 1 of 5 - the full suite against Postgres 16
+        run: python -m pytest backend/tests -q -rs --junitxml=.reports/junit-release.xml
+
+      - name: leg 1 of 5 - artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-leg-1-suite
+          path: .reports/junit-release.xml
+          retention-days: 30
+
+      # --- leg 2 -------------------------------------------------------------------------------
+      # Rule 2 of the coverage map asks whether a named test EXISTS. This asks whether it RAN.
+      #
+      # The browser half of that evidence comes from `ci.yml`'s e2e job for THIS commit, and it
+      # has to: leg 5 below is the only browser pass in this workflow and it runs after this leg,
+      # so a gate that waited for it would not be leg 2. What that buys is a genuine precondition
+      # -- a commit whose browser suite has never run has no browser evidence, and this refuses to
+      # call such a build releasable rather than quietly checking only the pytest rows.
+      - name: leg 2 of 5 - find the browser report ci.yml produced for this commit
+        id: browser-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          query="head_sha=$GITHUB_SHA&status=success&per_page=1"
+          runs=$(curl -fsS -H "authorization: Bearer $GH_TOKEN" \
+            -H 'accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?$query")
+          id=$(printf '%s' "$runs" | python -c \
+            'import json,sys; r=json.load(sys.stdin)["workflow_runs"]; print(r[0]["id"] if r else "")')
+          if [ -z "$id" ]; then
+            echo "no successful ci.yml run for $GITHUB_SHA: this commit has no browser evidence,"
+            echo "so the coverage gate cannot say its e2e rows ran. Push the commit and let ci"
+            echo "finish, then dispatch this workflow again."
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: leg 2 of 5 - download that report
+        uses: actions/download-artifact@v4
+        with:
+          name: playwright-report
+          run-id: ${{ steps.browser-run.outputs.id }}
+          github-token: ${{ github.token }}
+          path: .reports/browser
+
+      # Both phases. `e2e/run.mjs` runs Playwright twice -- first boot alone, then everything
+      # else -- and Playwright empties its output directory at the start of each run, so the
+      # runner writes phase 1's report back beside phase 2's afterwards. Counted off the map,
+      # phase 1 alone closes 8 shipped rows; without the first file they would read here as
+      # evidence that never ran.
+      - name: leg 2 of 5 - the executed-coverage gate
+        run: |
+          python ops/coverage_gate.py \
+            --junit .reports/junit-release.xml \
+            --playwright .reports/browser/.results/report-phase-1.json \
+            --playwright .reports/browser/.results/report.json \
+            | tee .reports/coverage-gate.txt
+
+      - name: leg 2 of 5 - artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-leg-2-coverage-gate
+          path: .reports/coverage-gate.txt
+          retention-days: 30
+
+      # --- leg 3 -------------------------------------------------------------------------------
+      # The two cases that only exist against a real bundle, and then M4.5's exit criterion, which
+      # means nothing against the fixture -- it was written to measure a real import. The script
+      # creates and drops its own database, so the service container above is all it needs, and it
+      # exits non-zero on a failed check. Its output is the committed measurement section 12's
+      # criteria are closed by, which is why it is teed rather than only printed.
+      - name: leg 3 of 5 - the real-bundle legs against CORPUS_BUNDLE_DIR
+        run: |
+          python -m pytest backend/tests/test_bundle_shapes.py backend/tests/test_bundle_validation.py \
+            -k real_bundle -q -rs | tee .reports/real-bundle-pytest.txt
+          python -u ops/m45_exit_criterion.py | tee .reports/m45-exit.txt
+
+      - name: leg 3 of 5 - artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-leg-3-real-bundle
+          path: |
+            .reports/real-bundle-pytest.txt
+            .reports/m45-exit.txt
+          retention-days: 30
+
+      # --- leg 4 -------------------------------------------------------------------------------
+      # docs/TESTING.md's release checklist, item 2, as far as a machine can take it: README's
+      # Recovery procedure on a scratch stack, against a dump THIS build's worker wrote. The half
+      # a machine cannot take is still a human drill and stays in that checklist -- the second
+      # pass with a different SECRETS_KEY, and the Jellyfin connector authenticating against a
+      # real server.
+      #
+      # It is also the only leg that runs the real bundle through the worker's import JOB rather
+      # than through a script, which is the path decision 300 moved `BUNDLE_IMPORT_TIMEOUT` and
+      # the worker's `stop_grace_period` to 600 s for. Stated as what is known: M4.14 measured
+      # that job at 213 s on the dev NVMe workstation with a warm page cache -- not on "the
+      # reference box", which is §2's 4 vCPU VM -- and THIS runner's speed is unmeasured, because
+      # no runner carrying the `spielplan-corpus` label has ever been registered. It is the
+      # household's own workstation reached through WSL or a Linux VM, so the budget is sized off
+      # the measurement plus the unmeasured cost of containerised I/O under a hypervisor, and not
+      # off a comparison anybody made. [decision 316; M4.16 cycle 4, REL-C4-01]
+      - name: leg 4 of 5 - the restore drill at stack level
+        run: |
+          set -u
+          STACK="docker compose -f docker-compose.yml"
+
+          # Three readers, written out rather than inlined as `python -c` one-liners: each is used
+          # more than once below, and a JSON path quoted twice in one shell script is a second
+          # place for it to be wrong. They live in `.reports` because that is what the artifact
+          # collects; `dump.py` is fed to the worker container over stdin, since `.reports` is not
+          # one of the five directories that service mounts.
+          cat > .reports/phase.py <<'PY'
+          import json, sys
+          print((json.load(sys.stdin).get("import_job") or {}).get("phase") or "none")
+          PY
+          cat > .reports/health.py <<'PY'
+          import json, sys
+          state = json.load(sys.stdin)
+          sys.exit(0 if state["ok"] and state["bundle"] else 1)
+          PY
+          cat > .reports/dump.py <<'PY'
+          import asyncio, datetime
+          from spielplan.backup import nightly
+          print(asyncio.run(nightly.run(datetime.datetime.now())).as_dict())
+          PY
+
+          # The same six variables `.env.example` asks an operator to fill, and no more: the one
+          # expression a household actually runs on is the compose file's DATABASE_URL default,
+          # built out of the three POSTGRES_* values, and it is evaluated here.
+          cat > .env <<EOF
+          PUBLIC_URL=$PUBLIC_URL
+          SESSION_SECRET=$SESSION_SECRET
+          SECRETS_KEY=$SECRETS_KEY
+          POSTGRES_USER=$POSTGRES_USER
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_DB=$POSTGRES_DB
+          BIND_ADDR=127.0.0.1
+          PORT=8080
+          TZ=Europe/Berlin
+          EOF
+
+          # A release drill starts where a household starts: at a first boot. This runner is NOT
+          # ephemeral -- `./data/pg` is a bind mount that survives the job -- so a second run would
+          # otherwise meet last week's database, where the wizard is spent and the import has
+          # already seeded. The `.env` above is written first because the compose file declares
+          # PUBLIC_URL, SESSION_SECRET and SECRETS_KEY required, and `down` reads it too.
+          $STACK down --remove-orphans
+          sudo rm -rf data
+
+          # ops/backend.Dockerfile runs as uid 1000 (section 14.3) and every ./data path is a host
+          # bind mount, so Docker would create the missing ones as root and the worker could write
+          # neither a dump nor a staged tree. README's "Running it" carries the same two lines.
+          # A copy of the bundle's CONTENTS, never the corpus directory itself: the importer
+          # stages out of /data/import, and the export is read-only to this repository. The
+          # trailing `/.` is the whole of that sentence -- `mkdir -p` has just created
+          # `data/import`, so `cp -a "$DIR" data/import/` copies the directory INTO it and stages
+          # `data/import/v20260828/BUNDLE.json`. `api/artifacts._resolve(None)` answers
+          # `cfg.import_dir`, and `Bundle.open` falls back only through `_archive_within`, which
+          # matches `.tar`/`.tar.zst` FILES and never a single child directory, so the import
+          # would refuse on a root holding no BUNDLE.json and this leg could only fail.
+          # `e2e/reset.mjs` spends the same character on `data/artifacts` for the same reason.
+          # Copied before the chown, because after it the runner's own user cannot write in that
+          # directory. [M4.16 cycle 1, M416-C1-D3-02]
+          mkdir -p data/raw data/artifacts data/cache data/import data/backups
+          cp -a "$CORPUS_BUNDLE_DIR/." data/import/
+          sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
+
+          $STACK up -d --build
+          for _ in $(seq 1 90); do
+            curl -fsS "$BASE_URL/api/health" > /dev/null && break
+            sleep 2
+          done
+          curl -fsS "$BASE_URL/api/health"
+
+          # The first admin, which is the only account creatable without one, and the session
+          # cookie every admin route below is asked with.
+          curl -fsS -c .reports/cookies.txt -H 'content-type: application/json' \
+            -d "{\"name\":\"drill\",\"password\":\"$DRILL_PASSWORD\"}" \
+            "$BASE_URL/api/setup/admin" > /dev/null
+
+          # Section 10 step 2, through the route the Data tab presses. The request returns 202 and
+          # the work is the worker's; the phase is polled the way the Data tab polls it.
+          curl -fsS -b .reports/cookies.txt -X POST -H 'content-type: application/json' -d '{}' \
+            "$BASE_URL/api/admin/bundle/import"
+          phase=none
+          for _ in $(seq 1 120); do
+            phase=$(curl -fsS -b .reports/cookies.txt "$BASE_URL/api/admin/bundle/state" \
+              | python .reports/phase.py)
+            case "$phase" in
+              active) break ;;
+              failed) echo "the bundle import failed; see the Data tab payload above"; exit 1 ;;
+            esac
+            sleep 10
+          done
+          if [ "$phase" != "active" ]; then
+            echo "the import did not reach 'active' in 20 minutes (last phase: $phase)"
+            exit 1
+          fi
+
+          # Staged into /data/artifacts by now, so the copy under /data/import has done its work
+          # and leg 5 rebuilds that directory as the fixture it measures (decision 299). Emptied
+          # rather than removed: it is a bind mount into two running containers, and replacing the
+          # directory leaves them holding the old inode. `sudo`, because the chown above handed it
+          # to the container's uid; the glob is the runner's own shell, which can still read it.
+          sudo rm -rf data/import/*
+          # And handed straight back, because leg 5 is this directory's next writer. `run.mjs`
+          # phase 0 rebuilds it with `make_bundle` as the RUNNER's user, and creating
+          # `content.sqlite` needs write on the DIRECTORY rather than on a file -- so the chown
+          # above, which the `sudo` on the line before this one exists to work around, would kill
+          # leg 5 at its first statement and make the gate report on the runner instead of on the
+          # build. Nothing in the containers writes here after the staging above: the staged copy
+          # lives under /data/artifacts, and the one uid-1000 write this directory ever takes is
+          # `_unpack`'s `.unpacked-*` beside an ARCHIVE, which neither the corpus export nor the
+          # fixture leg 5 builds is. [decision 299; M4.16 cycle 1, M416-REL-05]
+          sudo chown -R "$(id -u):$(id -g)" data/import
+
+          # Section 10's swap sequence ends here, and until it does the process has not LOADED
+          # what the database calls active.
+          $STACK restart backend worker
+          for _ in $(seq 1 90); do
+            curl -fsS "$BASE_URL/api/health" | python .reports/health.py && break
+            sleep 2
+          done
+
+          # A dump the worker's own code wrote, in the worker's own container, with the pinned
+          # pg_dump the image installs -- not one taken by hand for the occasion. `nightly.run`
+          # is written to be called this way; its docstring names "an operator runs the job by
+          # hand" as one of the cases its already-dumped-tonight guard exists for.
+          $STACK exec -T worker python - < .reports/dump.py
+          dump=$(ls -1 data/backups/spielplan-*.dump | tail -1)
+          echo "restoring $(basename "$dump")"
+
+          # README's Recovery block, in its three gestures, into a database created fresh for it.
+          # `--force` because `dropdb` refuses while any session is attached and the db container
+          # is not the only thing that has ever connected; the app processes are stopped first for
+          # the reason the Recovery block gives -- a restore into a database the stack is still
+          # serving ends with `connector_config` empty and `app_setting` still the fresh install's.
+          $STACK stop backend worker
+          $STACK exec -T db dropdb --force -U "$POSTGRES_USER" "$POSTGRES_DB"
+          $STACK exec -T db createdb -U "$POSTGRES_USER" "$POSTGRES_DB"
+          $STACK exec -T db pg_restore --clean --if-exists --no-owner \
+            -U "$POSTGRES_USER" -d "$POSTGRES_DB" "/backups/$(basename "$dump")"
+          $STACK start backend worker
+
+          for _ in $(seq 1 90); do
+            curl -fsS "$BASE_URL/api/health" > /dev/null && break
+            sleep 2
+          done
+          # The two facts the drill is for: the process reaches the restored database, and what it
+          # loaded is the bundle the dump remembers. A 503 or a null bundle is a restore that
+          # boots and serves an empty install, which is the failure mode that reads as success.
+          curl -fsS "$BASE_URL/api/health" | tee .reports/restore-drill-health.json
+          python .reports/health.py < .reports/restore-drill-health.json
+          # `applied migrations: (none pending)` on the way back up is the line the checklist asks
+          # an operator to read: it is written either way, so an empty grep is a boot that never
+          # reached the runner rather than a schema that needed nothing.
+          $STACK logs --no-color --since 5m backend | tee -a .reports/restore-drill-health.json
+
+      - name: leg 4 of 5 - artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-leg-4-restore-drill
+          path: .reports/restore-drill-health.json
+          retention-days: 30
+
+      # --- leg 5 -------------------------------------------------------------------------------
+      # The whole stack, from `docker compose up` to two browsers. `run.mjs` rebuilds the fixture
+      # bundle first (decision 299), resets to a first boot, runs phase 1 alone, restarts so the
+      # imported bundle is loaded (section 10) and then runs everything else -- over BOTH projects,
+      # because the `phone` project is an iPhone 13 on WebKit and section 6's phone-first layout is
+      # the primary one rather than a resize of the desktop.
+      #
+      # The fixture and not the corpus, deliberately: `10-home.spec.js` and the shelves count what
+      # `make_bundle` writes, so a browser pass against the real bundle asserts numbers no fixture
+      # produces. The real bundle is legs 3 and 4's subject; this leg's subject is the app.
+      - name: leg 5 of 5 - the two-phase browser pass over both projects
+        run: |
+          npm --prefix e2e ci || npm --prefix e2e install
+          npx --prefix e2e playwright install --with-deps chromium webkit
+          node e2e/run.mjs
+
+      - name: leg 5 of 5 - artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-leg-5-browser
+          path: |
+            e2e/playwright-report
+            e2e/.results
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: the stack's logs, whichever leg failed
+        if: always()
+        run: docker compose -f docker-compose.yml logs --no-color --tail 200 || true
