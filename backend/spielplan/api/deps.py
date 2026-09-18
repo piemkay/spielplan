@@ -119,16 +119,24 @@ async def current_user(request: Request, response: Response, conn: DB) -> auth.S
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not signed in")
     user = await auth.load_session(conn, sid)
     if user is None:
-        # The row is gone or lapsed, so the cookie naming it is dead weight the browser would
-        # keep sending for the rest of its 90 days. Starlette builds the error response itself
-        # and discards the one this dependency was handed, so the clearing Set-Cookie has to
-        # travel on the exception to survive.
-        response.delete_cookie(auth.SESSION_COOKIE, path="/")
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            "session expired",
-            headers={"set-cookie": response.headers["set-cookie"]},
-        )
+        # And no clearing Set-Cookie with it, deliberately. `Set-Cookie` addresses a cookie by
+        # NAME, so "retire the dead cookie this request carried" and "end whatever session the
+        # browser is holding when this response lands" are one act — and on a slow link they are
+        # not one session. Sign out, sign back in, and the refusal owed to the first session
+        # arrives after the second one's cookie is set and takes it: the household signs in and is
+        # thrown back to the sign-in page a moment later, decision 282's seam reading a 401 on a
+        # session §3.2 says is live and nothing ended. §2 puts this app on a LAN or Tailscale
+        # address, so the window is a real one and not a thought experiment.
+        #
+        # There is no narrower rule to retreat to. What the server knows is the sid the REQUEST
+        # carried; what it would clear is whatever the browser has NOW, and no header on this
+        # response can ask about that or make the clear conditional on a value.
+        #
+        # So the dead cookie is left to be sent, and the cost is the one the browser was always
+        # going to pay for it: a 401 per request against a session that is already gone — this
+        # line's own answer, which decision 282's client already handles — until the cookie's own
+        # Max-Age retires it. That is strictly cheaper than ending a session that is alive.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired")
     if user.session_slid:
         # §3.2's window slides in the browser only if the cookie is re-issued with it, and the
         # row moves at most once a day, so this costs one Set-Cookie a day rather than one per
@@ -154,8 +162,7 @@ def carry_slid_session_cookie(request: Request, response: Response) -> Response:
 
     The other half of `current_user`'s note above, kept here because `set_session_cookie` is
     already the one place that knows the cookie's shape. It is a no-op on every request that did
-    not slide, and it never overwrites a Set-Cookie the response already carries — the lapsed
-    session's clearing cookie is threaded through `headers=` on its own exception and wins.
+    not slide, and it never overwrites a Set-Cookie the response already carries.
     """
     slid = getattr(request.state, "slid_session_cookie", None)
     if slid and "set-cookie" not in response.headers:

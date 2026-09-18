@@ -59,8 +59,8 @@ async def _optional_user(
 
     `GET /state` is the one route that must serve both a first-booting stranger and a signed-in
     operator, so it cannot be gated and cannot be open either (sec-14). Re-using `current_user`
-    rather than re-reading the cookie here keeps the slide and the clearing Set-Cookie it
-    already applies to `response`; only its refusal is swallowed.
+    rather than re-reading the cookie here keeps the slide it already applies to `response`;
+    only its refusal is swallowed.
 
     A session locked to §3.1's forced first-login change counts as a stranger here. Decision 179
     puts every other authenticated route behind `ActiveUser`, and the privileged half of `/state`

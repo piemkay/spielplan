@@ -728,6 +728,74 @@ async def test_a_refused_request_still_carries_the_cookie_its_slide_earned(
     assert "set-cookie" not in ok.headers
 
 
+@pytest.mark.parametrize("path", ["/api/auth/me", "/api/setup/state"])
+async def test_a_refusal_for_a_dead_session_does_not_clear_the_live_one_that_replaced_it(
+    db, app, monkeypatch, path
+):
+    """A response may only end the session it was answering for.
+
+    `Set-Cookie` clears by NAME and not by value, so the clearing header `current_user` used to
+    put on its 401 did not retire the dead cookie it was answering — it retired whatever cookie
+    of that name the browser was holding when the response ARRIVED. §2 puts this app on a LAN or
+    Tailscale address, where a read is in flight for a few hundred milliseconds, and that makes
+    this ordinary rather than exotic: a read goes out under S1, the person signs out and signs
+    back in, and the 401 owed to S1 lands after S2's cookie is set and takes it. What the
+    household saw was being thrown back to the sign-in page a moment after signing in — S2's row
+    alive in `auth_session` the whole time, and decision 282's seam doing exactly what it should
+    with a 401 nothing had earned.
+
+    `/api/setup/state` is the same clear riding on a 200: `setup._optional_user` swallows the
+    refusal but keeps the response the dependency already wrote on, so a SUCCESSFUL state read
+    ended a live session. It is parametrised here rather than left to the route's own test
+    because it is the same defect and must not come back through the other door.
+
+    The gate is a clock and not a test double: it puts the in-flight window where the trace found
+    it — before the row is read, the measured 409 ms being connect plus TLS — and makes the
+    overlap exact rather than likely, so this fails every run and not one in thirty.
+    """
+    admin = await _admin(app)
+    browser = await _member(app, admin)  # one cookie jar is one browser
+    s1 = auth.open_session_cookie(browser.cookies.get(auth.SESSION_COOKIE))
+
+    arrived, gate = asyncio.Event(), asyncio.Event()
+    real_load = auth.load_session
+
+    async def slow_load(conn, sid):
+        if sid == s1:
+            arrived.set()
+            await gate.wait()
+        return await real_load(conn, sid)
+
+    monkeypatch.setattr(auth, "load_session", slow_load)
+
+    inflight = asyncio.create_task(browser.get(path))
+    await asyncio.wait_for(arrived.wait(), timeout=10)
+
+    assert (await browser.post("/api/auth/logout")).status_code == 200
+    relogin = await browser.post(
+        "/api/auth/login", json={"name": "jenny", "password": MEMBER_PASSWORD}
+    )
+    assert relogin.status_code == 200, relogin.text
+    s2_cookie = browser.cookies.get(auth.SESSION_COOKIE)
+    s2 = auth.open_session_cookie(s2_cookie)
+    assert s2 != s1, "the re-login must have minted a different session, or this asserts nothing"
+
+    gate.set()
+    landed = await inflight
+    assert "set-cookie" not in landed.headers, (
+        f"{path} answered for the dead S1 and cleared the cookie by name: "
+        f"{landed.headers.get('set-cookie')!r}"
+    )
+    assert browser.cookies.get(auth.SESSION_COOKIE) == s2_cookie, (
+        "the browser lost S2 to a response that was not answering for it"
+    )
+    assert await db.fetchval("SELECT count(*) FROM auth_session WHERE id = $1", s2) == 1, (
+        "S2's row must still be there — the defect is the cookie, not the session"
+    )
+    after = await browser.get("/api/auth/me")
+    assert after.status_code == 200, "signed in, and thrown back to the sign-in page a moment later"
+
+
 # --- §3.2 / §4.2: user verification is what stamps the admin clock --------------------------
 
 
@@ -1204,16 +1272,21 @@ async def test_the_setup_state_an_anonymous_caller_sees_is_two_fields(app):
     assert signed_in["has_admin"] is True
 
 
-async def test_a_lapsed_session_still_gets_the_anonymous_state_and_loses_its_cookie(db, app):
+async def test_a_lapsed_session_still_gets_the_anonymous_state_and_keeps_its_cookie(db, app):
     """The route is the one place both callers meet, so its optional dependency must not lose
-    what `current_user` does on the way past: a dead cookie is cleared rather than left to be
-    sent for the rest of its 90 days."""
+    what `current_user` does on the way past — and must not add to it either. It used to clear
+    the cookie here, which put a clear-by-name on a 200: a successful state read could end the
+    session the browser had moved to while this one was in flight. `deps.current_user` argues why
+    no refusal clears; this asserts the swallowed refusal does not smuggle one back out.
+    """
     admin = await _admin(app)
+    held = admin.cookies.get(auth.SESSION_COOKIE)
     await db.execute("DELETE FROM auth_session")
     lapsed = await admin.get("/api/setup/state")
     assert lapsed.status_code == 200
     assert set(lapsed.json()) == {"required", "note"}
-    assert not admin.cookies.get(auth.SESSION_COOKIE)
+    assert "set-cookie" not in lapsed.headers
+    assert admin.cookies.get(auth.SESSION_COOKIE) == held
 
 
 async def test_open_sign_ins_are_capped_and_expired_ones_swept_in_the_same_call(
