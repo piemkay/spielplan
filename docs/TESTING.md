@@ -262,7 +262,14 @@ Two things happen on the way that are easy to miss:
 > M4.14   12/12  covered
 > M4.15   11/11  covered
 > M4.16   17/17  covered
-  M5    0/11  covered
+> M5.1    6/6   covered
+  M5.2    0/1   covered
+  M5.3    0/2   covered
+  M5.4    0/2   covered
+  M5.5    0/2   covered
+  M5.6    0/2   covered
+  M5.7    0/2   covered
+  M5    0/1   covered
   M6    0/12  covered
   M7    0/2   covered
 ```
@@ -293,8 +300,265 @@ skipped, and section 5 reports `genome=0` where it reported 781, and both still 
 accounted-table check asks for a count OR a reason and the empty-block check already excluded
 `genome` by name.
 
-**M4.16 is the milestone this block was last re-pasted for, and its `17/17` is the red list it
-opened with, closed — sixteen rows, plus the one review cycle 1 added for decision 294's vendored
+**M5.1 is the milestone this block was last re-pasted for, and its `6/6` closed the red list it
+opened with — six rows written before a line of its code existed.** Those six, `current_milestone`
+and `MILESTONES`' seven new names land in ONE commit: a milestone present in one and absent from
+the other fails `covered != set(MILESTONES)` for every lane at once, and six other lanes are blocked
+on this one. Every one of the six opened with NO `tests` key, which is M4.10's, M4.11's and M4.16's
+opening rather than M4.9's and M4.15's — THE RED LIST WAS THE TEST PLAN, and it closed by those
+tests being written, never by a waiver, never by renaming a registered test and never by lowering
+`current_milestone`. The names now reach **121 ids across nine pytest files and no e2e spec**, and
+the series is published rather than left as a total to take on trust (decision 184): **46 ids** in
+`test_acquire_fetch.py` for the polite per-host fetcher, **40 ids** in `test_acquire_pipeline.py`
+for the ten-stage driver, **18 ids** in `test_acquire_rawstore.py` for the raw store, **10 ids** in
+`test_acquire_queue.py` for the durable queue, **1 id** in `test_acquire_drain.py` for §5.3's row
+that drives them, **3 ids** in `test_acquire_schema.py` for the half of
+the two-rows-one-file rule only a database can refuse, for the lease's sort key and for the
+coordinates this package cites into a test file and a migration, **1 id** in `test_acquisition_board.py` for
+decision 345's board, **1 id** in `test_devstub_contract.py` for the harness's copy of that same
+rule, and **1 id** in `test_api_gating.py` for the `/events` namespace. That last id is the
+one name in the series this milestone did not write:
+`test_the_spa_fallback_does_not_answer_for_the_api_namespace` predates M5.1 and was EXTENDED
+rather than duplicated, which is what decision 332 rules, so it now closes M4.6's
+`map-taste-admin-wizard-ends-at-the-bundle-import` and M5.1's `/events` row at once. It is the
+fourth id here shared across two rows and counted once, on the same ground as the three
+below: one assertion answering two rows is not a double count, and a red list closed by
+extending a registered test is still closed by a test rather than by a waiver - but it is the
+one row of the six whose evidence a later editor could narrow from the other milestone's
+side, which is why it is named here rather than left to be discovered. Fourteen of
+those ids are review cycle 3's, and they are the seams the six blocked milestones will be written
+against rather than internals: seven on the fetcher (a redirect carrying the caller's credentials
+to whatever host a `Location` named, which is the strip `follow_redirects=True` had been doing for
+the corpus; a hop into a host whose breaker is open asked for its robots.txt anyway and then
+reported a robots problem for a host that had none; one robots answer filed per host where RFC 9309
+scopes it to the authority; the size limit applied to the parsed string rather than to the wire, so
+a gzip answer chose a quarter of a gigabyte of the worker's heap; the conditional re-fetch's read
+key and write key unbound, in both directions; a per-host report that answered zeros one line after
+the block a drain assembles its detail in; and a rate published as the configured ceiling while the
+bucket ran at a host's own `Crawl-delay`), three on the mint (two workers minting one film twice in
+the window before either has committed, which `_TITLE_LOCK` was taken one stage too late to cover;
+an identity written stripped and looked up raw, so one task run twice minted twice; and a board
+parked with a date beside a task the reaper had closed for good), one on the queue (`defer` re-keyed
+to `(kind, key)` with no state predicate, which is the revive lever change 7 of that module refuses
+to ship), and one on the drain (the batch refusal standing between the two halves of one reaper, so
+a broken install closed tasks and never their board rows), and two on the RECORD of where the
+raw store's custody boundary is kept, which is the half of that clause no compose guard can hold
+(decision 345 said twice that `test_static_contracts.py` pins `/data/raw` off the backend, and
+`acquire/rawstore.py`'s own Custody paragraph said it a third time, when that file's only rule
+over the backend anchor is about the nightly dumps and stays green with the raw store mounted
+beside it - so the decision that binds M5.6 by name sent it to a guard that could never redden;
+and `ops/devstub.py` answering both board routes out of hand-typed rows that nothing in
+`test_devstub_contract.py` ever opened, so the harness could grow the `content` key the app's own
+test refuses, with a green build, on the file CLAUDE.md documents as the way to build a surface
+with no Docker). Ten of
+those ids are review cycle 2's, appended to the same four rows for the same reason cycle 1's were
+— five on the fetcher (a 3xx on robots.txt read as an answer and cached as allow-all for a day; a
+request counter that moved on a success and not on a failure; `Crawl-delay` and `Request-rate`
+parsed and then discarded; no size limit on the one file a stranger writes into this household's
+database; and a redirect this layer could not follow handed back as an answer), three on the mint
+(a stage-9 park with no deadline, which closes the task for ever on a condition the nightly sweep
+clears; `is_owned` written as an SQL literal on the path the module publishes for items Jellyfin
+has never shown us; and a provider-id validator that never asked the one bound its column has),
+one on the queue (a drain cancelled at its budget charging an attempt to every task it had claimed
+and not started), and one on the raw store (a 304 stored as a good document). Twenty-five
+of those ids are review cycle 1's, appended to the four rows the evidence belongs to rather than
+filed as rows of their own: the review found no requirement this milestone had failed to register,
+it found seams inside four of them that the first build's tests did not reach — a robots.txt that
+could not be read being cached as permission, a redirect hop meeting none of the four gates, a park
+with no deadline being terminal rather than a wait, a raise in the driver's own bookkeeping costing
+the whole leased batch, a mint taking a lookup helper's output as a permanent identity, a
+custody guard that asked only the container side of a mount, which reads the raw store delivered
+into the HTTP container under any other name as absent, and a per-host concurrency cap that
+eighteen registered tests read as data and none of them ever observed on the wire.
+
+**Ten of those ids are review cycle 4's**, appended to the five rows the evidence belongs to,
+and the two blockers among them are one shape: a claim that covered three of the four branches
+the thing it protects actually matches on. `_mint_claims` claimed the imdb, tmdb and tvdb ids
+and not `resolve.resolve_title_id`'s kind-and-year-and-name branch, so one film in two
+libraries whose copies carry DIFFERENT provider ids took disjoint claims and minted twice -
+measured 1 in 20 real concurrent drains, in a spine decision 162 cannot rewrite; and
+`_fetch_robots` set its status inside the streaming block and its body after it, so a robots.txt
+whose headers arrived and whose body did not was recorded as a 200 with an empty ruleset,
+cached in Postgres for a day, and read as permission to crawl a host publishing `Disallow: /`.
+The other eight: the robots decision taken against the caller's url while the query travelled
+in `params` and went on the wire; `Retry-After` in its HTTP-date form discarded on a reason
+(`float()` reading a date as a number) that cannot happen; the raw store's `read` handing back
+a zero-length file under a good digest because the integrity check sat on the write path a
+re-parse never takes; a gate answering with anything but None or an `Outcome` dereferenced
+unchecked in the driver, which is the seam M5.5 fills with code that bills; `str.isdigit()`
+admitting a superscript into `int()`; a robots cache row timestamped in the future read as
+fresh for as long as the clock takes to catch up; the size limit's character test joined to
+its byte test with `or`, so a non-ASCII robots.txt was accepted whole and cut mid-rule; and a
+title deleted while a stage ADVANCED raising a foreign-key error out of every handler where
+`TITLE_GONE` already names the lever. Two of the five rows gained no id and gained argued
+prose instead: `queue.lease`'s index paragraph asserted that a btree serves `ORDER BY
+priority, id` under a RANGE predicate, which no btree can, and cross-referenced a test that
+pins the index's existence and not the sort - so the claim is corrected and the sort key is
+pinned by a source read, `test_the_lease_orders_by_a_key_no_index_can_serve`, because an
+`EXPLAIN` against a unit-sized fixture measures the planner's cost model rather than the
+schema; and `rawstore.store`'s `finally` was documented as covering a killed worker, which no
+`finally` does.
+
+**Twelve of those ids are review cycle 4's SECOND pass**, appended to the same five rows, and the
+cycle exists because the loop stopped on its limit rather than on running out — three cycles had
+raised 49, 36 and 33 findings with five, two and four blockers. Its two blockers are the two
+cycle 3 closed read one turn further on. The mint: `resolve.resolve_title_id`'s fourth arm returns
+None for "there are several and I will not guess" exactly as it does for "there is no such title",
+and stage 1 read both as licence to write — so where the spine already held a name-and-year
+collision, the claim cycle 4 added serialised the pair and the loser came back to an arm the
+winner's own mint had made MORE ambiguous and minted beside it; and the same arm probes with the
+item's `Name` while `_mint` writes `original_name` from a field it never probes, so a German and an
+English copy of one film minted twice in one ordering with no concurrency at all. Decision 360 is
+the refusal both needed, and a lock was never the instrument: serialising a pair does not make a
+non-matching lookup match. The robots fetcher: a robots.txt whose first line outran the parsing
+limit left nothing after the line-boundary cut, and the app recorded that as a served empty file
+and pinned allow-all in Postgres for a day. The other ten: `Retry-After` clamped at zero on its
+date branch only, so a negative value deleted the backoff curve on every retryable status but the
+one a `max(...)` rescues; `normalise_host` collapsing a port and userinfo but not the DNS root
+label, which keys a second bucket and a second breaker for one host and lets an admin's Jellyfin
+url capture a declared one; `queue.lease` sorting inside its sub-SELECT and returning an
+undefined order, which `drain` walks positionally and refunds the tail of; `_run_stage` guarding
+two gate mistakes and letting through the third, a park with no deadline, which `queue.skip`
+closes for good and which is the spelling `ROADMAP-M5.md:324` words M5.5's cap refusal in;
+`_runtime_min`, the third value `_mint` binds against a bounded column and the one this file's own
+ceiling doctrine had never been applied to; `rawstore.store` asking gzip's ISIZE trailer, which a
+damaged body leaves intact, so a broken file under a good digest could never be repaired by any
+later fetch; `rawstore.read` guarding on `byte_size`, the one column `0024` permits to be NULL,
+rather than on the `content_sha256` it makes NOT NULL; a temporary file named from the writer's
+pid, which is 1 in every worker container sharing that bind mount; and two citations — a guard
+cited by a line number this milestone's own edits had moved, and `acquisition_job.reason`'s
+"shown verbatim" comment cited at line 137 in eleven places when it is on 138. Two corrections
+gained argued prose rather than a new id: `queue.release`'s paragraph credited `state = LEASED`
+with an ownership guarantee the predicate does not carry, which is the sentence M5.6's abandon
+action would have reused, and `stages.dna_extract` handed the spend cap to M5.7 where decision
+348's own title, `refuse_uncapped_spend` and the roadmap's migration table all say M5.5.
+
+Nine files
+and still no spread: the spine is four units plus §5.3's row that drives them, and the rows are
+filed against the units rather than against the surfaces they will one day feed. The ninth is
+`test_devstub_contract.py`, which is not a surface either: it is the second contract those two
+board routes have, and CLAUDE.md settles which of the two wins. **No e2e spec is the plan's instruction and not an omission**
+— M5.1 ships no surface, the browser suite is filename-ordered and single-worker, and M5's spec
+numbers are claimed by M5.6 and M5.7 in one block, so a file numbered here would have to be
+renumbered there. The one standing waiver above is still M0's, and this milestone neither discharges
+it nor adds one.
+
+**Nine rows the map already had were amended in place rather than duplicated,** named so an auditor
+can check each rather than take the count: `platform-compose-http-port-and-volumes`,
+`platform-exit-scripts-can-report-their-own-failure`,
+`platform-the-suite-says-whether-the-integration-layer-ran`,
+`jellyfin-acquisition-eval-worker-registry-mirrors-the-jobs-table`,
+`platform-every-route-is-behind-a-session`,
+`platform-the-proposal-ledger-counts-itself`,
+`platform-exit-criteria-are-closed-by-a-committed-measurement`,
+`platform-the-normative-file-describes-the-shipped-surface` and
+`platform-every-declared-router-is-mounted`. The first is M0's compose guard, whose
+`what` gains "and /data/raw is written by the worker and readable by nothing else". The volume SET
+has been asserted since M0 and the USE of one of those volumes was not — `/data/raw` sat in the
+compose file with nothing in the tree writing there, so the guard read a mount no process could
+have lost. M5.1's raw store is its first writer and so the milestone that owes the clause. It
+arrives with the three ids that hold it,
+`test_the_backend_container_cannot_open_what_this_module_writes`, the self-test that feeds the
+guard `- ./data:/data` and review cycle 1's second self-test, which delivers the raw store into the
+HTTP container under another name, because a clause with no test is a claim this map refuses. All
+three are named on
+M5.1's raw-store row as well, and that is one assertion answering two rows rather than a double
+count: M0 claims the volume set, M5.1 claims what writes into it, and the id figure above counts
+each id once.
+
+The next two are M4.8's instrument rows and were amended by review cycle 1 rather than by the
+opening commit, because what each gained is a guard and not a clause about the app. The exit-scripts
+row now carries the rule that a figure a DOCUMENT publishes about one of those scripts is derived
+from the script rather than typed: §12's M5.1 row and `docs/RELEASE.md` publish
+`ops/m51_exit_criterion.py`'s twelve numbered checks, its length and the nine scripts under `ops/` as
+words somebody wrote down, and the length was already eighteen lines stale when the new guard first
+read it — a figure falsified inside this very review cycle, in the file CLAUDE.md calls normative.
+Review cycle 4 gave that same row a second clause, the same rule turned the other way round: a
+coordinate a SCRIPT publishes into the application is a name that application still declares rather
+than a line number. `check_eleven` argued decision 332 by pointing at `app.py:522`, which was that
+rule at HEAD until this milestone's own rewrite of the class moved it twenty-five lines down inside
+the same change set, onto a docstring fragment about 405s — and the guard that settles "cite the
+function, not the line" globs `backend/`, so nothing had ever read `ops/`.
+The suite-reports-on-itself row now carries the other half of the sentence you are reading: that the
+milestone currently being written states its amended-rows count in the form the guard over that
+count can read, since that guard is a conditional and a claim it cannot see satisfies it for free.
+Each arrives with the tests that assert it, and registering them on the rows they belong to rather
+than opening new ones is the idiom M4.8's own ledger row set — which is also why the count here is
+nine and not one: a review cycle's amendments are amendments like any other.
+
+**The remaining six were amended by review cycles 2, 3 and 4, and what each gained is a guard
+rather than a clause** — which is why they are inside the count and not beside it. The banner's
+claim is that a row the map already held was changed rather than duplicated, and registering a
+guard on the row whose sentence it holds is that change: the alternative, a new row for each, is
+exactly what the two M4.8 rows above refuse. `jellyfin-acquisition-eval-worker-registry-mirrors-the-jobs-table`
+is M4.10's registry row and gained four `test_worker_schedule.py` ids, over prose in two files that
+stated the registry's size and a reader that could not tell a count from an article or a date.
+`platform-every-route-is-behind-a-session` gained the two `test_layering_guards.py` ids that hold
+the routing note above `ANONYMOUS` to the routers this app actually mounts.
+`platform-the-proposal-ledger-counts-itself` and
+`platform-exit-criteria-are-closed-by-a-committed-measurement` gained the three
+`test_static_contracts.py` ids that hold this file's own prose to the registries it sizes, one of
+the three registered on both. That last row also carries a two-word `why` refresh nobody chose:
+`test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured` derives both figures
+from `docs/RELEASE.md` and §12, and M5.1's own unmeasured §12 row moved them from five of fifteen
+to six of sixteen. Five of those six are disclosed a second time in M4.16's block below, where the
+id-total guard forced 144 to be restated as 149 and then, for the four ids below, as 153; the
+M4.10 one is disclosed nowhere else,
+because M4.10's block publishes no id total for anything to hold, and a row visible in the map and
+in no ledger block is the count this banner exists to make checkable. The fifth is
+`platform-the-normative-file-describes-the-shipped-surface`, amended by review cycle 4 in the
+same change as this sentence: its `what` gains the rule that every `decision N` at or above 162
+the normative file cites is one a register heads, which is decision 305's rule turned on the
+document that rule's authority comes from, and it arrives with the guard and the reader that
+tell a numbered decision from a dated one. That its amendment is counted by the guard the same
+cycle added is the instrument working rather than a coincidence: the floor is a floor for this
+cycle too. The sixth and last is M4.7's `platform-every-declared-router-is-mounted`, whose `what`
+gains the router that declares NO paths — `api/events.py`, mounted empty so that M5.2 adds the
+webhook by adding a route rather than by also remembering an `include_router` — and the rule that
+every test reading what the application mounts is named on it. It arrives with three ids: review
+cycle 1's guard, which asserts that mount through FastAPI's `original_router` because a router with
+no paths has no path to assert through, and which this milestone had left registered on no row at
+all; and the pair that closes that omission as a reading of the file rather than as one more typed
+id. Rule 2 walks this map's `tests` lists, so an id no row names could have been renamed or deleted
+with the whole gate green — the recurrence of the shape the suite-reports-on-itself row's own `why`
+already records, which is why cycle 4 repaired the class and not the instance.
+
+Decisions **321-361** record the calls it needed. Four gate its first commit and its migration — 321
+splits M5 into seven, 322 fixes the queue's shape before `0024` is checksummed, 323 says what stage 1
+may mint, and 331 amends §12's M5 criterion in place and gives M5.1 a row of its own — and 332, 336,
+340 and 345 are the four whose answers its code would otherwise have had to guess. Three more
+were taken as it closed, each a call its own exit criterion implied rather than one the plan
+had pre-answered: **347** bounds the drain's work per tick instead of stretching its timeout,
+**348** makes a paid stage refuse to run rather than run and bill, and **349** keeps the spine's
+three tables out of the movie-data archive. They are numbered 347-349 and not 346-348 because
+`docs/milestones/ROADMAP-M5.md` files 346 against M5.3, whose own plan is bound to record it
+under that number: a number allocated to a milestone that has not opened is a hole like any
+other, and spending it here would leave two normative rules under one heading. The range is
+deliberately full of holes: **324-330** spare, **333-335** spare, **337-339** spare,
+**341-344** spare and **346** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
+milestone that owns the step it blocks, because a number is taken by an owner rather than
+reserved by a planner. Its one migration is
+`0024_acquisition.sql`, the number the roadmap's ledger allocates to it; 0019 stays permanently unused
+and 0025-0029 belong to M5.2 through M5.6.
+
+Eleven rows this map already carried at `milestone = "M5"` were re-pointed rather than rewritten — the
+milestone key and nothing else — at the sub-milestone that owns each: the projection budget and the
+verify trust boundary to M5.4, the new-title trigger to M5.2, the two derive rows to M5.3, the spend
+meter and the two-attempt validator to M5.5, the three-ledger editors and the flywheel to M5.6, and
+the cost estimate and the spend guard to M5.7. None of them is M5.1's, which is itself the finding:
+they describe the pipeline's products and not its spine, so the milestone that builds the spine
+arrives with a red gate entirely of its own making. Two of the eleven -
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` and
+`jellyfin-acquisition-eval-flywheel-enqueues-naming-failures` -
+still rest their `spec` on bare proposals, and that is left exactly as it stands: decision 295's rule
+is scoped to `current_milestone`, M5.5 and M5.6 sort after M5.1, and re-pointing is what keeps those
+two outside its scope until decision 330 adopts or strikes proposals 104, 107, 109 and 135 by number.
+Renaming `proposals` to `decisions` is the one-word repair `_laundered_decision_citations` exists to
+catch, and adding the "rests only on" escape would record a debt this milestone has no standing to
+take.
+
+**M4.16 shipped before it, and its `17/17` closed the red list it
+opened with — sixteen rows, plus the one review cycle 1 added for decision 294's vendored
 extract, which shipped with no row at all.** Those sixteen were written before any source edit, `current_milestone` was
 raised and `MILESTONES` gained the name in that same commit — either one alone is a red build for
 everyone, since a milestone in one and not the other fails `covered != set(MILESTONES)`. Every one
@@ -304,15 +568,18 @@ subject IS this map, so a row naming a test that did not exist yet would have be
 describing work it had not done, inside the one milestone written to stop records doing exactly
 that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
 waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
-reach **144 ids across four pytest files and one e2e spec**, and the count includes the three
+reach **153 ids in four pytest files and one e2e spec**, and the count includes the three
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
 never instead of one — they sit in the frontend's suite rather than in the five files the figure
 names, so an auditor reconciling the two subtracts them first. The series is published rather than
-left as a total to take on trust (decision 184): **18 ids** in `test_layering_guards.py` for the
-two layering rules, **42 ids** in `test_release_gate.py` for the release workflow, the
-executed-coverage gate and the harness's own fixture, **61 ids** in `test_static_contracts.py` for
-the documents this milestone rewrote, **19 ids** in `test_spec_coverage.py` for the rules the
-instrument gained, and **1 id** in `19-phone-shell.spec.js` beside **3 ids** in
+left as a total to take on trust (decision 184): 20 ids in `test_layering_guards.py` for the
+two layering rules (two of them M5.1's review cycle 2, holding the routing note above
+`ANONYMOUS` to the tree it describes), 42 ids in `test_release_gate.py` for the release
+workflow, the executed-coverage gate and the harness's own fixture, 64 ids in `test_static_contracts.py` for
+the documents this milestone rewrote (three of them M5.1's review cycle 3, holding this file's own
+prose to the registries it sizes), 23 ids in `test_spec_coverage.py` for the rules the
+instrument gained (four of them M5.1's review cycle 4, holding the register's numbering and
+the normative file's own decision citations), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
 `data-sources.test.js` for the /account attribution block. It decomposed by instrument rather than
 by review cycle because no review cycle had run when it was first written, and it is restated here
 from the map rather than grown: review cycle 1 added twenty-three ids across the three instrument files

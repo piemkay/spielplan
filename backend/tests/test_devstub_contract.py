@@ -799,6 +799,98 @@ async def test_the_harness_bundle_payloads_carry_the_keys_the_routes_return(fres
         assert set((await client.get("/api/config")).json()["bundle"]) == _summary_keys()
 
 
+ACQUISITION_ROWS = ROOT / "backend" / "spielplan" / "acquire" / "board.py"
+ACQUISITION_ROUTES = ROOT / "backend" / "spielplan" / "api" / "acquisition.py"
+
+
+def _literal_keys(source: Path, function: str) -> set[str]:
+    """The constant keys of the one keyed dict literal `function` builds, in `source`.
+
+    A third reader rather than an argument to `_returned_keys`, for that reader's own reason and
+    one more of its own: `acquire/board.py` builds two of its three row shapes inside a list
+    comprehension rather than at a `return`, so a reader that walks `ast.Return` finds nothing at
+    all in `tasks_for_title` and `documents_for_title` -- and a comparison against nothing is what
+    this whole file exists to refuse. Every keyed dict in the body, therefore, of which each of the
+    five functions read here has exactly one: `board.job` also writes `{}` twice as the jsonb
+    fallback `db/pool.py` makes necessary, and an empty dict is a default rather than a payload.
+    """
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != function:
+            continue
+        keyed = [
+            keys
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Dict)
+            for keys in [{k.value for k in inner.keys if isinstance(k, ast.Constant)}]
+            if keys
+        ]
+        assert len(keyed) == 1, (
+            f"{source.name}'s {function} builds {len(keyed)} keyed dict literals; this reader "
+            "names exactly one payload"
+        )
+        return keyed[0]
+    raise AssertionError(f"{source.name} defines no {function}")
+
+
+async def test_the_harness_acquisition_payloads_carry_the_keys_the_routes_return(fresh):
+    """Section 6.6's board, key for key, against `acquire/board.py`'s own row literals.
+
+    The sibling above, one surface over, and owed for the reason that one records at length: a
+    payload the harness types by hand and nothing compares is a shape the front end is developed
+    against and the app has never promised. M5.1 ships `GET /api/admin/acquisition` and
+    `GET /api/admin/acquisition/{title_id}` with no client at all -- M5.6 builds the board against
+    them and adds its controls under decision 330, and M5.2-M5.5 move `acquisition_job.detail`, the
+    task envelope and the `raw_document` row underneath it while that work is being written. So the
+    drift this holds is the one that happens BETWEEN milestones, which is exactly the window the
+    bundle-state payload above spent four of its nine keys in.
+
+    The four app-vs-stub comparisons in this file cannot see it, and are not meant to: two subtract
+    `openapi()` path sets, one reads declared query parameters and one reads 2xx status codes, and
+    both handlers are annotated `-> dict[str, Any]`, so no response schema reaches either document.
+
+    DECISION 345 IS THE CLAUSE WITH TEETH HERE. The board shows the `raw_document` ROW and never
+    the bytes; `acquire/board.py` enforces that by selecting twelve columns of which `content_path`
+    is not one, and `test_acquisition_board.py` asserts it of the app. The harness's copy of the
+    same rule was a comment saying this file would catch a stub that invented a `content` field,
+    and until now nothing here read these two bodies at all. Equality and not containment, for the
+    sibling's reason read at its sharpest: a stub that grew that key would teach a board to render
+    the one thing decision 345 keeps out of every process that answers an HTTP request, and would
+    do it with a green build.
+
+    Read off the source for `_returned_keys`'s reason -- the app's two handlers need Postgres, an
+    admin session and rows in three tables, and this file has none of the three -- and at both
+    levels, because the envelope and the rows inside it are typed in different modules.
+    [M5.1 review cycle 3, M51-C3-REG-01]
+    """
+    async with _client(fresh) as client:
+        listed = await client.get("/api/admin/acquisition")
+        assert listed.status_code == 200, listed.text
+        assert set(listed.json()) == _literal_keys(ACQUISITION_ROUTES, "pipeline_board")
+        rows = listed.json()["jobs"]
+        assert rows, "the harness answers with no board rows, so the comparison below asks nothing"
+        for row in rows:
+            assert set(row) == _literal_keys(ACQUISITION_ROWS, "_job_row"), row
+
+        detail = await client.get(f"/api/admin/acquisition/{rows[0]['title_id']}")
+        assert detail.status_code == 200, detail.text
+        envelope = detail.json()
+        assert set(envelope) == _literal_keys(ACQUISITION_ROUTES, "job_detail")
+        # The app composes this row as `{**_job_row(row), "detail": ...}`, so the expectation is
+        # composed the same way rather than re-typed: a key added to the board row has to reach
+        # both routes, and a reader that spelled eleven keys here would stop noticing that.
+        assert set(envelope["job"]) == (
+            _literal_keys(ACQUISITION_ROWS, "_job_row") | _literal_keys(ACQUISITION_ROWS, "job")
+        )
+        assert envelope["tasks"], "a job with no queue rows leaves the task shape unasserted"
+        for task in envelope["tasks"]:
+            assert set(task) == _literal_keys(ACQUISITION_ROWS, "tasks_for_title"), task
+        assert envelope["documents"], "a job with no documents leaves decision 345 unasserted"
+        for document in envelope["documents"]:
+            assert set(document) == _literal_keys(ACQUISITION_ROWS, "documents_for_title"), document
+
 def test_the_harness_reports_the_phases_the_app_writes(harness):
     """The three phase strings, against the two modules that write them.
 

@@ -74,6 +74,16 @@ from spielplan.api import deps
 from spielplan.app import create_app
 from spielplan.core.config import settings
 
+# The prose readers, borrowed rather than re-written: `_comment_paragraphs` is this tree's notion
+# of what a reader reads - tokenized comments and docstrings off the AST, so a count inside a
+# string literal is not prose - with a run of adjacent `#` lines glued back into the paragraph it
+# was written as, and `_COUNT_WORDS` is its vocabulary for a hand-spelled one. Borrowed from there
+# rather than from `test_worker_schedule.py`'s sibling reader, which would drag `worker` and torch
+# into a file that imports the app and nothing else. The paragraph reader rather than
+# `_comment_prose` because this file's own note wrapped its count onto the next line and escaped
+# the guard below for it. [M5.1 review cycle 2; M5.1 review cycle 3, M51-C3-REG-02]
+from tests.test_static_contracts import _COUNT_WORDS, _comment_paragraphs
+
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
 # The files the numpy-only contract covers, relative to the package root. One today; see the
@@ -406,8 +416,8 @@ _SQL_HEAD = re.compile(
 #
 #
 # AND `app.py`, which is HTTP-layer code for THIS half of the rule. `_domain_modules` excludes it
-# from the import half and says why -- it is the composition root, so it imports all twelve
-# routers by definition -- and that argument is the import rule's alone. `app.py` also DECLARES A
+# from the import half and says why -- it is the composition root, so it imports every mounted
+# router by definition -- and that argument is the import rule's alone. `app.py` also DECLARES A
 # ROUTE, `@app.get("/api/health")`, whose handler carries a query: measured, one `SELECT 1`. So
 # the HTTP layer's real residue was sixty statements and this dict recorded fifty-nine, with the
 # sixtieth in the one file the ratchet could not see. That matters because of what the ratchet
@@ -415,6 +425,17 @@ _SQL_HEAD = re.compile(
 # live in, and `app.py` is where routes are already declared and where one query already sits.
 # `worker.py` sits at the same package root and is deliberately NOT scanned -- it serves no
 # request, so a route's query has no reason to land there. [M4.16 cycle 2, M416-C2-ARCH13-01]
+#
+# AND M5.1 ADDS TWO MODULES AND NOT ONE NUMBER, which is the outcome this dict's convention is
+# written for rather than an omission. `api/acquisition.py` (§6.6's acquisition board, two admin
+# reads) and `api/events.py` (§7.2's namespace, mounted with no routes yet) both measure ZERO:
+# every statement the board runs lives in `spielplan/acquire/board.py`, where the rule about what
+# decision 345 lets the board show belongs. So neither gets a key. A `0` row would say the same
+# thing in a form the grown half already says better -- a module absent from this dict holds zero
+# BY ASSERTION, and the first query to appear in either file fails as `(1, 0)` rather than
+# arriving under a key somebody wrote in advance. The figures below are therefore unchanged by
+# that milestone, and that is the measurement rather than a decision not to measure.
+# [M5.1, plan step F5; decisions 332 and 345]
 #
 # Sixty statements in twelve modules. The total is re-stated by hand below so this paragraph
 # can be falsified; `test_the_recorded_residue_totals_what_this_file_claims` is what falsifies it.
@@ -468,7 +489,7 @@ def _domain_modules() -> list[Path]:
     """Every package file the import rule covers: `spielplan/` minus `api/` and `app.py`.
 
     `app.py` is excluded because it is the composition root -- it exists to mount the routers, so
-    it imports all twelve of them by definition. `api/` is excluded because the rule is about what
+    it imports every one of them by definition. `api/` is excluded because the rule is about what
     reaches INTO it, and its own modules legitimately import `api/deps.py`.
     """
     return [
@@ -830,7 +851,7 @@ def test_the_residue_table_is_ascii():
 # does not. [decision 225; M4.16 arch-13]
 #
 # Implementation note, because it costs an afternoon otherwise: FastAPI 0.141.1 stops flattening
-# `include_router`, so `app.routes` holds twelve `_IncludedRouter` objects. Their
+# `include_router`, so `app.routes` holds an `_IncludedRouter` object per mounted router. Its
 # `effective_candidates()` gives HTTP routes with the prefixes applied but flattens the WebSocket
 # into a wrapper carrying neither a path nor a dependant -- the Tonight channel simply vanishes
 # from that walk, which is the one route this rule most needs to see. `original_router.routes`
@@ -1199,6 +1220,124 @@ def test_the_route_failure_messages_are_ascii():
     _named(set(ANONYMOUS) | set(CURRENT_ONLY)).encode("ascii")
     for reason in (*ANONYMOUS.values(), *CURRENT_ONLY.values(), *CONFIGURED_SURFACES.values()):
         reason.encode("ascii")
+
+
+# --- M5.1 cycle 2: the routing note describes the tree it is read against ---------------------
+
+# The implementation note above `ANONYMOUS` is the one paragraph in this file written to be acted
+# on rather than read: it exists so the next author does not spend an afternoon re-deriving what
+# `include_router` does under FastAPI 0.141, and it earns that by describing this tree concretely.
+# It described it by counting it, and the count was the one `main` had. M5.1 mounted `acquisition`
+# and `events`, so a reader who counts `app.routes` now finds a number the note does not have and
+# is back to deciding whether the note is stale or whether the flattening changed under them -
+# which IS the afternoon. Nothing read the number: it is a comment, and this file stayed green
+# through the milestone that mounted both of them and edited this file for other reasons.
+# [M5.1 review cycle 2, M51-REG-ROUTERS-03]
+#
+# Held to the live count rather than forbidden outright, for the reason the note is written at
+# all - a concrete tree is what makes it checkable. Anchored on the NOUN, because the other counts
+# in this file are the domain packages `ALLOWED_RESIDUE` is measured over and a rule that read
+# every number here would be ruling on a different set; and read as a PLURAL, because "an
+# `_IncludedRouter` object per mounted router" is a ratio rather than a tally and stays true as
+# routers are added, which is the form the note now uses. No exemption for a dated measurement,
+# unlike the registry's reader in `test_worker_schedule.py`: this note is an instruction about the
+# tree the reader is looking at, and a note that was true two milestones ago is the note that
+# costs the afternoon. The live count comes off `original_router`, the attribute `_route_leaves`
+# already walks, rather than off an isinstance against a private FastAPI class this file would
+# then have to import.
+#
+# WIDENED IN CYCLE 3, in both of the two ways the note escaped it. The narrow noun was chosen to
+# keep the rule off `ALLOWED_RESIDUE`'s domain packages, and that reason still holds -- but a
+# sentence that puts a count in front of the bare plural is a sentence about this set and no
+# other, so the bare plural is read as well, and the one sentence here that counted a subset of
+# them rather than all of them now names them instead. The other half was the pairing:
+# `_comment_prose` yields a comment PER LINE, the note wrapped between "all twelve" and "routers
+# by definition", and this reader consequently found NOTHING in the file it polices -- green over
+# two sentences that both still said twelve after M5.1 had made that wrong, which is what a guard
+# looks like once it has become a decoration. `_comment_paragraphs` glues the run back into the
+# paragraph it was written as before the split into sentences, so the pair is read together.
+# [M5.1 review cycle 3, M51-C3-REG-02]
+_ROUTER_TALLY = re.compile(
+    r"\b(\w+(?:-\w+)?)\s+(?:opaque\s+)?"
+    r"(?:`?_IncludedRouter`?\s+objects|(?:included\s+)?routers)\b",
+    re.IGNORECASE,
+)
+
+
+def _router_tallies(path: Path) -> list[tuple[int, str, str]]:
+    """Every sentence of `path`'s prose that counts the mounted routers, and how it spells it."""
+    found: list[tuple[int, str, str]] = []
+    for line, text in _comment_paragraphs(path):
+        for sentence in re.split(r"(?<=[.;]) ", text):
+            for match in _ROUTER_TALLY.finditer(sentence):
+                word = match.group(1).lower()
+                if word.isdigit() or word in _COUNT_WORDS:
+                    found.append((line, sentence.strip(), word))
+    return found
+
+
+def test_the_routing_note_counts_the_routers_this_app_actually_mounts():
+    """The note is acted on by the next author, so it is held to the tree they will count.
+
+    Asserted against `create_app()` rather than against `app.py`'s `include_router` lines, because
+    the sentence is about what `app.routes` HOLDS: a FastAPI that resumed flattening would keep
+    every one of those lines and make the note wrong in the other direction, which is the change
+    the note exists to warn about and the one a source scan cannot see. The sentence is
+    repeated back with `!a` rather than `!r` because it is somebody else's: this file's
+    prose carries em dashes, and a failure has to print on a cp1252 console.
+    """
+    live = len([r for r in create_app().routes if getattr(r, "original_router", None) is not None])
+    assert live, "the walk found no included routers at all - it is measuring itself"
+    assert live < len(_COUNT_WORDS), (
+        f"this app mounts {live} routers and the borrowed vocabulary spells as far as "
+        f"{len(_COUNT_WORDS) - 1}: extend `_COUNT_WORDS` rather than leaving the word unread"
+    )
+
+    stale = [
+        f"line {line} says {word!a} where the app mounts {live}: {sentence!a}"
+        for line, sentence, word in _router_tallies(Path(__file__))
+        if word not in {str(live), _COUNT_WORDS[live]}
+    ]
+
+    assert not stale, (
+        "the note states a number of mounted routers that `create_app` does not mount, and it is "
+        f"the note that saves the afternoon: say it per mounted router, or say today's: {stale}"
+    )
+
+
+def test_the_router_count_reader_reads_the_note_this_file_shipped(tmp_path):
+    """The sentence that went stale, its spellings, the shape it wrapped into, and the ratio.
+
+    The stale sentence is kept verbatim as a string literal, which is not prose: the guard above
+    reads comments and docstrings, so it does not read its own fixture. The ratio is the shape the
+    note now uses and the shape that must stay silent, or the repair reddens the guard that asked
+    for it.
+
+    The second and third blocks are cycle 3's, and they are the two shapes that escaped: a count
+    in front of the bare plural, which the narrow noun did not read, and the same sentence broken
+    across two `#` lines, which nothing read at all while the guard reported green. The line is
+    asserted with the word because the glue has to report the run's FIRST line -- a failure that
+    named the line the noun happens to sit on would send the next author to the wrong half of the
+    sentence. [M5.1 review cycle 3, M51-C3-REG-02]
+    """
+    module = tmp_path / "note.py"
+    module.write_text(
+        "# `app.routes` holds twelve `_IncludedRouter` objects.\n"
+        "# The walk sees twelve included routers.\n"
+        "# It now holds an `_IncludedRouter` object per mounted router.\n"
+        "\n"
+        "# A later note says thirteen routers.\n"
+        "\n"
+        "# The composition root imports all fourteen\n"
+        "# routers by definition.\n",
+        encoding="utf-8",
+    )
+
+    found = _router_tallies(module)
+
+    assert [(line, word) for line, _sentence, word in found] == [
+        (1, "twelve"), (1, "twelve"), (5, "thirteen"), (7, "fourteen")
+    ], f"the reader misses a count, misses a spelling of the noun, or reads the ratio: {found}"
 
 
 # --- the sentences the map makes out of rules 2 and 3 ----------------------------------

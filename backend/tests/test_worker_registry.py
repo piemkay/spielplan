@@ -328,7 +328,7 @@ async def test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading(db)
 
     Asserted as rows read rather than as elapsed time, because a timing threshold on a developer
     box is a flake and the defect is not about speed — it is about a read whose work is
-    proportional to history rather than to the fourteen jobs it answers for.
+    proportional to history rather than to the jobs it answers for.
     """
     names = [job.name for job in worker.JOBS if job.run is not None]
     await db.execute(

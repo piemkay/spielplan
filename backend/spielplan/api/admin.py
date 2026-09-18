@@ -662,6 +662,15 @@ JOB_NAMES: tuple[str, ...] = (
     "fold-in-tick",
     "tier-set-refit",
     "placement-reconciliation",
+    # M5.1 registered §8's drain, so the spine that walks a new Jellyfin add to "ready" is a
+    # job this loop fires and the card answers for it like any other. It belongs here more than
+    # most: it is the only job whose failure is INVISIBLE to a member - a prune that stops
+    # leaves rows, a fit that stops leaves yesterday's placements, but a drain that stops leaves
+    # a library that simply never grows, which looks exactly like a household that added
+    # nothing. §6.6's acquisition board (`api/acquisition.py`) answers "what happened to THIS
+    # title"; this tuple answers "is the thing that walks them running at all", and the second
+    # question is the one an operator asks first. [M5.1; decisions 321 and 336]
+    "acquisition-drain",
     "jellyfin-seen-sync",
     "jellyfin-sessions-poll",
     # M4.14 gave §5.3's ninth row a `run`, so the import is a job this loop fires and the card

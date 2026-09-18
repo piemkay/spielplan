@@ -51,7 +51,11 @@ MEMBER_PASSWORD = "a-member-password"
 # 191 and 193 — the eleven frozen sources' licence terms, and §6.4's unauthored axis artifact as
 # an outstanding task). Re-stated by hand, which is what the paragraph above says this number is
 # for: the equality failing on the added route is the check working.
-ADMIN_ROUTE_COUNT = 23
+# 23 until M5.1 added §6.6's Acquisition board as two reads - `GET /api/admin/acquisition` and
+# `GET /api/admin/acquisition/{title_id}` (`api/acquisition.py`, decision 345). Both arrive here
+# by taking `AdminUser` and nowhere else: the two sweeps below walk the dependency graph, so a
+# router that is admin-gated is swept whether or not anyone remembered to list it.
+ADMIN_ROUTE_COUNT = 25
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -200,6 +204,17 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
     Three claims, because the fix is a decline and a decline can be too wide: nothing under
     `/api` reaches the shell, a real route still refuses a wrong verb with 405 rather than
     pretending it is not there, and a client-side route still gets the shell.
+
+    AND `/events`, since M5.1. §7.2's `POST /events/jellyfin`, §7.3's `POST /events/playback`
+    and §11 all put routes under it, so it is a namespace and not one route - and until decision
+    332 the fallback declined only `api`, which left that namespace with both halves of the
+    failure above at once: a GET to an unrouted `/events/...` path served the app shell on a
+    built container, and a POST to one was the same partial match this test exists for and
+    answered 405. Three of the four probes above are repeated against it, in the same order and
+    with the same expectations; the fourth has no analogue until M5.2 mounts a real route for a
+    wrong verb to be refused by. That the answers match is the third clause of the coverage
+    row: the decline is ONE rule over the path's head segment rather than a clause each, so
+    `/api` and `/events` can only diverge if that rule has stopped being one. [decision 332]
     """
     build = tmp_path / "static"
     (build / "_app").mkdir(parents=True)
@@ -229,6 +244,67 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
             assert wrong_verb.status_code == 405, (
                 "the decline must not swallow a real route: GET /api/auth/me exists, so a POST "
                 "to it is a method mismatch and 405 is the honest answer"
+            )
+
+            # The same probes against `/events`, which M5.1 makes a namespace rather than a path
+            # the shell happens to swallow. The POST is the one that cannot be seen from a pytest
+            # run at all: with no static build the fallback is not mounted, so the 404 a no-DB
+            # suite asserts is the 404 of a route that does not exist, while the container
+            # answered 405. [decision 332; §7.2, §7.3, §11]
+            unrouted = await client.get("/events/jellyfin")
+            assert unrouted.status_code == 404, (
+                "an unrouted /events path must be 404 in the app that ships, not the shell: "
+                f"{unrouted.status_code}"
+            )
+            assert "html" not in unrouted.text.lower(), (
+                "the /events namespace was answered with the app shell - a webhook sender that "
+                "gets HTML where it expected JSON fails in a much less obvious place"
+            )
+            posted = await client.post("/events/jellyfin", json={})
+            assert posted.status_code == 404, (
+                "a POST to an unrouted /events path must read as 404 and never as 405: the "
+                "fallback is registered methods=['GET'], so a namespace it does not decline is "
+                f"a partial match and Starlette answers 405: {posted.status_code}"
+            )
+
+            # A LEADING DOUBLE SLASH IS THE SAME REQUEST TO THE SAME NAMESPACE, and the head
+            # segment this rule reads was the EMPTY STRING for it. The catch-all captures
+            # `/events/jellyfin` out of `//events/jellyfin`, so `path.split("/", 1)[0]` was `""`,
+            # which is in neither namespace - and both halves of the failure decision 332 exists
+            # to remove came back at once: the shell answered the GET and the GET-only fallback
+            # partially matched the POST, which Starlette answers 405. Nothing normalises it on
+            # the way in: uvicorn puts the raw target into `scope["path"]` unchanged, and the
+            # compose file publishes the backend's port directly rather than behind an ingress
+            # that might merge slashes. One expression on the rule closes it for both namespaces
+            # at once, which is what makes it still ONE rule.
+            #
+            # ASKED WITH AN ABSOLUTE URL, because httpx reads the relative reference
+            # `//events/jellyfin` as RFC 3986's network-path form - authority `events`, path
+            # `/jellyfin` - and would quietly probe `/jellyfin`, a client-side route that answers
+            # 200 shell before and after any fix. [M5.1 review cycle 3, M51-C3-332-01]
+            for probe in ("http://test//events/jellyfin", "http://test//api/nope"):
+                doubled = await client.get(httpx.URL(probe))
+                assert doubled.status_code == 404, (
+                    f"{probe} reached the app shell: the namespace decline reads the head "
+                    f"segment and a leading slash makes that the empty string"
+                )
+                assert "html" not in doubled.text.lower()
+                slashed_post = await client.post(httpx.URL(probe), json={})
+                assert slashed_post.status_code == 404, (
+                    f"a POST to {probe} answered {slashed_post.status_code}; a namespace whose "
+                    "contract says it can never 405 answered 405"
+                )
+
+            # The decline is a HEAD SEGMENT and not a string prefix, which is the half a
+            # decline can get wrong in the other direction. `/eventsish` is a client-side
+            # route that shares every character of the namespace's name, and the shipped
+            # bug this project has already paid for was exactly that reading: a boundary
+            # held with `startswith` let a DATA_DIR of `/data` admit `/database`
+            # (`api/artifacts.py:118-130`, M4.14 finding 2.7).
+            sibling = await client.get("/eventsish")
+            assert sibling.status_code == 200 and "shell" in sibling.text, (
+                "the decline swallowed a client-side route whose name merely starts with a "
+                "declined namespace - the split is on `/`"
             )
 
             client_route = await client.get("/rank")

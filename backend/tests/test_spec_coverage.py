@@ -56,7 +56,8 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # ahead of the milestones that own the rest. THE ORDER IS AUTHORED, NOT SORTED:
 # `_at_or_before` uses `MILESTONES.index`, and a string sort would put "M4.10" before
 # "M4.5". M4.16 was added by the milestone that opened it, in one
-# commit with its first rows; its own entry closes this block.
+# commit with its first rows, and M5.1 added the seven names M5 ships as in the same
+# shape and in one commit of its own; its entry closes this block.
 #
 # Nor was M4.6 in §12: its row was added to the table this week, together with the
 # §3.1/§6.2/§6.5/§6.6 amendments that decisions 164 and 166 forced. §6.6 sketched the
@@ -282,8 +283,47 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # 307-309 in cycle 2, 310 in cycle 3, 311-318 in cycle 4), and it writes NO migration:
 # 0024 is not claimed (decision 292 - decision 178's `rating_source` licence columns landed in
 # 0018_read_layer.sql) and 0019 stays permanently unused. See docs/milestones/M4.16-plan.md.
+#
+# M5.1 opens the seven that M5 ships as, and it is the second entry here whose subject is this
+# list. Section 12 gave M5 one row naming four subsystems, and its criterion - "a new Jellyfin
+# add reaches 'ready' unattended" - can be closed while three of them are absent, so decision 321
+# splits it into M5.1 through M5.7 and decision 331 amends that criterion in place rather than
+# leaving the gap unstated. The seven names sit between "M4.16" and "M5" POSITIONALLY:
+# `_at_or_before` asks `MILESTONES.index`, so the umbrella has to sort AFTER its parts, or a row
+# filed at "M5" reads as shipped while one of its parts is still current. "M5" stays in the list
+# for exactly one row, the umbrella criterion decision 331 amends, and decision 321's last clause
+# is what forces that row to exist at all: re-pointing all eleven pre-written `milestone = "M5"`
+# rows at the sub-milestone that owns each leaves the name holding zero rows, and
+# `test_every_milestone_is_represented` goes red on a name with none. The seven names,
+# `current_milestone = "M5.1"` and this milestone's first rows landed in ONE commit, which is the
+# M4.6 rule stated from the other side: a milestone in one and not the other fails
+# `covered != set(MILESTONES)` for every lane at once, and six other lanes are blocked on this one.
+#
+# M5.1 itself is the part of M5 with no product of its own. Section 8's preamble calls the raw
+# store, the durable `(kind,key)` queue and the per-host rate-limited HTTP layer "ported
+# skeleton", and this tree carried none of the three when the milestone opened - nothing named
+# `raw_document`, `job_run` was an outcome log with no `(kind,key)` identity, no attempts, no
+# lease and no scheduled retry, and the only outbound HTTP was a bare client per call with no
+# rate limit, no backoff and no breaker - while two stages of section 8 are already built and
+# have never had a caller: `placement/reconcile.py`'s `app_acquired` scope, which appears
+# nowhere outside its own file, and the "New in the library" shelf, which has no producer
+# because nothing in the tree stamps `title.origin = 'acquired'`. It runs first and alone
+# because every other M5 lane plugs into the seams it publishes - the stage contract, the queue,
+# the raw store - and because it holds this file, the structural half of `spec_coverage.toml`
+# and section 12's table, which no second milestone may hold at the same time. Two of the eleven
+# re-pointed rows cite bare proposals and GO ON citing them: decision 295's rule is scoped to
+# `current_milestone`, M5.5 and M5.6 sort after M5.1, and re-pointing is therefore what keeps
+# those two out of its scope until decision 330 settles proposals 104, 107, 109 and 135 by
+# number. Renaming `proposals` to `decisions` is the repair `_laundered_decision_citations`
+# exists to catch. Decisions 321-361 record the calls it needed - 321, 322, 323 and 331 gate its
+# first commit and its migration, and 332, 336, 340 and 345 are the four whose answers its code
+# would otherwise have had to guess; 347, 348 and 349 were taken as it closed, over the drain's
+# per-tick bound, a paid stage's refusal to run uncapped, and the archive's exclusion of the
+# spine's three tables. Its one migration is 0024_acquisition.sql.
+# See docs/milestones/M5.1-plan.md and ROADMAP-M5.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
-              "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5", "M6", "M7"]
+              "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
+              "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]
 KINDS = {"backend", "integration", "e2e", "static"}
 # No `frontend` kind, and its absence is a decision rather than an oversight: adding one is an
 # owner scope call and not an instrument repair (M4.16-plan.md Phase F 7), and decision 226
@@ -1158,7 +1198,7 @@ def _uncited_authority(rows: list[dict]) -> list[str]:
     promise more than it holds, that clause outran its own tests.
 
     Measured before it was written, the way this map asks, and re-measured since: over this tree
-    all 309 shipped rows name a section, a numbered decision or a document path, so the rule lands
+    all 315 shipped rows name a section, a numbered decision or a document path, so the rule lands
     green and asserts a property the map already has rather than inventing work. A document path is
     admitted because many rows answer to `CLAUDE.md`'s conventions or to `docs/TESTING.md` rather
     than to a §, and a rule that reddened those would be narrowed by the first person it stopped.
@@ -1484,6 +1524,108 @@ def test_the_roadmap_half_of_the_decision_register_is_not_stale():
         "the reader holds nothing. Re-read it against the two files rather than keeping it: a "
         "guard whose premise has gone is a line nobody can remove honestly."
     )
+
+
+# --- M5.1 review cycle 4: the same rule, turned on the one document that IS normative ----------
+#
+# `_unresolvable_decision_citations` above is scoped to `spec_coverage.toml` ROWS, and decision 305
+# was taken because a row could cite "a decision number that does not exist" and still be printed
+# covered. The normative file cites decisions too -- 96 distinct numbers across its fourteen
+# sections and its Status block -- and nothing in this tree read one of them. It cited 327, which
+# `docs/milestones/ROADMAP-M5.md` heads as a QUESTION under "Decisions the owner must take",
+# beneath a preamble that says "**They are not taken.** Transcribing them into
+# `docs/spec-v2.2-proposals.md` is an owner act", and which the register's own M5.1 preamble lists
+# in the same change set among the numbers that "stay unspent here". So the one file CLAUDE.md
+# calls normative named a decision the owner had not taken, in the one direction nothing covered:
+# `test_static_contracts.py::_unnamed_wave_decisions` splits the body at `## 0.` and never sees the
+# Status block, and `_numbers_named` treats every three-digit token on the point-release line as a
+# number that line NAMES rather than a citation to resolve, so 327 passed through both halves.
+#
+# Held here rather than beside that file's other guards because the resolver is here: one reading
+# of `### <n>.` and one of the roadmap's `### Decision N`, which is what the comment over
+# `_register_entries` asks for. Scoped to 162 and above for `_is_a_decision`'s reason -- below it
+# the offence is a proposal renamed rather than a number nobody took, and
+# `_laundered_decision_citations` owns that range and says so in its own message.
+#
+# Three digits at the head, because `owner decision 2026-08-29` is how this file spells a dated
+# ruling carrying no number at all, and a reader that took `2026` for a citation would send an
+# author hunting for an entry nobody ever wrote. [decision 305; M5.1 cycle 4, M51-C4-SPEC-01]
+_SPEC_DECISION_CITATION = re.compile(
+    r"\bdecisions?\s+(\d{1,3}(?:\s*(?:,|and|\+|\u2013|-)\s*(?:and\s+)?\d{1,3})*)\b", re.I
+)
+
+
+def _spec_decision_citations(text: str) -> dict[int, int]:
+    """Every `decision N` the normative file cites, by number, with the line it first stands on."""
+    cited: dict[int, int] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        for match in _SPEC_DECISION_CITATION.finditer(line):
+            body = match.group(1)
+            numbers = {int(n) for n in re.findall(r"\d{1,3}", body)}
+            for low, high in re.findall(r"(\d{1,3})\s*[-\u2013]\s*(\d{1,3})", body):
+                numbers.update(range(int(low), int(high) + 1))
+            for cite in numbers:
+                cited.setdefault(cite, number)
+    return cited
+
+
+def test_the_normative_file_cites_no_decision_the_owner_has_not_taken():
+    """Decision 305's rule, turned on the document that rule's own authority comes from.
+
+    A reader who follows `decision 327` out of the normative file and into the decision record
+    finds nothing under that heading -- and unlike a coverage row, nothing stands between them and
+    the sentence. CLAUDE.md draws the line the citation crosses: `decision N` is taken and
+    normative, a numbered proposal is provenance and "a requirement resting only on one rests on
+    nothing the owner agreed to". A planner's numbered question written up as a decision is that
+    category error in the one file where it reads as settled law, and the register said so about
+    the same number in the same wave.
+
+    The message names the two files it read rather than calling the number wrong, for the reason
+    `_unresolvable_decision_citations` gives: a decision taken in a THIRD document must be able to
+    redden this guard's premise instead of a legitimate sentence.
+    [decision 305; row `platform-the-normative-file-describes-the-shipped-surface`;
+     M5.1 review cycle 4, M51-C4-SPEC-01]
+    """
+    spec = _normative_path()
+    taken = _decisions_taken()
+    cited = _spec_decision_citations(spec.read_text(encoding="utf-8"))
+    assert cited, (
+        f"{spec.relative_to(REPO).as_posix()} cites no `decision N` anywhere any more, so this "
+        "guard reads nothing. Either the file stopped citing the register decision 288 makes its "
+        "companion, or the citation spelling moved and this reader did not come with it."
+    )
+    unresolvable = [
+        f"{spec.relative_to(REPO).as_posix()}:{line}: cites decision {number}"
+        for number, line in sorted(cited.items())
+        if number >= _FIRST_DECISION and number not in taken
+    ]
+    assert not unresolvable, (
+        "the normative file names a decision neither docs/spec-v2.2-proposals.md nor "
+        "docs/milestones/ROADMAP-to-M5.md heads an entry under:\n  "
+        + "\n  ".join(unresolvable)
+        + "\n\nA number a planner allocated is not a decision until the owner takes it. Name it "
+        "for what it is -- a numbered question in the roadmap that owns it -- rather than "
+        "borrowing the word this project reserves for a ruling."
+    )
+
+
+def test_the_spec_citation_reader_tells_a_numbered_decision_from_a_dated_one():
+    """Both ends of the reader, because a false hit here costs as much as a miss.
+
+    The normative file spells an unnumbered ruling `owner decision 2026-08-29` three times, and a
+    reader that took the year for a citation would report `decision 2026`, an entry nobody can
+    write. It also collapses whole waves into ranges (`decisions 214-226`), so a range has to
+    expand or the rule forgives eleven numbers at once.
+    [M5.1 review cycle 4, M51-C4-SPEC-01]
+    """
+    read = _spec_decision_citations(
+        "a. state: unseen | seen (owner decision 2026-08-29: no 'forgotten' state)\n"
+        "b. as rewritten by the 54a-54h fold (decisions 175, 214-226)\n"
+        "c. restated under decision 288 and decision 305\n"
+    )
+    assert 2026 not in read and 8 not in read, read
+    assert read[175] == 2 and read[214] == 2 and read[220] == 2 and read[226] == 2
+    assert read[288] == 3 and read[305] == 3
 
 
 # --- M4.16 review cycle 2: rule 7 reads the tests a waiver leans on -----------------------------
@@ -1995,6 +2137,84 @@ def test_the_join_key_ban_kept_the_guard_its_deleted_row_left_behind():
     )
 
 
+# --- M5.1 review cycle 4: the mount assertions rule 2 can only hold once a row names them -------
+#
+# The guard above is that rule stated of one id, and this is the same rule stated of a reading,
+# because the typed form is what let the class recur. `platform-every-declared-router-is-mounted`
+# names the two guards that compare PATH SETS and did not name the third, which asserts the mount
+# itself -- and rule 2 walks the map's `tests` lists, so a test no row names can be renamed or
+# deleted with this whole gate green. The third is not a spare: `api/events.py` declares no paths
+# (decision 332), `_unmounted_routers` filters on `paths - served` being non-empty, and an empty
+# set is never non-empty, so nothing else in the tree can see `app.include_router` go missing for
+# it. M5.2 adds the webhook by adding a route to that file, and would discover the mount gone
+# instead of inheriting it.
+#
+# READ OFF THE SOURCE rather than out of a list here, for the reason the row itself is not enough:
+# a list of ids inside a guard goes stale exactly the way a `tests` list does. `_unmounted_routers(`
+# and `original_router` are what an assertion about what the APPLICATION mounts is written with.
+# `include_router` is deliberately not in the set -- a test that mounts a router of its own is the
+# scaffold clause of the same row, and its guards are a different claim about a different subject.
+# [decision 332; M5.1 review cycle 4, M51-C4-COV-01]
+_MOUNT_WITNESS = re.compile(r"_unmounted_routers\(|original_router")
+STATIC_CONTRACTS = TESTS / "test_static_contracts.py"
+
+
+def _mount_guards_no_row_names(named: set[str] | None = None) -> list[str]:
+    """Every test in `test_static_contracts.py` asserting a mount that no shipped row names."""
+    source = STATIC_CONTRACTS.read_text(encoding="utf-8")
+    if named is None:
+        named = {
+            test_id
+            for r in REQUIREMENTS
+            if _at_or_before(r["milestone"])
+            for test_id in (r.get("tests") or [])
+        }
+    found = [
+        f"backend/tests/test_static_contracts.py::{node.name}"
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_")
+        and _MOUNT_WITNESS.search(ast.get_source_segment(source, node) or "")
+    ]
+    return [test_id for test_id in found if test_id not in named]
+
+
+def test_every_guard_over_a_router_this_app_mounts_is_named_by_a_row():
+    """The one assertion in this tree that a zero-path router is mounted was held by nothing.
+
+    Rule 2 refuses a row naming a test that does not exist; NOTHING refuses a test that exists and
+    no row names, and the difference is invisible while the test passes. The map's own `why` for
+    `platform-the-suite-says-whether-the-integration-layer-ran` records this shape from an earlier
+    cycle -- "the one test this milestone left registered on no row" -- which is why it is stated
+    here as a rule over the file rather than repaired one id at a time.
+    [M5.1 review cycle 4, M51-C4-COV-01]
+    """
+    unheld = _mount_guards_no_row_names()
+    assert not unheld, (
+        "these tests assert that the application mounts a router and no shipped row names them, "
+        "so rule 2 cannot see them renamed or deleted: "
+        + ", ".join(unheld)
+        + ". Register each on platform-every-declared-router-is-mounted, where the guards making "
+        "the same claim through the served path set already sit."
+    )
+
+
+def test_the_mount_assertion_reader_finds_the_guards_the_static_file_holds():
+    """The other half: a reader matching nothing would pass this file for ever.
+
+    Same argument as `test_the_synthetic_row_offends_no_rule` below -- a guard is two claims, what
+    it must say and what it must not. A floor rather than an equality, because the next milestone
+    adding a mount assertion is the case this rule exists for and must not have to restate a count
+    to add one. [M5.1 review cycle 4, M51-C4-COV-01]
+    """
+    found = _mount_guards_no_row_names(named=set())
+    assert len(found) >= 3, (
+        "the mount-assertion reader finds fewer than the three guards test_static_contracts.py "
+        "holds over what the application mounts, so the rule above is passing on a file it can "
+        f"no longer read: {found}"
+    )
+
+
 def test_the_synthetic_row_offends_no_rule(tmp_path):
     """The other half: a rule that always fires makes all eight cases above vacuous.
 
@@ -2386,7 +2606,12 @@ def test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publish
 # enumeration: a count published beside the ids it counts stays checkable at any later date, and a
 # count published alone is exactly the number decision 184 refuses. So a banner making this claim
 # owes the list, and the list is what this reads back against the map.
-_LEDGER_AMENDED = re.compile(r"\*\*(\d+|[A-Za-z]+) rows the map already had were amended in place")
+# Four alternations where the banner used to have one spelling, because a milestone that
+# amended ONE row cannot write this sentence in the plural and had its claim read by nothing.
+# The guard below that pair holds the sentence to this form. [M5.1 review cycle 1, M51-REV-REG-03]
+_LEDGER_AMENDED = re.compile(
+    r"\*\*(\d+|[A-Za-z]+) rows? the map already (?:had|carried) (?:were|was) amended in place"
+)
 _LEDGER_AMENDED_LIST = "named so an auditor can check each rather than take the count:"
 # The ledger wraps its prose, so the phrase introducing the list is as likely to arrive with a
 # newline in it as not: matched word by word, and the plain string above is what the failure
@@ -2457,6 +2682,208 @@ def test_the_testing_ledger_names_the_rows_it_says_it_amended():
             "Restate the count against the list -- a number nobody re-derived is decision 184's "
             "defect, and this one was ten over an eleventh row."
         )
+
+
+# The sentence in any spelling, which is the population the banner above is a subset of. A banner
+# is bold, plural and says "had ... were", and M5.1 amended ONE row: there is no grammatical way to
+# write that claim in the guarded form -- "One rows the map already had were amended" is the only
+# sentence the old pattern matched -- so the milestone wrote the truth, named the row and disclosed
+# in its own text that it sat outside the form. All five clauses then ran on nothing: the id
+# `platform-compose-http-port-and-volumes` could have been renamed out from under the ledger, or
+# been a row on `current_milestone` (which the block counts separately), and the document would
+# have gone on reading as recorded. M5.2 through M5.7 are each sized to amend about one row, so the
+# blind spot was about to be six claims wide. The banner is widened to the singular rather than the
+# prose bent to the plural, which is this tree's own idiom: a row is repaired by widening its guard
+# rather than by narrowing its claim.
+#
+# SCOPED TO `current_milestone`, and the limit is named rather than left to be discovered. Two
+# older blocks state the claim outside any banner -- M4.16's "Two rows the map already had are
+# amended in place" and M4.13's "Seven rows ... were amended in place", both unbolded -- and
+# bringing them in scope means retro-fitting id lists into closed milestones' blocks, which is a
+# different change from this one. What this holds is that the milestone whose block is being
+# written NOW states it in the form the guard reads. [M4.14's m414-c2-dim-record-03 guard;
+# M5.1 review cycle 1, M51-REV-REG-03]
+_LEDGER_AMENDED_ANY = "amended in place"
+
+
+def test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard():
+    """The guard above is a conditional, and a claim it cannot see satisfies it for free.
+
+    `docs/TESTING.md` said "One row the map already carried was amended in place rather than
+    duplicated, named here rather than counted in the banner form the blocks below use, because
+    that form is a plural and this is one row" -- true, complete, and matched by nothing. The
+    count-against-list, the ids-are-rows-this-map-holds, the none-of-them-is-on-current-milestone
+    and the each-names-a-test clauses all skipped, so the one protection against an id renamed out
+    from under the ledger was not running. CLAUDE.md sends the next reader to this file "rather
+    than assuming status", and what that reader does with the sentence is reconcile it against the
+    map. [M5.1 review cycle 1, M51-REV-REG-03]
+    """
+    text = LEDGER.read_text(encoding="utf-8")
+    blocks = [(match.start(), match.group(1)) for match in _LEDGER_BLOCK.finditer(text)]
+    opens = [start for start, name in blocks if name == CURRENT]
+    assert len(opens) == 1, (
+        f"docs/TESTING.md opens {len(opens)} blocks named {CURRENT} at the start of a line in "
+        "bold, and this guard reads the one the milestone is writing now"
+    )
+    start = opens[0]
+    end = min([s for s, _ in blocks if s > start], default=len(text))
+    unread = [
+        paragraph.strip().splitlines()[0]
+        for paragraph in text[start:end].split("\n\n")
+        if _LEDGER_AMENDED_ANY in paragraph and not _LEDGER_AMENDED.search(paragraph)
+    ]
+    assert not unread, (
+        f"docs/TESTING.md's {CURRENT} block claims a row was amended in place in a form the guard "
+        "over that claim cannot read, so the count, the ids and the tests behind it are checked by "
+        "nothing:\n  " + "\n  ".join(unread) + "\nWrite it as the banner: bold, '<count> row(s) "
+        f"the map already had/carried was/were amended in place', then '{_LEDGER_AMENDED_LIST}' "
+        "and the ids."
+    )
+
+
+def test_the_amended_rows_guard_reads_the_banner_a_one_row_milestone_writes():
+    """The sentence M5.1 shipped, in the form the widened pattern asks for.
+
+    Not an invented string: this is the claim that stood in the ledger, rewritten into the banner
+    rather than left outside it, and every clause of the guard has to survive the singular. The
+    count comes back as a number, the marker is found, and the one id is extracted -- which is the
+    whole reading M5.2 through M5.7 will each need. [M5.1 review cycle 1, M51-REV-REG-03]
+    """
+    banner = (
+        "**One row the map already carried was amended in place rather than duplicated,** named "
+        "so an auditor can check each rather than take the count: "
+        "`platform-compose-http-port-and-volumes`, M0's compose guard."
+    )
+    headline = _LEDGER_AMENDED.search(banner)
+    assert headline, (
+        "the amended-rows guard reads a plural banner only, so a milestone that amends ONE row -- "
+        "which each of M5.2 through M5.7 is sized to do -- publishes a count, a list and a set of "
+        "ids that nothing reconciles against this map"
+    )
+    assert _spelled(headline.group(1)) == 1
+    marker = _LEDGER_AMENDED_MARK.search(banner)
+    assert marker, "the singular banner carries the same marker phrase the plural one does"
+    assert _LEDGER_ROW_ID.findall(banner[marker.end():]) == [
+        "platform-compose-http-port-and-volumes"
+    ]
+
+
+# --- M5.1 review cycle 4: the amended-rows list, re-derived off the map rather than trusted -----
+#
+# The guard above holds the COUNT to the LIST and cannot hold either to the map, for the reason its
+# own docstring gives: "amended" is a fact about a diff, and the diff stops existing the moment the
+# milestone commits. That is true of a diff and false of THIS map, because a row another milestone
+# changes is changed together with its provenance -- `[M5.1 review cycle 2, M51-REG-JOBS-02]`
+# beside the ids it added, or "M5.1 review cycle 1 found ..." inside the `why` it rewrote -- and
+# the mark survives the commit exactly as the row does. Measured over the tree this was written
+# against: seven rows outside `current_milestone` carried M5.1's mark and the banner named three.
+# The four it left out are M4.10's registry row and three of M4.16's, every one of them amended by
+# a review cycle -- which is the case the banner's own closing sentence puts inside the count, "a
+# review cycle's amendments are amendments like any other", stated and then not applied.
+#
+# ONE DIRECTION ONLY, and the limit is the point rather than an omission. A marked row must be
+# named; a named row need not be marked, because a milestone may change a row without leaving a
+# dated provenance line and the banner is still the honest place to say so. This is a floor under
+# the list and never a ceiling on it, which is what keeps it from fighting the count guard above
+# over rows neither of them can see. An empty mark set is a legitimate answer -- a milestone that
+# touched no row it does not own -- and the reader test below is what keeps the reading itself
+# exercised in that case, which is the pairing the conditional guard above already needed.
+#
+# Read from `[[requirement]]` to the next one, which files a trailing comment with the row it
+# follows: this map's own layout, and the reason the mark is looked for in the row's SOURCE rather
+# than in its parsed fields, since three of the seven carry it in a comment `tomllib` drops.
+# [decision 184; M4.14's m414-c2-dim-record-03 guard; M5.1 review cycle 4, M51-C4-LEDGER-01]
+_MAP_ROW_HEAD = re.compile(r"^\[\[requirement\]\]\s*$", re.M)
+_MAP_ROW_FIELD = re.compile(r'^(id|milestone) = "([^"]+)"', re.M)
+
+
+def _rows_this_milestone_marked_as_amended() -> dict[str, str]:
+    """Every row outside `current_milestone` whose source carries this milestone's review cycle.
+
+    The milestone name is read with a boundary of its own, for `_current_milestone_blocks`' reason
+    one file over: `\\b` counts the dot as a boundary, so `M5.1` would match inside `M5.10`.
+    """
+    text = MAP.read_text(encoding="utf-8")
+    mark = re.compile(re.escape(CURRENT) + r"(?![\d.])[^\n]{0,40}?review cycle")
+    heads = list(_MAP_ROW_HEAD.finditer(text))
+    marked: dict[str, str] = {}
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(text)
+        block = text[head.start():end]
+        fields = dict(_MAP_ROW_FIELD.findall(block))
+        hit = mark.search(block)
+        if hit is None or "id" not in fields or fields.get("milestone") == CURRENT:
+            continue
+        line = text[: head.start() + hit.start()].count("\n") + 1
+        marked[fields["id"]] = f"{fields.get('milestone', '?')}, spec_coverage.toml:{line}"
+    return marked
+
+
+def _rows_the_current_block_says_it_amended() -> set[str]:
+    """The ids every amended-rows banner in `current_milestone`'s own ledger block names."""
+    text = LEDGER.read_text(encoding="utf-8")
+    blocks = [(match.start(), match.group(1)) for match in _LEDGER_BLOCK.finditer(text)]
+    opens = [start for start, name in blocks if name == CURRENT]
+    assert len(opens) == 1, (
+        f"docs/TESTING.md opens {len(opens)} blocks named {CURRENT} in bold at the start of a "
+        "line, and this guard reads the one the milestone is writing now"
+    )
+    end = min([start for start, _ in blocks if start > opens[0]], default=len(text))
+    named: set[str] = set()
+    for banner in text[opens[0]:end].split("\n\n"):
+        if not _LEDGER_AMENDED.search(banner):
+            continue
+        marker = _LEDGER_AMENDED_MARK.search(banner)
+        if marker:
+            named.update(_LEDGER_ROW_ID.findall(banner[marker.end():]))
+    return named
+
+
+def test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended():
+    """The floor under that list, and the one thing this map can still prove about a diff.
+
+    `docs/TESTING.md` published "Three rows the map already had were amended in place" over a map
+    in which seven rows outside M5.1 carried M5.1's own review-cycle provenance, and the four left
+    out are exactly the ones a later auditor cannot reconstruct: three are disclosed only
+    obliquely, inside a closed milestone's block as "three of them M5.1's review cycle 3", and the
+    fourth sits on M4.10, whose block publishes no id total for any instrument to hold. The count
+    guard above stayed green because three equals three, which is the ambiguity every ledger guard
+    here exists to remove -- an auditor counts the map, reads the ledger, and cannot tell a stale
+    sentence from a row amended and never recorded.
+
+    Scoped to the block being written now, for the reason the conditional guard above is: another
+    milestone's block naming a row does not record what THIS one did to it.
+    [M4.14 review cycle 2: m414-c2-dim-record-03; M5.1 review cycle 4, M51-C4-LEDGER-01]
+    """
+    marked = _rows_this_milestone_marked_as_amended()
+    named = _rows_the_current_block_says_it_amended() if marked else set()
+    unrecorded = sorted(f"{row} ({where})" for row, where in marked.items() if row not in named)
+    assert not unrecorded, (
+        f"these rows carry a {CURRENT} review cycle's provenance in spec_coverage.toml and no "
+        f"amended-rows banner in {CURRENT}'s docs/TESTING.md block names them:\n  "
+        + "\n  ".join(unrecorded)
+        + "\n\nA row this milestone changed and the ledger does not count is the defect the "
+        "banner exists to make checkable, and a count restated without the ids is the half "
+        "nobody can re-derive. Add each to the list after "
+        f"'{_LEDGER_AMENDED_LIST}' and restate the count against it."
+    )
+
+
+def test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing():
+    """The reader's two ends, on the two shapes this map actually writes.
+
+    A row re-pointed at a sub-milestone says "as M5.1 opened": the milestone key moved and the
+    claim did not, and the ledger counts those eleven separately, so it is not an amendment in the
+    banner's sense. A row that gained a guard says "M5.1 review cycle N" and is. The distance
+    bound is what keeps the two apart, and the boundary is what keeps `M5.10` out.
+    [M5.1 review cycle 4, M51-C4-LEDGER-01]
+    """
+    mark = re.compile(re.escape("M5.1") + r"(?![\d.])[^\n]{0,40}?review cycle")
+    assert mark.search("    # protected left alone. [M5.1 review cycle 2, M51-REG-JOBS-02]")
+    assert mark.search("# M5.1 review cycle 1 found the same class one document further out")
+    assert not mark.search('# Re-pointed from "M5" to M5.4 as M5.1 opened: decision 321 splits')
+    assert not mark.search("# `_at_or_before(current_milestone)`, M5.5 sorts after M5.1, and")
+    assert not mark.search("# M5.10 review cycle 1 found something else entirely")
 
 
 # "**21 ids** written against the plan's own rows, **3 ids** registered by the stages ..." -- the
@@ -2744,6 +3171,122 @@ def test_the_register_block_opens_with_the_number_of_decisions_it_holds():
         "and disclose the later sittings inside the sentence the way the 2026-09-10 block does "
         "for its eleventh:\n  " + "\n  ".join(drift)
     )
+
+
+# --- M5.1 review cycle 4: a number is spent once, by the milestone the roadmap files it under ---
+#
+# `docs/milestones/ROADMAP-M5.md` numbers M5's open questions from 321 and files each against the
+# milestone that must answer it, and this wave's practice is that the question's number IS the
+# decision's number: 332, 336, 340 and 345 were transcribed into the register under exactly the
+# numbers that table gives them. M5.1's closing sitting then took 346 for the drain's per-tick
+# bound -- the first number nothing above it had spent -- while the table files 346 against M5.3,
+# for decision 171's owed §4.3 and §10 amendment, and `docs/milestones/M5.3-plan.md` is bound to
+# record it under that number in a file no agent may edit.
+#
+# What that costs is silence rather than a red build, which is why it needed a guard rather than a
+# reading. `_register_entries` keys its entries by number, so a second `### 346.` would replace the
+# first and every citation of 346 in the tree -- the coverage map's, this file's, two in
+# `test_worker_schedule.py` -- would resolve against a rule about `dna_vocab/v1/` while staying
+# green, because `_is_a_decision` admits any number at or above 162 without opening a file. The one
+# thing that would redden is the register's heading COUNT, in M5.3's lane, with a message about the
+# file's size. The register's own M5.1 preamble states the harm in the words this guard enforces:
+# a number is taken by the owner, not reserved by a planner, and a number written twice is two
+# normative rules under one heading.
+#
+# The OWNER CELL and not the question: a question may name a milestone in passing, and the last
+# cell of the row is where the table files it. A cell naming no milestone at all -- 321's
+# "everything", 331's "all seven" -- allocates nothing and is skipped, as is a sitting header from
+# before the milestone names went into them. [M5.1 review cycle 4, M51-C4-REG-01]
+ROADMAP_M5 = REPO / "docs" / "milestones" / "ROADMAP-M5.md"
+_ALLOCATION_ROW = re.compile(r"^\|\s*\*\*(\d{3})\*\*\s*\|(.*)\|\s*$", re.M)
+_ALLOCATED_TO = re.compile(r"\bM\d+(?:\.\d+)?\b")
+
+
+def _numbers_the_roadmap_files_elsewhere(text: str) -> dict[int, frozenset[str]]:
+    """Every decision number the M5 roadmap's tables file against a named milestone."""
+    allocated = {}
+    for row in _ALLOCATION_ROW.finditer(text):
+        owners = frozenset(_ALLOCATED_TO.findall(row.group(2).rsplit("|", 1)[-1]))
+        if owners:
+            allocated[int(row.group(1))] = owners
+    return allocated
+
+
+def _sitting_of_each_decision() -> dict[int, str]:
+    """Every register decision, with the header of the `## Decisions taken` block holding it."""
+    body = REGISTER.read_text(encoding="utf-8")
+    heads = list(_REGISTER_BLOCK.finditer(body))
+    held = {}
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
+        for decision in _REGISTER_DECISION.finditer(body[head.end():end]):
+            held[int(decision.group(1))] = head.group(0).strip()
+    return held
+
+
+def test_the_register_spends_no_number_another_milestone_is_bound_to():
+    """An unspent number is a reservation the owner may still fill; a spent one is not.
+
+    M5.1 recorded the drain's per-tick bound as `### 346.` over a roadmap that files 346 against
+    M5.3 and an M5.3 plan bound to transcribe it there, and nothing in the tree could say so: the
+    register's two hole enumerations and `docs/TESTING.md`'s both list every number M5.1 left
+    unspent and omit 346, which is the same reading made three more times. The collision is silent
+    until the milestone that owns the number opens, and it surfaces there as a count -- in a lane
+    that did not cause it, over a file it may not renumber, because an agent may not edit a plan.
+
+    Held against the roadmap's own allocation because this milestone's code already treats that
+    file as authoritative for the same wave: `test_acquire_pipeline.py` pins the ten stages'
+    owners with "The owners are `ROADMAP-M5.md`'s allocation of the work and not a guess". Taking
+    it as binding for stage ownership and optional for numbering is the inconsistency.
+    [row `platform-the-proposal-ledger-counts-itself`; M5.1 review cycle 4, M51-C4-REG-01]
+    """
+    allocated = _numbers_the_roadmap_files_elsewhere(ROADMAP_M5.read_text(encoding="utf-8"))
+    assert allocated, (
+        f"{ROADMAP_M5.relative_to(REPO).as_posix()} files no numbered question against a named "
+        "milestone any more, so this guard reads nothing. Either its tables changed shape or the "
+        "allocation moved, and the rule comes out with the thing it was holding."
+    )
+    spent = []
+    for number, header in sorted(_sitting_of_each_decision().items()):
+        owners = allocated.get(number)
+        holder = set(_ALLOCATED_TO.findall(header))
+        if owners is None or not holder or owners & holder:
+            continue
+        spent.append(
+            f"decision {number} is headed under `{header}` and "
+            f"{ROADMAP_M5.relative_to(REPO).as_posix()} files it against "
+            + ", ".join(sorted(owners))
+        )
+    assert not spent, (
+        "the register spends a number another milestone's plan is bound to record:\n  "
+        + "\n  ".join(spent)
+        + "\n\nThe milestone that owns it cannot renumber its own citation, because an agent may "
+        "not edit a plan -- so the day it opens the register holds two `### N.` headings under one "
+        "number, `_register_entries` keeps the later one, and every citation in the tree resolves "
+        "against the wrong rule while staying green. Take the next number no plan claims, and add "
+        "this one to the hole lists that say which numbers are unspent."
+    )
+
+
+def test_the_allocation_reader_reads_the_owner_cell_and_not_the_question():
+    """Both ends, because either mistake here is a guard that reports the wrong milestone.
+
+    A question may name a milestone in its own text -- 322's asks whether the queue is
+    `acquisition_job`, which M5.1 builds -- and the cell that FILES it is the last one. A row that
+    files against no milestone at all is 321's "everything" and 331's "all seven": those bind
+    nobody and must not be read as binding the first `M`-shaped token on the line.
+    [M5.1 review cycle 4, M51-C4-REG-01]
+    """
+    read = _numbers_the_roadmap_files_elsewhere(
+        "| # | question | owner |\n"
+        "|---|---|---|\n"
+        "| **321** | Does M5 ship as one milestone or as M5.1-M5.7? | everything |\n"
+        "| **332** | Where does `/events/jellyfin`'s token live? | M5.1/M5.2 |\n"
+        "| **346** | Decision 171's spec amendment. M5.3 touches those clauses | M5.3 |\n"
+    )
+    assert 321 not in read
+    assert read[332] == frozenset({"M5.1", "M5.2"})
+    assert read[346] == frozenset({"M5.3"})
 
 
 # The owed device checks in `docs/TESTING.md`: the bullets, and the signature line under them.

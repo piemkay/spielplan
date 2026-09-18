@@ -123,7 +123,18 @@ APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "job_run", "titl
 # carries what a restore does there. Said unconditionally here until M4.16 cycle 4.
 GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
 
-EXCLUDED = USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE | GENOME_NOT_IMPORTED
+# 0024_acquisition's three tables, and they are APP_STATE's reason one milestone on rather than a
+# new one. `acquisition_task` is work THIS box has queued against ITS Jellyfin library, keyed on
+# that server's item ids; `fetch_host_state` is this box's robots cache and its own circuit
+# breaker's memory; and `raw_document` points at files under /data/raw, which the archive does not
+# carry and which a restore into another install would therefore name and not have. The archive is
+# the corpus - title, person, DNA, reviews, meta - and none of these three is corpus. Carrying them
+# would promise a household a crawl history it never ran and a raw store it does not hold.
+# [decisions 322, 340, 345; M5.1]
+ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
+
+EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
+            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE)
 
 
 # --- the postgres client binaries -------------------------------------------------------------

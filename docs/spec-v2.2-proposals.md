@@ -7,14 +7,15 @@ surface by surface, with an adversarial pass over every claimed divergence.*
 **Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
 there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
 amended in place, recording each wave as a dated point release in its own Status block. This
-file holds 303 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+file holds 316 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
 the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
-numbered owner decisions** - 142 of them, the latest 288-320 - and each is normative from the
+numbered owner decisions** - 155 of them, the latest 321-361 - and each is normative from the
 day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
 wave was folded into that file on 2026-09-03 and this one on 2026-09-17. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
-on 2026-09-04, and 228-233 were reserved and never spent. Seven of the proposals were settled
+on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
+decomposition leaves unspent between 321 and 361 for the sub-milestones that own them. Seven of the proposals were settled
 by the owner on 2026-08-29 and are indexed in the first decisions block below rather than
 numbered separately: six carry a **Decided (owner, 2026-08-29)** line inline, and the seventh
 (54) replaced the question with a redesign, written up as §6.2 — Tonight, rewritten. Proposals
@@ -6083,7 +6084,7 @@ everywhere the suite looks.
 
 ## Decisions taken (owner, 2026-09-17, as M4.16 opened)
 
-Sixteen, 288 through 303, taken as M4.16 opened — the milestone's range runs to 320, because
+Sixteen, 288 through 303, taken as M4.16 opened — M4.16's range runs to 320, because
 review cycles 1 through 4 took seventeen more in blocks of their own below — under the owner's standing
 instruction to take each
 plan's recommended option and record it here rather than ask. M4.16 is the last milestone before
@@ -7279,6 +7280,521 @@ practicable, section 4.7 becomes the false record, and the two come out in one c
 decision 307's polarity, which section 5.4 already uses. Nothing about the five notices, the owed
 logo slot (decision 298) or the block's placement (decisions 293 and 318) changes. M5 inherits the
 clause with a number attached rather than with nothing.
+
+---
+
+## Decisions taken (owner, 2026-09-17, as M5.1 opened)
+
+Eight, taken as M5.1 opened, under the owner's standing instruction to take each plan's
+recommended option and record it here rather than ask. The milestone's range runs to 361, so the
+register's M5.1 range is 321-361, the last three taken as it closed and the last two in its fourth
+review cycle, each recorded in a sitting of its own below - and unlike M4.16's it is deliberately
+full of holes. 324-330, 333-335, 337-339, 341-344 and 346 are argued in
+`docs/milestones/ROADMAP-M5.md` and in the six sibling plans, and each belongs to the milestone
+that owns the step it blocks. They stay unspent here, for 228-233's reason one wave on: a number
+is taken by the owner, not reserved by a planner, and a number written twice is two normative
+rules under one heading; 350-359 are the same rule inside one cycle, left unspent for the sibling
+review groups working it. M5.1 takes the four that block its own first commit and its migration
+(321, 322, 323, 331) and the four the plan marks takeable as it executes but whose answers its
+code would otherwise have to guess (332, 336, 340, 345).
+
+M5.1 holds `current_milestone`, which is why this block is written at all rather than left to the
+milestone that writes the code: the scalar, `MILESTONES`, the eleven pre-written `milestone = "M5"`
+rows, §12's table and this register are one editing surface, and M4.16's own preamble states the
+reason a wave holds it alone - a conflicted paragraph in a normative document is not a merge
+conflict but two readings of a requirement, and the loser is silently correct. Six other lanes are
+blocked on this one, and every one of them will cite these numbers.
+
+Three of the eight amend `docs/spielplan-spec_v2.1.md` (323, 331, 340) and are folded into the
+2026-09-17 point release as its fifth sitting, beside M4.16's opening and its four review cycles.
+That is the file's own mechanism rather than a new one: decision 288 makes the dated point release
+the single join between this register and the normative text, the guard that holds it reads a wave
+by its DATE, and these amendments were made on the same date as M4.16's. A second dated line
+stamped 2026-09-17 would leave that guard reading one of the two lines and reporting the other's
+decisions as unnamed. The counts M4.16 published stay as first taken, which is what every sitting
+before this one also did.
+
+### 321. M5 ships as a numbered set of seven rather than as one milestone
+
+**What the record says.** §12 gives M5 one row: Contents "Acquisition pipeline + admin connector UI
++ LLM layer + extraction flywheel", criterion "a new Jellyfin add reaches 'ready' unattended".
+`MILESTONES` in `backend/tests/test_spec_coverage.py` carries `"M5"` as one entry between `"M4.16"`
+and `"M6"`, and `backend/tests/spec_coverage.toml` carries eleven `milestone = "M5"` rows, every
+one of them with `tests = []` - which `docs/TESTING.md` prints as `M5 0/11 covered`.
+
+**Why it changes.** That row's Contents name four subsystems and its criterion can be closed while
+three of them are absent. "Unattended" means nobody opens the admin view, so a build that satisfies
+the sentence ships with no flywheel, no connector UI, one provider, one pass, and the validator's
+retry path never executed; `docs/milestones/ROADMAP-M5.md` enumerates fourteen such items under
+"The exit criterion is not a gate". The measured port surface is about 7,975 corpus lines plus
+genuinely new code, against M4.14's 5,558 production lines - four to six M4.14s behind one gate.
+And the splitting mechanism is not a new idea being tried here: it is built, and it has been
+exercised eleven times between M4.5 and M4.16.
+
+**The decision.** Seven: M5.1 through M5.7, inserted into `MILESTONES` between `"M4.16"` and
+`"M5"`, with the eleven existing `milestone = "M5"` rows re-pointed at the sub-milestone that owns
+each. `"M5"` itself STAYS in the list as the umbrella §12 names, holding the amended criterion
+decision 331 settles; a row may be filed at `"M5"` only if it is measured by
+`ops/m5_exit_criterion.py`.
+
+**Cost.** The `MILESTONES` edit is positional and not alphabetical: `_at_or_before` asks
+`MILESTONES.index`, so the seven names go between `"M4.16"` and `"M5"` by position, and the
+umbrella must sort AFTER its parts or a row filed at `"M5"` reads as shipped while one of its parts
+is still current. `current_milestone = "M5.1"`, the `MILESTONES` edit and at least one M5.1 row
+land in ONE commit, or `covered != set(MILESTONES)` is red for every lane - the M4.6 rule,
+unchanged. Because all eleven pre-written rows are re-pointed away, `"M5"` is left holding zero
+rows and `test_every_milestone_is_represented` goes red, so this decision's own last clause forces
+the umbrella row `jellyfin-acquisition-eval-a-new-add-reaches-ready-unattended`, which M5.1 adds
+with no `tests` key: M5 sorts after M5.1, so it is not yet owed one, and its red gate belongs to
+whoever closes the umbrella. Seven §12 rows instead of one, each written by the milestone that
+opens it (decision 331). What is given up is the simplicity of one row; what is bought is seven
+sentences a person can fail.
+
+### 322. The acquisition queue is a new table; `acquisition_job` stays the board
+
+**What the record says.** §8's preamble names "durable `(kind,key)` queue" as ported skeleton. §6.6
+names "acquisition pipeline monitor (per-title stage board from `acquisition_job`)".
+`0005_ledger.sql` declares that board as `acquisition_job(title_id integer PRIMARY KEY REFERENCES
+title(id) ON DELETE CASCADE, stage smallint, status text, detail jsonb, reason text, retry_after
+timestamptz, updated_at timestamptz)`, with `status` CHECKed against
+`queued|running|parked|ready|failed`.
+
+**Why it changes.** `title_id` is the PRIMARY KEY, so one title holds at most one job ever. That
+forecloses a re-added title's fresh job, a flywheel re-extraction of a title already at stage 10,
+and every form of job history - while stage 6's "never auto-retries past the spend cap" and stage
+4's 30-day review-accrual window both need a history this shape cannot hold. The foreign key means
+a job cannot exist before its title row does, and stage 1's job is precisely what mints the title:
+`connectors/resolve.py` refuses to mint and says so in as many words, that an unresolved item is
+reported and never invented and that acquiring genuinely new titles is §8's pipeline, arriving at
+M5. And the table is not empty on a real install: `placement/reconcile.py`'s `_park_thin` has been
+inserting `(stage = 2, status = 'parked')` rows with `ON CONFLICT (title_id) DO NOTHING` since
+M4.13's sweep, which §5.3 promises in its own words - thin titles "are still placed, badged, and
+parked as acquisition jobs for M5 enrichment".
+
+**The decision.** Keep `acquisition_job` exactly as §4.2 and §6.6 describe it, untouched by `0024`,
+and add a separate `acquisition_task(kind, key, payload, priority, state, attempts, max_attempts,
+next_attempt_at, lease_owner, lease_expires, last_error, result_note, paid, created_at,
+updated_at)` with `UNIQUE (kind, key)` - the port of `mdc/queue.py`, whose identity is `(kind,
+key)` and whose recovery is "by lease expiry, not by any shutdown handler - which is the only way
+that actually survives `kill -9`". The task is keyed on the Jellyfin item or the provider id, so it
+can hold work for a title that does not exist yet; stage 1 mints the `title` row and the board row
+appears then. Superseded runs are appended to `acquisition_job.detail`; there is no
+`acquisition_run` table at M5.1.
+
+**Cost.** One more table and one more concept on the Data tab, and the shape is fixed the moment
+`0024` is applied, because a migration is sha256-checksummed and a mismatch is a hard startup
+error. What is bought is that `acquisition_job` is NOT reshaped: there is no create-copy-drop, the
+CASCADE that `test_schema_contracts.py` pins is preserved untouched, and `backup/movie_data.py`'s
+table list needs no change. `acquisition_task` carries NO foreign key to `title`, and that absence
+IS the decision rather than an oversight a later agent should repair. The `paid` flag is a refusal
+and not decoration: the corpus carries it on every handler spec because "at corpus scale the
+difference between them is roughly a hundred euros a click", and a generic drain that ignored it
+would make that mistake on the first tick after M5.5 lands.
+
+### 323. Stage 1 mints only on a provider id
+
+**What the record says.** §8 stage 1 is "identify | Jellyfin ProviderIds -> title row
+(fill-never-clobber)". §4.1: "every later id is Spielplan's, minted at or above 1e9 and below
+2^31", implemented as `title_id_seq` with `MINVALUE 1000000000` in `0015_seed.sql`, whose own
+comment names "§8 stage 1" as the write path the partition backstops.
+
+**Why it changes.** Nothing says what identity a MINTED row gets when Jellyfin supplies only a name
+and a year, and `ops/fake_jellyfin.py` ships exactly such an item - "Tampopo", with an empty
+`ProviderIds`. `connectors/resolve.py` refuses a name-and-year match and states the measurement it
+refuses on: 2,438 titles share `(kind, lower(name))`, and 573 groups still collide with the year
+applied. A row minted off a name and a year is that same wrong match, written instead of refused -
+and written into the content spine, which decision 162 seeds once.
+
+**The decision.** Stage 1 mints only on a provider id (imdb/tmdb/tvdb). An item carrying none is
+parked at stage 1 with the reason "no provider id" and is an admin's problem. §8's stage-1 line
+gains that clause in the normative file, so the behaviour is falsifiable rather than inferred.
+
+**Cost.** Titles Jellyfin cannot identify never acquire automatically, and the household sees them
+only on the admin board. That is the honest outcome: the alternative writes a wrong `is_owned`, a
+wrong `owned_checked_at` and a dead deep link onto a film the household does not have, and nothing
+ever revisits it. It drives stage 1's implementation, `ops/m51_exit_criterion.py`'s check 8 -
+`acquisition_job` at stage 1 with that reason, and `count(*) FROM title WHERE origin = 'acquired'`
+unchanged - and the row
+`jellyfin-acquisition-eval-an-acquired-title-is-minted-placed-and-badged`. It also binds M5.2's
+trigger: an unidentifiable add parks rather than minting.
+
+### 331. §12's M5 exit criterion is amended in place to name its second half, and each sub-milestone writes its own §12 row when it opens
+
+**What the record says.** §12's M5 criterion is "a new Jellyfin add reaches 'ready' unattended".
+`docs/RELEASE.md` section 1 carries M5 as `NOT BUILT` / `none` / verdict unfilled.
+
+**Why it changes.** The fourteen items under `ROADMAP-M5.md`'s "The exit criterion is not a gate"
+show the shipped criterion closing over three absent subsystems. M4.11's, M4.12's and M4.14's rows
+all gained clauses in exactly this way, and the last two name their measuring script - "Measured
+end to end by `ops/m412_exit_criterion.py`, which refuses to run on a fixture pool" and
+"`ops/m414_exit_criterion.py`, thirteen numbered checks, which refuses to run on the fixture".
+
+**The decision.** Yes. Clause one stays verbatim and the row gains the clauses
+`ops/m5_exit_criterion.py` will measure - the flywheel's enqueue-and-launch, the spend cap's
+refusal, the two-attempt retry, the re-derive that keeps a curated correction, and the debounce
+that yields one job for a burst. Under decision 321 each sub-milestone also gets a §12 row in the
+shape M4.6, M4.7, M4.9-M4.12 and M4.14 use, WRITTEN BY THE MILESTONE THAT OPENS IT rather than
+pre-written here. M5.1 therefore makes exactly two §12 edits: the M5 row amended in place, and one
+new M5.1 row whose criterion names `ops/m51_exit_criterion.py`.
+
+**Cost.** The "written when it opens" half resolves an ambiguity the roadmap leaves. The plan says
+M5.1 holds the spec file, but M5.2's plan already amends §7.2 under the roadmap's unanswered
+question 327, which M5.2 is the milestone to take, so the file is
+held for THIS milestone's amendments rather than locked for the whole train; §7.2's ownership
+bullet is explicitly NOT amended here. Pre-writing six criteria for unbuilt milestones would
+publish measurements no run produced, which is decision 184's defect, and M5.1's own exit criterion
+implies only the row it can itself measure. §12 is amended in place (decision 288, never forked
+into a v2.2), and `docs/RELEASE.md`'s M5 section is restated so its "Criterion (§12, verbatim)"
+quotes the amended row, with an M5.1 section added in the file's existing shape and no invented
+measurement - `NOT BUILT`, no output file, an unfilled verdict. Adding a sixteenth row to §12 moves
+two figures that guards re-derive rather than read: the record's own row count, and the sentence in
+`spec_coverage.toml` that says how many build-order criteria have never been run. No guard requires
+a §12 row per milestone - M4.5, M4.8, M4.13, M4.15 and M4.16 have none - so the six absent
+sub-milestone rows redden nothing.
+
+### 332. `/events` is a namespace the SPA fallback declines, and its token is a connector secret
+
+**What the record says.** §7.2 puts `POST /events/jellyfin` under `/events`; §7.3 puts
+`POST /events/playback` there and decision 290 re-files it to M7; §11 puts the Home Assistant seams
+there too. `app.py`'s `SpaFallback.matches` returns `Match.NONE` only when the path is `api` or
+starts with `api/`, and the fallback route is registered `methods=["GET"]`.
+
+**Why it changes.** On a built container a `GET /events/jellyfin` therefore serves `index.html`,
+and a POST to any unrouted `/events/...` path is a PARTIAL match, which Starlette answers with 405
+rather than 404 - the exact failure
+`test_api_gating.py::test_the_spa_fallback_does_not_answer_for_the_api_namespace` was written to
+catch for `/api`, and the failure M4.6's own coverage row records as a regression that milestone
+introduced. Three sections put routes under `/events`, so it is a namespace and not one route, and
+the rule belongs beside the one it copies rather than as a second rule that can drift from it.
+
+**The decision.** `SpaFallback.matches` declines `events` exactly as it declines `api`, in one rule
+rather than two, and `api/events.py` is mounted empty at M5.1 for M5.2 to fill. The token for
+`POST /events/jellyfin` is a `connector_config` secret under `jellyfin`, generated at first save
+and displayed once in §6.6's Jellyfin card; a wrong token is 401; a `SECRETS_KEY` failure is 503
+naming `SECRETS_UNREADABLE_REASON`, which is M4.7's shape for every other secret-reading route. The
+existing `/api` gating test is EXTENDED rather than duplicated.
+
+**Cost.** M5.1 makes the routing change and mounts the empty router; M5.2 fills it and adds its
+`ANONYMOUS` entry with its reason, and because `test_route_inventory.py`'s untested set may only
+shrink, that route arrives with a test naming it. It fills the coverage row
+`platform-the-events-namespace-is-not-the-spa`, whose backend test asserts 404-and-never-405 and
+never the app shell. The token half is settled now rather than by M5.2 so that milestone has a
+clause to cite instead of a guess to make; nothing about §7.2's text changes here, because 327 is a
+question the roadmap files against M5.2 and nobody has taken yet.
+
+### 336. `parked` is waiting on something that may change; `failed` is a stage that raised and will raise again
+
+**What the record says.** §8 says "Failure at any stage parks the job with a reason, retryable from
+admin" and names only parking, while `acquisition_job.status`'s CHECK admits both `'parked'` and
+`'failed'`. `placement/reconcile.py` already writes `parked` with a different meaning again, and
+says so: "The title is ready - placed, badged, visible. It is the *job* that is parked, at §8 stage
+2 (enrich)."
+
+**Why it changes.** So the board today cannot distinguish "enriched me, I am fine" from "stage 6
+blew up", and the two need opposite treatment: one is waiting on a fact that may change and must
+never auto-fail, the other will raise again on every tick until somebody looks at it. The
+distinction is also what makes "paid stages never auto-retry past the spend cap" expressible before
+M5.5 exists, because a stage that refuses to run is not a stage that failed.
+
+**The decision.** `parked` means "waiting on something that may change" - the 30-day
+review-accrual window, the spend cap, thin-block enrichment, a bundle-less install - and never
+auto-fails. `failed` means "this stage raised and will raise again" and is the only state offering
+a plain retry. `reason` is shown verbatim on both. Proposal 109's three admin actions (retry stage
+/ retry from stage N / abandon) are adopted or struck by number under decision 330, which is
+M5.6's to take; M5.1 adds no admin action at all.
+
+**Cost.** It fixes the driver's park/fail split and the board's read side, and it re-reads the rows
+`_park_thin` has been writing since M4.13 as the pipeline's INBOX rather than as a backlog of
+failures - which is what they always were, and what the driver must treat them as, without ever
+relying on the nightly sweep to advance anything. `ops/m51_exit_criterion.py`'s check 8 asserts the
+status per this decision. The paid stage's refusal is a park rather than a failure, which is the
+half M5.5 will build against.
+
+### 340. §8's fetcher honours robots.txt and carries a declared User-Agent
+
+**What the record says.** §8's preamble names "per-host rate-limited HTTP layer" as ported
+skeleton, and stage 2 names two scraped sources, `rt:page` and `metacritic:page->reviews`. The
+normative file mentions neither robots.txt nor a User-Agent anywhere.
+
+**Why it changes.** The ported layer already carries the politeness - `mdc/http.py`'s own docstring
+lists "robots.txt fetch + honouring, per host, cached in the DB", a per-host token bucket and
+concurrency cap, a circuit breaker, conditional requests via stored ETag / Last-Modified, and
+retry with backoff and jitter honouring `Retry-After` - and `mdc/config.py`'s `HOST_POLICIES` runs
+Rotten Tomatoes and Metacritic deliberately slowly at `rps=0.7`, burst 1, concurrency 1, with a
+900-second breaker cooldown. This app's only outbound HTTP today is a bare `httpx.AsyncClient` per
+call in `connectors/jellyfin.py`, with no retry, no backoff, no rate limit and no breaker. So this
+is not a defect to fix; it is a clause to add, so a reviewer can fail the behaviour rather than
+debate it.
+
+**The decision.** Yes, and §8 gains the clause. The fetcher declares a User-Agent naming the app,
+honours robots.txt per host with the response cached in Postgres, and carries per-host rate and
+concurrency policies as data - including documented overrides with their reasoning, and the
+household's own Jellyfin exempted because it is not a third party.
+
+**Cost.** `0024` gains the robots cache; `acquire/hosts.py` carries the measured policies as config
+readable by §6.6, with no editor - an editor is M5.7's territory and is not in M5.1's scope at all.
+`RobotsDisallowed` is a non-retryable typed failure, which is the one failure shape a retry loop
+must not treat as transient. The corpus's documented `www.wikidata.org` override is restated with
+its reasoning rather than copied silently: Wikimedia's robots.txt disallows `/w/` to keep crawlers
+off the expensive script endpoints, the sanctioned batched action API sits under it, and the corpus
+recorded that the default check parked every `wikidata:entity` task and lost the awards, box-office
+and country claims entirely. The Jellyfin exemption is the same judgement from the other side - the
+household's own server, reached with the household's own key, ships a restrictive robots.txt that
+would otherwise block the owned-library sync. Feeds the coverage row
+`jellyfin-acquisition-eval-the-fetcher-is-polite-per-host`.
+
+### 345. §6.6's board shows the `raw_document` row, never the bytes, and `/data/raw` is not re-mounted on the backend
+
+**What the record says.** §1 names `/data/raw` among the volumes and §8 promises that "All fetched
+bytes land in the app's own raw store, so re-parsing is free forever". `docker-compose.yml` mounts
+`./data/raw:/data/raw` under the worker's anchor and states why the backend's anchor omits it:
+"nothing in the backend reads /data/backups or /data/raw at all, and a file that is not in the
+container cannot be served out of it. [M4.7 sec-08]". `test_static_contracts.py` pins that list
+against the nightly DUMPS and against nothing else - its one rule over the backend's anchor is
+`_backend_mounts_holding_the_dumps` - so `/data/raw` sat in the compose file with nothing in the
+tree asserting its absence from the backend at all, which is what makes this a clause M5.1 owes
+rather than one it inherits.
+
+**Why it changes.** §6.6's admin board is served by the backend, and M5.1 is the first milestone to
+put anything under that mount at all. A board that rendered the stored bytes would require
+re-mounting the raw store on the process that serves requests, which is exactly the custody
+boundary M4.7 drew on purpose, and it would be drawn back by a feature nobody asked for: the
+questions the board actually asks - which url, what status, which sha256, how many bytes, fetched
+when - are all answered by a row in Postgres.
+
+**The decision.** It does not show the document. The board links to the `raw_document` metadata row
+and the bytes are reachable only by an operator on the box. M4.7's sec-08 stands:
+`x-backend-volumes` keeps omitting `/data/raw`, and this milestone is what starts pinning it:
+`test_acquire_rawstore.py::test_the_backend_container_cannot_open_what_this_module_writes`, with
+the two self-tests that feed it `- ./data:/data` and the store delivered under another container
+path. `test_static_contracts.py` is not that guard and never was, and this sentence said twice
+that it is - which pointed the milestone the paragraph below binds, M5.6, at a file that would
+have stayed green while the mount moved. Corrected in place, both sentences, and held by
+`test_the_record_names_the_guard_that_actually_pins_this_mount`, since a citation nothing reads
+is how it went wrong in the first place. [M5.1 review cycle 3, M51-C3-345-02]
+
+**Cost.** M5.1 becomes the mount's first user without moving it; `api/acquisition.py` reads
+Postgres only, which is also what keeps its `ALLOWED_RESIDUE` entry honest; and the rawstore module
+states the boundary where it is enforced, citing `docker-compose.yml`'s own paragraph and decision
+181. `ops/m51_exit_criterion.py`'s check 9 measures it from outside - `exec backend ls /data/raw`
+fails and `exec worker ls /data/raw` succeeds - and it is one of the two checks that cannot run in
+a lane with no Docker, so it reports "not measured here" rather than a false pass. It also binds
+M5.6's board work: an admin action added there may not become a reason to move the mount.
+
+---
+
+## Decisions taken (owner, 2026-09-17, as M5.1 closed)
+
+Three, taken as M5.1 closed, under the same standing instruction as the eight above - the plan's
+recommended option, taken rather than asked. They are not in that block because they were not taken
+at the opening: each is a call the plan's own exit criterion implies and that the code had to make
+in order to satisfy it, so they are recorded in a sitting of their own rather than back-dated into
+the one that scheduled them. None of the three amends `spielplan-spec_v2.1.md`. Like 322, 332, 336
+and 345 they mandate schema, scheduling and driver behaviour, and the sentences they implement -
+§5.3's budget rule and §8's "paid stages (6) never auto-retry past the spend cap" - are already in
+that file. The register's M5.1 range therefore runs to 349 rather than 345, and the holes 324-330,
+333-335, 337-339, 341-344 and 346 stay unspent for the sub-milestones that own them.
+
+**Why these three are 347-349 and not 346-348.** 346 is the first free number only if the
+roadmap's allocation is read as a wish. It is not: `docs/milestones/ROADMAP-M5.md` files 346
+against M5.3 - decision 171's owed §4.3 and §10 amendment, which never landed - and M5.3's plan
+is bound to record it under that number, in a file no agent may edit. Spending 346 here would
+put two normative rules under one `### 346.` heading the day that milestone opens, and the
+reader this file has - `_register_entries` keys its entries by number - would silently keep the
+later one, so every citation of 346 in the tree would resolve against a rule about
+`dna_vocab/v1/`. That is the harm the paragraph above names in the opening block's own words:
+a number is taken by the owner, not reserved by a planner, and a number written twice is two
+normative rules under one heading. 346 is therefore a hole like 324-330 - allocated, unspent -
+and this sitting takes the three lowest numbers no plan anywhere claims.
+[M5.1 review cycle 4, M51-C4-REG-01]
+
+### 347. The acquisition drain is §5.3's second documented exception to the sequential-loop budget, bounded per tick rather than by wall clock
+
+**What the record says.** §5.3 files the worker's scheduled jobs in a table with a budget column,
+and `backend/spielplan/worker.py`'s `JOBS` is that table in code: the registry §6.6's System card
+reads, and the one `api/admin.py` re-spells by hand so the web process never imports torch. §5.3
+lists the acquisition pipeline's two CONSUMERS - the Cold Tower's forward pass and the DNA
+projection - and never the thing that fires them, because §8 is where the pipeline is written down.
+The table's own rule is that a job's timeout fits under its interval, the loop being sequential.
+
+**Why it changes.** A ten-stage driver over a durable queue has no natural bound: "drain the queue"
+takes as long as the queue is. Stretching the timeout until a batch fits makes the budget a
+wall-clock guess that a busy queue invalidates, and because the loop is sequential every second it
+takes is a second §7.3's playback poll and both fits do not get. A per-kind worker pool would bound
+nothing and is what the milestone's own "What this milestone does NOT do" forbids. A third risk is
+quieter and was measured during the build: `api/admin.py` spells the job names by hand, and the
+drain had not been added there - so §6.6's System card would have gone on reporting a set that did
+not include a job that was running.
+
+**The decision.** Bound the WORK per tick and not the clock: `pipeline.DRAIN_LIMIT` tasks a tick,
+with the job registered in `worker.py`'s `JOBS` beside the two rows whose trigger column names it,
+carrying the same argued paragraph the bundle-import row carries - what the number is, what it sits
+under, and what a milestone that finds it binding owes next. No per-kind pool. The hand-written list
+in `api/admin.py` gains the name in the same change, because a registry the new work must join and
+did not is the defect this decision was taken over.
+
+**Cost.** The budget is three numbers that must stay in order and only one of them is this job's
+own: `DRAIN_LIMIT` tasks at the job's timeout must stay well under `queue.LEASE_SECONDS`, or the
+reaper hands a task to a second worker while the first is still walking it - two processes, one
+title, both writing into a spine decision 162 makes permanent. `test_acquire_drain.py` holds that
+pair the way `test_worker_jobs.py` holds the backup's budget against `pg_dump`'s own timeout. What
+the budget does NOT buy is one title placed: `DRAIN_LIMIT` bounds tasks, and stage 9's
+`reconcile(scope="app_acquired")` places the whole acquired set, so a tick's placement work is
+`DRAIN_LIMIT x |acquired|`. That is cheap while the set is small, it is empty on every install
+today, and it is written down at the line an operator reads as the budget rather than left to be
+discovered - the milestone that finds the ceiling binding is the one that owes a measurement.
+
+### 348. A paid stage refuses to run rather than running and billing; M5.1 owns the refusal, M5.5 owns the cap
+
+**What the record says.** §8: "Failure at any stage parks the job with a reason, retryable from
+admin; paid stages (6) never auto-retry past the spend cap." §8's stage 6 is `dna extract`, and no
+cap, no price table and no meter exists anywhere in this tree - those are M5.5's and M5.7's.
+
+**Why it changes.** A stage that runs and then consults a cap has already spent the money, so the
+sentence cannot be implemented by the stage that bills; it has to be implemented by the thing that
+decides whether to call it. M5.1 does not implement stage 6 and will never bill anyone. But the day
+`stages.dna_extract` gets a body is the day the gate has to already exist, and a gate retrofitted
+after that commit is a gate whose absence is discovered by the first drain that bills a household
+real money. The refusal is therefore M5.1's to own even though the cap is not.
+
+**The decision.** The `Stage` record carries a `paid` flag, `acquisition_task` carries a `paid`
+column, and the driver consults a gate BEFORE calling a stage. `refuse_uncapped_spend` is the
+default: it lets a declared no-op through, because a no-op cannot spend, and refuses an IMPLEMENTED
+paid stage while no cap is configured, parking with that reason under decision 336. A generic drain
+never leases a paid task. The refusal, and not the cap, is M5.1's deliverable.
+
+**Cost.** The gate is the one extension point this milestone publishes, so it sits inside
+`_run_stage`'s guard rather than above it: a cap that cannot be read is decision 336's `failed`
+exactly, and it is recorded as a stage outcome instead of escaping the driver. The flag is the
+seam's weak point and is named as one: `implemented` is a hand-written literal in `STAGES`, nothing
+in the tree ties it to whether the stage has a body, and a milestone that wrote the billing call and
+left the flag False would ship a stage that bills with the gate waved through.
+`test_acquire_pipeline.py` holds it by calling every stage declared a no-op and asserting each still
+returns its stub marker, which reddens on exactly that commit. M5.5 inherits a gate to fill rather
+than a gate to invent.
+
+### 349. The acquisition spine's three tables are excluded from the movie-data archive
+
+**What the record says.** §10's movie-data archive carries the corpus, restricted by decision 292
+and with decision 310's cadence struck. `backend/spielplan/backup/movie_data.py` names what it
+carries in a hand-written `TABLES`, and `backend/tests/test_backup.py` names the complement -
+`USER_STATE`, `SECRET_CUSTODY`, `BUNDLE_DERIVED`, `APP_STATE`, `GENOME_NOT_IMPORTED` - so that a
+table joining the schema is classified by someone rather than defaulted into whichever side it
+happens to land on.
+
+**Why it changes.** `0024_acquisition.sql` adds three tables, and the plan's own instruction is to
+check that list before assuming a restored archive still satisfies the new constraints. None of the
+three is corpus. `acquisition_task` is work THIS box has queued against ITS Jellyfin library, keyed
+on that server's item ids, which mean nothing on another install. `fetch_host_state` is this box's
+robots.txt cache and its own circuit breaker's memory. `raw_document` points at files under
+`/data/raw`, which the archive does not carry - so a restore elsewhere would name bytes the
+receiving install does not have, which is worse than not naming them at all.
+
+**The decision.** All three are EXCLUDED, beside `APP_STATE`, and the reason is recorded where the
+exclusion is rather than here alone. Carrying them would promise a household a crawl history it
+never ran and a raw store it does not hold.
+
+**Cost.** Nothing in the archive changes and nothing in the restore path changes, which is the
+point: the classification is made in the same wave as the migration rather than inferred later from
+an absence. The guard that holds it is the one that already fails when a table joins the schema
+unclassified, so the next M5 migration meets the same question at the same place.
+
+## Decisions taken (owner, 2026-09-18, M5.1 review cycle 4 second pass)
+
+Two, taken in M5.1's fourth review cycle under the same standing instruction as the eleven above -
+the recommended remedy, taken rather than asked. Both are refusals rather than features, and both
+are here because the finding that forced them showed the milestone writing into decision 162's
+one-way door on a premise that was not true: stage 1 read the resolver's "I will not guess" as
+"there is no such title", and the raw store asked a length question under a function named for an
+identity one. A fix that changes what a milestone WRITES is a decision even when it deletes
+behaviour rather than adding it, which is why neither is filed as a repair.
+
+**Why these are 360-361 and not 350-351.** The owner's instruction for this cycle set 360 as the
+floor and told each review group to take the next free number above it; 350-359 are left unspent for
+the sibling groups working the same cycle, on 228-233's rule that a number written twice is two
+normative rules under one heading. The register's M5.1 range therefore runs to 361, and the holes
+324-330, 333-335, 337-339, 341-344, 346 and 350-359 stay unspent.
+
+### 360. When stage 1 cannot tell an item from titles the spine already holds, it refuses to mint
+
+**What the record says.** Decision 323: a row is MINTED only on a provider id, and stage 1 resolves
+through `connectors/resolve.resolve_title_id` first. Decision 162: content seeds ONCE, and a bad
+write into the content spine can only be undone by dropping the database. §4.1 rule 6 bans the
+UNIQUE on provider ids that would otherwise refuse a duplicate.
+
+**Why it changes.** Decision 323 states a NECESSARY condition and stage 1 read it as a sufficient
+one. `resolve_title_id`'s fourth arm takes `LIMIT 2` and answers only for exactly one candidate
+(`connectors/resolve.py:161-179`), deliberately, because for a LOOKUP an arbitrary match is worse
+than no match and a refusal is merely reported. So its None means two different things - "the spine
+holds nothing like this" and "the spine holds several and I will not guess" - and the mint treated
+both as licence to write. Two measured consequences, neither of which a lock can close. Where the
+spine already holds two titles sharing `(kind, lower(name), year)`, two library copies of one film
+with disjoint provider ids both mint: the winner's own mint adds a candidate to that arm, so the
+loser of `_MINT_LOCK` comes back to an arm MORE ambiguous than the one it left. And the arm is
+DIRECTIONAL - it probes with the item's `Name` and compares against the candidate's `name`,
+`original_name` and aliases, while `_mint` WRITES `original_name` from the item's `OriginalTitle`,
+which is never a probe - so a German and an English copy of one film resolve in one ordering and
+mint twice in the other, with no concurrency at all. `connectors/resolve.py:155-160` measures the
+population on the corpus this resolves against: 2,438 titles share `(kind, lower(name))` and 573
+groups still collide with the year applied. `pipeline.enqueue_item`'s documented input is
+`ResolveReport.unmatched`, which `resolve.py:198` appends to on exactly that refusal, so the queue's
+input is enriched for the state by construction.
+
+**The decision.** Stage 1 asks the ambiguity question directly, after `resolve_title_id` has
+returned None and under the claim `identify` already holds, and PARKS rather than minting when the
+spine holds any title matching `(kind, year)` on either of the two names the mint would write.
+`_indistinguishable_titles` counts to a ceiling of two and returns no id: it is a refusal and never
+a second resolver, which the file header's property 2 forbids for the reason it gives - a second
+resolver here would disagree with the nightly sweep about which title a library item is. The park
+carries no deadline, in the family `NO_PROVIDER_ID` and `MALFORMED_PROVIDER_ID` already use, and
+names the lever: add a provider id in Jellyfin that the title carries, then revive the task.
+
+**Cost.** A household loses an acquisition where its item's name and year exactly match titles it
+already holds and no provider id matches any of them. That case is rare - an exact name AND an exact
+year - and it is reversible: a park is recoverable, by an operator editing Jellyfin today and by
+decision 330's revive at M5.6. A mint is not. Under decision 162 two rows above 1e9 for one film are
+permanent, both placed by stage 9's `app_acquired` scope and both badged onto Home's "New in the
+library" shelf, and nothing in the app can merge them. That asymmetry is the whole argument. The
+alternative considered and rejected was to widen the lookup - retry with `OriginalTitle` as the
+probe - which closes the second consequence and not the first, and which buys the disagreement with
+the sweep that property 2 exists to prevent. [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01,
+M51-C4-MINT-ORIGINAL-03]
+
+### 361. The raw store answers the digest on both sides of its door
+
+**What the record says.** §8: "All fetched bytes land in the app's own raw store, so re-parsing is
+free forever" (`spec:402`), which M5.1's exit criterion measures as checks 6 and 7. The store is
+content-addressed: `_relative_path` derives the destination from the SHA-256 of the raw content, so
+identical bytes resolve to a file that already exists and are not written again.
+
+**Why it changes.** Both sides of that door asked a cheaper question than the name of the thing they
+were guarding. `store`'s already-exists guard was `_is_whole`, which compared gzip's ISIZE trailer -
+the uncompressed length mod 2^32 - to the length of the bytes in hand. ISIZE is a claim about the
+INTENDED content, so a member whose deflate body is damaged while its length is not answers True;
+the rewrite is skipped, and because the digest names the destination, no later fetch of the same
+bytes can repair it. Every one adds another `raw_document` row pointing at a file that raises on
+every read, and the only repair is an operator reconstructing the path from the board's sha256
+column, because decision 345 keeps `content_path` off §6.6's board. `read` then guarded the re-parse
+on `len(data) != byte_size` and never consulted `content_sha256` - and `0024` makes
+`content_sha256 text NOT NULL` while leaving `byte_size` nullable, so the check stood on the one
+column the schema permits to be absent and ignored the one it guarantees. Measured: a valid gzip of
+a DIFFERENT document of the same length was handed back as this row's bytes.
+
+**The decision.** Both ask the digest. `_holds_the_document` decompresses the file already at the
+destination and compares its SHA-256 to the one that named it, rewriting on any mismatch and on any
+gzip, zlib or OS error; `read` hashes what it has decompressed and refuses anything that is not the
+document its row names, with the length test dropped because a digest that matches is a length that
+matches.
+
+**Cost.** One gunzip and one hash per RE-store of a document this install already holds, which by
+the module's own one-file-two-rows invariant is once per re-fetch, beside an HTTP request that has
+already cost more. The common path is untouched: a NEW document's file does not exist, so nothing is
+decompressed, which is what "the common path must not pay for the rare one" was protecting. One
+registered test changed shape rather than subject:
+`test_two_fetches_of_one_url_leave_one_file_and_two_rows` proved write-once by tampering with the
+file and reading the tampered bytes back, which required the store to be unable to tell - so the
+proof moved to the write block's only route to the disk. [M5.1 review cycle 4 second pass,
+M51-C4-RAW-03, M51-C4-RAW-04]
 
 ---
 

@@ -684,6 +684,90 @@ async def _placement_reconciliation() -> dict[str, object] | None:
         return report.as_dict()
 
 
+async def _acquisition_drain() -> dict[str, object] | None:
+    """§8's pipeline, driven. The one caller of `acquire.pipeline` in this process.
+
+    §5.3's table has no row for this and could not have one: it lists the pipeline's CONSUMERS -
+    the Cold Tower's forward pass ("acquisition pipeline (§8)") and the DNA projection
+    ("acquisition") - and never the thing that fires them, because §8 is where the pipeline itself
+    is written down. This is that section's "Ported skeleton" reaching the loop, and
+    `pipeline.drain` is the whole body: reclaim the tasks of workers that died, lease a bounded
+    batch, walk each one through the ten stages.
+
+    THE BASIS IS ASKED FOR HERE AS WELL AS IN STAGE 9, and the two calls answer different
+    questions. `stages.active_store` is per title and returns the store that title is placed
+    against; this one is per BATCH and is asked for its two refusals. A household whose
+    `artifact_bundle` row is active while its directory is gone would otherwise fail one task at a
+    time - `_run_stage` turns a raised stage into `queue.fail`, and that spends an attempt - so an
+    unmounted volume would close `DRAIN_LIMIT` acquisitions a tick with `max_attempts` reached,
+    recording a broken install against the titles rather than against the install. Refused once
+    for the whole batch, nothing is spent: this job fails, `_tick` logs it and re-arms it at
+    `RETRY_AFTER`, the tasks stay `pending`, and the queue drains when the mount comes back.
+    [M4.13 data-03]
+
+    RECLAIM FIRST, THEN COUNT, and the order is the whole of that refusal's reach. A task whose
+    worker was killed is `leased` past its expiry and invisible to a count of pending rows, so a
+    count asked first would read an empty queue on exactly the tick that matters most - the one
+    after a crash - and would skip the batch refusal for the work it was written to protect.
+    `drain` reclaims too, because it owes that to its other callers; the second pass finds what
+    expired in between, which is why the two counts below are added rather than one overwriting
+    the other.
+
+    AND THE BOARD HALF OF THE REAPER GOES WITH IT, because the two halves are one reaper and this
+    job put the refusal between them. `queue.reclaim_expired` closes a TASK and knows nothing about
+    titles (decision 322); `pipeline.close_abandoned_boards` says the same thing on §6.6's board,
+    and it lives inside `drain` - one line below `_active_store`, which RAISES on an M4.13 data-03
+    install. So on a household whose `/data` volume went away, every tick closed the task for good
+    and left the board reading `running` with `reason = NULL` for as long as the install stayed
+    broken: the operator-facing lie M51-CRASH-03 was filed to remove, re-entered one layer up by
+    duplicating only the queue half here. Both are pure SQL over `acquisition_job` and
+    `acquisition_task`, need no bundle and no `ArtifactStore`, and are therefore safe on precisely
+    the install where the basis is not. `drain` calls them again when it is reached, which costs a
+    statement that matches nothing. [M5.1 review cycle 3, M51-C3-CRASH-03]
+
+    ONLY WHEN THERE IS WORK, which is what the count then buys. A broken install with an empty
+    queue would otherwise put a traceback in the log every `RETRY_AFTER` for ever, and §6.6 names
+    that log as the operator's data. What is left uncovered is one narrow race - a task that
+    becomes due between the count and the lease - and it is not the invariant: stage 9 asks the
+    same two questions per title, so that task is still placed against a basis §10 has checked.
+
+    WORK THIS DRAIN WOULD TAKE, and the count now says so: `queue.pending_count` carries `lease`'s
+    `paid` default, because `pipeline.drain` leases free work only (decision 348) and a count that
+    included a paid task would make the queue look non-empty to the one caller asking whether to
+    open the basis at all - which is this paragraph's own traceback, for a batch that leases
+    nothing. [M5.1 review cycle 2, M51-C2-PAID-02]
+
+    A BUNDLE-LESS HOUSEHOLD IS NOT SKIPPED, unlike `_placement_reconciliation` above. §3.1 makes
+    that install legal and its tasks still have stages 1 to 8 to walk; stage 9 parks each one with
+    its own reason rather than raising, which is the row §6.6 shows an operator and the state a
+    later import turns into work. A skip here would hide all of that behind a log line. `basis` is
+    null for that household, and for a tick that had nothing to lease.
+
+    `run_id` IS NOT PASSED. `raw_document.run_id` is provenance for bytes a stage fetched, and
+    `Job.run` takes no arguments: wiring it means either changing the callable signature every row
+    in this registry shares, or reading back the row `_record_start` has just written. Neither is
+    M5.1's, and at M5.1 nothing fetches - stages 2-8 are declared no-ops - so this job writes no
+    `raw_document` row at all. The milestone that gives a stage a fetch inherits the seam.
+    """
+    from spielplan.acquire import pipeline, queue
+
+    async with pool.acquire() as conn:
+        reclaimed = await queue.reclaim_expired(conn)
+        await pipeline.close_abandoned_boards(conn)
+        await pipeline.complete_landed_boards(conn)
+        due = await queue.pending_count(conn, [pipeline.TASK_KIND])
+        store = await _active_store(conn) if due else None
+        report = await pipeline.drain(conn, limit=pipeline.DRAIN_LIMIT)
+        if not report.leased and not any(reclaimed.values()):
+            return None
+        detail = report.as_dict()
+        detail["reclaimed"] = {
+            state: count + report.reclaimed.get(state, 0) for state, count in reclaimed.items()
+        }
+        detail["basis"] = store.version if store is not None else None
+        return detail
+
+
 # --- §5.3's ninth row: the bundle import, off the request path --------------------------------
 #
 # The name this loop claims work under, and the name `api/artifacts.py` enqueues it under. The
@@ -1050,6 +1134,55 @@ JOBS: tuple[Job, ...] = (
         _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT,
         timeout=1800),
     Job("dna-projection", "M5", "acquisition", "<1 s"),
+    # Not in §5.3's table, and beside the two rows whose trigger column names it rather than
+    # appended at the end: §5.3 lists the acquisition pipeline's consumers - the Cold Tower's
+    # forward pass above and the DNA projection - and never the thing that fires them, because §8
+    # is where the pipeline is written down. A reader who has just met the two rows that say
+    # "acquisition" meets their trigger here. See `_acquisition_drain`.
+    #
+    # THE BUDGET, against the rule at the head of this table. Eight tasks a tick
+    # (`pipeline.DRAIN_LIMIT`) and 120 s for the batch is 15 s a task, and those three numbers sit
+    # between two bounds, only one of which is this job's own.
+    #
+    # BELOW `queue.LEASE_SECONDS` = 900, comfortably - 7.5x here. The lease is what lets
+    # `queue.complete` write without a fence, and that is only true while `_tick`'s `wait_for`
+    # cancels an attempt long before its lease can expire. If the two ever crossed, the reaper
+    # would hand a task to a second worker while the first was still walking it: two processes,
+    # one title, both writing into a spine decision 162 makes permanent and nothing able to see it
+    # afterwards. `test_acquire_drain.py` holds the pair the way `test_worker_jobs.py` holds the
+    # backup's budget against `pg_dump`'s own timeout - the two constants live in different
+    # modules and nothing else keeps them in order.
+    #
+    # UNDER ITS OWN 1800 s INTERVAL, which is this table's rule and not a preference: the loop is
+    # sequential, so the 6.7% of an interval this job may hold is 6.7% that §7.3's playback poll,
+    # the fold-in tick and both fits do not get.
+    #
+    # WHAT 15 s A TASK BUYS IS NOT ONE TITLE PLACED, and this comment used to read as if it were.
+    # `DRAIN_LIMIT` bounds TASKS; `stages.place` calls `reconcile(scope="app_acquired")`, whose
+    # work list is `SELECT id FROM title WHERE origin = 'acquired'` - so one task's stage 9 places
+    # the WHOLE acquired set, and a tick's placement work is `DRAIN_LIMIT x |acquired|` rather than
+    # `DRAIN_LIMIT`. That is deliberate and argued where it is chosen (`stages.place`: a per-title
+    # scope would be a fifth definition of "who needs placing" in `reconcile.py`, which is the
+    # disagreement M4.13 records as ml05), and it is cheap while the acquired set is small - it is
+    # empty on every install today, and §5.3's own "<1 s/title" is a ceiling rather than a measured
+    # cost, with `tower.place` batching one forward pass per `CHUNK = 512`. It is written down here
+    # because this is the line an operator reads as the budget: the milestone that finds this
+    # ceiling binding is the one that owes a measurement, and §6.6's board is what it will read it
+    # off. [M5.1 review cycle 1, M51-REV-07]
+    #
+    # The rest of the headroom is for the milestone that gives a stage a fetch, which owes this
+    # line a measurement rather than a larger number. `acquire/fetch.py` already sleeps a
+    # `Retry-After` in process up to 300 s, so the first milestone to fetch inside a stage has to
+    # choose between that wait and a `queue.defer`; this budget is what makes the choice
+    # unavoidable.
+    #
+    # 1800 s AND NOT A MINUTE: this queue's feeder is the 15-minute Jellyfin sweep, so draining
+    # twice an hour reaches a new add within about a sweep of it being seen, while a minute rate
+    # would ask an empty queue 1,440 times a day to win nothing. It also keeps this row out of the
+    # minute-interval group that `JOB_RUN_KEEP_DAYS` and `DURATION_LOG_THRESHOLD` are sized on.
+    # [§8; plan step C4]
+    Job("acquisition-drain", "M5.1", "queue", "ms of declared no-ops + <1 s/title placed",
+        _acquisition_drain, every=1800, timeout=120),
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900,
         timeout=600),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,
@@ -1141,6 +1274,20 @@ MODEL_JOBS = frozenset({
     "fold-in-tick",
     "tier-set-refit",
     "placement-reconciliation",
+    # The seventh, and it writes the rows the sweep above writes: stage 9 calls
+    # `placement.reconcile` with §8's `app_acquired` scope, so a batch begun against v1 and
+    # committed after §10's flip stamps `title_placement` with a basis this install no longer
+    # serves. That is the invariant, not the guard.
+    #
+    # THE DERIVATION CANNOT SEE THAT PATH, and whoever edits `_acquisition_drain` next needs to
+    # know it. `_reaches_the_basis` walks the calls in a function body, and this job reaches
+    # `stages.active_store` through `pipeline.STAGES` - a module-level tuple of callables, which
+    # is data and not a call. The walk therefore clears the drain on the stage-9 route, and what
+    # puts it in this set honestly is the batch-level `_active_store` in `_acquisition_drain`
+    # itself. Delete that call and the guard goes green with this name struck from the set while
+    # stage 9 still fits in a basis - which is exactly the silent failure the derivation was
+    # written to make impossible. [M4.14 step D1, finding 2.2; plan step C4]
+    "acquisition-drain",
 })
 
 # The loop wakes far more often than any job runs; `due` decides what actually fires. A single

@@ -31,9 +31,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import Match
 from starlette.types import Scope
 
+from spielplan.api import acquisition as acquisition_api
 from spielplan.api import admin as admin_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
+from spielplan.api import events as events_api
 from spielplan.api import home as home_api
 from spielplan.api import library as library_api
 from spielplan.api import passkeys as passkeys_api
@@ -334,6 +336,13 @@ def create_app() -> FastAPI:
     app.include_router(tonight_api.router)
     app.include_router(push_api.router)
     app.include_router(admin_api.router)
+    app.include_router(acquisition_api.router)
+    # §7.2, §7.3 and §11 put routes under `/events`, and the namespace is mounted from M5.1 with
+    # none of them in it: `SpaFallback` below declines the namespace (decision 332), and the
+    # router that declines it and the router that will serve it have to be the same one, or M5.2
+    # adds a webhook the app shell answers. The router-mount guard in
+    # `test_static_contracts.py` is what holds the pair together once that route exists.
+    app.include_router(events_api.router)
 
     @app.get("/api/health")
     async def health() -> Response:
@@ -500,8 +509,8 @@ def create_app() -> FastAPI:
         app.mount("/_app", StaticFiles(directory=root / "_app"), name="assets")
 
         class SpaFallback(APIRoute):
-            """The catch-all, declining the `/api` namespace at match time rather than in the
-            handler.
+            """The catch-all, declining the app's server namespaces at match time rather than in
+            the handler.
 
             Refusing inside the handler was a GET-shaped refusal: the route is registered for
             GET, so a POST to an unrouted `/api/...` path was a *partial* match — path yes,
@@ -514,12 +523,46 @@ def create_app() -> FastAPI:
             the verb. The reason is unchanged — an unknown API path must not be answered with
             the app shell, because a client that gets HTML where it expected JSON fails in a
             much less obvious place.
+
+            `/events` IS A SECOND NAMESPACE AND NOT A SECOND CLAUSE. §7.2 puts the Jellyfin
+            webhook at `POST /events/jellyfin`, §7.3 puts playback at `POST /events/playback`
+            and §11 puts its own routes there too, so the thing being declined is a namespace
+            the way `/api` is - and it arrived at M5.1 carrying both halves of the failure the
+            paragraph above describes at once: a GET to an unrouted `/events/...` path served
+            the shell (measured: 200), and a POST to one answered 405 (measured), because the
+            fallback is registered for GET and a partial match is a method mismatch. M5.2's
+            sender would then read 405 as "this route exists, I used the wrong verb" and go
+            looking for a route nobody wrote.
+
+            ONE RULE over the head segment rather than a clause per namespace, which is what
+            decision 332 asks for and is not only tidiness: two clauses are two places to
+            forget, and the head segment is exactly what `path == "api" or
+            path.startswith("api/")` was spelling out by hand - `apis/` and `api-docs/` are
+            different namespaces and stay matchable, because the split is on `/`.
+            [decision 332; §7.2, §7.3, §11]
             """
+
+            # The namespaces this app serves itself. A route mounted under either is answered by
+            # the router or by nothing; neither is ever the shell.
+            SERVER_NAMESPACES = frozenset({"api", "events"})
 
             def matches(self, scope: Scope) -> tuple[Match, Scope]:
                 match, child = super().matches(scope)
                 path = child.get("path_params", {}).get("path", "")
-                if match is not Match.NONE and (path == "api" or path.startswith("api/")):
+                # `lstrip` BEFORE the split, because a request path with a leading double slash
+                # captures as `/events/jellyfin` and its head segment is then the EMPTY STRING -
+                # which is in neither namespace, so both halves of the failure this class exists
+                # to remove came back at once: the shell answered `GET //events/jellyfin` with 200
+                # and this GET-only route partially matched the POST, which Starlette answers 405.
+                # Nothing normalises it on the way in - uvicorn puts the raw target into
+                # `scope["path"]`, and the backend's port is published directly rather than behind
+                # an ingress that might merge slashes. One expression, so the rule stays ONE rule
+                # over the head segment and both namespaces are closed by it.
+                # [M5.1 review cycle 3, M51-C3-332-01]
+                if (
+                    match is not Match.NONE
+                    and path.lstrip("/").split("/", 1)[0] in self.SERVER_NAMESPACES
+                ):
                     return Match.NONE, {}
                 return match, child
 

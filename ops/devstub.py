@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import uuid
 from collections.abc import Sequence
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,12 +119,32 @@ STATE: dict[str, Any] = {
 app = FastAPI(title="Spielplan dev harness")
 
 
-def _db() -> sqlite3.Connection:
+def _db() -> closing[sqlite3.Connection]:
+    """The bundle's content database, for one `with` block.
+
+    `closing` and not the connection itself, although every one of the eleven call sites already
+    spells `with _db() as db:`. A sqlite3 connection's own context manager commits or rolls back
+    the transaction and then LEAVES THE CONNECTION OPEN -- so each of those blocks was leaking a
+    read handle on `content.sqlite`, and only the cyclic collector ever closed them. Measured on
+    one run of `test_devstub_contract.py`: 55 leaked handles.
+
+    On Windows an open handle makes `Path.unlink` raise, and `fx.make_bundle` -- which this
+    harness calls on every validate and every import, into the one fixed path in the tree that is
+    not a `tmp_path` -- unlinks `content.sqlite` before rewriting it. So the two bundle tests in
+    `test_devstub_contract.py` passed only while the collector happened to run between two
+    requests, which is a thing no test should depend on and which nothing here guaranteed. They
+    fail every time under `gc.disable()`, and they began failing for real when the `db` fixture
+    stopped applying 22 migrations per test: that was the allocation churn triggering the
+    collector often enough to hide this.
+
+    Read-only connections (`mode=ro`), so nothing is lost by ending the transaction differently
+    than the old spelling did -- there is no transaction to commit.
+    """
     if not (BUNDLE / "content.sqlite").exists():
         fx.make_bundle(BUNDLE)
     db = sqlite3.connect(f"file:{BUNDLE / 'content.sqlite'}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
-    return db
+    return closing(db)
 
 
 def _nav(role: str) -> dict[str, list[dict[str, str]]]:
@@ -1248,6 +1269,68 @@ def admin_system() -> dict[str, Any]:
                    "stale_after_hours": 36},
         "secrets": {"configured": True, "fingerprint": "0d1c3f2ba9e4",
                     "key_id": "devstub-key-id", "unreadable": False},
+    }
+
+
+# §6.6's Acquisition board, read side. M5.1 ships two GETs and no control: proposal 109's retry /
+# retry-from-stage / abandon are adopted or struck by number under decision 330, M5.6's.
+#
+# Fixture-shaped and nothing more. The harness runs no worker, no queue and no fetcher, so these
+# rows are invented the way the System card above is - but in the three shapes the page has to
+# render differently, because that is the only reason a harness answer is worth writing: a job
+# PARKED on something that may change and carrying its reason, a job that FAILED and will fail
+# again, and a job that walked all ten stages to `ready` and has no reason at all (decision 336).
+#
+# DECISION 345 HOLDS HERE TOO, and it is worth stating in the harness rather than only in the
+# app: the documents are METADATA - url, http status, sha256, byte size, fetched_at - and the
+# bytes are not reachable from any process serving a request. A stub that invented a `content`
+# field would be teaching the front end a shape `backend/spielplan/api/` will never send, which
+# is exactly what `test_devstub_contract.py` exists to prevent (CLAUDE.md: the harness is not the
+# app, and `backend/spielplan/api/` wins on any disagreement).
+_ACQUISITION: list[dict[str, Any]] = [
+    {"title_id": 1_000_000_701, "name": "A Bigger Splash", "year": 2015, "title_kind": "movie",
+     "origin": "acquired", "stage": 4, "status": "parked",
+     "reason": "fewer than 20 ratings - waiting 30 days for reviews to accrue",
+     "retry_after": None, "updated_at": None},
+    {"title_id": 1_000_000_702, "name": "Call Me By Your Name", "year": 2017,
+     "title_kind": "movie", "origin": "acquired", "stage": 2, "status": "failed",
+     "reason": "host www.rottentomatoes.com paused for 300s", "retry_after": None,
+     "updated_at": None},
+    {"title_id": 1_000_000_703, "name": "Suspiria", "year": 2018, "title_kind": "movie",
+     "origin": "acquired", "stage": 10, "status": "ready", "reason": None,
+     "retry_after": None, "updated_at": None},
+]
+
+
+@app.get("/api/admin/acquisition")
+def admin_acquisition() -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat()
+    return {"jobs": [{**job, "updated_at": now} for job in _ACQUISITION]}
+
+
+@app.get("/api/admin/acquisition/{title_id}")
+def admin_acquisition_job(title_id: int) -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat()
+    found = next((job for job in _ACQUISITION if job["title_id"] == title_id), None)
+    if found is None:
+        # The app answers 404 on a title the pipeline has never touched, and so does this: an
+        # empty envelope would present "no such job" and "a job doing nothing" as one state.
+        raise HTTPException(status_code=404, detail="no acquisition job for this title")
+    return {
+        "job": {**found, "updated_at": now, "detail": {"identify": {"source": "jellyfin"}}},
+        "tasks": [
+            {"id": 1, "kind": "acquire", "key": f"jellyfin:{title_id}", "state": "pending",
+             "attempts": 1, "max_attempts": 4, "next_attempt_at": now,
+             "last_error": found["reason"] if found["status"] == "failed" else None,
+             "result_note": None, "paid": False, "created_at": now, "updated_at": now},
+        ],
+        "documents": [
+            {"id": 1, "source": "tmdb", "kind": "movie", "entity_key": f"jellyfin:{title_id}",
+             "url": f"https://api.themoviedb.org/3/movie/{title_id % 1000}",
+             "http_status": 200,
+             "content_sha256": "c0ffee11" * 8, "byte_size": 4211,
+             "content_type": "application/json", "fetched_at": now, "ok": True, "error": None},
+        ],
     }
 
 

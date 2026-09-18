@@ -2050,6 +2050,35 @@ def test_the_router_mount_guard_notices_a_dropped_include():
     assert _unmounted_routers(served - {"/api/home"}) == {"home": {"/api/home"}}
 
 
+def test_a_router_that_declares_no_paths_is_still_asserted_to_be_mounted():
+    """The guard above compares PATH SETS, so a router with no paths is invisible to it.
+
+    `api/events.py` is mounted with no routes in it (decision 332): M5.2 adds the webhook by
+    adding a route to that file rather than by also remembering an `include_router` in `app.py`,
+    which is the "remembering" the module exists to remove. But `_unmounted_routers` filters on
+    `paths - served` being non-empty, and an empty set is never non-empty - so deleting
+    `app.include_router(events_api.router)` changed nothing any test in this tree could observe,
+    and the mount M5.2 is promised would be discovered missing by M5.2.
+
+    That is the M4.7 tq2-router-mount blind spot in its second form, and it is asserted here
+    rather than through a path because there is no path to assert. FastAPI 0.141 keeps the
+    included router on the opaque `_IncludedRouter` as `original_router`, which states the mount
+    directly: this is True today and False the moment that line is dropped.
+    [M5.1 review cycle 1, M51-REV-EVENTS-04]
+    """
+    from spielplan.api import events as events_api
+    from spielplan.app import create_app
+
+    mounted = [
+        route for route in create_app().routes
+        if getattr(route, "original_router", None) is events_api.router
+    ]
+    assert len(mounted) == 1, (
+        "`create_app` does not include `api/events.py`'s router - the /events namespace declares "
+        "no paths yet, so nothing else in this suite can see the include go missing"
+    )
+
+
 def _self_mounted_routers(root: Path) -> list[str]:
     """Test files that mount a router THE APPLICATION OWNS, which is the rule's own wording.
 
@@ -2195,9 +2224,34 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # health check is that the BACKEND's loop is not the one it blocks, which a single-process harness
 # cannot measure at all. [M4.14, decision 255]
 #
-# THE HAND-MERGE LANDS ON 8 UNLESS THE SIBLING ADDS ONE: M4.15 is being built in a parallel
-# worktree and merges after this branch. If it brings a ninth script these five assertions move
-# again, and whichever of the two merges second resolves them rather than taking one side.
+# THE HAND-MERGE LANDED ON 8: M4.15 merged without bringing a script of its own, so the note
+# above resolved on the number it named rather than on its alternative. M5.1 is what moved it.
+#
+# `ops/m51_exit_criterion.py` is the NINTH, and 8 became 9 in the five places below only after
+# every rule here had been read against it: no printed literal outside cp850 (it escapes what
+# it did not author twice over -- the park reasons `acquire/stages.py` writes for an operator
+# and Home's own why-line, both em-dashed and both reaching the console), no `check()`
+# predicate settled before the run, a computed terminal verdict, no component read at all --
+# check 4 RESTATES `PosterCard.svelte`'s `isColdPlaced` rather than grepping it, which is that
+# rule in force rather than a gap in its reach -- nothing that can fail between its CREATE
+# DATABASE and the block whose finally drops it, an `except Exception` around the measurement
+# that reports rather than propagates, and both arms on every numbered heading it prints. It
+# has no `rate()` seeding path for the last rule to exempt: it seeds through
+# `bundle_import.import_bundle` and `pipeline.drain`, which is `ops/m45_exit_criterion.py`'s
+# exemption for the same reason one layer along -- what it measures IS the driver, so a harness
+# that walked a title through the stages itself would be measuring its own idea of the walk.
+#
+# It is the first of the nine whose tally has a THIRD column. Two of its twelve checks need a
+# container and a port -- `/data/raw`'s absence from the backend image, and `/events` answering
+# 404 through the app that ships -- and a lane with neither prints "NOT MEASURED HERE" and
+# exits 3, which is neither a pass nor a failure. That third exit code is the same instinct as
+# `_constant_check_predicates` one level up: a check that cannot fail is worthless, and a check
+# reported as passing because nothing asked it is worse than worthless. [M5.1, decision 184]
+#
+# M5.2 THROUGH M5.7 EACH OWE A SCRIPT under decision 321, so these five assertions move again
+# per sub-milestone. M5.1 runs alone and there is no sibling to hand-merge against; the next
+# wave resolves the number to what `ls ops/m*_exit_criterion.py` reports, having first read its
+# own script against every rule below rather than bumping a constant to buy a green run.
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2304,7 +2358,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2436,10 +2490,111 @@ def _check_verdict(node: ast.Call) -> ast.expr | None:
     return next((kw.value for kw in node.keywords if kw.arg == "ok"), None)
 
 
+# A CALL SITE IS NOT WHERE THESE SCRIPTS PUBLISH THEIR VERDICTS, and reading only call sites left
+# the rule settling nothing about five of the nine. `ops/m51_exit_criterion.py` holds its twelve
+# numbered verdicts in `check_one`..`check_twelve` and has four `check(` call sites, all inside one
+# dispatcher -- two passing the literal `False` this rule deliberately allows, one passing the local
+# name `verdict`. So `ok = True` inside `check_one` is M4.5's "a summary recorded as a pass" written
+# one call frame out of the reader's reach, and the script still prints `12/12 checks passed`. The
+# same shape counts 11 numbered checks against 3 call sites in M4.11, 12 against 3 in M4.12, 6
+# against 4 in M4.13 and 13 against 4 in M4.14 -- and not one of those 54 functions contains a
+# `check(` call at all. M4.5 and M4.9, the two the rule was measured against, declare no numbered
+# check and write their verdicts straight into 14 and 22 calls, which is why it read as sound.
+# [decision 184; M5.1 cycle 4, M51-C4-REL-01]
+def _is_a_numbered_check(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A function that publishes one of the script's numbered verdicts, by name and by signature.
+
+    Both spellings, because both ship: `-> tuple[bool | None, str]` in the M5.1 script and
+    `-> tuple[bool, str, str]` in the four before it. The annotation is the gate rather than the
+    name alone, because it is what makes "this returns a verdict" decidable from the source; a
+    sibling test asserts every `check_*` in the tree still carries it, so the day a script drops
+    the annotation is reported rather than quietly unread.
+    """
+    return (
+        fn.name.startswith("check_")
+        and fn.returns is not None
+        and ast.unparse(fn.returns).startswith("tuple[")
+    )
+
+
+def _within(fn: ast.AST):
+    """Every node inside `fn` except the bodies of the functions nested inside it.
+
+    `ast.walk` would hand a closure's `return` to the check that encloses it --
+    `ops/m412_exit_criterion.py`'s check 5 installs a patched `finish` that returns
+    `await real_finish(...)` -- and a verdict is a claim about the numbered check, not about
+    whatever it monkeypatched on the way in.
+    """
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _sole_binding(fn: ast.AST, name: str) -> ast.expr | None:
+    """The one expression this function binds `name` to, or None when a reader cannot say which.
+
+    ONE binding or nothing, which is the same closure the predicate reader draws one level down:
+    a name rebound in two branches is a value the run picks, and `for`, `with ... as` and
+    `except ... as` are bindings whose value no reader of the source holds. Every one of those
+    answers None, so the rule says nothing about that check rather than guessing at it.
+    """
+    taken = {arg.arg for arg in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs}
+    taken |= {arg.arg for arg in (fn.args.vararg, fn.args.kwarg) if arg is not None}
+    if name in taken:
+        return None
+    body = list(_within(fn))
+    for node in body:
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return None
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+            return None
+    stores = [
+        node for node in body
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == name
+    ]
+    if len(stores) != 1:
+        return None
+    for node in body:
+        if isinstance(node, ast.Assign) and node.targets == [stores[0]]:
+            return node.value
+        if isinstance(node, ast.AnnAssign) and node.target is stores[0]:
+            return node.value
+    return None
+
+
+def _published_verdicts(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.expr]:
+    """The verdict expression of every `return <verdict>, ...` this numbered check publishes.
+
+    A verdict returned as a bare name is followed to its binding, because `ok = True` and
+    `return True, detail` are the same certificate and only the second is written at the return.
+    A name the binding reader cannot settle is dropped rather than reported: this rule speaks
+    about what it can read.
+    """
+    out: list[ast.expr] = []
+    for node in _within(fn):
+        if not (isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)):
+            continue
+        if not node.value.elts:
+            continue
+        verdict = node.value.elts[0]
+        if isinstance(verdict, ast.Name):
+            bound = _sole_binding(fn, verdict.id)
+            if bound is None:
+                continue
+            verdict = bound
+        out.append(verdict)
+    return out
+
+
 def _constant_check_predicates(source: str, label: str) -> list[str]:
     """Read with `ast`, not a regex: a predicate wrapped across three lines is the same defect."""
     out: list[str] = []
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
             continue
         if node.func.id != "check":
@@ -2450,6 +2605,16 @@ def _constant_check_predicates(source: str, label: str) -> list[str]:
         fixed = _fixed_predicate(verdict)
         if fixed:
             out.append(f"{label}:{node.lineno}: check({ast.unparse(verdict)}) -- {fixed}")
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or not _is_a_numbered_check(fn):
+            continue
+        for verdict in _published_verdicts(fn):
+            fixed = _fixed_predicate(verdict)
+            if fixed:
+                out.append(
+                    f"{label}:{verdict.lineno}: {fn.name} returns "
+                    f"{ast.unparse(verdict)} -- {fixed}"
+                )
     return out
 
 
@@ -2462,7 +2627,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2472,6 +2637,16 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
         "a milestone exit check reports a verdict it settled before the run:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def _a_verdict_function(body: str) -> str:
+    """One numbered check in the shape five of the nine scripts write, around the body under test.
+
+    The signature is `ops/m51_exit_criterion.py`'s verbatim; the M4.11-M4.14 scripts spell the
+    same thing `-> tuple[bool, str, str]`, and one case below carries that spelling so the two
+    are held together. [M5.1 cycle 4, M51-C4-REL-01]
+    """
+    return "async def check_one(ctx: Install) -> tuple[bool | None, str]:\n" + body
 
 
 @pytest.mark.parametrize(
@@ -2503,6 +2678,33 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
         ("a comparison against a name", "check(placed >= floor, 'unplaced')", 0),
         ("a call the run answers", "check(bool(rows), 'rows')", 0),
         ("membership in a literal the run indexes", "check(state in ('ok', 'warm'), 'state')", 0),
+        # M5.1 cycle 4. Five of the nine scripts publish their verdicts from a numbered check and
+        # hand `check()` a local name inside one shared dispatcher, so a certificate written in
+        # one of those twelve function bodies never passes the reader above at all -- which is
+        # M4.5's "a summary recorded as a pass" one call frame out of reach.
+        # [M5.1 cycle 4, M51-C4-REL-01]
+        ("a verdict published as a literal",
+         _a_verdict_function("    return True, 'the board carried counts'"), 1),
+        ("a verdict assigned as a literal",
+         _a_verdict_function("    ok = True\n    return ok, detail"), 1),
+        ("a verdict assigned and then pinned",
+         _a_verdict_function("    ok = rows == 0 or True\n    return ok, detail"), 1),
+        ("the three-value verdict the M4 scripts return",
+         "async def check_two(h: Household) -> tuple[bool, str, str]:\n    return True, 'x', ''", 1),
+        # And the same four directions as above, from inside a check: a verdict the run decides,
+        # the `None` arm that reports itself as not measured, the deliberate failure, and a name
+        # bound in two branches, which is a value the run picks and not one a reader can settle.
+        ("a verdict the run decides",
+         _a_verdict_function("    ok = rows == 0\n    return ok, detail"), 0),
+        ("the not-measured arm",
+         _a_verdict_function("    return None, 'no container was inspected'"), 0),
+        ("a deliberate failure published",
+         _a_verdict_function("    return False, 'no placement row for the title'"), 0),
+        ("a verdict bound in two branches",
+         _a_verdict_function("    if rows:\n        ok = True\n    else:\n        ok = rows == 0\n"
+                             "    return ok, detail"), 0),
+        ("a helper that publishes no numbered verdict",
+         "def tally(rows) -> tuple[bool, str]:\n    return True, 'rows'", 0),
     ],
 )
 def test_the_constant_predicate_guard_catches_a_real_violation(name, source, expected):
@@ -2529,6 +2731,52 @@ def test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare():
     assert not wrong, (
         "an exit script's check() no longer takes its verdict as `ok`, so the keyword arm of "
         "_check_verdict reads a name nobody passes:\n  " + "\n  ".join(wrong)
+    )
+
+
+def test_the_constant_predicate_guard_reaches_every_verdict_the_scripts_publish():
+    """The other arm's premise, and the measurement that says the rule is not reading past them.
+
+    A guard that flags nothing is indistinguishable from a guard that reads nothing, and for five
+    of the nine scripts this one WAS reading nothing: not one of the 54 numbered checks they
+    declare contains a `check(` call, so the verdicts they publish reached the call-site reader
+    only as the local name `verdict` inside a shared dispatcher. `ok = True` in a check body is
+    M4.5's "a summary recorded as a pass" one call frame out of reach, and the script goes on
+    printing `N/N checks passed`. So this asserts both halves the widened arm stands on -- that
+    every `check_*` still carries the tuple annotation the gate keys on, and that every one of
+    them publishes at least one verdict the reader can actually take hold of. A check whose
+    verdict the binding reader cannot settle is legal (the closure is the point, as one level
+    down), but a check with NO readable verdict at all is this rule blind again, silently.
+    [decision 184; M5.1 cycle 4, M51-C4-REL-01]
+    """
+    functions = [
+        (path.name, node)
+        for path in EXIT_SCRIPTS
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("check_")
+    ]
+    assert functions, (
+        "no exit script publishes its verdicts from a check_* function any more, so the return "
+        "arm of _constant_check_predicates reads nothing. If the idiom has gone, it comes out "
+        "together with this guard."
+    )
+    unread = [
+        f"{name}:{node.lineno}: {node.name} -> "
+        f"{ast.unparse(node.returns) if node.returns else '<unannotated>'}"
+        for name, node in functions if not _is_a_numbered_check(node)
+    ]
+    assert not unread, (
+        "an exit script's numbered check no longer declares the tuple return the verdict reader "
+        "gates on, so its verdict is settled by nothing:\n  " + "\n  ".join(unread)
+    )
+    blind = [
+        f"{name}:{node.lineno}: {node.name}"
+        for name, node in functions if not _published_verdicts(node)
+    ]
+    assert not blind, (
+        "a numbered check publishes no verdict this reader can follow, so a constant one in it "
+        "would go unreported:\n  " + "\n  ".join(blind)
     )
 
 
@@ -2627,7 +2875,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -2907,7 +3155,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3540,7 +3788,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 8, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -10534,9 +10782,12 @@ def _publication_block(path: Path) -> tuple[str, int]:
 
 # The THIRD claim in the same sentence, and the one nothing read. README published "132 of them
 # over fourteen dated sittings, 2026-08-29 to 2026-09-17" beside two figures that ARE derived, so
-# it inherited their credibility -- and 14 is neither the 24 `## Decisions taken` blocks the
-# register holds nor the 12 distinct dates they fall on nor the 11 dates that carry a numbered
-# decision. The range was wrong with it: entry 162 sits on 2026-09-01, and the 2026-08-29 sitting
+# it inherited their credibility -- and at M4.16 cycle 4 that 14 was neither the 24
+# `## Decisions taken` blocks the register then held nor the 12 distinct dates they fell on nor
+# the 11 dates that carried a numbered decision. All three have moved since, and the sentence is
+# dated rather than re-typed because only the last two are what `_held_sittings` derives: a
+# diagnosis says when it was taken, and the guard below is what keeps an undated one honest.
+# The range was wrong with it: entry 162 sits on 2026-09-01, and the 2026-08-29 sitting
 # holds none of the numbered decisions at all, being the seven answers indexed rather than
 # numbered. A SITTING is a distinct date, which is the idiom this file already uses one guard over
 # ("286 entries across twelve sittings"), and the count is over the sittings that actually carry
@@ -10665,7 +10916,7 @@ def test_the_proposal_ledger_counts_itself():
         ("the count moved and the range did not", (286, 287, None), False, True, True),
         ("a document states neither", (0, 0, None), True, True, True),
         ("both are current and neither states a sitting", (286, 303, None), False, False, True),
-        ("every figure derived", (286, 303, (11, "2026-09-01", "2026-09-17")), False, False, False),
+        ("every figure derived", (286, 303, (12, "2026-09-01", "2026-09-18")), False, False, False),
         # Review cycle 4: the sentence as README published it. Two derived figures and a third
         # that matched no available reading -- not the 24 blocks, not the 12 dates, not the 11
         # dates carrying a decision -- inside the same clause, which is what lent it their
@@ -10804,6 +11055,48 @@ def _comment_prose(path: Path) -> list[tuple[int, str]]:
         for slashes in re.finditer(r"(?<![:/])//", line):
             found.append((line_number, line[slashes.start():]))
     return found
+
+
+def _comment_paragraphs(path: Path) -> list[tuple[int, str]]:
+    """`_comment_prose`, with a run of adjacent `#` lines read as the one paragraph it is.
+
+    `_comment_prose` yields a comment PER LINE, which is the right grain for a rule about a single
+    comment and the wrong one for a rule about a sentence. This codebase wraps its prose at 108
+    columns, so a sentence long enough to state a number AND the noun it counts is exactly the
+    sentence likely to state them on either side of a line break, and neither line then carries the
+    pair. That is not hypothetical: the note above `ALLOWED_RESIDUE` in `test_layering_guards.py`
+    said "imports all twelve" and the line under it said "routers by definition", and the guard
+    written to hold that very note to the tree read neither half, over two stale sentences, in a
+    file that stayed green all milestone. [decision 184; M5.1 review cycle 3, M51-C3-REG-02]
+
+    `test_worker_schedule.py:1153` records the same limit and declines to close it, on the argument
+    that gluing blocks would join a comment to the DOCSTRING under it and so exempt a count from a
+    citation that is not in its sentence. That argument is about gluing the two kinds together and
+    it stands; it says nothing against gluing a comment run to itself, which is all this does --
+    consecutive lines, both comments, a bare `#` ending the run the way it ends a paragraph for a
+    reader, and docstrings passed through whole and untouched. The sibling's limit therefore stays
+    true of the reader it is written about, which still uses `_comment_prose`.
+
+    The line reported is the run's first, in `_job_tallies`' idiom of reporting a docstring's `def`:
+    enough to find the paragraph, and not a second number that has to stay true.
+    """
+    runs: list[tuple[int, list[str]]] = []
+    rest: list[tuple[int, str]] = []
+    for line, text in _comment_prose(path):
+        if not text.startswith("#"):
+            rest.append((line, text))
+            continue
+        body = re.sub(r"^#+[ \t]?", "", text).strip()
+        if not body:
+            runs.append((line, []))
+            continue
+        if runs and runs[-1][1] and runs[-1][0] + len(runs[-1][1]) == line:
+            runs[-1][1].append(body)
+        else:
+            runs.append((line, [body]))
+    return [
+        (line, " ".join(("# " + " ".join(lines)).split())) for line, lines in runs if lines
+    ] + rest
 
 
 def _named_in_scope(named: str, packages: set[str]) -> Path | None:
@@ -11757,7 +12050,7 @@ _RELEASE_INLINE_VERDICT = re.compile(r"\*\*Owner verdict:?\s*`([^`\n]*)`\*\*")
 
 # The row M4.5 is: §12 does not carry it, and the milestone measured the criterion section
 # 12 gives M0's importer against the real corpus rather than the fixture. RELEASE.md carries it
-# beside the fifteen because it is the one row with a committed output to point at.
+# beside §12's own rows because it is the one row with a committed output to point at.
 _EXTRA_RELEASE_ROWS = ("M4.5",)
 
 # Decision 298's owed asset, and the sentence that has to survive with it. Named here rather than
@@ -11781,9 +12074,9 @@ def _release_section_one() -> str:
 
     Split out in review cycle 5 because the table was the half nothing read. `_release_rows` keys
     off `^### M`, so everything above the first heading was discarded, and section 1 opens with a
-    sixteen-row table restating every row's Status, Output file and verdict. That is the FIRST
-    statement a reader meets of each of them, and it could disagree with the block below it in
-    every cell without a guard anywhere noticing. [M4.16 cycle 5, M416-C4-REL-08]
+    table restating every row's Status, Output file and verdict, a row for each block under it.
+    That is the FIRST statement a reader meets of each of them, and it could disagree with the
+    block below it in every cell without a guard anywhere noticing. [M4.16 cycle 5, M416-C4-REL-08]
     """
     body = _src(RELEASE_RECORD).split("## 1. ", 1)
     assert len(body) == 2, "docs/RELEASE.md has no `## 1.` section"
@@ -11815,11 +12108,11 @@ def _release_summary_problems(summary: dict[str, tuple[str, str, str]],
     A duplicated record read by no rule is the defect this milestone exists to close, and this one
     is a duplicate of the three fields the rule is ABOUT: a cell flipped to `MEASURED` against an
     output file that is not in the tree, or a verdict cell signed while the block below it still
-    says `UNMEASURED`, satisfied every guard here -- measured, one cell at a time, over all
-    sixteen rows. Held against the blocks rather than re-deriving the answer, because the blocks
-    are where the criterion is quoted and the table is the summary OF them; and the same
-    unfilled-verdict rule is applied to the cell, because a reader who stops at the table has read
-    a verdict either way. [M4.16 cycle 5, M416-C4-REL-08]
+    says `UNMEASURED`, satisfied every guard here -- measured at M4.16 cycle 5, one cell at a time,
+    over all sixteen rows it then held. Held against the blocks rather than re-deriving the answer,
+    because the blocks are where the criterion is quoted and the table is the summary OF them; and
+    the same unfilled-verdict rule is applied to the cell, because a reader who stops at the table
+    has read a verdict either way. [M4.16 cycle 5, M416-C4-REL-08]
     """
     problems = [
         f"the summary table names {name}, which has no block in section 1"
@@ -11855,9 +12148,10 @@ def _release_row_problems(rows: dict[str, str], owed: list[str]) -> list[str]:
     The verdict was read for its PRESENCE and never for its value until review cycle 5, so half of
     the rule `docs/RELEASE.md` publishes in its own voice -- "every §12 row either names an output
     file that exists in the tree, or is recorded as `UNMEASURED` / `NOT BUILT` / `RUN, OUTPUT NOT
-    COMMITTED` with an unfilled verdict" -- was enforced by nothing. Measured: signing any of the
-    sixteen section-1 rows one at a time left this function returning `[]` every time. Only M2's
-    value was held, by a bespoke guard below, which is decision 297's scope rather than the row's:
+    COMMITTED` with an unfilled verdict" -- was enforced by nothing. Measured at M4.16 cycle 5:
+    signing any of the sixteen section-1 rows one at a time left this function returning `[]` every
+    time, and section 1 has gained rows since. Only M2's value was held, by a bespoke guard below,
+    which is decision 297's scope rather than the row's:
     the `what` states the universal, and a row is repaired by widening its guard rather than by
     narrowing its claim. [docs/RELEASE.md "How to read this file"; M4.16 cycle 5, M416-C4-REL-08]
     """
@@ -12103,7 +12397,7 @@ def test_the_release_summary_table_says_what_the_blocks_under_it_say(name, table
 
 # --- M4.16 review cycle 1: the record covers the instrument the milestone exists to add ---------
 #
-# Everything above holds §12's fifteen rows plus M4.5. None of it reaches the release workflow
+# Everything above holds §12's own rows plus M4.5. None of it reaches the release workflow
 # itself, so the file whose declared contract is "the fact of a run, or the fact of its absence"
 # said neither about the one instrument this milestone was written for -- while `docs/TESTING.md`
 # twice pointed a reader at this file for that workflow's answer, and once asserted in the present
@@ -12730,9 +13024,11 @@ def test_every_escalated_claim_names_a_record_that_exists():
 
 # The `why` of the row that is ABOUT this record published a never-run count of its own, inherited
 # from the plan's pre-milestone diagnosis and never re-measured: "three of five criteria have never
-# been run" beside a record that counts fifteen build-order rows and five never run, and beside
-# docs/TESTING.md, which says five in the same wave. Decision 184 refuses a figure nobody derived,
-# and this is that rule applied to the one figure this record exists to establish.
+# been run" beside a record that counted fifteen build-order rows and five never run when M4.16
+# cycle 2 read it, and beside docs/TESTING.md, which said five in the same wave. Both figures have
+# moved since, which is the rule working rather than an erratum: the guard below re-derives them
+# and the paragraph is dated. Decision 184 refuses a figure nobody derived, and this is that rule
+# applied to the one figure this record exists to establish.
 # [M4.16 cycle 2, M416-C2-REL-05]
 _NEVER_RUN_CLAIM = re.compile(
     r"(?P<count>\w+) of (?:the )?(?P<total>\w+) criteria have never been run", re.I
@@ -12749,11 +13045,11 @@ def _count_word(token: str) -> int | None:
 def test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured():
     """One milestone, one fact, three documents, two answers.
 
-    `docs/RELEASE.md` counts the build order's rows on this branch and finds five never run of
-    fifteen; `docs/TESTING.md` says five in the same wave; and the coverage row that GOVERNS both
-    said "three of five", which is the plan's own pre-milestone sentence carried in unrevised. The
-    denominator is wrong in the direction that reads harsher and the numerator in the direction
-    that reads kinder, so neither half is a measurement.
+    At M4.16 cycle 2 `docs/RELEASE.md` counted the build order's rows on that branch and found five
+    never run of fifteen; `docs/TESTING.md` said five in the same wave; and the coverage row that
+    GOVERNS both said "three of five", the plan's own pre-milestone sentence carried in unrevised.
+    The denominator was wrong in the direction that reads harsher and the numerator in the
+    direction that reads kinder, so neither half was a measurement.
 
     Derived from the record's own Status fields rather than from a number typed anywhere, which is
     the shape `test_the_gate_and_its_guard_publish_the_vitest_count_the_map_actually_holds` uses
@@ -13100,8 +13396,18 @@ def test_the_citation_guard_sees_a_subject_that_moved():
     record = _src(RELEASE_RECORD)
     assert _citation_problems(record) == [], "the guard does not pass the record it describes"
     for stale, shipped in (
-        ("backend/spielplan/worker.py:1121", "backend/spielplan/worker.py:1112"),
-        ("backend/tests/test_backup.py:1367", "backend/tests/test_backup.py:1262"),
+        # M5.1 re-derived the first pair rather than inheriting it: `_acquisition_drain` and
+        # its registry row went in above `Job("nightly-backup"`, which moved the subject 99
+        # lines. Review cycle 1 moved it 14 further, arguing in that registry row's own budget
+        # paragraph that `DRAIN_LIMIT` bounds tasks and not work; review cycle 2 moved it 6 more,
+        # adding the paragraph that says `_acquisition_drain`'s due-count asks for the work this
+        # drain would take; review cycle 3 moved it 14 more, giving that job the board half of the
+        # reaper it had taken the queue half of and the paragraph arguing why the two travel
+        # together. 1240 - the number the record published until this cycle - becomes the stale
+        # half. The pair keeps meaning what it says rather than being retyped.
+        # [M51-REV-07; M5.1 review cycle 2, M51-C2-PAID-02; cycle 3, M51-C3-CRASH-03]
+        ("backend/spielplan/worker.py:1254", "backend/spielplan/worker.py:1240"),
+        ("backend/tests/test_backup.py:1378", "backend/tests/test_backup.py:1262"),
         ("account/+page.svelte:332", "account/+page.svelte:330"),
         ("(`:94`, `:102`", "(`:93`, `:101`"),
     ):
@@ -13270,3 +13576,448 @@ def test_the_attribution_guard_sees_the_sentence_decision_311_shipped():
     assert not _restore_attribution_problems(
         shipped, "a /data/backups movie-data archive passes over the three tables"
     ), "the guard still refuses the claim on a spec that has since said it"
+# --- M5.1 review cycle 1: the figures the documents publish about these scripts -----------------
+
+# Three figures about `ops/m*_exit_criterion.py` reach a reader as prose, and only one of them was
+# derived from anything: how many of the scripts there are (held by hand, five `== 9` assertions a
+# wave has to move deliberately, which is decision 184's shape), how many numbered checks one of
+# them holds, and how long one of them is. The last two sat in section 12's row -- the file
+# CLAUDE.md calls normative, and the row an owner signs -- and twice more in `docs/RELEASE.md`, as
+# words somebody typed.
+#
+# THE CLASS HAS BITTEN TWICE, which is why decision 184 exists at all. `ops/m45_exit_criterion.py`
+# published a bolded 18/18; M4.8 turned one of the eighteen into a real check and another into a
+# plain print, and nobody in that build could say what the corrected number was. And it bit again
+# inside this review cycle: "1,522 lines" was true at the commit that wrote it and false by the
+# time a sibling group had finished repairing that script, with nothing anywhere to say so. So the
+# rule this file already applies to prose -- a document that states a fact about this tree is held
+# to the tree -- is applied to the three figures that describe the instruments section 12 names.
+#
+# The checks figure is read STRICTLY and the lines figure LENIENTLY, which is not an inconsistency:
+# "N numbered checks" is a phrase about these scripts and nothing else, so a block making that
+# claim without naming one is itself the defect; "N lines" is ordinary English, and a sentence
+# counting something else in a block that happens to name a script is not a claim about the script.
+# [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
+_PUBLISHED_CHECKS = re.compile(r"(\d+|[A-Za-z]+) numbered checks?\b")
+_PUBLISHED_LINES = re.compile(r"\b([\d,]+) lines\b")
+_PUBLISHED_SCRIPT_COUNT = re.compile(r"(\d+|[A-Za-z]+) scripts under `ops/`")
+_NAMED_SCRIPT = re.compile(r"ops/(m[a-z0-9]+_exit_criterion\.py)")
+
+
+def _published_number(token: str) -> int | None:
+    """A count as either spelling these documents use: `13`, `1,522` or `thirteen`."""
+    bare = token.replace(",", "")
+    if bare.isdigit():
+        return int(bare)
+    return _COUNT_WORDS.index(bare.lower()) if bare.lower() in _COUNT_WORDS else None
+
+
+def _script_numbered_checks(name: str) -> int:
+    """How many numbered checks `ops/<name>` holds, read off its own `CHECKS` tuple.
+
+    Both spellings the scripts use are read -- `CHECKS = [...]` in the M4.11 and M4.12 scripts and
+    the annotated `CHECKS: tuple[tuple[int, str], ...] = (...)` the three since -- and a script
+    that exposes neither is reported rather than skipped. Four of the nine hold no `CHECKS` at all,
+    so a guard that quietly passed on a name it could not resolve would cover three files while
+    reading as though it covered nine, which is the defect one layer up from the one it is for.
+    """
+    path = REPO / "ops" / name
+    assert path.exists(), f"a document names ops/{name} and the tree does not hold it"
+    for node in ast.parse(_src(path)).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
+            continue
+        if not (isinstance(target, ast.Name) and target.id == "CHECKS"):
+            continue
+        assert isinstance(value, (ast.Tuple, ast.List)), (
+            f"ops/{name} declares CHECKS as something other than a tuple or list literal, so the "
+            "count a document publishes about it cannot be derived. State it in a form this guard "
+            "can read, or the figure goes back to being a number nobody measured."
+        )
+        return len(value.elts)
+    raise AssertionError(
+        f"a document publishes a count of ops/{name}'s numbered checks and that script declares "
+        "no module-level CHECKS. Decision 184: a figure published as measured is derived, so "
+        "either the script names its checks in one place or the document stops counting them."
+    )
+
+
+def _published_figure_problems(label: str, text: str) -> list[str]:
+    """Every figure this document publishes about an exit script, against the script itself.
+
+    The script a figure is about is the last one named before it inside the same block, which is
+    how both documents write it: section 12's cell names the instrument and then counts it, and
+    `docs/RELEASE.md` names it at the head of the paragraph that then says how big it is.
+    """
+    problems: list[str] = []
+    for pattern, noun in ((_PUBLISHED_CHECKS, "numbered checks"), (_PUBLISHED_LINES, "lines")):
+        for match in pattern.finditer(text):
+            where = f"{label}:{text[: match.start()].count(chr(10)) + 1}"
+            named = _NAMED_SCRIPT.findall(text[: match.start()].rsplit("\n\n", 1)[-1])
+            if not named:
+                if noun == "lines":
+                    continue
+                problems.append(
+                    f"{where}: '{match.group(0)}' names no exit script in its own paragraph, so "
+                    "there is nothing to derive it from. Name the script beside the count."
+                )
+                continue
+            published = _published_number(match.group(1))
+            if published is None:
+                problems.append(f"{where}: '{match.group(0)}' is neither a figure nor a number word")
+                continue
+            held = (
+                _script_numbered_checks(named[-1]) if noun == "numbered checks"
+                else len(_src(REPO / "ops" / named[-1]).splitlines())
+            )
+            if published != held:
+                problems.append(
+                    f"{where}: it publishes {published} {noun} for ops/{named[-1]}, which holds "
+                    f"{held}"
+                )
+    return problems
+
+
+def test_every_figure_published_about_a_milestone_script_is_the_scripts_own():
+    """Section 12 and `docs/RELEASE.md` describe the instruments; the instruments answer for it.
+
+    M5.2 through M5.7 each owe a script under decision 321 and review cycles routinely add a
+    check, so the row an owner signs would go on naming an instrument shape that no longer exists.
+    Held over both documents at once because they publish the same sentence: section 12 states the
+    criterion and the record quotes the cell back, so a figure corrected in one and not the other
+    is the same drift with an extra step. [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
+    """
+    spec = _normative_file()
+    problems = _published_figure_problems(spec.relative_to(REPO).as_posix(), _src(spec))
+    problems += _published_figure_problems("docs/RELEASE.md", _src(RELEASE_RECORD))
+    assert not problems, "\n  ".join(
+        ["a document publishes a figure about a milestone script that the script does not hold:",
+         *problems]
+    )
+
+
+def test_the_release_record_counts_the_scripts_under_ops_that_the_tree_holds():
+    """The third figure, and the one the five `== 9` assertions already move deliberately.
+
+    Published twice in one sentence -- "one of the nine scripts under `ops/`" and "not one of those
+    nine" -- so both spellings are read: a sentence that half-corrects itself is how a figure goes
+    stale while looking maintained. [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
+    """
+    text = _src(RELEASE_RECORD)
+    claims = _PUBLISHED_SCRIPT_COUNT.findall(text)
+    assert len(claims) == 1, (
+        f"docs/RELEASE.md publishes '<count> scripts under `ops/`' {len(claims)} times. One file "
+        "states it once, or this guard holds whichever it read first."
+    )
+    published = _published_number(claims[0])
+    assert published == len(EXIT_SCRIPTS), (
+        f"docs/RELEASE.md says {claims[0]} scripts under ops/ and the tree holds "
+        f"{len(EXIT_SCRIPTS)}: {[path.name for path in EXIT_SCRIPTS]}"
+    )
+    claim = _PUBLISHED_SCRIPT_COUNT.search(text)
+    sentence = re.split(r"\.\s", text[claim.start():], maxsplit=1)[0]
+    repeats = [_published_number(token) for token in re.findall(r"those (\d+|[A-Za-z]+)", sentence)]
+    assert all(repeat == published for repeat in repeats), (
+        f"the sentence publishing the script count restates it as {repeats} and says "
+        f"{published} at the front"
+    )
+
+
+def test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown():
+    """The three ways the reading fails, each over the real document rather than over an invention.
+
+    A check added to `ops/m51_exit_criterion.py` and a line added to it are the two edits a later
+    wave actually makes; the third is the sentence that counts checks without saying whose, which
+    is what a naive reading of this rule would pass in silence.
+    """
+    record = _src(RELEASE_RECORD)
+    assert not _published_figure_problems("docs/RELEASE.md", record), (
+        "docs/RELEASE.md is not clean to start with, so this self-test proves nothing"
+    )
+
+    grown = record.replace("twelve numbered checks", "eleven numbered checks")
+    assert grown != record, (
+        "docs/RELEASE.md no longer publishes 'twelve numbered checks', so this mutation is about a "
+        "sentence nobody has any more -- restate it from the file"
+    )
+    caught = _published_figure_problems("docs/RELEASE.md", grown)
+    assert caught and all("m51_exit_criterion.py" in problem for problem in caught), caught
+
+    lines = _PUBLISHED_LINES.search(record)
+    assert lines, "docs/RELEASE.md no longer publishes a line count for a milestone script"
+    shrunk = record.replace(lines.group(0), "1,000 lines")
+    assert _published_figure_problems("docs/RELEASE.md", shrunk), (
+        "the guard read a line count a thousand short as the script's own"
+    )
+
+    assert _published_figure_problems("probe.md", "It holds twelve numbered checks.") == [
+        "probe.md:1: 'twelve numbered checks' names no exit script in its own paragraph, so there "
+        "is nothing to derive it from. Name the script beside the count."
+    ]
+
+
+# --- M5.1 review cycle 4: an exit script cites the application by name, never by line ----------
+#
+# `check_eleven` of `ops/m51_exit_criterion.py` argued decision 332 by pointing at `app.py:522`
+# for the rule that declines `/events`, and at HEAD that line was exactly that rule. Decision
+# 332's own rewrite of the class -- the `/events` paragraph, `SERVER_NAMESPACES` and review cycle
+# 3's lstrip comment -- pushed the rule twenty-five lines down inside the SAME uncommitted change
+# set, so the coordinate came to rest on a prose fragment in the class docstring and the check's
+# argument sent its reader to a sentence about 405s. An operator verifying check 11 then cannot
+# tell a stale note from a rule that moved, which is the afternoon
+# `test_no_backend_comment_cites_the_tonight_client_by_line_number` settles for the backend citing
+# the frontend: cite the function, not the line. That guard globs `backend/` and the seam's
+# sibling reads one comment block in `api.js`, so neither of them has ever read `ops/` -- and
+# this is the one citation those scripts make into the module that decides the routing they
+# measure over HTTP, which is why it is the one held by a name rather than by a coordinate.
+#
+# HELD IN BOTH DIRECTIONS, because a ban on its own is satisfied by deleting the citation: the
+# names a script does cite have to RESOLVE, which is the property the coordinate never had. The
+# class is found by walking the module rather than by reading its top level, since `SpaFallback`
+# is declared inside `create_app` under the static-directory branch -- the mount only exists when
+# a static build does. Over every milestone script rather than over the one that was wrong: M5.2
+# through M5.7 each owe a script under decision 321, and §7.2, §7.3 and §11 all put routes under
+# the namespace this rule decides. [decision 332; M5.1 review cycle 4, M51-C4-CITE-01]
+_APP_BY_LINE = re.compile(r"app\.py:\d+")
+_APP_SYMBOL = re.compile(r"`SpaFallback\.(\w+)`")
+
+
+def _application_citations(text: str) -> tuple[list[str], set[str]]:
+    """(coordinates into `app.py`, `SpaFallback` members named) one script's source carries."""
+    return _APP_BY_LINE.findall(text), set(_APP_SYMBOL.findall(text))
+
+
+def test_no_milestone_script_cites_the_applications_routing_rule_by_line_number():
+    """A coordinate into another file is a citation nothing can keep true; a name is checkable.
+
+    So both halves are asserted here, and the second is why this is not simply a ban: a script
+    that answered the ban by dropping the citation would leave check 11 arguing decision 332 from
+    nothing at all. [decision 332; M5.1 review cycle 4, M51-C4-CITE-01]
+    """
+    coordinates: dict[str, list[str]] = {}
+    cited: set[str] = set()
+    for path in EXIT_SCRIPTS:
+        stale, symbols = _application_citations(_src(path))
+        if stale:
+            coordinates[path.name] = stale
+        cited |= symbols
+    assert not coordinates, (
+        "cite the function, not the line: a milestone exit script cites the application by a "
+        "coordinate the next edit to app.py moves, and this milestone's own edit moved it: "
+        f"{coordinates}"
+    )
+    assert cited, (
+        "no milestone script names a `SpaFallback.<member>` any more, so the half of this rule "
+        "that holds a citation to the application is reading nothing. If check 11 has stopped "
+        "citing the decline rule, this guard comes out together with it."
+    )
+    module = ast.parse(_src(REPO / "backend" / "spielplan" / "app.py"))
+    declared = [
+        node for node in ast.walk(module)
+        if isinstance(node, ast.ClassDef) and node.name == "SpaFallback"
+    ]
+    assert len(declared) == 1, (
+        f"backend/spielplan/app.py declares SpaFallback {len(declared)} time(s), so a citation "
+        "naming one of its members cannot be resolved against it"
+    )
+    held = {
+        node.name for node in declared[0].body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } | {
+        target.id for node in declared[0].body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    missing = sorted(cited - held)
+    assert not missing, (
+        f"a milestone script cites SpaFallback members app.py does not declare: {missing}. The "
+        f"class holds {sorted(held)} -- a name that no longer resolves is the same defect as a "
+        "line number that no longer resolves, caught one edit later."
+    )
+
+
+def test_the_application_citation_reader_tells_a_coordinate_from_a_name():
+    """Both ends of the reading, on the two spellings this milestone actually wrote.
+
+    The first is the sentence check 11 shipped with and the second is the sentence it carries now,
+    so neither is an invention: a reader that answered the same for both would make the rule above
+    vacuous in whichever direction it was blind. [M5.1 review cycle 4, M51-C4-CITE-01]
+    """
+    stale, symbols = _application_citations("declines `/api` (`app.py:522`), so an unrouted path")
+    assert stale == ["app.py:522"] and not symbols
+
+    stale, symbols = _application_citations(
+        "declines `/api` -- `SpaFallback.matches`, over `SpaFallback.SERVER_NAMESPACES` -- so an"
+    )
+    assert not stale and symbols == {"matches", "SERVER_NAMESPACES"}
+
+
+# --- M5.1 review cycle 3: this file's prose sizes registries this file already derives ---------
+#
+# Three registries grew inside M5.1 and three sentences here went on stating the size they had
+# before it: §12's build order gained a row, `docs/RELEASE.md`'s section 1 gained that row and the
+# block answering it, and the register gained the sittings the milestone opened and closed with.
+# The first figure was corrected by hand in `docs/RELEASE.md` inside the same change set and not
+# here, which makes this a mirror that was missed rather than a class nobody had noticed -- and it
+# was missed because nothing reads a comment. That is decision 184, a published figure is derived
+# or it is a claim, applied one level in from the documents where it has always been enforced; it
+# belongs here for two reasons rather than as a matter of taste. These sentences are the
+# explanation attached to a live constant and to two live readers, which is the only kind of
+# comment this codebase writes. And decision 331 puts each of M5.2 through M5.7 into §12 as it
+# opens, so all six move the same figures again -- in the file that holds the guard over the very
+# table being counted, where a reader has the most reason to trust what the prose says.
+#
+# Anchored on THE NOUN THAT NAMES THE SET, in `_router_tallies`' idiom, rather than on the bare
+# word "rows": this file uses that word of coverage rows, map rows, genome rows and bundle rows,
+# and a rule over all of them would be ruling on sets it knows nothing about, which is the mistake
+# `test_layering_guards.py` declined to make first. The exemption is `_job_tallies`' exactly -- a
+# sentence carrying a milestone tag is a dated measurement and stays, because a figure that says
+# when it was true is not a claim about the tree the reader is looking at -- and its looseness
+# comes with it, since a milestone named in that sentence for any other reason exempts the count
+# too. Measured rather than assumed: the sentence opening the release-workflow block above names
+# M4.5 for an unrelated reason and is exempt for it. That is the price of not inventing a second
+# convention for what one file over already has, and it is why the sentences this was written for
+# are REPAIRED rather than left standing for the guard to hold. A live claim drops the numeral, a
+# diagnosis of a defect says which cycle measured it, and the one that read "beside the fifteen"
+# -- a count with no noun at all, which no rule anchored on a noun can ever read -- names the set.
+# [decision 184; decision 331; M5.1 review cycle 3, M51-C3-REG-03, M51-C3-REG-04]
+_SELF_TALLIES = (
+    (re.compile(r"§12[^.;]{0,60}?\b(?P<count>\w+(?:-\w+)?)\s+rows\b", re.I), "build-order"),
+    (re.compile(r"\b(?P<count>\w+(?:-\w+)?)\s+build-order\s+rows\b", re.I), "build-order"),
+    (re.compile(r"\b(?P<count>\w+(?:-\w+)?)[- ]row\s+table\b", re.I), "section-1"),
+    (re.compile(r"\b(?P<count>\w+(?:-\w+)?)\s+section-1\s+rows\b", re.I), "section-1"),
+    (re.compile(r"\b(?P<count>\w+(?:-\w+)?)\s+`?## Decisions taken`?\s+blocks\b", re.I), "sitting"),
+)
+
+
+def _live_tallies() -> dict[str, int]:
+    """How big each of the three is, off the reader this file already uses to read it."""
+    return {
+        "build-order": len(_section_12_milestones()),
+        "section-1": len(_release_summary(_release_section_one())),
+        "sitting": len(_SITTING_BLOCK.findall(_src(REGISTER))),
+    }
+
+
+def _spelt_as(count: int) -> set[str]:
+    """Both ways this tree writes a number, and the digits alone once it outgrows the words."""
+    return {str(count)} | ({_COUNT_WORDS[count]} if count < len(_COUNT_WORDS) else set())
+
+
+def _self_tallies(path: Path) -> list[tuple[int, str, str, str]]:
+    """Every sentence of `path`'s prose that sizes one of those registries, and how it spells it.
+
+    Paragraphs rather than lines, because this file wraps at 108 columns and the sentence that went
+    stale in `test_layering_guards.py` put its count and its noun on either side of a break -- the
+    limit `_comment_paragraphs` exists to close. Sentences rather than whole paragraphs, because
+    the dated form has to be read the way it is written: a rule that asked a whole paragraph for a
+    milestone tag would exempt a live claim for sitting next to an unrelated citation.
+    """
+    found: list[tuple[int, str, str, str]] = []
+    for line, text in _comment_paragraphs(path):
+        for sentence in re.split(r"(?<=[.;]) ", text):
+            if re.search(r"\bM\d", sentence):
+                continue
+            for pattern, registry in _SELF_TALLIES:
+                for match in pattern.finditer(sentence):
+                    word = match.group("count").lower()
+                    if word.isdigit() or word in _COUNT_WORDS:
+                        found.append((line, sentence.strip(), word, registry))
+    return found
+
+
+def test_no_prose_in_this_file_states_a_registry_size_that_registry_does_not_have():
+    """The readers above already answer; a copy of their answer in prose has a shelf life.
+
+    Read against every spelling rather than against today's, which is the half a guard looking only
+    for the live figure cannot do: a count that was already wrong when it was written is exactly
+    the count nobody re-derived. Repeated back with `!a` rather than `!r`, because the sentence is
+    somebody else's -- this file quotes spec prose and carries its em dashes, and a failure has to
+    print on the cp1252 console this repository keeps its output ASCII for.
+    """
+    live = _live_tallies()
+    for registry, count in sorted(live.items()):
+        assert count, f"the {registry} reader found nothing at all - it is measuring itself"
+
+    stale = [
+        f"line {line} sizes {registry} at {word!a} where it holds {live[registry]}: {sentence!a}"
+        for line, sentence, word, registry in _self_tallies(Path(__file__))
+        if word not in _spelt_as(live[registry])
+    ]
+
+    assert not stale, (
+        "a comment in this file states a registry size the registry does not have, in the file "
+        "that holds the guard over that registry: re-derive it, drop the numeral, or date the "
+        f"sentence with the cycle that measured it: {stale}"
+    )
+
+
+def test_the_registry_size_reader_reads_the_sentences_this_file_shipped(tmp_path):
+    """Every spelling the three stale sentences came in, the wrap, and the dated form that stays.
+
+    The stale sentences are kept as string literals, which are not prose: the guard above reads
+    comments and docstrings, so it does not read its own fixture. The last block is the shape that
+    must stay silent -- a diagnosis that says when it was taken -- or the repair reddens the guard
+    that asked for it.
+    """
+    module = tmp_path / "note.py"
+    module.write_text(
+        "# §12 carries fifteen rows.\n"
+        "# A record that counts fifteen build-order rows.\n"
+        "# Section 1 opens with a sixteen-row table.\n"
+        "# Measured over the sixteen section-1 rows.\n"
+        "# The register holds 24 `## Decisions taken` blocks.\n"
+        "\n"
+        "# It wrapped: §12 carries\n"
+        "# fifteen rows.\n"
+        "\n"
+        "# At M4.16 cycle 4 the register held 24 `## Decisions taken` blocks.\n"
+        "\n"
+        "# It gained a row, and section 1 gained the block that answers it.\n",
+        encoding="utf-8",
+    )
+
+    found = _self_tallies(module)
+
+    assert [(line, word, registry) for line, _sentence, word, registry in found] == [
+        (1, "fifteen", "build-order"),
+        (1, "fifteen", "build-order"),
+        (1, "sixteen", "section-1"),
+        (1, "sixteen", "section-1"),
+        (1, "24", "sitting"),
+        (7, "fifteen", "build-order"),
+    ], f"the reader misses a spelling, reads the dated form, or loses the wrapped one: {found}"
+
+
+def test_the_paragraph_reader_glues_a_wrapped_comment_and_leaves_the_docstring_whole(tmp_path):
+    """The run is one paragraph, a bare `#` ends it, and a docstring is never glued to either.
+
+    The last is the objection `test_worker_schedule.py` records against gluing at all, so it is
+    asserted rather than argued: the docstring arrives on its own, keyed to the `def` it hangs
+    under, and the comment above it is not joined to it. [M5.1 review cycle 3, M51-C3-REG-02]
+    """
+    module = tmp_path / "note.py"
+    module.write_text(
+        "# The note says all fourteen\n"
+        "# routers by definition.\n"
+        "#\n"
+        "# A second paragraph.\n"
+        "\n"
+        "def f():\n"
+        '    """A docstring under a comment."""\n'
+        "\n"
+        "\n"
+        "# A trailing note.\n",
+        encoding="utf-8",
+    )
+
+    assert _comment_paragraphs(module) == [
+        (1, "# The note says all fourteen routers by definition."),
+        (4, "# A second paragraph."),
+        (10, "# A trailing note."),
+        (6, "A docstring under a comment."),
+    ]
