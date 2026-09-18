@@ -81,9 +81,8 @@ def _worker_suffix() -> str:
     worker with nothing ever coming back for them. An xdist worker is an ordinary OS process with
     an ordinary pid, so preferring the pid costs nothing and puts both invariants back.
 
-    The pid is enough because a session that ends normally drops its database and one that does
-    not is swept by `_reap_orphaned_databases` at the start of the next. The pid is enough because a session that
-    ends normally drops its database and a session that does not is swept by
+    The pid is enough because a session that ends normally drops its database and one that
+    does not is swept by
     `_reap_orphaned_databases` at the start of the next one -- which is the invariant this
     docstring used to assert on the strength of the `finally` in `pg_url` alone, a frame a
     terminated process never reaches. [M4.8 dd29]
