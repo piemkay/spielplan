@@ -70,13 +70,25 @@ def test_database_url() -> str | None:
 def _worker_suffix() -> str:
     """What makes this pytest process distinct from every other one on the machine.
 
-    `PYTEST_XDIST_WORKER` under -n, the pid otherwise. The pid is enough because a session that
+    The pid, always -- including under -n.
+
+    It read `PYTEST_XDIST_WORKER` first, and that spelling is the one form of this identifier
+    that is NOT process-unique: `gw0` is what the first worker of every `-n` run calls itself, so
+    two such runs against one cluster each force-drop the other's live database in
+    `_make_database` -- the cross-process destruction `pg_url`'s docstring records, arriving
+    through the very mechanism written to prevent it. `gw0` is also invisible to `_reap_pattern`,
+    which parses a pid back out of the name, so a terminated `-n` run leaked one database per
+    worker with nothing ever coming back for them. An xdist worker is an ordinary OS process with
+    an ordinary pid, so preferring the pid costs nothing and puts both invariants back.
+
+    The pid is enough because a session that ends normally drops its database and one that does
+    not is swept by `_reap_orphaned_databases` at the start of the next. The pid is enough because a session that
     ends normally drops its database and a session that does not is swept by
     `_reap_orphaned_databases` at the start of the next one -- which is the invariant this
     docstring used to assert on the strength of the `finally` in `pg_url` alone, a frame a
     terminated process never reaches. [M4.8 dd29]
     """
-    return os.environ.get("PYTEST_XDIST_WORKER") or f"p{os.getpid()}"
+    return f"p{os.getpid()}"
 
 
 # Postgres truncates an identifier at 63 bytes, so the name is cut to fit -- and what gets cut

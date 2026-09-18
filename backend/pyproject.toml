@@ -34,6 +34,13 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # 1,265 of this suite's 3,051 tests take `db`, and that is what makes a full run long. xdist
+    # is the half of the answer the fixture's own reset cannot give: `pg_url` already builds a
+    # database per process -- "one extra CREATE DATABASE per session buys a suite that can be run
+    # concurrently by anything" -- and `_worker_suffix` keeps that name process-unique under -n,
+    # so workers share the server and nothing else. Declared rather than assumed, because `-n` is
+    # now the documented way to run this suite.
+    "pytest-xdist>=3.6",
     "ruff>=0.7",
     # tests/fixtures/soft_authenticator.py builds real CTAP2 structures, so it encodes COSE
     # keys and attestation objects itself. It arrives transitively with webauthn; naming it

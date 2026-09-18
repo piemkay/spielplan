@@ -1,0 +1,81 @@
+# The database `pytest` runs against. Standalone: this file is complete on its own.
+#
+#   docker compose -f ops/compose.test.yml up -d
+#   TEST_DATABASE_URL=postgresql://spielplan:spielplan@127.0.0.1:5442/spielplan_test
+#
+# Deliberately NOT an overlay on docker-compose.yml, which the two files next door are. Decision
+# 181 left `${VAR:?}` on the stack's own services, and compose interpolates every service in the
+# file set before it starts any of them -- so `-f docker-compose.yml -f this up -d testdb` fails
+# on a missing SESSION_SECRET in a checkout with no `.env`, which is exactly the checkout someone
+# has when all they want to do is run the tests. Standing alone also means this file cannot start,
+# stop or rebuild a stack service by accident, and `name:` keeps it in its own compose project so
+# `docker compose down` in either place leaves the other running.
+#
+# WHY NOT JUST USE `db`. Everything below trades durability for speed, and `db` holds the
+# household's own `spielplan` database -- the one thing on the box that has to survive a power
+# cut. A test database cannot lose anything that existed before the run: `pg_url` creates one per
+# pytest process and drops it in a `finally`, and the database this URL names is a template name
+# the suite never connects to. The cluster's entire contents are created and destroyed inside one
+# pytest run, so durability here buys nothing.
+#
+# WHAT IT IS WORTH. Measured as the `db` fixture runs it -- connect, reset, close -- which is the
+# per-test cost that 1,265 of the suite's 3,051 tests pay:
+#
+#   PGDATA on the host bind mount, fsync on  -- what `db` does today         2.10 s
+#   docker named volume, fsync on                                            0.98 s
+#   docker named volume, fsync/synchronous_commit/full_page_writes off       0.18 s
+#
+# Two independent factors, and the settings are worth more than the mount. The bind mount is
+# Docker Desktop's Windows filesystem passthrough and Postgres DDL is near its worst case:
+# `apply_all` builds 69 tables and 92 indexes, and a TRUNCATE of those tables rewrites as many
+# relfilenodes again. The fsync group is what turns 22 migration commits per reset from disk waits
+# into memory writes. Neither is a decision about the product; both are decisions about a database
+# with a lifetime of one pytest process.
+#
+# Measured end to end on the full suite: 67m34s against `db` as it is configured today, 11m06s
+# here with no other change at all.
+#
+# A `--tmpfs` PGDATA measured the same (0.17 s) and is the same trade. The named volume is
+# preferred only because it has no size that can be got wrong as the fixtures grow.
+name: spielplan-test
+
+services:
+  testdb:
+    image: postgres:16
+    # Durability off, deliberately, and only here. A crash mid-run would corrupt a cluster whose
+    # every database was going to be dropped by the `finally` the crash skipped, and which the
+    # next session's `_reap_orphaned_databases` sweeps anyway.
+    command:
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-spielplan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spielplan}
+      # Never `spielplan`. The `db` fixture opens every test with DROP SCHEMA, so a mistyped port
+      # is the one way it could be aimed at real data, and a cluster that does not contain that
+      # name cannot be the target of that mistake.
+      POSTGRES_DB: spielplan_test
+    volumes:
+      # A named volume, never ./data: everything under /data is host-mounted by
+      # docker-compose.yml, and that passthrough is half of what this file exists to avoid.
+      - testdb-data:/var/lib/postgresql/data
+    # TEST_DB_PORT for the reason DB_PORT exists in compose.dev.yml -- a worktree per lane needs a
+    # cluster per lane. The default is 5442 rather than another 543x so it cannot collide with a
+    # stack's own DB_PORT, which the roadmap's parallel milestone pairs already spend 5432-5434 on.
+    ports:
+      - "127.0.0.1:${TEST_DB_PORT:-5442}:5432"
+    healthcheck:
+      # Against `postgres` and not POSTGRES_DB: this answers "is the server up", and naming a
+      # database the suite creates and drops would make the answer depend on the run.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spielplan} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  testdb-data:
