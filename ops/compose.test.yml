@@ -52,6 +52,14 @@ services:
       - synchronous_commit=off
       - -c
       - full_page_writes=off
+      # The shared lock table holds max_locks_per_transaction x max_connections entries, and the
+      # `db` fixture's DROP SCHEMA ... CASCADE takes one lock per object it drops -- every table,
+      # index, sequence and type the migrations build. Sixteen xdist workers resetting at once need
+      # that many times over: `pytest backend/tests/test_dna*.py -n 16` failed with "out of shared
+      # memory" at the default of 64 and passes at 256. The full suite rarely lines sixteen resets
+      # up in one instant, which is why it passed anyway -- a flake waiting for the day it did.
+      - -c
+      - max_locks_per_transaction=256
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-spielplan}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spielplan}
