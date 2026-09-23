@@ -133,8 +133,21 @@ GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
 # [decisions 322, 340, 345; M5.1]
 ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
 
+# 0027_dna_extraction's two tables, and they are ACQUISITION_SPINE's argument rather than a new
+# one -- with an asymmetry worth stating, because it looks like an oversight and is not: the DNA
+# this install extracts DOES travel (`dna_tag`, `dna_evidence`, `dna_projected` are in TABLES), and
+# what it REFUSED does not. `dna_reject` is a record of what one provider returned on one run of
+# this box's own configuration - it carries `provider` and a `run_id` into `job_run`, which is
+# APP_STATE and excluded - so a restore carrying it would name runs that never happened in that
+# install, which is `title_jellyfin_item`'s reason one milestone on. `dna_pack` is the index of a
+# pack in the raw store: the archive does not carry `/data/raw` and does not carry `raw_document`,
+# so its rows would point at files a restored install does not hold, and a pack sha nothing can be
+# reproduced against is worse than no row (decision 382 is about reproducibility). Neither is
+# corpus. [decisions 341, 382; M5.4]
+DNA_EXTRACTION = {"dna_reject", "dna_pack"}
+
 EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
-            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE)
+            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | DNA_EXTRACTION)
 
 
 # --- the postgres client binaries -------------------------------------------------------------

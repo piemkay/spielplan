@@ -265,7 +265,7 @@ Two things happen on the way that are easy to miss:
 > M5.1    6/6   covered
   M5.2    0/1   covered
   M5.3    6/6   covered
-  M5.4    0/2   covered
+  M5.4    8/8   covered
   M5.5    0/2   covered
   M5.6    0/2   covered
   M5.7    0/2   covered
@@ -299,6 +299,73 @@ than assumed — section 2 reports `29 shipped, 9 skipped with a reason` where i
 skipped, and section 5 reports `genome=0` where it reported 781, and both still pass, because the
 accounted-table check asks for a count OR a reason and the empty-block check already excluded
 `genome` by name.
+
+**M5.4 opened second, in one wave with M5.2 and M5.3, and the first milestone in this wave whose rows were
+appended to a map another milestone holds.** `current_milestone` is `"M5.1"` and stays there --
+M5.1 holds the scalar while six lanes build against the seams it published -- so M5.4's eight rows
+are owed rather than armed, and owed is what they are and not waived: a row this map carries with
+tests, at a milestone the gate has not reached, is a claim nobody has checked yet rather than one
+somebody excused. Two of the eight were already here. The verify trust boundary and the per-title
+projection budget were re-pointed from "M5" to M5.4 as M5.1 opened, milestone key and nothing
+else, and this milestone left their `what`, `why` and `spec` exactly as M4.16 and M5.1 left them:
+what moved is the `tests` key, which is the whole of what a milestone owes a red gate it
+inherits. Three more were written before the code they describe, which is M4.10's, M4.11's
+and M4.16's opening rather than M4.9's and M4.15's -- one for the single `norm()` the pack writer
+and the quote checker share, one for the store that records a dropped tag with the rule it broke,
+and one for the alias map this app has been loading since M0 and reading nowhere at all.
+
+**The sixth landed a cycle late, and the gap it left is worth reading rather than just counting.**
+`docs/milestones/M5.4-plan.md` gives the thin-facet measurement its own phase and decision 390 its
+own number, and then lists three new rows -- so `dna/coverage.py` and its 285-line test file
+shipped with no row naming any of it, and an unregistered test has none of the protection this
+page promises: `test_every_named_test_exists` only sees the tests a row names, so those assertions
+could have been emptied by a later refactor with the map still reading `M5.4 5/5`. The §8.4 rows
+that will eventually spend the measurement belong to M5.6, M5.7 and M6 and are all still
+`tests = []`; filling one of them from here would have silenced another milestone's red gate over
+work it has not done. `data-rules-the-thin-facet-measurement-counts-and-never-thresholds` is
+therefore M5.4's own row, added by its first review cycle, and the eleven ids it names were
+already green -- what changed is that deleting one of them now breaks the build.
+
+**The seventh and eighth landed two cycles later on the sixth's argument, and the review that found
+them measured what the gap had cost** (decision 402). `dna/adjudicate.py` has its own plan step and
+decision 388 assigns it here by name, yet its whole test file was named by no row; pack custody,
+decision 382's subject and the table M5.5's `llm_call` is specified to reference, had no row either.
+The same review found the reader wrong in exactly the place its unregistered tests did not look -- a
+per-title `keep` fell through `rename` to the blanket sweep while `is_retired` stopped on it -- and
+it found `dna_pack`'s key refusing a second title whose pack was byte-identical to a first (decision
+403). `data-rules-the-curation-ledger-reader-lets-a-titles-own-verdict-beat-the-blanket-rule` and
+`data-rules-the-pack-a-verdict-was-reached-against-is-kept-and-names-its-own-bytes` are M5.4's own
+rows; the inherited trust boundary's `what` and `why` stayed as written, and what it gained is the
+tests this cycle found asserting its clauses with no row naming them.
+
+**One row the map already had was amended in place rather than duplicated,** named so an auditor
+can check each rather than take the count: `platform-exit-criteria-are-closed-by-a-committed-measurement`,
+M4.16's release-record row. The first review cycle gave its `what` two clauses -- a row the record
+calls NOT BUILT names a milestone the map registers no test against, and the record's opening
+paragraph counts the rows its own table records -- registered the two static guards that hold them,
+and restated its `why` from six never-run criteria of sixteen to seven of seventeen, because M5.4's
+own §12 row stopped being NOT BUILT once `backend/spielplan/dna/` existed. It is the only row
+outside M5.4 whose text this milestone changed. The guard over this banner reads a review cycle's
+mark only for `current_milestone`, so the row is named now rather than left for the day M5.4 holds
+the scalar. [M5.4 review cycle 3, M54-C3-EVID-04]
+
+Decisions **341** and **382-403** record the calls it needed: eleven taken in one sitting as the
+milestone opened rather than discovered inside it, and 392-403 across its three review cycles,
+which this paragraph published as stopping at 391 for two cycles after the register had moved
+past it. Four of the first eleven bind its code directly: 341 gives a
+dropped tag a table of its own and settles that §6.6's "low-evidence" is an ordering and never a
+`WHERE`, which is §4.1 rule 2 and the reason `dna_reject` carries no confidence column to filter
+on; 382 keeps the pack in M5.1's raw store, so a verdict stays reproducible against the text it
+was made from rather than against whatever is on disk later; 386 drops a salience outside the
+declared domain instead of clamping it, because a clamp is a repair and §8 stage 7 says failures
+drop and are never repaired; and 387 ships the domain package and wires no §8 stage and no worker
+job, so `backend/spielplan/worker.py` and `backend/spielplan/acquire/stages.py` are untouched by
+a lane that does not own them. Two others record a debt rather than a rule: 383 takes
+`dna_alias.kind` in the schema and leaves the one-line loader fill owed, because
+`backend/spielplan/importer/dna.py` is M5.3's file and that lane is building in parallel, and 388
+records that M5.3's plan assigns the same adjudication ledger a second reader. Its one migration
+is `0027_dna_extraction.sql`, the number `docs/milestones/ROADMAP-M5.md`'s ledger allocates to it;
+0025 and 0026 belong to the two lanes building beside it, and 0019 stays permanently unused.
 
 **M5.1 is the milestone this block was last re-pasted for, and its `6/6` closed the red list it
 opened with — six rows written before a line of its code existed.** Those six, `current_milestone`
@@ -534,9 +601,9 @@ three tables out of the movie-data archive. They are numbered 347-349 and not 34
 `docs/milestones/ROADMAP-M5.md` files 346 against M5.3, whose own plan is bound to record it
 under that number: a number allocated to a milestone that has not opened is a hole like any
 other, and spending it here would leave two normative rules under one heading. The range is
-deliberately full of holes, and M5.3 took 326, 334, 335 and 346 out of them as it opened,
-leaving **324-325** spare, **327-330** spare, **333** spare, **337-339** spare and
-**341-344** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
+deliberately full of holes, and M5.3 took 326, 334, 335 and 346 out of them as it opened and M5.4
+341, leaving **324-325** spare, **327-330** spare, **333** spare, **337-339** spare and
+**342-344** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
 milestone that owns the step it blocks, because a number is taken by an owner rather than
 reserved by a planner. Its one migration is
 `0024_acquisition.sql`, the number the roadmap's ledger allocates to it; 0019 stays permanently unused
@@ -569,16 +636,18 @@ subject IS this map, so a row naming a test that did not exist yet would have be
 describing work it had not done, inside the one milestone written to stop records doing exactly
 that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
 waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
-reach **154 ids in four pytest files and one e2e spec**, and the count includes the three
+reach **156 ids in four pytest files and one e2e spec**, and the count includes the three
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
 never instead of one — they sit in the frontend's suite rather than in the five files the figure
 names, so an auditor reconciling the two subtracts them first. The series is published rather than
 left as a total to take on trust (decision 184): 20 ids in `test_layering_guards.py` for the
 two layering rules (two of them M5.1's review cycle 2, holding the routing note above
 `ANONYMOUS` to the tree it describes), 42 ids in `test_release_gate.py` for the release
-workflow, the executed-coverage gate and the harness's own fixture, 64 ids in `test_static_contracts.py` for
+workflow, the executed-coverage gate and the harness's own fixture, 66 ids in `test_static_contracts.py` for
 the documents this milestone rewrote (three of them M5.1's review cycle 3, holding this file's own
-prose to the registries it sizes), 24 ids in `test_spec_coverage.py` for the rules the
+prose to the registries it sizes, and two M5.4's review cycle 1, holding the release record's
+NOT BUILT rows to the coverage map and its opening paragraph to the table beneath it), 24 ids in
+`test_spec_coverage.py` for the rules the
 instrument gained (four of them M5.1's review cycle 4, holding the register's numbering and
 the normative file's own decision citations, and one M5.3's review cycle 1, holding the register to
 naming every number it leaves unspent below the last one it heads), and 1 id in `19-phone-shell.spec.js` beside 3 ids in

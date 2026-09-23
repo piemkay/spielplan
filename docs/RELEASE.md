@@ -7,13 +7,15 @@ and where the output lives; and what nobody has ever measured at all.
 
 It exists because "the suite is green" had been standing in for §12's exit criteria, and those are
 different statements. A green suite answers *is the map covered*. §12 asks *does this build ship*.
-Counted on this branch rather than inherited. §12 carries **seventeen** rows. **Seven of them have
-never been run at all**, and the seven are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
-under `ops/` at all and never have, while M5.1's and M5.3's instruments were each written in the same
+Counted on this branch rather than inherited. §12 carries **eighteen** rows. **Eight of them have
+never been run at all**, and the eight are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
+under `ops/` at all and never have; M5.1's and M5.3's instruments were each written in the same
 change set as the surface they measure and neither has ever been run, because the lanes that built
-them could start no server and no container. Three describe milestones that do not exist yet (M5, M6,
-M7). The remaining seven have been measured by one of the ten scripts under `ops/`, and **not one of
-those ten had a committed output** until M4.16 wrote the first. M4.5's own eighteen checks
+them could start no server and no container; and M5.4's checks are the suite's, which runs them
+against the fixture and not against the real install and real bundle its criterion names. Three
+describe milestones that do not exist yet (M5, M6, M7). The remaining seven have been measured by one
+of the ten scripts under `ops/`, and **not one of those ten had a committed output** until M4.16
+wrote the first. M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
 
@@ -66,6 +68,7 @@ is here because it is the one criterion this milestone actually ran.
 | M4.14 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5.1 | UNMEASURED | none | yes | `________` |
 | M5.3 | UNMEASURED | none | yes | `________` |
+| M5.4 | UNMEASURED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
@@ -315,9 +318,11 @@ and no container by construction, which is why the instrument was written to deg
 assume: checks 9 (`/data/raw` absent from the backend image) and 11 (`POST /events/nothing` answering
 404 through the app that ships) print "NOT MEASURED HERE" and the run exits 3 - neither a pass nor a
 failure - rather than counting an unasked question as an answer. This row therefore joins M0, M2,
-M4.6, M4.7 and M4.10 in the column this file exists for, and it is the first of the two of the seven
-that an owner can close by running something rather than by first writing it; M5.3's block below is
-the second, and it is the same sequence one milestone on.
+M4.6, M4.7, M4.10 and M5.4 in the column this file exists for, and it is the first of the two of the
+eight that an owner can close by running something rather than by first writing it; M5.3's block
+below is the second, and it is the same sequence one milestone on. Five of the others have no script
+under `ops/` at all, and M5.4's criterion names none because its checks are expressible against the
+suite.
 
 ### M5.3 — the sources and the derive: crawl once, re-parse forever, corrections last
 
@@ -365,9 +370,38 @@ injected so that Rotten Tomatoes' and Metacritic's real rate — seven tenths of
 one at a time — is honoured without the run taking a quarter of an hour. The harness is made
 tolerant; the policy is not made faster.
 
-This row therefore joins M0, M2, M4.6, M4.7, M4.10 and M5.1 in the column this file exists for, and
-it is one of the two of the seven that an owner can close by running something rather than by first
-writing it.
+This row therefore joins M0, M2, M4.6, M4.7, M4.10, M5.1 and M5.4 in the column this file exists
+for, and it is one of the two of the eight that an owner can close by running something rather than
+by first writing it.
+
+### M5.4 — the DNA half: the pack, the trust boundary, the projection
+
+**Criterion (§12, abbreviated):** a fabricated tag inside an otherwise well-formed provider
+response is absent from the verifier's output, and so is a tag whose quote is not a substring of
+that title's pack under `norm()`, and so is one whose salience is outside {1,2,3}; no tag is ever
+repaired, only dropped, and every drop is recorded with the rule it violated; every tag that passes
+carries its evidence quote; a term the adjudication ledger renames passes under its new name and one
+it retires does not pass at all; a quote differing from the pack only by bold markers, a spoiler tag
+or a smart apostrophe still passes; an extraction-lexicon alias row never projects; and a per-title
+projection of one acquired title completes in under 1 s on CPU with no GPU present and changes
+nothing when it is re-run.
+
+**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes. **Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone
+writes its own §12 row when it opens rather than having one pre-written for it. **It opened NOT
+BUILT and moved to UNMEASURED inside the same change set**, which is the move M5.1's block above
+records making: `backend/spielplan/dna/` is in this tree, nine modules and 2,624 lines, and the
+two words are not the same claim. Unlike M5.1's, this criterion names no `ops/`
+script, because every one of its checks is expressible against the suite — the verifier and the
+pack are pure functions over a payload and a database, and the projection budget is measured
+against the domain callable the way `test_placement.py` measures Cold Tower placement rather than
+the job that calls it (decision 387). What the suite cannot supply is the criterion's first clause.
+It runs those checks against the fixture bundle, whose three review rows are every one of them
+under the pack's 50-word floor and none of them from Rotten Tomatoes, and which carries no
+`wikipedia` raw document at all until M5.3 lands that fetcher (decision 391). "On a real install
+with the real corpus bundle" is therefore still an unasked question, and that is the column this
+file exists for.
 
 ### M5 — acquisition pipeline, admin connector UI, LLM layer, extraction flywheel
 
@@ -515,7 +549,7 @@ reporter only under `CI`, so no run made in this lane has ever produced the BROW
 parses; `e2e/.results/` here holds nothing but Playwright's own `.last-run.json`.
 
 **The pytest half is no longer only synthetic** (decision 313). Once, from this lane, scoped —
-never the whole suite. **Re-run and re-measured on this branch on 2026-09-19:**
+never the whole suite. **Re-run and re-measured on this branch on 2026-09-24:**
 
 ```
 pytest backend/tests/test_release_gate.py -q --junitxml=<scratch>/real-junit.xml   # 103 passed
@@ -523,7 +557,7 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 42 test result(s) read from 1 JUnit and 0 Playwright report(s)
   coverage gate: 42 row-and-test pair(s) confirmed executed
   coverage gate: 47 named vitest id(s) not visible here (decision 226: no row rests on one alone)
-  coverage gate: 312 row(s) name evidence that did not run, in 2259 line(s): ...
+  coverage gate: 312 row(s) name evidence that did not run, in 2261 line(s): ...
 ```
 
 **Four of those five figures are re-derived rather than remembered**, which is why this block is
@@ -560,11 +594,17 @@ two harness rows and M4.16's register row - the exit script's SQL, the operator'
 holes the register leaves unnamed - take the line figure to 2259 with the row figure still at
 312, and the commands above were re-run on this branch rather than the number edited. It also shows the figure is moved by registering an id on any
 SHIPPED row, whichever milestone does it, which is the one thing the six occasions above could not
-show while every one of them was the current milestone's own. The line
+show while every one of them was the current milestone's own. **M5.4's first review cycle is the ninth**, and it repeats the sixth's lesson rather than adding one:
+two guards registered on a row M4.16 already owned moved the line figure and left the row figure where
+it was, and it went red in that milestone's green pass rather than in the fix round that wrote them,
+because that round ran the test files it had touched and this figure is held in a file it had not.
+The commands above were re-run rather than the number edited, and re-run again when the M5.3 and M5.4
+lanes merged, which is where the figure above comes from. The line
 figure is NOT decomposed in this paragraph any more: the decomposition was a second copy of a
 measurement, it went stale in the same cycle that moved the figure, and that is what the sentence
 below strikes decision 313's own copy for. [M5.1, green pass; M5.1 review cycle 1, green pass;
-M5.1 review cycle 4, green pass; M5.1 review cycle 4 second pass, green pass] The fifth, pytest's
+M5.1 review cycle 4, green pass; M5.1 review cycle 4 second pass, green pass; M5.4 review
+cycle 1, green pass] The fifth, pytest's
 own `N passed` line, counts parameterised CASES; no static rule can take it without evaluating every
 `parametrize` list, so it stays what it is — a dated console reading, with nothing below claiming
 anything about it. It is NAMED here rather than restated: this paragraph carried a second copy of
@@ -955,7 +995,7 @@ docstring in `db/library.py` because `0004_dna.sql` is applied and checksummed; 
 `frontend/static/tmdb-logo.svg`, decision 298's owed asset, which is a comment about an ABSENCE
 rather than a citation to follow and is deleted together with section 7.1 the day the owner drops
 the file in; (3) `sync/resolve.py`, named at `backend/spielplan/backup/movie_data.py:32` and
-`backend/tests/test_backup.py:1378` — a genuine uncorrected citation, since the module is
+`backend/tests/test_backup.py:1391` — a genuine uncorrected citation, since the module is
 `connectors/resolve.py`.
 
 **Escalated, not edited.** The owner's call is whether (3) is repaired and (2) amended in decision

@@ -321,6 +321,27 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # per-tick bound, a paid stage's refusal to run uncapped, and the archive's exclusion of the
 # spine's three tables. Its one migration is 0024_acquisition.sql.
 # See docs/milestones/M5.1-plan.md and ROADMAP-M5.md.
+#
+# M5.4 opened second, in one wave with M5.2 and M5.3, and it adds no name to the list: M5.1 landed all seven
+# positionally in one commit, so what this entry owes a reader is why "M5.4" sits where it already
+# does and what is now behind it. It sits BEFORE "M5.5" because stage 7 is the trust boundary that
+# judges what stage 6 returns - §9's "the schema is a cost-saving device, not the guarantee, the
+# guarantee is the validator" - so the milestone that writes the validator has to be readable as
+# shipped before the milestone that first calls a provider, and M5.5 is written against what this
+# one publishes. It sits AFTER "M5.3" and depends on it barely: the install already holds the
+# bundle's review bodies and per-source `title_meta`, so the pack this milestone builds has
+# something to be built from before stage 2's fetchers exist, which is what makes the three lanes
+# of this wave parallel rather than notionally so. It does NOT hold `current_milestone`; M5.1 does,
+# and its five rows are appended without raising the scalar, which is the M4.6 rule read from the
+# other side - a scalar raised in a lane that is not holding it reddens every other lane at once.
+# Three of the five are new and land with no `tests` key, which is M4.10's, M4.11's and M4.16's
+# opening: the red list is the test plan, closed by writing those tests and never by a waiver, by
+# renaming a registered test, or by lowering the scalar. The other two are the pair M5.1 re-pointed
+# here - the verify trust boundary and the per-title projection budget - and the second of them
+# stays measured against the exported callable rather than against a `Job` registration this
+# milestone deliberately does not make (decision 387). Decisions 341 and 382-403 record the calls
+# it needed, and its one migration is 0027_dna_extraction.sql.
+# See docs/milestones/M5.4-plan.md and ROADMAP-M5.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
               "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]
@@ -3104,6 +3125,17 @@ def test_every_published_decision_range_ends_where_the_register_does():
     other side, applied to a figure a later run overtook, which is what the two ledger guards above
     already hold for the milestone counts and the id total. Neither of them can see a range.
     [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
+
+    A MILESTONE THAT DOES NOT HOLD `current_milestone` PUBLISHES ITS RANGE UNHELD, and this guard
+    says so rather than implying otherwise. M5.4 is the first milestone to ship rows without the
+    scalar, and its first two review cycles took ten decisions while four documents -- the three
+    this guard reads and the spec's own §12 row -- went on publishing the range it opened with; the
+    guard was scoped to M5.1 and saw none of it. It could not simply be pointed at M5.4 either: a
+    range is recognised here by starting at the milestone's lowest number, and M5.4's lowest is 341,
+    a number a planner filed against it, so it publishes "341 and 382-N" and no range beginning at
+    341 exists to read. Until that milestone holds the scalar, keeping its range current is the
+    milestone's own review work and nothing mechanical checks it.
+    [M5.4 review cycle 3, M54-C3-EVID-03]
     """
     blocks = _current_milestone_blocks()
     assert blocks, f"the register heads no `## Decisions taken` block for {CURRENT}"

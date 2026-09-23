@@ -13184,6 +13184,119 @@ def test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured():
     )
 
 
+# --- M5.4 review cycle 1: two words the record defines as different claims, read as one ---------
+#
+# `_UNMEASURED` groups `NOT BUILT` with `UNMEASURED` because both mean "no output file, and that is
+# the honest answer", and every rule above reads that set. Section 1 of the record defines them as
+# different claims -- never run, against does not exist yet -- and nothing held the difference.
+# M5.4's row was written `NOT BUILT` as the milestone opened, under decision 331, and was still
+# `NOT BUILT` in the change set that added `backend/spielplan/dna/`: the record said the package
+# the criterion is about does not exist, in the commit that added nine modules of it, and the
+# never-run count derived directly above therefore published six where seven was honest. M5.1's
+# block, fourteen lines further up the same file, had already made the move and written down why.
+#
+# The discriminator is not the prose. A milestone that does not exist yet has nothing registered
+# against it in the coverage map, which is why M5, M6 and M7's rows carry `tests = []` and why an
+# open milestone's gate is red rather than green. A row the map names tests for is a milestone
+# that exists and has not been run, and that is what UNMEASURED means.
+# [decisions 296, 331; M5.4 cycle 1, M54-REV1-DOC-01]
+
+
+def test_a_row_this_record_calls_not_built_is_a_milestone_the_map_names_no_test_for():
+    """`NOT BUILT` is a claim about the tree, so the tree is what holds it.
+
+    The status a row carries while its milestone is being built is the one place this record goes
+    stale without anybody editing it: the lane writes `NOT BUILT` on the day the row opens and the
+    code lands underneath it. Every other rule in this section reads `_UNMEASURED`, in which the
+    two words are one, so the suite stayed green over a cell that had become false AND over a
+    published count that under-reported the unrun criteria by one.
+    [decisions 184, 296, 331; M5.4 cycle 1, M54-REV1-DOC-01]
+    """
+    rows = _release_rows()
+    registered: dict[str, list[str]] = {}
+    for row in tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["requirement"]:
+        if row.get("tests"):
+            registered.setdefault(row["milestone"], []).append(row["id"])
+    claimed = [
+        name
+        for name in _section_12_milestones()
+        if (fields := _RELEASE_FIELDS.search(rows.get(name, ""))) is not None
+        and fields.group(1).strip() == "NOT BUILT"
+        and name in registered
+    ]
+    assert not claimed, (
+        "docs/RELEASE.md records "
+        + ", ".join(
+            f"{name} as NOT BUILT while spec_coverage.toml names tests for it "
+            f"({len(registered[name])} rows, first {registered[name][0]})"
+            for name in claimed
+        )
+        + ". NOT BUILT means the milestone does not exist yet; a milestone the map holds tests "
+        "for exists and has not been run against its criterion, which is UNMEASURED. Move the "
+        "Status field, the summary table cell, this file's opening paragraph and the never-run "
+        "count in spec_coverage.toml together, the way M5.1's row records doing."
+    )
+
+
+# The record's opening paragraph publishes the same figures its table holds -- how many rows the
+# build order carries, how many criteria have never been run, and which rows describe milestones
+# that do not exist yet, by name -- and no guard read any of them. It is the first statement a
+# reader meets and it is prose rather than a field, so the rule above can be green while the
+# paragraph contradicts the table it summarises. Decision 184 is what applies to all three.
+_RECORD_TOTAL = re.compile(r"carries\s+\*\*(?P<count>\w+)\*\*\s+rows")
+_RECORD_NEVER_RUN = re.compile(
+    r"\*\*(?P<count>\w+)\s+of\s+them\s+have\s+never\s+been\s+run\s+at\s+all\*\*"
+)
+_RECORD_NOT_BUILT = re.compile(
+    r"(?P<count>\w+)\s+describe\s+milestones\s+that\s+do\s+not\s+exist\s+yet\s*\((?P<names>[^)]*)\)"
+)
+
+
+def test_the_records_opening_paragraph_counts_the_rows_its_own_table_records():
+    """Three figures in prose, over a table that answers all three.
+
+    The same failure `test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured`
+    holds one file over, in the file that file trusts. Both of the paragraph's counts moved when
+    M5.4's row moved, and neither is a field any pattern here was reading.
+    [decision 184; M5.4 cycle 1, M54-REV1-DOC-01]
+    """
+    intro = re.split(r"^## ", _src(RELEASE_RECORD), maxsplit=1, flags=re.M)[0]
+    rows = _release_rows()
+    owed = _section_12_milestones()
+    status = {
+        name: fields.group(1).strip()
+        for name in owed
+        if (fields := _RELEASE_FIELDS.search(rows.get(name, ""))) is not None
+    }
+    never = [name for name in owed if status.get(name) == "UNMEASURED"]
+    unbuilt = [name for name in owed if status.get(name) == "NOT BUILT"]
+    problems = []
+    for label, pattern, measured in (
+        ("the build order's row count", _RECORD_TOTAL, len(owed)),
+        ("the never-run count", _RECORD_NEVER_RUN, len(never)),
+        ("the not-built count", _RECORD_NOT_BUILT, len(unbuilt)),
+    ):
+        claim = pattern.search(intro)
+        if claim is None:
+            problems.append(f"the opening of docs/RELEASE.md no longer states {label}")
+        elif _count_word(claim.group("count")) != measured:
+            problems.append(
+                f"{label}: the opening says {claim.group('count')!r}, the table records {measured}"
+            )
+    listed = _RECORD_NOT_BUILT.search(intro)
+    if listed is not None:
+        named = [part.strip() for part in listed.group("names").split(",") if part.strip()]
+        if named != unbuilt:
+            problems.append(
+                f"the opening names {named} as the milestones that do not exist yet; the table "
+                f"records {unbuilt}"
+            )
+    assert not problems, "; ".join(problems) + (
+        ". That paragraph is the first thing a reader meets and nothing else reads it, so a figure "
+        "it carries is a measurement only while it matches the rows underneath it."
+    )
+
+
 # --- M4.16 review cycle 4: a normative clause with more gestures than the command has ----------
 #
 # Decision 289 replaced a rotation §2 had promised since M0 with the one that ships, and the
@@ -13515,7 +13628,12 @@ def test_the_citation_guard_sees_a_subject_that_moved():
         # [M51-REV-07; M5.1 review cycle 2, M51-C2-PAID-02; cycle 3, M51-C3-CRASH-03;
         #  M5.3 review cycle 1, M53-C1-NET-03]
         ("backend/spielplan/worker.py:1283", "backend/spielplan/worker.py:1254"),
-        ("backend/tests/test_backup.py:1378", "backend/tests/test_backup.py:1262"),
+        # M5.4 moved the second pair 13 lines: `dna_reject` and `dna_pack` had to be classified
+        # in this file's EXCLUDED set before the schema could carry them, and the set went in
+        # above the paragraph the record cites. 1378 - the number published until this milestone
+        # - becomes the stale half, which is the same movement the first pair records four times
+        # over. [decisions 341, 382; M5.4]
+        ("backend/tests/test_backup.py:1391", "backend/tests/test_backup.py:1378"),
         ("account/+page.svelte:332", "account/+page.svelte:330"),
         ("(`:94`, `:102`", "(`:93`, `:101`"),
     ):

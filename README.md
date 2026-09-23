@@ -12,9 +12,9 @@ non-obvious decision in the source cites the section that mandates it.
 
 - [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) — current spec
 - [`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) — the decision record, amended
-  in place and never forked into a v2.2 (decision 288). **333 numbered entries** in two registers:
+  in place and never forked into a v2.2 (decision 288). **356 numbered entries** in two registers:
   proposals 1-161 are dated reasoning from the UI-prototype review, citable as provenance and
-  nothing more, and entries **162-425 are the numbered owner decisions** — 172 of them over
+  nothing more, and entries **162-425 are the numbered owner decisions** — 195 of them over
   fourteen dated sittings, 2026-09-01 to 2026-09-23 — each normative from the day it is taken
   until the amendment it mandates lands in the spec file. The register holds fifteen sittings in
   all; the first, on 2026-08-29, is seven answers

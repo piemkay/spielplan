@@ -7,17 +7,17 @@ surface by surface, with an adversarial pass over every claimed divergence.*
 **Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
 there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
 amended in place, recording each wave as a dated point release in its own Status block. This
-file holds 333 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+file holds 356 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
 the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
-numbered owner decisions** - 172 of them, spanning 162-425, the latest being M5.3's own
-372-378, the 420, 421 and 422 its second review cycle took and the 423, 424 and 425 its first
-took as 392-394 and the merge renumbered - and each is normative from the
-day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
+numbered owner decisions** - 195 of them, spanning 162-425, the latest being M5.1's 321-361, M5.4's
+341 and 382-403, and M5.3's 326, 334, 335, 346 and 372-378, the 420, 421 and 422 its second review
+cycle took and the 423, 424 and 425 its first took as 392-394 and the merge renumbered - and each
+is normative from the day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
 wave was folded into that file on 2026-09-03 and this one on 2026-09-17. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
-decomposition leaves unspent between 321 and 361 for the sub-milestones that own them. Seven of the proposals were settled
+decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
 by the owner on 2026-08-29 and are indexed in the first decisions block below rather than
 numbered separately: six carry a **Decided (owner, 2026-08-29)** line inline, and the seventh
 (54) replaced the question with a redesign, written up as §6.2 — Tonight, rewritten. Proposals
@@ -7291,7 +7291,7 @@ Eight, taken as M5.1 opened, under the owner's standing instruction to take each
 recommended option and record it here rather than ask. The milestone's range runs to 361, so the
 register's M5.1 range is 321-361, the last three taken as it closed and the last two in its fourth
 review cycle, each recorded in a sitting of its own below - and unlike M4.16's it is deliberately
-full of holes. 324-330, 333-335, 337-339, 341-344 and 346 are argued in
+full of holes. 324-330, 333-335, 337-339, 342-344 and 346 are argued in
 `docs/milestones/ROADMAP-M5.md` and in the six sibling plans, and each belongs to the milestone
 that owns the step it blocks. They stay unspent here, for 228-233's reason one wave on: a number
 is taken by the owner, not reserved by a planner, and a number written twice is two normative
@@ -7595,7 +7595,7 @@ the one that scheduled them. None of the three amends `spielplan-spec_v2.1.md`. 
 and 345 they mandate schema, scheduling and driver behaviour, and the sentences they implement -
 §5.3's budget rule and §8's "paid stages (6) never auto-retry past the spend cap" - are already in
 that file. The register's M5.1 range therefore runs to 349 rather than 345, and the holes 324-330,
-333-335, 337-339, 341-344 and 346 stay unspent for the sub-milestones that own them.
+333-335, 337-339, 342-344 and 346 stay unspent for the sub-milestones that own them.
 
 **Why these three are 347-349 and not 346-348.** 346 is the first free number only if the
 roadmap's allocation is read as a wish. It is not: `docs/milestones/ROADMAP-M5.md` files 346
@@ -7715,7 +7715,7 @@ behaviour rather than adding it, which is why neither is filed as a repair.
 floor and told each review group to take the next free number above it; 350-359 are left unspent for
 the sibling groups working the same cycle, on 228-233's rule that a number written twice is two
 normative rules under one heading. The register's M5.1 range therefore runs to 361, and the holes
-324-330, 333-335, 337-339, 341-344, 346 and 350-359 stay unspent.
+324-330, 333-335, 337-339, 342-344, 346 and 350-359 stay unspent.
 
 ### 360. When stage 1 cannot tell an item from titles the spine already holds, it refuses to mint
 
@@ -8514,6 +8514,821 @@ stating a park no stage takes.
 `test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_request` holds the note, the
 second view and the absence of any request to the paused host.
 [decisions 330, 334, 336, 340, 421; M5.3 review cycle 2, M53-C2-NET-01]
+
+---
+
+## Decisions taken (owner, 2026-09-18, as M5.4 opened)
+
+Eleven, taken as M5.4 opened, under the owner's standing instruction to take each plan's
+recommended option and record it here rather than ask. Ten are the milestone's own range, 382-391.
+The eleventh is 341, which `docs/milestones/ROADMAP-M5.md` files against M5.4/M5.6 and which is
+taken here under that number rather than re-issued inside 382-391: a number a planner allocated to
+a step is taken by the milestone that owns the step, which is the convention M5.1 followed for 332,
+336, 340 and 345, and spending a second number on one question would leave two normative rules for
+one rule - 228-233's rule that a number written twice is two normative rules under one heading. The
+register's holes shrink by exactly one - 342-344 and 346 stay unspent - and 362-381 are left
+unspent here for the two sibling lanes building the other halves of this wave, on that same rule.
+
+M5.4 does not hold `current_milestone`. M5.1 does and keeps it (`spec_coverage.toml:20`), so this
+block mandates schema, domain rules and coverage rows, and its rows are appended without raising
+the scalar: an open milestone's red gate is its test plan, and a scalar raised in a lane that is
+not holding it reddens six other lanes at once. The one normative edit it makes is the one decision
+331 reserves for a sub-milestone as it opens - its own §12 build-order row - and it deliberately
+makes no other: the Status block's dated point release is a single line in the file three lanes are
+writing against this week, and a sixth sitting sentence added from here would be three lanes
+rewriting one paragraph. The decisions below are normative from today under decision 177's rule
+whether or not that sentence is ever written; the milestone that closes the wave folds them into a
+dated sitting beside its siblings'.
+
+### 341. Stage 7 records what it drops, and "low-evidence" is an ordering rather than a filter
+
+**What the record says.** §6.6 Data promises "review of DNA rejects and low-evidence tags"
+(`spec:322`). §8 stage 7 says the opposite of a review for the same rows: "Failures drop, never
+repaired" (`spec:388`). §4.1 rule 2 says what "low-evidence" may not mean - "`salience`,
+`confidence`, `n_sources` are weights, never filters. No `WHERE confidence > x` anywhere" - and
+`test_landmine_guards.py:56-61` and `:613` enforce that over SQL and over Python alike.
+
+**Why it changes.** A dropped tag that is never written cannot be reviewed, and `grep -rn dna_reject
+backend/` returns nothing. The three manifest tables that might have served are declined by the
+importer on purpose and it says why (`importer/load.py:370-372`): `dna_annotation` is "curator
+working notes; no app surface reads one", `dna_term_signal` is "vocabulary-building telemetry,
+superseded by the shipped vocabulary", `dna_exclusion` is "the corpus's own extraction exclusions,
+applied before export". None of the three is a record of what THIS install's verifier refused. And
+the second half of §6.6's sentence is undefined in a document that elsewhere forbids the obvious
+reading of it, so it is settled here rather than left for the surface milestone to guess at.
+
+**The decision.** The verifier writes a `dna_reject(id, title_id, run_id, term, facet, salience,
+quote, rule_violated, provider, at)` row for every tag it drops, and the tag never reaches
+`dna_tag`. `rule_violated` is CHECK-constrained to the ported REASONS tuple - `schema`,
+`unknown_term`, `adjudicated`, `quote_unverified`, `unknown_title`, `no_pack`, `duplicate`
+(`mdc/dna/store.py:60-61`) - so §6.6's filter has a closed set and a spike in one reason is
+readable. "Low-evidence" is defined as an ORDERING on the review screen, ascending `confidence` /
+`n_sources`, and never as a WHERE clause. The reject row carries the quote verbatim, which is what
+lets that screen explain a rejection without the pack bytes: decision 345 keeps the backend out of
+`/data/raw`.
+
+**Cost.** Migration `0027` carries the table, and M5.6 builds the screen over it under a rule it
+may not relax - ORDER BY, never WHERE. `docs/TESTING.md`'s "**341-344** spare" line and the
+register's three hole enumerations lose 341, which is the bookkeeping a number being taken costs.
+The table grows one row per refusal rather than one per tag, so a provider having a bad night is
+visible as itself rather than as an absence; nothing prunes it here, and the milestone that gives
+the screen a retention rule owns that question under its own number.
+
+### 382. The pack is kept in the raw store, and `dna_pack` is the row that makes a verification reproducible
+
+**What the record says.** §8 stage 5 names the pack, §8 stage 7 verifies a quote against "that
+title's pack", and nothing in the spec says where the app keeps one. The corpus writes packs to a
+file (`mdc/dna/packs.py`'s `pack_path`, `read_pack`). §8's own preamble says where this app's bytes
+go: "All fetched bytes land in the app's own raw store, so re-parsing is free forever".
+
+**Why it changes.** A verification that cannot be reproduced against the text it was made from is
+not auditable, and §6.6's reject review is a screen about exactly those verdicts. The corpus has
+the scar the absence produces: 825 titles marked current against a pack no pass had seen, hiding
+652. A pack is not fetched bytes, but it is bytes the app made and must be able to show again, and
+this app's equivalent of the corpus's file under `/data` is M5.1's content-addressed store - which
+is already immutable, already hashed, and already absent from the backend container.
+
+**The decision.** `0027` adds `dna_pack(title_id, version, pack_sha, raw_document_id, n_reviews,
+n_sources, chars, built_at)`, one upserted row per (title, version). The bytes go through M5.1's
+`acquire/rawstore.store` with `source='pack'`, `kind='dna'`, `entity_key` the acquisition task's
+key, `url='pack:title:<id>'` and `content_type='text/plain; charset=utf-8'`. `pack_sha` is the
+digest of the pack TEXT the tags were extracted from rather than of whatever is on disk at ingest
+time, which is the half the corpus's scar turns on. M5.5's `llm_call` (migration `0028`)
+REFERENCES `dna_pack.pack_sha` and does not re-carry pack custody: one of the two migrations holds
+it and the other cites it.
+
+**Cost.** One raw-store write per pack build, on a path that is already content-addressed, so a
+rebuilt identical pack writes no second file. §6.6's board and its reject screen are designed
+against the ROW - sha, counts, built_at - and never against the bytes, because decision 345 keeps
+`/data/raw` off the backend; an operator who needs the bytes reads them on the worker. M5.5 must
+not add a `pack_sha` of its own, and `0028` is written knowing that.
+
+### 383. `dna_alias` gains `kind` in 0027; the loader edit that fills it is M5.3's file and is recorded as owed
+
+**What the record says.** `dna_alias` is `(version, alias, term)` (`0004_dna.sql:42-47`) and has
+never had a reader: `grep -rn dna_alias backend/spielplan/` finds the loader
+(`importer/dna.py:181-220`) and `backup/movie_data.py:141`. The corpus's `load_alias_map`
+(`mdc/dna/project.py:129-160`) applies three rules this app's loader does not: it skips
+`kind='lexicon'` rows, it keys on the NORMALISED raw term, and it skips a row whose vocabulary term
+the active vocabulary does not carry.
+
+**Why it changes.** A rule that cannot be applied because the data was dropped is not a rule. The
+app's loader reads `raw_term` and `vocab_term` only and drops `kind` entirely, so a lexicon row is
+stored indistinguishably from a projecting one - and the corpus skips those for a measured reason:
+"the mood twins' keyword surfaces cannot walk projected rows into the register facet through the
+back door (measured: Django and Hostel both inheriting `register.pulp`, cos 0.894)". The other two
+gaps need no schema help. The third comes with a caveat that has to be stated because the loader's
+own comment claims the opposite: `importer/dna.py:207-208` says an unadopted vocabulary term is "a
+constraint violation mid-transaction rather than a row", and `dna_alias` has NO foreign key from
+`term` to `dna_term` (`0004_dna.sql:42-47` keys only `version`), so the row is stored. The
+behaviour was benign while nothing read the table and stops being benign at stage 8.
+
+**The decision.** Phase C2's option (a), as the plan marks correct: `0027` adds `dna_alias.kind
+text`, nullable. `dna/aliases.py` refuses to project a row whose `kind` case-folds to `lexicon` and
+treats NULL as "not known to be lexicon", which is every shipped row until a loader writes the
+column. The one-line edit to `importer/dna._load_aliases` that would fill it is NOT taken here:
+`importer/dna.py` is M5.3's file under ROADMAP-M5's file-locality table and M5.3 is building in
+parallel, so the plan's "coordinate rather than taking the file" resolves to recording the debt.
+The reader closes the other two gaps with no schema help: the map keys on the normalised raw term,
+and a row whose vocabulary term is absent from `dna_term` is skipped.
+
+**Cost.** The rule is proved against a directly inserted `kind='lexicon'` row rather than against a
+bundle that cannot yet express one - the plan's exit check 12 - and until a loader fills the column
+the app projects lexicon rows exactly as it does today, which is what it has always done and is now
+visible. The M4.5 coverage row `data-rules-vocabulary-layer-loads-the-files-the-corpus-ships` is
+NOT widened, because the loader is unchanged; it gains a comment saying the column exists and the
+fill is owed, so the next reader of that row cannot mistake the schema for the behaviour.
+
+### 384. The projection cap does not ship, and `projection_capped_v1.txt` is not added to `VOCAB_FILES`
+
+**What the record says.** `mdc/dna/project.py:106` carries `PROJECTION_CAP = 0.45` over the terms
+listed in `projection_capped_v1.txt`, a file the real bundle ships under `artifacts/dna_vocab/v1/`
+and which `models/artifacts.py`'s `VOCAB_FILES` does not name. The plan marks neither option
+recommended.
+
+**Why it changes.** The exit criterion decides where the plan does not: it asks for idempotence,
+the lexicon rule and the 1 s budget, and says nothing about weights. And the cap has nothing in
+this app to apply to. Decision 188 keeps `n_sources` a raw count in `dna_projected.weight` and
+applies the saturating `0.30 * c / (1 + c)` at READ time in `db/dna_terms.TERM_WEIGHT:68-74`, so
+there is no `agreement_weight` in the column for a 0.45 ceiling to bound - decision 385 is the
+other half of this. Adding the file to `VOCAB_FILES` would also make every bundle that does not
+ship it fail import, including the one `backend/tests/fixtures/make_bundle.py` builds.
+
+**The decision.** Uncapped. The cap is not ported, the file is not read, and `VOCAB_FILES` is left
+at its four names. The corpus's measured tuning is recorded in `dna/project.py`'s docstring as an
+UNPORTED constant with its evidence - the 2026-08-21 grid, fail@5 7->5, and the facets
+carrier-sampling measured 40-70% unfounded - so a later milestone that re-scales the column
+re-opens the question deliberately rather than rediscovering the file.
+
+**Cost.** Acquired titles' projected rows carry the same unit and the same read-time saturation as
+the bundle's, which is the property decision 385 exists for. The correlated-source inflation the
+corpus measured is unmitigated here and is stated rather than papered over; the mitigation costs a
+fifth vocabulary file, a `VOCAB_FILES` change and a unit change in one column, and is a
+milestone's work rather than a line's.
+
+### 385. The incremental projection writes `n_sources` into `dna_projected.weight`, exactly as the importer does
+
+**What the record says.** `dna_projected.weight` is a §4.1 weight column (`0004_dna.sql:104-113`).
+Decision 188 settled what it holds on the bundle side and `importer/dna.load_projected` writes it:
+`n_sources`, the count of distinct inventories that named the term. The corpus writes something
+else into its own column - `agreement_weight`, 0.3 / 0.6 / 1.0 (`mdc/dna/project.py:81-86`).
+
+**Why it changes.** One column cannot carry two units. `db/dna_terms.TERM_WEIGHT` reads
+`dna_projected.weight` as `confidence` through the `dna_tagged` view and saturates it, so writing
+0.3 where the importer writes 4 would put an acquired title's projections at about 0.07 against a
+bundle title's 0.15 to 0.267 - Home's why-line and Tonight's vectors ranking two populations on
+different scales, which is finding 20 reopened through a new path. The bundle side of the same
+column is already pinned by
+`test_dna_import.py::test_the_projected_tier_keeps_n_sources_as_a_weight`.
+
+**The decision.** `n_sources`, with `via` the sources joined by ", " - the shape `importer/dna._via`
+produces - and `facet` the term's own prefix, which is `importer/dna.app_facet`'s rule. The
+projection's tests assert the unit against the importer's, never against the corpus's.
+
+**Cost.** The corpus's agreement ladder is not available to this app's projected tier, which is
+decision 384's subject and is stated there. A later milestone that wants the ladder changes the
+unit in one column - both writers and the read-time expression together - or it produces exactly
+the two-population defect this decision refuses.
+
+### 386. A salience outside {1,2,3} drops the tag and is recorded; the corpus's clamp is not ported
+
+**What the record says.** §8 stage 7's third rule is a membership test - "salience in {1,2,3}"
+(`spec:387`) - and `dna_tag` states the same as a constraint: `salience smallint NOT NULL CHECK
+(salience IN (1, 2, 3))` (`0004_dna.sql:78`). The corpus does not reject an out-of-range value; it
+clamps, `max(1, min(3, sal))` (`mdc/dna/store.py:214`).
+
+**Why it changes.** A clamp silently promotes 0 to 1 and 4 to 3, and that is a repair. The ported
+rule is one sentence - "Failures drop, never repaired" - and the plan's exit table row 4 requires
+salience 0 and salience 4 to be absent from the output AND recorded. A salience the model invented
+outside the contract is evidence about the model, and the clamp deletes that evidence while keeping
+the tag.
+
+**The decision.** Reject and record, with `rule_violated = 'schema'`: the value breaks the
+contract's declared domain, and REASONS stays ported verbatim with no new member. `max(1, min(3,
+sal))` is not ported. The membership test is written against a local bound out of the payload and
+named `level`, never `salience` - forced by the instrument rather than by taste, because
+`test_landmine_guards.py`'s `_COMPARISON_OPS` includes `ast.In` and `ast.NotIn` and
+`_PYTHON_WEIGHT_REFS` matches the bare word `salience` in either operand's source, so `if
+tag["salience"] not in (1, 2, 3)` is flagged as a §4.1 rule 2 cut. The guard cannot tell a domain
+check from a weight filter, and it is not weakened to teach it.
+
+**Cost.** One local binding, and a comment at that line arguing the distinction and citing §4.1
+rule 2 and §8 stage 7 so the next reader does not "repair" it back into the flagged spelling. A
+provider that emits 0 or 4 loses those tags outright rather than having them rounded into the tier,
+which is the intended asymmetry: a dropped tag is recoverable from `dna_reject` and a clamped one
+is indistinguishable from a real 3.
+
+### 387. M5.4 ships the DNA domain package and wires no pipeline stage and no worker job
+
+**What the record says.** §8 stages 5, 7 and 8 are declared no-ops by M5.1 with
+`implemented=False, owner="M5.4"`, and `worker.py:1052` registers `Job("dna-projection", "M5",
+"acquisition", "<1 s")` with no `run` and no `owner`. The coverage row
+`jellyfin-acquisition-eval-dna-projection-budget` says of itself that it "sits at M5 because that
+is where the job gets a `run`".
+
+**Why it changes.** The binding plan names exactly ONE existing-file hotspot for this milestone
+(`db/dna_terms.py`) and its §8 says outright "It does not touch `worker.py`. M5.1 registers the
+job" - a Do-Not taken against a considered alternative. Wiring stage 5 would also put a pack
+builder in front of M5.3's reviews gate, which does not exist yet, and would rewrite
+`test_acquire_pipeline.py:133`'s owner map and `:1059`'s `len(stubs) == 7` while M5.3 holds the
+sibling half of the same two assertions, plus `test_worker_schedule.py:560`, `:1027` and `:1108`.
+Three lanes editing one stage table in one week is the merge surface M5.1's own preamble warns
+about.
+
+**The decision.** No to both. `acquire/stages.py`, `acquire/pipeline.py`,
+`backend/spielplan/worker.py` and `backend/tests/test_worker_schedule.py` are untouched; stages 5,
+7 and 8 stay `implemented=False, owner="M5.4"` and the job keeps `run=None` with no `owner`. The
+package exports `build_pack`, `verify_payload` and `project_title` for the milestone that holds
+both halves of the wiring.
+
+**Cost.** The budget row is closed by timing `dna.project.project_title` directly, exactly as
+`test_placement.py::test_cold_tower_placement_of_one_title_stays_under_one_second` times
+`reconcile.reconcile` rather than the job that calls it, so the measurement is the domain
+function's and does not wait on a registration; the row's own sentence stays true as written. The
+wiring is one commit for whoever owns both stages, and until it lands §8's DNA half is code with
+tests and no caller - the same state M5.1 found `placement/reconcile.py`'s `app_acquired` scope in,
+and the reason that state is named here rather than left to be discovered.
+
+### 388. `dna/adjudicate.py` is M5.4's reader of `dna_adjudication`, and the sibling plan assigns the same ledger a second reader
+
+**What the record says.** M5.4's plan D2 gives this milestone `dna/adjudicate.py`, ported from
+`mdc/dna/adjudication.py`'s `rename()` / `is_retired()`, and says: "one of you writes
+`dna_adjudication`'s reader and the other writes `credit_correction`'s, and neither writes both".
+`M5.3-plan.md`'s Phase F1 assigns `derive/ledgers.py::apply_adjudications` the same table.
+
+**Why it changes.** The two plans disagree, coordination across lanes is not available, and the
+binding plan for this lane is M5.4's. Stage 7's first rule is term-in-vocabulary AFTER adjudication
+rename, so the verifier cannot be written without this reader at all.
+
+**The decision.** M5.4 writes `dna/adjudicate.py` with `rename()` and `is_retired()`, per its own
+plan's D2, and records here that the sibling plan assigns the same ledger a second reader. The
+files do not collide, so the cost is duplication rather than a merge conflict.
+
+**Cost.** Two readers of one table until the wave merges, and recording it is what lets that merge
+resolve the overlap deliberately instead of discovering it. M5.4's is the ingest-time half the
+trust boundary calls; whichever milestone closes the wave folds the derive-time half onto it rather
+than the other way round, because a boundary consulting its own private copy of a curated ledger is
+the shape §14.5's revert scar is about.
+
+### 389. The adjudication verdict vocabulary is read across both spellings, case-folded, with the per-title verdict beating the blanket rule
+
+**What the record says.** `0004_dna.sql:137` documents one vocabulary in a column comment - `keep |
+rename | drop | merge` - and `mdc/dna/adjudication.py` writes another: `REPOINT`, `DROP`,
+`DROP_EVIDENCE`. `importer/dna.load_adjudications` stores the TSV's `action` column verbatim, and
+the shipped ledger's rows are lowercase.
+
+**Why it changes.** A reader that knows one vocabulary treats the other as "no verdict", which
+turns a curated retirement into `unknown_term` - exactly the confusion `mdc/dna/store.py`'s
+`adjudicated`-versus-`unknown_term` split exists to prevent, because it makes a routine retirement
+look like an extractor emitting garbage. The per-title arm is real in this app rather than
+notional: `0015_seed.sql:159-166` dropped the `(version, term)` primary key and added `scope`,
+`title_id`, `quote` and `source` precisely so per-title verdicts survive the round trip §6.6's
+editor makes.
+
+**The decision.** Case-folded, both spellings: `rename` and `repoint` re-point; `merge` re-points
+onto its target, because the evidence merge is the writer's problem and not the boundary's; `drop`
+retires; `keep` is a no-op; `drop_evidence` is an evidence-level verdict the verifier does not act
+on. A verdict string the reader does not know is ignored and COUNTED, never guessed at. A
+`scope='title'` row for this title beats a `scope='global'` row for the same term, which is
+`mdc/dna/adjudication.rename`'s own order (`:225-234`).
+
+**Cost.** The verifier separates `adjudicated` from `unknown_term` in `dna_reject.rule_violated`,
+which is what makes a spike in either readable at §6.6. An unknown verdict string is counted rather
+than acted on, so a ledger that grows a fifth verdict is visible in that count and changes no tag
+until somebody teaches the reader what it means.
+
+### 390. The thin-facet measurement is `dna.coverage.facet_coverage` and carries no threshold
+
+**What the record says.** §8.4's flywheel has a `thin_facet` feed and `flywheel_item.kind` already
+carries the name (`0004_dna.sql:156-160`). Decision 329 - M5.6's - is what supplies the threshold,
+and the plan says do not invent it here.
+
+**Why it changes.** M5.6 needs a measurement to build the feed from, and this is the milestone that
+knows what a facet is. The name matters as much as the shape: `placement/features.py:90-109`
+already owns `is_thin` for a different test - at least one feature block dropped or empty - and
+conflating a placement input with a vocabulary-coverage feed is what decision 329 exists to
+prevent.
+
+**The decision.** A domain function returning a title's EXTRACTED-tier tag count per facet, over
+the facets `dna_facet` declares for the active version, read through the sanctioned `dna_tagged`
+view filtered to `tier = 'extracted'`. No threshold, no boolean return, and not named `is_thin`.
+The facet set is read from the table rather than from a corpus constant because this app's facet
+ids are the term prefixes (`mood`, `themes`, `characters`) while the corpus's are its extraction
+labels (`mood_tone`, `narrative_themes`, `character_dynamics`) - the mismatch M4.9 finding 1
+measured at 29,188 of 31,540 `dna_tag` rows.
+
+**Cost.** M5.6 turns it into feed 4 once decision 329 supplies N. Nothing here reads a count into a
+predicate, so §4.1 rule 2 is untouched and the guard stays green; a caller that later compares the
+count to a threshold is making a flywheel decision, which is the milestone boundary this shape
+draws.
+
+### 391. Both halves of §8 stage 5's known gap are measured against this install and stated, not papered over
+
+**What the record says.** §8 stage 5 names the craft supplement and its gap in one breath:
+"wikipedia craft sections; NOTE: the RT critic-blurb pool is a frozen 2020 dataset -> genuinely new
+releases get thinner sound/visual facets - known gap, mitigation: wiki sections + metacritic critic
+excerpts, revisit if coverage measures poor" (`spec:377-381`). §14 risk 2 repeats it and names the
+measurement: "measure facet coverage of post-2025 titles" (`spec:485`).
+
+**Why it changes.** Both of the supplement's inputs are thin or absent in THIS install, and a
+ported docstring carrying the corpus's measurements but not this install's reads as an assertion
+where the original was an argument - so the next person rediscovers the gap instead of reading it.
+
+**The decision.** It ships, both halves - Wikipedia craft sections read from `raw_document WHERE
+source = 'wikipedia'`, RT critic blurbs read from `review_store.review` below the pack's 50-word
+floor - and the module docstring records with counts what this install actually produces: the
+fixture bundle ships three review rows (metacritic, trakt, letterboxd), every one under the floor
+and none from `rottentomatoes`, and no `wikipedia` raw document exists until M5.3 lands that
+fetcher. §8 stage 5's gap note and §14 risk 2's measurement are carried into the docstring with
+that measurement beside them.
+
+**Cost.** The caps and the interleave are asserted at the backend layer over a synthetic review
+set, and the integration tests insert their own review rows rather than pretending the fixture
+bundle carries a pack worth 60 reviews. The supplement is therefore code whose two inputs this
+install cannot yet supply, which is stated in the docstring rather than hidden behind a skip - a
+skipped assertion reads as a pass in the summary line, and that is a shape this project has been
+bitten by before.
+
+---
+
+## Decisions taken (owner, 2026-09-19, M5.4 review cycle 1)
+
+Five, taken as M5.4's first adversarial review closed, under the same standing instruction as the
+block above: take the recommended remedy and record it here rather than ask. 392-396 are the next
+five numbers no plan claims - `docs/milestones/ROADMAP-M5.md`'s allocation table runs to 346, and
+342-344, 346, 350-359 and 362-381 stay unspent for the milestones and sibling lanes that own them,
+as they were. Four of the five amend a decision the block above took: 392 and 394 hold decision
+386's rule against the lines that were supposed to carry it, 393 corrects one clause of 385 whose
+premise was measurably false about this install's own bundle, and 395 corrects the constraint 382
+mandated in prose. None of them reopens a question the owner settled; each closes a gap between a
+settled rule and the code that was meant to implement it, which is the only kind of decision a
+review cycle should be taking.
+
+`current_milestone` stays `"M5.1"`. This block mandates one migration correction - `0027` is
+unapplied to any durable install, so it is corrected IN PLACE and loudly rather than superseded -
+and one coverage row, and it raises no scalar, for the reason the block above gives.
+
+### 392. Evidence that folds to nothing is not evidence, and no untrusted value may raise out of the boundary
+
+**What the record says.** §9: "The schema is a cost-saving device, not the guarantee - the
+guarantee is the validator" (`spec:418`). §8 stage 7's second rule is "quote-substring-of-pack via
+`norm()`" and §4.1 rule 1 is "a tag without its quote is unfalsifiable" (`0004_dna.sql:91-92`).
+Decision 341 makes every drop a `dna_reject` row, which is what makes the boundary auditable.
+
+**Why it changes.** `norm()` maps `**`, `***`, `*`, `___`, `[spoiler]`, `[/spoiler]` and U+00AD to
+the empty string, which is a substring of every pack - so rule 2 was satisfied VACUOUSLY by a
+quote made of nothing but markup, and `VerifiedTag`'s own guard could not see it because it tested
+`str(self.quote).strip()` on the raw quote. Measured against a real 1,065-character pack built by
+`dna/packs.py` out of three `review_store.review` rows, `{"term": "themes.robots", "quote": "**"}`
+was KEPT, on a pack in which the word "robot" does not occur, with no reject row - because a pass
+is not a drop. That is the shape a truncated or markup-only span takes, and the shape a
+hallucinating extractor produces when it emits the emphasis markers and loses the text between
+them. Three further untrusted values RAISED out of `verify_payload` instead of dropping one tag: a
+whitespace-only quote through the same constructor, `"inf"` through an `int()` whose guard named
+two of the three exceptions it raises, and a `10 ** 400` through `float()`. A raise is not a drop:
+it records nothing, never reaches `record_rejects`, and takes every other tag and every other
+refusal in the same pass with it - so a paid call over twenty-eight tags returned no verdict at
+all. And two payload keys that `int()` reads as one title - `"7"` and `"07"` - had the first key's
+verified tags overwritten by the second's, into neither `tags` nor `rejects`: decision 341's named
+failure inverted onto GOOD data, and therefore invisible in any rejection count.
+
+**The decision.** A quote whose `norm()` output is empty is a missing quote: it is refused beside
+the existing missing-quote test, recorded under the existing `rule_violated = 'schema'`, and
+REASONS gains no member. `VerifiedTag.__post_init__` asks that same question of that same
+function, so the type's promise and rule 2 are one question and no path can build a tag the type
+would refuse. `verify_payload` refuses every untrusted value without raising - the salience
+coercion catches `OverflowError` alongside `TypeError` and `ValueError`, matching
+`acquire/stages.py:869`'s precedent and `importer/dna.py:796`'s scar. And the per-title kept list
+and duplicate set are keyed on the resolved title id rather than on the payload key, so two
+spellings of one id accumulate and the second's repeats land as `duplicate`.
+
+**The accounting identity is scoped, and the scope is not a hedge.** `n_seen == n_kept +
+len(rejects)` is false of payloads that are handled perfectly well: a title refused whole -
+`unknown_title`, `no_pack`, a non-numeric key, a `tags` that is not a list - is ONE rejection for
+the title and its tags are never examined, which the no-pack test in `test_dna_verify.py`
+asserts in the tree with an argued message. So the identity binds the tags the
+boundary LOOKED AT: `n_seen` equals `n_kept` plus the tag-level rejections, asserted as a property
+over a payload generator rather than as a case. An invariant that is false when nothing is wrong
+tells a reader nothing when something is.
+
+**Cost.** One extra refusal arm, one bound local reused by rule 2 so a tag still costs exactly one
+`norm()`, one exception name, and two dicts keyed by title id. No REASONS member, no new column,
+no configurability. What it loses is nothing a reader can name: every value it now refuses was
+either kept with evidence that is nothing, or thrown.
+
+### 393. `dna_projected.via` is the keyword that produced the row, on both sides of the table
+
+**What the record says.** `0004_dna.sql:111` declares the column as "the keyword/alias that
+produced it", and `docs/milestones/M5.4-plan.md`'s Phase E1 repeats the phrase word for word:
+"writing `dna_projected` with `via` (the keyword/alias that produced it) and `weight`". Decision
+385 settles the WEIGHT as a count of distinct inventories and carries `via` along in one clause,
+on the premise that inventory names are "the shape `importer/dna._via` flattens the bundle's JSON
+array to".
+
+**Why it changes.** That premise is false, measured on this install's own fixture bundle.
+`content.sqlite`'s `dna_projected.sources` carries `["keyword:obsession", "keyword:heist"]` -
+keyword spellings, not inventory names - and `(title 2, structure.procedural)` carries ONE keyword
+beside `n_sources = 2`, so the two columns demonstrably disagree in length and `sources` cannot be
+a source list. The projection therefore put two units in one `text` column: for a bundle title
+"which keyword produced this term" was answerable and for an acquired title it was not, with no
+reader able to tell the two populations apart because both are comma-joined text. Each unit was
+pinned by its own green assertion in a different file - `test_dna_import.py:867` for one,
+`test_dna_project.py` for the other - and no test in the tree read both.
+
+**The decision.** `via` carries the keyword spellings that produced the row, prefixed `keyword:`
+as the bundle spells them, sorted and joined by ", ". The count of distinct inventories stays in
+`weight`, exactly as decision 385 requires - nothing that decision argues for is given up, because
+its argument is entirely about the weight's scale. Decision 385's `via` clause is amended by this
+one. One test reads `via` for one term from each writer and compares them, so the two can never
+drift again without something going red.
+
+**Cost.** One set in the loop that already walks the keywords. Six assertions in
+`test_dna_project.py` restated, one of them a docstring claiming a hand-written row was "written
+the way the importer writes one" when no row `importer/dna._via` produces has ever looked like it.
+Nothing renders `via` yet - `db/library.dna_for` selects it and no frontend file reads it - so the
+change costs no surface.
+
+### 394. The salience a payload states is read and never rounded, and a boolean states no level
+
+**What the record says.** Decision 386: a salience outside {1,2,3} is dropped and recorded under
+`rule_violated = 'schema'`, and the corpus's `max(1, min(3, sal))` is deliberately not ported,
+because "a dropped tag is recoverable from `dna_reject` and a clamped one is indistinguishable
+from a real 3". `DEFAULT_SALIENCE = 2` is the ported `or 2` and is scoped to a field the extractor
+did NOT fill.
+
+**Why it changes.** The line that was meant to carry 386 did not test the provider's claim against
+{1,2,3}; it tested `trunc(claim)`. `int(float(3.9))` is 3, so every non-integral claim in [1,4)
+was silently replaced with a value inside the domain and kept - which is decision 386's own
+forbidden row, "indistinguishable from a real 3", reached by a narrower interval than the clamp.
+The half that is worse is below 1: a stated 0.5 dropped correctly and the `dna_reject` row
+recorded 0, so §6.6's reviewer read a number the provider never uttered on the screen decision 341
+built to make refusals reviewable. And `float(True)` is 1.0, so a provider whose adapter renders a
+tri-state field as a boolean had every `true` read as the bottom of the scale - a claim it never
+made, on the field §4.1 rule 2 makes a weight.
+
+**The decision.** The stated level is parsed without truncating: an integral spelling comes back
+as its integer, because reading "2" or 2.0 is reading a claim the domain holds, and anything else
+comes back as what was stated and meets the domain check that was always meant to see it. A
+boolean is refused as not a number, for `DEFAULT_SALIENCE`'s own reason - that constant is for a
+field nobody filled. A non-finite value is refused the same way, which is where decision 392 meets
+this rule. `_storable` gates integrality as well as width, because asyncpg truncates a float bound
+into a `smallint` client-side and silently, which would have put a 3 in the column of the row that
+exists to record that 3.9 was said.
+
+**Cost.** One helper beside the one that already guards the same field's width, and one parameter
+out of `test_a_stated_level_inside_the_domain_is_read_as_its_integer`: 3.4 was in its list under a
+name that says "inside the domain" and a docstring arguing only for integral spellings, so the
+test was pinning the truncation rather than the rule.
+
+### 395. `dna_pack` is unique per (version, pack_sha), and it keeps custody of the document it names
+
+**What the record says.** Decision 382 keeps the pack in M5.1's raw store and makes `dna_pack` the
+row that indexes it, with `pack_sha` UNIQUE so 0028's `llm_call` can reference it. §14 risk 7
+(`spec:503`): "Two vocabularies in the tables is a state this build does not create and must still
+survive." M5.4's plan risk: the pack has to be retained or stage 7 is unauditable.
+
+**Why it changes.** `render_pack` takes no vocabulary version and emits none, so one title's pack
+under v1 and under v2 is byte-identical whenever its plot and reviews have not changed - which
+decision 162 makes the ordinary case, content being seeded once. A column-level UNIQUE on
+`pack_sha` therefore refused the second version's INSERT for the whole unchanged library, while
+`read_pack` scopes its read to the version and so demanded exactly the row the writer could not
+create: an internal contradiction inside one milestone's own files. Every other table in the DNA
+family is version-scoped for this clause. Separately, `ON DELETE SET NULL` on `raw_document_id`
+produced a state no reader can tell from "never packed": `read_pack` answers None on a NULL
+exactly as on a missing row, so deleting the bytes turned "the evidence for verdicts already
+reached is gone while this row still names its sha" into "this install has never packed these
+titles". 0023's decision 249 closed a SET NULL of that shape one table over, after a nulled
+pointer made §12's M2 index report zero owned titles waiting to be placed.
+
+**The decision.** `UNIQUE (version, pack_sha)` replaces the column-level UNIQUE, and
+`raw_document_id` takes `ON DELETE RESTRICT`. 0028's `llm_call` carries the version alongside the
+sha, which every DNA read is scoped to anyway, so decision 382's "one of the two migrations holds
+custody and the other cites it" is unchanged in substance. And `store_pack` refuses a call whose
+`text` and `info` describe different packs, rather than writing a row naming a pack the raw store
+does not hold - the corpus's `store_title` scar in this app's shape, and the one way to make a
+verification permanently irreproducible from inside the function decision 382 wrote.
+
+**Cost.** `0027` is corrected IN PLACE, which is legitimate only because it is unapplied to any
+durable install - it is stated here loudly for that reason, and it is the last cycle in which the
+correction is one word rather than a new migration hanging off an FK 0028 has by then created.
+RESTRICT blocks no path that exists: nothing in the tree deletes from `raw_document` at all, and
+`store_pack` upserts the column to the newest build, so earlier packs stay prunable.
+
+### 396. A refusal naming a title this install does not hold is written with a NULL title
+
+**What the record says.** `0027`'s own comment: "`title_id` is NULLABLE with its foreign key kept,
+because `unknown_title` is one of the seven reasons: a payload naming a title this install does
+not hold is refused, and the refusal is the row." Decision 341: a `dna_reject` row for every tag
+the verifier drops.
+
+**Why it changes.** `verify_payload` carries the payload's OWN title id into the rejection - it
+has no other, `int()` over an untrusted key - so the row the migration describes was the one row
+that could never be written. Worse, `executemany` is atomic in asyncpg, so one transposed digit in
+a provider's title id discarded the whole pass's refusal record and handed the caller an exception
+instead of a count: every genuine `unknown_term` and `quote_unverified` on real titles lost with
+it, and §6.6's review showing an install that dropped nothing. That is the "losing a whole batch"
+failure the module's key-alias comment is written against, arriving at the write rather than at
+the read, and `_SMALLINT` already guards the identical door one column over.
+
+**The decision.** `record_rejects` resolves the distinct title ids of a pass against `title` in one
+query and writes NULL for the ones it does not hold, which is exactly the state `0027` describes.
+The atomic `executemany` is kept - a pass's refusals landing all or none is the right shape - and
+the probe is bound as `bigint` with a width test before it, because an id from a bare `int()` has
+no width and a guard that raised on the value it exists to disarm would be the defect wearing the
+fix's clothes. The invented id itself is not kept: `Rejection.detail` reaches no column on purpose,
+and a free-text column beside a closed set is where the closed set stops being read.
+
+**Cost.** One `SELECT` per call, over at most the distinct titles of one pass. What it does not fix
+is the label: with `allowed` omitted a hallucinated id is refused as `no_pack` rather than
+`unknown_title`, which is documented on `verify_payload` rather than guessed at, because only the
+caller knows the unit.
+
+---
+
+## Decisions taken (owner, 2026-09-19, M5.4 review cycle 2)
+
+Five, taken as M5.4's second adversarial review closed, under the same standing instruction as
+the block above: take the recommended remedy and record it here rather than ask. 397-401 are the
+next five numbers no plan claims, the block above having spent 392-396; 342-344, 346, 350-359 and
+362-381 stay unspent for the milestones and sibling lanes that own them, as they were. All five
+amend a decision an earlier block took rather than reopening one: 397 holds decision 392's "no
+untrusted value raises out of the boundary" and decision 341's "every drop is recorded" against
+the two text columns and the one numeric column nothing was guarding, 398 and 399 close two
+classes decision 392's empty-fold refusal was read as covering and does not, 400 makes decision
+341's reject row carry the field plan D4 says it carries, and 401 narrows a claim `0027` made
+about a guard in another file. None of them reopens a question the owner settled.
+
+`current_milestone` stays `"M5.1"`. This block mandates one migration correction -- `0027` is
+unapplied to any durable install, so it is corrected IN PLACE and loudly rather than superseded,
+for the second time and by the same rule -- and no new coverage row, because every test it adds
+belongs to a row this milestone already owns.
+
+### 397. No untrusted value is bound into `dna_reject` unguarded, and text Postgres cannot store is refused at the boundary
+
+**What the record says.** Decision 341: the verifier writes a `dna_reject` row for every tag it
+drops, which is what makes the boundary auditable. Decision 392: "`verify_payload` refuses every
+untrusted value without raising", because "a raise is not a drop: it records nothing, never
+reaches `record_rejects`, and loses every OTHER refusal in the same run". Decision 396 settled the
+identical failure through `dna_reject.title_id` and named `_SMALLINT` as "the identical door one
+column over".
+
+**Why it changes.** There were two more doors, and they are the two columns a payload fills with
+its own strings. `json.loads` accepts a U+0000 escape and a lone surrogate escape; `norm()` and
+`str.strip()` preserve both; `Vocabulary.resolve` cannot resolve either, so the term goes to
+`dna_adjudication` as a bound parameter. Measured against this lane's cluster with `ledger=db`,
+which is the production shape `verify_payload`'s own docstring describes and every call in
+`test_dna_reject.py` uses: one NUL in one term of a three-tag payload raised
+`CharacterNotInRepertoireError: invalid byte sequence for encoding "UTF8": 0x00` out of
+`verify_payload` itself, through `adjudicate._verdicts_for`. No tag was kept, no refusal was
+recorded, and the pass returned as a stack trace -- decision 392's own failure mode, re-opened one
+check above the `OverflowError` arm written to close it, and invisible to that decision's property
+test, which runs with no ledger and therefore in the one configuration where no untrusted string
+can reach a database. At the write the same two strings take the atomic `executemany` down:
+`DataError: invalid input for query argument $6 in element #2 of executemany() sequence: 'neon on
+dry\ud800asphalt'`, with four genuine refusals in that call and zero rows landed. And the numeric
+column had the same shape for a different reason: `_storable` guarded `salience` inside
+`verify_payload` only, so a `Rejection` any other caller builds -- `record_rejects` is exported and
+takes any iterable of them -- wrote `DataError: ... $5 ... 32768 (value out of int16 range)` and
+lost the batch, while `True` passed the width test (`isinstance(True, int)`) and landed as a 1, a
+level no provider stated.
+
+**The decision.** `_storable_text` answers None for a string carrying U+0000 or an unpaired
+surrogate, in the idiom `_storable` already sets one column over. `verify_payload` refuses a tag
+whose term or quote carries one, beside the missing-quote test and under the existing
+`rule_violated = 'schema'`; REASONS gains no member, because what broke is the declared contract's
+own requirement that a term and a quote be text an install can keep. The field that CAN be stored
+still is, so the row says which title, which rule, which facet and whichever of the two strings was
+writable. And `record_rejects` guards at the BIND rather than trusting one producer: `term` and
+`quote` through `_storable_text`, `salience` through `_storable` there as well as here, so a
+`Rejection` M5.5 builds cannot discard a pass's refusal record. `facet` is not guarded and that is
+the same rule rather than an exception to it -- it is `voc.terms[term]`, this install's own
+vocabulary row, and no payload reaches it; `provider` and `run_id` are the caller's facts about
+the call. `_storable` also refuses a boolean, for decision 394's reason one layer up.
+
+**Cost.** One eight-line helper, one refusal arm, three guarded binds. What it loses is nothing a
+reader can name: every value it now refuses either took a whole pass's audit trail with it or was
+written as a number nobody stated.
+
+### 398. A character that prints nothing is not evidence, and `norm()` reads it as nothing
+
+**What the record says.** §8 stage 7's second rule is "quote-substring-of-pack via `norm()`" and
+§4.1 rule 1 is "a tag without its quote is unfalsifiable". Decision 392 refuses a quote whose
+`norm()` output is empty, on the argument that `""` is a substring of every text there has ever
+been. §4.1 rule 8 says the corpus "legitimately contains CJK, RTL scripts, ZWSP and emoji".
+
+**Why it changes.** That refusal assumed two classes -- a quote with content left, and a quote that
+folds to nothing -- and the zero-width characters are in neither. Python's `\s` does not match
+U+200B, U+200C, U+200D, U+2060, U+FEFF or U+180E, and the ported fold table carries the soft hyphen
+and none of its siblings, so each one survived `norm()` NON-EMPTY. Measured: a `themes.robots` tag
+whose entire evidence is one U+200B was KEPT against a pack carrying the same character, on a pack
+in which no robot appears, with no `dna_reject` row because nothing was dropped -- the exact shape
+decision 392 exists to refuse, arriving through the characters `\s` happens not to cover. The
+precondition is ordinary rather than contrived: U+200B is a line-break hint in HTML, U+FEFF arrives
+as a decoded page's BOM, `packs.clean()` removes HTML tags and collapses whitespace and neither
+touches an invisible, and §4.1 rule 8 says the corpus carries them on purpose. The admitting half
+failed at the same time: a pack whose scraped body carried a zero-width space inside a word made a
+correct transcription of that span unverifiable, dropped as `quote_unverified`.
+
+**The decision.** `norm()` drops what prints nothing, as its first step, so every fold below it
+reads the text a reader sees. The rule is stated over what a character DOES rather than over a list
+of the ones somebody thought of -- the list was the defect -- so the test is `str.isprintable()`,
+which is false for exactly the categories that render nothing, with whitespace kept so a newline
+still collapses to a space instead of joining two words. The ported twenty-entry fold table is
+untouched: an entry this app added would be a fold the corpus's measurements do not cover, and this
+rule belongs where it can be argued rather than enumerated. An invisible-only quote now folds to
+the empty string and is refused by decision 392's existing arm, so no REASONS member and no second
+reading of a quote. What it does not reach is a character that IS a character and happens to render
+blank -- U+2800, U+3164, a variation selector -- which is the pack's own content rather than
+formatting a transcriber disagrees with, and is stated in the docstring rather than left to be
+found.
+
+**Cost.** One line in the body and 1.5 ms per 40,000-character pack, which is folded once per title
+per pass. The fold's own guarantee is unchanged: it merges only strings that already differed by
+punctuation or by formatting, so it still cannot admit a quote that is genuinely absent.
+
+### 399. A quote that is not text is a missing quote
+
+**What the record says.** §4.1 rule 1 and `0004_dna.sql:91-92`: "a tag without its quote is
+unfalsifiable". The exit criterion: "every tag that passes carries its evidence quote". Decision
+394 refuses a boolean salience because "a value whose JSON type is a category error is refused
+rather than coerced into a claim the provider did not make".
+
+**Why it changes.** `norm()` takes `Any` and opens with `str(s)`, which is right for a fold --
+nothing a payload contains may make it raise -- and is not a reading of a type. So a JSON number
+reached rule 2 as the `str()` of itself and verified: `render_pack` writes `[plot:1]`, `[<src>:<n>]`
+and a `# <name> (<year>)` header into every pack, so the digits of a small integer and of a year are
+substrings of essentially every pack this app builds. Measured: `{"term": "mood.bleak", "evidence":
+1}` and the same tag with `1995` were both KEPT, with the stringified number stored as the span the
+tag rests on, and `VerifiedTag(quote=1995)` constructed and carried an `int` forward in a field its
+own annotation declares `str`. An adapter that renders a structured evidence object as its offset
+produces exactly this, and §6.6 would show the reviewer a column reading "1".
+
+**The decision.** A quote that is not a `str` is refused under the existing `rule_violated =
+'schema'`, with the value recorded so §6.6 shows what was offered, and REASONS gains no member. The
+constructor asks the same question, for named change 6's reason: the writer of a `dna_tag` row is
+M5.5's, so the type M5.4 hands forward is the only place this milestone owns. It is NOT a minimum
+quote length -- `{"quote": "a"}` still passes, the spec states no floor, and a boundary that
+invented one would be judging evidence rather than checking it.
+
+**Cost.** One `isinstance` at the boundary and one in the constructor. It refuses `1` while keeping
+`"1"`, which is the whole of what a type check can promise and is stated plainly rather than sold as
+more.
+
+### 400. A rejection carries the level the payload stated, on every arm that knows one
+
+**What the record says.** M5.4-plan.md D4: "a `dna_reject` row carries the term, the quote, the
+salience and the rule violated". Decision 341 gives the drop a table and not a log line. The
+module's own named change 5: `Rejection` carries the facet, the salience and the quote "because
+§6.6's reject review has to show a person the tag that was refused".
+
+**Why it changes.** The salience field was read after every other refusal arm had already appended,
+so the ONE row that recorded a level was the row where the level is itself the rule that broke --
+the row a reviewer needs it least on, the rule name having said it. Measured over a seven-tag
+payload stating a level on every tag: five of six rejections stated a level and five of six recorded
+NULL, including every `unknown_term` and every `quote_unverified`, which are the two refusals a
+reviewer actually triages and the two §6.6's screen is mostly made of. An operator facing twenty
+fabricated terms cannot then tell a provider confidently asserting nonsense from one hedging, which
+is the judgement decision 341 built the table to make possible. The registered test asserted the gap
+(`[None, None, 9]`) against a payload whose first two tags state 3 and 1, under a docstring saying
+the row carries "the level it claimed".
+
+**The decision.** The coercion is hoisted above the arms that record its result and the two salience
+refusals stay exactly where they are, so rule precedence is untouched: a tag with a fabricated term
+and an unreadable level still lands as `unknown_term`. Every tag-level arm that has a level passes
+`salience=_storable(level)`, and a coercion that failed records no level because there is none. The
+considered alternative -- that D4's sentence enumerates the row's COLUMNS, as `facet` being NULL on
+the arms above the vocabulary check shows -- is refused on the asymmetry it rests on: a facet is not
+KNOWABLE for a term the vocabulary does not carry, and a stated level always is. A column left NULL
+where the fact was in hand cannot be back-filled once M5.6's screen ships.
+
+**Cost.** One hoisted read, one `_storable` call per arm, and one assertion in
+`test_dna_reject.py` that now reads `[3, 1, 9]` and matches its own docstring.
+
+### 401. What the weight guard enforces is comparisons, and the two shapes it does not see are owed against M5.6
+
+**What the record says.** §4.1 rule 2: `salience`, `confidence` and `n_sources` are weights and
+never filters, "no `WHERE confidence > x` anywhere (a 0.5 cut would delete 44% of the extracted
+tier)". Decision 341 defines §6.6's "low-evidence" as an ORDER BY on ascending confidence and never
+a WHERE. `0027`'s comment claimed that rule was "enforced over SQL and Python by
+test_landmine_guards.py".
+
+**Why it changes.** That guard is a comparison scan, and two shapes select rows on a weight while
+comparing it to nothing. Measured by running the guard's own `_weight_filters` and
+`_python_weight_comparisons` over both: `WHERE salience IS NOT NULL` is not caught -- and against
+`dna_tagged` it deletes the entire projected tier, because `0004_dna.sql:127` emits `NULL::real AS
+salience` for that tier -- and the Python `if row["confidence"]:` is not caught either, because
+`_COMPARISON_OPS` carries no `Is`/`IsNot` and the scan walks only `ast.Compare`. The guard's
+positive cases all hold; what was wrong was a migration comment attributing to it an enforcement it
+does not perform, in the file a reader goes to for the rule. This project has the same defect on
+record one table over: "the loader's own comment says the opposite. Do not trust the comment; check
+the row."
+
+**The decision.** `0027`'s paragraph now claims comparisons, names both blind spots in the shapes
+they take, and records them as owed against M5.6 -- the milestone that writes §6.6's screen and will
+stand on the claim. `test_landmine_guards.py` is not widened here: it belongs to no milestone in
+this wave, and no code in the tree writes either shape today. A test holds the sentence and the
+guard to each other, so the claim goes red if the guard learns to see either shape (which is when
+the paragraph must be read again) and red if the paragraph stops naming them. The same honesty is
+applied to the coverage row's third clause:
+`test_the_low_evidence_half_is_an_ordering_and_never_a_filter` reads a SQL constant defined in its
+own file, so no package edit can turn it red -- it documents the query M5.6 is meant to run and
+executes it against the live schema, while the enforcement is the landmine guard, which reads the
+package and the migrations and never the tests. That is written into the row and into the test
+rather than implied, because a test that cannot fail reads as coverage.
+
+**Cost.** A comment paragraph, a coverage comment, and one test that imports a guard by path. The
+rule itself is unchanged, and the two blind spots are recorded rather than closed, because closing
+them is an edit to a file this wave does not own.
+
+## Decisions taken (owner, 2026-09-23, M5.4 review cycle 3)
+
+Two, taken as M5.4's third adversarial review closed, under the same standing instruction as the
+blocks above: take the recommended remedy and record it here rather than ask. 402 and 403 are the
+next two numbers no plan claims, the blocks above having spent 392-401. 402 is written down under
+the number this review's brief already gave it -- the brief listed it as taken and nothing recorded
+it, which the review reported as a finding of its own -- rather than being re-issued under a second
+number, on the rule that a number written twice is two normative rules under one heading. 342-344,
+346, 350-359 and 362-381 stay unspent for the milestones and sibling lanes that own them, as they
+were. Neither reopens a question the owner settled: 402 applies the precedent this milestone's
+first review cycle set for `dna/coverage.py` to the two modules it had not reached, and 403 amends
+decision 395's key where the premise that key rested on was measured false.
+
+`current_milestone` stays `"M5.1"`. This block mandates one migration correction -- `0027` is
+unapplied to any durable install, so it is corrected IN PLACE and loudly rather than superseded,
+for the third time and by the same rule -- and two new coverage rows, both this milestone's own.
+
+### 402. The adjudication reader and pack custody each get a coverage row of their own
+
+**What the record says.** CLAUDE.md's testing contract: "register new spec-driven tests there",
+because `test_every_named_test_exists` fails only when a REGISTERED test disappears. M5.4's first
+review cycle gave `dna/coverage.py` its own row on exactly that argument -- the plan gave the
+thin-facet measurement a numbered step and decision 390 a number, and a module whose tests no row
+names can have its only assertions emptied with the map still green. The plan gives
+`dna/adjudicate.py` a numbered step too (D2), and decision 388 assigns that reader to M5.4 by name.
+Decision 382 makes the pack's custody the basis of a reproducible verdict, and M5.5's `llm_call` is
+specified to reference `dna_pack` rather than re-carry custody.
+
+**Why it changes.** Neither half had a row. `test_dna_adjudicate.py` held nineteen tests and the
+map named none of them, so the per-title verdict beating the blanket rule, both projects' verdict
+spellings, the scope column and version scoping -- decision 389's whole rule set -- were asserted
+by nothing the contract could see; the only registered adjudication evidence was two end-to-end
+tests over one lowercase blanket row each. And `dna_pack` had no row anywhere in the map: of the
+tests asserting its custody, its digest and its ON DELETE behaviour, not one was named. The review
+that found both also found the reader wrong in the one place those unregistered tests did not look
+-- a per-title `keep` fell through `rename` to the blanket sweep -- which is what an unprotected
+test file costs in practice rather than in principle.
+
+**The decision.** Two M5.4 rows. One names every test in `test_dna_adjudicate.py`, because every
+one is a clause of what the reader promises. The other names the custody, digest and determinism
+tests across `test_dna_packs.py` and `test_dna_reject.py`, and says in its own comment that the
+caps, interleave, header and craft tests are deliberately not there: they are the port's derived
+table rather than the custody a verdict rests on. The inherited trust-boundary row is NOT widened
+for either -- its `what` and `why` are M4.16's and M5.1's, and this milestone has left them as they
+were written -- and the tests this cycle found asserting that row's own clauses unregistered
+(decision 386's non-integral refusal, decision 392's two halves and its accounting identity) are
+added to its `tests` list, which is what a milestone owes a row it inherits.
+
+**Cost.** Two rows and forty-eight registered ids. They do NOT move the figure `docs/RELEASE.md`
+§2.1 publishes, and that is measured rather than assumed: the two commands that section prints were
+re-run and printed 42, 42, 47, 312 rows and 2254 lines exactly as pasted, because
+`ops/coverage_gate.py` reads only the rows at or before `current_milestone` and every id this
+decision registers sits on an M5.4 row. The day the scalar reaches M5.4 they move it at once. A
+later milestone refactoring either module now breaks the build if it deletes or renames an
+assertion, which is the protection the rest of the map already had.
+
+### 403. `dna_pack` is unique per (title, version, pack_sha), and two titles may hold one pack
+
+**What the record says.** Decision 395: "`UNIQUE (version, pack_sha)` replaces the column-level
+UNIQUE", on `0027`'s argument that two titles colliding within one version "would have to produce
+byte-identical packs, which stage 4's reviews gate makes unreachable", and that the collision
+"would be a refused write that parks the stage with a reason".
+
+**Why it changes.** Every clause of that argument was measured false. `render_pack` writes the
+title's NAME and YEAR into the header and never its id, and `build_pack` gives a title with no plot
+and no reviews a two-line pack on purpose, so any two unenriched titles sharing a name, a year
+and a kind hold one pack and one sha -- an ambiguity real enough that decision 360's
+`_indistinguishable_titles` exists to refuse a mint over it. Stage 4's
+reviews gate is a declared no-op M5.3 owns, and decision 387 wires nothing in front of `store_pack`
+at all. Measured on a scratch database: the second title's INSERT raised a bare
+`UniqueViolationError` that `store_pack`'s `ON CONFLICT (title_id, version)` does not cover, the
+title was then `no_pack` for every tag it would ever receive, and a `raw_document` row was left
+behind with nothing pointing at it. On the upsert path it was worse than a refusal: a title whose
+rebuilt pack came to equal another's kept a row naming its OLD pack, and `read_pack` returned that
+stale text without raising, because the row and its bytes still agreed and the disagreement was
+between the row and the world. Nor was the refusal ever a park: `acquire/pipeline.py` turns a
+raised stage into decision 336's failure, which spends attempts.
+
+**The decision.** `UNIQUE (title_id, version, pack_sha)` replaces `UNIQUE (version, pack_sha)`. An
+`llm_call` is about one title, so (title, version, sha) is the key it wants to reference, and the
+key it references can no longer be spent by a different title. `render_pack`'s ported header is
+untouched. Decision 395's version scoping and its ON DELETE RESTRICT both stand; only the key
+widens. What an `llm_call` whose pack has since been rebuilt points at stays M5.5's to answer in
+0028, as 395 left it.
+
+**Cost.** `0027` is corrected IN PLACE for the third time, which is legitimate only because it is
+applied to no durable install -- said loudly in the file and here for that reason. The key is now a
+superset of the primary key and so constrains nothing the primary key does not; it exists to be the
+target 0028's foreign key names, which is the whole of what 395 wanted it for.
 
 ---
 

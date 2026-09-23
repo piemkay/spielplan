@@ -1031,6 +1031,26 @@ why = "§5.3 files the job with a measured budget and §1 makes CPU-only a hard 
 # Re-pointed from "M5" to M5.4 as M5.1 opened: decision 321 splits M5 into seven, and the job
 # this row times is the one M5.4's projection stage writes. Milestone key only - the clause,
 # its budget and its absent `tests` are exactly as M4.16 left them.
+#
+# Decision 387: M5.4 ships the projection and wires no worker job, so the `why` above stays
+# true as written - "It sits at M5 because that is where the job gets a `run`" - while the
+# budget is measured against the exported callable rather than against the registration.
+# That is `test_placement.py::test_cold_tower_placement_of_one_title_stays_under_one_second`'s
+# shape one milestone on: it times `reconcile.reconcile` and not `Job("cold-tower-placement",
+# ...)`, because what §5.3 gives a budget is the work, and the registration is how the work is
+# reached. The wiring is one commit for the milestone that holds both halves of it. [M5.4]
+#
+# Two tests, because the clause has two halves and the timing one cannot reach the second. "On
+# CPU only, with no GPU present" is not asserted by a measurement taken on a machine that
+# happens to have no GPU: the same number comes back either way, and what would break it is the
+# projection acquiring a model - which is a live possibility here and not a hypothetical, since
+# `alias_key`'s own docstring records that real synonym resolution needs embeddings and is
+# deferred rather than absent. So the second test reads the module's import list, which is the
+# one line that change arrives on. Measured against a 2,582-row alias map: 36 ms, ~27x under.
+tests = [
+    "backend/tests/test_dna_project.py::test_per_title_projection_of_one_acquired_title_stays_under_one_second",
+    "backend/tests/test_dna_project.py::test_the_projection_loads_no_model_and_needs_no_gpu",
+]
 
 [[requirement]]
 id = "library-rate-home-grid-switch"
@@ -3011,6 +3031,14 @@ tests = [
     # the fixture bundle rather than restating it.
     "backend/tests/test_dna_import.py::test_the_spec_states_the_axis_filename_rule_the_loader_enforces",
 ]
+# NOT widened by M5.4, and the absence is decision 383 rather than an oversight. `0027` adds
+# `dna_alias.kind text` so an extraction-lexicon row can be told from a projecting one, and
+# `importer/dna._load_aliases` still reads `raw_term` and `vocab_term` only and drops the
+# column - so this row's sentence about what the loader reads may not widen yet. The one-line
+# fill is owed: `importer/dna.py` is M5.3's file under ROADMAP-M5's file-locality table and
+# that lane is building in parallel, which is why M5.4 takes the schema and not the loader.
+# The rule the column exists for is asserted against a directly inserted row instead, by
+# `data-rules-the-projected-tier-reads-the-alias-map-the-way-it-was-built`. [decision 383]
 
 [[requirement]]
 id = "data-rules-validation-reports-rather-than-raises"
@@ -3703,7 +3731,445 @@ milestone = "M5.4"
 kind = "backend"
 what = "The verifier drops, never repairs, any extracted tag whose term is not in vocabulary v1 after alias repair and adjudication rename, whose quote is not a substring of the pack under `norm()`, or whose salience is outside {1,2,3}; every tag it passes carries its evidence quote, and a fabricated tag inside an otherwise well-formed provider response is absent from the verifier's output."
 why = "The ported trust boundary caught 100% of fabricated tags in the corpus pilot, and §4.1 rule 1 requires that an extracted tag without its quote is unfalsifiable and must not exist."
-tests = []
+
+# THE ROW'S OWN CLAIM IS A CATCH RATE, so the list is split where the evidence is. The first
+# group takes the three rules one at a time against a pack this suite writes, which is the
+# only way to say WHICH rule refused a tag; the second hands a schema-valid payload of
+# twenty-eight tags to the boundary over a pack `dna/packs.py` really built out of real rows
+# and asserts the rate is 100% and not "most". Neither is sufficient alone: the first has
+# never met a pack, and the second cannot attribute a refusal. And the catch-rate test
+# carries a POSITIVE control -- four tags that are true of the title and must all pass --
+# because a verifier that refused everything would score 100% against the negative one.
+#
+# THE TWO CASES A STRICT PORT LOSES ARE REGISTERED HERE DELIBERATELY. The four key-alias
+# spellings are `what`'s "after alias repair" read at the field level: a run that emitted
+# `id` for `term` once had all 161 of its tags logged as "bad term", which is
+# indistinguishable from a quality collapse, and a reviewer tightening the list would be
+# undoing that measurement rather than hardening this row. The last two entries are the
+# static read of the module: "drops, never repairs" is a claim about what the code does NOT
+# contain, and no behavioural test can assert the absence of a repair path.
+# [M5.4 phase D, D1-D4; M5.4-plan.md §7 checks 1-8]
+tests = [
+    "backend/tests/test_dna_verify.py::test_a_fabricated_term_is_absent_from_the_output_and_recorded",
+    "backend/tests/test_dna_verify.py::test_an_authored_alias_row_repairs_a_bare_phrase",
+    "backend/tests/test_dna_verify.py::test_an_authored_alias_beats_the_derived_prefix_repair",
+    "backend/tests/test_dna_verify.py::test_the_prefix_repair_recalls_a_term_the_extractor_meant",
+    "backend/tests/test_dna_verify.py::test_the_prefix_repair_refuses_rather_than_guessing",
+    "backend/tests/test_dna_verify.py::test_the_prefix_repair_never_changes_the_term_body",
+    "backend/tests/test_dna_verify.py::test_a_quote_that_is_not_in_the_pack_is_refused",
+    "backend/tests/test_dna_verify.py::test_the_pack_this_title_has_is_the_pack_its_quotes_are_checked_against",
+    "backend/tests/test_dna_verify.py::test_a_title_with_no_pack_is_refused_rather_than_passed",
+    "backend/tests/test_dna_verify.py::test_a_stated_level_outside_the_declared_domain_is_refused_and_recorded",
+    "backend/tests/test_dna_verify.py::test_a_clamp_would_have_kept_the_tag_this_test_drops",
+    "backend/tests/test_dna_verify.py::test_a_level_that_is_not_a_number_is_refused_rather_than_defaulted",
+    "backend/tests/test_dna_verify.py::test_a_verified_tag_cannot_be_constructed_without_its_quote",
+    "backend/tests/test_dna_verify.py::test_every_tag_the_boundary_passes_carries_a_quote",
+    "backend/tests/test_dna_verify.py::test_every_spelling_of_the_term_field_is_read",
+    "backend/tests/test_dna_verify.py::test_every_spelling_of_the_quote_field_is_read",
+    "backend/tests/test_dna_verify.py::test_the_run_that_emitted_id_and_no_source_keeps_all_its_tags",
+    "backend/tests/test_dna_verify.py::test_no_statement_in_the_verifier_writes_a_term_outside_the_two_named_repairs",
+    "backend/tests/test_dna_verify.py::test_the_only_thing_the_rename_wrapper_calls_is_the_curation_ledger",
+    "backend/tests/test_dna_reject.py::test_no_fabricated_term_is_rescuable_by_any_repair_this_module_has",
+    "backend/tests/test_dna_reject.py::test_every_fabricated_tag_in_a_schema_valid_payload_is_caught",
+    "backend/tests/test_dna_reject.py::test_a_term_the_ledger_renames_passes_under_its_new_name",
+    "backend/tests/test_dna_reject.py::test_a_term_the_ledger_retires_is_recorded_as_adjudicated_and_not_as_garbage",
+    "backend/tests/test_dna_reject.py::test_a_rename_onto_a_term_the_vocabulary_does_not_carry_is_still_unknown",
+    # THREE CLASSES THE ROW'S LAST CLAUSE DID NOT COVER, added as review cycle 2 closed them.
+    # "Every tag it passes carries its evidence quote" was true of a tag whose evidence is one
+    # zero-width space (`norm()` returned it unchanged, so the constructor's question and rule 2
+    # both said yes against a pack whose source published the same character) and of a tag whose
+    # evidence is the integer 1 (`norm()` opens with `str(s)`, and `render_pack` writes `[plot:1]`
+    # into every pack it builds). Both were KEPT, which is why neither is in the catch rate above:
+    # a pass is not a drop and leaves no row to count. The third is the same sentence read the
+    # other way -- a term or a quote carrying a NUL or an unpaired surrogate made the boundary
+    # RAISE rather than drop, so a paid pass returned no verdict at all and every other refusal in
+    # it was lost. [M5.4 review cycle 2, M54-DIM1-02/M54-D386-04/M54-DIM3-01-02; decisions 397-399]
+    "backend/tests/test_dna_verify.py::test_a_quote_that_renders_as_nothing_is_a_missing_quote",
+    "backend/tests/test_dna_verify.py::test_a_quote_that_is_not_text_is_a_missing_quote",
+    "backend/tests/test_dna_verify.py::test_the_pack_this_file_writes_really_carries_those_digits",
+    "backend/tests/test_dna_verify.py::test_a_verified_tag_cannot_be_constructed_from_a_quote_that_is_not_text",
+    "backend/tests/test_dna_verify.py::test_text_postgres_cannot_store_is_refused_before_anything_binds_it",
+    # WHAT REVIEW CYCLE 3 FOUND ASSERTED AND NAMED BY NO ROW, and every clause is this row's own.
+    # Decision 386's repair -- a non-integral level refused rather than truncated -- was asserted
+    # only by tests no row named, while the weaker pair that predates the repair was registered;
+    # so were decision 392's two halves at the boundary (evidence that folds to nothing is refused,
+    # and no untrusted value raises) and its accounting identity. Then the three classes the cycle
+    # closed: a quote Postgres cannot store is refused by the TYPE and not only by the boundary,
+    # which is decision 397 applied to the one object it had missed; a padded term reaches the
+    # curation ledger as the vocabulary reads it, so "after alias repair and adjudication rename"
+    # holds for the spelling the repair already tolerates; and a term that is not text is refused,
+    # where a one-element array had been KEPT through `alias_key`'s bracket-stripping -- "drops,
+    # never repairs" read for the term's type. [M5.4 review cycle 3, M54-C3-EVID-02,
+    # M54-C3-DIM2-02, M54-DIM3-C3-02, M54-DIM3-C3-05]
+    "backend/tests/test_dna_verify.py::test_a_non_integral_level_is_refused_rather_than_truncated",
+    "backend/tests/test_dna_verify.py::test_a_stated_level_inside_the_domain_is_read_as_its_integer",
+    "backend/tests/test_dna_verify.py::test_a_quote_that_folds_to_nothing_is_a_missing_quote",
+    "backend/tests/test_dna_verify.py::test_no_untrusted_value_raises_out_of_the_boundary",
+    "backend/tests/test_dna_verify.py::test_n_seen_counts_every_tag_the_boundary_looked_at",
+    "backend/tests/test_dna_verify.py::test_the_accounting_identity_holds_over_every_tag_the_boundary_looked_at",
+    "backend/tests/test_dna_verify.py::test_a_verified_tag_cannot_carry_a_quote_postgres_cannot_store",
+    "backend/tests/test_dna_reject.py::test_a_padded_term_reaches_the_ledger_as_the_vocabulary_reads_it",
+    "backend/tests/test_dna_verify.py::test_a_term_that_is_not_text_is_refused_rather_than_read_through_its_brackets",
+]
+
+[[requirement]]
+# M5.4's first three new rows sit beside the gate they elaborate rather than beside the other
+# `data-rules-` ids, because the trust boundary above and these three are one milestone's
+# argument read from four sides: the boundary itself, the function that normalises, the store
+# that records a refusal, and the map the projection reads. They OPENED with NO `tests` key, which
+# is M4.10's, M4.11's and M4.16's opening: THE RED LIST WAS THE TEST PLAN, and each list below was
+# filled by the stage that wrote the code its row describes -- never by a waiver, never by renaming
+# a registered test and never by lowering `current_milestone`, which stays "M5.1" while its sibling
+# lanes build. So these rows are owed rather than armed -- and owed is what they are, not waived.
+# [decisions 341, 382-403; M5.4-plan.md §6]
+id = "data-rules-one-quote-normalisation-for-the-pack-and-the-verifier"
+spec = "§8 stage 5 (\"ported packs.py (interleaving, caps, norm())\") + §8 stage 7"
+milestone = "M5.4"
+kind = "backend"
+what = "One function normalises text for quote comparison, used by both the pack writer and the verifier: it strips inline markup, folds the punctuation variants sources disagree about, collapses whitespace and lowercases, and it is the only such function in the tree. A quote transcribed across bold markers, a spoiler tag or a smart apostrophe verifies against a pack that carries the markup verbatim."
+why = "The packs carry what their sources published, and an extractor transcribing a span across that markup produces a quote that is right about the film and wrong about the characters - measured across the library at 7,334 bold markers and 1,336 spoiler tags. A verifier that normalises differently from the pack writer rejects good tags, which is why the corpus's own module says every verification path must use that exact function."
+
+# The fold table's twenty entries get one parametrised case each plus a completeness check
+# against `_PUNCT_FOLD` itself, because a row that tested the entries somebody remembered to list
+# would pass just as green on a table that had quietly grown a twenty-first. The two static
+# guards and the self-test under them are registered here rather than left implicit: this row's
+# claim is that it is the ONLY such function in the tree, and nothing else in the suite asserts
+# that. [M5.4 phase A; M5.4-plan.md A1-A2 and its first risk]
+tests = [
+    "backend/tests/test_dna_norm.py::test_every_fold_table_entry_folds",
+    "backend/tests/test_dna_norm.py::test_the_case_table_covers_every_fold_entry",
+    "backend/tests/test_dna_norm.py::test_inline_markup_is_stripped",
+    "backend/tests/test_dna_norm.py::test_whitespace_collapses_across_newlines_and_tabs",
+    "backend/tests/test_dna_norm.py::test_the_result_is_lowercased",
+    "backend/tests/test_dna_norm.py::test_a_non_string_is_coerced_rather_than_raising",
+    "backend/tests/test_dna_norm.py::test_a_quote_transcribed_across_markup_verifies_against_the_pack",
+    "backend/tests/test_dna_norm.py::test_a_quote_that_is_absent_stays_absent_under_the_fold",
+    "backend/tests/test_dna_norm.py::test_exactly_one_module_in_the_package_defines_norm",
+    "backend/tests/test_dna_norm.py::test_the_norm_module_defines_that_one_function_and_nothing_else",
+    "backend/tests/test_dna_norm.py::test_the_single_definition_guard_sees_a_second_definition",
+    # THE LAST SENTENCE OF `what` IS THE PACK'S AND NOT THE FOLD'S, which is why two tests from
+    # a different file land on this row. "A quote transcribed across bold markers, a spoiler tag
+    # or a smart apostrophe verifies against a pack that carries the markup verbatim" has two
+    # halves and the eleven above prove only the first: every one of them would stay green
+    # against a pack builder that stripped `**` and `[spoiler]` at build time, because they hand
+    # `norm()` their own strings. The fold would then be closing a gap that no longer exists,
+    # and every quote an extractor transcribed across markup it never saw would drop as
+    # `quote_unverified` with nothing raised and nothing logged. So the pack is asserted to
+    # still CARRY what its sources published, and `clean()` is asserted to remove HTML tags and
+    # whitespace and nothing else - which is the boundary that makes the first claim checkable
+    # rather than a matter of degree. [M5.4 phase B; M5.4-plan.md B4 and its second risk]
+    "backend/tests/test_dna_packs.py::test_the_pack_keeps_the_markup_its_sources_published",
+    "backend/tests/test_dna_packs.py::test_clean_strips_html_tags_and_collapses_whitespace",
+    # AND THE THIRD SIDE OF THE SAME SENTENCE: `what` says the one function is "used by both
+    # the pack writer and the verifier", and until `dna/verify.py` existed nothing asserted
+    # the second half of that. Every test above would stay green against a verifier that
+    # compared a quote to a pack with no fold at all -- they hand `norm()` their own strings
+    # and never watch it decide anything. The three below run the quote and the pack through
+    # it on opposite sides of a real comparison, one of them against a pack `dna/packs.py`
+    # built from rows and `store_pack` put in custody. The last is the measurement under the
+    # other two: three of the four quotes are NOT literal substrings of that pack, so the
+    # fold is what carries them, and a first draft in which all four happened to be literal
+    # would have asserted nothing at all. [M5.4 phase D, D1; M5.4-plan.md §7 check 3]
+    "backend/tests/test_dna_verify.py::test_a_quote_transcribed_across_markup_and_a_smart_apostrophe_passes",
+    "backend/tests/test_dna_reject.py::test_a_quote_transcribed_across_the_packs_markup_verifies",
+    "backend/tests/test_dna_reject.py::test_the_fold_is_what_carries_three_of_those_four_quotes",
+    # AND THE FOURTH SIDE, WHICH IS WHAT THE FOLD DOES NOT READ. `what` says this function folds
+    # "the punctuation variants sources disagree about", and the zero-width characters are one of
+    # those variants in both directions: a quote of one U+200B survived the fold NON-EMPTY and was
+    # admitted by rule 2 against a pack whose own source published it, while a span correctly
+    # transcribed WITHOUT a source's zero-width hint was dropped as `quote_unverified`. The rule
+    # that closes both is stated over what a character does rather than over a list of code points,
+    # so the first two tests hold the rule and the whitespace it must NOT eat -- dropping a newline
+    # instead of collapsing it joins two words, silently, on both sides -- and the last two hold it
+    # where the comparison actually happens. The ported twenty-entry table is untouched, so the
+    # completeness check above still binds it. [M5.4 review cycle 2, M54-DIM1-02; decision 398]
+    "backend/tests/test_dna_norm.py::test_a_character_that_prints_nothing_folds_away",
+    "backend/tests/test_dna_norm.py::test_the_invisible_fold_does_not_eat_the_whitespace_that_separates_two_words",
+    "backend/tests/test_dna_verify.py::test_the_fold_reads_an_invisible_character_as_nothing_and_the_pack_still_carries_it",
+    "backend/tests/test_dna_verify.py::test_a_quote_transcribed_without_the_packs_invisible_hint_verifies",
+]
+
+[[requirement]]
+id = "data-rules-a-dropped-tag-is-recorded-with-the-rule-it-broke"
+spec = "§8 stage 7 (\"Failures drop, never repaired\") + §6.6 Data (\"review of DNA rejects and low-evidence tags\") + §4.1 rule 2"
+milestone = "M5.4"
+kind = "integration"
+what = "A tag the verifier drops is written to a reject store carrying its term, its quote, its salience and the rule it violated, and never to dna_tag; no code path repairs a near-miss term or a near-miss quote; and the reject review orders by confidence ascending without filtering on it."
+why = "§6.6 promises a review of DNA rejects while §8 stage 7 drops them, and a dropped tag that is never written cannot be reviewed. The three manifest tables that might have served are declined by the importer on purpose. 'Low-evidence' cannot mean `WHERE confidence > x` without contradicting §4.1 rule 2, which a static guard already enforces over both SQL and Python."
+
+# THREE CLAUSES, AND THE MIDDLE ONE IS AN ABSENCE. That a dropped tag is written down and
+# that it never reaches `dna_tag` are both behaviours and are asserted against real rows.
+# That NO CODE PATH repairs a near-miss term is not a behaviour at all -- it is a property of
+# what the module does not contain -- so it is asserted by reading `dna/verify.py` with `ast`
+# and holding it to exactly two statements that write a term, both of them named repairs that
+# run BEFORE the vocabulary check. The three shapes a third one would take are covered
+# separately, because a guard that sees only `term = fix(term)` misses `tag.term = fix` and
+# misses a rewrite sitting inside the constructor call, and the guard's own self-test proves
+# it can go red rather than asserting that it could.
+#
+# THE THIRD CLAUSE IS PINNED BEFORE THE SCREEN THAT COULD BREAK IT EXISTS. §6.6's review is
+# M5.6's surface, and decision 341 settles now what "low-evidence" may mean there: an ORDER
+# BY on ascending confidence and never a WHERE, which is §4.1 rule 2 and the reason `0027`
+# gives `dna_reject` no `confidence` column at all. The query M5.6 will run is written into
+# the test and EXECUTED, so the shape is a fact in the tree rather than an intention in a
+# plan.
+#
+# AND WHAT THAT PINS IS THE INTENTION, WHICH IS WORTH SAYING OUTRIGHT (decision 401).
+# `LOW_EVIDENCE_REVIEW` is a SQL constant defined in the test file twenty lines above the test,
+# so no edit under `backend/spielplan/` can turn those assertions red -- including the edit the
+# clause exists to forbid, M5.6 shipping the screen with `WHERE t.confidence > $3`. What holds
+# the rule is `test_landmine_guards.py`, which reads the package and the migrations and never
+# the tests, and which will therefore read that screen the day it is package code; M5.6's own
+# row, map-taste-admin-rejects-are-ordered-never-filtered, carries the e2e evidence for the
+# surface. This registration documents the query and executes it against the live schema, which
+# is worth having and is not enforcement, and the guard it defers to has two measured blind
+# spots that `0027` now names as owed against M5.6 -- the test below holds that sentence and the
+# guard to each other. A test that cannot fail reads as coverage, so what this one covers is
+# written down here rather than left for the next reader to discover.
+# [M5.4 phase D, D4; decision 341; M5.4-plan.md §7 checks 8 and 9;
+#  M5.4 review cycle 2, M54-DIM2-03/M54-DIM3-07; decision 401]
+tests = [
+    "backend/tests/test_dna_reject.py::test_every_refusal_is_written_down_with_the_rule_it_broke",
+    "backend/tests/test_dna_reject.py::test_not_one_refused_tag_reaches_the_extracted_tier",
+    "backend/tests/test_dna_reject.py::test_the_reject_store_refuses_a_rule_nobody_declared",
+    "backend/tests/test_dna_reject.py::test_recording_nothing_writes_nothing",
+    "backend/tests/test_dna_reject.py::test_a_term_the_ledger_retires_is_recorded_as_adjudicated_and_not_as_garbage",
+    "backend/tests/test_dna_reject.py::test_a_tag_that_carries_no_quote_is_refused_and_written_down",
+    "backend/tests/test_dna_reject.py::test_the_reject_review_orders_by_recency_and_filters_only_on_the_title",
+    "backend/tests/test_dna_reject.py::test_the_low_evidence_half_is_an_ordering_and_never_a_filter",
+    "backend/tests/test_dna_verify.py::test_no_statement_in_the_verifier_writes_a_term_outside_the_two_named_repairs",
+    "backend/tests/test_dna_verify.py::test_nothing_in_the_verifier_assigns_to_a_term_attribute",
+    "backend/tests/test_dna_verify.py::test_every_verified_tag_is_built_from_the_term_the_checks_agreed_on",
+    "backend/tests/test_dna_verify.py::test_the_term_write_guard_sees_each_shape_a_repair_would_take",
+    "backend/tests/test_dna_verify.py::test_the_reject_store_constrains_itself_to_exactly_the_ported_reasons",
+    "backend/tests/test_dna_verify.py::test_the_migrations_claim_about_the_weight_guard_is_the_claim_the_guard_supports",
+    # THE FIRST CLAUSE IS "A TAG THE VERIFIER DROPS IS WRITTEN", AND WHAT KEPT BREAKING IT WAS ONE
+    # UNWRITABLE VALUE TAKING THE REST OF THE PASS WITH IT. `executemany` is atomic in asyncpg, so
+    # a title id no `title` row carries, a term or a quote carrying a NUL or an unpaired surrogate,
+    # and a level wider than `smallint` each discarded every genuine refusal in the same call and
+    # handed the caller an exception instead of a count -- the install's record then says the pass
+    # never happened, which is decision 341's named failure and not a near miss of it. The first
+    # two were written in cycle 1 as the adversarial evidence for this clause and never registered
+    # here; the next three are cycle 2's, and the last of them binds a `Rejection` a caller built
+    # rather than one `verify_payload` produced, because `record_rejects` is exported and M5.5
+    # builds its own. [M5.4 review cycle 2, M54-DIM3-01/M54-DIM3-02/M54-D386-02; decisions 396-397]
+    "backend/tests/test_dna_reject.py::test_a_refusal_naming_a_title_this_install_does_not_hold_is_written_with_no_title",
+    "backend/tests/test_dna_reject.py::test_one_unwritable_title_id_does_not_discard_the_rest_of_the_passs_refusals",
+    "backend/tests/test_dna_reject.py::test_a_term_postgres_cannot_store_never_reaches_the_curation_ledger",
+    "backend/tests/test_dna_reject.py::test_one_unwritable_string_does_not_discard_the_rest_of_the_passs_refusals",
+    "backend/tests/test_dna_reject.py::test_a_level_the_column_cannot_hold_does_not_discard_the_rest_either",
+    # THE BEHAVIOURAL HALF OF THE MIDDLE CLAUSE, which the static guards above cannot be: they are
+    # scoped to the name `term`, and a rewrite inside `Vocabulary.repair` binds `term_id`. It was
+    # written before this cycle and registered nowhere, and review cycle 3 made it assert the facet
+    # claim beside the body -- a body-preserving repair that filed `Mood.slow_burn` under `pacing`
+    # is a near-miss repair of the facet the extractor named. [M5.4 review cycle 3, M54-DIM3-C3-01]
+    "backend/tests/test_dna_verify.py::test_the_prefix_repair_never_changes_a_body_under_any_single_character_edit",
+]
+
+[[requirement]]
+id = "data-rules-the-projected-tier-reads-the-alias-map-the-way-it-was-built"
+spec = "§8 stage 8 (\"per-title alias-map projection … same alias map\") + §4.1 rule 1"
+milestone = "M5.4"
+kind = "integration"
+what = "Projection maps a title's keywords through the alias map keyed as the map was built, skips rows whose vocabulary term the active vocabulary does not carry, and never projects an extraction-lexicon row; re-running it for one title changes nothing; the two tiers are only ever read together through the sanctioned view; and it projects only an acquired title, refusing a bundle title rather than rewriting the rows the bundle imported."
+why = "dna_alias is loaded and has no reader at all, and the loader drops the map's `kind` column, stores the raw term unnormalised and keeps rows whose vocabulary term is absent - dna_alias.term has no foreign key to dna_term, so nothing rejects them. The corpus skips lexicon rows for a measured reason: without the skip, keyword surfaces walk projected rows into the register facet through the back door."
+
+# The reader half of the row, which is the half that could not be tested before `aliases.py`
+# existed: the three fidelity gaps, the key the map is built on, and the two rules the corpus
+# applies to the map's second half. The clauses about a re-run changing nothing and about the
+# two tiers being read only through `dna_tagged` belong to `dna/project.py` and are APPENDED
+# here by the stage that writes it - this list is filled as the milestone builds rather than
+# replaced, which is the same progression the norm row above went through.
+#
+# `test_a_row_whose_term_the_vocabulary_does_not_carry_is_skipped` is registered although its
+# subject is a row nothing rejects: it asserts the INSERT succeeds before it asserts the skip,
+# because a test that only checked the absence would pass just as green on an install where the
+# row had been refused, and gap 3 would then be closed against a table that never held it.
+# [M5.4 phase C; M5.4-plan.md C1 and its §2.4 caveat; decision 383]
+tests = [
+    "backend/tests/test_dna_aliases.py::test_every_spelling_the_key_exists_for_folds_to_one",
+    "backend/tests/test_dna_aliases.py::test_the_key_collapses_exactly_what_the_corpus_docstring_names",
+    "backend/tests/test_dna_aliases.py::test_a_plural_is_left_alone",
+    "backend/tests/test_dna_aliases.py::test_a_phrase_of_pure_punctuation_folds_to_nothing",
+    "backend/tests/test_dna_aliases.py::test_the_four_spellings_of_one_alias_resolve_to_one_term",
+    "backend/tests/test_dna_aliases.py::test_a_row_the_loader_wrote_with_no_kind_is_in_the_map",
+    "backend/tests/test_dna_aliases.py::test_a_lexicon_row_never_enters_the_map",
+    "backend/tests/test_dna_aliases.py::test_a_row_whose_term_the_vocabulary_does_not_carry_is_skipped",
+    "backend/tests/test_dna_aliases.py::test_a_term_is_a_raw_spelling_of_itself",
+    "backend/tests/test_dna_aliases.py::test_an_explicit_map_row_beats_the_implicit_self_mapping",
+    "backend/tests/test_dna_aliases.py::test_a_register_term_gets_no_implicit_self_mapping",
+    "backend/tests/test_dna_aliases.py::test_an_install_with_no_vocabulary_reads_an_empty_map",
+    "backend/tests/test_dna_aliases.py::test_the_map_is_scoped_to_one_vocabulary_version",
+    # The projection half, appended by the stage that wrote `dna/project.py` exactly as the
+    # comment above said it would be. The map has a reader above; here it has a CALLER, which is
+    # what turns each of the three gaps from a property of a dict into a row that either exists
+    # in `dna_projected` or does not. The last two are the clauses `aliases.py` could not reach
+    # at all: "re-running it for one title changes nothing" is a claim about what a second write
+    # does to a row that already exists, and "the two tiers are only ever read together through
+    # the sanctioned view" needs both tiers populated for one title before it says anything.
+    #
+    # `..._updates_the_row_it_already_wrote` is registered beside the idempotence test and not
+    # instead of it, because the two pin opposite halves of one write and each alone admits the
+    # wrong fix: `DO NOTHING` passes the idempotence test and freezes every row at whatever the
+    # first pass saw, while a delete-and-rewrite passes the update test and renumbers every row
+    # and re-stamps every `created_at` on a re-run that changed nothing. [M5.4 phase E]
+    #
+    # NOT registered here, deliberately: `test_dna_project.py`'s four tests on what the weight
+    # MEANS (decision 385 - a count of inventories, never the corpus's 0.3/0.6/1.0 ladder). No
+    # M5.4 row claims the unit. The clause that owns it is
+    # `data-rules-vocabulary-layer-loads-the-files-the-corpus-ships` above, whose
+    # `test_the_projected_tier_keeps_n_sources_as_a_weight` pins the BUNDLE side of the same
+    # column - an M4.5 row, and widening another milestone's `what` from this lane is the move
+    # decision 383's note already declined one column over. So the tests exist and run, and the
+    # row that would claim them is named here rather than a claim being stretched to fit.
+    "backend/tests/test_dna_project.py::test_a_keyword_that_matches_an_alias_row_projects_one_row",
+    "backend/tests/test_dna_project.py::test_a_keyword_spelled_differently_from_the_map_row_still_projects",
+    "backend/tests/test_dna_project.py::test_a_lexicon_alias_row_never_projects",
+    "backend/tests/test_dna_project.py::test_a_row_whose_vocabulary_term_is_absent_never_projects",
+    "backend/tests/test_dna_project.py::test_re_running_the_projection_for_one_title_changes_nothing",
+    "backend/tests/test_dna_project.py::test_a_second_run_that_gains_an_inventory_updates_the_row_it_already_wrote",
+    "backend/tests/test_dna_project.py::test_the_projection_never_touches_the_extracted_tier",
+    # AND THE NON-GOAL, WHICH WAS A SENTENCE UNTIL REVIEW CYCLE 3. `dna/project.py` said it does not
+    # re-project the bundle's existing rows and rested that on no caller this milestone ships handing
+    # it a bundle title -- true only because decision 387 ships no caller at all. Measured, a bundle
+    # title handed in had its importer row's corpus `n_sources` overwritten by a local count, and
+    # decision 162 seeds content once, so nothing could have restored it. The first test is
+    # isolation (an acquired title's run leaves another title alone) and the second is admission
+    # (the bundle title itself is refused); `what` gained the clause the two hold.
+    # [M5.4 review cycle 3, M54-DIM5-04; M5.4-plan.md §8]
+    "backend/tests/test_dna_project.py::test_another_titles_projected_rows_are_untouched",
+    "backend/tests/test_dna_project.py::test_a_bundle_title_handed_to_the_projection_is_refused_and_its_rows_survive",
+]
+
+[[requirement]]
+# THE FOURTH M5.4 ROW, AND IT LANDED A CYCLE LATE. `docs/milestones/M5.4-plan.md` gives Phase F
+# its own step and decision 390 its own number, and then lists three new rows in §6 -- so the
+# thin-facet measurement shipped with `dna/coverage.py`, a 285-line test file, and no row naming
+# any of it. What that costs is exactly the protection CLAUDE.md promises: renaming or deleting a
+# REGISTERED test breaks the build, and `test_every_named_test_exists` cannot see a file no row
+# mentions, so a later milestone refactoring this module could have emptied its only assertions
+# with the map still reading M5.4 5/5. The §8.4 rows that will one day spend this measurement are
+# M5.6's, M5.7's and M6's, and all three are still `tests = []`: filling one of them from here
+# would silence another milestone's red gate over work it has not done, which is the move the
+# ledger above refuses in three places. So the measurement gets the row its own phase earned.
+# [M5.4 phase F, F1; decision 390; M5.4 review cycle 1, M54-REV1-COV-04]
+id = "data-rules-the-thin-facet-measurement-counts-and-never-thresholds"
+spec = "§8.4 + §14 risk 2 + §4.1 rules 1 and 2"
+milestone = "M5.4"
+kind = "integration"
+what = "A title's facet coverage is reported as the count of distinct extracted-tier terms per facet, however many providers named each, over every facet the active vocabulary declares, including the facets that count zero, in dna_facet.ord order and scoped to one vocabulary version; it carries no threshold, returns no boolean, reads the two tiers only through the sanctioned view, and never reads salience, confidence or n_sources."
+why = "§8.4 feeds the flywheel from thin-facet titles and §14 risk 2 asks for a measurement rather than a predicate - \"measure facet coverage of post-2025 titles\" - while no threshold appears anywhere in the spec. Decision 390 leaves the number to decision 329 and the milestone that spends LLM money on it, and keeps the name away from `placement/features.is_thin`, which is a different test about a different subject."
+
+# The measurement, the shape of its answer, and the two absences that are the decision: no
+# threshold anywhere in the module's own source, and no second `is_thin`. The last three are the
+# static half -- read with `ast` over this file's own source, with a self-test under them, because
+# "carries no threshold" is a claim about what the code does NOT contain and no behavioural test
+# can assert an absence.
+tests = [
+    "backend/tests/test_dna_coverage.py::test_the_fixture_names_the_shipped_eleven",
+    "backend/tests/test_dna_coverage.py::test_every_declared_facet_is_a_key_and_the_silent_ones_are_zero",
+    "backend/tests/test_dna_coverage.py::test_a_title_nobody_has_named_reports_zeroes_rather_than_nothing",
+    "backend/tests/test_dna_coverage.py::test_the_projected_tier_is_not_coverage",
+    "backend/tests/test_dna_coverage.py::test_a_tag_under_a_superseded_vocabulary_is_invisible_and_addressable",
+    "backend/tests/test_dna_coverage.py::test_a_facet_label_the_vocabulary_does_not_declare_covers_nothing",
+    "backend/tests/test_dna_coverage.py::test_an_install_with_no_vocabulary_measures_nothing_and_raises_nothing",
+    "backend/tests/test_dna_coverage.py::test_the_measurement_carries_no_threshold",
+    "backend/tests/test_dna_coverage.py::test_the_threshold_guard_catches_a_real_violation",
+    "backend/tests/test_dna_coverage.py::test_the_threshold_guard_reads_prose_as_prose",
+    "backend/tests/test_dna_coverage.py::test_nothing_here_is_named_after_the_other_thinness_test",
+    # TWO MORE, BOTH REVIEW CYCLE 3'S. The first is what `what` now says outright: a term three
+    # providers named is one term of coverage, because `dna_tag`'s key carries the provider and
+    # section 6.6's parallel mode writes a row per provider -- counted as rows, the unanimously thin
+    # post-2025 title read as better covered than a bundle title with three distinct terms. The
+    # second pins the order a REAL install returns, through the loader that writes `dna_facet`,
+    # because the fixture's `ord` is one the shipped loader never produces and the module had cited
+    # §6.8 for a sequence §6.8 does not state -- which is why `spec` no longer cites it either.
+    # [M5.4 review cycle 3, M54-DIM5-01, M54-DIM5-02]
+    "backend/tests/test_dna_coverage.py::test_one_term_named_by_three_providers_is_one_term_of_coverage",
+    "backend/tests/test_dna_coverage.py::test_the_order_a_real_install_returns_is_the_loaders_alphabetical_index",
+]
+
+[[requirement]]
+# THE FIFTH M5.4 ROW, ON THE FOURTH'S ARGUMENT AND TWO CYCLES LATER THAN IT (decision 402). The
+# plan gives `dna/adjudicate.py` its own step (D2) and decision 388 assigns the reader to this
+# milestone by name, and it shipped with a test file no row named: the per-title verdict beating
+# the blanket rule, both projects' verdict spellings, the scope column and version scoping were
+# asserted by nothing `test_every_named_test_exists` can see, so a later milestone could have
+# emptied them with the map still reading M5.4 green. It is not folded into the inherited trust
+# boundary above, whose `what` and `why` are M4.16's and M5.1's and which this milestone left as
+# they wrote them. [M5.4 review cycle 3, M54-C3-EVID-01, M54-DIM3-C3-04, M54-DIM3-C3-03]
+id = "data-rules-the-curation-ledger-reader-lets-a-titles-own-verdict-beat-the-blanket-rule"
+spec = "§8 stage 7 (\"after alias repair + adjudication rename\") + §8 stage 3 + §14.5 + §14 risk 7"
+milestone = "M5.4"
+kind = "integration"
+what = "The curation ledger is read in both projects' verdict spellings, case-folded: rename, repoint and merge re-point a term to a named target, drop retires it, keep answers for its title and changes nothing, drop_evidence answers for no term, and a verdict string the reader was never taught is ignored and counted; the first per-title verdict about a term is that title's verdict for both the re-point and the retirement question and beats the blanket rule, applicability is read off title_id and never off scope, and every read is scoped to one vocabulary version."
+why = "§8 stage 3: a derive that regenerates rows without re-applying curated verdicts silently reverts them, which the corpus measured at 787 rows and half the register facet. Two projects wrote two verdict vocabularies into one column with no CHECK between them, so a reader that knows one turns a curated retirement into unknown_term - the confusion the adjudicated and unknown_term split exists to prevent. Decision 389 settles the vocabulary and the precedence."
+
+# Every test the file holds, because every one is a clause of `what`: the three verdict families
+# in both spellings, the two absences (an evidence note and an untaught string answer for no
+# term), the per-title arm against both blanket verdicts, and the two scoping rules. The two
+# review cycle 3 added pin the half the reader got wrong -- a `keep` fell through `rename`'s
+# per-title arm to the blanket sweep while `is_retired` stopped on it.
+tests = [
+    "backend/tests/test_dna_adjudicate.py::test_a_blanket_rename_re_points_the_term_for_every_title",
+    "backend/tests/test_dna_adjudicate.py::test_a_per_title_verdict_beats_the_blanket_rule_for_its_term",
+    "backend/tests/test_dna_adjudicate.py::test_a_per_title_drop_answers_no_rename_even_under_a_blanket_rename",
+    "backend/tests/test_dna_adjudicate.py::test_a_blanket_drop_retires_the_term_for_every_title",
+    "backend/tests/test_dna_adjudicate.py::test_a_per_title_keep_excepts_its_title_from_a_blanket_retirement",
+    "backend/tests/test_dna_adjudicate.py::test_a_per_title_keep_excepts_its_title_from_a_blanket_re_point",
+    "backend/tests/test_dna_adjudicate.py::test_both_functions_agree_about_which_per_title_row_is_that_titles_verdict",
+    "backend/tests/test_dna_adjudicate.py::test_a_verdict_for_another_title_does_not_reach_this_one",
+    "backend/tests/test_dna_adjudicate.py::test_every_spelling_of_a_re_point_re_points",
+    "backend/tests/test_dna_adjudicate.py::test_every_spelling_of_a_retirement_retires",
+    "backend/tests/test_dna_adjudicate.py::test_a_drop_evidence_row_never_answers_for_the_term",
+    "backend/tests/test_dna_adjudicate.py::test_an_unknown_verdict_is_ignored_rather_than_guessed_at",
+    "backend/tests/test_dna_adjudicate.py::test_an_unknown_per_title_verdict_does_not_shadow_the_blanket_rule",
+    "backend/tests/test_dna_adjudicate.py::test_unknown_verdicts_counts_the_spellings_nobody_taught_this_reader",
+    "backend/tests/test_dna_adjudicate.py::test_an_empty_ledger_answers_rather_than_raising",
+    "backend/tests/test_dna_adjudicate.py::test_no_active_vocabulary_is_the_pre_import_state_and_not_an_error",
+    "backend/tests/test_dna_adjudicate.py::test_a_re_point_that_names_no_target_is_not_a_re_point",
+    "backend/tests/test_dna_adjudicate.py::test_a_verdict_filed_under_another_vocabulary_is_invisible",
+    "backend/tests/test_dna_adjudicate.py::test_the_corpus_spelling_of_the_blanket_scope_reads_as_blanket",
+    "backend/tests/test_dna_adjudicate.py::test_a_row_carrying_a_title_id_speaks_for_that_title_whatever_its_scope_says",
+    "backend/tests/test_dna_adjudicate.py::test_the_per_title_arm_is_read_before_the_blanket_arm_in_one_query",
+]
+
+[[requirement]]
+# THE SIXTH, ON THE SAME ARGUMENT (decision 402), and its scope is stated because most of
+# `test_dna_packs.py` is deliberately NOT here. The caps, the interleave, the series header and
+# the craft supplement are the port's derived table -- §8 stage 5's "ported packs.py
+# (interleaving, caps, norm())" read as behaviour -- and the norm row above claims the half of
+# that clause a verdict rests on. What this row names is the half decision 382 exists for: the
+# text a verdict was reached against is kept, addressable, reproducible from rows that did not
+# change, and refuses to answer with bytes it does not name. `0027`'s `dna_pack` had no row of its
+# own anywhere in the map, and it is the table M5.5's `llm_call` is specified to reference.
+# [M5.4 review cycle 3, M54-C3-EVID-02, M54-C3-PACK-02; decisions 382, 395, 402 and 403]
+id = "data-rules-the-pack-a-verdict-was-reached-against-is-kept-and-names-its-own-bytes"
+spec = "§8 stage 5 + §8 stage 7 + §14 risk 7"
+milestone = "M5.4"
+kind = "integration"
+what = "The pack a verification reads is stored in the raw store and indexed by one row per title and vocabulary version whose pack_sha is the digest of exactly those bytes; a pack rebuilt from rows that did not change is the same bytes, a rebuild that did change replaces the index row, one title's pack is storable under two vocabulary versions and two titles' byte-identical packs are both storable, a pack the info does not describe is refused, every row names a document and that document cannot be deleted out from under it, and a row whose bytes are not its pack raises rather than answering that the title was never packed."
+why = "§8 stage 7 checks a quote against that title's pack, so a verdict nobody can reproduce against the text it was made from is not auditable and §6.6's reject review cannot explain a single refusal. The corpus's ingest derived the sha from whatever pack was on disk and marked 825 titles current against a pack no pass had seen, hiding 652."
+
+tests = [
+    "backend/tests/test_dna_packs.py::test_store_pack_writes_one_index_row_and_bytes_that_read_back_unchanged",
+    "backend/tests/test_dna_packs.py::test_the_sha_is_the_digest_of_the_text_the_extraction_reads",
+    "backend/tests/test_dna_packs.py::test_two_packs_that_differ_by_one_character_get_different_shas",
+    "backend/tests/test_dna_packs.py::test_the_pack_digest_is_the_first_sixteen_characters_of_a_full_sha256",
+    "backend/tests/test_dna_packs.py::test_reviews_of_equal_length_are_ordered_deterministically",
+    "backend/tests/test_dna_packs.py::test_two_sources_whose_plots_tie_pick_the_same_one_after_a_re_import",
+    "backend/tests/test_dna_packs.py::test_rebuilding_a_pack_replaces_its_index_row_rather_than_adding_one",
+    "backend/tests/test_dna_packs.py::test_one_titles_pack_is_storable_under_two_vocabulary_versions",
+    "backend/tests/test_dna_packs.py::test_two_titles_whose_packs_are_byte_identical_are_both_in_custody",
+    "backend/tests/test_dna_packs.py::test_storing_a_pack_the_info_does_not_describe_is_refused",
+    "backend/tests/test_dna_packs.py::test_the_document_a_pack_row_names_cannot_be_deleted_out_from_under_it",
+    # RESTRICT refused the route to a NULL document and not the state; `0027` now refuses both.
+    # [M5.4 review cycle 3, M54-C3-PACK-04]
+    "backend/tests/test_dna_packs.py::test_a_pack_row_cannot_name_no_document_at_all",
+    "backend/tests/test_dna_reject.py::test_the_pack_is_read_back_out_of_custody_and_carries_its_markup",
+    "backend/tests/test_dna_reject.py::test_a_pack_row_whose_bytes_are_not_its_pack_raises_rather_than_verifying",
+    "backend/tests/test_dna_reject.py::test_a_title_this_install_has_never_packed_has_no_pack",
+]
 
 [[requirement]]
 # Re-pointed from "M5" to M5.6 under decision 321, milestone key only - and the `spec`
@@ -9020,8 +9486,8 @@ id = "platform-exit-criteria-are-closed-by-a-committed-measurement"
 spec = "§12 exit criteria; docs/TESTING.md (\"A second workflow decides whether the build SHIPS\")"
 milestone = "M4.16"
 kind = "static"
-what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; and the never-run count the map publishes is the one the record measured."
-why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: seven of the seventeen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
+what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; the never-run count the map publishes is the one the record measured; and a row the record calls NOT BUILT names a milestone the map registers no test against, while the record's own opening paragraph counts the rows its table records."
+why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: eight of the eighteen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
 # The unfilled half is decision 297's and decision 298's, in the idiom of
 # `test_the_owed_device_checks_are_recorded_and_still_unsigned`: M2's criterion has never been
 # measured and the TMDB logo is an owed asset, and neither may be quietly signed. The guard goes
@@ -9103,6 +9569,18 @@ tests = [
     "backend/tests/test_static_contracts.py::test_no_prose_in_this_file_states_a_registry_size_that_registry_does_not_have",
     "backend/tests/test_static_contracts.py::test_the_registry_size_reader_reads_the_sentences_this_file_shipped",
     "backend/tests/test_static_contracts.py::test_the_paragraph_reader_glues_a_wrapped_comment_and_leaves_the_docstring_whole",
+    # M5.4 review cycle 1, and the taxonomy this record states at its top held by nothing. Section
+    # 1 defines `UNMEASURED` as never run and `NOT BUILT` as a milestone that does not exist yet;
+    # `_UNMEASURED` groups them because both mean "no output file, honestly", and every rule above
+    # reads that set. So M5.4's row could say NOT BUILT in the change set that added
+    # `backend/spielplan/dna/`, and the derived count directly above stayed green publishing six
+    # never-run criteria where seven was the honest figure. The discriminator is the map, not the
+    # prose: a milestone that does not exist yet has `tests = []`, which is what makes an open
+    # milestone's gate red. The second guard holds the opening paragraph, which restates the same
+    # figures in prose and which nothing read. [decisions 184, 296, 331; M5.4 cycle 1,
+    # M54-REV1-DOC-01]
+    "backend/tests/test_static_contracts.py::test_a_row_this_record_calls_not_built_is_a_milestone_the_map_names_no_test_for",
+    "backend/tests/test_static_contracts.py::test_the_records_opening_paragraph_counts_the_rows_its_own_table_records",
 ]
 # `docs/milestones/M4.5-exit.txt` is the first committed output any exit script has ever had, and
 # it reads 17/17 rather than the 18/18 the plan records: M4.8 turned the eighteenth check into a
