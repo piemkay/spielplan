@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from spielplan import worker
-from spielplan.acquire import pipeline, queue
+from spielplan.acquire import fetch, hosts, pipeline, queue, stages
 from spielplan.core.config import settings
 from spielplan.db import pool
 from spielplan.importer import bundle as bundle_import
@@ -42,6 +42,22 @@ from tests.fixtures import make_bundle as fx
 NOON = datetime(2026, 9, 17, 12, 0, tzinfo=timezone(timedelta(hours=2)))
 
 DRAIN = "acquisition-drain"
+
+
+# What one first acquisition costs the slowest host §8 stage 2 names by hand, counted off the
+# adapters rather than guessed: `metacritic:page` tries the year-qualified candidate and then the
+# bare one, `metacritic:reviews` resolves the same way because the page kind writes no slug until a
+# candidate is accepted, and the two review views are one request each. Six, and the robots.txt read
+# is a seventh that the cache pays once per drain. `_walk_batch` is sequential and `stages.enrich`
+# walks its kinds in a plain loop, so a batch costs about the slowest host's queue rather than the
+# sum of every host's. [M5.3 review cycle 1, M53-C1-NET-03]
+_METACRITIC_REQUESTS_A_TITLE = 6
+
+# The shipped stage table, captured at import. `enrichment_stands_down` below is autouse and
+# rebuilds `pipeline.STAGES` without `fetches`, which is right for every test in this file whose
+# subject is the worker job - and wrong for the one test whose subject is whether the budget prices
+# the crawl those stages really do. Read at module scope, which runs before any fixture.
+_SHIPPED_STAGES = pipeline.STAGES
 
 
 def _job():
@@ -113,6 +129,51 @@ async def bundled(db, worker_env, tmp_path):
     return report
 
 
+async def _refuse_to_crawl(_conn):
+    raise AssertionError(
+        "this test reached §8 stage 2, whose real fetcher would crawl five hosts per title from "
+        "whatever machine is running the suite. The drain's fetcher is injectable "
+        "(`pipeline.drain(fetcher_factory=...)`); this file's subject is the worker job, so it "
+        "stands the fetching stages down instead"
+    )
+
+
+@pytest.fixture(autouse=True)
+def enrichment_stands_down(monkeypatch):
+    """Stages 2, 3 and 4 advance without doing anything. M5.3, for this file's own subject.
+
+    THIS FILE IS ABOUT THE WORKER JOB AND NOT ABOUT THE CRAWL. Its claims are §5.3's - the budget
+    sits under `queue.LEASE_SECONDS`, the batch refuses before it leases, a killed worker's task is
+    reclaimed and finished once, the `job_run` row looks like every other job's - and every one of
+    them is asserted through a task that walks all ten stages and ends at `ready`.
+
+    M5.3 gave stages 2, 3 and 4 bodies, and both halves of that break this file. A title minted
+    from a bare Jellyfin item has no plot and no reviews, so the reviews gate parks it with a
+    thirty-day window - correctly, and "the drain completes what it leased" then has nothing to
+    measure. And stage 2 with no fetcher factory builds the REAL one: five keyless sources times
+    eight titles a tick, robots.txt and all, against Wikipedia, Wikidata, TVmaze, Rotten Tomatoes
+    and Metacritic, from every machine that runs this suite. One test took 65 seconds doing it.
+    `worker._acquisition_drain` takes no factory - it is the production call path, which is what
+    this file insists on testing through - so the stand-down is here rather than at a call site.
+
+    `test_acquire_pipeline.py` carries the same fixture and the same argument, and is where the
+    three stages are asserted for real, against an `httpx.MockTransport`. No assertion in this
+    file changes: the substitutes keep `paid`, `implemented` and `owner` and restore exactly the
+    pipeline every test below was written against.
+    """
+    monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
+
+    def stands_down(stage):
+        async def stood_down(_ctx):
+            return stages.advance({"stood_down": f"stage {stage.number} stood down by this file"})
+        return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid, stage.implemented,
+                              stage.owner)
+
+    monkeypatch.setattr(pipeline, "STAGES", tuple(
+        stands_down(stage) if stage.number in (2, 3, 4) else stage for stage in pipeline.STAGES
+    ))
+
+
 # --- the registry entry (backend, no DB) ---------------------------------------------------------
 
 
@@ -152,6 +213,49 @@ def test_the_drains_budget_is_bounded_by_the_lease_it_takes_and_by_its_own_batch
     assert per_task >= 1.0, (
         f"{pipeline.DRAIN_LIMIT} tasks in {job.timeout}s is {per_task:.2f}s each, and section "
         "5.3 prices the Cold Tower's forward pass alone at under a second a title"
+    )
+
+
+def test_the_drains_budget_prices_the_crawl_its_stages_now_do():
+    """Decision 347's owed measurement, as the two relations that make the number checkable.
+
+    THE REGISTRY COMMENT NAMES THE MILESTONE THAT OWES THIS: "the rest of the headroom is for the
+    milestone that gives a stage a fetch, which owes this line a measurement rather than a larger
+    number". M5.3 is that milestone - stage 2 crawls eight hosts - and until this cycle the row
+    still read "ms of declared no-ops", which is false by two orders of magnitude against a batch
+    whose slowest host is paced at seven-tenths of a request a second.
+
+    THE SECOND RELATION IS THE CHOICE THAT SAME PARAGRAPH SAID THIS BUDGET WOULD FORCE: "`fetch.py`
+    already sleeps a `Retry-After` in process up to 300 s, so the first milestone to fetch inside a
+    stage has to choose between that wait and a `queue.defer`". A budget at or under that ceiling
+    is one a SINGLE 429 cancels, and `pipeline._walk_batch` deliberately keeps the cancelled
+    in-flight task's charged attempt - so four such ticks close a perfectly good title `failed`
+    with no retry surface before M5.6. The ceiling is read off the shipped function rather than
+    retyped, so a policy change moves the assertion with it.
+
+    NEITHER HALF IS A CEILING ON THE BUDGET; `test_the_drains_budget_is_bounded_by_the_lease_it_
+    takes_and_by_its_own_batch` above is, and the two together are what decision 347 asked for.
+    [M5.3 review cycle 1, M53-C1-NET-03]
+    """
+    job = _job()
+    fetching = [stage for stage in _SHIPPED_STAGES if stage.implemented and stage.fetches]
+    assert fetching, (
+        "no implemented stage fetches, so this test is measuring a pipeline that does not exist"
+    )
+    assert "no-op" not in job.budget, (
+        f"stages {[s.number for s in fetching]} fetch, and the budget still reads {job.budget!r}"
+    )
+
+    ceiling = fetch._retry_after({"retry-after": "100000"})
+    assert job.timeout > ceiling, (
+        f"a {job.timeout}s batch against a {ceiling}s in-process Retry-After ceiling is a batch "
+        "one 429 cancels, and the cancelled task keeps its attempt"
+    )
+    slowest = min(hosts.HOST_POLICIES[host].rps
+                  for host in ("www.rottentomatoes.com", "www.metacritic.com"))
+    assert job.timeout >= pipeline.DRAIN_LIMIT * _METACRITIC_REQUESTS_A_TITLE / slowest, (
+        f"{pipeline.DRAIN_LIMIT} titles at {_METACRITIC_REQUESTS_A_TITLE} requests each against "
+        f"{slowest} rps does not fit in {job.timeout}s of pure pacing, before any latency"
     )
     assert job.name in worker.MODEL_JOBS, (
         "stage 9 places against the active bundle, so this job must be skipped across section "

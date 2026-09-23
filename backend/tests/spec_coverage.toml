@@ -2721,7 +2721,7 @@ spec = "§4.3 corrections_v1.tsv + §8 stage 3"
 milestone = "M4.5"
 kind = "backend"
 what = "corrections_v1.tsv is parsed at the header the corpus actually ships (kind, title_id, value, evidence, note), and a file whose header the parser does not recognise fails the import report naming the missing column — never raises, and never silently loads zero corrections."
-why = "The ledger is parsed and stored for a derive that does not exist yet — §8 stage 3 is M5's — so nothing applies it today, and §14.5 is the scar for what happens when it is not applied. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
+why = "The ledger is parsed and stored here and applied nowhere here: §8 stage 3's derive applies it per title and last (`derive/ledgers.apply_corrections`), so a card reflects a correction only after its title is next derived, and §14.5 is the scar for a derive that regenerates rows without re-applying it. dna.py read r['field'], a column the shipped file does not have, so the real ledger raised KeyError instead of producing a validation failure."
 tests = [
     "backend/tests/test_dna_import.py::test_corrections_ledger_parses_the_header_the_corpus_ships",
     "backend/tests/test_dna_import.py::test_an_unrecognised_corrections_header_fails_the_report_naming_the_column",
@@ -2742,6 +2742,33 @@ tests = [
     # ledger is stored for a derive that does not exist yet, and the import report said the
     # opposite in as many words. The test below is what makes the rewritten `why` falsifiable.
     "backend/tests/test_dna_import.py::test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowhere",
+    # M5.3's half, and the `why` above moved with it rather than after it. That sentence said the
+    # ledger is stored "for a derive that does not exist yet ... so nothing applies it today",
+    # which was the truth from M4.5 until §8 stage 3 landed and is now an instruction to go
+    # hunting for a defect that is not there. What replaces it is a MOMENT rather than a state -
+    # the ledger is stored here, applied there, and a card reflects a correction only after its
+    # title is next derived - because the two sentences a reader reaches for are wrong in
+    # opposite directions and the rows an import has just stored are precisely the rows no derive
+    # has seen.
+    #
+    # The test below is the derive-side half made falsifiable, and it is on this row rather than
+    # only on M5.3's gate row because what this row is about is THIS FILE: a header parsed at the
+    # columns the corpus ships is worth nothing if the rows it yields are never spent, and until
+    # now no test on this row asked whether they were. It reaches the ledger through
+    # `dna.load_corrections` - the loader the four parse tests at the head of this list assert
+    # about - and only then derives, so the header read and the row spent are one path rather
+    # than two fixtures that agree. It rests on the FIXTURE bundle's single correction, which is
+    # what makes it runnable here; the real bundle's six are `ops/m53_exit_criterion.py`'s, and
+    # §14.5's scar is invisible to any test whose title carries no curated row at all.
+    #
+    # `test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowhere` KEPT ITS NAME and
+    # had its body rewritten in the same commit, which is the only shape this gate allows: it is
+    # registered here, `test_every_named_test_exists` reads `git ls-files`, and a rename would
+    # break the build by design (CLAUDE.md). The name is still true of the file it asserts about -
+    # import-time application is still nowhere, and a second implementation of it in `importer/`
+    # would be the derive-disagrees-with-the-ledger failure in miniature - so what moved is the
+    # sentence the report prints and not what the test is for. [decision 326; M5.3]
+    "backend/tests/test_derive_ledgers.py::test_the_shipped_correction_replaces_the_music_credit_the_source_got_wrong",
 ]
 
 [[requirement]]
@@ -3184,6 +3211,13 @@ why = "§6.6 spend guard: 'per-title cost estimate before enabling'. Whether par
 tests = []
 
 [[requirement]]
+# Left red and left to M5.6, which builds the three editors. Its second clause -
+# "re-deriving a title that carries a curated credit correction re-applies corrections_v1.tsv
+# last" - is discharged by M5.3's derive-side applier, whose own assertion lives on
+# `jellyfin-acquisition-eval-derive-applies-both-ledgers-corrections-last`; what stays here is
+# the editor-side one, that the three editors write three artifacts with no merged write path
+# and that a fix typed in the app reaches the derive at all. Two rows, one subject, neither
+# closes the other, and this one is not re-pointed: the editors are M5.6's.
 id = "map-taste-admin-three-ledger-editors-corrections-last"
 spec = "§6.6 Data + §8 stage 3 + §14.5"
 milestone = "M5.6"
@@ -3211,13 +3245,84 @@ why = "Owner requirement: every Jellyfin add triggers acquisition. Library scans
 tests = []
 
 [[requirement]]
+# Re-pointed from "M5" to M5.3 under decision 321, and this is M5.3's gate row: the one
+# §14.5 is about. Decision 376 fixes what the adjudication half runs AGAINST, which the
+# `what` below cannot state because the answer is a schedule rather than a requirement:
+# `apply_adjudications` rules over the `dna_tag` rows the title already carries for the
+# active vocabulary version, whatever wrote them - the bundle importer today, stage 8 from
+# M5.4 - so M5.4 inherits a working applier rather than being asked to write one. The two
+# calls stay two: adjudications at ingest, corrections last, which is what the last clause
+# of `what` means by "at their own points rather than merged into one pass" and what a
+# test asserting only the end state cannot see.
 id = "jellyfin-acquisition-eval-derive-applies-both-ledgers-corrections-last"
 spec = "§8 stage 3 (with §14 risk 5)"
 milestone = "M5.3"
 kind = "integration"
 what = "A re-derive of an already-derived title regenerates its rows and then applies `adjudications_v1.tsv` (DNA verdicts) and `corrections_v1.tsv` (credit facts), with corrections applied last; a curated credit fix present before the re-derive is still present after it, and the two ledgers are applied at their own points rather than merged into one pass."
 why = "A derive that regenerates rows without re-applying both ledgers silently reverts curated fixes — the 787-rows-reverted-twice scar named in §14.5."
-tests = []
+# Every test below runs against a title that HAS a curated row, and that is the contract this
+# row's tests are written under rather than a preference: a brand-new acquired title carries no
+# adjudication and no correction, so "applies BOTH ledgers, corrections last" is satisfied
+# vacuously by an applier that does nothing - which is the state §14.5 describes. The curated
+# rows arrive through `importer/dna`'s own loaders from files in the shipped header, so what is
+# asserted is that the applier reads the ledger the BUNDLE ships and not merely a table.
+#
+# The clauses, and which group closes each:
+#   * "applies both ledgers ... corrections last" - the four F3 tests; `..._at_their_own_points_
+#     and_in_that_order` is the only one that can see the ORDER, because it reads the database at
+#     each call rather than after both, and swapping or merging the two calls leaves the end state
+#     a final-rows assertion accepts.
+#   * "a curated credit fix present before the re-derive is still present after it" -
+#     `..._survives_a_derive_and_a_second_derive_changes_nothing` (the exit criterion's checks 1
+#     and 2 as one test) and `test_derive_rebuild.py`'s household-authored twin, which is decision
+#     326's other half: the appliers do not filter on `origin`, so the §6.6 editors' rows apply too.
+#   * "regenerates its rows" - the DNA half, which has no clause of its own in `what` because
+#     decision 376 settles it as a schedule: the nine F1 tests hold the corpus's three-phase order,
+#     `_merge_into`, the vocabulary's veto on a re-point target, and the two verdict spellings a
+#     real install and a fixture install respectively carry.
+#   * the negative control, which is not a clause but the only way the scar is visible at all:
+#     with the applier disabled a curated verdict reverts, silently, exactly as it did in §14.5.
+tests = [
+    "backend/tests/test_derive_ledgers.py::test_the_shipped_per_title_verdict_drops_the_tag_it_names_and_leaves_the_others",
+    "backend/tests/test_derive_ledgers.py::test_the_shipped_blanket_rename_repoints_a_retired_term_onto_the_vocabularys",
+    "backend/tests/test_derive_ledgers.py::test_a_per_title_verdict_beats_the_blanket_rule_for_its_term",
+    "backend/tests/test_derive_ledgers.py::test_a_repoint_onto_a_term_the_vocabulary_does_not_know_is_refused_and_counted",
+    "backend/tests/test_derive_ledgers.py::test_a_repoint_onto_a_term_the_title_already_carries_merges_and_keeps_the_louder_reading",
+    "backend/tests/test_derive_ledgers.py::test_a_merge_does_not_fold_two_providers_readings_into_one_row",
+    "backend/tests/test_derive_ledgers.py::test_an_evidence_drop_takes_the_quote_and_then_the_tag_it_was_holding_up",
+    "backend/tests/test_derive_ledgers.py::test_the_ledger_the_corpus_ships_is_read_as_the_same_verdicts_the_schema_declares",
+    "backend/tests/test_derive_ledgers.py::test_applying_the_dna_ledger_twice_leaves_exactly_what_it_left_the_first_time",
+    "backend/tests/test_derive_ledgers.py::test_the_shipped_correction_replaces_the_music_credit_the_source_got_wrong",
+    "backend/tests/test_derive_ledgers.py::test_the_corrected_person_is_minted_in_this_apps_half_of_the_id_partition",
+    "backend/tests/test_derive_ledgers.py::test_applying_the_credit_ledger_twice_in_a_row_adds_nothing",
+    "backend/tests/test_derive_ledgers.py::test_a_correction_with_no_evidence_is_refused_and_writes_nothing",
+    "backend/tests/test_derive_ledgers.py::test_a_correction_naming_a_title_this_install_does_not_hold_is_counted_and_skipped",
+    "backend/tests/test_derive_ledgers.py::test_a_joint_credit_is_added_beside_the_one_the_source_already_carries",
+    "backend/tests/test_derive_ledgers.py::test_a_correction_kind_the_ledger_does_not_declare_is_counted_and_not_guessed_at",
+    "backend/tests/test_derive_ledgers.py::test_a_shipped_correction_survives_a_derive_and_a_second_derive_changes_nothing",
+    "backend/tests/test_derive_ledgers.py::test_the_two_ledgers_are_applied_at_their_own_points_and_in_that_order",
+    "backend/tests/test_derive_ledgers.py::test_a_curated_verdict_reverts_when_the_adjudicator_does_not_run",
+    "backend/tests/test_derive_ledgers.py::test_the_derive_reports_each_ledgers_counts_apart",
+    "backend/tests/test_derive_rebuild.py::test_a_title_carrying_both_curated_ledgers_derives_twice_and_keeps_both",
+    # M5.3 review cycle 1, m53-c1-dim326-01 and decision 423. Decision 326 kept the household's
+    # ROW across a models-only re-import; these two keep its FIX, which the bigserial renumbering
+    # took back on both ledgers - last-wins on the credit one, first-wins on the DNA one, so the
+    # ORDER BY that repairs them points opposite ways.
+    "backend/tests/test_derive_ledgers.py::test_a_household_correction_still_wins_after_the_re_import_renumbers_the_bundles",
+    "backend/tests/test_derive_ledgers.py::test_a_household_dna_verdict_is_the_one_that_takes_effect_before_and_after_a_re_import",
+    # M5.3 review cycle 1, M53-C1-SCAR-02. The negative control above is the clause this
+    # row's comment calls the only way the scar is visible at all, and a demonstration whose
+    # account of itself is wrong is one no later reader can repeat (decision 184). This guard
+    # holds `ops/m53_exit_criterion.py`'s check 3 and the docstring beside it to naming the
+    # seed import and M5.4's stage 8 - the only two writers of `dna_tag` - rather than a
+    # re-import, which on an install writes none of it at all (decision 162).
+    "backend/tests/test_m53_exit_criterion.py::test_the_negative_control_does_not_say_a_re_import_puts_the_extracted_tier_back",
+    # M5.3 review cycle 2, m53-c2-scar-01. The credit `apply_corrections` mints is labelled
+    # `correction`, which no scope decision 375 deletes by can reach, so a correction the ledger
+    # stopped asserting - withdrawn by a shorter re-imported TSV, re-pointed, or refused for want
+    # of evidence - left its invented composer on the card for ever. The mirror of the scar.
+    "backend/tests/test_derive_ledgers.py::test_a_correction_the_ledger_stops_asserting_takes_its_credit_back_on_the_next_derive",
+]
 
 [[requirement]]
 # Re-pointed from "M5" to M5.3 under decision 321, milestone key only. M5.1's own row
@@ -3225,13 +3330,353 @@ tests = []
 # half of this - the stage tuple, the park with its reason, the resume at the parked stage
 # and the re-read of the raw store - and the derive's half, the reviews gate and its 30-day
 # window, stays M5.3's. Two rows, one subject, two owners: neither closes the other.
+#
+# Decision 335 settles the predicate `what` states loosely: the plot half is `title.overview`,
+# resolved by `importer/meta.resolve_title_fields` from `plot_full` then `plot_short` through
+# the same `best()` and `SOURCE_PRIORITY` the importer uses, so the gate names the resolved
+# field rather than re-implementing the fallback; the review half is `count(distinct source)
+# >= 2` AND `sum(word_count) >= 50` across those rows, read off the generated stored column so
+# the measurement is taken before any normalisation. Short of it is a park with both counts in
+# `reason` and `retry_after` 30 days out - decision 336's park with a deadline, never a fail.
 id = "jellyfin-acquisition-eval-stage-park-retry-idempotent"
 spec = "§8 stage 4 (with §14 risk 5)"
 milestone = "M5.3"
 kind = "integration"
 what = "A title whose pack has a plot but fewer than two review sources or under 50 words parks at `reviews gate` with that reason and a 30-day retry window rather than advancing to `dna pack`; the admin retry resumes from the parked stage, re-uses the content-addressed raw store instead of re-fetching, and produces no duplicated derived rows."
-why = "New releases accrue reviews over weeks; the raw/derived split and idempotent re-ingest are the corpus invariants that must be ported or the per-title derive inherits the bugs they were built to kill."
-tests = []
+why = "New releases accrue reviews over weeks; the raw/derived split and idempotent re-ingest are the corpus invariants that must be ported or the per-title derive inherits the bugs they were built to kill. The raw store this row re-reads is one M5 creates and fills: the export bundle ships no `data/raw/`, so `re-uses the content-addressed raw store instead of re-fetching` is a claim about bytes this pipeline fetched and never about inherited ones."
+# WHAT THESE EIGHT CLOSE, AND WHAT IS STILL OWED INSIDE THIS MILESTONE. `derive/gate.py` is
+# decision 335's predicate and nothing else: the first clause of `what` - "fewer than two review
+# sources or under 50 words", "that reason", "a 30-day retry window" - is measured here, at the
+# boundary (49 against 50, one source against two, a plot present against a whitespace-only one)
+# and against real `review_store.review` rows, so the total is the one the generated stored
+# column computed rather than one Python recounted.
+#
+# THE SECOND CLAUSE IS CLOSED BY THE FOUR APPENDED BELOW, and this note used to say it was owed
+# because "a gate that answers correctly and a stage that ignores the answer both pass every test
+# named" above it. The stage that consults it now exists:
+#
+#   * "parks ... rather than advancing to `dna pack`", "that reason" and "a 30-day retry window"
+#     as a WALK rather than as a predicate - the board at stage 4, the reason verbatim on it, and
+#     `acquisition_job.retry_after` asserted against `acquisition_task.next_attempt_at` rather
+#     than each against thirty days, because two dates that are both about right and not equal is
+#     exactly what "two writes, one truth, one constant" exists to prevent.
+#   * "the admin retry resumes from the parked stage" and "re-uses the content-addressed raw
+#     store instead of re-fetching" - a second drain whose `stages_run` BEGINS at the reviews
+#     gate, whose request log is empty, and for which no HTTP client was constructed at all. Zero
+#     is asserted three ways because each can hold while another does not.
+#   * "produces no duplicated derived rows" - the same counts over `credit`, `review_store.review`
+#     and the distinct people a title's credits point at, which are the three places a derive can
+#     duplicate without the database refusing it.
+#
+# `test_the_derive_opens_no_socket` is the same claim as a property of the module rather than of
+# one walk: nothing under `spielplan/derive/` can reach a host, so a resume that re-parses cannot
+# re-fetch even by accident. It is `jellyfin-acquisition-eval-a-re-derive-is-idempotent`'s stage
+# handing it here, where the clause about re-fetching actually lives.
+tests = [
+    "backend/tests/test_reviews_gate.py::test_fifty_words_is_the_floor_and_forty_nine_is_below_it",
+    "backend/tests/test_reviews_gate.py::test_the_reason_opens_with_the_gate_and_carries_both_counts",
+    "backend/tests/test_reviews_gate.py::test_the_review_window_is_thirty_days_and_the_deadline_is_tz_aware_utc",
+    "backend/tests/test_reviews_gate.py::test_two_sources_totalling_fortynine_words_do_not_clear_the_gate",
+    "backend/tests/test_reviews_gate.py::test_two_sources_totalling_fifty_words_clear_the_gate",
+    "backend/tests/test_reviews_gate.py::test_five_hundred_words_from_one_source_do_not_clear_the_gate",
+    "backend/tests/test_reviews_gate.py::test_a_title_with_reviews_and_no_plot_does_not_clear_the_gate",
+    "backend/tests/test_reviews_gate.py::test_the_word_total_is_the_one_postgres_generated_and_not_a_python_recount",
+    "backend/tests/test_acquire_pipeline.py::test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thirty_day_window",
+    "backend/tests/test_acquire_pipeline.py::test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request",
+    "backend/tests/test_acquire_pipeline.py::test_a_drain_whose_tasks_never_reach_stage_two_opens_no_socket",
+    "backend/tests/test_acquire_pipeline.py::test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher",
+    "backend/tests/test_derive_rebuild.py::test_the_derive_opens_no_socket",
+    # Review cycle 1: which reading of `re-uses the content-addressed raw store instead of
+    # re-fetching` this row is closed by, settled rather than left to the reader. A stage-4
+    # resume reads no stored byte and cannot: `_resume_index` answers the BOARD's stage, so the
+    # job re-enters at `reviews gate`, whose body is `gate.measure` and an advance-or-park, and
+    # `derive/gate.py` imports `dataclasses`, `datetime` and `asyncpg`. The app's one
+    # `rawstore.read` is `derive/rebuild.py`'s, which is stage 3 and behind the resume point.
+    # So the clause is about the PIPELINE - bytes fetched once are parsed from the store rather
+    # than re-crawled - and never about a read the retry performs, and the four tests above
+    # close it as the three zeros this note already describes. Decision 424 narrows §12's M5.3
+    # row and docs/RELEASE.md to that, and the guard below holds the sentence and the resume
+    # path to each other in both directions: the day a retry does re-read stored bytes -
+    # M5.6's "retry from stage N", decision 330 - it asks for the clause back.
+    # [decision 424; M5.3 review cycle 1, M53-EXIT-02]
+    "backend/tests/test_static_contracts.py::test_no_criterion_promises_a_raw_store_read_the_parked_resume_cannot_perform",
+    # M5.3 review cycle 2, m53-c2-gate-01 and M53-C2-NET-03; decision 421. The retry above is the
+    # EARLY one, made while `retry_after` is still ahead. The window CLOSING is the other event,
+    # and it re-entered at stage 4 too, re-counting day one's rows with no request for ever, so
+    # §8's "new releases accrue reviews over weeks" could not be seen. It now re-enters at stage 2.
+    "backend/tests/test_acquire_pipeline.py::test_the_window_closing_asks_the_sources_again_and_counts_what_accrued",
+    "backend/tests/test_acquire_pipeline.py::test_a_title_still_thin_when_the_window_closes_parks_for_another_window",
+    # m53-c2-gate-02: the reason the board renders promises that re-ask, and it used to say
+    # nothing was asked of an operator even when the counts were zero because no key existed. The
+    # promise is held on that population: a key typed in during the window is asked at its close.
+    "backend/tests/test_acquire_pipeline.py::test_a_key_typed_in_during_the_window_is_asked_when_it_closes",
+]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-stage-two-fetches-into-the-raw-store"
+spec = "§8 stage 2 + §8 preamble (\"All fetched bytes land in the app's own raw store\")"
+milestone = "M5.3"
+kind = "integration"
+what = "Stage 2 fetches each of its eight named sources through the rate-limited fetcher and writes every response into the raw store before anything is parsed; a source that 404s or times out is a note on the job rather than a park, while a failure of the required source parks with that source named; and a scraped page that belongs to a different film is refused rather than parsed."
+why = "§8 names eight sources and the app has one connector. The corpus already separates fetch from parse so that a parser change never requires another crawl, and it refuses a mismatched scraped page because a slug guess that lands on the wrong film is the same silent wrong match the Jellyfin resolver refuses to make."
+# WHAT THESE CLOSE AND WHAT THE STAGE BODY STILL OWES. The eight adapters are here, each asserted
+# on the request it puts on the wire - which is the half nothing else in the system can notice,
+# because an `append_to_response` entry quietly lost costs a round trip per title and produces no
+# error anywhere. The raw-store half is asserted at the two co-keying rules `rawstore.store` names
+# M5.3 as the shape to get wrong: `entity_key` is the TASK's key (asserted against a task keyed on
+# a Jellyfin item, so a module reconstructing it from `title_id` fails rather than passes by
+# accident), and `url` is the string the request was MADE against, proved by the validators it
+# stores then conditioning the next fetch. The refusal half is asserted from both sides - a page
+# judged to be a different film writes no slug and still leaves its bytes in the store, and a
+# metacritic guess another title already holds is refused before any request at all.
+#
+# THE PARK IS CLOSED NOW THAT THE STAGE-2 DRIVER EXISTS, and this note used to say it was owed:
+# "a failure of the required source parks with that source named" is the driver's verb and not an
+# adapter's, because an adapter returns a `SourceResult` and never decides one
+# (`sources/base.py:31-45`). `test_the_required_source_failing_parks_at_stage_two_and_names_it`
+# closes it, and `test_an_install_with_no_tmdb_key_notes_it_and_walks_on` closes the state decision
+# 334 and decision 377 are only both true if it is read apart from it - a TMDB that is not
+# configured never runs, so there is no failure to park on, and §3.1 makes that install legal.
+# `test_an_absent_credential_is_a_note` and `test_a_404_is_a_note` close the note half, which is
+# the other seven sources' whole contract.
+#
+# "BEFORE ANYTHING IS PARSED" is measured from inside stage 3 rather than counted afterwards.
+# `test_every_stage_two_response_is_in_the_raw_store_before_stage_three_reads_one` reads the store
+# on the derive's first statement, because a count taken after the walk is satisfied by a stage 2
+# whose last statement is the write - which is exactly the arrangement that leaves a household one
+# worker crash away from bytes it paid for and cannot re-read.
+#
+# The four `test_derive_rebuild.py` tests are the refusal on the DERIVE's side of "refused rather
+# than parsed": the adapter tests above hold that a guessed page writes no slug, and these hold
+# that a page judged to be another film contributes no row, takes back the rows a previous derive
+# wrote from it, and leaves its slug alone for stage 2 to decide (decision 372).
+tests = [
+    "backend/tests/test_sources_adapters.py::test_tmdb_resolve_exchanges_the_imdb_id_and_writes_only_the_tmdb_id",
+    "backend/tests/test_sources_adapters.py::test_tmdb_detail_asks_for_the_append_list_that_keeps_a_title_to_one_request",
+    "backend/tests/test_sources_adapters.py::test_omdb_asks_for_the_full_plot_and_the_tomatoes_block",
+    "backend/tests/test_sources_adapters.py::test_trakt_sends_its_three_headers_and_reads_both_of_its_own_ids",
+    "backend/tests/test_sources_adapters.py::test_trakt_comments_keeps_the_three_sorts_apart_in_the_store",
+    "backend/tests/test_sources_adapters.py::test_tvmaze_asks_for_its_three_embeds_in_one_request",
+    "backend/tests/test_sources_adapters.py::test_wikipedia_asks_for_the_plain_text_extract_of_the_article_it_holds",
+    "backend/tests/test_sources_adapters.py::test_metacritic_reviews_fetches_the_two_server_rendered_views_only",
+    "backend/tests/test_sources_adapters.py::test_every_document_is_filed_under_the_task_key_and_never_a_provider_id",
+    "backend/tests/test_sources_adapters.py::test_a_document_is_filed_under_the_url_the_request_was_made_against",
+    "backend/tests/test_sources_adapters.py::test_the_stored_validators_condition_the_next_fetch_of_the_same_url",
+    "backend/tests/test_sources_adapters.py::test_a_404_is_a_note_and_a_failure_row_rather_than_a_raise",
+    "backend/tests/test_sources_adapters.py::test_an_absent_credential_is_a_note_and_issues_no_request_at_all",
+    "backend/tests/test_sources_adapters.py::test_a_two_hundred_carrying_no_bytes_at_all_is_a_note_and_never_a_raise",
+    "backend/tests/test_sources_adapters.py::test_omdb_saying_no_inside_a_200_is_stored_as_a_document_that_is_not_good",
+    "backend/tests/test_sources_adapters.py::test_a_scraped_stub_body_is_a_soft_block_and_is_not_stored_as_good",
+    "backend/tests/test_sources_adapters.py::test_a_guessed_rotten_tomatoes_page_for_a_different_film_writes_no_slug",
+    "backend/tests/test_sources_adapters.py::test_a_guessed_rotten_tomatoes_page_that_is_this_film_writes_the_canonical_slug",
+    "backend/tests/test_sources_adapters.py::test_a_metacritic_guess_another_title_already_holds_is_refused_unfetched",
+    "backend/tests/test_sources_adapters.py::test_the_two_scraped_hosts_are_paced_at_the_rate_their_policy_declares",
+    "backend/tests/test_sources_adapters.py::test_only_one_module_in_the_package_reaches_for_the_fetcher",
+    "backend/tests/test_sources_adapters.py::test_the_identity_check_is_the_parsers_one_and_not_a_second_copy",
+    "backend/tests/test_sources_adapters.py::test_the_borrowed_identity_check_really_decides_a_guessed_page",
+    # M5.3 review cycle 1. The refusal is not optional and the branches below are the ones that
+    # used to walk past it: a conditional answer on a GUESSED candidate (m53-c1-slug-01,
+    # M53-C1-NET-01, both scraped sources plus the supplied-slug half the correction must not
+    # break), a body no parser can read filed as a good document (M53-C1-NET-02), decision 334's
+    # word RAN for a required source that was never asked (M53-334-01), and the one set this
+    # package hands the predicate (m53-c1-slug-03).
+    "backend/tests/test_sources_adapters.py::test_a_guessed_metacritic_candidate_answering_304_is_still_not_this_titles_page",
+    "backend/tests/test_sources_adapters.py::test_a_guessed_rotten_tomatoes_candidate_answering_304_is_still_refused",
+    "backend/tests/test_sources_adapters.py::test_a_supplied_rotten_tomatoes_slug_answering_304_is_still_this_titles_page",
+    "backend/tests/test_sources_adapters.py::test_a_json_source_answering_with_an_interception_page_files_no_good_document",
+    "backend/tests/test_sources_adapters.py::test_a_trakt_comment_page_is_a_json_array_and_is_still_a_good_document",
+    "backend/tests/test_sources_adapters.py::test_the_required_source_with_no_tmdb_id_to_ask_about_reports_that_it_never_ran",
+    "backend/tests/test_sources_adapters.py::test_a_co_director_vouches_for_a_page_at_stage_two_as_it_does_at_stage_three",
+    # THE REFUSAL ITSELF, on the side of the clause that says "rather than PARSED". The two
+    # adapter tests above hold that a guessed page writes no slug and issues no second request;
+    # these hold the decision both of them borrow, against real captures of the two cases the
+    # corpus argues from. `metacritic_page_alpha_2018.html` is the collision - the corpus asked
+    # for `movie/alpha` on behalf of Alpha (2026) and Metacritic served the 2018 film, whose
+    # `metacritic_slug` is NULL in the corpus to this day - and
+    # `metacritic_page_black_orpheus_2006.html` is the restoration the same rule must keep.
+    # The two db tests are the per-title read the refusal's second signal comes from: without it
+    # there is no cast to compare and the year alone decides, which clears a same-name same-year
+    # collision. §8 stage 7's quote verification cannot catch a wrong page afterwards, because a
+    # quote from the wrong film's pack IS a genuine substring of that pack.
+    "backend/tests/test_derive_parse.py::test_the_real_collision_is_refused_by_the_cast_the_page_claims",
+    "backend/tests/test_derive_parse.py::test_a_restoration_is_dated_decades_after_the_film_and_is_still_the_same_film",
+    "backend/tests/test_derive_parse.py::test_the_year_tolerance_is_two_in_both_directions",
+    "backend/tests/test_derive_parse.py::test_a_page_that_says_nothing_about_itself_cannot_contradict_us",
+    "backend/tests/test_derive_parse.py::test_rotten_tomatoes_lets_a_matching_year_vouch_for_a_page_its_dub_cast_does_not",
+    "backend/tests/test_derive_parse.py::test_a_scraped_page_for_the_wrong_film_is_refused_against_this_titles_own_cast",
+    "backend/tests/test_derive_parse.py::test_a_title_with_no_credits_yet_has_an_empty_cast_and_that_is_an_answer",
+    "backend/tests/test_derive_parse.py::test_a_film_with_no_tomatometer_is_not_given_its_neighbours_percentage",
+    # "before anything is parsed" is a LAYERING claim as much as an ordering one, and this is the
+    # half of it a test can hold for ever: no module under `spielplan/derive/` imports transport,
+    # so no parser can fetch what it is missing. That is the whole of §8's "re-parsing is free
+    # forever" (`spec:398`) from the parse side.
+    "backend/tests/test_derive_parse.py::test_no_module_in_the_derive_package_can_reach_the_network",
+    "backend/tests/test_derive_rebuild.py::test_a_scraped_page_for_another_film_is_refused_and_writes_nothing",
+    "backend/tests/test_derive_rebuild.py::test_the_refusal_reads_the_cast_this_run_parsed_and_not_the_one_already_stored",
+    "backend/tests/test_derive_rebuild.py::test_a_refused_page_takes_back_the_rows_a_previous_derive_wrote_from_it",
+    "backend/tests/test_derive_rebuild.py::test_the_slug_a_refused_page_was_fetched_under_is_left_for_stage_two",
+    # M5.3 review cycle 1, m53-c1-slug-02: the refusal was recorded per SOURCE off the `page:main`
+    # document alone, so a `reviews:*` document fetched under another slug - or under no proved
+    # page at all - was parsed into this title's pack with `DeriveReport.refused` empty.
+    "backend/tests/test_derive_rebuild.py::test_reviews_fetched_from_a_path_no_accepted_page_proves_are_not_written",
+    "backend/tests/test_derive_rebuild.py::test_a_scraped_source_with_no_accepted_page_writes_no_reviews_either",
+    # The stage-2 DRIVER: eight sources through one fetcher, every response in the raw store
+    # before a parser sees one, a 404 as a note and the one required source's failure as a park.
+    "backend/tests/test_acquire_pipeline.py::test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_gate_live",
+    "backend/tests/test_acquire_pipeline.py::test_every_stage_two_response_is_in_the_raw_store_before_stage_three_reads_one",
+    "backend/tests/test_acquire_pipeline.py::test_a_metacritic_404_with_tmdb_answering_is_a_note_and_the_walk_reaches_stage_three",
+    "backend/tests/test_acquire_pipeline.py::test_the_required_source_failing_parks_at_stage_two_and_names_it",
+    "backend/tests/test_acquire_pipeline.py::test_an_install_with_no_tmdb_key_notes_it_and_walks_on",
+    # M5.3 review cycle 1, M53-334-01: the third state, which `available_kinds` cannot see because
+    # it is a fact about the title's data rather than about a capability.
+    "backend/tests/test_acquire_pipeline.py::test_a_title_tmdb_holds_no_record_of_walks_on_rather_than_parking_stage_two",
+    "backend/tests/test_acquire_pipeline.py::test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher",
+    # M5.3 review cycle 2, m53-c2-334-01: the same empty `tmdb_id` when `tmdb:resolve` was REFUSED
+    # or failed, which is decision 334's park condition and was walked past as "no record".
+    "backend/tests/test_sources_adapters.py::test_a_resolve_tmdb_refused_or_failed_is_a_failure_and_not_an_answer",
+    "backend/tests/test_acquire_pipeline.py::test_a_refused_or_failed_tmdb_resolve_parks_stage_two_naming_it",
+    # M5.3 review cycle 2, M53-C2-NET-01; decision 422. A breaker pause on a best-effort host is
+    # that source's note, one sentence per view, and asks the paused host nothing.
+    "backend/tests/test_acquire_pipeline.py::test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_request",
+    # M5.3 review cycle 2, m53-c2-slug-01. Stage 2 judges a guessed page with the cast the TMDB
+    # detail already in the raw store carries, which is the evidence stage 3 judges the same bytes
+    # with; on a first acquisition `credit` is empty and the check was the year alone.
+    "backend/tests/test_sources_adapters.py::test_a_restoration_page_is_judged_at_stage_two_with_the_cast_tmdb_already_sent",
+]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-a-re-derive-is-idempotent"
+spec = "§8 stage 3 + §14 risk 5"
+milestone = "M5.3"
+kind = "integration"
+what = "Deriving one title twice from the same raw documents produces the same title_meta, credit, review and display rows - no duplicates, no growth, no changed ordering - and the per-title field resolution uses the same source priority and the same absent-value rule as the bundle importer rather than a second implementation."
+why = "The per-title incremental derive is new code replacing deliberately-wholesale corpus steps, and idempotent re-ingest is the first of the invariants §14 risk 5 says to port or inherit the bugs they were built to kill. The shipped resolve_title_fields groups every title_meta row in the database, so a per-title version is a fork of the resolution rule unless it calls the same helper."
+# The five below discharge the row's SECOND half - "the per-title field resolution uses the same
+# source priority and the same absent-value rule as the bundle importer rather than a second
+# implementation". `resolve_title_fields` took a `title_ids` scope rather than gaining a sibling,
+# so the anti-fork claim is asserted the only way a shared implementation can be: by running both
+# paths over the same rows under two orders and requiring the same answer, and by requiring the
+# reversed order to move a field, without which that assertion would hold for a scoped path that
+# ignored `priority` entirely. Decision 335 is the reason the fork would matter beyond this row -
+# the reviews gate reads `title.overview` precisely because the plot fallback has one owner.
+# The row's FIRST half - the derive producing the same title_meta/credit/review/display rows
+# twice - is asserted where `derive_title` lands, and its tests are appended to this same list.
+#
+# THE TEN FROM `test_derive_rebuild.py` CLOSE THAT FIRST HALF. "The same rows ... no changed
+# ordering" is measured as a whole-snapshot comparison over all thirteen tables, read without the
+# surrogate key and ORDERED BY it, so a derive that re-inserted the same values in a different
+# order fails here rather than on a card. "No duplicates" is asserted separately for the three
+# places it can happen and the database refuses none of them: `credit` and `review_store.review`
+# carry `bigserial` and no natural key (`0003_content.sql:146-156`, `:239-250`), and `person` is
+# the one table a re-derive writes that is not scoped by title at all, so a duplicate there is
+# permanent. Decision 375's mechanism is asserted in both directions - a source whose document is
+# gone keeps its rows, a source whose response went empty loses exactly its own - because a
+# replace-by-scope that got either wrong would still pass a test that only derived twice.
+#
+# The scoped resolve is asserted TWICE by design and the two are not duplicates: `test_title_meta`
+# holds the function to its `title_ids` predicate, and `test_a_derive_of_one_title_leaves_another
+# _title_s_card_exactly_as_it_was` holds the DERIVE to calling it that way, against a neighbour
+# whose card deliberately disagrees with its own `title_meta` so an unscoped call repairs it and
+# is seen.
+#
+# NOT CLOSED BY ANY TEST NAMED HERE, and it belongs to two rows this stage does not own: the
+# derive re-reading the content-addressed raw store instead of re-fetching (asserted by
+# `test_derive_rebuild.py::test_the_derive_opens_no_socket`, which is
+# `jellyfin-acquisition-eval-stage-park-retry-idempotent`'s clause) and the scraped-page refusal
+# at derive time (four tests in the same file, which is
+# `jellyfin-acquisition-eval-stage-two-fetches-into-the-raw-store`'s "refused rather than
+# parsed"). Both rows are other stages' to point at these tests.
+tests = [
+    "backend/tests/test_title_meta.py::test_a_scoped_resolve_touches_only_the_titles_it_names",
+    "backend/tests/test_title_meta.py::test_a_scoped_resolve_of_a_title_with_no_meta_row_writes_nothing",
+    "backend/tests/test_title_meta.py::test_the_scoped_and_unscoped_paths_resolve_one_title_identically",
+    "backend/tests/test_title_meta.py::test_an_empty_title_id_list_resolves_nothing_rather_than_everything",
+    "backend/tests/test_title_meta.py::test_the_source_order_is_readable_without_an_import_report",
+    "backend/tests/test_derive_rebuild.py::test_two_derives_of_one_title_leave_the_same_rows",
+    "backend/tests/test_derive_rebuild.py::test_a_second_derive_adds_no_person_and_keeps_every_credit_pointed_at_the_same_row",
+    "backend/tests/test_derive_rebuild.py::test_a_source_whose_document_is_gone_keeps_the_rows_it_wrote",
+    "backend/tests/test_derive_rebuild.py::test_a_source_that_now_says_less_loses_exactly_what_it_stopped_saying",
+    "backend/tests/test_derive_rebuild.py::test_title_meta_keeps_one_row_per_source_and_is_never_collapsed",
+    "backend/tests/test_derive_rebuild.py::test_the_meta_row_carries_the_document_s_own_fetch_time",
+    "backend/tests/test_derive_rebuild.py::test_a_derive_of_one_title_leaves_another_title_s_card_exactly_as_it_was",
+    "backend/tests/test_derive_rebuild.py::test_one_review_carried_by_two_documents_of_one_source_is_stored_once",
+    "backend/tests/test_derive_rebuild.py::test_two_sources_scoring_one_platform_leave_one_row_and_the_page_s_own_score",
+    "backend/tests/test_derive_rebuild.py::test_the_documents_are_read_newest_first_and_per_page",
+    # M5.3 review cycle 1. `_replace` returned the length of the list handed to `executemany`
+    # while eight of the ten targets carry a conflict clause the ordinary path triggers, so §6.6's
+    # board over-reported three tables on every derive
+    # (m53-rev1-derive-report-rows-overstates-what-landed); and a bundle shipping its own
+    # `source_priority` resolves the corpus by one order and every acquired title by another, which
+    # the import now says out loud (m53-rev1-derive-resolves-by-the-constant-not-the-bundle-order).
+    "backend/tests/test_derive_rebuild.py::test_the_row_counts_on_the_board_are_the_rows_the_database_actually_holds",
+    "backend/tests/test_title_meta.py::test_a_bundle_whose_order_is_not_the_apps_is_warned_about_at_the_one_moment_it_can_be",
+    # M5.3 review cycle 2, m53-c2-d375-01; decision 420. The bundle files its review bodies under
+    # the labels a crawl uses and `award` had no provenance at all, so the derive that enriched a
+    # corpus title deleted what decision 162 says nothing can bring back - 400 reviews to 91 on the
+    # real fixture documents - and, once it stopped, would have filed each re-crawled one twice.
+    "backend/tests/test_derive_rebuild.py::test_the_bundle_s_reviews_and_awards_survive_the_derive_that_enriches_their_title",
+    "backend/tests/test_derive_rebuild.py::test_a_review_or_award_the_bundle_already_holds_is_not_written_beside_it",
+]
+
+[[requirement]]
+id = "data-rules-wikidata-and-wikipedia-have-a-key-to-fetch-by"
+spec = "§8 stage 2 (wikidata:resolve, wikipedia:article) + §4.1"
+milestone = "M5.3"
+kind = "backend"
+what = "A title carries its Wikidata entity id and its Wikipedia article title once stage 2 resolves them, and wikidata:resolve runs before the two scraped sources so their slugs are read rather than guessed."
+why = "title carries nine identity columns and neither of these two, while the corpus carries both. §8 says wikidata:resolve 'halves guessing' precisely because it produces the MC/RT/Letterboxd slugs, so the ordering inside stage 2 is load-bearing rather than cosmetic."
+# THE ROW CLAIMS TWO THINGS AND THE TWO HALVES ARE ASSERTED SEPARATELY, because they can fail
+# separately. The columns are `0026_acquisition_sources.sql`'s and are held by `test_derive_schema`
+# - text, no UNIQUE, so two titles may legitimately share one Wikidata item (§4.1 rule 6). That
+# they are FILLED is `wikidata:resolve`'s, asserted against the real SPARQL answer, and the
+# Wikipedia half is asserted from the other side too: a title with no article title searches for
+# one and writes it before the extract is fetched.
+#
+# THE ORDERING IS THE CLAUSE WITH TEETH and it is asserted on the sequence AND on the numbers.
+# "Halves guessing" is entirely an ordering: run `wikidata:resolve` first and `rt:page` reads an
+# identifier, run it second and it builds a url out of a name - which cannot tell two films of one
+# name apart, and whichever page exists is served to both. `available_kinds` sorts on
+# `default_priority`, so a tie would break on the alphabet and put `metacritic:page` first; the
+# priorities are therefore asserted as strictly ordered rather than merely as a returned list.
+tests = [
+    "backend/tests/test_derive_schema.py::test_the_two_keys_stage_two_fetches_by_are_on_the_title_and_are_text",
+    "backend/tests/test_derive_schema.py::test_two_titles_may_share_one_wikidata_entity",
+    "backend/tests/test_sources_adapters.py::test_wikidata_resolves_before_either_scraped_source",
+    "backend/tests/test_sources_adapters.py::test_the_kinds_run_in_the_order_section_eight_lists_them",
+    "backend/tests/test_sources_adapters.py::test_wikidata_resolves_one_title_with_one_binding_and_fills_four_slugs",
+    "backend/tests/test_sources_adapters.py::test_a_title_wikidata_holds_no_item_for_leaves_every_slug_unguessed",
+    "backend/tests/test_sources_adapters.py::test_an_identity_write_fills_and_never_clobbers",
+    "backend/tests/test_sources_adapters.py::test_wikipedia_searches_when_the_title_carries_no_article_and_stores_the_search",
+    "backend/tests/test_sources_adapters.py::test_a_search_hit_that_names_another_year_leaves_the_title_with_no_article",
+    "backend/tests/test_sources_adapters.py::test_a_rotten_tomatoes_slug_wikidata_supplied_is_the_only_candidate",
+    "backend/tests/test_sources_adapters.py::test_a_supplied_rotten_tomatoes_slug_is_fetched_once_and_never_verified",
+]
+
+[[requirement]]
+# M5.3 review cycle 1, and the shape `test_spec_coverage.py:2182` already names in another file:
+# "Rule 2 refuses a row naming a test that does not exist; NOTHING refuses a test that exists and
+# no row names, and the difference is invisible while the test passes." `0026`'s `origin` column
+# shipped with three tests and no row, so a later lane could rename or delete all three with the
+# gate green - and what they hold is the half of decision 326 that cannot be repaired afterwards,
+# because `0026` is checksummed the moment it reaches a durable install.
+#
+# NOT registered on M4.14's re-import row, whose own comment refuses them for a reason that is
+# correct: that `what` is about which rows a models-only import may replace, and says nothing
+# about what the CHECK refuses or what the ALTER backfills. Nor on M5.6's editor row, which
+# `docs/milestones/M5.6-plan.md` scopes to CONSUMING this column ("the `origin` provenance column
+# is M5.3's `0026`"). The column is landed here, so the row that holds it is here.
+# [decision 326; M5.3 review cycle 1, M53-COV-03]
+id = "data-rules-a-curated-row-names-the-author-who-may-replace-it"
+spec = "§6.6 (the three ledger editors) + §8 stage 3; decisions 171, 247, 326"
+milestone = "M5.3"
+kind = "integration"
+what = "Both curated ledgers carry `origin text NOT NULL DEFAULT 'bundle' CHECK (origin IN ('bundle','household'))`: a row written by a loader that names no origin reads as the bundle's, a row already in the table when 0026 is applied is backfilled to the bundle's by the DEFAULT rather than failing the ALTER at boot, and a third value - `title.origin`'s `acquired` above all - is refused rather than stored, because a curated row the importer's `origin = 'bundle'` DELETE passes over is one no editor claims and nothing can ever replace. Both tables stay inside the archive whose restore that DEFAULT is what keeps working."
+why = "Decision 326 makes `origin` the only thing telling the importer's DELETE which rows it owns, so §6.6's promise that a fix typed into a ledger editor survives every re-import rests on this column's vocabulary and on its backfill. Every other layer of this suite migrates an empty database, so the ALTER over rows that were already there - the only state an existing install is in - is asserted nowhere else."
+tests = [
+    "backend/tests/test_derive_schema.py::test_a_curated_row_is_the_bundles_or_the_households_and_nothing_between",
+    "backend/tests/test_derive_schema.py::test_a_ledger_row_written_before_the_migration_reads_as_the_bundles",
+    "backend/tests/test_derive_schema.py::test_the_two_ledgers_whose_default_keeps_an_old_archive_restorable_are_still_archived",
+]
 
 [[requirement]]
 # Re-pointed from "M5" to M5.5 under decision 321, milestone key only - and the `spec`
@@ -4142,9 +4587,9 @@ id = "platform-app-fixture-is-isolated-from-the-operators-env"
 spec = "§2 (env vars seed connector config on first boot); §7.3"
 milestone = "M4.8"
 kind = "integration"
-what = "The `app` fixture starts with no connector configured regardless of a .env in pytest's working directory: the connector seed variables Settings declares are cleared and .env is resolved in an empty directory, and a test that wants a seeded connector seeds it explicitly."
-why = "The fixture runs the genuine lifespan, which calls registry.seed_from_env, and Settings reads .env from the cwd. A household that follows its own README gets two red tests unrelated to the code, on the machine where the release is cut, and its encrypted credentials written into per-process test databases. conftest already records this incident for SECRETS_KEY and fixed it for one fixture only."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_app_fixture_ignores_a_dot_env_in_the_working_directory", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_clears_every_connector_seed_variable", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_mutates_the_process_only_through_monkeypatch"]
+what = "The `app` fixture starts with no connector configured regardless of a .env in pytest's working directory: the connector seed variables Settings declares are cleared and .env is resolved in an empty directory, and a test that wants a seeded connector seeds it explicitly; `ops/m53_exit_criterion.py` does both before it builds the install its eleven checks run against."
+why = "The fixture runs the genuine lifespan, which calls registry.seed_from_env, and Settings reads .env from the cwd. A household that follows its own README gets two red tests unrelated to the code, on the machine where the release is cut, and its encrypted credentials written into per-process test databases. conftest already records this incident for SECRETS_KEY and fixed it for one fixture only. M5.3 review cycle 1 found the third site: `ops/m53_exit_criterion.py` inherited the name half from `ops/m51_exit_criterion.py:378` and not the chdir, so a household running the exit criterion from its own repository root had JELLYFIN_URL and JELLYFIN_API_KEY read out of `.env` and `registry.seed_from_env` encrypted the key into the scratch database under the script's throwaway DEK. TMDB, OMDb and Trakt survived only because `_seed_throwaway_credentials` overwrites those three outright."
+tests = ["backend/tests/test_harness_fixtures.py::test_the_app_fixture_ignores_a_dot_env_in_the_working_directory", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_clears_every_connector_seed_variable", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_mutates_the_process_only_through_monkeypatch", "backend/tests/test_harness_fixtures.py::test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory"]
 
 [[requirement]]
 id = "platform-landmine-guards-catch-the-shapes-a-regression-would-take"
@@ -4165,9 +4610,9 @@ id = "platform-exit-scripts-can-report-their-own-failure"
 spec = "§12 M2/M3/M4 exit criteria; §13"
 milestone = "M4.8"
 kind = "static"
-what = "No milestone exit script contains a check whose verdict is settled before the run -- a predicate built only out of literals, `not`, `and`/`or` and comparisons between them that comes out true, or a boolean expression an operand pins -- read at the first positional argument, at the `ok` keyword every one of those scripts declares its verdict with, and at the verdict every numbered `check_*` returns -- followed through a name the check binds once, because five of the nine scripts publish their verdicts from such a function and reach `check()` only as a local name inside one shared dispatcher, and every one of those functions must still publish a verdict this reader can follow; a predicate over anything the run itself decides, `placed >= 0` among them, is outside what a static reader can settle and is not claimed here; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and the M4.12 script's small-pool check reads the state its seat reads left behind, with no read of a settling route after them; and a figure a script's docstring publishes as measured is one the script's own constants give, so the M4.13 script's clamp control is recomputed from DROPS, K_FITTED and K_GROWN and held against both that docstring and the paragraph docs/TESTING.md publishes it in; and the same rule outward, where a figure a DOCUMENT publishes about one of these scripts -- how many numbered checks it holds, how many lines it is, how many scripts there are under `ops/` -- is derived from the script rather than typed, in §12's row and in docs/RELEASE.md alike; and a citation one of these scripts makes into the application is a NAME that application still declares rather than a line number, which its own milestone's edits move inside the change set that writes the citation."
-why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal. M4.12 review cycle 2 found the same family one layer in, in a check rather than in a verdict: check 8 of the M4.12 script grades decision 215's clause -- a pool of two or three candidates reaches the ballot rather than waiting silently -- and on such a pool only the round read can end a seat, because there is no pair to answer and the escape is refused below pair six. It issued one more GET of the session AFTER its loop of seat reads, and every read of the session, the ballot and the result calls `play.settle`: so the trailing GET moved the room itself, the verdict came back 'ballot' whichever way the round read behaved, and the detail line the check prints -- that 'voting' is the silent wait this milestone closed -- named the one thing it could not see. No client produces that order either, which is M412-PLAY-4's defect read from the other end: `refresh()` GETs the session and only then calls `loadRound`. M4.13 review cycle 2 found the same class in a docstring rather than in a predicate: check 5 of `ops/m413_exit_criterion.py` said \"Measured that way the clamp reports 20/60 (33%)\", and the clamp is the one quantity in that check nothing computes -- the run measures the rescale. The stream the check builds, `round(i * (k_to - 1) / (DROPS - 1))` over `range(DROPS)`, puts 19 of 60 drops out of a 7-level history's reach, not 20; the published pair is what a probe over `range(1, DROPS + 1)` gives. It changed no verdict -- both sit inside the plan's 30-60% band -- but decision 246 makes `docs/TESTING.md`'s M4.13 paragraph the record of what the script measured, and the one figure in it nobody could reproduce was the one never re-derived from the code that shipped. M5.1 review cycle 1 found the same class one document further out and measured it drifting inside the cycle itself: §12's M5.1 row and docs/RELEASE.md publish `ops/m51_exit_criterion.py`'s check count as a typed word, docs/RELEASE.md publishes its length and the number of scripts under ops/ the same way, and the length was 1,522 when the sentence was written and 1,540 by the time a sibling review group had finished repairing that script -- a stale figure in the file CLAUDE.md calls normative, on the row an owner signs, with M5.2-M5.7 each owing a script and every review cycle free to add a check. M5.1 review cycle 4 found the rule at the top of this row reading four dispatch calls and none of the fifty-four numbered checks the five function-shaped scripts publish their verdicts from: `ops/m51_exit_criterion.py` holds its twelve in `check_one`..`check_twelve`, its four `check(` call sites are all inside one dispatcher, and two of those pass the deliberate `False` this rule allows. Not one of those fifty-four functions contains a `check(` call at all, so the rule settled nothing about any of them. Measured by mutation rather than argued: `ok = True` and `return True, 'the board carried counts'` injected into `check_one` each left every reader in this file silent -- M4.5's own \"a summary recorded as a pass\", one call frame out of reach, in the milestone six others are scheduled against and whose dispatcher shape each of them will copy."
-tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reaches_every_verdict_the_scripts_publish", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_small_pool_check_grades_the_state_the_seat_reads_left", "backend/tests/test_static_contracts.py::test_the_settling_read_guard_catches_a_trailing_session_get", "backend/tests/test_static_contracts.py::test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give", "backend/tests/test_static_contracts.py::test_the_clamp_control_arithmetic_moves_when_the_simulation_does", "backend/tests/test_static_contracts.py::test_every_figure_published_about_a_milestone_script_is_the_scripts_own", "backend/tests/test_static_contracts.py::test_the_release_record_counts_the_scripts_under_ops_that_the_tree_holds", "backend/tests/test_static_contracts.py::test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown", "backend/tests/test_static_contracts.py::test_no_milestone_script_cites_the_applications_routing_rule_by_line_number", "backend/tests/test_static_contracts.py::test_the_application_citation_reader_tells_a_coordinate_from_a_name"]
+what = "No milestone exit script contains a check whose verdict is settled before the run -- a predicate built only out of literals, `not`, `and`/`or` and comparisons between them that comes out true, or a boolean expression an operand pins -- read at the first positional argument, at the `ok` keyword every one of those scripts declares its verdict with, and at the verdict every numbered `check_*` returns -- followed through a name the check binds once, because five of the nine scripts publish their verdicts from such a function and reach `check()` only as a local name inside one shared dispatcher, and every one of those functions must still publish a verdict this reader can follow; a predicate over anything the run itself decides, `placed >= 0` among them, is outside what a static reader can settle and is not claimed here; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and the M4.12 script's small-pool check reads the state its seat reads left behind, with no read of a settling route after them; and a figure a script's docstring publishes as measured is one the script's own constants give, so the M4.13 script's clamp control is recomputed from DROPS, K_FITTED and K_GROWN and held against both that docstring and the paragraph docs/TESTING.md publishes it in; and the same rule outward, where a figure a DOCUMENT publishes about one of these scripts -- how many numbered checks it holds, how many lines it is, how many scripts there are under `ops/` -- is derived from the script rather than typed, in §12's row and in docs/RELEASE.md alike; and a citation one of these scripts makes into the application is a NAME that application still declares rather than a line number, which its own milestone's edits move inside the change set that writes the citation; and every whole SQL statement `ops/m53_exit_criterion.py` holds as a literal prepares against a migrated schema."
+why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal. M4.12 review cycle 2 found the same family one layer in, in a check rather than in a verdict: check 8 of the M4.12 script grades decision 215's clause -- a pool of two or three candidates reaches the ballot rather than waiting silently -- and on such a pool only the round read can end a seat, because there is no pair to answer and the escape is refused below pair six. It issued one more GET of the session AFTER its loop of seat reads, and every read of the session, the ballot and the result calls `play.settle`: so the trailing GET moved the room itself, the verdict came back 'ballot' whichever way the round read behaved, and the detail line the check prints -- that 'voting' is the silent wait this milestone closed -- named the one thing it could not see. No client produces that order either, which is M412-PLAY-4's defect read from the other end: `refresh()` GETs the session and only then calls `loadRound`. M4.13 review cycle 2 found the same class in a docstring rather than in a predicate: check 5 of `ops/m413_exit_criterion.py` said \"Measured that way the clamp reports 20/60 (33%)\", and the clamp is the one quantity in that check nothing computes -- the run measures the rescale. The stream the check builds, `round(i * (k_to - 1) / (DROPS - 1))` over `range(DROPS)`, puts 19 of 60 drops out of a 7-level history's reach, not 20; the published pair is what a probe over `range(1, DROPS + 1)` gives. It changed no verdict -- both sit inside the plan's 30-60% band -- but decision 246 makes `docs/TESTING.md`'s M4.13 paragraph the record of what the script measured, and the one figure in it nobody could reproduce was the one never re-derived from the code that shipped. M5.1 review cycle 1 found the same class one document further out and measured it drifting inside the cycle itself: §12's M5.1 row and docs/RELEASE.md publish `ops/m51_exit_criterion.py`'s check count as a typed word, docs/RELEASE.md publishes its length and the number of scripts under ops/ the same way, and the length was 1,522 when the sentence was written and 1,540 by the time a sibling review group had finished repairing that script -- a stale figure in the file CLAUDE.md calls normative, on the row an owner signs, with M5.2-M5.7 each owing a script and every review cycle free to add a check. M5.1 review cycle 4 found the rule at the top of this row reading four dispatch calls and none of the fifty-four numbered checks the five function-shaped scripts publish their verdicts from: `ops/m51_exit_criterion.py` holds its twelve in `check_one`..`check_twelve`, its four `check(` call sites are all inside one dispatcher, and two of those pass the deliberate `False` this rule allows. Not one of those fifty-four functions contains a `check(` call at all, so the rule settled nothing about any of them. Measured by mutation rather than argued: `ok = True` and `return True, 'the board carried counts'` injected into `check_one` each left every reader in this file silent -- M4.5's own \"a summary recorded as a pass\", one call frame out of reach, in the milestone six others are scheduled against and whose dispatcher shape each of them will copy. M5.3 review cycle 1 found the class from the other end, where a static reader cannot reach it at all: `derived_snapshot` in the M5.3 script selected `value` from `display.platform_rating`, which has carried `score` since 0003 and gained only `metric` and `scale` at 0015 - `value` is the corpus BUNDLE's name for that column, mapped at importer/load.py:283 - so three of the eleven checks raised UndefinedColumnError before asserting anything, `measure()` caught each and printed it as that check's failure, and the run reported a criterion red that it had never measured. The three were decision 375's idempotence, the zero-outbound retry and the raw-store-before-parse check. Every one of the 539 static guards over these scripts passed on that tree, because reading a file says nothing about what a database would answer it."
+tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reaches_every_verdict_the_scripts_publish", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_small_pool_check_grades_the_state_the_seat_reads_left", "backend/tests/test_static_contracts.py::test_the_settling_read_guard_catches_a_trailing_session_get", "backend/tests/test_static_contracts.py::test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give", "backend/tests/test_static_contracts.py::test_the_clamp_control_arithmetic_moves_when_the_simulation_does", "backend/tests/test_static_contracts.py::test_every_figure_published_about_a_milestone_script_is_the_scripts_own", "backend/tests/test_static_contracts.py::test_the_release_record_counts_the_scripts_under_ops_that_the_tree_holds", "backend/tests/test_static_contracts.py::test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown", "backend/tests/test_static_contracts.py::test_no_milestone_script_cites_the_applications_routing_rule_by_line_number", "backend/tests/test_static_contracts.py::test_the_application_citation_reader_tells_a_coordinate_from_a_name", "backend/tests/test_m53_exit_criterion.py::test_every_statement_the_exit_script_sends_prepares_against_the_schema"]
 # Decision 184: M4.5's published "18/18" counted two of these constants, so the count no longer
 # describes what the script prints. It is restated in words in docs/TESTING.md's ledger and
 # corrected by a real run against a real bundle, not by a number nobody measured.
@@ -6846,10 +7291,10 @@ tests = [
 
 [[requirement]]
 id = "data-rules-a-models-only-import-loads-the-curated-ledgers-it-carries"
-spec = "§4.3 corrections_v1.tsv (\"travels with the bundle and is applied at every derive\") + decision 162 + decision 171 + decision 247"
+spec = "§4.3 corrections_v1.tsv (\"travels with the bundle and is applied at every derive\") + decision 162 + decision 171 + decision 247 + decision 326"
 milestone = "M4.14"
 kind = "integration"
-what = "A models-only re-import loads the four curated ledgers the bundle carries — corrections_v1.tsv, seed_list.json, adjudications_v1.tsv and the axis TSVs — and loads none of the content tiers: no load_vocabulary term tables, no load_tags, no load_projected. A refreshed onboarding list shorter than the installed one replaces it rather than merging with its tail (three entries loaded over the fixture's eight leave three rows, not eight with positions 3-7 carrying the old ids). A seed_list entry naming a title this install never seeded is counted and skipped in the report rather than aborting the import on seed_list.title_id's NOT NULL FK; a present-but-empty adjudications ledger is refused rather than silently replacing the curated verdicts, and so is a present-but-empty onboarding list (decision 260), a present-but-empty axis TSV (decision 264, which is the accepted-but-empty file the other two guards' shape had no equivalent for) and a present-but-empty corrections ledger - four ledgers, four guards, and the fourth is the one the other three are argued from; an absent ledger file stays a warning that changes nothing, and so does a bundle that names a vocabulary it ships no dna_vocab/<version>/ tree for (decision 266) and one whose ledgers name a vocabulary this install has no dna_vocabulary row for (decision 265) - one line per skip, and nothing installed changes on either. The test says in its docstring that it asserts against a model bundle the test constructs, because no real one exists."
+what = "A models-only re-import loads the four curated ledgers the bundle carries — corrections_v1.tsv, seed_list.json, adjudications_v1.tsv and the axis TSVs — and loads none of the content tiers: no load_vocabulary term tables, no load_tags, no load_projected. A refreshed onboarding list shorter than the installed one replaces it rather than merging with its tail (three entries loaded over the fixture's eight leave three rows, not eight with positions 3-7 carrying the old ids). A seed_list entry naming a title this install never seeded is counted and skipped in the report rather than aborting the import on seed_list.title_id's NOT NULL FK; a present-but-empty adjudications ledger is refused rather than silently replacing the curated verdicts, and so is a present-but-empty onboarding list (decision 260), a present-but-empty axis TSV (decision 264, which is the accepted-but-empty file the other two guards' shape had no equivalent for) and a present-but-empty corrections ledger - four ledgers, four guards, and the fourth is the one the other three are argued from; an absent ledger file stays a warning that changes nothing, and so does a bundle that names a vocabulary it ships no dna_vocab/<version>/ tree for (decision 266) and one whose ledgers name a vocabulary this install has no dna_vocabulary row for (decision 265) - one line per skip, and nothing installed changes on either. Which rows a re-import may replace is decided by provenance rather than by the table: `credit_correction` and `dna_adjudication` each carry an `origin`, both loaders' DELETEs name `origin = 'bundle'` in the statement itself rather than leaning on the column's default, and a correction or a verdict the household authored is still standing after a models-only re-import that replaced every row the bundle shipped. The test says in its docstring that it asserts against a model bundle the test constructs, because no real one exists."
 why = "bundle.py's `if db is not None:` holds load_corrections, load_seed_list and load_vocabulary, so under decision 162 — where the only recurring bundle is models-only — none of them ever runs again. Reproduced three times independently: after a models-only import of a bundle whose corrections_v1.tsv, seed_list.json and adjudications differed, credit_correction / seed_list / dna_adjudication / dna_axis_weight were byte-for-byte unchanged, report.table_counts was {} and the report carried no line at all — while validate_id_partition had just read two of those same files off the same bundle. The importer inspects artifacts it then discards. load_seed_list upserts ON CONFLICT (position) with no preceding DELETE where load_corrections deletes for exactly the stated reason, and rate/queue.py:272,375 reads the whole table. Real volumes: corrections 6 rows, adjudications 828 (817 title-scoped), seed_list 100 entries."
 tests = [
     "backend/tests/test_bundle_lifecycle.py::test_a_models_only_import_loads_the_curated_ledgers_and_no_content_tier",
@@ -6907,6 +7352,36 @@ tests = [
     "backend/tests/test_dna_import.py::test_an_absent_curated_ledger_names_what_is_still_installed",
     "backend/tests/test_dna_import.py::test_a_bundle_with_no_axis_file_says_which_weights_it_left_standing",
     "backend/tests/test_dna_import.py::test_an_onboarding_list_of_unknown_ids_is_told_apart_from_an_empty_one",
+    # DECISION 326, AND WHY IT LANDS ON THIS ROW RATHER THAN ON ONE OF M5.3'S. Everything above
+    # asks whether a models-only import LOADS the ledgers it carries; decision 326 asks whose rows
+    # it may replace while doing it, and that is the same statement one clause further on. Decision
+    # 171 had already probed the cost of `importer/dna.py`'s unscoped `DELETE FROM
+    # credit_correction` and left it standing because nothing else wrote that table yet; §6.6's
+    # three editors will, and decision 171's own rule - that a models-only import loads all four
+    # curated ledgers on EVERY import - is what guarantees the household's row and the bundle's
+    # meet in it. The scope therefore lands with the appliers rather than with the editors it is
+    # for: a provenance column added after the first household row exists has to guess where that
+    # row came from, and `0026`'s `DEFAULT 'bundle'` is only the truth while every row is still
+    # the bundle's.
+    #
+    # THE STATIC TEST IS NOT DECORATION AND IS THE REASON THE OTHER TWO CAN BE TRUSTED. No bundle
+    # can ship a household row, so both behaviour tests have to author one themselves and are
+    # exactly as strong as the fixture that does - which is how an unscoped DELETE survived from
+    # M4.5 to M5.3 with decision 171's probe already on the record and this row already green.
+    # `..._name_the_origin_they_may_replace` reads the two statements instead, and reads the two
+    # INSERTs with them, because a loader that left `origin` to the column default would write
+    # rows this row's clause is true of by accident rather than by statement.
+    #
+    # NOT REGISTERED HERE, deliberately: `test_derive_schema.py`'s `test_a_curated_row_is_the_
+    # bundles_or_the_households_and_nothing_between` and `test_a_ledger_row_written_before_the_
+    # migration_reads_as_the_bundles` hold the column's vocabulary and its backfill, and the
+    # clause added to `what` above claims neither. They are written, they pass, and they belong to
+    # a row about `0026` rather than about the import - naming them here would make this row read
+    # as covered for two claims it does not make, which is the reading M5.3's own opening step
+    # refused twice for this same pair of rows. [decisions 171, 247, 326; M5.3]
+    "backend/tests/test_dna_import.py::test_a_models_only_re_import_keeps_the_correction_the_household_typed",
+    "backend/tests/test_dna_import.py::test_a_models_only_re_import_keeps_the_verdict_the_household_typed",
+    "backend/tests/test_dna_import.py::test_both_curated_ledger_statements_name_the_origin_they_may_replace",
 ]
 
 [[requirement]]
@@ -8319,7 +8794,7 @@ id = "platform-the-proposal-ledger-counts-itself"
 spec = "README.md; docs/spec-v2.2-proposals.md header"
 milestone = "M4.16"
 kind = "static"
-what = "The number of `### N.` entries in docs/spec-v2.2-proposals.md equals the count README publishes and the count the file's own header publishes, the decision range each states ends at the highest decision the register holds, any sittings clause either publishes states the number of distinct dated sittings that actually carry a numbered owner decision and the first and last of those dates, and no `### N.` entry spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it."
+what = "The number of `### N.` entries in docs/spec-v2.2-proposals.md equals the count README publishes and the count the file's own header publishes, the decision range each states ends at the highest decision the register holds, any sittings clause either publishes states the number of distinct dated sittings that actually carry a numbered owner decision and the first and last of those dates, and no `### N.` entry spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it, and every number below the highest entry that the file does not head is named as unspent by its header or by the sitting that left it."
 why = "README and the header both said \"161 ... all seven owner decisions were taken on 2026-08-29\" over a file holding 270 entries and nine sittings, while README itself cited decisions 162 and 163 fifty lines further down. A count nobody re-derives is a measurement nobody made."
 # 286 entries as this milestone opens, the last of them 303. Both figures move again if a review
 # cycle takes a decision, which is the point: the guard re-derives rather than pasting.
@@ -8354,6 +8829,12 @@ tests = [
     # allocation. [M5.1 review cycle 4, M51-C4-REG-01]
     "backend/tests/test_spec_coverage.py::test_the_register_spends_no_number_another_milestone_is_bound_to",
     "backend/tests/test_spec_coverage.py::test_the_allocation_reader_reads_the_owner_cell_and_not_the_question",
+    # Review cycle 1 of M5.3 adds the other half of the same clause. The guard above holds a
+    # number the ROADMAP files elsewhere; nothing held a number the register neither heads nor
+    # mentions, which is the state 346 was in when M5.1 spent it. M5.3 left 379-381 - the rest
+    # of its own lane block - out of all three hole lists while heading 372-378 above them.
+    # [decision 346; M5.3 review cycle 1, M53-REG-06]
+    "backend/tests/test_spec_coverage.py::test_the_register_accounts_for_every_number_below_the_last_one_it_spends",
 ]
 # Both the count and the RANGE ENDPOINT are held, because they fail differently: a wave that
 # restates the count and leaves the range a wave back reads as precise. Each claim is read
@@ -8540,7 +9021,7 @@ spec = "§12 exit criteria; docs/TESTING.md (\"A second workflow decides whether
 milestone = "M4.16"
 kind = "static"
 what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; and the never-run count the map publishes is the one the record measured."
-why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: six of the sixteen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
+why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: seven of the seventeen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
 # The unfilled half is decision 297's and decision 298's, in the idiom of
 # `test_the_owed_device_checks_are_recorded_and_still_unsigned`: M2's criterion has never been
 # measured and the TMDB logo is an owed asset, and neither may be quietly signed. The guard goes
@@ -8633,7 +9114,7 @@ id = "map-taste-data-sources-are-attributed"
 spec = "decision 293 (§10 Data terms, /account); §6.8 copy register; decisions 298 and 307"
 milestone = "M4.16"
 kind = "e2e"
-what = "A signed-in phone reaches one Data sources surface carrying the IMDb courtesy notice verbatim, TMDB's own attribution sentence whole, in the words its API terms fix and with only the bracketed category resolved, CC BY-SA credit for Wikipedia and TVmaze and the rating sources' own licence text; the TMDB logo renders from a static asset when one is present and its absence is recorded in docs/RELEASE.md as owed, together with the two guards that assert that absence deliberately; no record argues the block's placement from a phone tab-bar route, which `api/auth.py`'s SURFACES does not carry; the CC BY-SA credits' missing material link is ruled on in a numbered decision and published in docs/RELEASE.md rather than argued away in the component, for as long as nothing in the package or the surface reads the corpus column such a link would come from; and no source name is rendered on a poster card or a shelf."
+what = "A signed-in phone reaches one Data sources surface carrying the IMDb courtesy notice verbatim, TMDB's own attribution sentence whole, in the words its API terms fix and with only the bracketed category resolved, CC BY-SA credit for Wikipedia and TVmaze and the rating sources' own licence text; the TMDB logo renders from a static asset when one is present and its absence is recorded in docs/RELEASE.md as owed, together with the two guards that assert that absence deliberately; no record argues the block's placement from a phone tab-bar route, which `api/auth.py`'s SURFACES does not carry; the CC BY-SA credits' missing material link is ruled on in a numbered decision and published in docs/RELEASE.md rather than argued away in the component, on the ground that is true of the build when it is read - that nothing in the package held the corpus column such a link would come from until M5.3, and that nothing under `api/`, `db/` or the surface serves it now that stage 2 does - each change of ground taken as a numbered decision rather than as a re-scoped guard; and no source name is rendered on a poster card or a shelf."
 why = "Roughly ten thousand TMDB overviews and posters and 8,418 IMDb scores are displayed on every install with none of the notices those licences make a condition of use, and §6.8's quiet register is the reason the notice belongs on one surface rather than on every card."
 # Decision 226: the three vitest ids sit BESIDE the Playwright one and never instead of it. The
 # browser half is what proves a signed-in phone REACHES the block; what the mounted half adds is
@@ -8675,6 +9156,16 @@ tests = [
     # PREMISE rather than the prose: it re-reads the corpus column a material URI would come from
     # and goes red the day anything reads it, which is the day the record is the false statement.
     # [decisions 296, 320; M4.16 cycle 5, M416-C5-ATTR-01]
+    #
+    # AND M5.3 IS THAT DAY, which is why this `what`'s last clause changed. §8 stage 2 fills
+    # `title.wikipedia_title` and the derive writes the article URL into `title_meta.homepage`, so
+    # the premise "this build holds none" is dead; the guard was narrowed to `api/` in the same
+    # change and both published records were left stating the old grep. Decision 425 re-measures
+    # the ground instead: the deferral now rests on the SERVING half alone, the guard asserts both
+    # halves - the package holds it, nothing under `api/`, `db/` or `frontend/src` serves it - and
+    # section 4.7 and the component's paragraph both carry the number that re-took it. `db/` is in
+    # the walk because `db/library.py` selects `t.*` and returns `dict(row)`, so the column reaches
+    # a route with the string in no file. [decision 425; M5.3 review cycle 1, M53-COV-01]
     "backend/tests/test_static_contracts.py::test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry",
     "backend/tests/test_static_contracts.py::test_the_material_link_guard_reads_the_citation_and_not_the_argument",
 ]

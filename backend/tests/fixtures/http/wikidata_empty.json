@@ -1,0 +1,16 @@
+{
+  "head": {
+    "vars": [
+      "item",
+      "imdb",
+      "rt",
+      "mc",
+      "lb",
+      "tmdb",
+      "article"
+    ]
+  },
+  "results": {
+    "bindings": []
+  }
+}

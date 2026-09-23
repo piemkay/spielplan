@@ -995,18 +995,29 @@ async def test_loading_the_corrections_ledger_twice_leaves_one_copy(db, bundle_d
 
 
 async def test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowhere(db, bundle_dir):
-    """§8 stage 3 is M5's, so §10's report may not say the ledger was applied.
+    """Import-time application is still NOWHERE, which is why this test keeps its name while its
+    subject moves: §8 stage 3 has an applier now, and this file is still not it.
 
-    The line read "N credit corrections loaded and re-applied at derive", and grep finds exactly
-    two readers of `credit_correction`: this writer and `backup/movie_data.py`. Five of the
-    shipped ledger's six rows are unreflected in the corpus's own `content.sqlite` either, so
-    nothing upstream pre-applied them. §14.5 is the scar for a derive that does not re-apply
-    them — "787 rows reverted twice" — and a report claiming the application already happens is
-    how that scar gets earned a third time.
+    The line read "N credit corrections loaded and re-applied at derive", and grep found exactly
+    two readers of `credit_correction`: this writer and `backup/movie_data.py`. §14.5 is the scar
+    for a derive that does not re-apply them - "787 rows reverted twice" - and a report claiming
+    the application already happens is how that scar gets earned a third time. [M4.9 finding 32]
 
-    The other half of the repair is a non-event: nothing patches `credit` at import. §8 stage 3
-    owns the application, and a second implementation of it here would be the derive-disagrees-
-    with-the-ledger failure in miniature. [M4.9 finding 32]
+    M5.3 makes half of that false and the other half sharper. `derive/ledgers.apply_corrections`
+    is the third reader, called per title and last by §8 stage 3, so "nothing applies them yet" is
+    now the wrong sentence: an operator who reads it on an install that HAS the applier goes
+    looking for a defect that is not there. What replaces it is a moment rather than a state - a
+    card reflects a correction after its title is next derived - because the two sentences a
+    reader reaches for are both wrong, one in each direction, and the rows an import has just
+    stored are precisely the rows no derive has seen. [decision 326]
+
+    "re-applied at derive" is the one phrasing still refused outright, and refusing it matters
+    MORE than it did: the derive really does apply these now, so the phrase is no longer false
+    about the pipeline, only about these rows - which makes it the easy thing to write.
+
+    The other half of the repair is a non-event and has not moved: nothing patches `credit` at
+    import. §8 stage 3 owns the application, and a second implementation of it here would be the
+    derive-disagrees-with-the-ledger failure in miniature.
     """
     report = ImportReport()
 
@@ -1014,14 +1025,221 @@ async def test_the_corrections_note_says_the_ledger_is_stored_and_applied_nowher
 
     notes = [f for f in report.findings if f.rule == "corrections" and f.severity == "note"]
     assert len(notes) == 1
-    assert "stored for §8 stage 3 (M5)" in notes[0].message
-    assert "nothing applies them yet" in notes[0].message
+    assert "§8 stage 3's derive applies them" in notes[0].message, notes[0].message
+    assert "derive/ledgers.py" in notes[0].message, (
+        "the note names a stage but not the applier, so nobody can go and read it"
+    )
+    assert "only after its title is next derived" in notes[0].message, notes[0].message
+    # The two sentences this line is between, each refused by name. The first was true until the
+    # applier landed and is now an instruction to go hunting; the second is the M4.9-era
+    # falsehood, and it is refused over `render()` rather than over the message because that is
+    # what an operator reads and §10 promises them.
+    assert "nothing applies them" not in report.render(), report.render()
+    assert "re-applied at derive" not in report.render(), report.render()
+    # A count of what THIS IMPORT applied, which is still zero and is still the only thing an
+    # import report can count. It stays a detail key rather than becoming prose because the prose
+    # above now says who does apply them.
     assert notes[0].detail["applied"] == 0
-    assert "re-applied at derive" not in report.render()
+    assert notes[0].detail["corrections"] == 1
     assert await db.fetchval("SELECT count(*) FROM credit_correction") == 1
     assert await db.fetchval("SELECT count(*) FROM credit") == 0, (
         "the ledger is stored, not applied — nothing here may write a credit row"
     )
+
+
+# --- whose curated row a re-import may replace (decision 326) ----------------------------
+
+
+async def test_a_models_only_re_import_keeps_the_correction_the_household_typed(db, bundle_dir):
+    """Decision 326, and the collision decision 171 recorded in advance rather than discovered.
+
+    Decision 171's Cost paragraph is the whole case and is quoted because it was written before
+    the damage existed: "`DELETE FROM credit_correction` is unscoped, so when §6.6's ledger
+    editors land, an in-app-authored correction absent from the next bundle's TSV is wiped
+    (probed: P4 removed the app row)". Decision 162 makes a models-only import the ONLY import
+    this household runs twice and decision 247 puts this loader back on that path, so the wipe is
+    not an exotic sequence - it is what happens on the next routine re-import after somebody types
+    a fix into §6.6's editor.
+
+    M5.3 ships the applier those editors feed, which is what moves the scope from M5.6 to here: a
+    provenance column added after the first household row exists has to guess where that row came
+    from, and guessing wrong in this direction is the wipe itself.
+
+    The bundle's half is asserted in the same pass and deliberately: `origin` scoping is only
+    correct if decision 247's replacement still happens for the rows the bundle DOES own, and a
+    test that checked the household row alone would pass over a DELETE that had stopped working.
+    """
+    path = bundle_dir / "artifacts" / "corrections_v1.tsv"
+    await dna.load_corrections(db, path, ImportReport())
+    await db.execute(
+        "INSERT INTO credit_correction (title_id, field, new_value, evidence, note, origin) "
+        "VALUES (1, 'composer', 'Elliot Goldenthal', 'the disc sleeve', 'typed here', 'household')"
+    )
+
+    # The next bundle's ledger, re-authored: one row changed and one added, so "replaced" is
+    # visible rather than inferred from a count that a no-op would also produce.
+    path.write_text(
+        "kind\ttitle_id\tvalue\tevidence\tnote\n"
+        "composer\t8\tKunihiko Murai\thttps://example.invalid/tampopo\tre-exported\n"
+        "composer_add\t2\tJohann Johannsson\thttps://example.invalid/prisoners\tuncredited\n",
+        encoding="utf-8",
+    )
+    report = ImportReport()
+
+    await dna.load_corrections(db, path, report)
+
+    rows = await db.fetch(
+        "SELECT title_id, field, new_value, note, origin FROM credit_correction "
+        "ORDER BY origin, title_id"
+    )
+    assert [(r["title_id"], r["field"], r["origin"]) for r in rows] == [
+        (2, "composer_add", "bundle"), (8, "composer", "bundle"), (1, "composer", "household")
+    ], "the re-import wiped the household's correction, or failed to replace the bundle's"
+    household = rows[2]
+    assert (household["new_value"], household["note"]) == ("Elliot Goldenthal", "typed here"), (
+        "the household row survived the DELETE and was then overwritten by the INSERT"
+    )
+    # The count in §10's report is the ledger this bundle carried, not the table. An operator
+    # comparing "2 credit correction(s) stored" against three rows is reading the two facts the
+    # `origin` column now keeps apart.
+    note = next(f for f in report.findings if f.rule == "corrections" and f.severity == "note")
+    assert note.detail["corrections"] == 2, note.message
+
+
+async def test_a_models_only_re_import_keeps_the_verdict_the_household_typed(db, vocab_dir):
+    """The same ruling one ledger over, and the reason decision 326 is one decision and not two.
+
+    §6.6 gives the household a DNA-verdict editor beside the credit one, and `dna_adjudication` is
+    the table it writes into. A household verdict is not the bundle's to replace by construction:
+    it names a term this household argued about on a title this install acquired, and no upstream
+    export will ever carry it back, so the version-scoped DELETE deletes it permanently on the
+    next re-import. `load_adjudications` is on the models-only path for the same reason
+    `load_corrections` is (decision 247), so it has the same exposure and takes the same scope.
+
+    Asserted at v1 with a real vocabulary loaded first, because `dna_adjudication.version` is an FK
+    to `dna_vocabulary` and a household row has to be storable before it can be wiped.
+    """
+    await _seed_titles(db)
+    await dna.load_vocabulary(db, vocab_dir, "v1", ImportReport())
+    await db.execute(
+        "INSERT INTO dna_adjudication (version, scope, title_id, term, verdict, note, origin) "
+        "VALUES ('v1', 'title', 1, 'mood.dread', 'drop', 'we watched it', 'household')"
+    )
+
+    # Re-authored upstream: a different title and no `global` rule at all, so a loader that failed
+    # to replace would be as visible as one that over-deleted.
+    (vocab_dir / "adjudications_v1.tsv").write_text(
+        "scope\ttitle_id\tterm\taction\ttarget\tquote\tsource\tnote\n"
+        "title\t2\tmood.cosy\tdrop\t\t\ttrakt:comment\tre-exported\n",
+        encoding="utf-8",
+    )
+
+    await dna.load_adjudications(db, vocab_dir, "v1", ImportReport())
+
+    rows = await db.fetch(
+        "SELECT title_id, term, verdict, note, origin FROM dna_adjudication "
+        "ORDER BY origin, term"
+    )
+    assert [(r["title_id"], r["term"], r["origin"]) for r in rows] == [
+        (2, "mood.cosy", "bundle"), (1, "mood.dread", "household")
+    ], "the re-import wiped the household's verdict, or failed to replace the bundle's"
+    assert rows[1]["note"] == "we watched it", "the household row was overwritten, not kept"
+
+
+async def test_a_curated_row_stored_before_the_provenance_column_reads_as_the_bundles(
+    db, bundle_dir, vocab_dir
+):
+    """The scope is only safe because of what 0026's DEFAULT did to the rows already there.
+
+    Every `credit_correction` and `dna_adjudication` row on an install that upgrades into this
+    milestone arrived from a bundle - there was no editor to write anything else - so `origin
+    text NOT NULL DEFAULT 'bundle'` backfills the truth rather than a convenience, and the scoped
+    DELETE goes on replacing exactly what the unscoped one replaced. A column added with any other
+    default, or with none, would have turned decision 247's replacement into a silent no-op on
+    every existing install: the bundle's re-authored ledger would insert beside rows nothing
+    claimed, and `credit_correction` would grow by six on every re-import for ever.
+
+    THIS TEST PASSES AGAINST THE UNSCOPED DELETE and says so rather than implying otherwise: it
+    guards the precondition the two tests above rest on, so it reddens on a change to 0026's
+    default or to what the loaders write, not on the absence of the scope. Its companion is
+    `test_derive_schema.py::test_a_ledger_row_written_before_the_migration_reads_as_the_bundles`,
+    which stages the migration itself; this one asserts that the loaders then act on it.
+    """
+    await _seed_titles(db)
+    await dna.load_vocabulary(db, vocab_dir, "v1", ImportReport())
+    # Written the way every shipped build up to 0026 wrote them: no `origin` in the column list.
+    await db.execute(
+        "INSERT INTO credit_correction (title_id, field, new_value, evidence) "
+        "VALUES (8, 'composer', 'somebody upstream corrected', 'https://example.invalid/old')"
+    )
+    await db.execute(
+        "INSERT INTO dna_adjudication (version, scope, title_id, term, verdict) "
+        "VALUES ('v1', 'title', 1, 'mood.stale', 'drop')"
+    )
+    assert await db.fetchval(
+        "SELECT count(*) FROM credit_correction WHERE origin = 'bundle'"
+    ) == 1
+    assert await db.fetchval(
+        "SELECT count(*) FROM dna_adjudication WHERE origin = 'bundle' AND term = 'mood.stale'"
+    ) == 1
+
+    await dna.load_corrections(db, bundle_dir / "artifacts" / "corrections_v1.tsv", ImportReport())
+    await dna.load_adjudications(db, vocab_dir, "v1", ImportReport())
+
+    assert await db.fetchval(
+        "SELECT count(*) FROM credit_correction WHERE new_value = 'somebody upstream corrected'"
+    ) == 0, "a pre-0026 correction outlived the re-import that owns it"
+    assert await db.fetchval(
+        "SELECT count(*) FROM dna_adjudication WHERE term = 'mood.stale'"
+    ) == 0, "a pre-0026 verdict outlived the re-import that owns it"
+    assert await db.fetchval("SELECT count(*) FROM credit_correction") == 1
+    assert await db.fetchval("SELECT count(*) FROM dna_adjudication") == 2
+
+
+def test_both_curated_ledger_statements_name_the_origin_they_may_replace():
+    """Read off the SQL text, so a widening reddens HERE rather than wherever a household row
+    happens to be sitting.
+
+    The two tests above need a household row to notice anything, which makes them exactly as
+    strong as the fixture they build - and the shipped bundle carries no household row, because no
+    bundle can. A DELETE quietly widened back to the whole table therefore passes every behaviour
+    test in this file that does not construct one, which is how the unscoped form survived from
+    M4.5 to M5.3 with decision 171's probe already on the record. The statement is a string in this
+    module; asserting on the string costs one test and cannot be satisfied by a missing fixture.
+
+    The INSERTs are read for the same reason in the other direction: decision 326 puts `origin` at
+    the call site rather than leaving it to the column's DEFAULT, so that a reader of either
+    statement can see which rows it claims without opening a migration. A DEFAULT is a fine
+    backfill and a poor declaration of intent.
+    """
+    source = Path(dna.__file__).read_text(encoding="utf-8")
+
+    deletes = [
+        line.strip() for line in source.splitlines()
+        # Comment lines are excluded, and the exclusion is load-bearing rather than tidy:
+        # decision 171's probe is quoted verbatim above the statement it is about, and the quote
+        # names the unscoped form. The record of why the scope exists may not read as the scope
+        # being gone -- which is what the first draft of this test reported it as.
+        if not line.lstrip().startswith("#")
+        and ("DELETE FROM credit_correction" in line or "DELETE FROM dna_adjudication" in line)
+    ]
+    assert len(deletes) == 2, deletes
+    for statement in deletes:
+        assert "origin = 'bundle'" in statement, (
+            f"an unscoped curated-ledger DELETE is back: {statement} (decisions 171 and 326)"
+        )
+
+    inserts = [
+        block for block in source.split("await conn.executemany(")[1:]
+        if "INSERT INTO credit_correction" in block.split(")")[0]
+        or "INSERT INTO dna_adjudication" in block.split(")")[0]
+    ]
+    assert len(inserts) == 2, [block[:80] for block in inserts]
+    for block in inserts:
+        head = block.split("rows,")[0]
+        assert "origin" in head and "'bundle'" in head, (
+            f"a curated-ledger INSERT leaves `origin` to the column default: {head.strip()}"
+        )
 
 
 # --- every DNA table the §10 manifest names is accounted for -----------------------------

@@ -1,0 +1,25 @@
+{
+  "Title": "Heat",
+  "Year": "1995",
+  "Rated": "R",
+  "Runtime": "170 min",
+  "Plot": "A group of high-end professional thieves start to feel the heat.",
+  "Awards": "10 wins & 12 nominations",
+  "Ratings": [
+    {
+      "Source": "Internet Movie Database",
+      "Value": "8.3/10"
+    },
+    {
+      "Source": "Rotten Tomatoes",
+      "Value": "87%"
+    },
+    {
+      "Source": "Metacritic",
+      "Value": "76/100"
+    }
+  ],
+  "tomatoUserMeter": "94",
+  "BoxOffice": "$67,436,818",
+  "Response": "True"
+}

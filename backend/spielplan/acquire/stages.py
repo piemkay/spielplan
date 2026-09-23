@@ -14,10 +14,16 @@ wrote. What IS ported, with named changes, is the corpus's handler contract:
     to decide whether to run it at all, including `paid`. Changed: the unit of registration is a
     STAGE of one pipeline rather than a task KIND of many, so the registry is an ordered tuple
     in `pipeline.py` and not a dict keyed by name.
-  * `mdc/sources/base.py:23-34`'s `Ctx` - the per-run handle a stage is given. Changed: no
-    `fetcher` (nothing fetches at M5.1, and `acquire/fetch.py` is deliberately not imported here
-    so this module does not depend on a layer it does not use), and `title_id` is on it, because
+  * `mdc/sources/base.py:23-34`'s `Ctx` - the per-run handle a stage is given. Changed: the
+    `fetcher` is a HANDLE THIS MODULE NEVER NAMES THE TYPE OF, and `title_id` is on it, because
     a stage of a per-title pipeline always has a title while a corpus handler only has a key.
+    M5.1 left the fetcher off entirely - "nothing fetches at M5.1, and `acquire/fetch.py` is
+    deliberately not imported here so this module does not depend on a layer it does not use" -
+    and decision 373 puts it back as a field the DRIVER fills: `pipeline.drain` builds one per
+    drain and hands it down, so §8 stage 2 drives eleven source adapters without this file
+    importing a transport, an HTTP client or one of the fetcher's exception types. That is why
+    `StageContext.fetcher` is annotated `Any` and why every failure an adapter can suffer
+    arrives here as a `sources.base.SourceResult` rather than as an exception to catch.
   * `mdc/runner.py:161-205`'s `_execute` - the mapping from what a handler did to what the queue
     is told. Changed from EXCEPTIONS to RETURN VALUES: the corpus raises `Skip`, `Permanent`,
     `HostPaused`, `RobotsDisallowed` and `FetchError` and catches five arms in the runner, which
@@ -85,14 +91,18 @@ Three properties, each of which a later reader must keep:
      here and enforced somewhere else is a property worth reading in the place that enforces it.
      [M5.1 review cycle 4, d322-C4-MINT-01]
 
-WHY STAGES 2-8 ARE DECLARED NO-OPS AND NOT MISSING. Each advances and records
+WHY STAGES 5-8 ARE DECLARED NO-OPS AND NOT MISSING. Each advances and records
 `not implemented at M5.1 - owned by M5.<n>` in the board's `detail`, and names its owner in its
 own docstring. That is what makes the spine testable end to end before any lane opens - a task
 can walk 1 to 9 to 10 today and prove the driver, the queue and the two shipped stages agree -
 and it is what makes a stub that survives into M5.6 visible to a `grep` rather than invisible in
-a registry table. The owners are the roadmap's, not guesses: `ROADMAP-M5.md:279-296` puts the
-eight source adapters, the parsers and the reviews gate in M5.3; `:298-312` puts the pack, the
-trust boundary and the projection in M5.4; `:314-329` puts the LLM extraction in M5.5.
+a registry table. The owners are the roadmap's, not guesses: `:298-312` puts the pack, the trust
+boundary and the projection in M5.4; `:314-329` puts the LLM extraction in M5.5.
+THIS PARAGRAPH SAID "2-8" UNTIL M5.3 GAVE THREE OF THEM BODIES (`ROADMAP-M5.md:279-296`, the
+eight source adapters, the parsers and the reviews gate). The count is restated rather than left
+to be read off the tuple because `pipeline.STAGES`' `implemented` flag is a hand-written literal
+and this sentence is the prose half of the same claim - and because four is now the number
+`test_every_stage_declared_a_no_op_returns_its_stub_marker` asserts.
 """
 
 from __future__ import annotations
@@ -109,9 +119,12 @@ from spielplan.acquire import queue
 from spielplan.connectors import resolve
 from spielplan.connectors.jellyfin import TICKS_PER_SECOND
 from spielplan.core.config import settings
+from spielplan.derive import gate, rebuild
 from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
+from spielplan.sources import base as sources
+from spielplan.sources import credentials
 
 log = logging.getLogger("spielplan.acquire.pipeline")
 
@@ -272,6 +285,67 @@ _MINT_LOCK = 8002
 # D3's sentence, one spelling. The milestone named is the one `ROADMAP-M5.md` gives the work.
 NOT_IMPLEMENTED = "not implemented at M5.1 - owned by {}"
 
+# §8's own name for stage 2, which is also the `phase` every adapter in `sources/` registers
+# under (`sources/base.HandlerSpec.phase`). Spelled once because it is the filter stage 2 selects
+# its kinds by: a driver that asked for a phase the registry does not use would run nothing and
+# report a clean walk, which is the failure mode a registry exists to prevent.
+ENRICH_PHASE = "enrich"
+
+# Decision 334's one required source, as the registry spells it. `derive/rebuild.REQUIRED_DOCUMENTS`
+# is the same fact on the other side of the raw store - the two KINDS that document arrives under,
+# `tmdb:movie_detail` and `tmdb:tv_detail` - and the two cannot be one constant because one names a
+# handler and the other names stored bytes. They are registered in both comments so a rename of the
+# handler cannot leave the derive looking for a document nothing produces.
+REQUIRED_KIND = "tmdb:detail"
+
+# The SOURCE that kind belongs to, which is what decision 334's park is a rule about: "a required
+# source that RAN and did not answer parks with that source named". Derived from the kind rather
+# than written out, because the two must not be able to drift apart.
+REQUIRED_SOURCE = REQUIRED_KIND.split(":", 1)[0]
+
+# A stage 2 that was handed no fetcher. A FAILURE and not a park, which is the one place in this
+# file where that is the easy call: decision 336 gives `failed` to "this stage raised and will
+# raise again", and a driver that did not build a fetcher will not build one on the next drain
+# either - nothing an operator does to this title changes it. Decision 373 puts the construction
+# in `pipeline.drain` precisely so that there is one per drain; a stage that quietly made its own
+# would be a second set of per-host token buckets and a second circuit breaker pacing the same
+# hosts at twice their declared rate, which is the defect `fetch.Fetcher._runtime` already guards
+# against INSIDE one instance. The sentence names the driver because the repair is a code change
+# and the person reading §6.6's board needs to know that it is not theirs.
+NO_FETCHER = (
+    "stage 2 was handed no fetcher, so no source could be asked. Every request this app makes "
+    "goes through the one rate-limited fetcher `pipeline.drain` builds per drain (spec v2.1 §8, "
+    "decision 373); this is a defect in the driver rather than anything about this title"
+)
+
+# Decision 334's park: the one source §8 stage 2 requires answered and did not answer well.
+# Written for §6.6's board, which `0005_ledger.sql:138` says shows this string verbatim, and it
+# names the lever twice over - the TMDB card in Admin for the configuration case, and the retry
+# for the transient one - because `_run_stage`'s own rule is that a reason an operator reads has
+# to name a lever that exists. It carries the source's note inside the sentence for
+# `UNUSABLE_METADATA`'s reason: the note is the only thing that says WHICH way it failed, and a
+# reason that is nothing but a note is a log line on a product surface.
+ENRICH_REQUIRED_FAILED = (
+    "enrichment stopped: {} is the one source §8 stage 2 requires and it answered \"{}\". The "
+    "other sources were still asked and whatever they returned is in this job's detail. Check "
+    "the TMDB connector in Admin, then retry this job from the acquisition board - it resumes "
+    "here and re-reads what is already in the raw store (decision 334)"
+)
+
+# The same park, for the state where the required KIND never got to ask because a sibling kind of
+# the required SOURCE failed first. `tmdb:detail` has no request to make until `tmdb:resolve` has
+# filled `title.tmdb_id`, so a refused key or a 500 on the resolve kind leaves the required kind
+# unasked. A separate sentence rather than a second `format` of the one above because "it answered"
+# is untrue here - the required kind was never asked at all - and a reason an operator reads has to
+# describe the state it was written for. [M5.3 review cycle 2, m53-c2-334-01]
+ENRICH_REQUIRED_UNASKED = (
+    "enrichment stopped: {} is the one source §8 stage 2 requires and it could not be asked, "
+    "because {} answered \"{}\". The other sources were still asked and whatever they returned "
+    "is in this job's detail. Check the TMDB connector in Admin, then retry this job from the "
+    "acquisition board - it resumes here and re-reads what is already in the raw store "
+    "(decision 334)"
+)
+
 # A provider id this pipeline is allowed to MINT against. Decision 323 says a row is minted "only
 # on a provider id (imdb/tmdb/tvdb)", and `resolve.identity` answers a different question: it was
 # built for LOOKUP, where a junk key merely fails to match, and `_mint` reuses its output as the
@@ -375,17 +449,30 @@ def fail(reason: str, *, detail: dict[str, Any] | None = None) -> Outcome:
 
 @dataclass
 class StageContext:
-    """What one stage is handed. The corpus's `Ctx`, minus the fetcher and plus the title.
+    """What one stage is handed. The corpus's `Ctx`, with the title added and the fetcher back.
 
     `title_id` is None until stage 1 has run, and is the reason this is a mutable dataclass where
     `Outcome` is frozen: the driver sets it once, between stage 1 and stage 2, and every later
-    stage reads it.
+    stage reads it. `fetcher` is set the same way and for a second reason of its own, below.
+
+    `fetcher: Any` IS THE WHOLE OF HOW THIS MODULE STAYS FREE OF TRANSPORT (decision 373). It
+    holds the fetcher, the one door §8's politeness clause (`spec:404`) is enforced at, and
+    naming that type here would mean importing it - under `TYPE_CHECKING`, which costs nothing at
+    runtime, but which is still an import node and still repeals the property
+    `test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher` states. The annotation is
+    not laziness about a type: an adapter calls `ctx.fetcher.get(...)` and this module never calls it
+    at all, so what stage 2 needs to know about the object is that it has one, which is exactly
+    what `None` and not-`None` say. `pipeline.drain` builds it, so a stage handed none FAILS with
+    a reason naming the driver rather than constructing one for itself - a stage that built its
+    own would be a second answer to "how many Fetchers does one drain have", and the per-host
+    token buckets and the circuit breaker are per instance (`fetch.Fetcher`'s own docstring).
     """
 
     conn: asyncpg.Connection
     task: queue.Task
     title_id: int | None = None
     run_id: int | None = None
+    fetcher: Any = None
 
     @property
     def item(self) -> dict[str, Any]:
@@ -948,37 +1035,304 @@ async def _mint(
     return int(minted)
 
 
-# --- stages 2-8: declared no-ops ----------------------------------------------------------------
+# --- stages 2, 3 and 4: the crawl, the derive and the gate ---------------------------------------
 
 
-async def enrich(_ctx: StageContext) -> Outcome:
-    """§8 stage 2: the eight source fetches. **Owned by M5.3** (`ROADMAP-M5.md:279-296`).
+async def _capabilities(conn: asyncpg.Connection) -> dict[str, bool]:
+    """Which of the three keyed sources this install has configured. Decision 377's narrow read.
 
-    A declared no-op at M5.1. `acquire/fetch.py` and `acquire/rawstore.py` are the layers it will
-    be written against and both ship here; what does not ship is a single source adapter, which
-    is M5.3's whole first half.
+    `sources/base.available_kinds` takes this map and drops every kind whose `requires` is not in
+    it, so this is what makes §3.1's half-configured boot a legal state for stage 2 rather than a
+    stage full of identical "no credential" notes: a household that has set up TMDB and not OMDb
+    asks seven sources and never builds a request for the eighth. The five keyless sources carry
+    `requires = None` and are not in this map at all, which is why the map is asked for by name
+    rather than defaulted - a keyless source filtered out by a missing key would be §8's own
+    source list quietly shortened.
+
+    Three reads and not one. `credentials` deliberately exposes no generic loader (decision 377),
+    because the day M5.5's `ConnectorSpec` lands it deletes this file rather than reconciling a
+    second design with it. The cost is three indexed `connector_config` lookups per title, which
+    is the same order as the two `SELECT 1 FROM title` the driver already pays per stop.
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.3")})
+    return {
+        credentials.TMDB: await credentials.tmdb_auth(conn) is not None,
+        credentials.OMDB: await credentials.omdb_key(conn) is not None,
+        credentials.TRAKT: await credentials.trakt_headers(conn) is not None,
+    }
 
 
-async def derive(_ctx: StageContext) -> Outcome:
-    """§8 stage 3: the per-title parse, ending by applying both curated ledgers, corrections last.
-    **Owned by M5.3** (`ROADMAP-M5.md:279-296`), and §14 risk 5 is why it is M5's largest.
+async def enrich(ctx: StageContext) -> Outcome:
+    """§8 stage 2: "tmdb:resolve -> tmdb:detail ... wikidata:resolve ... rt:page,
+    metacritic:page->reviews" (`spec:365-368`), each through the one polite fetcher.
 
-    A declared no-op at M5.1.
+    THE ORDER IS THE REGISTRY'S AND NOT A LIST HERE. `sources/base.available_kinds` sorts on
+    `default_priority`, and §8's sequence is load-bearing rather than cosmetic: `wikidata:resolve`
+    "halves guessing" because it yields the MC/RT/Letterboxd slugs, so running it before `rt:page`
+    and `metacritic:page` is the difference between reading a slug and building a url out of a
+    name that cannot tell two films apart. A driver that spelled the eleven kinds out would be the
+    second place that order lives, and the day a source moved, the two would disagree with nothing
+    to say so. This function names exactly one kind - the required one, below - and that one is a
+    decision rather than an ordering.
+
+    DECISION 334 IS THE WHOLE OF THE MAPPING FROM ELEVEN ANSWERS TO ONE VERB. Only `tmdb:detail`
+    is required; every other source's 404, timeout, refused slug or missing credential is a note
+    in `acquisition_job.detail` under that source's name and the stage still advances. That is not
+    leniency - it is what makes the raw store worth having. Seven sources answered, their bytes
+    are on disk, and §8 stage 4's gate is the quality bar that decides whether what they said is
+    enough. A stage that parked on the first 404 would throw away eight good documents over one
+    host that had never heard of this film.
+
+    AND THE REQUIRED SOURCE PARKS ONLY WHEN IT RAN - THE SOURCE, WHICH THIS USED TO TEST AS ONE
+    KIND. Decision 377 says in terms that "a source
+    whose credential is absent is a stage-2 note under decision 334, never a park and never an
+    exception", and decision 334 says a FAILURE of `tmdb:detail` parks. Both are true of the code
+    below because the two states are different: a TMDB that is not configured is filtered out by
+    `available_kinds` and never runs, which §3.1 makes a legal install rather than a broken one,
+    while a TMDB that was asked and did not answer is the one failure §8 stage 2 cannot shrug off.
+    Read the other way round this stage would park every task on every install that has not yet
+    typed a key into §6.6's TMDB card, including the installs `ops/m51_exit_criterion.py` measures.
+    The unconfigured title is not lost: it reaches stage 4 with no plot and no reviews and parks
+    THERE, with the counts in its reason, which is the honest sentence for it.
+
+    THERE IS A THIRD STATE AND `available_kinds` CANNOT SEE IT, because it filters on capability
+    and this one is a fact about the title's data. `tmdb:detail` has no request to make when the
+    row carries no `tmdb_id` - a file Jellyfin identified by an IMDb id TMDB has no record of, or
+    files under the other `kind` - and no later kind supplies one, so that title would park here
+    on every drain for ever. `SourceResult.ran` is what tells this loop the difference, and the
+    outcome is the paragraph above's: not lost, parked at stage 4 with the counts.
+    [M5.3 review cycle 1, M53-334-01]
+
+    AND THAT THIRD STATE HAS TWO CAUSES THAT LOOK IDENTICAL FROM HERE, which is why the park below
+    reads the SOURCE and not the kind. An empty `tmdb_id` means either "TMDB holds no record of
+    this film", which is an answer, or "`tmdb:resolve` could not ask" - a refused key, a 500, a
+    host this drain could not reach. The second is decision 334's park condition exactly, and
+    testing the required KIND walked past it: the stage advanced, the title parked at stage 4 for
+    thirty days with zero counts, and the `reason` column §6.6 renders named no connector at all,
+    while the SAME broken credential on a title that already carried a `tmdb_id` produced a
+    one-day park naming TMDB. One key, two opposite operator experiences, and the wrong one went
+    to every newly acquired IMDb-only title. `sources/tmdb.resolve` now answers the no-record case
+    ok - it did what it exists to do and spent one request - so `ok=False` on a tmdb kind means a
+    request that failed, and a failure at any kind of the required source parks.
+    [M5.3 review cycle 2, m53-c2-334-01]
+
+    EVERY FAILURE IS A NOTE, INCLUDING ONE THIS MODULE CANNOT NAME. An adapter returns a
+    `SourceResult`; `sources/_views.capture` turns a 404, a robots refusal, a short body and the
+    circuit breaker into one. So the `except Exception` below catches a provider's malformed JSON
+    and an outright bug in one adapter, and records both as that source's note - which is decision
+    334's own reading ("a source raising anything else is that source's note, not the stage's
+    failure") and is also the only shape available, because naming the transport's exceptions
+    here would import the layer decision 373 keeps out of this file. A paused host that is TMDB's
+    parks below with a deadline, which is decision 336's shape for it.
+
+    A PAUSED HOST THAT IS ANY OTHER SOURCE'S IS A NOTE AND THE STAGE ADVANCES, AND THAT CAN COST
+    THE TITLE THAT SOURCE. This paragraph used to end "a source that said nothing this drain and
+    will be asked again on the next", which was false: `pipeline._resume_index` answers the
+    BOARD's stage, so a title past stage 2 does not reach it again on the next drain, and stage 2
+    is the only stage that fetches. Decision 422 keeps the behaviour - decision 334 already rules
+    that a source which did not answer is a note, a breaker pause is eight of its timeouts in a
+    row, and parking every title drained inside a 900-second cooldown would re-walk the seven
+    sources that DID answer every quarter of an hour for as long as one host is down, which one
+    blocked host would turn into a stalled pipeline - and states the price. A title the missing
+    source leaves short parks at stage 4, and decision 421 re-enters it at this stage when that
+    window closes, so it IS asked again, thirty days on. A title that clears stage 4 without it
+    keeps what it has until an operator can re-run stage 2 (decision 330, M5.6).
+    `sources/_views.capture` writes the note as a sentence naming the host and the cooldown, so
+    the board says which it was. [M5.3 review cycle 2, M53-C2-NET-01; decision 422]
+
+    THE PARK CARRIES A DEADLINE. `OPERATOR_WAIT`'s arithmetic is the argument and it is the same
+    one `place` makes: a park with no `until` is `queue.skip`, which closes the task for good, and
+    what this park waits on - a network that heals, a key an operator types - is decision 336's
+    "something that may change" in its plainest form. The daily re-ask costs one walk that stops
+    at this stage.
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.3")})
+    if ctx.title_id is None:
+        return fail("stage 2 reached with no title id; stage 1 did not establish one")
+    if ctx.fetcher is None:
+        return fail(NO_FETCHER)
+
+    # Idempotent and cheap after the first call - `importlib.import_module` hands back what is
+    # already in `sys.modules` - and called here rather than at import time because the adapters
+    # import `sources/_views`, which imports `acquire.fetch`, which would close a cycle through a
+    # module this file is forbidden to name. A registry populated by the first drain rather than
+    # by the first import is also what lets `load_all`'s discovery stay discovery.
+    sources.load_all()
+    capabilities = await _capabilities(ctx.conn)
+    # `include_paid=False`, which is `available_kinds`' own argument applied one layer up: the
+    # driver's spend gate reads `Stage.paid` and stage 2 is not a paid STAGE, so a paid KIND run
+    # from inside it would bill the household behind the refusal §8 requires. None of §8 stage 2's
+    # eight sources is paid today; the flag exists so that the first one that is cannot arrive
+    # through this loop by default (`sources/base.py`'s `paid_kinds`).
+    wanted = sources.available_kinds(capabilities, ENRICH_PHASE, include_paid=False)
+
+    answered: list[str] = []
+    notes: dict[str, str] = {}
+    # The kinds that returned without putting a request on the wire, which is the distinction
+    # decision 334 draws with the word RAN and `SourceResult.ran` carries. Collected for every
+    # kind although only the required one is read, because a set built for one member is a set
+    # the day a second source becomes required. An adapter that RAISED is in neither collection
+    # and parks the required source, which is the conservative reading: nothing survived the
+    # exception to say whether a request went out.
+    unasked: set[str] = set()
+    documents = 0
+    for kind in wanted:
+        spec = sources.REGISTRY[kind]
+        try:
+            result = await spec.fn(ctx)
+        except Exception as exc:                                         # noqa: BLE001
+            log.warning("acquisition source %s raised for title %s", kind, ctx.title_id,
+                        exc_info=True)
+            notes[kind] = f"{type(exc).__name__}: {exc}"
+            continue
+        if result.doc_id is not None:
+            documents += 1
+        if not result.ran:
+            unasked.add(kind)
+        if result.ok:
+            answered.append(kind)
+            if result.note:
+                notes[kind] = result.note
+        else:
+            notes[kind] = result.note or "no answer"
+
+    # A kind the registry holds and this install cannot run. Reported under its own name rather
+    # than omitted, because §6.6's board showing eight sources on one install and eleven on
+    # another with nothing saying why is the state decision 377's note exists to prevent. Computed
+    # from `requires` alone so that a kind filtered for any OTHER reason - `include_paid` above is
+    # the live one - is not described to an operator as a missing credential.
+    for kind, spec in sorted(sources.REGISTRY.items()):
+        if spec.phase != ENRICH_PHASE or kind in wanted:
+            continue
+        if spec.requires and not capabilities.get(spec.requires, False):
+            notes[kind] = f"{spec.requires} is not configured, so this source was not asked"
+
+    detail: dict[str, Any] = {"answered": answered, "documents": documents}
+    if notes:
+        detail["notes"] = notes
+    # AND THE PARK FIRES ONLY WHEN THE REQUIRED SOURCE RAN, which these lines now test rather than
+    # assert. `available_kinds` closes one half of decision 334's distinction - a TMDB nobody has
+    # configured never reaches the loop - and `SourceResult.ran` closes the other: a title whose
+    # `tmdb_id` column is empty because TMDB holds no record of it is one TMDB was never asked
+    # about, and parking it here spends a full eight-source re-crawl a day, for ever, under a
+    # reason naming a connector that is working. It advances instead, and stage 4 parks it with
+    # the counts and a thirty-day window. [M5.3 review cycle 1, M53-334-01]
+    #
+    # `failed` IS THE KINDS THAT RAN AND DID NOT ANSWER - in neither collection, which includes an
+    # adapter that RAISED, for the reason `unasked`'s own comment gives: nothing survived the
+    # exception to say whether a request went out. Decision 334's park is about the required
+    # SOURCE, so a failure at any of its kinds is the condition and the reason names the kind that
+    # actually failed. `wanted` is priority-ordered, so `required[0]` is the earliest one -
+    # `tmdb:resolve` before `tmdb:detail`, which is the order the failure propagated in.
+    # [M5.3 review cycle 2, m53-c2-334-01]
+    failed = [kind for kind in wanted if kind not in answered and kind not in unasked]
+    required = [kind for kind in failed if kind.split(":", 1)[0] == REQUIRED_SOURCE]
+    if REQUIRED_KIND in wanted and REQUIRED_KIND not in answered and required:
+        blame = REQUIRED_KIND if REQUIRED_KIND in required else required[0]
+        note = notes.get(blame, "no answer")
+        return park(
+            ENRICH_REQUIRED_FAILED.format(REQUIRED_KIND, note) if blame == REQUIRED_KIND
+            else ENRICH_REQUIRED_UNASKED.format(REQUIRED_KIND, blame, note),
+            until=waiting_on_the_world(),
+            detail=detail,
+        )
+    return advance(detail)
 
 
-async def reviews_gate(_ctx: StageContext) -> Outcome:
+async def derive(ctx: StageContext) -> Outcome:
+    """§8 stage 3: "per-title parse of raw docs -> title_meta/credit/review/...", ending by
+    applying both curated ledgers, corrections last (`spec:375-379`, §14.5).
+
+    IT WRITES AND IT DOES NOT FETCH, which is the property the whole milestone is named for. Every
+    byte this stage reads came out of the content-addressed raw store stage 2 filled, so a parser
+    that was wrong is repaired by re-running this stage and never by asking a host again - §8's
+    "All fetched bytes land in the app's own raw store, so re-parsing is free forever"
+    (`spec:398`). `derive/rebuild.py` imports no transport at all and a test holds it to that, so
+    the property is a fact about the module rather than a promise about this call.
+
+    THE COUNTS GO ON THE BOARD BECAUSE NOTHING ELSE CAN SAY THEM. `DeriveReport` carries the two
+    ledgers' outcomes apart - §14.5 names "two distinct ledgers" and a board line reading "3
+    curated rows applied" could not tell an operator which one applied them, or whether the other
+    ran at all - and it carries `refused`, which is the scraped page that turned out to be another
+    film. A derive that logged these instead would put the only account of what it did somewhere
+    decision 345 says §6.6 cannot reach.
+
+    A MISSING TITLE RAISES AND IS MEANT TO. `derive_title` answers `LookupError` rather than an
+    empty report, `_run_stage` turns a raise into `fail`, and `_record_stop` checks the title
+    exists before writing the board - so the one state this stage cannot describe is handled by
+    the driver that already handles it, rather than by a second guard here that would disagree
+    with `ready`'s.
+    """
+    if ctx.title_id is None:
+        return fail("stage 3 reached with no title id; stage 1 did not establish one")
+    report = await rebuild.derive_title(ctx.conn, ctx.title_id)
+    detail: dict[str, Any] = {
+        "documents": len(report.documents),
+        "sources": list(report.sources),
+        "rows": dict(report.rows),
+        "people": report.people,
+        "adjudications": dict(report.adjudications),
+        "corrections": dict(report.corrections),
+    }
+    if report.refused:
+        detail["refused"] = list(report.refused)
+    return advance(detail)
+
+
+async def reviews_gate(ctx: StageContext) -> Outcome:
     """§8 stage 4: "pack requires plot + multi-source reviews >=50 words; if thin, retry window 30
-    days". **Owned by M5.3** (`ROADMAP-M5.md:290-292`, whose exit criterion names this park).
+    days (new releases accrue reviews over weeks)" (`spec:380-381`).
 
-    A declared no-op at M5.1. This is the stage the queue's `defer` and the board's `retry_after`
-    exist for, and both ship here unused: `acquire/queue.py`'s `defer` takes an INSTANT rather
-    than a duration precisely because this window is a date counted from a release.
+    THE PREDICATE IS `derive/gate.py`'s AND NOT A SECOND ONE HERE. Decision 335 fixes it as one
+    query - a non-whitespace `title.overview`, two distinct `review_store.review` sources, fifty
+    words across them off the generated stored column - and this stage asks it, reads the answer
+    and decides a verb. That split is what lets the boundary be asserted at 49 against 50 without
+    a database walk of the whole pipeline, and it is why `measure` and `passes` are two calls: the
+    counts go on the board whether the gate passed or not, because a title that cleared with two
+    sources and fifty-one words is one an operator may want to look at.
+
+    THIS IS THE PARK DECISION 336 WAS WRITTEN FOR, and it is the only one in this file whose
+    deadline is not `waiting_on_the_world()`. The thing §8 says may change is not an operator - it
+    is the world writing reviews of a film that came out last week - so the window is §8's own
+    thirty days, counted from now by `gate.window_deadline()` and spelled in exactly one place.
+    Nothing is asked of anybody, no attempt is spent (`queue.defer`), and the task comes back by
+    itself. A park that auto-failed here would close a title for the crime of being new.
+
+    WHAT COMES BACK WHEN THE WINDOW CLOSES IS A CRAWL, NOT A RE-COUNT, and for one review cycle it
+    was a re-count. The two stages that can move these counts are stage 2, which fetches the
+    reviews, and stage 3, which writes them; `pipeline._resume_index` answered the BOARD's stage,
+    so the task that came back after thirty days re-entered HERE, re-ran `gate.measure` over the
+    rows day one wrote, opened no socket and parked again with the same sentence, for ever - and
+    the accrual §8 wrote the window for could not be seen by construction. The stage now declares
+    `reask_from=2` in `pipeline.STAGES`, and a park here whose deadline has PASSED re-enters at
+    stage 2. One made due BEFORE its deadline is an operator's retry, which still re-enters here
+    and asks nothing of anyone - check 5 of this milestone's exit criterion and
+    `test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` measure that - so
+    the clock against the board's `retry_after` is what tells the two events apart.
+    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
+
+    TWO WRITES, ONE TRUTH, ONE CONSTANT - AND THE SECOND WRITE IS ALREADY THE DRIVER'S. The queue
+    decides when the task leases again and `acquisition_job.retry_after` is what §6.6 renders;
+    `pipeline._record_stop` passes `outcome.until` to BOTH - `queue.defer` and `write_board` - so
+    this stage returns one instant and cannot put two different dates in front of an operator.
+    `write_board`'s own docstring records that the column "was added for §8 stage 4's thirty-day
+    review-accrual window", written at M5.1 for this call; a stage that wrote the board itself
+    would be the second writer of `acquisition_job` that `ready`'s docstring refuses.
+
+    A MISSING TITLE RAISES, for `derive`'s reason one function up: `gate.measure` answers
+    `LookupError` rather than zeros, because "0 sources, 0 words" on §6.6's board for a row that
+    is absent is a sentence about a title that does not exist.
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.3")})
+    if ctx.title_id is None:
+        return fail("stage 4 reached with no title id; stage 1 did not establish one")
+    counts = await gate.measure(ctx.conn, ctx.title_id)
+    detail: dict[str, Any] = {
+        "plot": counts.has_plot, "sources": counts.sources, "words": counts.words,
+    }
+    if gate.passes(counts):
+        return advance(detail)
+    return park(gate.reason(counts), until=gate.window_deadline(), detail=detail)
+
+
+# --- stages 5-8: declared no-ops -----------------------------------------------------------------
 
 
 async def dna_pack(_ctx: StageContext) -> Outcome:

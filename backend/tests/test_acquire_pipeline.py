@@ -25,6 +25,7 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -33,12 +34,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncpg
+import httpx
 import pytest
 
-from spielplan.acquire import pipeline, queue, stages
+from spielplan.acquire import fetch, pipeline, queue, stages
 from spielplan.connectors import resolve
+from spielplan.core import secrets
 from spielplan.core.config import settings
 from spielplan.db.pool import _init_connection as pool_init
+from spielplan.derive import gate
 from spielplan.home import shelves
 from spielplan.importer import bundle as bundle_import
 from spielplan.models.artifacts import ArtifactStore
@@ -126,12 +130,24 @@ def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_tha
     The second half is D3's visibility rule. A stub that survives into M5.6 has to be findable,
     so each declares its owner twice: in the tuple, where this test reads it, and in its own
     docstring, where a person greps for it. The owners are `ROADMAP-M5.md`'s allocation of the
-    work and not a guess - M5.3 has the sources, the parsers and the reviews gate, M5.4 the pack,
-    the trust boundary and the projection, M5.5 the LLM extraction.
+    work and not a guess - M5.4 has the pack, the trust boundary and the projection, M5.5 the LLM
+    extraction.
+
+    FOUR STUBS AND NOT SEVEN SINCE M5.3. It had the sources, the parsers and the reviews gate, and
+    stages 2, 3 and 4 now carry bodies - so the map below is what is still owed rather than what
+    was owed when this test was written, and the milestone that discharged the other three is
+    named above rather than deleted from the sentence. The stages that shipped keep
+    `owner = "M5.3"`: the field reads as provenance the moment a stage has a body, which is
+    already how stages 1, 9 and 10 carry the default, and `pipeline.Stage`'s docstring settles it.
+    This comprehension is scoped to `not s.implemented` and therefore never sees them, which is
+    exactly why that question had to be settled somewhere else.
     """
     assert [s.number for s in pipeline.STAGES if s.paid] == [6]
     assert {s.number: s.owner for s in pipeline.STAGES if not s.implemented} == {
-        2: "M5.3", 3: "M5.3", 4: "M5.3", 5: "M5.4", 6: "M5.5", 7: "M5.4", 8: "M5.4",
+        5: "M5.4", 6: "M5.5", 7: "M5.4", 8: "M5.4",
+    }
+    assert {s.number: s.owner for s in SHIPPED if s.implemented} == {
+        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 9: "M5.1", 10: "M5.1",
     }
     for stage in pipeline.STAGES:
         if stage.implemented:
@@ -284,6 +300,73 @@ async def _task_row(db, key: str):
     )
 
 
+# --- keeping the driver's own tests off the open web ----------------------------------------------
+#
+# M5.3 gave stages 2, 3 and 4 bodies, and every test in this file that walks a task was written
+# against a pipeline where they were declared no-ops. That is not an accident of timing: their
+# subject is the DRIVER - the mint, the advisory lock, the park, the resume, the board's two
+# writers, the fourth exit - and M5.1 chose declared no-ops for stages 2-8 precisely so the spine
+# could be proved before any lane opened. A test about `pg_try_advisory_lock` that also has to
+# supply a canned web, a TMDB credential and two review sources is a test about three things, and
+# it reddens for the crawl's reasons.
+#
+# So the three stages stand down by default and the tests whose subject they ARE opt back in with
+# `live`. Two properties come with that and both are the point:
+#
+#   * NOTHING IN THIS FILE CAN REACH THE OPEN WEB BY FORGETTING. `pipeline._default_fetcher` is
+#     replaced by one that refuses, so a test that reaches a stage with `fetches=True` without
+#     supplying a factory fails with a sentence saying so rather than crawling eight hosts from
+#     whatever machine is running the suite. CLAUDE.md's rule for doubles - "test doubles are
+#     refusers, not mocks" - is the same rule, and this is the milestone that makes it matter.
+#   * A MINTED TITLE NO LONGER REACHES `ready` BY ITSELF, which is stage 4 working. A brand-new
+#     acquired title has no plot and no reviews, so the reviews gate parks it with a thirty-day
+#     window - correct, and fatal to twenty tests that assert the walk ends at 10. Standing the
+#     three stages down restores exactly the pipeline those tests were written against and changes
+#     no assertion in any of them.
+#
+# The substitutes keep `paid`, `implemented` and `owner` and change only `run` and `fetches`, so
+# the tuple a test reads for its flags is still the shipped one. The tests that read the SHIPPED
+# flags statically read `SHIPPED`, which is captured above for this reason.
+STOOD_DOWN = "stage {} stood down by this file's fixture; the live stages are asserted under `live`"
+
+
+def _stands_down(stage: pipeline.Stage) -> pipeline.Stage:
+    async def stood_down(_ctx):
+        return stages.advance({"stood_down": STOOD_DOWN.format(stage.number)})
+
+    return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid, stage.implemented,
+                          stage.owner)
+
+
+async def _refuse_to_crawl(_conn):
+    raise AssertionError(
+        "this test reached a stage that fetches without supplying a fetcher factory, and the real "
+        "one would have crawled eight hosts from this machine. Take the `live` fixture and give "
+        "`pipeline.drain` a `fetcher_factory` over an httpx.MockTransport"
+    )
+
+
+@pytest.fixture(autouse=True)
+def enrichment_stands_down(monkeypatch):
+    """Stages 2, 3 and 4 advance without doing anything, unless a test asks for the real ones."""
+    monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
+    monkeypatch.setattr(pipeline, "STAGES", tuple(
+        _stands_down(stage) if stage.number in (2, 3, 4) else stage for stage in SHIPPED
+    ))
+
+
+@pytest.fixture
+def live(monkeypatch):
+    """Put the shipped stages back. For the tests whose subject is §8 stages 2, 3 and 4.
+
+    A fixture and not a `monkeypatch.setattr` in each test, because the autouse one above has
+    already patched the attribute and the order between two patches of one name is the kind of
+    thing that works until someone reorders a decorator. pytest runs autouse fixtures of a scope
+    before the explicitly requested ones, so this always lands second.
+    """
+    monkeypatch.setattr(pipeline, "STAGES", SHIPPED)
+
+
 # --- the mint, the placement and the badge -------------------------------------------------------
 
 
@@ -356,7 +439,17 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
         assert board["reason"] is None, "a ready job carries no park reason"
         assert board["detail"]["identify"]["identified"] == "minted"
         assert board["detail"]["place"]["placement"] == "cold_tower"
-        assert board["detail"]["enrich"]["stub"] == "not implemented at M5.1 - owned by M5.3"
+        # STAGES 2, 3 AND 4 STOOD DOWN FOR THIS WALK, and the assertion says so rather than
+        # asserting nothing. This test's subject is §8 stages 1, 9 and 10 - the mint, the Cold
+        # Tower coordinate and Home's shelf - and it was written when stages 2-8 were declared
+        # no-ops, which is why three titles can be minted from bare Jellyfin items and still reach
+        # `ready`. They cannot any more: M5.3's reviews gate parks a title with no plot and no
+        # reviews, correctly, and a version of this test that satisfied the gate would be
+        # asserting the crawl, the parsers and the derive in a test about a badge. What stage 2
+        # actually records is asserted where it is the subject:
+        # `test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_gate_live`.
+        assert board["detail"]["enrich"]["stood_down"] == STOOD_DOWN.format(2)
+        assert board["detail"]["reviews gate"]["stood_down"] == STOOD_DOWN.format(4)
 
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('patrick', 'admin') RETURNING id"
@@ -997,23 +1090,202 @@ def test_the_stage_contract_is_a_return_value_and_not_an_exception():
         stages.advance().verb = stages.FAIL          # frozen: the board and the queue read one
 
 
-def test_this_module_does_not_reach_for_the_fetcher():
-    """Nothing fetches at M5.1, so the driver must not import the layer that does.
+# The modules a stage machine and a parser may not import. `acquire.fetch` is the app's own
+# transport; the rest are the ways a file reaches a socket without it, which is the thing
+# decision 340's politeness clause is enforced at one door for.
+#
+# THE LIST IS `test_derive_parse.py:1097`'S, MINUS `spielplan.connectors`, and it was four names
+# until this cycle. Four caught `httpx` and `requests` and let `socket`, `http.client`, `aiohttp`
+# and `urllib3` through - on the one module in this tree that drives eleven adapters at eight
+# third-party hosts. The sibling file's own meta-test states the standard this failed: "a static
+# check that catches four of them is a check whose absence a later author discovers by shipping
+# the fifth". `spielplan.connectors` stays off deliberately and is not an oversight: `stages.py`
+# imports `connectors.resolve` for §7.1's identity, and the assertion above says so.
+# [M5.3 review cycle 1, M53-C1-NET-04]
+TRANSPORT = ("httpx", "requests", "urllib.request", "urllib3", "http.client", "socket",
+             "aiohttp", "spielplan.acquire.fetch")
 
-    Stages 2 and 3 are M5.3's, and `acquire/fetch.py` ships here for them rather than for this
-    file. An import of it would make the driver depend on a module it does not use - and, worse,
-    would make a later reader believe a stage of this pipeline fetches, which is the one thing the
-    raw store exists to make unnecessary on a re-parse (`spec:398`).
+
+def _absolute(node: ast.ImportFrom, package: str) -> str:
+    """`from .fetch import HostPaused` inside `spielplan.acquire` is `spielplan.acquire.fetch`.
+
+    `test_derive_parse.py:1101-1107`'s helper, and the half this file did not have. It matters
+    more here than there, because `acquire/stages.py` is a SIBLING of `acquire/fetch.py`: the
+    relative spellings are the SHORTEST way to write decision 373's violation anywhere in this
+    tree, and `node.module or ""` reports nothing at all for them.
+    """
+    if not node.level:
+        return node.module or ""
+    parts = package.split(".")
+    prefix = ".".join(parts[: len(parts) - node.level + 1])
+    return f"{prefix}.{node.module}" if node.module else prefix
+
+
+def _transport_imports(source: str, *, package: str = "spielplan.acquire") -> list[str]:
+    """Every transport module `source` imports. `test_derive_parse.py:1109-1131`'s helper.
+
+    Repeated rather than imported across test modules, which is this suite's convention for a
+    static guard: a helper shared between two files is a helper one file's change can weaken for
+    the other, and the whole value of a guard is that it says one thing about one tree. What that
+    convention cost is on the line above: the copy made here was the weaker one, which is the
+    failure mode the argument exists to avoid, so it is brought back to the sibling's strength
+    rather than shared with it.
+    """
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = _absolute(node, package)
+            modules.add(module)
+            # `from spielplan.acquire import fetch` records `spielplan.acquire.fetch` as well,
+            # which is the likeliest spelling of the violation and the one a module-name list
+            # misses if only the left-hand side is recorded.
+            modules.update(f"{module}.{alias.name}" for alias in node.names if module)
+    return sorted(
+        m for m in modules
+        if any(m == bad or m.startswith(f"{bad}.") for bad in TRANSPORT)
+    )
+
+
+def _fetcher_uses(source: str) -> list[str]:
+    """Every use of a `.fetcher` attribute in `source` other than asking whether it is there.
+
+    THE BYPASS NO IMPORT GUARD CAN SEE, which `test_sources_adapters.py`'s `_reaches_for_the_fetcher`
+    was rebuilt for and this file's guard was not: decision 373 hands the fetcher over on
+    `StageContext.fetcher`, set at stage 2 and never cleared, so `await ctx.fetcher.get(url)` in
+    `stages.py` or under `derive/` needs no import whatsoever. A presence test is the one use the
+    stage machine has - `enrich` fails on `ctx.fetcher is None` rather than asking nobody - so that
+    shape alone is let through; a call, an alias or an argument is a request made by the stage
+    machine instead of by an adapter through `sources/_views`. [decision 373; M5.3 review cycle
+    2, M53-C2-NET-04]
+    """
+    tree = ast.parse(source)
+    presence = {
+        id(node.left)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare) and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.Is | ast.IsNot)
+        and isinstance(node.comparators[0], ast.Constant) and node.comparators[0].value is None
+    }
+    return sorted(
+        f"line {node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "fetcher" and id(node) not in presence
+    )
+
+
+def test_the_transport_guard_reports_every_spelling_of_the_violation():
+    """The guard below is only worth having if it can fail, so it is shown failing.
+
+    Every spelling, because a static check that catches four of them is a check whose absence a
+    later author discovers by shipping the fifth. The two `from ... import` forms are the ones
+    `test_layering_guards.py`'s own helper names as its known limit.
+
+    THE RELATIVE ONES AND THE STDLIB ONES ARE THE ADDITIONS, and they are the spellings this file
+    was weakest on while `test_derive_parse.py:1097` one file over already refused them. Both
+    matter HERE more than there: `acquire/stages.py` is a SIBLING of `acquire/fetch.py`, so
+    `from . import fetch` and `from .fetch import HostPaused` are the shortest spellings of
+    decision 373's violation available anywhere in the tree, and `stages.py:1091-1092` says in its
+    own voice that naming `fetch.HostPaused` is the thing a later author will want. `socket` and
+    `http.client` need no dependency and no import of ours at all.
+    [M5.3 review cycle 1, M53-C1-NET-04]
+    """
+    for spelling in (
+        "import httpx",
+        "import httpx as h",
+        "from httpx import AsyncClient",
+        "from spielplan.acquire import fetch",
+        "from spielplan.acquire.fetch import Fetcher",
+        "import spielplan.acquire.fetch",
+        "import urllib.request",
+        "from urllib.request import urlopen",
+        "import socket",
+        "from socket import create_connection",
+        "import http.client",
+        "import aiohttp",
+        "import urllib3",
+        "from . import fetch",
+        "from .fetch import HostPaused",
+    ):
+        assert _transport_imports(f"{spelling}\n"), f"{spelling!r} walked past the guard"
+    assert _transport_imports("from spielplan.acquire import queue, rawstore\n") == []
+    assert _transport_imports("# from spielplan.acquire import fetch\n") == [], (
+        "a comment naming the module is not an import, and every guarded file has one"
+    )
+    # The import-free spellings, and the one use of the handle the stage machine is allowed.
+    for spelling in (
+        "async def f(ctx):\n    return await ctx.fetcher.get('u')\n",
+        "def f(ctx):\n    client = ctx.fetcher\n",
+        "def f(ctx):\n    return helper(ctx.fetcher)\n",
+    ):
+        assert _fetcher_uses(spelling), f"{spelling!r} walked past the guard"
+    assert _fetcher_uses("def f(ctx):\n    if ctx.fetcher is None:\n        return 1\n") == []
+    assert _fetcher_uses('"""`ctx.fetcher.get` is the adapters\' call."""\n') == []
+
+
+def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
+    """The halves of M5.1's guard that decision 373 leaves true, and one it adds.
+
+    THIS TEST USED TO SAY `pipeline.py` IMPORTS NO FETCHER AND M5.3 MADE THAT FALSE. Something
+    has to construct the one `fetch.Fetcher` a drain paces every host through, and decision 373
+    puts it in `drain` - so the import moved down one level rather than out, and the property
+    worth guarding moved with it. It is re-pointed rather than deleted because what it was really
+    claiming survives the change and is now STRONGER:
+
+      * `acquire/stages.py` imports no transport at all. §8 stage 2 lives there and drives eleven
+        source adapters, and it does so through a handle whose type it never names - not even
+        under `TYPE_CHECKING`, which is why `StageContext.fetcher` is annotated `Any`. A stage
+        machine that could name `fetch.HostPaused` would be one exception away from deciding a
+        verb on the transport layer's vocabulary instead of decision 334's.
+      * NOTHING UNDER `spielplan/derive/` imports transport either, which is the half this test
+        did not have and the half §8's "re-parsing is free forever" (`spec:398`) actually rests
+        on. Stage 3 reads the content-addressed raw store; a parser that could reach a host would
+        make a bad derive cost another crawl, which is the whole of what the raw store buys.
+        `derive/parse.py` and `derive/rebuild.py` each carry a per-package guard of their own; the
+        claim is repeated here because THIS is the file that decides what stage 3 is called with,
+        and a driver-side statement of it is what a reader of `run_task` needs.
+
+    `pipeline.py` is deliberately absent from the loop. It imports `acquire.fetch` on purpose now,
+    and the assertion below says so rather than leaving its absence to be read as an oversight.
     """
     source = Path(pipeline.__file__).read_text(encoding="utf-8")
     driver = Path(stages.__file__).read_text(encoding="utf-8")
     # The guard sees something: both files really do import from the package it is scanning.
-    assert "from spielplan.acquire import queue" in source
+    assert "from spielplan.acquire import fetch, queue, stages" in source, (
+        "decision 373 puts the drain's one Fetcher in pipeline.py; this test is re-pointed, not "
+        "relaxed, so it has to fail if that import goes away"
+    )
     assert "from spielplan.connectors import resolve" in driver
-    for text, name in ((source, "pipeline.py"), (driver, "stages.py")):
-        assert "acquire.fetch" not in text, f"{name} imports the fetcher"
-        assert "acquire import fetch" not in text, f"{name} imports the fetcher"
-        assert "import httpx" not in text, f"{name} acquired an HTTP client"
+
+    # The package each file's RELATIVE imports resolve against, carried beside its text because
+    # the two halves of this walk sit in different packages and `from . import fetch` means a
+    # different module in each.
+    guarded = {"acquire/stages.py": (driver, "spielplan.acquire")}
+    derive_dir = Path(stages.__file__).resolve().parents[1] / "derive"
+    for path in sorted(derive_dir.glob("*.py")):
+        guarded[f"derive/{path.name}"] = (path.read_text(encoding="utf-8"), "spielplan.derive")
+    assert len(guarded) >= 6, f"the walk found only {sorted(guarded)}; it is looking in the wrong place"
+
+    for name, (text, package) in sorted(guarded.items()):
+        # `ast` AND NOT A SUBSTRING, which is what this test used to do and cannot any more. Every
+        # one of these files ARGUES IN PROSE about the layer it does not use - `derive/parse.py`
+        # and `derive/rebuild.py` both name `spielplan.acquire.fetch` in a docstring describing
+        # their own guard - so a substring check now fails on the comment that explains why the
+        # import is absent. `test_derive_parse.py`'s helper is the idiom and the reason it records
+        # `from x import y` as `x.y` too is exactly `from spielplan.acquire import fetch`.
+        offenders = _transport_imports(text, package=package)
+        assert offenders == [], (
+            f"{name} imports transport {offenders}: stage 2 drives its adapters "
+            "through a handle it never names and stage 3 re-reads the content-addressed raw "
+            "store, which is the whole of \"re-parsing is free forever\" (spec:398, decision 373)"
+        )
+        used = _fetcher_uses(text)
+        assert used == [], (
+            f"{name} uses `.fetcher` at {used}: the handle reaches every stage on the context, so "
+            "a request through it needs no import - and a request made here rather than by an "
+            "adapter through `sources/_views` is one no board row records (decisions 345, 373)"
+        )
 
 
 # --- review cycle 1: the seams M5.2 through M5.7 are written against -----------------------------
@@ -1056,7 +1328,11 @@ async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
     """
     ctx = stages.StageContext(conn=None, task=None)
     stubs = [s for s in pipeline.STAGES if not s.implemented]
-    assert len(stubs) == 7, "stages 2-8 are the declared no-ops (D3)"
+    # FOUR SINCE M5.3, which gave stages 2, 3 and 4 bodies. The count is asserted rather than
+    # derived because it is the half of this test that notices a stage going the OTHER way: a
+    # milestone that wrote a body and left `implemented=False` is caught by the loop below, and a
+    # milestone that set the flag on a stage it had not written is caught by this line.
+    assert len(stubs) == 4, "stages 5-8 are the declared no-ops that remain (D3)"
     stale = (
         "is declared `implemented=False` and no longer returns the stub marker - it has a body, "
         "and the flag the spend gate reads is stale"
@@ -2508,3 +2784,949 @@ async def test_a_gate_that_parks_with_no_deadline_is_refused_rather_than_closing
         "a park with a deadline is a re-ask and never a retry budget (decision 336)"
     )
     assert held["next_attempt_at"] > datetime.now(UTC), "and it comes back by itself"
+
+
+# --- M5.3: stages 2, 3 and 4 have bodies ---------------------------------------------------------
+#
+# Everything below runs the SHIPPED stages, through `live`, against a canned web. It is the half
+# of this file the fixture above stands down, and it is deliberately the only half: a driver test
+# and a crawl test that share a fixture are two tests that redden for each other's reasons.
+#
+# THE CANNED WEB IS A REFUSER BY DEFAULT. An unrouted host answers 404, which is what the five
+# sources these tests do not route are meant to get - decision 334 makes each of them a note and
+# the walk carries on. So every route below is a source a test is making a claim about, and the
+# absence of a route is itself an assertion.
+
+TMDB_HOST = "api.themoviedb.org"
+TRAKT_HOST = "api.trakt.tv"
+MC_HOST = "www.metacritic.com"
+
+
+class _Clock:
+    """A clock that moves only when something sleeps on it. `test_sources_adapters.py`'s idiom.
+
+    Injected in place of `time.monotonic` and `asyncio.sleep` together, because the two are one
+    fiction. It is here so the two scraped hosts can be crawled at the rate their policy actually
+    declares - `acquire/hosts.py` runs both deliberately slowly with a long breaker cooldown -
+    without this file's tests taking seconds per page. Make the TEST tolerant, never the policy
+    faster.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        if len(self.slept) > 200:
+            raise AssertionError(f"paced 200 times without progress; last wait was {seconds!r}")
+        self.now += seconds
+
+
+class _CannedWeb:
+    """A route table keyed on (host, path), and a log of every request that was made.
+
+    The log is the assertion surface for the two measures that are about requests NOT made: exit
+    criterion 5 ("outbound request count = 0" on a resume) and a drain whose tasks never reach
+    stage 2. `robots.txt` is served permissively because two of the eight hosts are crawled with
+    `respect_robots=True` and a test about a park would otherwise be a test about a missing file.
+    """
+
+    ROBOTS = b"User-agent: *\nAllow: /\n"
+
+    def __init__(self, routes: dict) -> None:
+        self.routes = routes
+        self.seen: list[httpx.Request] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.seen.append(request)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, content=self.ROBOTS,
+                                  headers={"content-type": "text/plain"})
+        route = self.routes.get((request.url.host, request.url.path))
+        if callable(route):
+            route = route(request)
+        if route is None:
+            return httpx.Response(404, content=b"not found",
+                                  headers={"content-type": "text/html"})
+        status, body, content_type = route
+        return httpx.Response(status, content=body, headers={"content-type": content_type})
+
+    @property
+    def fetched(self) -> list[httpx.Request]:
+        """Every request that was not a robots.txt read. Robots is politeness, not enrichment."""
+        return [r for r in self.seen if r.url.path != "/robots.txt"]
+
+    def hosts(self) -> set:
+        return {r.url.host for r in self.fetched}
+
+
+def _json_route(payload, *, status: int = 200):
+    return status, json.dumps(payload).encode("utf-8"), "application/json"
+
+
+def _factory(site: _CannedWeb, clock: _Clock):
+    """A `FetcherFactory` over a canned web, in `StageGate`'s shape: the seam a test fills."""
+    async def make(conn):
+        return fetch.Fetcher(conn=conn, transport=httpx.MockTransport(site.handler),
+                             clock=clock, sleep=clock.sleep, jitter=lambda lo, _hi: lo)
+    return make
+
+
+# A plot and two reviewers, sized clear of decision 335's floor rather than at it: the gate wants a
+# non-empty `title.overview`, two DISTINCT sources and fifty words across them, and a fixture that
+# cleared it by one word would be a fixture whose failures read as arithmetic. The boundary itself
+# is asserted where the predicate lives
+# (`test_reviews_gate.py::test_fifty_words_is_the_floor_and_forty_nine_is_below_it`).
+PLOT = (
+    "Two men who are very good at their work circle one another across a city that neither of "
+    "them can leave, and the film gives each of them exactly as much sympathy as the other."
+)
+TMDB_REVIEW = (
+    "A heist picture that is really about labour: every character is introduced by what they are "
+    "competent at, and the film's sympathy runs to whoever is doing the work in the frame. The "
+    "coffee shop scene earns its reputation because it is the only time either man is idle."
+)
+TRAKT_COMMENT = (
+    "The shootout is staged for legibility rather than for spectacle, which is why it still works "
+    "thirty years on. You always know where everyone is standing, and that is the whole trick."
+)
+
+
+def _tmdb_detail(tmdb_id: int, imdb_id: str, *, title: str = "The Duellists") -> dict:
+    """One TMDB movie payload with the appended blocks §8 stage 3 actually parses.
+
+    `reviews` is INSIDE the detail document rather than fetched separately because that is what
+    the shipped adapter asks for: `tmdb.MOVIE_APPEND` carries `reviews`, and
+    `derive/rebuild.REVIEW_DOCUMENTS` maps `("tmdb", "movie_detail")` onto the `tmdb` review
+    source for exactly that reason. One request, and it is the required one.
+    """
+    return {
+        "id": tmdb_id, "title": title, "original_title": title, "overview": PLOT,
+        "release_date": "1977-01-01", "runtime": 100, "original_language": "en",
+        "external_ids": {"imdb_id": imdb_id},
+        "credits": {
+            "cast": [{"id": 1, "name": "Keith Carradine", "character": "Armand", "order": 0}],
+            "crew": [{"id": 2, "name": "Ridley Scott", "job": "Director",
+                      "department": "Directing"}],
+        },
+        "keywords": {"keywords": [{"id": 9, "name": "duel"}]},
+        "reviews": {"total_results": 1, "results": [
+            {"id": f"r-{tmdb_id}", "author": "a reviewer", "content": TMDB_REVIEW,
+             "created_at": "2020-01-01T00:00:00.000Z", "author_details": {"rating": 8}},
+        ]},
+    }
+
+
+def _enrichable(tmdb_id: int = 500001, imdb_id: str = "tt5000001") -> dict:
+    """The routes that let one title clear §8 stage 4. Everything else 404s, on purpose."""
+    comment = [{"id": 77, "comment": TRAKT_COMMENT, "user_rating": 9, "likes": 3,
+                "created_at": "2020-02-02T00:00:00.000Z", "spoiler": False, "review": True,
+                "user": {"username": "someone"}}]
+    routes = {
+        (TMDB_HOST, f"/3/movie/{tmdb_id}"): _json_route(_tmdb_detail(tmdb_id, imdb_id)),
+        (TRAKT_HOST, f"/movies/{imdb_id}"): _json_route(
+            {"ids": {"trakt": 42, "slug": "the-duellists"}}
+        ),
+    }
+    for sort in ("likes", "lowest", "highest"):
+        routes[(TRAKT_HOST, f"/movies/{imdb_id}/comments/{sort}")] = (
+            _json_route(comment) if sort == "likes" else _json_route([])
+        )
+    return routes
+
+
+@pytest.fixture
+async def keyed(db, secrets_key):
+    """TMDB and Trakt configured where §2 puts them: `connector_config`, behind the DEK.
+
+    OMDb is deliberately left out. Decision 377 makes an absent credential a note rather than a
+    park, and an install that has configured two of the three is §3.1's half-configured boot -
+    which is the state most households are actually in, and therefore the state the walk below
+    should be proved against rather than a fully-keyed one nobody has.
+    """
+    await secrets.put_connector_secrets(db, "tmdb", {}, {"api_key": "tmdb-test-key"})
+    await secrets.put_connector_secrets(db, "trakt", {"client_id": "trakt-test"}, None)
+    return db
+
+
+async def _documents(db, title_id: int) -> list[dict]:
+    """This title's raw store rows, reached the way §6.6's board reaches them.
+
+    Through the task key and not through `title_id`, because that is the join decision 345 leaves
+    the board with (`acquire/board.py:92-101`): `raw_document.entity_key` is the TASK's key, so a
+    document filed any other way is one an operator can never see. A test that read the rows by a
+    column the board does not join on would pass for a store the board cannot show.
+    """
+    rows = await db.fetch(
+        "SELECT d.source, d.kind, d.ok, d.http_status, d.byte_size"
+        "  FROM raw_document d JOIN acquisition_task t ON t.key = d.entity_key"
+        " WHERE t.payload ->> 'title_id' = $1 ORDER BY d.id",
+        str(title_id),
+    )
+    return [dict(row) for row in rows]
+
+
+async def test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_gate_live(
+    db, bundled, keyed, live
+):
+    """§8's ten stages end to end with 2, 3 and 4 doing their real work. M5.3's own exit walk.
+
+    THIS IS THE TEST `test_an_item_with_provider_ids_is_minted_placed_and_badged` USED TO BE, for
+    the pipeline that now exists. One title rather than three, because the shelf floor that made
+    three necessary is asserted there and what is asserted here is the SEQUENCE: a Jellyfin item
+    becomes a title, the title becomes bytes in the raw store, the bytes become rows, the rows
+    clear a quality bar, and only then is a coordinate computed and a badge stamped.
+
+    FIVE OF THE EIGHT SOURCES 404 AND THE WALK DOES NOT CARE, which is decision 334 and is the
+    half of this test worth having. OMDb is not configured at all, Wikidata, Wikipedia, Rotten
+    Tomatoes and Metacritic answer the canned web's default 404, and TVmaze is not applicable to a
+    movie - and the job still reaches `ready`, because §8 stage 2's quality bar is not stage 2's.
+    It is stage 4's, and the two sources that did answer carry a plot and fifty words between
+    them.
+    """
+    clock = _Clock()
+    site = _CannedWeb(_enrichable())
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    assert report.ready == 1, report.as_dict()
+    walk = report.tasks[0]
+    assert walk.stages_run == [s.name for s in SHIPPED], walk.as_dict()
+    title_id = walk.title_id
+
+    board = await _board(db, title_id)
+    assert (board["stage"], board["status"]) == (10, "ready")
+    assert board["reason"] is None, "a ready job carries no park reason"
+
+    # Stage 2, as an operator reads it: what answered, and one note per source that did not.
+    enrich = board["detail"]["enrich"]
+    assert "tmdb:detail" in enrich["answered"], enrich
+    assert set(enrich["answered"]) >= {"tmdb:resolve", "tmdb:detail", "trakt:summary",
+                                       "trakt:comments"}, enrich
+    assert enrich["notes"]["omdb:detail"] == "omdb is not configured, so this source was not asked"
+    assert "metacritic:page" in enrich["notes"] and "rt:page" in enrich["notes"], enrich
+    assert enrich["documents"] >= 4
+
+    # Stage 3 wrote rows, and both ledgers ran even though this title carries neither - the counts
+    # are on the board because §14.5's failure is a derive that quietly skips them.
+    derived = board["detail"]["derive"]
+    assert derived["rows"]["credit"] >= 2, derived
+    assert "adjudications" in derived and "corrections" in derived, derived
+
+    # Stage 4 cleared, and the counts it cleared on are on the board either way.
+    passed = board["detail"]["reviews gate"]
+    assert passed == {"plot": True, "sources": 2, "words": passed["words"]}, passed
+    assert passed["words"] >= gate.MIN_TOTAL_WORDS
+
+    row = await db.fetchrow(
+        "SELECT overview, tmdb_id, imdb_id, trakt_slug, placement, origin FROM title WHERE id = $1",
+        title_id,
+    )
+    assert row["overview"] == PLOT, "stage 3 resolved the card's plot out of the raw document"
+    assert row["trakt_slug"] == "the-duellists", "stage 2 wrote the identity it was handed"
+    assert (row["placement"], row["origin"]) == ("cold_tower", "acquired")
+
+    # And the household's own server was never in the batch: §8's exemption is for the Jellyfin
+    # host and this walk is eight third parties.
+    assert site.hosts() <= {TMDB_HOST, TRAKT_HOST, "query.wikidata.org", "en.wikipedia.org",
+                            "www.rottentomatoes.com", MC_HOST, "www.omdbapi.com",
+                            "api.tvmaze.com"}, site.hosts()
+
+
+async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_reads_one(
+    db, bundled, keyed, live, monkeypatch
+):
+    """Exit criterion measure 6: "every response has a `raw_document` row before any parse".
+
+    §8's preamble is the claim - "All fetched bytes land in the app's own raw store, so re-parsing
+    is free forever" (`spec:398`) - and the word that makes it worth a test is BEFORE. A stage 2
+    that stored its documents on the way out, or a stage 3 that parsed a response it still held in
+    memory, would satisfy every count this file could take afterwards and would leave a household
+    one worker crash away from bytes it paid for and cannot re-read.
+
+    So the measurement is taken from INSIDE stage 3, on its first statement, against the request
+    log: at the moment the derive begins, every request that was not a robots.txt read has a row.
+    Counting afterwards proves nothing, because stage 2's own last statement could be the write.
+    """
+    clock = _Clock()
+    site = _CannedWeb(_enrichable())
+    seen: dict = {}
+    real_derive = stages.derive
+
+    async def watched(ctx):
+        seen["requests"] = [str(r.url) for r in site.fetched]
+        seen["stored"] = await ctx.conn.fetchval(
+            "SELECT count(*) FROM raw_document WHERE entity_key = $1", ctx.task.key
+        )
+        return await real_derive(ctx)
+
+    monkeypatch.setattr(pipeline, "STAGES", tuple(
+        pipeline.Stage(s.number, s.name, watched, s.paid, s.implemented, s.owner, s.fetches)
+        if s.number == 3 else s
+        for s in SHIPPED
+    ))
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    assert report.ready == 1, report.as_dict()
+
+    assert seen["requests"], "stage 2 made no request at all, so this proves nothing"
+    assert seen["stored"] == len(seen["requests"]), (
+        f"stage 3 began with {seen['stored']} raw_document rows for "
+        f"{len(seen['requests'])} requests: {seen['requests']}"
+    )
+    # And the failures are in there too, which is what makes a 404 readable off the board rather
+    # than only off a log: `rawstore.latest` filters on `ok`, so a failure row reaches no parser.
+    documents = await _documents(db, report.tasks[0].title_id)
+    assert any(d["ok"] for d in documents) and any(not d["ok"] for d in documents), documents
+    assert {d["source"] for d in documents} >= {"tmdb", "trakt", "metacritic"}, documents
+
+
+async def test_a_metacritic_404_with_tmdb_answering_is_a_note_and_the_walk_reaches_stage_three(
+    db, bundled, keyed, live
+):
+    """Exit criterion measure 7: "Metacritic 404 with TMDB ok = a note, not a park" (decision 334).
+
+    The canned web routes TMDB and Trakt and nothing else, so Metacritic answers 404 - which is
+    what a slug guessed from a title does most of the time, and is the ordinary state of seven of
+    §8's eight sources rather than an error. The assertion is that the walk got PAST stage 3: a
+    park at 2 would have left the board at stage 2 and stage 3 unrun, and the eight documents
+    already on disk unparsed.
+    """
+    clock = _Clock()
+    site = _CannedWeb(_enrichable())
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    assert report.parked == 0 and report.failed == 0, report.as_dict()
+    walk = report.tasks[0]
+    assert "derive" in walk.stages_run, walk.as_dict()
+    board = await _board(db, walk.title_id)
+    notes = board["detail"]["enrich"]["notes"]
+    assert "metacritic:page" in notes, notes
+    assert board["status"] != "parked" or board["stage"] > 2
+
+    # The refused host is still in the raw store as the honest record of what the guess returned.
+    documents = await _documents(db, walk.title_id)
+    metacritic = [d for d in documents if d["source"] == "metacritic"]
+    assert metacritic and all(not d["ok"] for d in metacritic), documents
+    assert all(d["http_status"] == 404 for d in metacritic), metacritic
+
+
+async def test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_request(
+    db, bundled, keyed, live
+):
+    """Decision 422: a circuit-breaker pause on a best-effort host is that source's note.
+
+    Metacritic's breaker is OPEN when the walk starts - `fetch_host_state.paused_until` in the
+    future, which is what eight consecutive failures during another title's walk leave behind and
+    what a worker restart reads back (`fetch._load_host_state`). The host must not be asked, the
+    stage must advance under decision 334, and the board must say what happened in a sentence.
+
+    THE SENTENCE AND THE SECOND VIEW ARE WHAT CHANGED. `sources/_views.capture` re-raised the
+    pause, claiming the driver would park on it; the driver never did - `stages.enrich` caught it
+    as a note spelled `HostPaused: host ... paused for 900s`, and the raise abandoned the source at
+    its first paused view, so the kind's second view was never recorded at all. Each view is now
+    recorded on its own and the note names the host, the cooldown and the consequence.
+    [M5.3 review cycle 2, M53-C2-NET-01]
+    """
+    await db.execute(
+        "INSERT INTO fetch_host_state (host, paused_until) VALUES ($1, now() + interval '900 s')",
+        MC_HOST,
+    )
+    clock = _Clock()
+    site = _CannedWeb(_enrichable())
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = report.tasks[0]
+    assert "derive" in walk.stages_run, "a paused best-effort host parked stage 2"
+    assert not any(r.url.host == MC_HOST for r in site.seen), "a paused host was asked"
+    board = await _board(db, walk.title_id)
+    notes = board["detail"]["enrich"]["notes"]
+    for kind in ("metacritic:page", "metacritic:reviews"):
+        assert f"host {MC_HOST} paused for" in notes[kind], notes
+        assert not notes[kind].startswith("HostPaused"), (
+            "a class name and an exception message is a log line on the board, not a note"
+        )
+    assert "so it was not asked" in notes["metacritic:page"], notes
+
+
+async def test_the_required_source_failing_parks_at_stage_two_and_names_it(
+    db, bundled, keyed, live
+):
+    """Exit criterion measure 8: "required source failing = a park naming it" (decision 334).
+
+    TMDB is CONFIGURED here and answers 500, which is the state decision 334 distinguishes from an
+    absent credential: the source ran and did not answer. An install with no TMDB key is §3.1's
+    legal half-configured boot and is a note - asserted in the test below this one - and reading
+    the two the same way would park every title on every install that has not yet typed a key into
+    §6.6's TMDB card.
+
+    A PARK WITH A DEADLINE, which is the half a reader should check rather than assume. A park
+    with no `until` is `queue.skip` and closes the task for good (`stages.waiting_on_the_world`),
+    and what this one waits on - a host that comes back, a key an operator corrects - is decision
+    336's "something that may change" in its plainest form.
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    routes[(TMDB_HOST, "/3/movie/500001")] = (500, b"upstream is having a day", "text/html")
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    assert report.parked == 1 and report.failed == 0, report.as_dict()
+    walk = report.tasks[0]
+    assert walk.stage == 2, walk.as_dict()
+    assert walk.stages_run == ["identify", "enrich"], "stage 3 must not run on a parked stage 2"
+    assert "tmdb:detail" in walk.reason, walk.reason
+    assert "acquisition board" in walk.reason, "a reason on §6.6's board names a lever"
+
+    board = await _board(db, walk.title_id)
+    assert (board["stage"], board["status"]) == (2, "parked")
+    assert board["reason"] == walk.reason, "§6.6 shows the reason verbatim (0005_ledger.sql:138)"
+    assert board["retry_after"] is not None, "the board shows the wait it is describing"
+    # The other sources were still asked, and their bytes are on disk: a park is not a rollback,
+    # and the next walk re-reads them instead of re-fetching.
+    assert board["detail"]["enrich"]["answered"], board["detail"]["enrich"]
+    documents = await _documents(db, walk.title_id)
+    assert {d["source"] for d in documents} >= {"trakt", "metacritic"}, documents
+    # AND TMDB'S 500 LEFT NO ROW AT ALL, which is `sources/_views.capture`'s rule and not an
+    # oversight here: only a NON-retryable failure is stored, because "a timeout or a 503 will be
+    # asked again on the next drain, and a row per attempt would turn one flaky host into a board
+    # nobody can read". Metacritic's 404 is stored for the opposite reason - it is an answer.
+    assert not any(d["source"] == "tmdb" for d in documents), documents
+
+    row = await _task_row(db, "jellyfin:jf-acq-1")
+    assert row["state"] == queue.PENDING and row["attempts"] == 0, (
+        "a park with a deadline is a re-ask and never a retry budget (decision 336)"
+    )
+
+
+async def test_a_title_tmdb_holds_no_record_of_walks_on_rather_than_parking_stage_two(
+    db, bundled, keyed, live
+):
+    """Decision 334's word RAN, for the state `available_kinds` cannot see.
+
+    THE TWO TESTS AROUND THIS ONE ARE THE TWO STATES THAT WERE ALREADY APART: TMDB configured and
+    answering 500 parks, TMDB unconfigured is a note. This is the third, and until M5.3's first
+    review cycle it was read as the first. `THIRD` carries an IMDb id and no TMDB one - stage 1
+    mints on any of imdb/tmdb/tvdb (decision 323) - and TMDB has no record for it, which `_find`
+    answers by writing no `tmdb_id`. No later kind supplies one and `wikidata:resolve` does not
+    yield it, so `tmdb:detail` had nothing to ask about on this drain and will have nothing to ask
+    about on every drain after it.
+
+    WHAT THE PARK COST IS THE POINT. `OPERATOR_WAIT` is one day and a stage-2 park re-enters at
+    stage 2, so the title re-walked all eight sources daily, for ever - including Rotten Tomatoes
+    and Metacritic, which `acquire/hosts.py` paces at seven-tenths of a request a second with a
+    quarter-hour breaker - under a reason telling an operator to check a TMDB connector that is
+    working. Reaching stage 4 instead costs a thirty-day window and, on the retry, zero requests:
+    `test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` is that half.
+
+    AND `answered` STAYS TRUE. The fix is not "report ok": `tmdb:detail` is absent from the
+    board's answered list, where it belongs, and the note under its own name is what says why.
+    [M5.3 review cycle 1, M53-334-01]
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    routes[(TMDB_HOST, "/3/find/tt5000003")] = _json_route({"movie_results": [], "tv_results": []})
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, THIRD) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = report.tasks[0]
+    assert walk.stage == 4, walk.as_dict()
+    assert walk.status == "parked" and "reviews gate" in walk.reason, walk.as_dict()
+    board = await _board(db, walk.title_id)
+    enrich = board["detail"]["enrich"]
+    assert "tmdb:detail" not in enrich["answered"], enrich
+    assert enrich["notes"]["tmdb:detail"] == "no tmdb id on the title, so TMDB could not be asked"
+    # `tmdb:resolve` IS ANSWERED, and that is what walks this title on rather than a special case:
+    # TMDB said it holds no record, which is a fact about the film. The test below is the state
+    # this one used to be confused with. [M5.3 review cycle 2, m53-c2-334-01]
+    assert "tmdb:resolve" in enrich["answered"], enrich
+    assert "TMDB has no record for tt5000003" in enrich["notes"]["tmdb:resolve"], enrich
+
+
+@pytest.mark.parametrize("status", [401, 500])
+async def test_a_refused_or_failed_tmdb_resolve_parks_stage_two_naming_it(
+    db, bundled, keyed, live, status
+):
+    """Decision 334's park, for the required source failing at the kind BEFORE the required one.
+
+    THE SAME TITLE AS THE TEST ABOVE, AND THE OPPOSITE OUTCOME, because the source did something
+    different. `THIRD` carries only an IMDb id, so `tmdb:detail` has nothing to ask about until
+    `tmdb:resolve` has filled `title.tmdb_id`. Above, TMDB answered and holds no record, and the
+    title walks on to stage 4. Here the key is refused, or the host is down: TMDB RAN and did not
+    answer, which is decision 334's park condition in its own words. Read at the KIND, the two
+    were one state - the column is empty either way - and this one walked on too: fourteen
+    requests across six hosts, a thirty-day park at stage 4 with "no plot yet, 0 sources" and a
+    `reason` naming no connector at all, while the SAME broken key on a title that already
+    carried a `tmdb_id` parked here for a day naming TMDB. One key, two operator experiences.
+    [M5.3 review cycle 2, m53-c2-334-01]
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    routes[(TMDB_HOST, "/3/find/tt5000003")] = _json_route({"status_message": "no"}, status=status)
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, THIRD) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = report.tasks[0]
+    assert (walk.stage, walk.status) == (2, "parked"), walk.as_dict()
+    assert walk.stages_run == ["identify", "enrich"], "stage 3 must not run on a parked stage 2"
+    assert "tmdb:detail" in walk.reason and "tmdb:resolve" in walk.reason, walk.reason
+    assert str(status) in walk.reason, "the note saying WHICH way it failed is in the sentence"
+    assert "could not be asked" in walk.reason, "tmdb:detail was never asked, so it never answered"
+    board = await _board(db, walk.title_id)
+    assert (board["stage"], board["status"]) == (2, "parked"), dict(board)
+    assert board["reason"] == walk.reason, "the board shows the reason verbatim (0005_ledger.sql:138)"
+    assert board["retry_after"] is not None, "a park with no deadline is `queue.skip`"
+    assert "tmdb:resolve" not in board["detail"]["enrich"]["answered"], board["detail"]
+
+
+async def test_an_install_with_no_tmdb_key_notes_it_and_walks_on(db, bundled, live):
+    """Decision 377: "a source whose credential is absent is a stage-2 note ... never a park".
+
+    THE TWO DECISIONS ARE ONLY BOTH TRUE IF THESE TWO STATES ARE READ APART, which is why this
+    test sits next to the one above it. Decision 334 requires `tmdb:detail`; decision 377 says an
+    absent credential is a note. `sources/base.available_kinds` is what reconciles them: a kind
+    whose capability is off is filtered out and never runs, so there is no failure to park on.
+
+    §3.1 makes this install legal, and the title is not lost by walking on - it arrives at stage 4
+    with no plot and no reviews and parks THERE, with the counts in its reason, which is the
+    honest sentence for a title nobody has given this app a way to enrich.
+    """
+    clock = _Clock()
+    site = _CannedWeb({})
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = report.tasks[0]
+    assert walk.stage == 4, walk.as_dict()
+    assert walk.status == "parked" and "reviews gate" in walk.reason, walk.as_dict()
+    board = await _board(db, walk.title_id)
+    notes = board["detail"]["enrich"]["notes"]
+    for kind in ("tmdb:resolve", "tmdb:detail", "omdb:detail", "trakt:summary"):
+        assert notes[kind].endswith("is not configured, so this source was not asked"), notes
+    assert not any(r.url.host in (TMDB_HOST, TRAKT_HOST) for r in site.fetched), (
+        "an absent credential costs no request at all, not even a robots.txt read"
+    )
+
+
+# --- stage 4's park, and the resume that costs nothing --------------------------------------------
+
+
+async def test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thirty_day_window(
+    db, bundled, keyed, live
+):
+    """Exit criterion measure 4, and §8 stage 4: "if thin, retry window 30 days".
+
+    THE TITLE IS THIN THE WAY A REAL ONE IS. TMDB answers with the plot and its own reviewer, and
+    Trakt holds nothing - so the gate sees a plot, ONE source and plenty of words, which is the
+    case decision 335's `count(DISTINCT source) >= 2` exists for and the case a word-count-only
+    gate would wave through. §8 says "multi-source" and `mdc/dna/packs.py:46` says why: "so no
+    single reviewer culture dominates".
+
+    TWO WRITES, ONE TRUTH, ONE CONSTANT, AND THE SECOND WRITE WAS ALREADY THE DRIVER'S. The stage
+    returns one instant; `_record_stop` passes it to `queue.defer` AND to `write_board`, so the
+    date an operator reads on §6.6's board and the date the queue will lease on are the same
+    value rather than two computed from one duration. This test asserts them against each other
+    rather than each against thirty days, because two dates that are both about right and not
+    equal is precisely the defect that arrangement exists to prevent.
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    for sort in ("likes", "lowest", "highest"):
+        routes[(TRAKT_HOST, f"/movies/tt5000001/comments/{sort}")] = _json_route([])
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+
+    before = datetime.now(UTC)
+    report = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    after = datetime.now(UTC)
+
+    assert report.parked == 1 and report.failed == 0, report.as_dict()
+    walk = report.tasks[0]
+    assert walk.stage == 4, walk.as_dict()
+    assert walk.stages_run == ["identify", "enrich", "derive", "reviews gate"], walk.as_dict()
+
+    # The reason carries BOTH counts, which is decision 335 and is what tells an operator whether
+    # the title is close. The plot is named only when it is missing, so it is not named here.
+    assert walk.reason.startswith("reviews gate: 1 source, "), walk.reason
+    assert "retry window 30 days" in walk.reason, walk.reason
+    assert "no plot" not in walk.reason, "the plot is there; naming it reads as a complaint"
+
+    board = await _board(db, walk.title_id)
+    assert (board["stage"], board["status"]) == (4, "parked")
+    assert board["reason"] == walk.reason, "§6.6 shows the reason verbatim"
+    assert board["detail"]["reviews gate"] == {"plot": True, "sources": 1,
+                                               "words": board["detail"]["reviews gate"]["words"]}
+
+    window = board["retry_after"]
+    assert window is not None, (
+        "the gate parked with no deadline, which is `queue.skip`: the task is closed for good and "
+        "the thirty-day window it told an operator about can never come (decision 336)"
+    )
+    assert before + gate.REVIEW_WINDOW <= window <= after + gate.REVIEW_WINDOW, window
+    row = await _task_row(db, "jellyfin:jf-acq-1")
+    assert row["next_attempt_at"] == window, (
+        "the queue leases on one instant and the board shows another: two writes, one truth"
+    )
+    # NO ATTEMPT SPENT. Decision 336: a park with a deadline is a re-ask, and thirty days of them
+    # would otherwise close a title for the crime of being new.
+    assert row["state"] == queue.PENDING and row["attempts"] == 0, dict(row)
+    assert row["last_error"] is None, "nothing raised, so nothing is recorded as an error"
+
+
+async def test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request(
+    db, bundled, keyed, live
+):
+    """Exit criterion measure 5: "resumes at stage 4; outbound request count = 0; no duplicated
+    derived row".
+
+    THIS IS THE MEASUREMENT THE RAW STORE EXISTS FOR. §8 promises "All fetched bytes land in the
+    app's own raw store, so re-parsing is free forever" (`spec:398`), and the only way to cash
+    that promise is a resume that re-enters at the stage it parked in: a walk restarted at stage 1
+    would re-fetch by construction, and every one of this household's eight hosts would be asked
+    again for bytes already on its own disk.
+
+    ZERO IS ASSERTED THREE WAYS because each can be true while another is false. The request log
+    is empty - nothing reached the transport. The factory was never called - no HTTP client was
+    even constructed, which is `_OneFetcher`'s whole point. And `stages_run` begins at the reviews
+    gate rather than at identify - the resume point is the BOARD's stage and not the task's.
+
+    AND THE DERIVE THAT RAN IN BETWEEN DUPLICATED NOTHING. The second walk's stage 4 re-measures
+    against the same `review_store.review` rows the first walk's stage 3 wrote; a derive keyed on
+    anything but `(title_id, source)` would have doubled them and the gate would then pass on
+    arithmetic rather than on reviews.
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    for sort in ("likes", "lowest", "highest"):
+        routes[(TRAKT_HOST, f"/movies/tt5000001/comments/{sort}")] = _json_route([])
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+    first = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    assert first.parked == 1, first.as_dict()
+    title_id = first.tasks[0].title_id
+    assert site.fetched, "the first walk made no request, so the second proves nothing"
+
+    counted = await _derived_counts(db, title_id)
+    assert counted["review"] >= 1 and counted["credit"] >= 1, counted
+
+    # The admin retry: §8's "retryable from admin" is a task due now, which is what decision 330's
+    # button will write. The window is what makes it wait, not the state.
+    await db.execute(
+        "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
+        " WHERE kind = $1 AND key = $2", pipeline.TASK_KIND, "jellyfin:jf-acq-1",
+    )
+    made: list[str] = []
+    site.seen.clear()
+
+    async def counting(conn):
+        made.append("built")
+        return await _factory(site, clock)(conn)
+
+    second = await pipeline.drain(db, limit=1, fetcher_factory=counting)
+
+    assert second.leased == 1, second.as_dict()
+    walk = second.tasks[0]
+    assert walk.stages_run[0] == "reviews gate", walk.as_dict()
+    assert "identify" not in walk.stages_run and "enrich" not in walk.stages_run, walk.as_dict()
+    assert site.fetched == [], [str(r.url) for r in site.fetched]
+    assert made == [], "an HTTP client was built for a walk that never reaches a fetching stage"
+    assert await _derived_counts(db, title_id) == counted, "the resume duplicated a derived row"
+
+
+async def test_the_window_closing_asks_the_sources_again_and_counts_what_accrued(
+    db, bundled, keyed, live
+):
+    """§8 stage 4's parenthetical, measured: "retry window 30 days (new releases accrue reviews
+    over weeks)". Decision 421.
+
+    THE TEST ABOVE IS AN OPERATOR MAKING THE TASK DUE WHILE THE WINDOW IS STILL OPEN, and this is
+    the window itself closing - the event §8 wrote the thirty days for. The two used to be one
+    walk: `pipeline._resume_index` answered the board's stage, so the task that came back after
+    thirty days re-entered at `reviews gate`, re-counted the rows stage 3 had written on day one,
+    opened no socket and parked again with a byte-identical reason, every thirty days, for ever.
+    The only stages that can move what the gate measures - 2, which fetches the reviews, and 3,
+    which writes them - were behind the resume point, so the accrual §8 names could not be
+    observed by construction.
+
+    THE WORLD CHANGES BETWEEN THE TWO WALKS AND NOTHING ELSE DOES. Week 0: Trakt holds no comment
+    and the title parks with one source. Then Trakt carries the comment - the accrual - and the
+    window's instant passes, which is BOTH writes of it moving into the past together, because
+    `_record_stop` wrote them as one value and thirty days moves both. The walk must ask the hosts
+    again, write the comment, and clear the gate on it.
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    accrued = dict(routes)
+    for sort in ("likes", "lowest", "highest"):
+        routes[(TRAKT_HOST, f"/movies/tt5000001/comments/{sort}")] = _json_route([])
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+    first = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    assert (first.tasks[0].stage, first.tasks[0].status) == (4, "parked"), first.as_dict()
+    assert first.tasks[0].reason.startswith("reviews gate: 1 source, "), first.tasks[0].reason
+    title_id = first.tasks[0].title_id
+
+    site.routes = accrued
+    site.seen.clear()
+    await db.execute(
+        "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
+        " WHERE kind = $1 AND key = $2", pipeline.TASK_KIND, "jellyfin:jf-acq-1",
+    )
+    await db.execute(
+        "UPDATE acquisition_job SET retry_after = now() - interval '1 minute' WHERE title_id = $1",
+        title_id,
+    )
+
+    second = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = second.tasks[0]
+    assert walk.stages_run[:3] == ["enrich", "derive", "reviews gate"], walk.as_dict()
+    assert "identify" not in walk.stages_run, "the window re-asks the sources, not the mint"
+    assert any(r.url.path == "/movies/tt5000001/comments/likes" for r in site.fetched), (
+        "the window closed and no host was asked, so a review written since cannot be counted"
+    )
+    assert walk.status == "ready", walk.as_dict()
+    board = await _board(db, title_id)
+    assert board["detail"]["reviews gate"]["sources"] == 2, board["detail"]["reviews gate"]
+    assert await db.fetchval(
+        "SELECT count(*) FROM review_store.review WHERE title_id = $1 AND source = 'trakt'",
+        title_id,
+    ) == 1, "the accrued comment is in the store exactly once"
+
+
+async def test_a_title_still_thin_when_the_window_closes_parks_for_another_window(
+    db, bundled, keyed, live
+):
+    """Decision 421's other outcome: the sources were asked again and still hold too little.
+
+    The re-ask is a re-crawl and not a promise, so a film nobody has reviewed yet parks again,
+    with its counts and a NEW thirty-day window measured from this walk - the board's
+    `retry_after` and the queue's `next_attempt_at` moving together, as they did on day one. No
+    attempt is spent: decision 336's park with a deadline is a re-ask, never a retry budget.
+    """
+    clock = _Clock()
+    routes = _enrichable()
+    for sort in ("likes", "lowest", "highest"):
+        routes[(TRAKT_HOST, f"/movies/tt5000001/comments/{sort}")] = _json_route([])
+    site = _CannedWeb(routes)
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+    first = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    title_id = first.tasks[0].title_id
+    counted = await _derived_counts(db, title_id)
+    await db.execute(
+        "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
+        " WHERE kind = $1 AND key = $2", pipeline.TASK_KIND, "jellyfin:jf-acq-1",
+    )
+    await db.execute(
+        "UPDATE acquisition_job SET retry_after = now() - interval '1 minute' WHERE title_id = $1",
+        title_id,
+    )
+    site.seen.clear()
+
+    before = datetime.now(UTC)
+    second = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    walk = second.tasks[0]
+    assert walk.stages_run == ["enrich", "derive", "reviews gate"], walk.as_dict()
+    assert site.fetched, "the window closed, so the sources were asked again"
+    assert (walk.stage, walk.status) == (4, "parked"), walk.as_dict()
+    board = await _board(db, title_id)
+    assert board["retry_after"] >= before + gate.REVIEW_WINDOW, board["retry_after"]
+    row = await _task_row(db, "jellyfin:jf-acq-1")
+    assert row["next_attempt_at"] == board["retry_after"], "two writes, one truth"
+    assert row["state"] == queue.PENDING and row["attempts"] == 0, dict(row)
+    assert await _derived_counts(db, title_id) == counted, "the re-derive duplicated a row"
+
+
+async def test_a_key_typed_in_during_the_window_is_asked_when_it_closes(
+    db, bundled, live, secrets_key
+):
+    """The one sentence §6.6 renders, held to what it tells the operator it can wait for.
+
+    THE GATE'S REASON USED TO SAY "Nothing is asked of an operator", unconditionally, and this was
+    the title it was most wrong about: acquired before anyone typed a TMDB key, so no plot and no
+    source at all because nothing could be asked - the state the no-TMDB-key test above walks
+    into - and told to wait thirty days for a walk that would ask nothing either. The
+    sentence now promises that the sources are asked again when the window closes, which is
+    decision 421's re-entry at stage 2; this is that promise measured on the population it was
+    false for. The key goes in between the walks, which is the ordinary order for a household
+    that lets the first sweep run before it opens Admin, and the close of the window asks TMDB.
+    [decisions 335, 377, 421; M5.3 review cycle 2, m53-c2-gate-02]
+    """
+    clock = _Clock()
+    site = _CannedWeb(_enrichable())
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+    first = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+    walk = first.tasks[0]
+    assert (walk.stage, walk.status) == (4, "parked"), walk.as_dict()
+    assert walk.reason.startswith("reviews gate: no plot yet, 0 sources, 0 words"), walk.reason
+    assert "sources are asked again" in walk.reason, walk.reason
+    assert not any(r.url.host in (TMDB_HOST, TRAKT_HOST) for r in site.fetched)
+    title_id = walk.title_id
+
+    await secrets.put_connector_secrets(db, "tmdb", {}, {"api_key": "tmdb-test-key"})
+    await secrets.put_connector_secrets(db, "trakt", {"client_id": "trakt-test"}, None)
+    await db.execute(
+        "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
+        " WHERE kind = $1 AND key = $2", pipeline.TASK_KIND, "jellyfin:jf-acq-1",
+    )
+    await db.execute(
+        "UPDATE acquisition_job SET retry_after = now() - interval '1 minute' WHERE title_id = $1",
+        title_id,
+    )
+    site.seen.clear()
+
+    second = await pipeline.drain(db, limit=1, fetcher_factory=_factory(site, clock))
+
+    assert any(r.url.host == TMDB_HOST for r in site.fetched), (
+        "the window closed after a key was typed in and TMDB was not asked, so the reason told "
+        "the operator to wait for something no walk does"
+    )
+    assert second.tasks[0].status == "ready", second.tasks[0].as_dict()
+    board = await _board(db, title_id)
+    assert board["detail"]["reviews gate"]["plot"] is True, board["detail"]["reviews gate"]
+
+
+async def _derived_counts(db, title_id: int) -> dict:
+    """One count per table §8 stage 3 writes into, for the rows belonging to this title.
+
+    `review` is read out of `review_store` because that is the schema it lives in, and `person` is
+    read through `credit` because a person is shared and the count that matters is how many this
+    title points at. Together they are the three places a derive can duplicate without the
+    database refusing it (`test_derive_rebuild.py` argues the same three).
+    """
+    return {
+        "credit": await db.fetchval("SELECT count(*) FROM credit WHERE title_id = $1", title_id),
+        "review": await db.fetchval(
+            "SELECT count(*) FROM review_store.review WHERE title_id = $1", title_id
+        ),
+        "title_meta": await db.fetchval(
+            "SELECT count(*) FROM title_meta WHERE title_id = $1", title_id
+        ),
+        "people": await db.fetchval(
+            "SELECT count(DISTINCT person_id) FROM credit WHERE title_id = $1", title_id
+        ),
+    }
+
+
+# --- decision 373: who builds the fetcher, and when -----------------------------------------------
+
+
+async def test_a_drain_whose_tasks_never_reach_stage_two_opens_no_socket(db, data_dir, live):
+    """Decision 373's lazy half, on the walk that is a household's commonest one.
+
+    An item Jellyfin supplies no provider id for parks at stage 1 (decision 323) and never reaches
+    a stage that fetches. Nothing should be constructed for it: not a request, not an
+    `httpx.AsyncClient`, not the `connector_config` read `_default_fetcher` makes to find the
+    Jellyfin host. A drain that built one anyway would be correct and wasteful; what makes it
+    worth a test is the SAME mechanism carrying exit criterion measure 5, where being wasteful
+    means asking eight hosts for bytes already on disk.
+    """
+    built: list[str] = []
+
+    async def never(conn):
+        built.append("built")
+        return fetch.Fetcher(conn=conn, transport=httpx.MockTransport(_CannedWeb({}).handler))
+
+    assert await pipeline.enqueue_item(db, NO_IDS) is True
+    report = await pipeline.drain(db, limit=1, fetcher_factory=never)
+
+    assert report.parked == 1, report.as_dict()
+    assert report.tasks[0].stages_run == ["identify"], report.tasks[0].as_dict()
+    assert built == [], "a fetcher was built for a walk that stopped at stage 1"
+
+
+async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
+    db, bundled, keyed, live, monkeypatch
+):
+    """`Stage.fetches` is a hand-written literal, and this is what ties it to reality.
+
+    The same shape as `implemented` and for the same reason: the driver reads the flag BEFORE
+    calling the stage, so nothing about the stage's body can correct a flag that is wrong. The
+    property is that the Fetcher is built AT the first stage that declared it needs one and not
+    before - stage 1 runs on a context whose `fetcher` is still None, and on a walk that never
+    reaches stage 2 nothing is built at all (the two tests either side of this one).
+
+    IT STAYS ON THE CONTEXT AFTERWARDS, AND THAT IS THE DESIGN RATHER THAN A LEAK. Decision 373
+    puts `fetcher` on `StageContext`, which is per WALK: one drain has one Fetcher and one walk
+    has one context, so stages 3 to 10 are handed the same object stage 2 was. Nothing keeps them
+    from calling it except the thing that actually does - `spielplan/derive/` imports no transport
+    at all, which is a static fact about the tree rather than a hope about a context field, and
+    `test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher` is where it is asserted.
+    Clearing the field after stage 2 would buy nothing and would cost M5.5 the handle its own
+    billed HTTP call will want.
+
+    Recorded per stage rather than as a single boolean, because "some stage got one" is satisfied
+    by a driver that builds one before the loop and hands it to all ten - which is exactly the
+    implementation this test exists to distinguish itself from.
+    """
+    handed: dict = {}
+
+    def watching(stage):
+        async def run(ctx):
+            handed[stage.number] = ctx.fetcher is not None
+            return await stage.run(ctx)
+        return pipeline.Stage(stage.number, stage.name, run, stage.paid, stage.implemented,
+                              stage.owner, stage.fetches)
+
+    monkeypatch.setattr(pipeline, "STAGES", tuple(watching(s) for s in SHIPPED))
+    assert await pipeline.enqueue_item(db, MOVIE) is True
+    report = await pipeline.drain(db, limit=1,
+                                  fetcher_factory=_factory(_CannedWeb(_enrichable()), _Clock()))
+
+    assert report.ready == 1, report.as_dict()
+    assert handed == {n: n >= 2 for n in range(1, 11)}, handed
+    assert handed[1] is False, (
+        "stage 1 ran on a context that already carried a Fetcher, so it was built before the loop "
+        "rather than at the stage that declared it - and a walk that parks at stage 1 then pays "
+        "for an HTTP client it never uses"
+    )
+    assert [s.number for s in SHIPPED if s.fetches] == [2], (
+        "§8 stage 2 is the only stage that reaches the network today; a second one sets the same "
+        "flag on the same line rather than teaching the driver a stage number"
+    )
+
+
+async def test_a_stage_two_handed_no_fetcher_fails_and_names_the_driver(db, bundled, keyed, live):
+    """A stage never builds its own Fetcher, and says so in a sentence an operator can place.
+
+    `run_task` is called directly by `ops/` scripts and by every milestone's tests, so `None` is a
+    reachable value rather than a theoretical one. The refusal is a FAILURE and not a park, which
+    is the one easy call in `stages.py`: decision 336 gives `failed` to "this stage raised and
+    will raise again", and a driver that did not build a fetcher will not build one next drain
+    either - nothing an operator does to this title changes it.
+
+    A stage that quietly made its own would be a second set of per-host token buckets and a second
+    circuit breaker pacing the same hosts at twice their declared rate, which is §8's politeness
+    clause (`spec:404`) broken by the machinery meant to keep it.
+    """
+    task = await _leased(db, item=MOVIE)
+    report = await pipeline.run_task(db, task)
+
+    assert report.status == "failed", report.as_dict()
+    assert report.stage == 2
+    assert report.reason == stages.NO_FETCHER
+    assert "pipeline.drain" in report.reason and "decision 373" in report.reason
+    board = await _board(db, report.title_id)
+    assert (board["stage"], board["status"]) == (2, "failed")
+    assert board["detail"]["enrich"]["retrying"] is True, (
+        "a failure records whether the machine will try again; this one is a code defect and "
+        "will not fix itself, but the board must still say which it is"
+    )

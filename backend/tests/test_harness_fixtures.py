@@ -637,3 +637,87 @@ async def test_the_app_fixture_clears_every_connector_seed_variable(
     assert await db.fetchval("SELECT count(*) FROM connector_config") == 0, (
         "the lifespan seeded connectors from the environment pytest inherited"
     )
+
+
+# --- M5.3 review cycle 1: the third site of the same door ---------------------------------------
+#
+# `conftest` closes this one for the `app` fixture with BOTH halves -- the connector names deleted
+# AND a chdir into a directory holding no `.env` -- and its own docstring records why both are
+# needed: "`no_secrets_key` below already records this incident and fixes it with a chdir; the
+# second site did not get the fix". `ops/m53_exit_criterion.py` is the third site and inherited the
+# first half alone from `ops/m51_exit_criterion.py:378`. TMDB, OMDb and Trakt survive there by
+# accident, because `_seed_throwaway_credentials` sets those three outright and the environment
+# outranks the file; Jellyfin has no such overwrite, and `.env.example` documents JELLYFIN_URL and
+# JELLYFIN_API_KEY as exactly what an operator writes into the file the script then reads.
+# [M5.3 review cycle 1, M53-EXIT-04; decisions 377, 378]
+
+
+def test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory(
+    a_dot_env_in_the_working_directory, tmp_path, monkeypatch
+):
+    """The script's own claim, held to the whole of what would make it true.
+
+    `_neutralise_connector_env` is documented as taking "the operator's connector credentials away
+    before anything reads them", and deriving the names from `Settings` rather than listing them is
+    argued there as what makes a seventh connector variable impossible to forget. The derivation is
+    complete over NAMES and blind to the second source those names arrive from: `Settings` declares
+    `env_file=".env"`, resolved from the working directory at construction, and popping a name that
+    was never in `os.environ` does nothing to a file. `build_install` then calls
+    `registry.seed_from_env`, which encrypts the household's real Jellyfin key into the scratch
+    database under the throwaway DEK the script seals everything with.
+
+    One test rather than a rule over `ops/`: `ops/m51_exit_criterion.py` carries the same half-fix,
+    is M5.1's and is closed, so a guard stated over every exit script would report a file this lane
+    may not repair. [M5.3 review cycle 1, M53-EXIT-04]
+    """
+    # The one test in this file that loads a module out of `ops/`, so the import is here rather
+    # than at the top where the rest of the suite would pay for it.
+    import importlib.util
+
+    from spielplan.core import config as core_config
+
+    for name in conftest._connector_seed_env_names():
+        monkeypatch.delenv(name, raising=False)
+    # The script sets these three at import, outright and on purpose -- its header argues that a
+    # `setdefault` would read a developer's `.env` afterwards. Recorded through monkeypatch BEFORE
+    # the import so that its writes are unwound with this test rather than left standing in the
+    # worker's environment for everything scheduled after it.
+    restored = {
+        "SESSION_SECRET": "a-session-secret-this-test-puts-back-afterwards",
+        "SECRETS_KEY": "a-secrets-key-this-test-puts-back-afterwards",
+        "PUBLIC_URL": "http://localhost:8080",
+    }
+    for name, placeholder in restored.items():
+        monkeypatch.setenv(name, os.environ.get(name, placeholder))
+    # DATA_DIR is the directory the script makes for itself and removes in its own `finally`, set
+    # one line above the call under test; the neutralisation has to land somewhere this run owns.
+    work = tmp_path / "a-run-of-its-own"
+    work.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(work))
+
+    script = conftest.ROOT.parent / "ops" / "m53_exit_criterion.py"
+    spec = importlib.util.spec_from_file_location("m53_exit_criterion_under_test", script)
+    module = importlib.util.module_from_spec(spec)
+    # In `sys.modules` before it executes, and through monkeypatch so it comes back out: the
+    # script declares `Install` as a dataclass under `from __future__ import annotations`, and
+    # `dataclasses` resolves a string annotation through `sys.modules[cls.__module__]`.
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+
+    module._neutralise_connector_env()
+
+    settings = core_config.Settings()
+    read = {
+        name: getattr(settings, name.lower())
+        for name in conftest._connector_seed_env_names()
+        if getattr(settings, name.lower())
+    }
+    assert not read, (
+        f"the exit criterion reads {sorted(read)} out of the .env in the directory it was run "
+        "from, so a household following its own README has its credentials encrypted into the "
+        "scratch database under this script's throwaway DEK"
+    )
+    assert (a_dot_env_in_the_working_directory / ".env").is_file(), (
+        "the operator's own .env was moved or removed; the script must stop reading that file, "
+        "not edit it"
+    )

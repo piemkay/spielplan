@@ -1,0 +1,182 @@
+{
+ "id": 1825,
+ "name": "The Expanse",
+ "type": "Scripted",
+ "language": "English",
+ "genres": [
+  "Science-Fiction",
+  "Thriller",
+  "Mystery"
+ ],
+ "status": "Ended",
+ "runtime": null,
+ "averageRuntime": 55,
+ "premiered": "2015-12-14",
+ "ended": "2022-01-14",
+ "officialSite": "https://www.amazon.com/dp/B07YL9WK1S/",
+ "schedule": {
+  "time": "",
+  "days": [
+   "Friday"
+  ]
+ },
+ "rating": {
+  "average": 8.7
+ },
+ "summary": "<p>A thriller set two hundred years in the future, <b>The Expanse</b> follows the case of a missing young woman who brings a hardened detective and a rogue ship's captain together in a race across the solar system to expose the greatest conspiracy in human history.</p>",
+ "image": {
+  "original": "https://static.tvmaze.com/uploads/images/original_untouched/445/1114081.jpg"
+ },
+ "network": {},
+ "webChannel": {
+  "id": 3,
+  "name": "Prime Video",
+  "country": null,
+  "officialSite": "https://www.primevideo.com"
+ },
+ "_embedded": {
+  "cast": [
+   {
+    "person": {
+     "id": 1462,
+     "name": "Steven Strait"
+    },
+    "character": {
+     "name": "James \"Jim\" Holden"
+    }
+   },
+   {
+    "person": {
+     "id": 59777,
+     "name": "Dominique Tipper"
+    },
+    "character": {
+     "name": "Naomi Nagata"
+    }
+   },
+   {
+    "person": {
+     "id": 68329,
+     "name": "Wes Chatham"
+    },
+    "character": {
+     "name": "Amos Burton"
+    }
+   },
+   {
+    "person": {
+     "id": 1943,
+     "name": "Shohreh Aghdashloo"
+    },
+    "character": {
+     "name": "Chrisjen Avasarala"
+    }
+   },
+   {
+    "person": {
+     "id": 8988,
+     "name": "Cas Anvar"
+    },
+    "character": {
+     "name": "Alex Kamal"
+    }
+   },
+   {
+    "person": {
+     "id": 102030,
+     "name": "Frankie Adams"
+    },
+    "character": {
+     "name": "Roberta \"Bobbie\" Draper"
+    }
+   },
+   {
+    "person": {
+     "id": 37128,
+     "name": "Cara Gee"
+    },
+    "character": {
+     "name": "Camina Drummer"
+    }
+   }
+  ],
+  "crew": [
+   {
+    "type": "Stunt Coordinator",
+    "person": {
+     "id": 607,
+     "name": "Tig Fong"
+    }
+   },
+   {
+    "type": "Co-Executive Producer",
+    "person": {
+     "id": 1462,
+     "name": "Steven Strait"
+    }
+   },
+   {
+    "type": "Producer",
+    "person": {
+     "id": 1462,
+     "name": "Steven Strait"
+    }
+   },
+   {
+    "type": "Executive Producer",
+    "person": {
+     "id": 1526,
+     "name": "Naren Shankar"
+    }
+   },
+   {
+    "type": "Co-Executive Producer",
+    "person": {
+     "id": 1531,
+     "name": "Alan DiFiore"
+    }
+   },
+   {
+    "type": "Producer",
+    "person": {
+     "id": 1943,
+     "name": "Shohreh Aghdashloo"
+    }
+   },
+   {
+    "type": "Co-Executive Producer",
+    "person": {
+     "id": 10170,
+     "name": "Robin Veith"
+    }
+   },
+   {
+    "type": "Consulting Producer",
+    "person": {
+     "id": 10170,
+     "name": "Robin Veith"
+    }
+   }
+  ],
+  "seasons": [
+   {
+    "number": 1
+   },
+   {
+    "number": 2
+   },
+   {
+    "number": 3
+   },
+   {
+    "number": 4
+   },
+   {
+    "number": 5
+   },
+   {
+    "number": 6
+   }
+  ]
+ }
+}

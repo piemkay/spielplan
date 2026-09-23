@@ -232,6 +232,173 @@ async def test_a_bundle_shipping_no_order_gets_the_corpus_order_and_a_report_lin
     assert title["overview"] == fx.META[0][4]
 
 
+# --- jellyfin-acquisition-eval-a-re-derive-is-idempotent (the resolution half) -------------
+#
+# §8 stage 3 derives ONE title, and `resolve_title_fields` grouped every `title_meta` row in the
+# database. The four tests below are the two halves of the row that lands here: the scope is real
+# (a derive writes the title it names and nothing else) and the rule is not forked (the scoped
+# path and the wholesale path are the same `best()` walking the same order).
+
+
+CARD = ("overview", "tagline", "poster_path", "backdrop_path", "trailer_key")
+
+# What §8's acquisition path wrote for a title, in the only shape a test can tell apart from what
+# the corpus resolved: values no source in the fixture carries.
+ACQUIRED = (
+    "Written by section 8's acquisition path.",
+    "Acquired, not imported.",
+    "/acquired.jpg",
+    "/acquired-bd.jpg",
+    "acquired-trailer-key",
+)
+BLANK = (None,) * len(CARD)
+
+
+async def _card(db, title_id: int) -> tuple:
+    row = await db.fetchrow(
+        f"SELECT {', '.join(CARD)} FROM title WHERE id = $1", title_id
+    )
+    return tuple(row[column] for column in CARD)
+
+
+async def _write_card(db, title_id: int, values: tuple) -> None:
+    assignments = ", ".join(f"{c} = ${i}" for i, c in enumerate(CARD, start=2))
+    await db.execute(f"UPDATE title SET {assignments} WHERE id = $1", title_id, *values)
+
+
+async def test_a_scoped_resolve_touches_only_the_titles_it_names(db, root):
+    """A derive that named title 1 and rewrote title 3 is a full-library rewrite wearing the
+    name of an acquisition, and it is silent: almost every row it touched would get back the
+    value it already had, so only a title whose card came from somewhere else can show it.
+
+    Title 3 is that title here. It carries meta rows and a `title_video` row, so an unscoped
+    pass has something to write over both of its fields - which is what makes the trailer key
+    the assertion that fails when the grouping query is scoped and the UPDATE below it is not.
+    """
+    await load_content(db, root)
+    await _write_card(db, 3, ACQUIRED)
+    await _write_card(db, 1, BLANK)
+    report = ImportReport()
+
+    await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), report, title_ids=[1])
+
+    assert await _card(db, 1) == (
+        fx.META[0][4], fx.META[0][2], "/heat.jpg", "/heat-bd.jpg", "heat-trailer-key",
+    )
+    assert await _card(db, 3) == ACQUIRED
+    # §10's accounting is per table and not a total; the same applies to a call that resolved one
+    # title. Two titles carry a trailer key at this point and the line must not claim them both.
+    note = next(f for f in report.findings if f.rule == "title-card")
+    assert note.detail["titles"] == 1
+    assert "1 carry a trailer key" in note.message
+
+
+async def test_a_scoped_resolve_of_a_title_with_no_meta_row_writes_nothing(db, root):
+    """The docstring's standing promise, now per title: title 8 ships no meta row, so a derive
+    that names it has nothing to resolve and must leave the card alone rather than blanking it
+    back to NULL. An acquisition that wrote a card and then derived the title it wrote is the
+    ordinary §8 sequence, not an edge case."""
+    await load_content(db, root)
+    await _write_card(db, 8, ACQUIRED)
+
+    await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), title_ids=[8])
+
+    assert await _card(db, 8) == ACQUIRED
+
+
+async def test_the_scoped_and_unscoped_paths_resolve_one_title_identically(db, root):
+    """The row's second half: the per-title resolution uses "the same source priority and the
+    same absent-value rule as the bundle importer rather than a second implementation".
+
+    Asserted by running both paths over the same rows under two different orders, because a fork
+    shows up in exactly two places - which source wins a field, and whether a present-but-empty
+    column counts as an answer. Title 1 carries both: omdb has a plot and no tagline, so
+    reversing the first two sources moves the plot and must leave the tagline on tmdb.
+    """
+    await load_content(db, root)
+    reversed_order = ["omdb", "tmdb", "wikipedia", "trakt", "tvmaze"]
+    answers = []
+
+    for priority in (list(meta.SOURCE_PRIORITY), reversed_order):
+        await meta.resolve_title_fields(db, priority)
+        wholesale = await _card(db, 1)
+        await _write_card(db, 1, BLANK)
+
+        await meta.resolve_title_fields(db, priority, title_ids=[1])
+
+        assert await _card(db, 1) == wholesale
+        answers.append(wholesale)
+
+    assert answers[0] != answers[1], (
+        "the two orders resolve title 1 identically, so the assertion above says nothing about "
+        "priority and a scoped path that ignored it would pass"
+    )
+    assert answers[0][1] == answers[1][1] == fx.META[0][2], (
+        "omdb's absent tagline moved the field, so the scoped path is walking `best()` no further "
+        "than its first source"
+    )
+
+
+async def test_an_empty_title_id_list_resolves_nothing_rather_than_everything(db, root):
+    """`[]` is "no titles", not "every title", and the difference lands at the one call site that
+    can produce it - a derive whose scope came out empty - where the falsy reading runs a
+    full-library rewrite in the name of resolving nothing."""
+    await load_content(db, root)
+    await _write_card(db, 1, BLANK)
+
+    await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), title_ids=[])
+
+    assert await _card(db, 1) == BLANK
+
+
+def test_the_source_order_is_readable_without_an_import_report(root):
+    """A derive has no `ImportReport` and must not build one to ask which order resolved this
+    install's cards.
+
+    THIS DOCSTRING USED TO CLAIM MORE THAN THE TWO LINES BELOW PROVE. It said "the answer is still
+    read from the bundle the import read it from, so a derive cannot resolve a card by an order the
+    import never used" - and the two assertions are the proof of the opposite: the argument a
+    derive passes returns the constant, and the argument it never passes returns the bundle's
+    order. `derive/rebuild.derive_title` calls this with `bundle_root=None` because there is no
+    manifest left to read (`api/artifacts.py:152`: the bundle "is deleted by its own import") and
+    no column persists the order. What a bundle shipping its own order gets instead is the warning
+    the test below asserts. [M5.3 review cycle 1,
+    m53-rev1-derive-resolves-by-the-constant-not-the-bundle-order]
+    """
+    assert meta.source_priority(None) == list(meta.SOURCE_PRIORITY)
+
+    set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia"])
+    assert meta.source_priority(root) == ["omdb", "tmdb", "wikipedia"]
+
+
+def test_a_bundle_whose_order_is_not_the_apps_is_warned_about_at_the_one_moment_it_can_be(root):
+    """The fork the sentence above used to deny, said out loud where somebody is reading findings.
+
+    An install taking this branch ends with two resolution orders - the corpus titles resolved by
+    the bundle's, every acquired title resolved by `SOURCE_PRIORITY` - and nothing anywhere records
+    that they differ. It is silent in both directions, because almost every field agrees between
+    two orders and the ones that do not look like a different source simply winning; and decision
+    335 carries it further than a card, since the reviews gate names `title.overview` and its plot
+    arm inherits whichever half a title is in. A `warn` and not a `fail`: the import is correct and
+    the corpus's cards are right. [M5.3 review cycle 1,
+    m53-rev1-derive-resolves-by-the-constant-not-the-bundle-order]
+    """
+    report = ImportReport()
+    assert meta.source_priority(root, report) == list(meta.SOURCE_PRIORITY)
+    assert not [f for f in report.findings if f.severity == "warn"], (
+        "a bundle shipping no order of its own resolves by the app's and has nothing to warn about"
+    )
+
+    set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia"])
+    report = ImportReport()
+    meta.source_priority(root, report)
+
+    warned = [f for f in report.findings if f.rule == "source-priority" and f.severity == "warn"]
+    assert len(warned) == 1, [f.as_dict() for f in report.findings]
+    assert report.ok, "a divergent order is a fork to record and never a reason to refuse a bundle"
+    assert "resolves an acquired title's card by the app's" in warned[0].message
+
+
 # --- data-rules-import-reports-every-shipped-table ----------------------------------------
 
 

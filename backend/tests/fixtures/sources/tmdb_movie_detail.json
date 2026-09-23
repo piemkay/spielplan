@@ -1,0 +1,414 @@
+{
+ "adult": false,
+ "backdrop_path": "/8MUZz7oPXQftFTslZpRP3CVMOoq.jpg",
+ "budget": 47000000,
+ "homepage": "http://www.arrivalmovie.com/",
+ "id": 329865,
+ "imdb_id": "tt2543164",
+ "original_language": "en",
+ "original_title": "Arrival",
+ "overview": "Taking place after alien crafts land around the world, an expert linguist is recruited by the military to determine whether they come in peace or are a threat.",
+ "popularity": 21.4012,
+ "poster_path": "/x2FJsf1ElAgr63Y3PNPtJrcmpoe.jpg",
+ "release_date": "2016-11-10",
+ "revenue": 203388186,
+ "runtime": 116,
+ "status": "Released",
+ "tagline": "Why are they here?",
+ "title": "Arrival",
+ "vote_average": 7.631,
+ "vote_count": 19674,
+ "belongs_to_collection": null,
+ "genres": [
+  {
+   "id": 18,
+   "name": "Drama"
+  },
+  {
+   "id": 878,
+   "name": "Science Fiction"
+  },
+  {
+   "id": 9648,
+   "name": "Mystery"
+  }
+ ],
+ "origin_country": [
+  "US"
+ ],
+ "production_countries": [
+  {
+   "iso_3166_1": "US",
+   "name": "United States of America"
+  }
+ ],
+ "spoken_languages": [
+  {
+   "english_name": "Mandarin",
+   "iso_639_1": "zh",
+   "name": "普通话"
+  },
+  {
+   "english_name": "English",
+   "iso_639_1": "en",
+   "name": "English"
+  },
+  {
+   "english_name": "Russian",
+   "iso_639_1": "ru",
+   "name": "Pусский"
+  }
+ ],
+ "production_companies": [
+  {
+   "id": 7493,
+   "name": "FilmNation Entertainment",
+   "origin_country": "US"
+  },
+  {
+   "id": 32300,
+   "name": "Lava Bear Films",
+   "origin_country": "US"
+  },
+  {
+   "id": 2575,
+   "name": "21 Laps Entertainment",
+   "origin_country": "US"
+  }
+ ],
+ "keywords": {
+  "keywords": [
+   {
+    "id": 1612,
+    "name": "spacecraft"
+   },
+   {
+    "id": 1603,
+    "name": "extraterrestrial technology"
+   },
+   {
+    "id": 6203,
+    "name": "loss"
+   },
+   {
+    "id": 3667,
+    "name": "time"
+   },
+   {
+    "id": 9951,
+    "name": "alien"
+   },
+   {
+    "id": 5996,
+    "name": "language"
+   }
+  ]
+ },
+ "alternative_titles": {
+  "titles": [
+   {
+    "iso_3166_1": "US",
+    "title": "Story of Your Life",
+    "type": "working title"
+   },
+   {
+    "iso_3166_1": "GR",
+    "title": "I Afixi",
+    "type": ""
+   },
+   {
+    "iso_3166_1": "IL",
+    "title": "Ha'mifgash",
+    "type": ""
+   }
+  ]
+ },
+ "videos": {
+  "results": [
+   {
+    "key": "dyFa0tOwA1k",
+    "site": "YouTube",
+    "type": "Clip",
+    "name": "The First Five Minutes",
+    "official": true
+   },
+   {
+    "key": "m8-H5j538oM",
+    "site": "YouTube",
+    "type": "Clip",
+    "name": "Dr. Banks Decodes Heptapod Language - Full Scene",
+    "official": true
+   }
+  ]
+ },
+ "recommendations": {
+  "results": [
+   {
+    "id": 2103
+   },
+   {
+    "id": 17431
+   },
+   {
+    "id": 639771
+   }
+  ]
+ },
+ "similar": {
+  "results": [
+   {
+    "id": 267370
+   },
+   {
+    "id": 9400
+   },
+   {
+    "id": 9410
+   }
+  ]
+ },
+ "release_dates": {
+  "results": [
+   {
+    "iso_3166_1": "FR",
+    "release_dates": [
+     {
+      "certification": "TP",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2016-12-07T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "en",
+      "note": "Mondes possibles : la science-fiction sur grand écran, Institut Lumière, Lyon",
+      "release_date": "2026-06-03T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "en",
+      "note": "Mondes possibles : la science-fiction sur grand écran, Institut Lumière, Lyon",
+      "release_date": "2026-06-28T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "VOD",
+      "release_date": "2017-04-07T00:00:00.000Z",
+      "type": 4
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "Netflix",
+      "release_date": "2022-08-01T00:00:00.000Z",
+      "type": 4
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "DVD, Blu-Ray & 4K UHD",
+      "release_date": "2017-04-12T00:00:00.000Z",
+      "type": 5
+     }
+    ]
+   },
+   {
+    "iso_3166_1": "US",
+    "release_dates": [
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "Telluride Film Festival",
+      "release_date": "2016-09-02T00:00:00.000Z",
+      "type": 1
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "Fantastic Fest",
+      "release_date": "2016-09-22T00:00:00.000Z",
+      "type": 1
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "Chicago International Film Festival",
+      "release_date": "2016-10-27T00:00:00.000Z",
+      "type": 1
+     },
+     {
+      "certification": "",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "Philadelphia International Film Festival",
+      "release_date": "2016-10-28T00:00:00.000Z",
+      "type": 1
+     },
+     {
+      "certification": "PG-13",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2016-11-11T00:00:00.000Z",
+      "type": 3
+     },
+     {
+      "certification": "PG-13",
+      "descriptors": [],
+      "iso_639_1": "",
+      "note": "",
+      "release_date": "2017-02-14T00:00:00.000Z",
+      "type": 5
+     }
+    ]
+   }
+  ]
+ },
+ "credits": {
+  "cast": [
+   {
+    "id": 9273,
+    "name": "Amy Adams",
+    "gender": 1,
+    "profile_path": "/1h2r2VTpoFb5QefAaBYYQgQzL9z.jpg",
+    "character": "Louise Banks",
+    "order": 0
+   },
+   {
+    "id": 17604,
+    "name": "Jeremy Renner",
+    "gender": 2,
+    "profile_path": "/yB84D1neTYXfWBaV0QOE9RF2VCu.jpg",
+    "character": "Ian Donnelly",
+    "order": 1
+   },
+   {
+    "id": 2178,
+    "name": "Forest Whitaker",
+    "gender": 2,
+    "profile_path": "/4w7l5JUwnwFNBy7J93ZwYN1nihm.jpg",
+    "character": "Colonel Weber",
+    "order": 2
+   },
+   {
+    "id": 72873,
+    "name": "Michael Stuhlbarg",
+    "gender": 2,
+    "profile_path": "/aYB3SQm3h6ZyAdlbGyiNfakjx56.jpg",
+    "character": "Agent Halpern",
+    "order": 3
+   },
+   {
+    "id": 225411,
+    "name": "Mark O'Brien",
+    "gender": 2,
+    "profile_path": "/8ckgltvlife4BBJcBpHEQWXfQ9p.jpg",
+    "character": "Captain Marks",
+    "order": 4
+   },
+   {
+    "id": 21629,
+    "name": "Tzi Ma",
+    "gender": 2,
+    "profile_path": "/x4fz0LCIiBNGdil3nBYO22W7QJ0.jpg",
+    "character": "General Shang",
+    "order": 5
+   },
+   {
+    "id": 1646444,
+    "name": "Abigail Pniowsky",
+    "gender": 1,
+    "profile_path": "/eFjFSNghr04PT6eBHzqLCvCUiXm.jpg",
+    "character": "8-Year-Old Hannah",
+    "order": 6
+   },
+   {
+    "id": 1522166,
+    "name": "Julia Scarlett Dan",
+    "gender": 1,
+    "profile_path": "/5keIOToJhdil2uaTOXq5JX4e3OR.jpg",
+    "character": "12-Year-Old Hannah",
+    "order": 7
+   }
+  ],
+  "crew": [
+   {
+    "id": 137427,
+    "name": "Denis Villeneuve",
+    "gender": 2,
+    "profile_path": "/zdDx9Xs93UIrJFWYApYR28J8M6b.jpg",
+    "department": "Directing",
+    "job": "Director"
+   },
+   {
+    "id": 115033,
+    "name": "Eric Heisserer",
+    "gender": 2,
+    "profile_path": "/pFG6KLu3yNiiz2sHVKjdSMaPso5.jpg",
+    "department": "Writing",
+    "job": "Screenplay"
+   },
+   {
+    "id": 999565,
+    "name": "Joe Walker",
+    "gender": 2,
+    "profile_path": "/2pfPFxb2I0ulvMZx5B7juwvuU3I.jpg",
+    "department": "Editing",
+    "job": "Editor"
+   },
+   {
+    "id": 1046612,
+    "name": "Bradford Young",
+    "gender": 2,
+    "profile_path": "/shGkUnVemFAOVJuXQDk58CqCgsz.jpg",
+    "department": "Camera",
+    "job": "Director of Photography"
+   },
+   {
+    "id": 117992,
+    "name": "Jóhann Jóhannsson",
+    "gender": 2,
+    "profile_path": "/6TWdYn3opC6l5FBGACpTVbJn3yC.jpg",
+    "department": "Sound",
+    "job": "Original Music Composer"
+   },
+   {
+    "id": 102873,
+    "name": "Patrice Vermette",
+    "gender": 2,
+    "profile_path": null,
+    "department": "Art",
+    "job": "Production Design"
+   },
+   {
+    "id": 132642,
+    "name": "Jan Thijs",
+    "gender": 0,
+    "profile_path": null,
+    "department": "Camera",
+    "job": "Still Photographer"
+   },
+   {
+    "id": 1519868,
+    "name": "Donald Sparks",
+    "gender": 2,
+    "profile_path": null,
+    "department": "Directing",
+    "job": "First Assistant Director"
+   }
+  ]
+ }
+}

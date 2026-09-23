@@ -38,15 +38,21 @@
    * strings rather than the corpus's — are stated in full.
    *
    * WIKIPEDIA AND TVMAZE ARE CREDITED, NOT DEEP-LINKED. CC BY-SA asks for the licence identified
-   * and, where reasonable, the material linked — and this build holds no material to link. Nothing
-   * under `backend/spielplan` or `frontend/src` reads `title_meta`'s `homepage`, `importer/load.py`
-   * does not map the corpus's `wikipedia_title` onto `title`, and `/api/titles/{id}` carries no
-   * field an anchor could be built from; for TVmaze the corpus column is the show's own marketing
-   * site rather than the TVmaze page, so a link there would credit the wrong work under a CC BY-SA
-   * notice. What this block owes is the credit and the licence, and both are here. The missing half
-   * is not argued away in this comment: it is ruled on in decision 320 and published as a debt in
-   * `docs/RELEASE.md` section 4.7, so a reader who wants the link has somewhere to find out why it
-   * is absent. [decision 320]
+   * and, where reasonable, the material linked — and this build holds the material's address and
+   * does not serve it. That is a change of ground and not the sentence this paragraph used to
+   * carry: until M5.3 nothing here read an article identifier at all, which is what decision 320
+   * rests on. §8 stage 2 now fills `title`'s `wikipedia_title` and the derive writes
+   * `https://en.wikipedia.org/wiki/<article>` into `title_meta`'s `homepage`, so the half of that
+   * premise still standing is the SERVING one: no route selects either column, `/api/titles/{id}`
+   * carries no field an anchor could be built from, and a surface cannot link what it is never
+   * sent. For TVmaze the corpus column is the show's own marketing site rather than the TVmaze
+   * page, so a link there would credit the wrong work under a CC BY-SA notice — unbuildable
+   * rather than unbuilt. What this block owes is the credit and the licence, and both are here.
+   * The missing half is not argued away in this comment: it is ruled on in decision 320,
+   * re-measured in decision 425 on the day the identifier landed, and published as a debt in
+   * `docs/RELEASE.md` section 4.7 — so a reader who wants the link has somewhere to find out why
+   * it is still absent and what has changed since it was first refused.
+   * [decision 320; decision 425]
    */
 
   /**

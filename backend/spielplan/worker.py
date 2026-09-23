@@ -743,11 +743,17 @@ async def _acquisition_drain() -> dict[str, object] | None:
     later import turns into work. A skip here would hide all of that behind a log line. `basis` is
     null for that household, and for a tick that had nothing to lease.
 
-    `run_id` IS NOT PASSED. `raw_document.run_id` is provenance for bytes a stage fetched, and
-    `Job.run` takes no arguments: wiring it means either changing the callable signature every row
-    in this registry shares, or reading back the row `_record_start` has just written. Neither is
-    M5.1's, and at M5.1 nothing fetches - stages 2-8 are declared no-ops - so this job writes no
-    `raw_document` row at all. The milestone that gives a stage a fetch inherits the seam.
+    `run_id` IS NOT PASSED, AND SINCE M5.3 THAT COSTS SOMETHING. `raw_document.run_id` is
+    provenance for bytes a stage fetched, and `Job.run` takes no arguments: wiring it means either
+    changing the callable signature every row in this registry shares, or reading back the row
+    `_record_start` has just written. At M5.1 the seam was free - stages 2-8 were declared no-ops,
+    so this job wrote no `raw_document` row at all - and M5.3 gave stage 2 a body, so every
+    document this production path files now carries a null `run_id` while the same walk driven from
+    a test with an explicit run does not. The rows are correct and complete; what is missing is the
+    line tying a batch of them to the tick that fetched them, which §6.6's board reads per title
+    rather than per run. Recorded here rather than fixed in a review pass, because the repair is
+    the callable signature every row in this table shares.
+    [M5.3 review cycle 1, noted beside M53-C1-NET-03]
     """
     from spielplan.acquire import pipeline, queue
 
@@ -1141,10 +1147,11 @@ JOBS: tuple[Job, ...] = (
     # "acquisition" meets their trigger here. See `_acquisition_drain`.
     #
     # THE BUDGET, against the rule at the head of this table. Eight tasks a tick
-    # (`pipeline.DRAIN_LIMIT`) and 120 s for the batch is 15 s a task, and those three numbers sit
+    # (`pipeline.DRAIN_LIMIT`) and 420 s for the batch is 52.5 s a task, and those three numbers sit
     # between two bounds, only one of which is this job's own.
     #
-    # BELOW `queue.LEASE_SECONDS` = 900, comfortably - 7.5x here. The lease is what lets
+    # BELOW `queue.LEASE_SECONDS` = 900 - 2.1x here, and see the measurement below for why it is no
+    # longer the 7.5x this paragraph was written at. The lease is what lets
     # `queue.complete` write without a fence, and that is only true while `_tick`'s `wait_for`
     # cancels an attempt long before its lease can expire. If the two ever crossed, the reaper
     # would hand a task to a second worker while the first was still walking it: two processes,
@@ -1154,10 +1161,10 @@ JOBS: tuple[Job, ...] = (
     # modules and nothing else keeps them in order.
     #
     # UNDER ITS OWN 1800 s INTERVAL, which is this table's rule and not a preference: the loop is
-    # sequential, so the 6.7% of an interval this job may hold is 6.7% that §7.3's playback poll,
-    # the fold-in tick and both fits do not get.
+    # sequential, so the 23% of an interval this job may hold is 23% that §7.3's playback poll, the
+    # fold-in tick and both fits do not get.
     #
-    # WHAT 15 s A TASK BUYS IS NOT ONE TITLE PLACED, and this comment used to read as if it were.
+    # WHAT A TASK'S SHARE BUYS IS NOT ONE TITLE PLACED, and this comment used to read as if it were.
     # `DRAIN_LIMIT` bounds TASKS; `stages.place` calls `reconcile(scope="app_acquired")`, whose
     # work list is `SELECT id FROM title WHERE origin = 'acquired'` - so one task's stage 9 places
     # the WHOLE acquired set, and a tick's placement work is `DRAIN_LIMIT x |acquired|` rather than
@@ -1170,19 +1177,41 @@ JOBS: tuple[Job, ...] = (
     # ceiling binding is the one that owes a measurement, and §6.6's board is what it will read it
     # off. [M5.1 review cycle 1, M51-REV-07]
     #
-    # The rest of the headroom is for the milestone that gives a stage a fetch, which owes this
-    # line a measurement rather than a larger number. `acquire/fetch.py` already sleeps a
-    # `Retry-After` in process up to 300 s, so the first milestone to fetch inside a stage has to
-    # choose between that wait and a `queue.defer`; this budget is what makes the choice
-    # unavoidable.
+    # THE MEASUREMENT THAT PARAGRAPH ASKED FOR, TAKEN AT M5.3, AND WHAT IT MOVED. The paragraph
+    # above used to end "the rest of the headroom is for the milestone that gives a stage a fetch,
+    # which owes this line a measurement rather than a larger number". M5.3 is that milestone -
+    # §8 stages 2, 3 and 4 have bodies and stage 2 crawls eight hosts - so "ms of declared no-ops"
+    # stopped being true of this row and the number under it stopped being arithmetic anyone had
+    # done. Measured against the shipped per-host policy (`acquire/hosts.py`) rather than guessed:
+    # a first acquisition asks about sixteen urls a title, and the two hosts §8 stage 2 names by
+    # hand are paced at `rps=0.7, burst=1, max_concurrency=1` with up to six Metacritic requests a
+    # title - the page's two candidates, the reviews kind re-resolving them, and the two review
+    # views. `_walk_batch` is sequential and `stages.enrich` walks its kinds in a plain loop, so
+    # the per-host buckets refill during each other's waits and a batch costs about the SLOWEST
+    # host's queue rather than the sum: 8 x 6 / 0.7 = ~69 s of pure pacing, before latency, TLS,
+    # the parse and stage 3's writes. The milestone's own test fixture measured the keyless subset
+    # at 65 s of wall clock for one batch (`test_acquire_drain.py`'s `enrichment_stands_down`).
+    #
+    # AND THE CHOICE THAT PARAGRAPH SAID THIS BUDGET WOULD FORCE, MADE. `acquire/fetch.py:1360`
+    # sleeps a `Retry-After` in process up to 300 s, so any budget at or under that ceiling is one
+    # that a SINGLE 429 from a single host cancels - and `pipeline._walk_batch` deliberately keeps
+    # the in-flight task's charged attempt when it is cancelled, so four such ticks close a
+    # perfectly good title `failed` with no retry surface before M5.6. 420 s is above the ceiling
+    # with the measured batch beside it (69 + 300 = 369) and still 2.1x under `LEASE_SECONDS`,
+    # which is the bound that actually matters: the reaper must never hand a leased task to a
+    # second worker while the first is walking it. Raising it further would buy the pathological
+    # case at the cost of the invariant; lowering it back would be choosing to fail the title.
+    # It is 23% of the 1800 s interval rather than 6.7%, which is the honest price of a stage that
+    # crawls and is why this row's estimate now names the crawl. [M5.3 review cycle 1, M53-C1-NET-03]
     #
     # 1800 s AND NOT A MINUTE: this queue's feeder is the 15-minute Jellyfin sweep, so draining
     # twice an hour reaches a new add within about a sweep of it being seen, while a minute rate
     # would ask an empty queue 1,440 times a day to win nothing. It also keeps this row out of the
     # minute-interval group that `JOB_RUN_KEEP_DAYS` and `DURATION_LOG_THRESHOLD` are sized on.
     # [§8; plan step C4]
-    Job("acquisition-drain", "M5.1", "queue", "ms of declared no-ops + <1 s/title placed",
-        _acquisition_drain, every=1800, timeout=120),
+    Job("acquisition-drain", "M5.1", "queue",
+        "~9 s/title of paced crawl x 8 a tick + <1 s/title placed",
+        _acquisition_drain, every=1800, timeout=420),
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900,
         timeout=600),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,

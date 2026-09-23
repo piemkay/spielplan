@@ -17,13 +17,17 @@ nothing else — never `load_vocabulary`'s term tables, `load_tags` or `load_pro
 are the content tiers decision 162 forbids a re-import from carrying. Those four are what
 travels with a model bundle and what §8 stage 3 re-applies at every derive, and each of them
 replaces what it finds rather than merging with it: the bundle's copy is the whole truth for its
-version, and a ledger that arrives shorter has to end shorter. The one thing none of them may do
-is treat an absent, unreadable or EMPTY file as an instruction to delete — omission is not
-destructive, which is the guard `parse_corrections` has always kept, `load_adjudications` keeps
-under decision 247, `load_seed_list` under decision 260 and `load_axes` under decision 264. Four
-ledgers, four guards: the count is written out because for one cycle this sentence named three
-of them while all four cleared. Zero is not a length a ledger can ask for: it is
-indistinguishable from an export that did not finish writing.
+version, and a ledger that arrives shorter has to end shorter. **For the rows the bundle
+authored**, which is a qualifier decision 326 adds to two of the four: §6.6 gives the household
+an editor over `credit_correction` and `dna_adjudication`, so from M5.6 those two tables hold
+rows no bundle can supply and no re-import may take. `origin` is what tells them apart and the
+two DELETEs below name it; the other two ledgers have no editor and stay whole-table replacements.
+The one thing none of them may do is treat an absent, unreadable or EMPTY file as an instruction
+to delete — omission is not destructive, which is the guard `parse_corrections` has always kept,
+`load_adjudications` keeps under decision 247, `load_seed_list` under decision 260 and
+`load_axes` under decision 264. Four ledgers, four guards: the count is written out because for
+one cycle this sentence named three of them while all four cleared. Zero is not a length a
+ledger can ask for: it is indistinguishable from an export that did not finish writing.
 """
 
 from __future__ import annotations
@@ -314,10 +318,22 @@ async def load_adjudications(
     # The ledger is authored upstream and travels with the bundle, so the bundle's copy is the
     # whole truth for its version; replacing it is what makes a re-import idempotent without a
     # key the data does not have (§10: a re-import is a planned admin event, not an append).
-    await conn.execute("DELETE FROM dna_adjudication WHERE version = $1", version)
+    #
+    # WHOSE COPY, THOUGH, is the half decision 326 settles. §6.6's second ledger editor writes DNA
+    # verdicts into this same table, and a household verdict is not the bundle's to replace: it
+    # names a title this install acquired and a term this household argued about, and no upstream
+    # export will ever carry it back. So the version scope gains a provenance scope. The argument
+    # for the column, and decision 171's probe of what the unscoped form costs, are written out at
+    # `load_corrections` -- that is the ledger the probe actually measured, and one statement of
+    # the reason is what keeps the two from drifting apart. `origin` is a literal in the INSERT
+    # rather than the column's DEFAULT for the same reason it is named in the DELETE: which rows a
+    # re-import owns is the one question a reader of these two statements has.
+    await conn.execute(
+        "DELETE FROM dna_adjudication WHERE version = $1 AND origin = 'bundle'", version
+    )
     await conn.executemany(
         "INSERT INTO dna_adjudication (version, scope, title_id, term, verdict, target, quote, "
-        "source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        "source, note, origin) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'bundle')",
         rows,
     )
     per_title = sum(1 for r in rows if r[2] is not None)
@@ -745,8 +761,26 @@ async def load_corrections(conn: asyncpg.Connection, path: Path, report: ImportR
     rows = parse_corrections(path, report)
     if not rows:
         return
-    # The bundle's copy is the whole truth: nothing else writes this table, so it is replaced
-    # rather than merged and the ledger a re-import ships is the ledger the install ends on.
+    # The bundle's copy is the whole truth FOR THE ROWS THE BUNDLE WROTE, and the capitals are
+    # there because the clause that used to stand here was "nothing else writes this table" -- a
+    # measurement, offered as a rule, with a dated expiry nobody read as one. §6.6 promises the
+    # household three ledger editors, and decision 171's Cost paragraph named the collision the
+    # day the measurement would stop holding: "`DELETE FROM credit_correction` is unscoped, so
+    # when §6.6's ledger editors land, an in-app-authored correction absent from the next bundle's
+    # TSV is wiped (probed: P4 removed the app row)". That was accepted then because nothing wrote
+    # household rows. M5.3 is the milestone that ends the condition -- it builds the appliers those
+    # editors feed -- so decision 326 scopes the DELETE here rather than at M5.6, because a
+    # provenance column added AFTER the first household row exists has to guess where that row
+    # came from, and guessing wrong in this direction is the wipe the probe measured.
+    #
+    # Decision 247's rule is unchanged for the rows it was about: a bundle ledger that arrives
+    # shorter still ends shorter, and on an install that has never opened an editor every row is
+    # the bundle's, so the scoped DELETE and the unscoped one do the same thing. That is the point
+    # -- the scope costs nothing until it is the only thing standing between a household's curated
+    # fix and a routine re-import. `origin` is written as a literal in the INSERT rather than left
+    # to the column's DEFAULT (0026_acquisition_sources.sql) because which rows a re-import claims
+    # is the question a reader of these two statements has, and the answer belongs at the call site
+    # rather than in whichever migration happened to add the column.
     #
     # What this comment used to argue was the re-import path, and that path did not reach this
     # function at all. Decision 162 makes a models-only bundle the recurring one, and `bundle.py`
@@ -755,26 +789,47 @@ async def load_corrections(conn: asyncpg.Connection, path: Path, report: ImportR
     # were dropped on every re-import, with `report.table_counts` empty and no line in the report
     # to notice it by. Decision 247 puts the four curated ledgers back on the model path, which
     # is what makes this argument true rather than merely plausible.
-    # [M4.14 finding 2.15, decision 247]
-    await conn.execute("DELETE FROM credit_correction")
+    # [M4.14 finding 2.15; decisions 247, 171 and 326]
+    await conn.execute("DELETE FROM credit_correction WHERE origin = 'bundle'")
     await conn.executemany(
-        "INSERT INTO credit_correction (title_id, field, new_value, evidence, note) "
-        "VALUES ($1,$2,$3,$4,$5)",
+        "INSERT INTO credit_correction (title_id, field, new_value, evidence, note, origin) "
+        "VALUES ($1,$2,$3,$4,$5,'bundle')",
         rows,
     )
-    # NOT "re-applied at derive", which is what this line claimed and what §14.5 warns about
-    # believing. §8 stage 3 — the derive that would apply them — is M5's, and grep finds exactly
-    # two readers of `credit_correction`: this writer and `backup/movie_data.py`. Five of the
-    # shipped ledger's six rows are unreflected in the corpus's own `content.sqlite`, so nothing
-    # upstream pre-applied them either. Saying so is the whole repair: the rows are stored, and
-    # an operator reading the report learns that no credit on any card reflects them yet.
+    # WHAT THIS LINE MAY CLAIM CHANGED THE DAY THE APPLIER LANDED, AND IT MAY NOT CLAIM MORE.
+    # Until M5.3 it read "stored for §8 stage 3 (M5) - nothing applies them yet, so no credit on
+    # any card reflects them", over a comment saying grep finds exactly two readers of
+    # `credit_correction`: this writer and `backup/movie_data.py`. Both were true; both are now
+    # false. `derive/ledgers.apply_corrections` is the third reader, and §8 stage 3 calls it per
+    # title and last, after everything that derive has just regenerated (§14.5, decision 326).
+    #
+    # So the note names the applier and the MOMENT, because neither of the two sentences a reader
+    # reaches for is the fact. An operator told "nothing applies them" on an install that has the
+    # applier concludes the pipeline is broken and goes looking for the defect; one told "applied"
+    # concludes the curated fixes are already on the cards and stops checking. What is true is
+    # narrower than either: a correction reaches a card when its title is next derived, and the
+    # rows this import just stored have not been derived against yet.
+    #
+    # `applied=0` STAYS and stays honest, because it counts what THIS IMPORT did, which is the
+    # only thing an import report can count. The importer applies none -- that half has not moved
+    # and is what the key was always about. What it may no longer be read as is a statement about
+    # the install, which is why the message above it now names who does apply them.
+    #
+    # "re-applied at derive" is still refused outright, and is now the EASY thing to write rather
+    # than the plainly wrong thing: the derive really does apply these, so the phrase is no longer
+    # false about the pipeline, only about these rows. A report sentence in the past tense about an
+    # event that has not happened is how §14.5's scar gets earned a third time -- the first two
+    # were earned by believing an application had happened when it had not.
+    #
     # Import-time patching of `credit` is deliberately not done — §8 stage 3 owns that, and a
-    # second implementation of it here is how a derive silently reverts curated fixes.
-    # [M4.9 finding 32]
+    # second implementation of it here is how a derive silently reverts curated fixes. That half
+    # is unchanged, and it is the reason this function writes a ledger and stops.
+    # [M4.9 finding 32; §14.5; decision 326]
     report.note(
         "corrections",
-        f"{len(rows)} credit correction(s) stored for §8 stage 3 (M5) — nothing applies them "
-        "yet, so no credit on any card reflects them",
+        f"{len(rows)} credit correction(s) stored; §8 stage 3's derive applies them per title "
+        "and last (derive/ledgers.py), so a card reflects one only after its title is next "
+        "derived - this import applies none",
         corrections=len(rows), applied=0,
     )
 

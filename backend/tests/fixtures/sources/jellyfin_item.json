@@ -1,0 +1,160 @@
+{
+ "Id": "1af7355615558bca3155e440d6b1e26d",
+ "Name": "WALL·E",
+ "OriginalTitle": "WALL·E",
+ "ProductionYear": 2008,
+ "RunTimeTicks": 58926080000,
+ "Overview": "After hundreds of years doing what he was built for, WALL•E— a robot designed to clean up the earth—discovers a new purpose in life when he meets a sleek search robot named EVE. EVE comes to realize that WALL•E has inadvertently stumbled upon the key to the planet's future, and races back to space to report to the humans. Meanwhile, WALL•E chases EVE across the galaxy and sets into motion one of the most imaginative adventures ever brought to the big screen.",
+ "OfficialRating": "FSK-0",
+ "Genres": [
+  "Animation",
+  "Family",
+  "Science Fiction"
+ ],
+ "ProductionLocations": [
+  "United States of America"
+ ],
+ "Taglines": [
+  "After 700 years of doing what he was built for, he'll discover what he was meant for."
+ ],
+ "CommunityRating": 8.119,
+ "CriticRating": 95,
+ "PremiereDate": "2008-06-25T22:00:00.0000000Z",
+ "Path": "/media/entertainment/movies/WALL·E (2008)/WALL·E (2008) {imdb-tt0910970} [Hybrid][Remux-2160p][DV HDR10][TrueHD Atmos 7.1][EN+RO][HEVC]-playBD.mkv",
+ "UserData": {
+  "PlaybackPositionTicks": 0,
+  "PlayCount": 0,
+  "IsFavorite": false,
+  "Played": false,
+  "Key": "10681",
+  "ItemId": "1af7355615558bca3155e440d6b1e26d"
+ },
+ "Studios": [
+  {
+   "Name": "Pixar"
+  }
+ ],
+ "MediaSources": [
+  {
+   "Container": "mkv",
+   "Bitrate": 57735211,
+   "Size": 36530863002
+  }
+ ],
+ "MediaStreams": [
+  {
+   "Type": "Subtitle",
+   "Codec": "subrip",
+   "Width": 0,
+   "Height": 0,
+   "VideoRange": "Unknown",
+   "VideoRangeType": "Unknown",
+   "Language": "deu"
+  },
+  {
+   "Type": "Video",
+   "Codec": "hevc",
+   "Width": 3840,
+   "Height": 2160,
+   "VideoRange": "HDR",
+   "VideoRangeType": "DOVIWithHDR10",
+   "BitDepth": 10,
+   "Profile": "Main 10"
+  },
+  {
+   "Type": "Audio",
+   "Codec": "truehd",
+   "VideoRange": "Unknown",
+   "VideoRangeType": "Unknown",
+   "BitDepth": 24,
+   "Channels": 8,
+   "Profile": "Dolby TrueHD + Dolby Atmos",
+   "ChannelLayout": "7.1",
+   "Language": "eng"
+  },
+  {
+   "Type": "Audio",
+   "Codec": "ac3",
+   "VideoRange": "Unknown",
+   "VideoRangeType": "Unknown",
+   "Channels": 6,
+   "ChannelLayout": "5.1",
+   "Language": "eng"
+  },
+  {
+   "Type": "Audio",
+   "Codec": "eac3",
+   "VideoRange": "Unknown",
+   "VideoRangeType": "Unknown",
+   "Channels": 6,
+   "ChannelLayout": "5.1",
+   "Language": "ron"
+  },
+  {
+   "Type": "Subtitle",
+   "Codec": "PGSSUB",
+   "Width": 1920,
+   "Height": 1080,
+   "VideoRange": "Unknown",
+   "VideoRangeType": "Unknown",
+   "Language": "eng"
+  }
+ ],
+ "People": [
+  {
+   "Name": "Ben Burtt",
+   "Role": "WALL·E / M-O (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Elissa Knight",
+   "Role": "EVE (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Jeff Garlin",
+   "Role": "Captain (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Fred Willard",
+   "Role": "Shelby Forthright, BnL CEO",
+   "Type": "Actor"
+  },
+  {
+   "Name": "John Ratzenberger",
+   "Role": "John (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Kathy Najimy",
+   "Role": "Mary (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Sigourney Weaver",
+   "Role": "Ship's Computer (voice)",
+   "Type": "Actor"
+  },
+  {
+   "Name": "Andrew Stanton",
+   "Role": "Director",
+   "Type": "Director"
+  },
+  {
+   "Name": "Andrew Stanton",
+   "Role": "Screenplay",
+   "Type": "Writer"
+  },
+  {
+   "Name": "Jim Reardon",
+   "Role": "Screenplay",
+   "Type": "Writer"
+  },
+  {
+   "Name": "Lindsey Collins",
+   "Role": "Producer",
+   "Type": "Producer"
+  }
+ ]
+}

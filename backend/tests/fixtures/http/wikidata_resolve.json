@@ -1,0 +1,47 @@
+{
+  "head": {
+    "vars": [
+      "item",
+      "imdb",
+      "rt",
+      "mc",
+      "lb",
+      "tmdb",
+      "article"
+    ]
+  },
+  "results": {
+    "bindings": [
+      {
+        "item": {
+          "type": "uri",
+          "value": "http://www.wikidata.org/entity/Q124070"
+        },
+        "imdb": {
+          "type": "literal",
+          "value": "tt0113277"
+        },
+        "rt": {
+          "type": "literal",
+          "value": "m/heat"
+        },
+        "mc": {
+          "type": "literal",
+          "value": "movie/heat"
+        },
+        "lb": {
+          "type": "literal",
+          "value": "heat-1995"
+        },
+        "tmdb": {
+          "type": "literal",
+          "value": "949"
+        },
+        "article": {
+          "type": "uri",
+          "value": "https://en.wikipedia.org/wiki/Heat_(1995_film)"
+        }
+      }
+    ]
+  }
+}

@@ -224,10 +224,15 @@ class RobotsUnavailable(FetchError):
     the old code made was sound about the exception it had: refusing a host over one outage
     "would let one outage park every task for that host as permanently refused - the one failure
     `RobotsDisallowed` promises is not transient". So this failure is the transient one, in
-    `HostPaused`'s mould: a stage catches it and parks with a deadline under decision 336, and the
-    next drain asks the host again. A 4xx is NOT this - RFC 9309 §2.3.1.3 puts the whole 400-499
+    `HostPaused`'s mould: it is not cached past the drain that met it, and the next drain asks
+    the host again. A 4xx is NOT this - RFC 9309 §2.3.1.3 puts the whole 400-499
     range under "unavailable" and says a crawler may access any resource, which is what a host
     publishing no robots.txt means. [M5.1 review cycle 1, M51-340-03]
+
+    NO STAGE PARKS ON IT, which this docstring used to say one did. At §8 stage 2 it is a
+    best-effort source's note like the breaker's pause - decision 422 says why - and a title it
+    leaves short at stage 4 is asked again when that window closes (decision 421).
+    [M5.3 review cycle 2, M53-C2-NET-01]
     """
 
     def __init__(self, host: str, url: str, status: int):

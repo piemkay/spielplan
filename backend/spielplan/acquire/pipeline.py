@@ -58,9 +58,26 @@ are built here - those are M5.5's and M5.7's. What is built is the refusal, and 
 built now is that it cannot be retrofitted: the day stage 6 gets a body is the day the gate has to
 already exist, or the first drain after that commit bills the household.
 
-NOTHING HERE FETCHES. `acquire/fetch.py` is deliberately not imported: stages 2 and 3 are M5.3's
-and at M5.1 they are declared no-ops, so a dependency on the HTTP layer would be a dependency on a
-module this file does not use.
+THIS FILE BUILDS THE FETCHER AND `stages.py` STILL DOES NOT NAME IT (decision 373). It used to
+say "NOTHING HERE FETCHES ... a dependency on the HTTP layer would be a dependency on a module
+this file does not use", which was M5.1's true sentence and stopped being true the moment stage 2
+got a body: something has to construct the one `fetch.Fetcher` a drain paces every host through,
+and the only honest place is the loop that knows what a drain IS. So the import moved down one
+level rather than out: `drain` builds one per drain inside `async with`, behind a factory a test
+replaces with an `httpx.MockTransport`, and hands it to `run_task`, which puts it on the context.
+`acquire/stages.py` imports no transport at all - it drives eleven source adapters through a
+handle it never names the type of - and neither does anything under `spielplan/derive/`, which is
+what "re-parsing is free forever" (`spec:398`) rests on.
+
+ONE FETCHER PER DRAIN, BUILT ON THE FIRST STAGE THAT ASKS. `fetch.Fetcher`'s own docstring says
+the instance is the unit: the per-host token buckets, the semaphores and the circuit breaker live
+on it and are rebuilt from `fetch_host_state` at the top of the next drain. Two instances in one
+drain would pace one host at twice its declared rate, which is §8's politeness clause (`spec:404`)
+broken by the machinery meant to keep it. And the construction is LAZY - `Stage.fetches` says
+which stages need one - so a drain that leases nothing, or whose tasks all park at stage 1, or
+whose retry resumes at stage 4 from the raw store, builds no HTTP client and opens no socket.
+That last one is not a micro-optimisation: it is exit criterion measure 5, "resumes at stage 4;
+outbound request count = 0".
 """
 
 from __future__ import annotations
@@ -76,8 +93,8 @@ from typing import Any
 
 import asyncpg
 
-from spielplan.acquire import queue, stages
-from spielplan.connectors import resolve
+from spielplan.acquire import fetch, queue, stages
+from spielplan.connectors import registry, resolve
 
 log = logging.getLogger("spielplan.acquire.pipeline")
 
@@ -120,8 +137,36 @@ class Stage:
     `implemented` is not decoration and not a to-do marker. The spend gate reads it: a stage that
     is declared a no-op cannot spend money, so refusing it would make the spine untestable end to
     end - which is D3's whole purpose - while refusing an implemented paid stage with no cap is
-    §8's rule. `owner` is the milestone that owes the body, so a stub surviving into M5.6 is
-    visible in the tuple as well as in its own docstring.
+    §8's rule. `owner` is the milestone that owes the body - or, once there is one, the milestone
+    that wrote it, which is how the default already reads on stages 1, 9 and 10 - so a stub
+    surviving into M5.6 is visible in the tuple as well as in its own docstring.
+
+    `fetches` IS `paid`'s SHAPE FOR A SECOND QUESTION THE DRIVER MUST ANSWER BEFORE THE CALL
+    (decision 373). `paid` asks "will running this spend money"; `fetches` asks "will running this
+    need the drain's one `fetch.Fetcher`", and both have to be answerable without calling the
+    stage - the first because a stage that runs and then checks a cap has already spent, the
+    second because a Fetcher built for a walk that never reaches stage 2 is an HTTP client built
+    for nothing. A boolean on the stage rather than a stage number in `run_task` because the
+    number is exactly the kind of fact that goes stale: §8's stage 2 is the only one that fetches
+    today, M5.5's stage 6 calls an LLM provider over HTTP and may well want the same handle, and a
+    driver testing `if stage.number == 2` would be a second spelling of the stage list this
+    module exists to keep single. Like `implemented`, it is a hand-written literal and a test is
+    what ties it to reality:
+    `test_acquire_pipeline.py::test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher`.
+
+    `reask_from` IS WHERE A PARK AT THIS STAGE RE-ENTERS ONCE ITS OWN DEADLINE HAS PASSED, and §8
+    stage 4 is the only stage that has one. The board is the resume point, which is right for
+    every park whose answer can change without the pipeline doing anything - a key typed into
+    Admin, a spend cap - and wrong for the one whose answer can only change if an EARLIER stage
+    runs again: the reviews gate counts rows stage 3 wrote out of documents stage 2 fetched, so a
+    window that re-entered at 4 re-counted day one's rows, opened no socket and parked again, and
+    §8's "new releases accrue reviews over weeks" could not be observed. Keyed on the deadline
+    PASSING rather than on the park alone, because the same park made due EARLY is an operator's
+    retry, which §12's M5.3 row says resumes at stage 4 with no request made - and the window's
+    instant is `retry_after`, which `_record_stop` wrote with the queue's `next_attempt_at` as one
+    value, so the clock is what tells the two events apart. A field for `fetches`' reason: a
+    driver testing `stage.number == 4` would be a second spelling of this tuple.
+    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
     """
 
     number: int
@@ -130,16 +175,31 @@ class Stage:
     paid: bool = False
     implemented: bool = True
     owner: str = "M5.1"
+    fetches: bool = False
+    reask_from: int | None = None
 
 
 # §8's ten, verbatim and in order (`docs/spielplan-spec_v2.1.md` §8's own block). The names carry
 # spaces because the spec's do; the callables carry underscores because Python's do, and the test
 # that reads the spec back asserts the pair rather than either alone.
+#
+# STAGES 2, 3 AND 4 KEEP `owner="M5.3"` NOW THAT THEY HAVE BODIES, and the alternative was to let
+# them fall back to the default. They are not stubs any more, so "the milestone that owes the
+# body" no longer describes them - but the default is `"M5.1"`, which stages 1, 9 and 10 carry
+# because M5.1 WROTE them, so dropping the string would file three stages under a milestone that
+# did not write a line of them. The field reads as provenance the moment a stage ships, and that
+# is the reading the two assertions over it already allow: both are scoped to
+# `if not s.implemented`, so what `owner` means for an implemented stage was never asserted and is
+# settled here rather than left to whoever next reads the tuple. [M5.3, decision 373]
+#
+# Stage 2 is the only `fetches=True`. Not a list of "the network stages": one boolean per row,
+# where the row already carries `paid`, so the day M5.5's extraction wants the same handle it sets
+# the same flag on the same line.
 STAGES: tuple[Stage, ...] = (
     Stage(1, "identify", stages.identify),
-    Stage(2, "enrich", stages.enrich, implemented=False, owner="M5.3"),
-    Stage(3, "derive", stages.derive, implemented=False, owner="M5.3"),
-    Stage(4, "reviews gate", stages.reviews_gate, implemented=False, owner="M5.3"),
+    Stage(2, "enrich", stages.enrich, owner="M5.3", fetches=True),
+    Stage(3, "derive", stages.derive, owner="M5.3"),
+    Stage(4, "reviews gate", stages.reviews_gate, owner="M5.3", reask_from=2),
     Stage(5, "dna pack", stages.dna_pack, implemented=False, owner="M5.4"),
     # The only paid one, and marked so while it still spends nothing. See `refuse_uncapped_spend`.
     Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=False, owner="M5.5"),
@@ -430,13 +490,26 @@ async def _resume_index(conn: asyncpg.Connection, title_id: int) -> int:
     doing nothing. That is D5's idempotence rather than a wasted call: the alternative - returning
     "past the end" - would make a re-run of a finished task a silent no-op, and a silent no-op is
     indistinguishable from a driver that stopped working.
+
+    A PARK WHOSE OWN DEADLINE HAS PASSED RE-ENTERS AT ITS STAGE'S `reask_from`, when it declares
+    one - §8 stage 4's window, which re-enters at stage 2 so that the reviews written in the
+    meantime are fetched and derived before the gate counts again. `now()` and not this process's
+    clock, because the queue leases on `next_attempt_at <= now()` and the window has to close by
+    the same clock that made the task due. A `retry_after` still in the future is an operator
+    making the task due early, and that re-enters at the board's stage as it always did.
+    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
     """
     row = await conn.fetchrow(
-        "SELECT stage FROM acquisition_job WHERE title_id = $1", title_id
+        "SELECT stage, status = $2 AND retry_after <= now() AS closed"
+        "  FROM acquisition_job WHERE title_id = $1",
+        title_id, PARKED,
     )
     if row is None:
         return 0
     stage = max(1, min(len(STAGES), int(row["stage"])))
+    reask = STAGES[stage - 1].reask_from
+    if row["closed"] and reask is not None:
+        return reask - 1
     return stage - 1
 
 
@@ -454,6 +527,69 @@ async def _remember_title(conn: asyncpg.Connection, task: queue.Task, title_id: 
         " WHERE id = $1",
         task.id, json.dumps({"title_id": int(title_id)}),
     )
+
+
+# The drain's second extension point, and the shape is `StageGate`'s for the same reason: a test
+# has to be able to answer the question differently without the driver knowing it is a test.
+# `FetcherFactory` makes an UN-ENTERED `Fetcher`; the drain enters it, so `__aexit__` - which
+# closes the client and flushes `fetch_host_state` - runs exactly once and is the drain's to own
+# rather than a factory's to remember. `FetcherSupply` is what `run_task` is handed: call it and
+# get the drain's one Fetcher, built on the first call and returned unchanged on every later one.
+FetcherFactory = Callable[[asyncpg.Connection], Awaitable[fetch.Fetcher]]
+FetcherSupply = Callable[[], Awaitable[fetch.Fetcher]]
+
+
+async def _default_fetcher(conn: asyncpg.Connection) -> fetch.Fetcher:
+    """The fetcher a real drain uses. One per drain, paced from `fetch_host_state`.
+
+    THE JELLYFIN HOST IS READ FROM `connector_config` AND NOT FROM A SETTING, because that is
+    where §2 puts it - "configured in the admin UI and stored in `connector_config`" - and because
+    `hosts.policy_for` needs the value an admin actually typed in order to apply `JELLYFIN_POLICY`
+    to the right host. `fetch.py`'s port verdict 6 records why the fetcher takes the hostname
+    rather than reaching for it: "reaching for it here would couple the fetcher to the connector
+    layer and to the secrets boundary for one hostname comparison". So the coupling lands here,
+    in the driver, which already imports the connector layer for `resolve`.
+
+    THE EXEMPTION IS NOT WIDENED BY ONE CHARACTER. `registry.load_jellyfin` degrades to an empty
+    url when the DEK will not open, and `hosts.policy_for` reads an empty `jellyfin_host` as "no
+    exemption" - so an install whose secrets are unreadable crawls every host politely rather than
+    crawling one of them fast. `jellyfin_key` takes the URL whole, `policy_for` refuses to let a
+    declared row be overridden by it (`hosts.py:292-300`), and none of that is restated here.
+    """
+    jellyfin = await registry.load_jellyfin(conn)
+    return fetch.Fetcher(conn=conn, jellyfin_host=jellyfin.url)
+
+
+class _OneFetcher:
+    """One `Fetcher` per drain, built on the first stage that declares it fetches.
+
+    Not a `functools.cache` and not a module-level singleton: the instance holds this drain's
+    per-host token buckets and its view of the breaker, and `fetch.Fetcher`'s own docstring says
+    the unit is the worker job rather than the process. It also holds the connection, which is the
+    drain's and goes back to the pool when the drain ends.
+
+    THE POINT IS THE CALL THAT NEVER HAPPENS. A drain whose tasks all park at stage 1, or whose
+    one task resumes at stage 4 and re-reads the raw store, never reaches a stage with
+    `fetches=True`, so `__call__` is never awaited, `httpx.AsyncClient` is never constructed and
+    nothing is put on the wire. That is measurable from the outside - the factory is not called -
+    which is what makes exit criterion measure 5 a test rather than an argument.
+    """
+
+    def __init__(
+        self,
+        conn: asyncpg.Connection,
+        stack: contextlib.AsyncExitStack,
+        factory: FetcherFactory,
+    ) -> None:
+        self._conn = conn
+        self._stack = stack
+        self._factory = factory
+        self._fetcher: fetch.Fetcher | None = None
+
+    async def __call__(self) -> fetch.Fetcher:
+        if self._fetcher is None:
+            self._fetcher = await self._stack.enter_async_context(await self._factory(self._conn))
+        return self._fetcher
 
 
 async def _run_stage(
@@ -559,6 +695,7 @@ async def run_task(
     *,
     gate: StageGate = refuse_uncapped_spend,
     run_id: int | None = None,
+    open_fetcher: FetcherSupply | None = None,
 ) -> TaskReport:
     """Walk one task through §8's stages from wherever its title's board row says it is.
 
@@ -595,6 +732,13 @@ async def run_task(
     only release that survives a `kill -9`. The loser DEFERS with no attempt spent and writes no
     board row, because the row belongs to the walk that holds the title.
     [M5.1 review cycle 2, seam322-06]
+
+    `open_fetcher` IS ASKED FOR ONLY BY A STAGE THAT DECLARED IT FETCHES (decision 373), and it is
+    asked for INSIDE the walk rather than before it - which is what makes "a resume at stage 4
+    opens no socket" a property of the loop rather than of a caller remembering. None is a legal
+    value and means nobody supplied one: `stages.enrich` then fails with a reason naming the
+    driver instead of constructing a Fetcher of its own, because one drain has one set of per-host
+    token buckets or it has none (`_OneFetcher`).
     """
     ctx = stages.StageContext(
         conn=conn, task=task, title_id=_payload_title_id(task), run_id=run_id
@@ -632,6 +776,15 @@ async def run_task(
         while index < len(STAGES):
             stage = STAGES[index]
             report.stage = stage.number
+            if stage.fetches and ctx.fetcher is None and open_fetcher is not None:
+                # OUTSIDE `_run_stage`'s guard on purpose, unlike the spend gate one line into it.
+                # A factory that raises is the drain's failure and not this stage's: it means the
+                # connector read or the client construction broke, which will break identically
+                # for every task in this batch, and `drain`'s own `except Exception` closes the
+                # task with "the driver failed outside any stage" - which is the true sentence.
+                # Recording it as a stage failure would spend this title's attempt on a fault that
+                # has nothing to do with this title.
+                ctx.fetcher = await open_fetcher()
             outcome = await _run_stage(stage, ctx, gate)
             report.stages_run.append(stage.name)
             detail = {stage.name: outcome.detail} if outcome.detail else {}
@@ -835,6 +988,7 @@ async def drain(
     limit: int = DRAIN_LIMIT,
     gate: StageGate = refuse_uncapped_spend,
     run_id: int | None = None,
+    fetcher_factory: FetcherFactory | None = None,
 ) -> DrainReport:
     """Reclaim what died, lease up to `limit` ready tasks, and walk each one. §5.3's job body.
 
@@ -871,6 +1025,17 @@ async def drain(
     actually ate the budget keeps its attempt, so `max_attempts` still bounds a stage that cannot
     finish inside one tick. [M5.1 review cycle 2, port-CANCEL-01]
     [M5.1 review cycle 1, M51-REV-01, M51-CRASH-02]
+
+    ONE FETCHER FOR THE WHOLE BATCH, AND IT IS BUILT ONLY IF SOMETHING ASKS (decision 373). The
+    `AsyncExitStack` is what makes "inside `async with`" true across a loop that may or may not
+    need one: nothing is entered until `_OneFetcher` is called, and whatever was entered is exited
+    on the way out - closing the client and flushing this drain's per-host counters into
+    `fetch_host_state`, which is the row §6.6 reads and the row the NEXT drain rebuilds its pacing
+    and its breaker from. The stack wraps the CANCELLATION arm too, and that matters: `_tick`
+    bounds this job with `asyncio.wait_for`, and a drain cancelled at its budget must still flush
+    the requests it already made, or a household's politeness accounting resets every time a tick
+    runs long. `fetcher_factory` is the seam a test replaces with an `httpx.MockTransport`, in
+    `StageGate`'s shape and for its reason.
     """
     report = DrainReport()
     report.reclaimed = await queue.reclaim_expired(conn)
@@ -878,9 +1043,47 @@ async def drain(
     await complete_landed_boards(conn)
     leased = await queue.lease(conn, [TASK_KIND], limit=limit)
     report.leased = len(leased)
+    async with contextlib.AsyncExitStack() as stack:
+        open_fetcher = _OneFetcher(conn, stack, fetcher_factory or _default_fetcher)
+        await _walk_batch(conn, leased, report, gate=gate, run_id=run_id,
+                          open_fetcher=open_fetcher)
+    if report.leased:
+        log.info("acquisition drain: %s", report.as_dict())
+    return report
+
+
+async def _walk_batch(
+    conn: asyncpg.Connection,
+    leased: list[queue.Task],
+    report: DrainReport,
+    *,
+    gate: StageGate,
+    run_id: int | None,
+    open_fetcher: FetcherSupply,
+) -> None:
+    """`drain`'s loop, lifted out whole so the fetcher's `async with` can wrap it.
+
+    EVERY LINE BELOW IS `drain`'s AND ONE OF THEM MOVED: the `run_task` call gained
+    `open_fetcher`, and nothing else changed - including the two arms `drain`'s docstring argues
+    at length, the cancellation refund and the fourth exit that writes both tables. It is a
+    function rather than an extra indentation level because the loop is forty lines of
+    comment-dense bookkeeping and re-wrapping it in `async with` would have re-flowed every one of
+    them, turning a two-line change into a diff nobody could read for the thing that actually
+    moved. The report is passed in and mutated for the same reason: `drain` still owns it, and
+    this function returns nothing precisely so it cannot become a second place the counters are
+    decided.
+
+    A CANCELLATION STILL PROPAGATES THROUGH THE STACK, which is what makes the split safe rather
+    than merely tidy. `_tick` bounds the job with `asyncio.wait_for`; the arm below hands the
+    untouched tasks back and re-raises, `drain`'s `AsyncExitStack` then exits the Fetcher on the
+    way out, and this drain's per-host counters reach `fetch_host_state` even though the tick ran
+    long. Without that, a household whose ticks regularly overran would keep no politeness
+    accounting at all. `test_acquire_drain.py`'s budget test is what holds it.
+    """
     for position, task in enumerate(leased):
         try:
-            outcome = await run_task(conn, task, gate=gate, run_id=run_id)
+            outcome = await run_task(conn, task, gate=gate, run_id=run_id,
+                                     open_fetcher=open_fetcher)
         except asyncio.CancelledError:
             # `_tick`'s budget, not a worker dying, and the difference is the rest of this batch.
             # `queue.lease` claims the whole batch in one statement and counts the attempt ON THE
@@ -953,9 +1156,6 @@ async def drain(
             report.parked += 1
         elif outcome.status == FAILED:
             report.failed += 1
-    if report.leased:
-        log.info("acquisition drain: %s", report.as_dict())
-    return report
 
 
 # A board row still reading `running` is the crash marker: `write_board(RUNNING)` is written

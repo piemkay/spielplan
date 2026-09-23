@@ -1,0 +1,126 @@
+{
+ "ids": {
+  "imdb": "tt2543164",
+  "plex": {
+   "guid": "5d776b83fb0d55001f56a04b",
+   "slug": "arrival-2016"
+  },
+  "slug": "arrival-2016",
+  "tmdb": 329865,
+  "trakt": 210803
+ },
+ "year": 2016,
+ "title": "Arrival",
+ "votes": 49088,
+ "colors": {
+  "poster": [
+   "#989BA4",
+   "#262A2D"
+  ]
+ },
+ "genres": [
+  "science-fiction",
+  "drama",
+  "mystery"
+ ],
+ "images": {
+  "logo": [
+   "media.trakt.tv/images/movies/000/210/803/logos/medium/1e2d9e6ae1.png.webp"
+  ],
+  "thumb": [
+   "media.trakt.tv/images/movies/000/210/803/thumbs/medium/aa8302f450.jpg.webp"
+  ],
+  "banner": [
+   "media.trakt.tv/images/movies/000/210/803/banners/medium/5ce7825e82.jpg.webp"
+  ],
+  "fanart": [
+   "media.trakt.tv/images/movies/000/210/803/fanarts/medium/00dd6427c9.jpg.webp"
+  ],
+  "poster": [
+   "media.trakt.tv/images/movies/000/210/803/posters/medium/fc306afd42.jpg.webp"
+  ],
+  "clearart": [
+   "media.trakt.tv/images/movies/000/210/803/cleararts/medium/937f45397a.png.webp"
+  ]
+ },
+ "rating": 8.018843650817871,
+ "status": "released",
+ "country": "us",
+ "runtime": 116,
+ "tagline": "Why are they here?",
+ "trailer": "https://youtube.com/watch?v=7W1m5ER3I1Y",
+ "homepage": "https://www.arrivalmovie.com/",
+ "language": "en",
+ "overview": "Taking place after alien crafts land around the world, an expert linguist is recruited by the military to determine whether they come in peace or are a threat.",
+ "released": "2016-11-10",
+ "languages": [
+  "zh",
+  "en",
+  "ru"
+ ],
+ "subgenres": [
+  "military",
+  "scientist",
+  "female-protagonist",
+  "heartbreak",
+  "alien",
+  "spacecraft",
+  "wistful",
+  "science-fiction"
+ ],
+ "social_ids": {
+  "twitter": "arrivalmovie",
+  "facebook": "ArrivalMovie",
+  "instagram": "arrivalmovie",
+  "wikipedia": "Arrival_(film)"
+ },
+ "updated_at": "2026-08-13T15:45:07.000Z",
+ "after_credits": false,
+ "certification": "PG-13",
+ "comment_count": 254,
+ "during_credits": false,
+ "original_title": "Arrival",
+ "available_translations": [
+  "ar",
+  "bg",
+  "bs",
+  "ca",
+  "cs",
+  "da",
+  "de",
+  "el",
+  "en",
+  "eo",
+  "es",
+  "et",
+  "fa",
+  "fi",
+  "fr",
+  "he",
+  "hr",
+  "hu",
+  "id",
+  "it",
+  "ja",
+  "ka",
+  "ko",
+  "lt",
+  "lv",
+  "nb",
+  "nl",
+  "no",
+  "pl",
+  "pt",
+  "ro",
+  "ru",
+  "sk",
+  "sl",
+  "sr",
+  "sv",
+  "th",
+  "tr",
+  "uk",
+  "vi",
+  "zh"
+ ]
+}

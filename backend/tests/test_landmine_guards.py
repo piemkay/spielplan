@@ -935,13 +935,23 @@ def test_union_guard_allows_the_sanctioned_view_and_nothing_after_it():
 
 def test_display_schema_is_read_from_exactly_one_place():
     """§4.1 rule 3: platform_rating lives in a display-only schema the feature builder cannot
-    import from. Keeping the reads in one function is what makes the boundary auditable."""
+    import from. Keeping the reads in one function is what makes the boundary auditable.
+
+    THE LIST IS THREE AND TWO OF THEM ARE WRITERS, which the name of this test does not say and
+    the rule does not mind: the boundary rule 3 draws is that nothing in `display` may become a
+    model feature, so what has to be enumerable is every module that names the table at all.
+    `db/library.py` is the one reader, §6.0's card; `importer/load.py` writes it from the bundle
+    (§10); and `derive/rebuild.py` writes it from the raw store (§8 stage 3) - the same fact
+    arriving by the other of the two paths decision 162 keeps apart. A third WRITER is not a
+    widening of rule 3 and a second reader would be; the assertion stays an exact list so that
+    either shows up here.
+    """
     readers = [
         p.relative_to(PACKAGE).as_posix()
         for p in sorted(PACKAGE.rglob("*.py"))
         if "display.platform_rating" in p.read_text(encoding="utf-8")
     ]
-    assert sorted(readers) == ["db/library.py", "importer/load.py"], readers
+    assert sorted(readers) == ["db/library.py", "derive/rebuild.py", "importer/load.py"], readers
 
 
 def test_every_listing_query_partitions_by_kind():

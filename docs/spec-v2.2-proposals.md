@@ -7,10 +7,12 @@ surface by surface, with an adversarial pass over every claimed divergence.*
 **Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
 there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
 amended in place, recording each wave as a dated point release in its own Status block. This
-file holds 316 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+file holds 333 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
 the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
-numbered owner decisions** - 155 of them, the latest 321-361 - and each is normative from the
+numbered owner decisions** - 172 of them, spanning 162-425, the latest being M5.3's own
+372-378, the 420, 421 and 422 its second review cycle took and the 423, 424 and 425 its first
+took as 392-394 and the merge renumbered - and each is normative from the
 day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
 wave was folded into that file on 2026-09-03 and this one on 2026-09-17. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
@@ -7795,6 +7797,723 @@ registered test changed shape rather than subject:
 file and reading the tampered bytes back, which required the store to be unable to tell - so the
 proof moved to the write block's only route to the disk. [M5.1 review cycle 4 second pass,
 M51-C4-RAW-03, M51-C4-RAW-04]
+
+---
+
+## Decisions taken (owner, 2026-09-18, as M5.3 opened)
+
+Eleven, taken under the same standing instruction M5.1's sittings ran under: the plan's
+recommended option, taken rather than asked. Four of them are questions
+`docs/milestones/ROADMAP-M5.md` files against M5.3 and that M5.1 deliberately left unspent -
+326, 334, 335 and 346 - and the other seven are spent out of this lane's own block, 372-381. The
+holes the M5.1 blocks enumerate therefore narrow to 324, 325, 327-330, 333, 337-339, 341-344 and
+350-359, which stay unspent for the milestones those tables file them against; 362-371 and
+382-391 belong to the two sibling lanes building the rest of this wave and are not touched here.
+**379, 380 and 381 are the rest of this lane's block and stay unspent**, for the reason 350-359
+do: a number is taken by the owner rather than reserved by a planner, and one written twice is
+two normative rules under one heading (228-233). Naming them is the other half of decision 346's
+cost paragraph - the hole lists there enumerated every number M5.1 left unspent and omitted the
+one that mattered.
+
+**346 is recorded and not applied, and that is what it decides.** It is decision 171's owed spec
+amendment, and decision 331 gives the normative file to the milestone that holds it, one at a
+time. So the text is written down here in full and the debt stays open and citable rather than
+being closed by a second lane editing a paragraph a third lane is also in. M5.3's only edit to
+`docs/spielplan-spec_v2.1.md` is its own §12 row.
+
+### 326. Where the in-app ledger editors write, and what survives a re-import
+
+**What the record says.** §6.6 gives the household three ledger editors and promises that app-side
+fixes "survive every future re-derive" (`docs/spielplan-spec_v2.1.md:322`). Decision 171 rules that
+all four curated ledgers re-load on every import including the models-only one, and decision 162
+makes a models-only import the only import that recurs. `importer/dna.py:759` is `DELETE FROM
+credit_correction` with no WHERE; `load_adjudications`' DELETE (`:317`) is scoped to the vocabulary
+version and to nothing else. Both tables are archived by `backup/movie_data.py:149-150`.
+
+**Why it changes.** Decision 171's own Cost paragraph (`ROADMAP-to-M5.md:390-412`) recorded the
+collision in advance and verbatim: "`DELETE FROM credit_correction` is unscoped, so when §6.6's
+ledger editors land, an in-app-authored correction absent from the next bundle's TSV is wiped
+(probed: P4 removed the app row)". A household-authored fix therefore survives every re-derive -
+which is literally what §6.6 promises - and is destroyed by the next re-import. That was acceptable
+while nothing wrote household rows. M5.3 is the milestone that ends that condition: it builds the
+appliers the editors will feed, and an applier whose input a re-import silently empties reverts
+curated fixes by another route than the one §14.5 names.
+
+**The decision.** Both curated-ledger tables gain
+`origin text NOT NULL DEFAULT 'bundle' CHECK (origin IN ('bundle','household'))` in migration
+`0026`. The editors (M5.6) will write Postgres rows carrying `origin = 'household'`;
+`importer/dna.py:759` becomes `DELETE FROM credit_correction WHERE origin = 'bundle'`, and
+`load_adjudications`' version-scoped DELETE gains the same `AND origin = 'bundle'`. The TSV export
+route ships with the editors at M5.6, not here. **This decision mandates a spec amendment this
+milestone does not apply.** The clause is §6.6's Data bullet at `docs/spielplan-spec_v2.1.md:322`,
+and the replacement text is given here verbatim so the milestone that holds the spec file can paste
+it: "`adjudications_v1.tsv` for DNA verdicts *and* `corrections_v1.tsv` for credit facts, so
+app-side fixes survive every future re-derive **and every re-import**." M5.3 does not apply it,
+under decision 331 and for decision 346's reason.
+
+**Cost.** The backfill is free by construction: every row already stored came from a bundle, which
+is what the DEFAULT says. A NOT NULL column with a DEFAULT also restores from an archive written
+before it, because `restore_archive` COPYs with the column list the ARCHIVE carries
+(`backup/movie_data.py`, `copy_to_table(..., columns=entry["columns"])`) and the absent column takes
+its default - a CHECK added without a DEFAULT would have refused every archive this build has
+written. What this does not buy is an export: a household row is durable and is not yet in any TSV
+the household can carry off the box, and that gap is M5.6's to close rather than a silence.
+
+### 334. Which of §8 stage 2's eight sources are required for the stage to pass
+
+**What the record says.** §8 states one failure rule for the whole pipeline - "Failure at any stage
+parks the job with a reason, retryable from admin" (`spec:398`) - and describes stage 4 as the
+quality bar. For a title whose Metacritic page 404s while TMDB answers, those two clauses read
+opposite ways and the tree has no third sentence to break the tie.
+
+**Why it changes.** TMDB is the metadata spine rather than one source among eight: the corpus's
+whole crawl is built around one `append_to_response` call (`mdc/sources/tmdb.py`'s `detail`), and
+`importer/meta.SOURCE_PRIORITY` puts `tmdb` first for every card field this app renders. Requiring
+all eight would park most titles for ever on sources that legitimately hold no page for them - TVmaze
+carries no films at all, and RT and Metacritic have no page for a great many titles - which is the
+difference between "unattended" working and not. The clause ordering implies the answer: stage 2
+collects what exists and stage 4 judges whether enough of it arrived.
+
+**The decision.** Only `tmdb:detail` is required. Every other source is best-effort: its 404,
+timeout, refused slug or missing credential is recorded as a note in `acquisition_job.detail` under
+that source's name, and stage 2 still advances. A failure of `tmdb:detail` parks stage 2 with a
+reason naming that source. Stage 4's reviews gate is the only quality bar in stages 2-4.
+
+**Cost.** A title can reach stage 4 carrying one source, and the gate is then the only thing between
+it and a thin pack - which is what makes decision 335's predicate load-bearing rather than
+decorative. The board gains a second kind of line to render: a per-source note on a job that is
+otherwise progressing, beside the stage rather than in place of it. This is the shape the coverage
+row `jellyfin-acquisition-eval-stage-two-fetches-into-the-raw-store` states, and exit-criterion
+checks 7 and 8 measure the pair - Metacritic 404 with TMDB ok is a note, the required source failing
+is a park naming it.
+
+### 335. The exact reviews-gate predicate
+
+**What the record says.** §8 stage 4 requires "plot plus multi-source reviews of 50+ words" and the
+map's own row reads it as ">= 2 sources AND >= 50 words" without saying fifty words of what
+(`spec_coverage.toml`, row `jellyfin-acquisition-eval-stage-park-retry-idempotent`). "Plot" is a
+resolved field with a documented fallback, asserted by
+`test_title_meta.py::test_the_overview_falls_back_from_plot_full_to_plot_short`.
+
+**Why it changes.** Three readings of one sentence produce three different park rates, and the
+difference is a household's library rather than a rounding error: ">= 50 words each" fails a title
+carrying one 200-word review and one 30-word one, which is a perfectly acquirable title. And the
+plot half cannot be re-stated inside the gate without forking a rule that already has one owner.
+
+**The decision.** Plot: `title.overview` non-empty, which `importer/meta.resolve_title_fields`
+already resolves from `plot_full` then `plot_short` through `meta.best` and `SOURCE_PRIORITY` - one
+definition, not a second one inside the gate. Reviews: `count(distinct source) >= 2` over
+`review_store.review` for the title AND `sum(word_count) >= 50` across those rows, read off the
+generated stored column, so the measurement is taken BEFORE any normalisation. Anything short parks
+at stage 4 with `retry_after = now() + interval '30 days'` and both counts in `reason`.
+
+**Cost.** The predicate costs one query over a column Postgres has already computed:
+`review_store.review.word_count` is `GENERATED ALWAYS AS ... STORED` over `btrim(body)`
+(`0003_content.sql:249-251`), so the gate adds no parsing and no second definition of a word. What
+it buys is a `reason` string that is a product surface - `acquisition_job.reason` is "shown verbatim
+on the admin board" (`0005_ledger.sql:138`) - so the counts are in it by rule rather than by habit:
+"reviews gate: 2 sources, 38 words - retry window 30 days". The park is decision 336's park with a
+deadline and never a failure.
+
+### 346. Decision 171's owed spec amendment is supplied here and applied by the milestone that holds the spec file
+
+**What the record says.** Decision 171 mandated two amendments - replacing §4.3's `dna_vocab/v1/`
+bullet and adding a sentence to §10 - and neither landed: §4.3's bullet
+(`docs/spielplan-spec_v2.1.md:194`) still ends at "applied at every derive, §8 stage 3", and §10's
+importer paragraph (`:433`, the one carrying "Content seeds once") says nothing about re-loading the
+ledgers the bundle ships. Both line numbers were re-derived against this tree rather than copied:
+`M5.3-plan.md` cites them as `:196` and `:427`, and neither resolves here - the first never did, and
+the second moved six lines down when M5.1 amended §8 above it, four for decision 323's mint rule in
+the stage table and two for decision 340's politeness paragraph. A stale line number is the one
+defect an amendment-debt entry cannot afford, because pasting against it is the whole purpose. Under
+CLAUDE.md decision 171 is normative from the day it was taken until the amendment it mandates lands
+in the spec file, so the debt is open and citable.
+
+**Why it changes.** Nothing about the ruling changes; what is settled here is who applies it.
+Decision 331 gives the normative file to the milestone that holds it, one milestone at a time, and
+M5.1 has closed. Two parallel lanes editing one normative paragraph is the merge surface
+`test_spec_coverage.py` names as the worst in this repository, and a conflicted paragraph in a spec
+is two readings of a requirement rather than a merge conflict.
+
+**The decision.** No: **this decision mandates a spec amendment this milestone does not apply.** M5.3
+supplies the replacement text verbatim here and records the amendment as still owed; its only edit to
+`docs/spielplan-spec_v2.1.md` is its own §12 row, under decision 331. The text owed, to be pasted at
+`spec:194` and into §10's importer paragraph at `spec:433`: §4.3's `dna_vocab/v1/` bullet must
+continue past "applied at every derive, §8 stage 3" with "- and re-loaded by every import, including
+a models-only one, because the ledgers travel with the bundle and the install's copy is replaced by
+the one the bundle ships for rows whose `origin` is `bundle` (decisions 171, 247, 326)"; and §10
+gains "The import re-loads the curated ledgers it ships and re-applies nothing: §8 stage 3 is the
+only place a ledger reaches a derived row."
+
+**Cost.** The debt stays open for one more wave, and it is now recorded in the register rather than
+only in a roadmap table - which is what stops a later milestone spending 346 on something else. That
+is the failure `test_the_register_spends_no_number_another_milestone_is_bound_to` was written to
+catch when M5.1 nearly recorded its drain bound under this number.
+
+### 372. Stage 2's adapters write bytes and identity, and nothing else
+
+**What the record says.** §8's preamble promises that "All fetched bytes land in the app's own raw
+store, so re-parsing is free forever" (`spec:398`), and the plan makes every adapter write bytes and
+return nothing else. §8 stage 2 also says `wikidata:resolve` "halves guessing" (`spec:366`), which is
+a claim about the MC/RT/Letterboxd slugs it yields - and a later fetch cannot use a slug that exists
+only inside an unparsed blob.
+
+**Why it changes.** Both sentences are true only if the raw/derived split is about DERIVED rows and
+not about join keys. That is the corpus's own shape rather than a compromise: `mdc/sources/tmdb.py`
+calls `set_ids` at `:89` and `:143` while the full parse waits for `mdc rebuild`, because the next
+fetch has to know what to ask for. Without it, "halves guessing" is a sentence about nothing and the
+two scraped sources go on guessing slugs they were handed.
+
+**The decision.** An adapter writes (a) the raw bytes into the raw store and (b) identity columns on
+`title` only - `tmdb_id`, `imdb_id`, `tvdb_id`, `wikidata_id`, `wikipedia_title`, `trakt_slug`,
+`rt_slug`, `metacritic_slug` - and nothing else. Every field a card renders (`overview`, `tagline`,
+`poster_path`, `backdrop_path`, `year`, `runtime_min`), every `title_meta` payload, and every credit,
+review and display row is written by stage 3 from the raw store. Identity writes are
+fill-never-clobber (`COALESCE(existing, new)`), never an overwrite. The `kind` flip
+`mdc/sources/tmdb.py:81-84` performs on an IMDb/TMDB disagreement is deliberately NOT ported.
+
+**Cost.** Migration `0026` has to land before the adapters, because two of them write columns it
+adds, and the stage-2 ordering (`tmdb:resolve` -> `tmdb:detail` -> `wikidata:resolve` -> omdb ->
+trakt -> wikipedia -> tvmaze -> rt -> metacritic) becomes load-bearing and therefore testable rather
+than incidental. The fill-never-clobber rule is §7.1's, which `connectors/resolve.py:15-17` already
+states for the Jellyfin end - "when they disagree the corpus wins" - so an acquired title cannot have
+its corpus-shipped ids rewritten by a source that disagrees. Not porting the `kind` flip costs a
+title that IMDb and TMDB disagree about: it stays the kind it was minted as. That is deliberate.
+`title.kind` is §4.1 rule 5's ranking partition, and flipping it under an acquired title is a write
+decision 162 makes permanent.
+
+### 373. The fetcher reaches a stage through `StageContext.fetcher`, built once per drain
+
+**What the record says.** M5.1's `test_this_module_does_not_reach_for_the_fetcher` forbids
+`acquire/pipeline.py` and `acquire/stages.py` from importing `acquire/fetch.py`, and
+`stages.StageContext` was built without a fetcher field under the note "no fetcher (nothing fetches
+at M5.1)". Stage 2 fetches, so one of the two has to move.
+
+**Why it changes.** `fetch.Fetcher`'s own docstring says "One instance per drain; shared by every
+stage that reaches the network in that drain", and its per-host token buckets, semaphores and breaker
+state are rebuilt from `fetch_host_state` at the top of each drain. A Fetcher per task would pace a
+host at N times its declared rate by exactly the machinery meant to pace it - the defect
+`Fetcher._hosts_lock` already exists to prevent one level down - and this is the milestone that
+crawls the open web on a household's IP address. The half of M5.1's guard worth keeping is the
+parser half: `mdc/parse/titles.py` imports `ids` and `_htmlutil` and no transport at all, and that is
+the whole of "re-parsing is free forever".
+
+**The decision.** `stages.StageContext` gains a `fetcher` field - the corpus's `Ctx.fetcher`
+(`mdc/sources/base.py`'s `Ctx`). `pipeline.drain` builds ONE `fetch.Fetcher` per drain inside
+`async with`, behind an injectable factory so tests pass an `httpx.MockTransport`, and hands it to
+every `run_task`. `pipeline.py` therefore imports `acquire.fetch`; `stages.py` does not, and neither
+does anything under `derive/`. M5.1's guard is re-pointed to the halves that stay true rather than
+deleted: `stages.py` imports no transport, and `derive/parse.py`, `derive/ids.py` and
+`derive/reviews.py` import no transport either. A drain whose tasks never reach stage 2 opens no
+socket.
+
+**Cost.** `acquire/pipeline.py`, `acquire/stages.py` and `backend/tests/test_acquire_pipeline.py` are
+all touched by the wiring, and one registered guard changes shape rather than subject - which is the
+only way to repair it, since renaming or deleting a registered test breaks the build by design. What
+the rewritten guard holds is strictly more than what it replaced: the `derive/` half did not exist to
+be asserted before, and it is the half that keeps a parser change from costing another crawl. Every
+adapter test drives a `MockTransport` rather than a socket, so the suite still sends nothing to a
+third party.
+
+### 374. Letterboxd is not ported, and Wikidata's batch kinds become one per-title resolve
+
+**What the record says.** The corpus ships `mdc/sources/letterboxd.py` (63 lines) and three Wikidata
+handlers - `resolve` (`:96`), `entity` (`:170`) and `labels` (`:211`) - all keyed by `_batch_key`
+(`:61`) over a list of ids and planned by `plan_resolve` (`:65`) and `plan_entities` (`:80`). §8
+stage 2 names eight sources and Letterboxd is not one of them.
+
+**Why it changes.** Adding a ninth source because the corpus has one is how a milestone acquires
+scope its spec never asked for, and every source is a host this household's IP crawls. The Wikidata
+half is §8's preamble stated concretely: the corpus's `rebuild`, `project` and `ingest` are
+deliberately wholesale while this app needs per-title incremental, and that gap IS the milestone's
+work rather than an inconvenience. A batch SPARQL query keyed on a list of IMDb ids has no per-title
+form; one title's `wikidata:resolve` is one query with one `?imdb` binding.
+
+**The decision.** `mdc/sources/letterboxd.py` is NOT ported, and the omission is recorded here rather
+than left as a silent gap; `title.letterboxd_slug` keeps being written by `wikidata:resolve`, because
+Wikidata yields it - the column is filled, the source is not crawled. Of the three Wikidata handlers
+only `resolve` is ported, and it becomes PER-TITLE: `_batch_key`, `plan_resolve`, `plan_entities` and
+the `wikidata:entity` and `wikidata:labels` kinds are not ported.
+
+**Cost.** Eight adapter modules, not nine and not eleven, and `sources/base.py`'s registry holds
+exactly the kinds §8 names - which is what makes "every one of stage 2's sources went through the
+polite fetcher" a countable claim. A later reader who greps `letterboxd` under `sources/` finds this
+decision instead of nothing. What is given up is the corpus's label cache: nothing in this app
+resolves a Wikidata entity's labels, and no requirement asks it to.
+
+### 375. The derive's idempotence mechanism: replace by (title_id, source) scope, in one transaction
+
+**What the record says.** §14 risk 5 names idempotent re-ingest as one of the invariants to port "or
+inherit the bugs they were built to kill", and this milestone's own coverage row asks for "no
+duplicates, no growth, no changed ordering". `credit`, `review_store.review`, `title_genre`,
+`title_keyword`, `title_language`, `title_country`, `title_company`, `title_video` and
+`display.platform_rating` carry no natural key an UPSERT could stand on.
+
+**Why it changes.** `bigserial` primary keys give none of those three properties for free, and the
+corpus's own answer does not transfer: `mdc/parse/rebuild.py`'s `_clear_derived` drops the derived
+tables outright, which is right for a wholesale rebuild and exactly wrong per title. Deleting by
+`title_id` alone would make a derive that ran while TMDB was down erase the credits a previous
+successful derive wrote - a wholesale habit doing its damage one title at a time.
+
+**The decision.** `derive_title(conn, title_id)` runs inside ONE transaction and, for each derived
+table, deletes by `(title_id, source)` for exactly the sources this run re-derived and re-inserts. A
+source that produced no raw document this run is not in that scope and keeps the rows it produced
+last time; nothing deletes by `title_id` alone. `title_meta` keeps one row per `(title_id, source)` -
+the table's primary key - and is never collapsed. Row ORDER is made deterministic at read time by the
+derive writing `credit.ord` and the `title_*` position equivalents from the source payload's own
+ordering, so "no changed ordering" is a property of the data rather than of `bigserial`.
+
+**Cost.** The idempotence test has to assert three things rather than one - equal row counts, equal
+values and stable ordering across two runs - and additionally that a second derive with one source's
+raw document absent does not erase that source's rows, which is the clause the mechanism exists for.
+Keeping `title_meta` per source is not free either: it is the table `meta.best` and `SOURCE_PRIORITY`
+exist to order, and a derive that collapsed it would destroy the thing the design is for while
+passing a naive "the card has an overview" test.
+
+### 376. What `apply_adjudications` applies to, and how the app's four verdicts map onto the corpus's three actions
+
+**What the record says.** `mdc/dna/adjudication.py::apply` takes a list of freshly extracted DNA tags
+and rules over them with `REPOINT | DROP | DROP_EVIDENCE` (`:48`). This app's table spells the ledger
+`verdict IN ('keep','rename','drop','merge')` (`0004_dna.sql:135-143`), re-keyed at
+`0015_seed.sql:159-166` to carry `id`, `scope` and `title_id`. M5.3 writes no DNA tags at all -
+stages 5 to 8 are M5.4's and M5.5's - so the applier needs an input this milestone actually has.
+
+**Why it changes.** `mdc/dna/adjudication.py`'s own header states the invariant the ledger exists for
+- `dna_tag = f(result files, vocabulary, adjudications)`, with all three versioned and none of them a
+mutation nobody can replay - and the reason the order matters: "A per-title verdict therefore always
+beats the blanket rule for its term, which is what lets the audit keep 29 `central_couple` rows while
+dropping 92." An applier written against "whatever this run extracted" has nothing to run against at
+M5.3 and would be written twice; an applier written against the rows the title carries runs today
+over bundle-imported tags and unchanged tomorrow over stage 8's.
+
+**The decision.** `derive/ledgers.apply_adjudications(conn, title_id)` runs at the INGEST point of the
+derive - before the derive's own writes settle and before corrections - over the `dna_tag` rows the
+title already carries for the active vocabulary version, whatever wrote them (today the bundle
+importer; from M5.4, stage 8). The map: `drop` deletes the tag row; `rename` and `merge` re-point
+`term` to `target`, merging onto an existing row for that term by keeping the higher salience
+(`mdc/dna/adjudication.py:103`'s `_merge_into`); `keep` is an explicit no-op that shadows a blanket
+term rule for the same term. Order is the corpus's and is preserved: evidence drops, then per-title
+verdicts (`scope = 'title'`, `title_id = $1`), then blanket term rules (`scope = 'global'`) as a
+sweep over what the per-title rows did not name. The ledger never invents a tag: every action removes
+or re-points evidence something else produced.
+
+**Cost.** The test has to run against a title carrying both a bundle-imported `dna_tag` and a curated
+`dna_adjudication` row, which the real bundle supplies - 828 rows, 817 of them title-scoped - because
+§14.5's scar is invisible in a happy-path test: a brand-new acquired title carries no adjudication,
+so "applies BOTH ledgers" passes vacuously over code that does nothing. Running the applier at ingest
+rather than at the end is §14.5's own placement ("DNA verdicts at ingest, source-credit facts at
+rebuild") and is what makes "two calls at two points, never one merged pass" a difference a test can
+see rather than a style note. M5.4 inherits a working applier instead of being asked to write one.
+
+### 377. The three keyed sources read their credentials through a narrow per-source read, not a second generic loader
+
+**What the record says.** The plan allows two shapes: read credentials through M5.5's generic
+`ConnectorSpec` if it has landed, and through a narrow per-source read if it has not. M5.5 has not
+landed and is not in this wave. `connectors/registry.py:88-99` already seeds `tmdb`, `omdb` and
+`trakt` from env with the comment "§6.6 configures these in the admin UI at M5",
+`core/config.py:71-74` declares the four settings, and
+`test_static_contracts.py::test_compose_forwards_every_connector_seed_variable` already holds compose
+forwarding all six variables.
+
+**Why it changes.** The seam exists and needs nothing from this milestone; what it needs is a reader.
+`registry.py` is M5.5's and M5.7's hotspot file, so a second generic loader written here is code that
+has to be deleted the day theirs lands - and a deletion in a file two other lanes are editing is the
+merge surface this wave is arranged to avoid.
+
+**The decision.** A narrow per-source read. `sources/credentials.py` asks `connector_config` for the
+named connector's config and secret blobs through the shipped `connectors/registry` READ path only,
+exposing `tmdb_auth()`, `omdb_key()` and `trakt_headers()` and nothing generic.
+`connectors/registry.py` is not edited: no new `env_seeds` entry, no new `ConnectorSpec`, no widening
+of `core/config.py`. A source whose credential is absent is a stage-2 note under decision 334, never
+a park and never an exception.
+
+**Cost.** `connectors/registry.py` and `core/config.py` stay out of M5.3's diff entirely, which also
+removes a merge surface with two sibling lanes. `sources/credentials.py` is about forty lines and is
+marked in its own header as the narrow form M5.5 replaces, so the milestone that widens it finds the
+note rather than a second design to reconcile. The other five sources are keyless and read nothing.
+
+### 378. M5.3 writes its own §12 row and `ops/m53_exit_criterion.py`, and the negative control runs behind a flag
+
+**What the record says.** Decision 331 says each sub-milestone writes its own §12 row when it opens,
+and the roadmap files an exit script against each. This milestone's exit criterion has eleven
+measures, and the third of them is deriving a title with the adjudication applier DISABLED, to show
+that a curated DNA verdict visibly reverts.
+
+**Why it changes.** §14.5's scar is invisible unless the failure can be shown once, and a measure
+that requires breaking the applier cannot be one the script takes by default. The published figures
+are meanwhile held by instruments rather than by prose:
+`test_static_contracts.py::_script_numbered_checks` derives a check count off the script's own
+module-level `CHECKS` tuple and refuses a figure that names no script (decision 184), and
+`test_exit_criteria_are_closed_by_a_committed_measurement` requires one `docs/RELEASE.md` row per §12
+milestone, with `test_the_unmeasured_criterion_and_the_owed_asset_stay_unsigned` requiring an
+unmeasured row's verdict to stay blank - so the §12 row cannot land alone and cannot publish a count
+nobody derived.
+
+**The decision.** M5.3 adds one §12 row and, with the milestone's code, `ops/m53_exit_criterion.py`:
+eleven numbered checks, the plan's own pass table verbatim, one `CHECKS` entry per measure, refusing
+to run on the fixture. The script exposes check 3 only under an explicit `--negative-control` flag,
+runs it on a scratch database, prints what reverted, and re-enables the applier before it exits; the
+flag is off by default and the ten remaining checks run without it. `docs/RELEASE.md` gains an M5.3
+summary row and section with an unfilled owner verdict, recorded `NOT BUILT` while the instrument is
+owed and moved to `UNMEASURED` in the change set that lands it - which is M5.1's own sequence, stated
+in M5.1's block in that file. The §12 row names the script and counts its checks only once the script
+is in the tree, for the same reason: a figure published about an instrument nobody can open is the
+claim decision 184 refuses.
+
+**Cost.** The script moves `len(EXIT_SCRIPTS)`, and therefore `docs/RELEASE.md`'s count of the
+scripts under `ops/`, `docs/TESTING.md`'s clause about them and five `== 9` assertions in
+`test_static_contracts.py`. Every one of those figures is DERIVED at write time from the directory
+rather than incremented, because two sibling lanes are adding scripts in the same wave and an
+increment by hand is a guess that happens to be right. The §12 row moves a second self-counting
+figure the same way: `spec_coverage.toml`'s "N of the M criteria have never been run", which
+`test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured` re-derives from
+`docs/RELEASE.md`'s own Status fields.
+
+---
+
+## Decisions taken (owner, 2026-09-19, M5.3 review cycle 1)
+
+Three, 423-425, taken under the same standing instruction as the block above. They were written as
+392-394, numbered from the floor the owner set for that cycle because 382-391 was a sibling lane's,
+and the collision the brief for review cycle 2 foresaw at 392 reached all three: M5.4 had taken
+392-394 as well, and M5.2 393 and 394 - the state decision 346's cost paragraph records the price
+of. **They were renumbered to 423-425 when this lane merged**, the next free numbers in its own
+range of 420-429, and every citation in the tree moved with them. M5.4's keep the old numbers
+because its block runs unbroken from 382 to 403, and moving three entries disturbs less than
+moving twelve.
+
+For one cycle these three sat at the foot of the block above, under its "Eleven", with a sentence
+excusing the first two and nothing excusing the third. That is the drift
+`test_the_registers_decision_blocks_count_the_decisions_they_carry` was written for, and it could
+not see this one: it reads only `current_milestone`'s blocks, and M5.3 does not hold that key.
+[M5.3 review cycle 2, m53-c2-dim-exit-02]
+
+### 423. Which author's curated row takes effect when the bundle's and the household's touch one title
+
+**What the record says.** Decision 326 answers "what survives a re-import": both curated tables
+carry `origin`, `importer/dna.py`'s two DELETEs name `origin = 'bundle'`, and "the appliers do NOT
+filter on origin: a household row applies exactly like a bundle row". §6.6 promises that a fix typed
+into one of its three ledger editors "survives every future re-derive". Decision 247 reloads all
+four curated ledgers on every models-only import, which decision 162 makes the only import a
+household runs twice. Neither decision says which row wins when both name one title.
+
+**Why it changes.** It has to be answered because the code already answers it, by accident and
+differently after every import. `credit_correction.id` and `dna_adjudication.id` are `bigserial`s
+and both loaders are DELETE-then-INSERT, so a byte-identical reload of an unchanged TSV renumbers
+every bundle row ABOVE every household row. Both appliers read their ledger in id order and both are
+order-sensitive, in opposite directions: `apply_corrections` is LAST-wins, because a `composer` row
+deletes every music credit the title has and inserts one; `apply_adjudications` is FIRST-effective-
+wins, because `_rule` keys on the term and both the DROP and the REPOINT arms move the tag off it,
+so a later rule naming that term finds no row. Measured on a scratch database: one bundle and one
+household `composer` correction on one title gave the household's name before a reload and the
+bundle's after it, and the DNA pair flipped the other way. Decision 326 stopped the household's ROW
+being wiped; this is the same fix arriving back on the card. It is also plain idempotence - reloading
+an unchanged file must not change what the next derive writes - which is why it is M5.3's rather than
+a question deferred to M5.6's editors: the appliers are this milestone's and the defect is in them.
+
+**The decision.** The household's curated row is the one that takes effect. `apply_corrections`
+selects `ORDER BY origin, id` ('bundle' sorts first, so the household's applies last and wins);
+`_TITLE_RULES` and `_BLANKET_RULES` select `ORDER BY origin DESC, id` (the household's applies first
+and wins). The two clauses point opposite ways because the two appliers do, and a fix that spelled
+them the same way would entrench on one ledger exactly the outcome it removed from the other. `id`
+still orders within an origin, so the bundle's file order and the household's authoring order are
+both preserved - which is what `apply_corrections`' "a `composer` and a `composer_add` on one title
+compose in the order the owner wrote them" and `_TITLE_RULES`' "two blanket rules touching one term
+apply in the order the owner wrote them" were always about.
+
+This does not amend decision 326's sentence. The appliers still do not FILTER on origin: every row
+is selected and every row is applied. What they now do is order by it, which is a statement about
+precedence between two authors and not about which rows are in the ledger.
+
+**Cost.** Two ORDER BY clauses and two tests, in M5.3's own files, with no schema change and no
+migration - `origin` is already there, which is decision 326's whole point. It does not close
+everything ordering cannot reach: a household `keep` against a bundle `drop` on one term still loses,
+because `keep` is a no-op that only shadows a BLANKET rule, and no ORDER BY changes that. M5.6 is
+where the editor decides what it writes when the household edits a title the bundle already corrects
+- edit in place, supersede, or a second row - and that decision sits on top of this one rather than
+replacing it. Without this, §6.6's promise is false for exactly the population its credit editor
+exists for: the six titles `corrections_v1.tsv` already names are the ones upstream is known to have
+got wrong. [M5.3 review cycle 1, m53-c1-dim326-01]
+
+---
+
+### 424. What the criterion may say the admin retry does, now that the retry is known not to read
+
+**What the record says.** §12's M5.3 row, written as the milestone opened under decision 331 and
+owned by it under decision 378, says a title parked at the reviews gate is one whose "admin retry
+resumes from that stage, re-reads the content-addressed raw store instead of re-fetching, and
+duplicates no derived row". `docs/RELEASE.md`'s M5.3 block restates the sentence and
+`ops/m53_exit_criterion.py` quotes the row it measures. The plan's §7 prose
+(`docs/milestones/M5.3-plan.md:425`) and `docs/milestones/ROADMAP-M5.md:290` carry the same words,
+and `spec_coverage.toml`'s `jellyfin-acquisition-eval-stage-park-retry-idempotent` carries the
+older phrasing it inherited, "re-uses the content-addressed raw store instead of re-fetching".
+
+**Why it changes.** Nothing in the tree performs that read, and nothing could without a stage the
+milestone deliberately did not build. `pipeline._resume_index` (`:466-485`) answers the BOARD's
+stage, so a job parked at stage 4 re-enters at `reviews gate`; `stages.reviews_gate` (`:1197-1236`)
+calls `gate.measure` and then advances or parks; `derive/gate.py` imports `dataclasses`, `datetime`
+and `asyncpg` and reads `title.overview` and `review_store.review`. The app's only `rawstore.read`
+is `derive/rebuild.py`'s, which is stage 3 and BEHIND the resume point. Check 5 and
+`test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` both assert zero three
+ways - the resume label, an empty request log, no HTTP client constructed at all - and neither
+reads a stored byte, because none is read. The clause is true of the PIPELINE, which is how the
+map's row reads it and what its `why` was widened to say: bytes fetched once are parsed out of the
+store rather than re-crawled, and `test_the_derive_opens_no_socket` makes that a property of the
+module. It is not true of the retry, and §12's row is the one document that says it is - the
+sentence an owner signs after running the instrument, in the file CLAUDE.md calls normative.
+
+**The decision.** The clause in §12's M5.3 row becomes "the admin retry resumes from that stage
+rather than from stage 1, so nothing before the park runs again: no request leaves the process, no
+HTTP client is constructed, and no derived row is duplicated" - which is exactly what check 5
+measures and what the registered integration test asserts. `docs/RELEASE.md`'s restatement and the
+script's quotation of the row move with it, those three being M5.3's own writing under decisions
+346 and 378. Nothing else is edited. `docs/milestones/M5.3-plan.md` and
+`docs/milestones/ROADMAP-M5.md` keep the older sentence because an agent may not edit a plan, and
+the map's row keeps the requirement as M5 inherited it, with a note recording which reading closes
+it. Reconciling those three is the owner's, and this entry is where the debt is recorded.
+
+**Cost.** A normative sentence narrowed by the lane that transcribed it, which is the one shape of
+edit decision 346 leaves M5.3 in the spec file, and one that has to be argued rather than assumed:
+the plan asked for a raw-store re-read on the resume path and this milestone did not build one, so
+the entry states the fact rather than hiding it behind a rewording.
+`test_no_criterion_promises_a_raw_store_read_the_parked_resume_cannot_perform` holds the three
+copies and the resume path to each other in BOTH directions, so the day a retry does re-read stored
+bytes the clause is asked for back rather than quietly forgotten - and that day is a real one:
+decision 330 leaves "retry from stage N" to M5.6, and a retry re-entering at stage 3 re-reads the
+raw store literally. This decision settles nothing about that; it says only what M5.3's own
+criterion may claim about the retry M5.3 ships, which is a task made due again. Without it an owner
+runs the instrument, reads `[PASS] 5`, and closes a clause no check asked and no code answers.
+[M5.3 review cycle 1, M53-EXIT-02]
+
+---
+
+### 425. The article identifier arrived, so the CC BY-SA deferral is re-measured rather than re-scoped
+
+**What the record says.** Decision 320 defers the CC BY-SA material link and publishes the debt in
+`docs/RELEASE.md` section 4.7, on a measurement rather than on a reading of the licence: "`grep -rn
+homepage backend/spielplan frontend/src` is empty", `importer/load.py` does not map
+`wikipedia_title` onto `title`, and `/api/titles/{id}` exposes no field an anchor could be built
+from. Its Cost paragraph commissions the instrument in the same breath: "a guard whose premise is
+the measurement rather than the prose: it re-runs the `homepage` / `wikipedia_title` reading and
+goes red the day either is read, because that is the day the link becomes reasonably practicable,
+section 4.7 becomes the false record, and the two come out in one change."
+
+**Why it changes.** M5.3 is that day, and what happened was the opposite of the instruction.
+`0026_acquisition_sources.sql` adds `title.wikipedia_title`; `sources/wikidata.py` fills it;
+`sources/wikipedia.py:213` reads it back, because the extract has to be asked for by article; and
+`derive/parse.py:884` writes `https://en.wikipedia.org/wiki/{article}` into the Wikipedia
+`title_meta` row's `homepage`. The build therefore holds the identifier AND computes the exact URI
+the licence asks to be linked. The guard did not go red: `_ARTICLE_CARRIER_ROOTS` was added in the
+same change, narrowing its walk from the whole package to `api/`, which is where none of the four
+new readers live. Section 4.7 and `DataSources.svelte`'s paragraph were left standing, so two
+published records went on stating a dated grep this tree no longer answers that way - and the
+component's is the one place the whole point of decision 320 was that a departure must not be
+argued from unnumbered prose.
+
+**The decision.** The ground is re-measured and the deferral survives on the half that is still
+true. `docs/RELEASE.md` section 4.7 keeps its 2026-09-17 measurement, dated, and gains a
+2026-09-19 re-measurement saying what M5.3 changed and what survives: no route selects either
+column, `api/library.py`'s title payload is an explicit key tuple omitting both, and a surface
+cannot link what it is never sent. `DataSources.svelte`'s paragraph says the same in its own voice
+and cites both numbers. The guard is re-pointed at BOTH halves rather than at a narrower one -
+`_holds_the_article_carrier` asserts the package reads the identifier, so the re-measurement cannot
+go stale in silence, and the serving walk covers `api/`, `db/` and `frontend/src`. `db/` is named
+because `db/library.py:400` is `SELECT t.*` and `:408` returns `dict(row)`, so the column already
+transits into a route with the string appearing in no file at all; a walk over `api/` alone cannot
+hold an exposure claim. `map-taste-data-sources-are-attributed`'s `what` keeps its clause and has
+its condition corrected rather than dropped, under `M4-open-points.md:212-213`.
+
+What this decision does NOT do is build the link. M5.3 ships no frontend surface and adds no route,
+and a licence anchor belongs on the title surface beside the plot it credits, not on the
+household-wide block - so the anchor is owed by whichever milestone next opens that surface, and
+the one narrowing this rule had in it is spent here. The day a response carries the column, the
+guard goes red, section 4.7 is the false record, and the two come out with the anchor, exactly as
+decision 320 wrote it.
+
+**Cost.** A second number on a debt that already had one, which is the honest price of a premise
+that moved: a reader of 4.7 now meets two dated measurements instead of one, and has to read both
+to know what the build does. That is cheaper than the alternative this replaces - a signed
+instrument re-aimed by the change that tripped it, with no entry anywhere saying the ground had
+shifted. `test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry` holds all three
+carriers to this: the package must still read the identifier, nothing may serve it, and both the
+component's paragraph and section 4.7 must cite the number that re-took it.
+[decisions 296, 307, 320; M5.3 review cycle 1, M53-COV-01]
+
+---
+
+## Decisions taken (owner, 2026-09-23, M5.3 review cycle 2)
+
+Three, taken under the same standing instruction as the sittings above: the finding's recommended
+option where it had one, taken rather than asked. They are numbered from 420 and not from 395,
+which is the next number this file alone would offer, because this file cannot see the two sibling
+lanes building the rest of this wave: 397-402 are M5.4's and 410-419 are M5.2's, and a number that
+only looks free here is how 346 came to be written twice (decision 346's cost paragraph). **395,
+396 and 403-409 are left unspent by this lane** and are claimed here for nobody.
+
+### 420. Which rows of `award` and `review_store.review` a per-title derive may replace
+
+**What the record says.** Decision 375 makes §8 stage 3 idempotent by replacing "by `(title_id,
+source)` for exactly the source labels this run parsed", and says in terms that "nothing deletes by
+`title_id` alone". Decision 162 makes content seed once: after the import the household's copy of
+the content spine and the review bodies is the only copy there is, and the export bundle ships no
+`data/raw/`. §12's M2 row says the thin bundle titles "are still placed, badged, and parked as
+acquisition jobs for M5 enrichment", and `placement/reconcile._park_thin` has been writing those
+`(stage = 2, parked)` rows since M4.13.
+
+**Why it changes.** `source` answers which CRAWL produced a row and the importer files the corpus's
+rows under the same names. `importer/reviews.py` copies the corpus's own `source` column verbatim,
+so bundle review bodies already sit under `trakt`, `metacritic` and `letterboxd`; `importer/load.py`
+maps four columns of the corpus `award` table and drops its `source`, so `award` had no provenance
+at all and `derive/rebuild._write` deleted it by `title_id` whenever any OMDb or Wikidata document
+was read. So the first enrichment of a corpus title destroyed the bundle's review bodies under every
+crawled label and every bundle award, and replaced them with the handful one crawl returned - and
+§6.6's board rendered only the arrival, because `_replace` reads its count back over the predicate
+it has just deleted by. Measured on a scratch database with the real fixture documents: 400 bundle
+reviews to 91, 12 bundle awards to 3. Nothing takes it back. No §8 stage 2 source reproduces an
+IMDb-sourced per-category award row - `derive/parse.py` emits awards only out of OMDb's free-text
+`Awards` blurb - and `importer/reviews.py`'s own header records that "a bundle whose reviews are
+dropped on import cannot re-extract anything later". It is decision 375's own justification with
+the IMPORT substituted for the previous derive, and the guard did not bind because it scopes on the
+source label rather than on the author.
+
+**The decision.** `0026` gives `award` and `review_store.review` an `origin text NOT NULL DEFAULT
+'bundle' CHECK (origin IN ('bundle','derived'))`, and `derive/rebuild.py`'s two deletes there name
+`origin = 'derived'` - the reviews delete beside its existing source scope, the award delete beside
+its existing `title_id` and behind its existing `AWARD_SOURCES` guard. The derive writes 'derived'
+as a literal in its own INSERTs; the two bulk COPY loaders in `importer/` are untouched and their
+rows take the default, because neither corpus table ships a column called `origin` and a literal
+there would have to be threaded through a mapping whose whole job is to mirror the corpus. The
+vocabulary is not decision 326's 'household' because the second author here is not a person: it is
+§8 stage 3, and the column's whole content is "this row can be rebuilt out of bytes this box still
+holds".
+
+AND THE DERIVE DOES NOT WRITE A ROW THE BUNDLE ALREADY HOLDS. The corpus crawled these same
+sources, so keeping its rows means a corpus title's Trakt comments, Metacritic reviews and OMDb
+award rows come back from the parse value for value; inserted, each would stand twice under one
+label, and `review_store.review` has no natural key to refuse the second - so decision 335's
+`sum(word_count)` would count one review twice and a thin title would clear stage 4 on arithmetic.
+A derived review is skipped when a bundle row of the same title and source carries its author and
+the first 400 characters of its body, which is `ParsedReview.fingerprint`'s own definition of "the
+same review" for a row with no source id; a derived award is skipped when a bundle row carries all
+of its mapped columns.
+
+The CREDIT half is deliberately left as it is, which is the distinction that makes this small. A
+re-fetched TMDB cast is the same cast under the same label, so a derive overwriting the bundle's
+TMDB credits for one title loses nothing it cannot ask for again, and `ops/m53_exit_criterion.py`
+already argues that at the line. `title_meta`, the seven multi-row tables and
+`display.platform_rating` are the same case. Only the two tables whose bundle rows no crawl can
+reproduce get the column.
+
+**Cost.** Two `ALTER TABLE`s, one sequential scan of the review store as the CHECK is validated,
+one optional parameter on `_replace` and one read of the bundle's rows per derive. **`0026` IS
+EDITED IN PLACE to carry them**, which CLAUDE.md forbids for an applied migration and which is legal
+here only because 0026 has reached no durable install - it is this lane's own migration, applied to
+this lane's test cluster alone. Any database that ran the earlier 0026 hard-fails its checksum at
+the next boot and has to be rebuilt; the merge must say so. The `DEFAULT` is what keeps a
+movie-data archive written by an earlier build restorable, for the reason decision 326 gives for
+its own: `backup/movie_data.py` COPYs each table with the column list THE ARCHIVE carries. What it
+does not buy is a source axis on `award`: an OMDb response still cannot lose a Wikidata-written
+award row, because nothing in the data says which of the two wrote it, and that is decision 375
+degraded exactly as far as the schema forces. Without this, the milestone's own acceptance run -
+check 1 picks its subject by `credit_correction.origin = 'bundle'` and derives it - performs the
+destruction on a real corpus title.
+`test_the_bundle_s_reviews_and_awards_survive_the_derive_that_enriches_their_title` and
+`test_a_review_or_award_the_bundle_already_holds_is_not_written_beside_it` hold the two halves.
+[decisions 162, 375; M5.3 review cycle 2, m53-c2-d375-01]
+
+---
+
+### 421. §8 stage 4's window re-asks the sources when it closes; an early retry still asks nothing
+
+**What the record says.** §8 stage 4: "if thin, retry window 30 days (new releases accrue reviews
+over weeks)". §12's M5.3 row: "the admin retry resumes from that stage rather than from stage 1, so
+nothing before the park runs again: no request leaves the process, no HTTP client is constructed,
+and no derived row is duplicated". Decision 424 settled that the retry M5.3 ships is "a task made
+due again", and decision 336 admits `parked` only for "waiting on something that may change".
+
+**Why it changes.** The window could not observe the thing it was written for.
+`pipeline._resume_index` answered the BOARD's stage, so the task that came back when the thirty days
+closed re-entered at `reviews gate` - and the only stages that can move what the gate counts, stage
+2, which fetches the reviews, and stage 3, which writes them, were behind the resume point. Measured
+on a scratch database: week 0 parks at "1 source, 49 words"; Trakt then serves three comments and
+the window closes; week 4 runs `reviews gate` alone with zero requests, the same counts and a
+byte-identical reason, and `queue.defer` refunds the attempt, so it repeats every thirty days for
+ever. `gate.reason` meanwhile told §6.6's board "this title is re-asked by itself when the window
+closes", which was false for exactly the population stage 4 exists for. The two clauses above were
+never in conflict: the spec has two events - the window closing, and an operator making the task due
+before it does - and the build had collapsed them into one.
+
+**The decision.** A park whose own deadline has PASSED re-enters at the stage that can change its
+answer. `pipeline.Stage` gains `reask_from`, stage 4 declares 2, and `_resume_index` returns it when
+the board row is `parked` with `retry_after <= now()`. A task made due while `retry_after` is still
+in the future is §12's admin retry and decision 424's "task made due again", and it re-enters at
+stage 4 exactly as before: no request, no HTTP client, no derived row touched - so check 5 and
+`test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` stand unchanged. The
+discriminator is the clock against the one instant `_record_stop` writes to both
+`acquisition_job.retry_after` and `acquisition_task.next_attempt_at`, read by the database's `now()`
+because the queue leases by it. `gate.reason` says what the window does - "When it closes the
+sources are asked again, so reviews written in the meantime are counted without anyone retrying
+this job" - and no longer says "Nothing is asked of an operator", which was false on an install
+with no TMDB key; a key typed in during the window is asked when it closes.
+
+The alternative - keep the loop and retract the promise until M5.6 - is refused, because §8 is
+normative and its parenthetical is the window's whole reason: where code and spec disagree, the
+code is the bug. What this does NOT do is decision 330's "retry from stage N", which stays M5.6's:
+an operator still has no lever that sends one title back to stage 2 before its window closes.
+
+**Cost.** The driver learns one fact about one stage, as a field rather than a stage number, for
+the reason `Stage.fetches` gives. The re-ask is unbounded, as §8 writes it: a title nobody ever
+reviews is re-crawled once per window, which is roughly fourteen requests per title per thirty
+days - conditional ones, so a document that has not changed costs a 304 - where cycle 1's
+M53-334-01 measured the same crawl repeating daily. §12's "admin retry" now means the EARLY one,
+which is the only one there is: once the window has closed the task is due by itself.
+`test_the_window_closing_asks_the_sources_again_and_counts_what_accrued` and
+`test_a_title_still_thin_when_the_window_closes_parks_for_another_window` hold it.
+[decisions 330, 335, 336, 424; M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03, m53-c2-gate-02]
+
+---
+
+### 422. What a circuit-breaker pause costs a best-effort source, and where it is recorded
+
+**What the record says.** Decision 334 makes `tmdb:detail` the only required source: every other
+source's "404, timeout, refused slug or missing credential is recorded as a note in
+`acquisition_job.detail` under that source's name, and stage 2 still advances". Decision 340 puts
+robots.txt, the token bucket, the concurrency cap and the breaker in one layer; `acquire/hosts.py`
+gives www.rottentomatoes.com and www.metacritic.com a 900-second cooldown after eight consecutive
+failures. Decision 336 defines `parked` as waiting on something that may change.
+
+**Why it changes.** `sources/_views.py` claimed the opposite of what the build does, in its own
+voice: "A `HostPaused` IS RE-RAISED AND NOT RECORDED ... decision 336 makes it a park with a
+deadline that the stage driver takes - not a note under a source's name", and
+`acquire/fetch.RobotsUnavailable` said the same of itself. The driver never took that park.
+`stages.enrich` catches everything an adapter raises as that source's note and advances, so the
+re-raise produced a note anyway - spelled as a class name and an exception message, and abandoning
+`fetch_views` at its first paused view so the second view was never recorded at all. The sentence
+`stages.enrich` justified the coarse catch with was false too: "a source that said nothing this
+drain and will be asked again on the next". `pipeline._resume_index` answers the board's stage, and
+stage 2 is the only stage that fetches, so a title that advanced past it did not ask that host on
+the next drain.
+
+**The decision.** The behaviour stands and the three sentences go. A breaker pause on a best-effort
+source is decision 334's note: the pause is eight of that host's timeouts in a row, a timeout is
+already a note by name, and parking instead would hold every title drained inside a 900-second
+cooldown and re-walk the seven sources that DID answer every quarter of an hour for as long as one
+host is down - which a host that blocks this app outright would turn into a stalled pipeline, the
+unattended-working cost decision 334 was taken to avoid. `sources/_views.capture` therefore records
+the pause as that source's `Captured` error rather than re-raising, so the note is a sentence
+naming the host and the cooldown, each view is recorded independently, and the modules agree. The
+required source is untouched: stage 2's park is about `tmdb:detail` not answering and not about
+which exception said so, so a paused api.themoviedb.org still parks with a deadline.
+
+**Cost.** A transient outage during a library backfill can cost a title drained inside it that
+source. A title the missing source leaves short parks at stage 4, and decision 421 asks it again
+when that window closes; a title that clears stage 4 without it keeps what it has until decision
+330's lever, at M5.6. That price is written where an author meets it, in `stages.enrich`'s own
+docstring, and `RobotsUnavailable`'s docstring is corrected in the same change rather than left
+stating a park no stage takes.
+`test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_request` holds the note, the
+second view and the absence of any request to the paused host.
+[decisions 330, 334, 336, 340, 421; M5.3 review cycle 2, M53-C2-NET-01]
 
 ---
 

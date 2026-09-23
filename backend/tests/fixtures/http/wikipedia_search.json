@@ -1,0 +1,17 @@
+{
+  "batchcomplete": true,
+  "query": {
+    "search": [
+      {
+        "ns": 0,
+        "title": "Heat (magazine)",
+        "snippet": "British weekly magazine"
+      },
+      {
+        "ns": 0,
+        "title": "Heat (1995 film)",
+        "snippet": "American crime film"
+      }
+    ]
+  }
+}

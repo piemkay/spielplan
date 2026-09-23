@@ -3289,6 +3289,78 @@ def test_the_allocation_reader_reads_the_owner_cell_and_not_the_question():
     assert read[346] == frozenset({"M5.3"})
 
 
+# --- M5.3 review cycle 1: a number left unspent is a hole, and a hole has to be named ------------
+#
+# Decision 346's cost paragraph is what the practice above is for, and this is its other half. M5.1
+# spent 346 because "the register's two hole enumerations and `docs/TESTING.md`'s both list every
+# number M5.1 left unspent and omit 346", and the collision surfaced in the lane that owned the
+# number, over a plan file no agent may edit. The guard above catches a number the ROADMAP files
+# elsewhere; nothing caught a number the register neither heads nor mentions at all, which is the
+# state that made 346 lootable in the first place.
+#
+# M5.3's own sitting accounted for 372-378 as spent, for the 324-359 the M5.1 blocks leave unspent
+# and for 362-371 and 382-391 as the two sibling lanes' -- and left 379-381, the rest of its own
+# block, named nowhere in the file. An auditor reading the register alone meets three numbers under
+# the highest entry with nothing said about them, and takes one.
+#
+# Read off the file's header and the sitting PREAMBLES, because that is where this file enumerates
+# holes; a number inside an entry's body is a citation of a rule, not a claim about who owns a
+# number. A range opening at the register's own first decision is skipped for the reason
+# `test_every_published_decision_range_ends_where_the_register_does` keys on that same number:
+# `162-N` is the file's extent, and reading it as an allocation would mark every hole in the file
+# accounted for ever after. [decision 346; M5.3 review cycle 1, M53-REG-06]
+_ALLOCATION = re.compile(r"(?<![:\d])(\d{3})(?:\s*[-\u2013]\s*(\d{3}))?\b")
+_SPAN_IN_WORDS = re.compile(r"between (\d{3}) and (\d{3})")
+
+
+def _numbers_the_register_speaks_for() -> set[int]:
+    """Every decision number the file's header paragraphs and its sitting preambles account for."""
+    body = REGISTER.read_text(encoding="utf-8")
+    opening = _REGISTER_DECISION.search(body)
+    assert opening, "the register heads no `### <n>.` entry at all, so this reads nothing"
+    regions = [body[:opening.start()]]
+    heads = list(_REGISTER_BLOCK.finditer(body))
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
+        block = body[head.end():end]
+        first = _REGISTER_DECISION.search(block)
+        regions.append(head.group(0) + (block[:first.start()] if first else block))
+    spoken: set[int] = set()
+    for region in regions:
+        for first, last in _ALLOCATION.findall(region):
+            if int(first) == _FIRST_DECISION and last:
+                continue
+            spoken.update(range(int(first), int(last or first) + 1))
+        for first, last in _SPAN_IN_WORDS.findall(region):
+            spoken.update(range(int(first), int(last) + 1))
+    return spoken
+
+
+def test_the_register_accounts_for_every_number_below_the_last_one_it_spends():
+    """A hole the file does not enumerate is indistinguishable from a number nobody wanted.
+
+    Held below the highest entry only. Above it there is nothing to read: a number no sitting has
+    reached yet is the next one, and a lane's block is orchestration that reaches this file when
+    the sitting that spent from it is written. [decision 346; M5.3 review cycle 1, M53-REG-06]
+    """
+    headed = {number for number in _register_entries() if number >= _FIRST_DECISION}
+    assert headed, "the register heads no numbered owner decision, so this guard holds nothing"
+    spoken = _numbers_the_register_speaks_for()
+    unaccounted = sorted(
+        number for number in range(_FIRST_DECISION, max(headed))
+        if number not in headed and number not in spoken
+    )
+    assert not unaccounted, (
+        f"the register heads no entry at {unaccounted} and says nothing about those numbers "
+        "either, while heading numbers above them. A number neither spent nor named as unspent "
+        "reads as free to the next reader, and decision 346 records what that costs: the "
+        "milestone that owns it cannot renumber its own citation, so the day it opens the file "
+        "holds two `### N.` headings under one number, the later one wins, and every citation in "
+        "the tree resolves against the wrong rule while staying green. Name them in the sitting "
+        "that left them unspent, the way that sitting already names the sibling lanes' blocks."
+    )
+
+
 # The owed device checks in `docs/TESTING.md`: the bullets, and the signature line under them.
 # Read as one shape, because the debt is only a debt while both halves stand -- a filled line over
 # the bullets is decision 184's defect wearing a signature, and bullets with no line under them

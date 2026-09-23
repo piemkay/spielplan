@@ -2252,6 +2252,14 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # per sub-milestone. M5.1 runs alone and there is no sibling to hand-merge against; the next
 # wave resolves the number to what `ls ops/m*_exit_criterion.py` reports, having first read its
 # own script against every rule below rather than bumping a constant to buy a green run.
+#
+# M5.3 IS THE FIRST WAVE WITH SIBLINGS, and the paragraph above is what it did: the number is
+# `ls ops/m*_exit_criterion.py` in THIS lane's tree, which holds M5.3's script and not the two
+# its siblings are writing in parallel. So the assertion is right on the branch and wrong on the
+# merge, deliberately - five conflicts a person resolves by counting the directory again is the
+# shape decision 184 asks for, and a lane that had left it at nine to avoid them would have
+# published a figure nobody re-derived. Every rule below was read against
+# `ops/m53_exit_criterion.py` before the number moved. [M5.3, decision 378]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2358,7 +2366,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2627,7 +2635,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2875,7 +2883,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -3155,7 +3163,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3788,7 +3796,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 9, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -10916,7 +10924,7 @@ def test_the_proposal_ledger_counts_itself():
         ("the count moved and the range did not", (286, 287, None), False, True, True),
         ("a document states neither", (0, 0, None), True, True, True),
         ("both are current and neither states a sitting", (286, 303, None), False, False, True),
-        ("every figure derived", (286, 303, (12, "2026-09-01", "2026-09-18")), False, False, False),
+        ("every figure derived", (286, 303, (14, "2026-09-01", "2026-09-23")), False, False, False),
         # Review cycle 4: the sentence as README published it. Two derived figures and a third
         # that matched no available reading -- not the 24 blocks, not the 12 dates, not the 11
         # dates carrying a decision -- inside the same clause, which is what lent it their
@@ -11771,7 +11779,13 @@ _MATERIAL_LINK_WINDOW = 600      # only for a body with no closing `*/`; see bel
 # on the first run after that paragraph landed. An attribute or a string literal is every shape a
 # read comes in here: `payload["homepage"]` and `.get("homepage")` in the importer, `->>'homepage'`
 # in a query, `meta.homepage` on the surface. Prose spells a column in backticks, which is none of
-# them. The two names are `title_meta`'s own field and the corpus's `title` column -- `load.py`
+# them -- EXCEPT when it spells the table with it, and the next author to rewrite that paragraph
+# should know before this reddens on them: a prose "`title`'s `wikipedia_title`" is invisible here
+# and a prose "`title.wikipedia_title`" is an ACCESS as far as the pattern is concerned, so the
+# argument for the deferral can turn the guard over the deferral red by saying the same thing in
+# the ordinary way. Measured on the first run after decision 425's rewrite of it.
+# [M5.3 review cycle 1, M53-COV-01]
+# The two names are `title_meta`'s own field and the corpus's `title` column -- `load.py`
 # does not map the second onto `title` at all, and `importer/meta.py` keeps the whole corpus row as
 # `payload` jsonb that only `resolve_title_fields` reads back, by field name and never by either.
 _ARTICLE_CARRIER = re.compile(
@@ -11779,16 +11793,58 @@ _ARTICLE_CARRIER = re.compile(
 )
 
 
-def _reads_the_article_carrier() -> list[str]:
-    """Package and surface files that read the column a CC BY-SA material link would come from."""
+# WHERE THE PREMISE STOPPED BEING TRUE, AND WHAT IS LEFT OF IT. Decision 320's premise has two
+# halves and the paragraph above states both: this build "holds no article identifier", AND
+# "`/api/titles/{id}` exposes no field a link could be built from". M5.3 makes the FIRST half false
+# and does not get to narrow a guard past it. `0026_acquisition_sources.sql` adds
+# `title.wikipedia_title`, `wikidata:resolve` fills it, `sources/wikipedia.py:213` reads it back,
+# and `derive/parse.py:884` writes `https://en.wikipedia.org/wiki/{article}` into `title_meta`'s
+# `homepage` - so this build now holds the identifier AND computes the exact URI CC BY-SA asks to
+# be linked. Decision 320's instrument was commissioned to go red on that day and section 4.7 to
+# come out with the anchor; M5.3 ships no title surface and serves no new field, so decision 425
+# re-measures the ground instead: the record says what is now true, the component's paragraph says
+# it, and the debt stays published under a second number rather than being quietly re-scoped.
+#
+# THE RULE THEREFORE HAS TWO SIDES, because the deferral now rests on the exposure half alone and
+# a one-sided guard cannot see which half moved:
+#
+#   * the package HOLDS it - asserted, not assumed, so the day nothing reads either column again
+#     section 4.7's re-measurement is the false record in the other direction;
+#   * nothing SERVES it - `api/` shapes every response this app sends, `db/` is where the rows
+#     those responses carry are selected, and `frontend/src` renders them.
+#
+# `db` is in the roots and its absence was the second detection hole: `db/library.py:400` is
+# `SELECT t.*` and `:408` returns `dict(row)`, so `title.wikipedia_title` already transits into
+# `api/library.py` as a live value with the string appearing in no file at all. What keeps it off
+# the wire is the explicit key tuple at `api/library.py:107-111`, which a string-matching walk over
+# `api/` cannot hold - naming `db` is what puts the layer that builds the row inside the rule.
+# [decisions 320, 372, 425; M5.3 review cycle 1, M53-COV-01]
+_ARTICLE_CARRIER_ROOTS = ("api", "db")
+_MATERIAL_LINK_REMEASURED = 425
+
+
+def _carries_the_article_identifier(roots: list[Path]) -> list[str]:
+    """Files under `roots` that read `title_meta`'s `homepage` or the corpus's `wikipedia_title`."""
     found = []
-    for root in (SPIELPLAN, FRONTEND):
+    for root in roots:
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix not in {".py", ".svelte", ".js"}:
                 continue
             if _ARTICLE_CARRIER.search(_src(path)):
                 found.append(path.relative_to(REPO).as_posix())
     return found
+
+
+def _reads_the_article_carrier() -> list[str]:
+    """Route, query and surface files that read the column a material link would come from."""
+    return _carries_the_article_identifier(
+        [SPIELPLAN / part for part in _ARTICLE_CARRIER_ROOTS] + [FRONTEND]
+    )
+
+
+def _holds_the_article_carrier() -> list[str]:
+    """Anywhere in the package at all: decision 425's half of the re-measurement."""
+    return _carries_the_article_identifier([SPIELPLAN])
 
 
 def _material_link_argument(text: str) -> str:
@@ -11814,7 +11870,7 @@ def test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry():
     """A departure argued from a licence is a reading; a departure argued from a decision is a
     record somebody signed.
 
-    Decision 320 refused both easy repairs. BUILDING the link is unavailable: this build imports
+    Decision 320 refused both easy repairs. BUILDING the link was unavailable: that build imported
     no article identifier at all, and for TVmaze the corpus's `homepage` is the show's own
     marketing site rather than the TVmaze page, so an anchor under a CC BY-SA credit would point
     at the wrong work. EDITING `map-taste-data-sources-are-attributed`'s `what` to stop at the
@@ -11823,16 +11879,45 @@ def test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry():
     number, in `docs/RELEASE.md` section 4, where decision 296 routes a plan-versus-tree
     correction.
 
-    The escape hatch is the point, and it is the one section 5.4 uses: import the identifier and
-    this guard goes red of its own accord, because then the record is the false statement and the
-    two are deleted together. [decision 320; row `map-taste-data-sources-are-attributed`]
+    THE FIRST HALF OF THAT PREMISE DIED AT M5.3 AND THIS GUARD ALMOST DIED WITH IT. §8 stage 2
+    imports the article identifier and the derive computes the article URL, which is the day
+    decision 320's Cost paragraph says the guard goes red, section 4.7 becomes the false record
+    and the two come out with the anchor. What happened instead was a narrowing: the walk was
+    re-pointed at `api/` alone, the four new readers fell outside it, and both published carriers
+    of the old measurement were left standing - a landmine disarmed by the change that trod on it.
+    Decision 425 re-measures the ground rather than re-scoping the instrument: the identifier is
+    HELD and is served nowhere, both halves are asserted here, and the record and the component
+    say so under that number. The escape hatch survives on the half that still stands - serve the
+    field and this goes red of its own accord - and it is now the only half left, which is why the
+    day it fires the deferral is over rather than narrowed again.
+    [decisions 320, 425; row `map-taste-data-sources-are-attributed`;
+     M5.3 review cycle 1, M53-COV-01]
     """
+    # A narrowing that also blunted the detector would be a retirement with the name of a rule, so
+    # both halves are re-proved here: the pattern still catches every shape a read comes in, and
+    # every root it walks is a directory with files of the kinds it reads.
+    for spelling in ('payload["homepage"]', ".get('homepage')", "meta.homepage",
+                     'row["wikipedia_title"]', ".wikipedia_title", "->>'homepage'"):
+        assert _ARTICLE_CARRIER.search(spelling), f"the detector missed {spelling}"
+    for root in [SPIELPLAN / part for part in _ARTICLE_CARRIER_ROOTS] + [FRONTEND]:
+        assert any(p.suffix in {".py", ".svelte", ".js"} for p in root.rglob("*") if p.is_file()), (
+            f"the guard walks {root}, which holds nothing it can read"
+        )
+    assert _holds_the_article_carrier(), (
+        "nothing in the package reads the article identifier any more, so decision 425's "
+        "re-measurement -- that this build HOLDS it and only declines to serve it -- is now the "
+        "false record. Re-run the reading and correct docs/RELEASE.md section 4.7 with it: the "
+        "deferral's ground moved back to decision 320's, and that is a change somebody has to "
+        "state rather than inherit."
+    )
     reads = _reads_the_article_carrier()
     assert not reads, (
-        f"{reads} now read the corpus's article identifier, so decision 320's premise -- that "
-        "this build holds none -- no longer holds and the CC BY-SA material link has become "
-        "reasonably practicable. Delete this guard and docs/RELEASE.md section 4.7 in the same "
-        "change as the anchor, and let the block carry the link."
+        f"{reads} now serve the corpus's article identifier, so the surviving half of decision "
+        "320's premise -- that no response carries a field a link could be built from -- no "
+        "longer holds and the CC BY-SA material link has become reasonably practicable. Delete "
+        "this guard and docs/RELEASE.md section 4.7 in the same change as the anchor, and let the "
+        "block carry the link. It is not to be re-scoped again: decision 425 spent the one "
+        "narrowing this rule had in it."
     )
     argument = _material_link_argument(_src(FRONTEND / "lib" / "components" / "DataSources.svelte"))
     assert argument, (
@@ -11840,19 +11925,38 @@ def test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry():
         "That paragraph is the only thing standing between a reader and the conclusion that the "
         "link was forgotten; if the link shipped, this guard comes out with it."
     )
-    assert f"decision {_MATERIAL_LINK_DECISION}" in argument, (
-        f"the paragraph arguing the credit carries no material link cites no decision "
-        f"{_MATERIAL_LINK_DECISION}:\n  "
-        + argument[:200]
-        + "\n\nEvery other argued departure in this header cites the ruling that took it. A "
-        "departure argued from the licence text alone is this milestone's own defect class: a "
-        "record that owes a debt with nowhere for a reader to find it."
-    )
+    for number in (_MATERIAL_LINK_DECISION, _MATERIAL_LINK_REMEASURED):
+        assert f"decision {number}" in argument, (
+            f"the paragraph arguing the credit carries no material link cites no decision "
+            f"{number}:\n  "
+            + argument[:200]
+            + "\n\nEvery other argued departure in this header cites the ruling that took it. A "
+            "departure argued from the licence text alone is this milestone's own defect class: a "
+            "record that owes a debt with nowhere for a reader to find it. Both numbers are owed "
+            "now and for different sentences: 320 is why there is no link, 425 is why the reason "
+            "given for it is no longer the one 320 gave."
+        )
     register = _src(REGISTER)
-    assert re.search(rf"(?m)^### {_MATERIAL_LINK_DECISION}\.", register), (
-        f"DataSources.svelte cites decision {_MATERIAL_LINK_DECISION} and the register heads no "
-        f"`### {_MATERIAL_LINK_DECISION}.` entry. A citation to a number nobody took is the trap "
-        "this milestone's plan opens with."
+    for number in (_MATERIAL_LINK_DECISION, _MATERIAL_LINK_REMEASURED):
+        assert re.search(rf"(?m)^### {number}\.", register), (
+            f"DataSources.svelte cites decision {number} and the register heads no `### {number}.` "
+            "entry. A citation to a number nobody took is the trap this milestone's plan opens "
+            "with."
+        )
+    # And the record carries the re-measurement too, which is the half nothing read at all: 4.7
+    # published a dated grep as its ground, M5.3 falsified the grep, and the section went on
+    # saying it because the only instrument over that paragraph asked the COMPONENT for a
+    # citation. A number in the section is not the measurement -- the two assertions above are --
+    # but it is what sends a reader to the entry that re-took it. [M5.3 cycle 1, M53-COV-01]
+    record = _src(RELEASE_RECORD)
+    section = record[record.find("### 4.7"):]
+    section = section[:section.find("\n### ") if "\n### " in section else len(section)]
+    assert section, "docs/RELEASE.md no longer holds a section 4.7 for the material-link debt"
+    assert re.search(rf"\b{_MATERIAL_LINK_REMEASURED}\b", section), (
+        f"docs/RELEASE.md section 4.7 cites no decision {_MATERIAL_LINK_REMEASURED}. Its dated "
+        "measurement is the ground the whole deferral stands on, and that ground moved: the "
+        "section has to carry the entry that re-took it, or a reader is left with a grep that "
+        "this tree no longer answers the way the paragraph says it does."
     )
 
 
@@ -13403,10 +13507,14 @@ def test_the_citation_guard_sees_a_subject_that_moved():
         # adding the paragraph that says `_acquisition_drain`'s due-count asks for the work this
         # drain would take; review cycle 3 moved it 14 more, giving that job the board half of the
         # reaper it had taken the queue half of and the paragraph arguing why the two travel
-        # together. 1240 - the number the record published until this cycle - becomes the stale
-        # half. The pair keeps meaning what it says rather than being retyped.
-        # [M51-REV-07; M5.1 review cycle 2, M51-C2-PAID-02; cycle 3, M51-C3-CRASH-03]
-        ("backend/spielplan/worker.py:1254", "backend/spielplan/worker.py:1240"),
+        # together. 1240 - the number the record published until that cycle - became the stale
+        # half. M5.3's review cycle 1 moved it 29 further: the drain's budget paragraph took
+        # decision 347's owed measurement, which is prose rather than code and is why the subject
+        # keeps sliding down this file. 1254 is now the stale half. The pair keeps meaning what it
+        # says rather than being retyped.
+        # [M51-REV-07; M5.1 review cycle 2, M51-C2-PAID-02; cycle 3, M51-C3-CRASH-03;
+        #  M5.3 review cycle 1, M53-C1-NET-03]
+        ("backend/spielplan/worker.py:1283", "backend/spielplan/worker.py:1254"),
         ("backend/tests/test_backup.py:1378", "backend/tests/test_backup.py:1262"),
         ("account/+page.svelte:332", "account/+page.svelte:330"),
         ("(`:94`, `:102`", "(`:93`, `:101`"),
@@ -13598,7 +13706,13 @@ def test_the_attribution_guard_sees_the_sentence_decision_311_shipped():
 # claim without naming one is itself the defect; "N lines" is ordinary English, and a sentence
 # counting something else in a block that happens to name a script is not a claim about the script.
 # [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
-_PUBLISHED_CHECKS = re.compile(r"(\d+|[A-Za-z]+) numbered checks?\b")
+#
+# WHITESPACE-TOLERANT, which `_RAW_STORE_REREAD` below already is and for this file's own recorded
+# reason: a phrase re-wrapped across a line break stops being read. `docs/RELEASE.md`'s M5.3 block
+# wrapped "eleven numbered / checks", so the one figure that block publishes was invisible here and
+# `_published_figure_problems` returned no problem for it whatever number it said - silently,
+# because a pattern that finds nothing reports nothing. [M5.3 review cycle 2, m53-c2-dim-exit-01]
+_PUBLISHED_CHECKS = re.compile(r"(\d+|[A-Za-z]+)\s+numbered\s+checks?\b")
 _PUBLISHED_LINES = re.compile(r"\b([\d,]+) lines\b")
 _PUBLISHED_SCRIPT_COUNT = re.compile(r"(\d+|[A-Za-z]+) scripts under `ops/`")
 _NAMED_SCRIPT = re.compile(r"ops/(m[a-z0-9]+_exit_criterion\.py)")
@@ -13757,6 +13871,13 @@ def test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown():
         "probe.md:1: 'twelve numbered checks' names no exit script in its own paragraph, so there "
         "is nothing to derive it from. Name the script beside the count."
     ]
+
+    # The fourth: a figure a paragraph re-wrap has split across a line break is still a figure.
+    # `docs/RELEASE.md`'s M5.3 block publishes its count exactly that way, and a line-bound reading
+    # passed any number there. [M5.3 review cycle 2, m53-c2-dim-exit-01]
+    assert _published_figure_problems(
+        "probe.md", "Measured by `ops/m51_exit_criterion.py`, eleven numbered\nchecks."
+    ), "a figure wrapped across a line break was not read at all"
 
 
 # --- M5.1 review cycle 4: an exit script cites the application by name, never by line ----------
@@ -14021,3 +14142,96 @@ def test_the_paragraph_reader_glues_a_wrapped_comment_and_leaves_the_docstring_w
         (10, "# A trailing note."),
         (6, "A docstring under a comment."),
     ]
+
+
+# --- M5.3 review cycle 1: a criterion may not name an action nothing in the tree performs --------
+#
+# §12's M5.3 row promised that the admin retry "re-reads the content-addressed raw store instead of
+# re-fetching", and no path in this tree does it. `pipeline._resume_index` answers the BOARD's
+# stage, so a job parked at stage 4 re-enters at `reviews gate`, whose body is `gate.measure` and
+# an advance-or-park and nothing else; `derive/gate.py` imports `dataclasses`, `datetime` and
+# `asyncpg` and reads `title.overview` and `review_store.review`. The one `rawstore.read` in the
+# app is `derive/rebuild.py`'s, which is stage 3 and BEHIND the resume point. What the retry does
+# hold -- and what check 5 and `test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_
+# request` measure three ways -- is that nothing is re-fetched, which is what decision 424 narrows
+# the sentence to.
+#
+# BOTH DIRECTIONS, because the sentence may become true rather than staying false: decision 330
+# leaves "retry from stage N" to M5.6, and a retry re-entering at stage 3 would re-read those bytes
+# for real. The day the resume path reaches the raw store, this asks for the clause back rather
+# than going quiet. The two owner documents carrying the older phrasing -- `M5.3-plan.md` §7 and
+# `ROADMAP-M5.md:290` -- are deliberately not read: an agent may not edit a plan, so a guard that
+# reported one would be reporting a file nothing here is allowed to repair. The map's own
+# `jellyfin-acquisition-eval-stage-park-retry-idempotent` states the clause a third way, as the
+# requirement M5 inherited, and its comment block records which reading closes it. The sentence
+# itself is quoted verbatim in decision 424 and nowhere else in these three files, which is what
+# this anchor costs: provenance goes in the register, and a document held here describes the old
+# wording rather than repeating it.
+# [decision 424; M5.3 review cycle 1, M53-EXIT-02]
+#
+# Whitespace-tolerant because the clause is WRAPPED in two of the three files it was written
+# into, and a reader that walks lines misses it there -- which is this file's own recorded
+# failure mode one guard family over: "a part re-wrapped across a line break stops being read".
+_RAW_STORE_REREAD = re.compile(r"re-(?:reads?|uses?)\s+the\s+content-addressed\s+raw\s+store")
+
+# The three files this milestone wrote the criterion into: the normative row (decision 346 gives
+# M5.3 that row and nothing else in the spec), the release record's restatement, and the
+# instrument's own quotation of the row it measures.
+_CRITERION_COPIES = ("docs/RELEASE.md", "ops/m53_exit_criterion.py")
+
+
+def test_no_criterion_promises_a_raw_store_read_the_parked_resume_cannot_perform():
+    """The clause and the code path it is about, held to each other in one place.
+
+    A sentence in the normative file is not falsifiable by reading the normative file, which is how
+    this one survived: it was transcribed into §12's M5.3 row as the milestone opened, the check
+    that measures it reports exactly the three zeros it does measure, and the gap between the two
+    is visible only to a reader holding `acquire/pipeline.py`, `acquire/stages.py` and
+    `derive/gate.py` open at once. An owner signing the row would close a clause nothing asked.
+    [decision 424; M5.3 review cycle 1, M53-EXIT-02]
+    """
+    package = REPO / "backend" / "spielplan"
+    stages = ast.parse(_src(package / "acquire" / "stages.py"))
+    parked_stage = next(
+        (node for node in ast.walk(stages)
+         if isinstance(node, ast.AsyncFunctionDef) and node.name == "reviews_gate"),
+        None,
+    )
+    assert parked_stage is not None, (
+        "`acquire/stages.py` no longer defines `reviews_gate`, so this reads nothing about the "
+        "stage a job parked by the reviews gate re-enters at. Name the stage it parks in now."
+    )
+    # `ast.unparse` and not the file: stage 2 three hundred lines above writes `raw_document` rows
+    # and argues about them in prose, and the resume point is this function alone.
+    resume = {
+        "acquire/pipeline.py": _src(package / "acquire" / "pipeline.py"),
+        "acquire/stages.py::reviews_gate": ast.unparse(parked_stage),
+        "derive/gate.py": _src(package / "derive" / "gate.py"),
+    }
+    reaches = sorted(
+        name for name, text in resume.items()
+        if "rawstore" in text or "raw_document" in text
+    )
+
+    claimed = []
+    for path in (_normative_file(), *(REPO / name for name in _CRITERION_COPIES)):
+        text = _src(path)
+        for found in _RAW_STORE_REREAD.finditer(text):
+            line = text.count("\n", 0, found.start()) + 1
+            claimed.append(f"{path.relative_to(REPO).as_posix()}:{line}")
+    if reaches:
+        assert claimed, (
+            f"{', '.join(reaches)} now reads the raw store on the path a parked job resumes "
+            "through, and no criterion says so. Decision 424 narrowed §12's M5.3 row to what the "
+            "resume could be measured doing -- no request, no client, no duplicated row -- "
+            "because the read was not among them. If M5.6's retry-from-stage-N has landed "
+            "(decision 330), the clause belongs back in the row and in docs/RELEASE.md."
+        )
+    else:
+        assert not claimed, (
+            "a criterion promises the retry re-reads the content-addressed raw store, and nothing "
+            f"on the resume path can: {', '.join(claimed)}. The resume point is the board's own "
+            "stage, `reviews_gate` asks `gate.measure` and nothing else, and the app's only "
+            "`rawstore.read` is stage 3's, which the resume is past. Say what the retry does -- it "
+            "opens no socket and builds no client -- or make the sentence true first."
+        )

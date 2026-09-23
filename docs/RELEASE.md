@@ -7,13 +7,13 @@ and where the output lives; and what nobody has ever measured at all.
 
 It exists because "the suite is green" had been standing in for §12's exit criteria, and those are
 different statements. A green suite answers *is the map covered*. §12 asks *does this build ship*.
-Counted on this branch rather than inherited. §12 carries **sixteen** rows. **Six of them have
-never been run at all**, and the six are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
-under `ops/` at all and never have, while M5.1's instrument was written in the same change set as
-the surface it measures and has still never been run, because the lane that built both had neither
-a container nor a port. Three describe milestones that do not exist yet (M5, M6, M7). The remaining
-seven have been measured by one of the nine scripts under `ops/`, and **not one of those nine had a
-committed output** until M4.16 wrote the first. M4.5's own eighteen checks
+Counted on this branch rather than inherited. §12 carries **seventeen** rows. **Seven of them have
+never been run at all**, and the seven are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
+under `ops/` at all and never have, while M5.1's and M5.3's instruments were each written in the same
+change set as the surface they measure and neither has ever been run, because the lanes that built
+them could start no server and no container. Three describe milestones that do not exist yet (M5, M6,
+M7). The remaining seven have been measured by one of the ten scripts under `ops/`, and **not one of
+those ten had a committed output** until M4.16 wrote the first. M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
 
@@ -65,6 +65,7 @@ is here because it is the one criterion this milestone actually ran.
 | M4.12 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M4.14 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5.1 | UNMEASURED | none | yes | `________` |
+| M5.3 | UNMEASURED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
@@ -314,8 +315,59 @@ and no container by construction, which is why the instrument was written to deg
 assume: checks 9 (`/data/raw` absent from the backend image) and 11 (`POST /events/nothing` answering
 404 through the app that ships) print "NOT MEASURED HERE" and the run exits 3 - neither a pass nor a
 failure - rather than counting an unasked question as an answer. This row therefore joins M0, M2,
-M4.6, M4.7 and M4.10 in the column this file exists for, and it is the only one of the six that an
-owner can close by running something rather than by first writing it.
+M4.6, M4.7 and M4.10 in the column this file exists for, and it is the first of the two of the seven
+that an owner can close by running something rather than by first writing it; M5.3's block below is
+the second, and it is the same sequence one milestone on.
+
+### M5.3 — the sources and the derive: crawl once, re-parse forever, corrections last
+
+**Criterion (§12, abbreviated):** a title carrying one of the bundle's `credit_correction` rows is
+re-derived from its raw documents and still carries the correction afterwards, with the DNA verdicts
+applied at ingest and the credit corrections applied last; a second derive changes nothing; a title
+with a plot but fewer than two review sources parks at `reviews gate` with both counts in its reason
+and a 30-day window, and the admin retry resumes there rather than at stage 1, so nothing before
+the park runs again -- no request leaves the process, no HTTP client is constructed and no derived
+row is duplicated; a source that 404s is a note while the required source failing parks with that
+source named; a scraped page for a different film is refused with
+nothing written; and a models-only re-import leaves a household-authored correction in place. The
+cell names the instrument: "Measured end to end by `ops/m53_exit_criterion.py`, eleven numbered
+checks, which refuses to run on the fixture".
+
+**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes. **Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone writes
+its own §12 row when it opens rather than having one pre-written for it. **The status moved from NOT
+BUILT to UNMEASURED inside the same change set**, which is M5.1's block above happening a second
+time and for the same reason: `ops/m53_exit_criterion.py` is now in this tree and it has never been
+run. It needs a real export bundle and a live Postgres, and the lane that wrote it had the second and
+not the first.
+
+**One clause of the criterion above was narrowed by review cycle 1 before anyone ran it** (decision
+424). The row had the admin retry reading the content-addressed raw store back instead of
+re-fetching, and no path performs that read: a job parked at stage 4 re-enters at the reviews
+gate, which asks `derive/gate.py` one query, and the app's only read of the raw store is stage 3's,
+behind the resume point. Check 5 measures what the retry does hold - it opens no socket, builds no
+client and duplicates no derived row, asserted three ways - so the sentence now says that. An owner
+signing this row is signing something the instrument asks.
+
+**Ten of its eleven checks run by default and the eleventh is switched off on purpose.** Check 3 is
+the negative control decision 378 puts behind `--negative-control`: it disables the adjudication
+applier for exactly one derive, on the scratch database the whole run already creates and drops,
+prints the curated DNA verdict it watched revert, and puts the applier back inside a `finally`. The
+plan's words are "never leave the applier disabled". Without the flag that check prints "NOT MEASURED
+HERE" and the run exits 3 — neither a pass nor a failure — rather than counting an unasked question
+as an answer, which is `ops/m51_exit_criterion.py`'s own shape under decision 184.
+
+**Nothing it does reaches a third party.** This is the milestone that crawls the open web on a
+household's IP address, so all eight of §8 stage 2's sources are driven against an `httpx`
+mock transport serving a canned web declared in the script, with the fetcher's clock and sleeper
+injected so that Rotten Tomatoes' and Metacritic's real rate — seven tenths of a request a second,
+one at a time — is honoured without the run taking a quarter of an hour. The harness is made
+tolerant; the policy is not made faster.
+
+This row therefore joins M0, M2, M4.6, M4.7, M4.10 and M5.1 in the column this file exists for, and
+it is one of the two of the seven that an owner can close by running something rather than by first
+writing it.
 
 ### M5 — acquisition pipeline, admin connector UI, LLM layer, extraction flywheel
 
@@ -463,7 +515,7 @@ reporter only under `CI`, so no run made in this lane has ever produced the BROW
 parses; `e2e/.results/` here holds nothing but Playwright's own `.last-run.json`.
 
 **The pytest half is no longer only synthetic** (decision 313). Once, from this lane, scoped —
-never the whole suite. **Re-run and re-measured on this branch on 2026-09-18:**
+never the whole suite. **Re-run and re-measured on this branch on 2026-09-19:**
 
 ```
 pytest backend/tests/test_release_gate.py -q --junitxml=<scratch>/real-junit.xml   # 103 passed
@@ -471,7 +523,7 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 42 test result(s) read from 1 JUnit and 0 Playwright report(s)
   coverage gate: 42 row-and-test pair(s) confirmed executed
   coverage gate: 47 named vitest id(s) not visible here (decision 226: no row rests on one alone)
-  coverage gate: 312 row(s) name evidence that did not run, in 2252 line(s): ...
+  coverage gate: 312 row(s) name evidence that did not run, in 2259 line(s): ...
 ```
 
 **Four of those five figures are re-derived rather than remembered**, which is why this block is
@@ -497,7 +549,18 @@ on each occasion rather than the numbers edited. The sixth says plainly what thi
 fix rounds that grew the map each ran the test files they had touched, and this figure is held in a
 file none of them touched, so nothing went red until a run over every file the milestone changed.
 That is the third, fourth, fifth and sixth pieces of evidence that this guard does what it was
-written to do, and the first showing it holds the row figure as well as the line figure. The line
+written to do, and the first showing it holds the row figure as well as the line figure. **M5.3 is
+the seventh**, and the first from a milestone that does not hold `current_milestone`: registering
+§8 stage 3's applier on M4.5's corrections row and decision 326's three re-import tests on M4.14's
+took the line figure to 2256 and left the row figure alone, because both rows already named
+evidence this scoped run never selects, and the two commands above were re-run on this branch
+rather than the number edited. **Its own review cycle 1 is the eighth**, and it moved the
+figure the same way from outside its own milestone again: three guards registered on M4.8's
+two harness rows and M4.16's register row - the exit script's SQL, the operator's `.env`, the
+holes the register leaves unnamed - take the line figure to 2259 with the row figure still at
+312, and the commands above were re-run on this branch rather than the number edited. It also shows the figure is moved by registering an id on any
+SHIPPED row, whichever milestone does it, which is the one thing the six occasions above could not
+show while every one of them was the current milestone's own. The line
 figure is NOT decomposed in this paragraph any more: the decomposition was a second copy of a
 measurement, it went stale in the same cycle that moved the figure, and that is what the sentence
 below strikes decision 313's own copy for. [M5.1, green pass; M5.1 review cycle 1, green pass;
@@ -624,7 +687,7 @@ its own" is still owed.
 `worker.py` still finds only the two volume mounts."
 
 **Measured:** the waiver was discharged at M4.5 and the job shipped at M4.7.
-`backend/spielplan/worker.py:1254` registers `Job("nightly-backup", "M0", "nightly", "minutes",
+`backend/spielplan/worker.py:1283` registers `Job("nightly-backup", "M0", "nightly", "minutes",
 _nightly_backup, every=86400, ...)`, and `backend/spielplan/backup/nightly.py:43` reads `KEEP = 14`
 under the comment `# §2: "rotation 14".`. That waiver is gone from
 `backend/tests/spec_coverage.toml`. **Exactly one standing waiver remains there**, and it is not
@@ -730,6 +793,20 @@ this one. `api/library.py`'s title payload is id/kind/name/original_name/year/ru
 so `/api/titles/{id}` exposes no field an anchor could be built from, and `TitleDetail.svelte` —
 the surface the component's own paragraph forwards a reader to — renders no source link at all.
 
+**Re-measured on 2026-09-19, as M5.3 landed: the first half of that reading has stopped being
+true.** `0026_acquisition_sources.sql` adds `title.wikipedia_title`, §8 stage 2's
+`wikidata:resolve` fills it, `sources/wikipedia.py` reads it back to know which article to ask for,
+and `derive/parse.py` writes `https://en.wikipedia.org/wiki/<article>` into the Wikipedia
+`title_meta` row's `homepage`. So `grep -rn homepage backend/spielplan frontend/src` is no longer
+empty and this build holds the material's address — the sentence above is the measurement of
+2026-09-17 and not of this tree. What survives is the SERVING half, re-run here: `backend/spielplan/db/`
+and `backend/spielplan/api/` name neither column, `api/library.py`'s title payload is still an
+explicit key tuple that omits both, and `/api/titles/{id}` carries no field an anchor could be built
+from. Decision 425 takes that change of ground rather than leaving it to a re-scoped instrument —
+M5.3 ships no title surface and serves no new field, so the debt stays published, under a second
+number, with the reason for it corrected. It becomes buildable, and this section deletable, the day
+a response carries the column.
+
 **The plan's condition could not be settled in this lane and is not signed either way.** The only
 corpus either checkout holds is `backend/tests/fixtures/make_bundle.py`'s synthetic bundle: ten
 `title_meta` rows with `homepage` NULL across all three sources, eight titles with
@@ -744,9 +821,15 @@ under a CC BY-SA notice; and CC BY-SA 4.0 qualifies the material URI "to the ext
 practicable" under a chapeau attaching to what the Licensor supplied.
 `map-taste-data-sources-are-attributed`'s `what` is widened to carry the record and is not narrowed
 to the code. **Held by** `test_the_cc_by_sa_credit_records_the_material_link_it_does_not_carry`
-(`backend/tests/test_static_contracts.py`), which re-runs that reading rather than restating it and
-goes red the day either column is read — at which point this section is the false record and the
-two are deleted together. (Decisions 296 and 320; M4.16 cycle 5, M416-C5-ATTR-01.)
+(`backend/tests/test_static_contracts.py`), which re-runs BOTH readings rather than restating
+either: that the package HOLDS the identifier, so the re-measurement above cannot go stale in
+silence, and that nothing under `api/`, `db/` or `frontend/src` serves it, so it goes red the day a
+response carries the column — at which point this section is the false record and the two come out
+with the anchor. The narrowing that instrument survived is why the second half names `db/` as well:
+`db/library.py` selects `t.*` and returns `dict(row)`, so the column transits into a route with the
+string appearing in no file, and a walk over `api/` alone could not hold the claim it was pointed
+at. (Decisions 296, 320 and 425; M4.16 cycle 5, M416-C5-ATTR-01; re-measured in M5.3 review
+cycle 1, M53-COV-01.)
 
 ---
 

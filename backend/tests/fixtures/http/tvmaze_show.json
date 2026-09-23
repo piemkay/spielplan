@@ -1,0 +1,38 @@
+{
+  "id": 82,
+  "name": "Game of Thrones",
+  "network": {
+    "id": 8,
+    "name": "HBO"
+  },
+  "_embedded": {
+    "cast": [
+      {
+        "person": {
+          "id": 14072,
+          "name": "Peter Dinklage"
+        },
+        "character": {
+          "id": 32476,
+          "name": "Tyrion Lannister"
+        }
+      }
+    ],
+    "crew": [
+      {
+        "type": "Creator",
+        "person": {
+          "id": 1,
+          "name": "David Benioff"
+        }
+      }
+    ],
+    "seasons": [
+      {
+        "id": 1,
+        "number": 1,
+        "episodeOrder": 10
+      }
+    ]
+  }
+}

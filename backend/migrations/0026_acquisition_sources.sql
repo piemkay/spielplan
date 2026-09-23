@@ -1,0 +1,163 @@
+-- 0026_acquisition_sources — the two identity columns §8 stage 2 fetches by, the provenance
+-- column that decides which curated rows a re-import may replace, and the one that decides which
+-- content rows a per-title derive may replace.
+-- Spec v2.1 §8 stage 2 (`wikidata:resolve`, `wikipedia:article`, and "halves guessing"), §8 stage
+-- 3 (the derive that applies both curated ledgers), §4.1 (the title spine and rule 6), §6.6 (the
+-- three ledger editors), §10 (the re-import); decisions 326, 334 and 372;
+-- docs/milestones/M5.3-plan.md §5.
+--
+-- NUMBERING. 0026 is what docs/milestones/ROADMAP-M5.md's migration ledger allocates to M5.3,
+-- confirmed two ways: the directory holds 0016-0018 and 0020-0024 and no 0025 or 0026, and that
+-- table files 0025 against M5.2 and 0027 against M5.4 — two lanes building beside this one right
+-- now, whose numbers are therefore not free even though the files are absent. 0019 was allocated
+-- at M4.10, which needed no schema, and stays permanently unused. `db/migrate.py` keys
+-- `schema_migration` on the filename stem and sorts a glob, so a gap costs nothing and a renumber
+-- would cost everything: a file already applied under one stem silently re-runs under a new one
+-- and dies on its first statement.
+--
+-- WHAT THIS FILE DELIBERATELY DOES NOT DO. It adds no table. `title_meta`, `credit`,
+-- `review_store.review` and `display.platform_rating` already have the shapes §8 stage 3 writes
+-- into — that is what "tables mirror the corpus export" (§4.1) bought, and section 3 adds one
+-- column to two of them rather than a table — and
+-- `acquisition_job.retry_after` already exists, commented "§8 stage 4: 30-day review-accrual
+-- window" (0005_ledger.sql:139) and read by nothing until this milestone. It also adds no index
+-- and no UNIQUE: see section 1.
+
+-- ---------------------------------------------------------------------------
+-- 1. The two keys §8 stage 2 has no column for. Decisions 372 and 334.
+-- ---------------------------------------------------------------------------
+-- `title` carries nine identity columns (0003_content.sql:34-42) and neither of these two, while
+-- the corpus project carries both — and §8 stage 2 names `wikidata:resolve` and
+-- `wikipedia:article` as two of its eight sources. Without a column the app can hold a Wikidata
+-- entity id in, `wikidata:resolve` has nowhere to put its answer and every later fetch re-derives
+-- it or guesses, which is precisely what §8 says that source exists to stop: it "halves guessing"
+-- (spec:366) because it yields the Metacritic, Rotten Tomatoes and Letterboxd slugs the two
+-- scraped sources would otherwise have to construct from a name.
+--
+-- So these two columns are what makes decision 372 implementable: an adapter writes bytes into the
+-- raw store AND identity onto `title`, and nothing else. The join keys are not derived rows —
+-- they are what decides which URL the next fetch asks for, which is why they cannot wait for the
+-- derive the way `overview` and the credits do. The corpus does exactly this and for exactly this
+-- reason: `mdc/sources/tmdb.py` calls `set_ids` at `:89` and `:143` while the full parse waits for
+-- `mdc rebuild`.
+--
+-- NO UNIQUE, and none is arguable here rather than merely forbidden: §4.1 rule 6
+-- (0003_content.sql:24-25) bans UNIQUE on the provider-id columns because "315/171/...
+-- duplicate values exist, mostly legitimate movie/series pairs", and a Wikidata item and a
+-- Wikipedia article are the same kind of key — one article covers a film and its remake often
+-- enough that a UNIQUE would refuse a legitimate acquisition at the moment it is least
+-- recoverable (decision 162: content seeds once).
+--
+-- NO INDEX EITHER, which is a different decision from the one above and is why it is stated.
+-- Nothing in this app looks a title up BY these columns: stage 2 reads them off the row it already
+-- holds by `title_id`, and §7.1's resolver matches Jellyfin items on imdb/tmdb/tvdb, which are the
+-- three that have partial indexes. An index on a column no query filters by is write cost with no
+-- reader, and the milestone that adds such a query is the one that can measure it.
+ALTER TABLE title ADD COLUMN wikidata_id text;
+ALTER TABLE title ADD COLUMN wikipedia_title text;
+
+-- ---------------------------------------------------------------------------
+-- 2. Which curated rows a re-import owns, and which it must not touch. Decision 326.
+-- ---------------------------------------------------------------------------
+-- §6.6 promises that fixes typed into the app's three ledger editors "survive every future
+-- re-derive", and §8 stage 3 is what makes that true: the derive re-applies both ledgers, so a
+-- regenerated `credit` row carries the correction again. What nothing in this schema said is what
+-- happens at the OTHER event — decision 171 rules that all four curated ledgers re-load on every
+-- import including the models-only one, and decision 162 makes a models-only import the only
+-- import this household will ever run twice.
+--
+-- The collision was recorded in advance and verbatim, in decision 171's own Cost paragraph:
+-- "`DELETE FROM credit_correction` is unscoped, so when §6.6's ledger editors land, an
+-- in-app-authored correction absent from the next bundle's TSV is wiped (probed: P4 removed the
+-- app row)". It was accepted then because nothing wrote household rows. M5.3 is the milestone that
+-- ends that condition — it builds the appliers those editors feed — so the provenance column lands
+-- here even though the editors are M5.6's, because a column added AFTER the first household row
+-- exists has to guess where that row came from.
+--
+-- `origin` and not a nullable `authored_by`: the question every reader of these tables has is
+-- binary — may the importer replace this row, or did somebody here write it — and a CHECK over two
+-- literals answers it in the DDL rather than in whichever loader is being read.
+--
+-- THE NAME IS `title.origin`'s AND THE VOCABULARY DELIBERATELY IS NOT. `0008_placement.sql:46-47`
+-- already carries `origin text NOT NULL DEFAULT 'bundle' CHECK (origin IN ('bundle',
+-- 'acquired'))` on `title`, and reusing the name is the point: a reader who knows that column
+-- knows what kind of fact this is. The second literal differs because the two answer different
+-- questions. `title.origin` says how the WORK arrived — bundle, or §8's pipeline — and §10's
+-- rebuild set is scoped on it. These two say who may REPLACE the row, and beside the bundle the
+-- only author this app recognises is the household (§6.6's editors; decision 326). 'acquired' is
+-- therefore refused here rather than tolerated as a synonym: a curated row carrying it is one
+-- the importer's `origin = 'bundle'` DELETE passes over for ever and no editor claims.
+--
+-- THE DEFAULT IS WHAT MAKES THE BACKFILL FREE, and it is also what keeps the movie-data archive
+-- restorable. Every row either table holds today arrived from a bundle, so 'bundle' is the truth
+-- for all of them rather than a convenience. And `backup/movie_data.py` archives both tables
+-- (`:149-150`) while `restore_archive` COPYs each one with the column list THE ARCHIVE carries, so
+-- an archive written by any shipped build up to this one restores with `origin` taking its default
+-- — where a NOT NULL CHECK added without a DEFAULT would have refused every one of them, on the
+-- one recovery gesture decision 162 leaves the household.
+--
+-- What this column does NOT do is scope anything by itself. `load_corrections`' `DELETE FROM
+-- credit_correction` and `load_adjudications`' version-scoped DELETE — both in
+-- `importer/dna.py` — gain `origin = 'bundle'` in this milestone's code; the TSV export route
+-- that would let a household carry its own rows off the box ships with the editors at M5.6.
+--
+-- NAMED BY FUNCTION AND NOT BY LINE, which this paragraph used to do and got wrong in the only
+-- way it could: both statements MOVE in the same commit that ships this migration, so the two
+-- numbers it carried were main's and were stale the moment the file landed. A migration is the
+-- most permanent artifact in the tree — its sha256 is checked at every boot — so a coordinate
+-- inside it is a reference that outlives the coordinate system. Decision 184's rule about a
+-- published figure nobody can re-derive is the same rule one file over.
+-- [M5.3 review cycle 2, M53-C2-DIM7-03]
+ALTER TABLE credit_correction ADD COLUMN origin text NOT NULL DEFAULT 'bundle'
+    CHECK (origin IN ('bundle', 'household'));
+ALTER TABLE dna_adjudication ADD COLUMN origin text NOT NULL DEFAULT 'bundle'
+    CHECK (origin IN ('bundle', 'household'));
+
+-- ---------------------------------------------------------------------------
+-- 3. Which content rows a per-title derive owns, and which it must not touch. Decision 420.
+-- ---------------------------------------------------------------------------
+-- Decision 375 scopes §8 stage 3's delete on `(title_id, source)`, and `source` is a statement
+-- about WHICH CRAWL produced a row. It is not a statement about who wrote it, and in these two
+-- tables that difference is the whole question. `importer/reviews.py` copies the corpus's own
+-- `source` column verbatim, so the bundle's review bodies are already filed under `trakt`,
+-- `metacritic` and the other labels §8 stage 2 crawls under; and `importer/load.py` maps four of
+-- the corpus `award` columns and drops its `source`, so `award` carried no provenance at all and
+-- its delete was by `title_id` alone.
+--
+-- So a corpus title — one of the thin ones §12's M2 row parks "as acquisition jobs for M5
+-- enrichment" — that reached stage 3 lost every bundle review filed under a label this crawl
+-- touched, and every bundle award the moment any OMDb or Wikidata document was read, and got
+-- back whatever one crawl returned. Under decision 162 nothing takes that back: the export
+-- bundle ships no `data/raw/`, so the bytes those rows came from do not exist on this box, and
+-- no §8 stage 2 source can reproduce them — `derive/parse.py` emits awards only out of OMDb's
+-- free-text `Awards` blurb, and `importer/reviews.py`'s own header records that "a bundle whose
+-- reviews are dropped on import cannot re-extract anything later". The operation that ran to
+-- make a thin title thicker made it thinner, and §6.6's board showed only the arrival, because
+-- `_replace` reads its count back over the predicate it has just deleted by.
+--
+-- `origin`, AND THE SAME TWO-LITERAL SHAPE AS SECTION 2 for section 2's reason: the question a
+-- reader of these tables has is binary, and a CHECK over two literals answers it in the DDL
+-- rather than in whichever writer is being read. The second literal is 'derived' and not
+-- section 2's 'household' because the second author here is not a person — it is §8 stage 3,
+-- and a row it wrote is one it can write again out of bytes this box still holds. That is the
+-- whole of what the column buys: a delete scoped `origin = 'derived'` can only reach rows whose
+-- source material the derive still has.
+--
+-- THE DEFAULT IS THE TRUTH RATHER THAN A CONVENIENCE, as in section 2 — every row either table
+-- holds today arrived from a bundle. It is also what keeps a movie-data archive written by any
+-- shipped build up to this one restorable, since `backup/movie_data.py` archives both tables and
+-- COPYs each with the column list THE ARCHIVE carries; and it is what lets the two bulk COPY
+-- loaders in `importer/` stay exactly as they are, because neither corpus table ships a column
+-- called `origin` and a literal would have to be threaded through a mapping whose whole job is
+-- to mirror the corpus. The derive names 'derived' in its own INSERTs rather than leaning on
+-- anything, because it is the writer whose rows its own delete has to be able to find again.
+--
+-- NO INDEX, for section 1's reason and with the same test applied: both deletes are already
+-- `WHERE title_id = $1 AND ...` over tables indexed on `title_id`, and a per-title derive
+-- touches tens of rows. The CHECK costs one sequential scan of the review store as this
+-- migration applies — half a million rows on the shipped corpus, on the boot that is already
+-- unpacking a bundle — and buys the refusal of a third value for the life of the install.
+ALTER TABLE award ADD COLUMN origin text NOT NULL DEFAULT 'bundle'
+    CHECK (origin IN ('bundle', 'derived'));
+ALTER TABLE review_store.review ADD COLUMN origin text NOT NULL DEFAULT 'bundle'
+    CHECK (origin IN ('bundle', 'derived'));

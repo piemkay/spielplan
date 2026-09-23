@@ -264,7 +264,7 @@ Two things happen on the way that are easy to miss:
 > M4.16   17/17  covered
 > M5.1    6/6   covered
   M5.2    0/1   covered
-  M5.3    0/2   covered
+  M5.3    6/6   covered
   M5.4    0/2   covered
   M5.5    0/2   covered
   M5.6    0/2   covered
@@ -470,7 +470,7 @@ The next two are M4.8's instrument rows and were amended by review cycle 1 rathe
 opening commit, because what each gained is a guard and not a clause about the app. The exit-scripts
 row now carries the rule that a figure a DOCUMENT publishes about one of those scripts is derived
 from the script rather than typed: §12's M5.1 row and `docs/RELEASE.md` publish
-`ops/m51_exit_criterion.py`'s twelve numbered checks, its length and the nine scripts under `ops/` as
+`ops/m51_exit_criterion.py`'s twelve numbered checks, its length and the ten scripts under `ops/` as
 words somebody wrote down, and the length was already eighteen lines stale when the new guard first
 read it — a figure falsified inside this very review cycle, in the file CLAUDE.md calls normative.
 Review cycle 4 gave that same row a second clause, the same rule turned the other way round: a
@@ -534,8 +534,9 @@ three tables out of the movie-data archive. They are numbered 347-349 and not 34
 `docs/milestones/ROADMAP-M5.md` files 346 against M5.3, whose own plan is bound to record it
 under that number: a number allocated to a milestone that has not opened is a hole like any
 other, and spending it here would leave two normative rules under one heading. The range is
-deliberately full of holes: **324-330** spare, **333-335** spare, **337-339** spare,
-**341-344** spare and **346** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
+deliberately full of holes, and M5.3 took 326, 334, 335 and 346 out of them as it opened,
+leaving **324-325** spare, **327-330** spare, **333** spare, **337-339** spare and
+**341-344** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
 milestone that owns the step it blocks, because a number is taken by an owner rather than
 reserved by a planner. Its one migration is
 `0024_acquisition.sql`, the number the roadmap's ledger allocates to it; 0019 stays permanently unused
@@ -568,7 +569,7 @@ subject IS this map, so a row naming a test that did not exist yet would have be
 describing work it had not done, inside the one milestone written to stop records doing exactly
 that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
 waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
-reach **153 ids in four pytest files and one e2e spec**, and the count includes the three
+reach **154 ids in four pytest files and one e2e spec**, and the count includes the three
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
 never instead of one — they sit in the frontend's suite rather than in the five files the figure
 names, so an auditor reconciling the two subtracts them first. The series is published rather than
@@ -577,9 +578,10 @@ two layering rules (two of them M5.1's review cycle 2, holding the routing note 
 `ANONYMOUS` to the tree it describes), 42 ids in `test_release_gate.py` for the release
 workflow, the executed-coverage gate and the harness's own fixture, 64 ids in `test_static_contracts.py` for
 the documents this milestone rewrote (three of them M5.1's review cycle 3, holding this file's own
-prose to the registries it sizes), 23 ids in `test_spec_coverage.py` for the rules the
+prose to the registries it sizes), 24 ids in `test_spec_coverage.py` for the rules the
 instrument gained (four of them M5.1's review cycle 4, holding the register's numbering and
-the normative file's own decision citations), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
+the normative file's own decision citations, and one M5.3's review cycle 1, holding the register to
+naming every number it leaves unspent below the last one it heads), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
 `data-sources.test.js` for the /account attribution block. It decomposed by instrument rather than
 by review cycle because no review cycle had run when it was first written, and it is restated here
 from the map rather than grown: review cycle 1 added twenty-three ids across the three instrument files
@@ -926,13 +928,15 @@ rather than rule 1: `test_every_named_test_exists` printed one line per *test* t
 yet rather than one per bare row. That list — forty-seven names when the rows were filled, four of
 the files holding them not yet written — *was* the test plan (`docs/milestones/M4.14-plan.md`), and
 it was closed by writing those tests under those names: all twelve rows now name tests that exist —
-**138 ids in fourteen pytest files and one e2e spec**, and the count includes the nineteen
+**141 ids in fourteen pytest files and one e2e spec**, and the count includes the nineteen
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and never
 instead of one — they sit in the frontend's suite rather than in the fifteen files the figure
-names, so an auditor reconciling the two subtracts them first. Four of the 138 are M4.16's,
-added to two of these rows by its review cycles rather than by M4.14: the figure is what the map
-holds now and not what M4.14 closed with. It read 134 until a guard re-derived it, which is the
-whole argument for re-deriving one (decision 184). [M4.16 cycle 4, M416-C4-LEDGER-01]
+names, so an auditor reconciling the two subtracts them first. Four of the 141 are M4.16's,
+added to two of these rows by its review cycles rather than by M4.14, and three are M5.3's, which
+registered decision 326's re-import tests on the curated-ledger row because whose rows an import
+may replace is that row's clause one sentence further on: the figure is what the map holds now and
+not what M4.14 closed with. It read 134 until a guard re-derived it, which is the
+whole argument for re-deriving one (decision 184). [M4.16 cycle 4, M416-C4-LEDGER-01; M5.3]
 Review cycle 1's are appended to the rows they belong to rather than given rows of their own: the
 four-shape Postgres guard and the crash that leaves no staged tree, the
 reaper's two claims and the door's third window, the seed list's and the axis ledger's clears and
