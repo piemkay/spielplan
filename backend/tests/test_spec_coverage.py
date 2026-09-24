@@ -413,6 +413,25 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # registered test, or by lowering the scalar. Decision 339 - the question the roadmap files against
 # it - and 450-456 record the calls it needed, and it writes no migration (plan section 5).
 # See docs/milestones/M5.7-plan.md and ROADMAP-M5.md.
+#
+# M5 closes the wave, and like M5.4 through M5.7 it adds no name to the list: M5.1 kept "M5" in
+# it for exactly one row, the umbrella criterion decision 331 amends, so what this entry owes a
+# reader is why the name is now current. It sits AFTER "M5.7" because its criterion is a
+# composition of what the seven publish - a new add walks the ten stages to `ready`, a naming
+# failure is in the queue the moment that walk returns, a cap parks the next add - so it can read
+# as shipped only once every part does, and BEFORE "M6" because no part of it is M6's. It HOLDS
+# `current_milestone`, raising it from "M5.1", where it had stood since M5.1 opened, to "M5": that
+# arms the gate for every row at or before M5, M5.2-M5.7's included, and every guard scoped to the
+# current milestone, and whatever the move turns red is this milestone's to close - by writing the
+# test, fixing the record or fixing the code, never by a waiver and never by a lower scalar. Its
+# new row lands at "M5" with no `tests` key, under decision 321's rule that a row is filed there
+# only if `ops/m5_exit_criterion.py` measures it, and the umbrella row it has always held is closed
+# by that script's per-clause tests (decision 465); the red list is the test plan. Decisions
+# 461-467 record the calls it needed - stages 5, 7 and 8 wired (461-463), decision 444's pre-check
+# kept (464), the umbrella measured in-process on the fixture (465), decision 438's owed timing
+# left to the real install (466) and a stage-6 park re-entering at stage 5 (467), with 468 its
+# review's: the worker's drain walks under its tick's own run - and it writes no migration (plan
+# section 5). See docs/milestones/M5-plan.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
               "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]

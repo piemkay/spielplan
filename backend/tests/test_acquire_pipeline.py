@@ -37,15 +37,16 @@ import asyncpg
 import httpx
 import pytest
 
-from spielplan.acquire import fetch, pipeline, queue, stages
+from spielplan.acquire import actions, fetch, pipeline, queue, rawstore, stages
 from spielplan.connectors import registry, resolve
 from spielplan.core import secrets
 from spielplan.core.config import settings
 from spielplan.db.pool import _init_connection as pool_init
 from spielplan.derive import gate
+from spielplan.dna import craft, packs, verify
 from spielplan.home import shelves
 from spielplan.importer import bundle as bundle_import
-from spielplan.llm import spend
+from spielplan.llm import extract, spend
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from tests.fixtures import make_bundle as fx
@@ -148,13 +149,17 @@ def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_tha
     because this file's autouse fixture now stands stage 6 down as a DECLARED NO-OP - its
     `implemented` flag is what the spend gate reads - so the patched tuple would report a stub
     that the build does not ship.
+
+    NO STUBS SINCE M5, which gave stages 5, 7 and 8 their bodies (decisions 461, 462, 463) and
+    keeps `owner = "M5.4"` on each by the same rule: the body is a call into the package M5.4
+    built, so the field names the milestone that wrote it. The map of what is still owed is empty,
+    and the docstring loop below stays for the next stage somebody declares without a body.
     """
     assert [s.number for s in SHIPPED if s.paid] == [6]
-    assert {s.number: s.owner for s in SHIPPED if not s.implemented} == {
-        5: "M5.4", 7: "M5.4", 8: "M5.4",
-    }
+    assert {s.number: s.owner for s in SHIPPED if not s.implemented} == {}
     assert {s.number: s.owner for s in SHIPPED if s.implemented} == {
-        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 6: "M5.5", 9: "M5.1", 10: "M5.1",
+        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 5: "M5.4", 6: "M5.5", 7: "M5.4", 8: "M5.4",
+        9: "M5.1", 10: "M5.1",
     }
     for stage in SHIPPED:
         if stage.implemented:
@@ -253,7 +258,9 @@ async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_no
 
     declared = pipeline.Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=False)
     assert await pipeline.refuse_uncapped_spend(declared, ctx) is None
-    free = next(s for s in SHIPPED if not s.paid and not s.implemented)
+    # Built as the declared paid one above is, because no shipped stage is a declared no-op since
+    # M5 (decisions 461-463) and the gate's answer to a free one is still this test's subject.
+    free = pipeline.Stage(5, "dna pack", stages.dna_pack, implemented=False)
     assert await pipeline.refuse_uncapped_spend(free, ctx) is None
     assert len(asked) == 3, "a stage that cannot spend was made to read the meter"
 
@@ -384,8 +391,20 @@ async def _task_row(db, key: str):
 # written against: stage 6 was a declared no-op from M5.1 until this milestone. The tests whose
 # subject IS stage 6 put it back with `extraction_live`, and `test_llm_stage.py` walks it through
 # the driver against the refusing double.
+#
+# M5 GAVE STAGES 5, 7 AND 8 THEIR BODIES, AND 5 AND 7 STAND DOWN TOO, in decision 432's pattern
+# and for its reason. A live stage 5 reads the active vocabulary before anything else, and a test
+# database with no bundle has none, so it parks every walk that reaches it with a deadline
+# (decision 461) where these tests expect stage 9's own park - and on a database with a bundle it
+# builds a pack and files it in the raw store, which is not what a test of the mint or the lock is
+# about. Stage 7 is not these tests' subject either: it records what stage 6 filed, and stage 6
+# is stood down. Neither is paid, so each keeps `implemented=True` in its substitute and the gate
+# waves it through without a read. STAGE 8 STAYS LIVE: an acquired title with no keywords projects
+# no row and advances, and a bundle title takes the branch that leaves its projected tier alone
+# (decision 463), so every walk here crosses the shipped stage 8 unchanged. The tests whose
+# subject is stage 5 or 7 put them back with `dna_live`.
 STOOD_DOWN = "stage {} stood down by this file's fixture; the live stages are asserted under `live`"
-STANDS_DOWN = (2, 3, 4, 6)
+STANDS_DOWN = (2, 3, 4, 5, 6, 7)
 
 
 def _stands_down(stage: pipeline.Stage) -> pipeline.Stage:
@@ -406,7 +425,7 @@ async def _refuse_to_crawl(_conn):
 
 @pytest.fixture(autouse=True)
 def enrichment_stands_down(monkeypatch):
-    """Stages 2, 3, 4 and 6 advance without doing anything, unless a test asks for the real ones."""
+    """Stages 2 to 7 advance without doing anything, unless a test asks for the real ones."""
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         _stands_down(stage) if stage.number in STANDS_DOWN else stage for stage in SHIPPED
@@ -436,6 +455,9 @@ def live(monkeypatch):
     written: the tests that take it walk a title through the crawl, the derive and the gate to
     `ready`, and a shipped stage 6 would park every one of them at the spend gate with no cap on
     a test database (decision 432). `extraction_live` is the way back for stage 6.
+
+    STAGES 5 AND 7 STAY STOOD DOWN UNDER IT TOO, since M5 gave them bodies: a shipped stage 5 would
+    file a pack for every title these tests walk to `ready`, and `dna_live` is the way back for both.
     """
     _put_back(monkeypatch, (2, 3, 4))
 
@@ -448,6 +470,17 @@ def extraction_live(monkeypatch):
     down as a declared no-op, and a test about what the shipped stage does has to say so.
     """
     _put_back(monkeypatch, (6,))
+
+
+@pytest.fixture
+def dna_live(monkeypatch):
+    """Put stages 5 and 7's shipped bodies back. For the tests whose subject is §8's DNA stages.
+
+    `extraction_live`'s shape and its reason, for the two stages M5 wired that this file stands
+    down (decisions 461, 462); stage 8 is never stood down. Stage 6 stays a declared no-op unless
+    the test also takes `extraction_live`, and the three fixtures commute (`_put_back`).
+    """
+    _put_back(monkeypatch, (5, 7))
 
 
 # --- the mint, the placement and the badge -------------------------------------------------------
@@ -1482,18 +1515,17 @@ async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
     that needs a connection. The build still goes red either way; what was missing is the sentence
     that says why, and a maintainer who reads "the test needs a context" is one step from giving
     it one. [M5.1 review cycle 4, M51-C4-PAID-03]
+
+    NO STAGE IS A DECLARED NO-OP SINCE M5 (decisions 461, 462, 463), and the test keeps its name
+    and both halves. The loop runs over nothing on the shipped build and still names the stage in
+    a doctored one - the build the test below hands it - and the assertion after it refuses the
+    next stage a milestone declares with no body, which is now the only way the list can grow.
     """
     ctx = stages.StageContext(conn=None, task=None)
     # `SHIPPED` AND NOT `pipeline.STAGES`, because the flag under test is the one the build ships:
     # this file's autouse fixture stands stage 6 down as a declared no-op, and reading the patched
     # tuple would call the fixture's substitute and count it as a stub.
     stubs = [s for s in SHIPPED if not s.implemented]
-    # THREE SINCE M5.5, which gave stage 6 its body (decision 432), after M5.3 gave stages 2, 3 and
-    # 4 theirs. The count is asserted rather than derived because it is the half of this test that
-    # notices a stage going the OTHER way: a milestone that wrote a body and left
-    # `implemented=False` is caught by the loop below, and a milestone that set the flag on a stage
-    # it had not written is caught by this line.
-    assert len(stubs) == 3, "stages 5, 7 and 8 are the declared no-ops that remain, M5.4's (D3)"
     stale = (
         "is declared `implemented=False` and no longer returns the stub marker - it has a body, "
         "and the flag the spend gate reads is stale"
@@ -1510,6 +1542,13 @@ async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
         assert outcome.detail == {"stub": stages.NOT_IMPLEMENTED.format(stage.owner)}, (
             f"stage {stage.number} ({stage.name}) {stale}"
         )
+    # NONE SINCE M5, after M5.3 gave stages 2, 3 and 4 their bodies, M5.5 stage 6 (decision 432) and
+    # M5 the last three. AFTER THE LOOP AND NOT BEFORE IT, which is load-bearing: a body written
+    # behind a stale `implemented=False` is a stub the list counts, so a count asserted first would
+    # redden on the count and never reach the sentence that names the stage - the failure
+    # `test_the_stub_marker_check_names_the_stage_when_a_body_raises` asserts. What this line still
+    # catches that the loop cannot is a stage declared a no-op that really is one.
+    assert stubs == [], "no stage is a declared no-op since M5 (decisions 461, 462, 463)"
 
 
 async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, data_dir):
@@ -2694,12 +2733,17 @@ async def test_the_stub_marker_check_names_the_stage_when_a_body_raises(monkeypa
     them. And the check reads `SHIPPED` now (its own comment says why), so the doctored build goes
     where the check looks - which is what this test did before, through the attribute the check
     used to read.
+
+    AND THE DOCTORED STAGE IS DECLARED `implemented=False` OUTRIGHT SINCE M5, where it copied the
+    shipped flag. Stage 7 now ships its body with the flag set (decision 462), so a copy would
+    doctor a build with no stub in it and the check would pass over it; the mistake rehearsed is a
+    body behind a stale False, so the False is written here.
     """
     async def bodied(ctx):
         return await ctx.conn.fetchval("SELECT 1")
 
     patched = tuple(
-        pipeline.Stage(s.number, s.name, bodied, s.paid, s.implemented, s.owner)
+        pipeline.Stage(s.number, s.name, bodied, s.paid, False, s.owner)
         if s.number == 7 else s
         for s in SHIPPED
     )
@@ -3935,3 +3979,307 @@ async def test_a_stage_six_handed_no_fetcher_fails_and_names_the_driver(
     assert (board["stage"], board["status"]) == (6, "failed")
     assert board["detail"]["dna extract"]["retrying"] is True
     assert await db.fetchval("SELECT count(*) FROM llm_call") == 0
+
+
+# --- M5: stages 5, 7 and 8 wired (decisions 461-463, 467) -----------------------------------------
+#
+# The two stages this file stands down, put back with `dna_live` and walked by the driver on a
+# leased task, because each claim lives in the driver's reach: stage 5 files a document under the
+# task's key and the walk's run, stage 7 reads what this walk's run filed, and a stage-6 park
+# re-enters at stage 5 only through `_resume_index`. Stage 8's two branches are
+# `test_flywheel_feed.py`'s, beside the observation that follows them.
+
+DNA_VERSION = "v1"
+DNA_RUN = 4601
+# A plot and two review sources over `packs.MIN_WORDS`, so the base pack interleaves real reviews,
+# and a Wikipedia article carrying one craft section, so `craft.augment` appends a supplement.
+# WITHOUT THE ARTICLE THE TEST PROVES NOTHING about decision 461's trap: a pack with no supplement
+# is its base, and the base `PackInfo` stored unchanged is then exactly right.
+DNA_PLOT = "Two officers of Napoleon's cavalry fight a string of duels across sixteen years."
+DNA_REVIEWS = (("tmdb", " ".join(["duel"] * 60)), ("trakt", " ".join(["sabre"] * 60)))
+DNA_ARTICLE = (
+    "== Plot ==\nTwo officers duel.\n"
+    "== Music ==\nHoward Blake's score is a spare chamber piece for strings, held back through the "
+    "long rides and let loose only at the duels, which it scores as ceremony rather than action.\n"
+)
+# What an M5.5-M5.7 install wrote on the board for every title that reached stage 6 (decision 467's
+# upgraded install), restated rather than imported: `llm/extract.py` no longer says it.
+UNWIRED_NO_PACK = (
+    "no DNA pack is stored for this title under vocabulary v1, so there is nothing to extract from "
+    "and no provider is called. Section 8 stage 5 builds the pack, and stage 5 is not wired in this "
+    "build (decision 387); this title resumes here once a pack is stored (decision 432)"
+)
+
+
+async def _dna_vocabulary(db) -> None:
+    """An active vocabulary with nothing in it: stage 5 needs a version to key the pack by."""
+    await db.execute(
+        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ($1, 0, 0)", DNA_VERSION
+    )
+
+
+async def _dna_title(db) -> int:
+    """An acquired title with a plot and two review sources; no task and no board row yet."""
+    title_id = await db.fetchval(
+        "INSERT INTO title (kind, name, year, is_owned, origin)"
+        " VALUES ('movie', 'The Duellists', 1977, true, 'acquired') RETURNING id"
+    )
+    await db.execute("INSERT INTO title_meta (title_id, source, payload) VALUES ($1, 'tmdb', $2)",
+                     title_id, {"plot_full": DNA_PLOT})
+    await db.executemany(
+        "INSERT INTO review_store.review (title_id, source, body, is_critic) VALUES ($1, $2, $3, true)",
+        [(title_id, source, body) for source, body in DNA_REVIEWS],
+    )
+    return title_id
+
+
+async def _filed(db, title_id: int) -> None:
+    """What stage 6 leaves behind: two extracted-tier rows, one with its quote, and refusals filed
+    under this walk's run, under another run, and under none."""
+    tag = None
+    for term in ("mood.bleak", "themes.revenge"):
+        tag = await db.fetchval(
+            "INSERT INTO dna_tag (title_id, version, term, facet, salience, provider)"
+            " VALUES ($1, $2, $3, split_part($3, '.', 1), 2, 'gemini') RETURNING id",
+            title_id, DNA_VERSION, term,
+        )
+    await db.execute("INSERT INTO dna_evidence (dna_tag_id, quote, source) VALUES ($1, 'duel', 'tmdb:1')",
+                     tag)
+    await db.executemany(
+        "INSERT INTO dna_reject (title_id, run_id, term, rule_violated, provider)"
+        " VALUES ($1, $2, $3, $4, 'gemini')",
+        [
+            (title_id, DNA_RUN, "mood.invented", "unknown_term"),
+            (title_id, DNA_RUN, "mood.bleak", "quote_unverified"),
+            (title_id, DNA_RUN, "themes.revenge", "quote_unverified"),
+            (title_id, DNA_RUN + 1, "mood.bleak", "schema"),
+            (title_id, None, "themes.revenge", "adjudicated"),
+        ],
+    )
+
+
+async def _dna_rows(db) -> tuple:
+    return tuple([
+        await db.fetchval(f"SELECT count(*) FROM {table}")
+        for table in ("dna_tag", "dna_evidence", "dna_reject", "dna_pack")
+    ])
+
+
+async def test_stage_five_stores_the_augmented_pack_under_the_task_key_and_stage_six_reads_it_back(
+    db, data_dir, dna_live
+):
+    """Decision 461: §8 stage 5 is "ported packs.py ... + craft supplement", and what it stores is
+    what stage 6 reads - `llm/extract` sends exactly the text `verify.read_pack` returns.
+
+    THE SUPPLEMENT IS WHAT MAKES THIS A TEST. `craft.augment` returns a `CraftInfo` that
+    `store_pack` cannot take, and `store_pack` refuses a `PackInfo` whose digest and length are
+    not the offered text's own, so the stage recomputes both from the augmented text; with the
+    article below the base info is wrong, and a stage that stored it would raise here. The pack is
+    also a document §6.6's board lists, which it is only when filed under the task's key and the
+    walk's run (decision 345).
+    """
+    await _dna_vocabulary(db)
+    title_id = await _dna_title(db)
+    task = await _leased(db, title_id=title_id)
+    await rawstore.store(
+        db, source="wikipedia", kind="article", url=f"https://en.wikipedia.org/w/api.php?{task.key}",
+        entity_key=task.key,
+        content=json.dumps({"query": {"pages": [{"extract": DNA_ARTICLE}]}}).encode("utf-8"),
+    )
+    await pipeline.write_board(db, title_id, stage=5, status=pipeline.RUNNING)
+
+    report = await pipeline.run_task(db, task, run_id=DNA_RUN)
+
+    assert report.stages_run[:2] == ["dna pack", "dna extract"], report.as_dict()
+    assert report.stage == 9, "stage 5 advanced and the walk stopped at stage 9's bundle-less park"
+    row = await db.fetchrow("SELECT * FROM dna_pack WHERE title_id = $1 AND version = $2",
+                            title_id, DNA_VERSION)
+    assert row is not None, "stage 5 advanced and stored no pack"
+    pack = await verify.read_pack(db, title_id, DNA_VERSION)
+    base, base_info = await packs.build_pack(db, title_id)
+    assert craft.SENTINEL in pack and "spare chamber piece" in pack, (
+        "the pack stage 6 reads carries no craft supplement"
+    )
+    assert craft.base_pack(pack) == base, "the base pack is not an exact prefix of the stored one"
+    assert (row["pack_sha"], row["chars"]) == (packs.sha(pack), len(pack))
+    assert row["chars"] > base_info.chars
+    assert (row["n_reviews"], row["n_sources"]) == (base_info.n_reviews, base_info.n_sources) == (2, 2)
+    document = await db.fetchrow(
+        "SELECT source, entity_key, run_id FROM raw_document WHERE id = $1", row["raw_document_id"]
+    )
+    assert tuple(document) == ("pack", task.key, DNA_RUN), dict(document)
+    detail = (await _board(db, title_id))["detail"]["dna pack"]
+    assert {key: detail[key] for key in ("version", "pack_sha", "chars", "base_chars",
+                                         "raw_document_id", "n_sections", "n_rt")} == {
+        "version": DNA_VERSION, "pack_sha": row["pack_sha"], "chars": len(pack),
+        "base_chars": base_info.chars, "raw_document_id": row["raw_document_id"], "n_sections": 1,
+        "n_rt": 0,
+    }, detail
+
+
+async def test_stage_five_parks_with_a_deadline_when_no_vocabulary_is_active(db, data_dir, dna_live):
+    """§3.1's bundle-less install, one stage earlier than stage 6 meets it. `dna_pack` is keyed by
+    vocabulary version, so there is nothing to store under; nothing raised and a retry cannot
+    supply one, so it is a park and not a failure (decision 336) - and a park WITH a deadline,
+    because a park with none is `queue.skip`, which closes the task for good (decision 461)."""
+    title_id = await _dna_title(db)
+    task = await _leased(db, title_id=title_id)
+    await pipeline.write_board(db, title_id, stage=5, status=pipeline.RUNNING)
+
+    report = await pipeline.run_task(db, task)
+
+    assert (report.stage, report.status, report.stages_run) == (5, "parked", ["dna pack"]), (
+        report.as_dict()
+    )
+    assert report.reason == stages.NO_PACK_VOCABULARY
+    report.reason.encode("ascii")
+    board = await _board(db, title_id)
+    assert (board["stage"], board["status"], board["reason"]) == (5, "parked", report.reason)
+    assert board["retry_after"] is not None and board["retry_after"] > datetime.now(UTC)
+    row = await _task_row(db, task.key)
+    assert row["state"] == queue.PENDING, "a park with no deadline closes the task for good"
+    assert row["next_attempt_at"] == board["retry_after"]
+    assert await _dna_rows(db) == (0, 0, 0, 0)
+    assert await db.fetchval("SELECT count(*) FROM raw_document WHERE source = 'pack'") == 0
+
+
+async def test_stage_seven_advances_with_the_rejects_stage_six_filed_and_asks_no_second_verdict(
+    db, data_dir, dna_live, monkeypatch
+):
+    """Decision 462: the verdict is stage 6's (decision 432), so stage 7 records it and reaches
+    none of its own. Its detail is the title's extracted-tier count and THIS run's refusals by rule
+    - not another run's, not a run-less one's - with no call to the validator or the extraction and
+    no row written, and the board keeps it beside stage 6's for the life of the job."""
+    await _dna_vocabulary(db)
+    title_id = await _dna_title(db)
+    task = await _leased(db, title_id=title_id)
+    await _filed(db, title_id)
+    asked: list[str] = []
+
+    async def second_verdict(*_args, **_kwargs):
+        asked.append("asked")
+        raise AssertionError("stage 7 asked for a verdict stage 6 already reached (decision 462)")
+
+    monkeypatch.setattr(verify, "verify_payload", second_verdict)
+    monkeypatch.setattr(extract, "extract_title", second_verdict)
+    before = await _dna_rows(db)
+    await pipeline.write_board(db, title_id, stage=7, status=pipeline.RUNNING)
+
+    report = await pipeline.run_task(db, task, run_id=DNA_RUN)
+
+    assert report.stages_run[:1] == ["verify"] and report.stage == 9, report.as_dict()
+    assert asked == []
+    assert (await _board(db, title_id))["detail"]["verify"] == {
+        "version": DNA_VERSION, "tags": 2, "rejected": {"quote_unverified": 2, "unknown_term": 1},
+    }
+    assert await _dna_rows(db) == before, "stage 7 wrote a row"
+
+
+async def test_stage_seven_with_no_run_reads_no_reject(db, data_dir, dna_live):
+    """`run_id = $2` and not `IS NOT DISTINCT FROM`: a walk with no run - every `run_task` an ops
+    script or a test calls directly - reads none, where the null-safe form would report every
+    run-less refusal the title ever had as this walk's (decision 462)."""
+    await _dna_vocabulary(db)
+    title_id = await _dna_title(db)
+    task = await _leased(db, title_id=title_id)
+    await _filed(db, title_id)
+    await pipeline.write_board(db, title_id, stage=7, status=pipeline.RUNNING)
+
+    report = await pipeline.run_task(db, task)
+
+    assert report.stages_run[:1] == ["verify"], report.as_dict()
+    assert (await _board(db, title_id))["detail"]["verify"] == {
+        "version": DNA_VERSION, "tags": 2, "rejected": {},
+    }
+
+
+async def test_an_expired_stage_six_park_re_enters_at_stage_five_and_stores_a_pack(
+    db, data_dir, dna_live, extraction_live
+):
+    """Decision 467: a title an M5.5-M5.7 install parked at stage 6 on a missing pack, whose own
+    deadline has passed, re-enters at stage 5 - `reask_from=5` - and the pack it waited for is
+    stored before stage 6 is asked again. The shipped gate still runs before stage 6, so the re-ask
+    costs one local build and nothing billed: with no cap set it parks under decision 348's
+    sentence, having asked no provider."""
+    await _dna_vocabulary(db)
+    title_id = await _dna_title(db)
+    assert await pipeline.enqueue_title(db, title_id) is True
+    await pipeline.write_board(db, title_id, stage=6, status=pipeline.PARKED, reason=UNWIRED_NO_PACK,
+                               retry_after=datetime.now(UTC) - timedelta(minutes=1))
+
+    report = await pipeline.drain(db, limit=1)
+
+    walk = report.tasks[0]
+    assert walk.stages_run == ["dna pack", "dna extract"], walk.as_dict()
+    assert (walk.stage, walk.status, walk.reason) == (6, "parked", pipeline.NO_SPEND_CAP)
+    assert await db.fetchval("SELECT count(*) FROM dna_pack WHERE title_id = $1 AND version = $2",
+                             title_id, DNA_VERSION) == 1
+    assert await db.fetchval("SELECT count(*) FROM llm_call") == 0
+
+
+async def test_a_stage_six_park_made_due_early_resumes_at_stage_six(
+    db, data_dir, dna_live, extraction_live
+):
+    """The other half of decision 467, which is decision 421's: the same park made due BEFORE its
+    deadline - an operator's retry or a Launch writes the task due now and leaves the board's
+    deadline ahead - resumes at the board's stage and builds nothing, so `test_llm_stage.py` and
+    `ops/m55_exit_criterion.py`, which make parks due early over a pack placed by hand, walk as
+    they did."""
+    await _dna_vocabulary(db)
+    title_id = await _dna_title(db)
+    assert await pipeline.enqueue_title(db, title_id) is True
+    await pipeline.write_board(db, title_id, stage=6, status=pipeline.PARKED, reason=UNWIRED_NO_PACK,
+                               retry_after=datetime.now(UTC) + timedelta(days=1))
+
+    report = await pipeline.drain(db, limit=1)
+
+    walk = report.tasks[0]
+    assert walk.stages_run == ["dna extract"], walk.as_dict()
+    assert (walk.stage, walk.status) == (6, "parked"), walk.as_dict()
+    assert await db.fetchval("SELECT count(*) FROM dna_pack") == 0
+
+
+async def test_a_launched_bundle_title_nobody_owns_parks_at_stage_ten_and_resumes_there(
+    db, bundled, dna_live
+):
+    """Plan section 9's risk, which is worth one test: the first walks past stage 6 on a real
+    install will be Launches of bundle titles (decision 443), through stages 9 and 10 that were only
+    ever walked by acquired titles. A placed bundle title nobody owns walks from stage 5 - a real
+    pack, stage 7's record, stage 8's bundle branch (decision 463) - places on its existing
+    coordinate and parks at stage 10 on "no ownership flag" with a deadline. When the deadline
+    passes it is re-asked at stage 10 alone, two column reads, never stage 5 or 6 again."""
+    title_id = await db.fetchval(
+        "SELECT t.id FROM title t WHERE t.origin = 'bundle' AND t.placement IN ('cold_tower', 'warm')"
+        "   AND NOT EXISTS (SELECT 1 FROM acquisition_job j WHERE j.title_id = t.id)"
+        " ORDER BY t.id LIMIT 1"
+    )
+    assert title_id is not None, "the fixture bundle places no title that has no board row"
+    await db.execute("UPDATE title SET is_owned = false, owned_checked_at = NULL WHERE id = $1",
+                     title_id)
+    async with db.transaction():
+        assert await actions.make_due(db, title_id, stage=5, reason="launched by this test") == 1
+
+    first = next(t for t in (await pipeline.drain(db)).tasks if t.title_id == title_id)
+
+    assert first.stages_run == [s.name for s in SHIPPED if s.number >= 5], first.as_dict()
+    assert (first.stage, first.status) == (10, "parked"), first.as_dict()
+    assert "no ownership flag" in first.reason, first.reason
+    board = await _board(db, title_id)
+    assert board["retry_after"] is not None and board["retry_after"] > datetime.now(UTC)
+    assert "decision 162" in board["detail"]["project"]["kept"], board["detail"]["project"]
+    packed = await db.fetchval("SELECT count(*) FROM raw_document WHERE source = 'pack'")
+    assert packed == 1
+
+    await db.execute(
+        "UPDATE acquisition_job SET retry_after = now() - interval '1 minute' WHERE title_id = $1",
+        title_id,
+    )
+    await db.execute(
+        "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
+        " WHERE kind = $1 AND payload ->> 'title_id' = $2", pipeline.TASK_KIND, str(title_id),
+    )
+    again = next(t for t in (await pipeline.drain(db)).tasks if t.title_id == title_id)
+
+    assert again.stages_run == ["ready"], again.as_dict()
+    assert (again.stage, again.status) == (10, "parked"), again.as_dict()
+    assert await db.fetchval("SELECT count(*) FROM raw_document WHERE source = 'pack'") == packed

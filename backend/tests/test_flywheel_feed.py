@@ -11,11 +11,13 @@ it, and the queue is read with `store.queue` - the admin queue's own read - the 
 No drain loop, no worker job and no sweep runs in between, because a sweep over the extracted tier
 is precisely the implementation that passes a naive test and fails the row (plan §9).
 
-STAGES 2, 3, 4 AND 6 STAND DOWN, as `test_acquire_pipeline.py` stands them down and for its reason:
-the subject is the driver's observation, not the crawl, the gate or the bill, and a walk that had to
-supply a canned web and a spend cap would redden for those. Stage 8 is the shipped one - a declared
-no-op carrying `observes_coverage` - and stage 9 parks for want of a bundle, which is where a walk
-past the observation stops on this database.
+STAGES 2 TO 7 STAND DOWN, as `test_acquire_pipeline.py` stands them down and for its reason: the
+subject is the driver's observation, not the crawl, the gate, the pack or the bill, and a walk that
+had to supply a canned web and a spend cap would redden for those. Stage 8 is the shipped one,
+carrying `observes_coverage` and, since M5, its body (decision 463): title 7 is a bundle title
+(`title.origin`'s default), so it takes the branch that leaves the bundle's projected tier alone,
+and the acquired title below takes the one that projects. Stage 9 parks for want of a bundle, which
+is where a walk past the observation stops on this database.
 
 Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
 """
@@ -35,14 +37,17 @@ from tests.test_acquire_pipeline import SHIPPED, STANDS_DOWN, _refuse_to_crawl, 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
 TITLE = 7
-TASK_KEY = f"title:{TITLE}"
+# §4.1's minting rule - `origin = 'acquired'` and an id at or above 1e9 (`0008_placement.sql:46-48`)
+# - which is the population stage 8 projects (decision 463).
+ACQUIRED = 1_000_000_007
 M6_WRITERS = ("enqueue_empty_predicate", "enqueue_uncovered_frontier")
 
 
 @pytest.fixture(autouse=True)
 def only_the_driver_is_live(monkeypatch):
     """`test_acquire_pipeline.py`'s stand-down, restated as a fixture of this file's own so a reader
-    sees it: 2, 3, 4 and 6 advance without doing anything, and nothing can reach the open web."""
+    sees it: 2 to 7 advance without doing anything - 5 and 7 since M5 gave them bodies (decisions
+    461, 462) - stage 8 stays live, and nothing can reach the open web."""
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         _stands_down(stage) if stage.number in STANDS_DOWN else stage for stage in SHIPPED
@@ -89,14 +94,40 @@ async def _title(db) -> None:
     assert await pipeline.enqueue_title(db, TITLE) is True
 
 
-async def _walk(db, *, from_stage: int | None = None) -> pipeline.TaskReport:
+async def _acquired(db) -> None:
+    """A title this pipeline minted, with its task, carrying one keyword the alias map below names."""
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned, origin)"
+        " VALUES ($1, 'movie', 'La Jetee', 1962, true, 'acquired')", ACQUIRED,
+    )
+    assert await pipeline.enqueue_title(db, ACQUIRED) is True
+    await _keyword(db, ACQUIRED)
+
+
+async def _keyword(db, title_id: int) -> None:
+    """An alias v1 adopts, and a TMDB keyword of the title's that folds onto it (`alias_key`)."""
+    await db.execute(
+        "INSERT INTO dna_alias (version, alias, term) VALUES ('v1', 'revenge', 'themes.revenge')"
+        " ON CONFLICT DO NOTHING"
+    )
+    await db.execute(
+        "INSERT INTO title_keyword (title_id, keyword, source) VALUES ($1, 'Revenge', 'tmdb')", title_id
+    )
+
+
+async def _board_detail(db, title_id: int) -> dict:
+    return await db.fetchval("SELECT detail FROM acquisition_job WHERE title_id = $1", title_id)
+
+
+async def _walk(db, *, from_stage: int | None = None, title_id: int = TITLE) -> pipeline.TaskReport:
     """One walk of the title's task, leased the way a drain tick leases it. `from_stage` puts the
     board where a later walk re-enters - a board retry or a launch does the same - since the first
     walk parks at stage 9 and a walk resumes at the board's stage."""
     if from_stage is not None:
-        await pipeline.write_board(db, TITLE, stage=from_stage, status=pipeline.RUNNING)
+        await pipeline.write_board(db, title_id, stage=from_stage, status=pipeline.RUNNING)
     await db.execute(
-        "UPDATE acquisition_task SET state = 'pending', next_attempt_at = now() WHERE key = $1", TASK_KEY
+        "UPDATE acquisition_task SET state = 'pending', next_attempt_at = now() WHERE key = $1",
+        f"title:{title_id}",
     )
     (task,) = await queue.lease(db, [pipeline.TASK_KIND], limit=1)
     return await pipeline.run_task(db, task)
@@ -241,20 +272,87 @@ async def test_a_running_row_closes_done_at_the_next_finish_and_a_still_thin_tit
     assert await store.queue(db) == []
 
 
-def test_stage_eight_keeps_its_stub_and_is_the_only_stage_that_observes():
-    """Decision 440 puts the observation on a flag the stage row carries and leaves stage 8 M5.4's
-    declared no-op - the body `test_acquire_pipeline.py`'s stub-marker test refuses it. One row
-    carries the flag, and it is the stage whose finish §8.4 names."""
+async def test_stage_eight_projects_an_acquired_titles_keywords(db, data_dir):
+    """Decision 463's first branch: §8 stage 8 is "per-title alias-map projection of its keywords
+    ... for an acquired title". The title's TMDB keyword folds onto an alias v1 adopts, so one
+    projected row is written - its weight the count of inventories naming the term, its `via` the
+    spelling that reached it - and the stage's own detail on the board says how many."""
+    await _vocabulary(db)
+    await _acquired(db)
+
+    walk = await _walk(db, from_stage=8, title_id=ACQUIRED)
+
+    assert walk.stages_run[:1] == ["project"] and walk.stage == 9, walk.as_dict()
+    rows = await db.fetch(
+        "SELECT version, term, facet, weight, via FROM dna_projected WHERE title_id = $1", ACQUIRED
+    )
+    assert [tuple(row) for row in rows] == [("v1", "themes.revenge", "themes", 1.0, "keyword:Revenge")]
+    assert (await _board_detail(db, ACQUIRED))["project"]["projected"] == len(rows)
+
+
+async def test_stage_eight_leaves_a_bundle_titles_projected_rows_untouched(db, data_dir):
+    """Decision 463's second branch, and decision 162 behind it: a bundle title's projected tier is
+    content the import seeds once and nothing can restore, and `project_title` refuses such a title
+    for that reason - so stage 8 must not call it, or every bundle walk a Launch or a retry makes
+    would fail after stage 6 had billed for it. Title 7 carries a projected row the bundle wrote and
+    a keyword that WOULD project a second term: after the walk its rows are byte for byte what
+    they were, `created_at` included, and the board names decision 162."""
+    await _vocabulary(db)
+    await _title(db)
+    await _keyword(db, TITLE)
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight, via)"
+        " VALUES ($1, 'v1', 'mood.bleak', 'mood', 3.0, 'keyword:bleak')", TITLE,
+    )
+    before = [dict(row) for row in await db.fetch(
+        "SELECT * FROM dna_projected WHERE title_id = $1 ORDER BY id", TITLE
+    )]
+
+    walk = await _walk(db, from_stage=8)
+
+    assert walk.stages_run[:1] == ["project"] and walk.stage == 9, walk.as_dict()
+    after = [dict(row) for row in await db.fetch(
+        "SELECT * FROM dna_projected WHERE title_id = $1 ORDER BY id", TITLE
+    )]
+    assert after == before, "stage 8 re-derived a bundle title's projected tier"
+    detail = (await _board_detail(db, TITLE))["project"]
+    assert detail["origin"] == "bundle" and "decision 162" in detail["kept"], detail
+
+
+def test_stage_eight_is_still_the_only_stage_that_observes():
+    """Decision 440 puts the observation on a flag the stage row carries, and decision 463 gives
+    the stage its body without moving it: one row carries the flag, it is the stage whose finish
+    §8.4 names, and it now ships implemented with M5.4 kept as provenance."""
     assert [s.number for s in SHIPPED if s.observes_coverage] == [8]
     project = next(s for s in SHIPPED if s.observes_coverage)
-    assert not project.implemented and project.owner == "M5.4"
+    assert project.implemented and project.owner == "M5.4"
+    assert project.run is stages.project
 
 
-async def test_stage_eights_body_is_still_the_stub_marker():
-    outcome = await stages.project(stages.StageContext(conn=None, task=None))
-    assert (outcome.verb, outcome.detail) == (
-        stages.ADVANCE, {"stub": stages.NOT_IMPLEMENTED.format("M5.4")}
+async def test_the_thin_facet_row_lands_after_stage_eights_projection(db, data_dir):
+    """The observation is the driver's and follows the stage's advance (decision 440), so it fires
+    on both of stage 8's branches (decision 463). An acquired thin title: when `run_task` returns,
+    its projected row and its thin-facet row both exist, the projection first. Then a bundle
+    title's walk, which projects nothing: its row lands just the same."""
+    await _vocabulary(db)
+    await _acquired(db)
+
+    walk = await _walk(db, from_stage=8, title_id=ACQUIRED)
+
+    assert walk.stages_run[:1] == ["project"], walk.as_dict()
+    projected_at = await db.fetchval(
+        "SELECT created_at FROM dna_projected WHERE title_id = $1", ACQUIRED
     )
+    (row,) = await _thin_rows(db)
+    assert projected_at is not None, "stage 8 projected nothing for an acquired title"
+    assert projected_at <= row["created_at"], "the thin-facet row was written before the projection"
+    assert (await store.queue(db))[0]["title_id"] == ACQUIRED
+
+    await _title(db)
+    walk = await _walk(db, from_stage=8)
+
+    assert walk.stages_run[:1] == ["project"], walk.as_dict()
+    assert sorted(row["title_id"] for row in await store.queue(db)) == [TITLE, ACQUIRED]
 
 
 # --- the two feeds M6 produces --------------------------------------------------------------------

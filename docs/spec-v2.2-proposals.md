@@ -12,7 +12,7 @@ the 2026-08-29 prototype review: citable as provenance and nothing more, so a re
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
 numbered owner decisions**, and each is normative from the day it is taken until the amendment it
 mandates lands in `spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03,
-this one on 2026-09-17, M5.2's on 2026-09-23 and M5.6's on 2026-09-24. The decision numbering
+this one on 2026-09-17, M5.2's on 2026-09-23, and M5.6's and M5's on 2026-09-24. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
 decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
@@ -11511,7 +11511,10 @@ never a literal 6 - `spend.retry_refusal` runs first, with the task's batch plan
 a refusal returns its reason as a 409 and changes nothing. Abandon closes the title's open tasks as
 skipped and writes a new board status, `abandoned`, which 0029 adds to `acquisition_job`'s CHECK; a
 thin-but-placed title abandoned from the board is therefore never shown as failed. The plan marks no
-option; this is decision 336's rule applied to proposal 109's three actions.
+option; this is decision 336's rule applied to proposal 109's three actions. (Amended in place as M5
+opened to cite decision 464: once stage 5 has a body, "the first implemented stage at or after N" is
+read as the first such stage that is `paid`, `fetches` or declares `reask_from`, which keeps this
+rule's outcome byte-identical - retries from 5 and 6 refused over the cap, every other N queued.)
 
 **Cost.** A new domain module, `acquire/actions.py`, three POST routes, and `abandoned` in the status
 CHECK. The board envelope carries `stages` - the ten names out of `pipeline.STAGES` - and a per-job
@@ -11985,6 +11988,303 @@ decision 331 and M5.4's precedent leave standing.
 so for that interval the row's retry clause is held at the domain function and not at a route. The
 fourteen checks of the plan's §7 are held by the suite and by the owner's browser gate, and the
 RELEASE.md row and block for M5.7 read UNMEASURED / none / an unsigned verdict.
+
+---
+
+## Decisions taken (owner, 2026-09-24, as M5 opened)
+
+Taken as M5 opened, under the owner's standing instruction to take each plan's recommended option
+and record it here rather than ask. M5 is the umbrella decision 321 kept in `MILESTONES` for the one
+§12 criterion that names all seven parts, and M5.1 through M5.7 have landed.
+`docs/milestones/ROADMAP-M5.md` files no question against it, so every number here is spent from the
+bottom of the range the owner handed this lane in an instruction, 461-469, and the top of that range
+is left for this lane's review cycle. `docs/milestones/M5-plan.md` marks a recommendation for each
+question and each entry takes it; 467 was added to the plan when it was critiqued. None of them
+re-opens an M5.1-M5.7 decision: 432 stands, and 467 completes its "this title resumes here once a
+pack is stored"; 438 stands, and 466 says where its owed measurement is taken; 444's rule stands,
+and 464 keeps its outcome; 162 stands, and 463 is how stage 8 keeps it.
+
+M5 holds `current_milestone` and raises it from M5.1, where it has stood since M5.1 opened, to M5.
+That arms the coverage gate for every row at or before M5 and every guard scoped to the current
+milestone, M5.2-M5.7's included. Holding the scalar, it also holds the spec file (decision 288) and
+applies the text its decisions mandate as point release v2.1.4: §8 stage 7 per 462, §8 stage 8 per
+463, §12's M5 row per 465, and the M5.5 and M5.6 text that says stage 5 is unwired, which 461 makes
+false. It writes no migration and 0030 stays unclaimed: stage 5 writes `raw_document` (0024) and
+`dna_pack` (0027), stage 7 reads `dna_tag` and `dna_reject`, and stage 8 writes `dna_projected`
+(0004). The §6.6 and §9 sentences decisions 324, 325, 337, 338 and 339 mandate stay owed and are
+normative from this register under decision 177's rule; plan §8 leaves them unfolded, because that
+is prose and the owner bounded this run.
+
+### 461. Stage 5 stores the augmented pack
+
+**What the record says.** §8 stage 5: "ported packs.py (interleaving, caps, norm()) + craft
+supplement". Decision 387 shipped M5.4 as a domain package that wires no pipeline stage, and
+decision 391 ships both halves of the pack - `dna/packs.py`'s base and `dna/craft.py`'s supplement -
+while `acquire/pipeline.py` declares stage 5 `implemented=False, owner="M5.4"` and `stages.dna_pack`
+returns the stub marker. Decision 432 recorded the wiring as owed and has stage 6 park, with a
+reason naming stage 5, on a title with no stored pack. So on every install every new add parks at
+stage 6, the thin-facet feed decision 440 writes after stage 8 never fires, and a flywheel Launch -
+which makes titles due at stage 5 (decision 443) - parks every launched title at 6.
+
+**Why it changes.** §12's M5 criterion, "a new Jellyfin add reaches 'ready' unattended", is false on
+every install until stage 5 stores what stage 6 reads. And the package holds a trap for whoever
+wires it. `craft.augment` returns a `CraftInfo`, which `packs.store_pack` cannot take; and
+`store_pack` refuses a `PackInfo` whose `sha` or `chars` are not the offered text's own, because
+decision 382 makes `pack_sha` the digest of the bytes the extraction reads. So both obvious
+wirings - the craft info handed over, or the base info left unchanged beside the augmented text -
+raise for every title. Storing the base pack alone would pass custody and drop the half of §8 stage
+5 that decision 391 measured as the mitigation for a new release's thin sound and visual facets.
+
+**The decision.** The augmented pack, the plan's recommendation. `stages.dna_pack` reads the active
+vocabulary (`db/dna_terms.active_version`), calls `packs.build_pack`, then `craft.augment`, then
+`packs.store_pack` inside one `conn.transaction()` with `entity_key=ctx.task.key` and
+`run_id=ctx.run_id`, so the stored document is a `raw_document` row decision 345's board lists. What
+it stores is the base `PackInfo` with `chars` and `sha` recomputed from the augmented text -
+`dataclasses.replace(base, chars=len(augmented), sha=packs.sha(augmented))` - and never the
+`CraftInfo`, and never the base unchanged. With no active vocabulary it parks with
+`waiting_on_the_world()`, as stage 6 does; a title that no longer exists fails, as in stages 3
+and 4. The row becomes `implemented=True` and keeps `owner="M5.4"` as provenance, decision 373's
+reading of the field for a stage that ships: the body is a call into M5.4's package. It is neither
+`paid` nor `fetches`.
+
+**Cost.** Every new walk reaches stage 6 with a stored pack, so a new add can reach `ready` and the
+thin-facet feed fires on a real install for the first time. Each run of stage 5 writes one
+`raw_document` row, and the content-addressed store writes no new file for an unchanged pack. A test
+that walks a task to `ready` and is not about the DNA stages stands stage 5 down, in decision 432's
+pattern, because it parks without a vocabulary; a fixture puts it back for the tests that are. And
+the first unattended add of an unowned cold corpus title, which decision 411 lets walk, now bills an
+extraction and replaces the corpus's extracted rows, which a Launch or a retry already did by design
+(decisions 443, 444). That the unattended add now does it too is recorded here as the owner's call
+and not re-opened (plan §9).
+
+### 462. Stage 7 records the verdict stage 6 reached and verifies nothing a second time
+
+**What the record says.** §8 stage 7: "ported trust boundary verbatim: term-in-vocabulary (after
+alias repair + adjudication rename), quote-substring-of-pack via norm(), salience ∈ {1,2,3} ...
+Failures drop, never repaired." Decision 432 put that verdict inside stage 6: `llm/extract.py` asks
+M5.4's `verify_payload` inside the two-attempt loop, records each attempt's refusals with
+`verify.record_rejects` (decision 341), and writes the tier only when every run was accepted, after
+`consensus.store_title`'s merge and `apply_adjudications` in the same transaction. Stage 7 is still
+declared `implemented=False` with the stub body, and once stages 5 and 8 have bodies it is the one
+stage left with nothing to do.
+
+**Why it changes.** Of the three things stage 7 could do, two are wrong. A re-check of the stored
+tier judges rows stage 6 never judged, because what is stored is post-merge and post-ledger, and a
+disagreement leaves no action §8 allows, since failures are "never repaired". A pass-through is a
+stub flagged `implemented=True`, which the stub-marker guard decision 348 relies on could never see.
+And the board keeps each stage's detail for the whole walk - the upsert is `detail =
+acquisition_job.detail || EXCLUDED.detail` - so a stage-7 detail is the lasting per-title record of
+what the trust boundary dropped.
+
+**The decision.** Record it, the plan's recommendation. The stage reads two things: the title's
+extracted-tier tag count under the active version, and the `dna_reject` rows this walk's run filed
+for the title, grouped by `rule_violated`, read with a plain `run_id = ctx.run_id`, so a context
+with no run reads none. It advances with both. It calls neither `verify_payload` nor a provider, and
+it writes no row. It is neither `paid` nor `fetches`, and the row becomes `implemented=True` with
+`owner="M5.4"` kept as provenance. §8's stage-7 text is amended in place to say where the verdict is
+reached; its `N  name` column stays verbatim, because `test_acquire_pipeline.py` reads the ten names
+back out of that block.
+
+**Cost.** Stage 7's board detail is the audit record and nothing more: a reader who wants to know
+why a tag is absent reads it beside stage 6's. A reject read spelled `IS NOT DISTINCT FROM` would
+have a context with no run inherit every NULL-run reject the title ever had, which is the defect the
+plain comparison refuses.
+
+### 463. Stage 8 projects an acquired title and leaves a bundle title's projected tier alone
+
+**What the record says.** §8 stage 8: "per-title alias-map projection of its keywords (incremental —
+new code, same alias map)". `dna/project.project_title` raises for a title whose origin is not
+`acquired`, because a bundle title's projected rows are content decision 162 seeds once and a
+re-derive would overwrite them with no import able to restore them. `title.origin` defaults to
+`'bundle'` (`0008_placement.sql`). Decision 440 put §8.4's thin-facet write in the driver, after
+stage 8 advances, on the row's `observes_coverage` flag, and left stage 8 a declared no-op.
+`worker.py`'s `dna-projection` row, §5.3's budget for this stage, names no owner, and the worker's
+boot census counts it as awaiting its milestone.
+
+**Why it changes.** Bundle titles do reach stage 8: through an add that resolves to an unplaced
+bundle title (decision 411 exits only placed ones at stage 1), through an admin retry of a
+`placement/reconcile.py` `_park_thin` inbox row (decision 444), and through a Launch of either
+(decision 443). An unconditional call to `project_title` would fail every such walk after stage 6
+had billed for it, starting with `test_llm_stage.py`'s bundle-title walk.
+
+**The decision.** For `origin = 'acquired'` stage 8 calls `dna.project.project_title`. For any other
+origin it advances with a detail naming decision 162: the bundle's projected rows are seeded once,
+and this stage leaves them alone. `observes_coverage` stays on the row and the
+`flywheel.thin.observe_title` call stays in `run_task` after the stage advances, so the feed fires
+on both branches. The row becomes `implemented=True` and keeps `owner="M5.4"`. `worker.py`'s
+`dna-projection` Job gains `owner="spielplan.dna.project"` - the `cold-tower-placement` precedent, a
+§5.3 row reached through the drain - and keeps `run=None`. No stage stays a declared no-op. The
+stub-marker test asserts that none does, and keeps its synthetic branch so that it still catches a
+body behind `implemented=False`. The plan marks this option recommended, and it is the only one
+`project_title`'s own refusal leaves.
+
+**Cost.** The worker boot census moves `dna-projection` from awaiting its milestone to run outside
+the schedule, and `test_worker_schedule.py`'s census assertions move with it. §8's stage-8 text is
+amended in place to name the bundle branch, its `N  name` column verbatim. `test_llm_stage.py`'s
+bundle-title walk holds only because of that branch, and no bundle title's projected tier is
+re-derived.
+
+### 464. Decision 444's paid-stage pre-check keeps its outcome once stage 5 has a body
+
+**What the record says.** Decision 444: when "the first implemented stage at or after N is the paid
+one - read from `pipeline.STAGES`' flags, never a literal 6 - `spend.retry_refusal` runs first", and
+a refusal changes nothing. `acquire/actions.py` spells it in one line. The M5.5 row
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` says a manual retry of a parked stage-6
+job that would breach the cap "is refused with that reason rather than queued", and
+`test_acquire_actions.py` asserts a retry from 5 is refused over the cap because stage 5 is a
+declared no-op.
+
+**Why it changes.** The predicate reads the flag decision 461 flips. Once stage 5 has a body, the
+first implemented stage at or after 5 is stage 5, which is not paid, so a retry from 5 over the cap
+would be queued and park at 6 on the next tick. Nothing would be billed, because the driver's gate
+stays the guarantee (decisions 325, 348), but the M5.5 row's "refused with that reason rather than
+queued" would be false.
+
+**The decision.** Restate it, the plan's recommendation. The pre-check runs when the first
+implemented stage at or after N that is `paid`, `fetches` or declares `reask_from` is the paid one.
+Nothing between the click and the paid call fetches or holds a re-ask window, so nothing between
+them can change what the cap check answers. With the shipped flags the outcomes are byte-identical
+to today's: retries from 5 and 6 are refused over the cap, and every other N is queued. That stays
+true with decision 467's `reask_from=5`, which sits on the paid stage's own row. The driver's gate
+stays the guarantee. Decision 444's entry gains one line citing this one, as 431's does for 439.
+
+**Cost.** One line changes in `acquire/actions.py`, and two docstring sentences are restated.
+`test_acquire_actions.py`'s assertions stay green and unedited; the only edit there is its
+docstring's "a declared no-op" clause, which cites this decision instead.
+
+### 465. ops/m5_exit_criterion.py measures the umbrella on the fixture, in-process, and CI runs its checks
+
+**What the record says.** §12's M5 row names its instrument, "measured with it by
+`ops/m5_exit_criterion.py`", over decision 331's clauses, and no such script exists. The row
+`jellyfin-acquisition-eval-a-new-add-reaches-ready-unattended` names no test, and `docs/RELEASE.md`
+records M5 as `NOT BUILT`. `ops/m51_exit_criterion.py` through `m53` refuse the fixture, because
+each measures a population argument only the real bundle can make. `ops/m55_exit_criterion.py` runs
+in-process on the fixture against the refusing double, and its test module runs its checks in CI
+(decision 435).
+
+**Why it changes.** Refusing the fixture would leave the umbrella unrunnable in any lane, and its
+row closed by nothing. The population arguments m51-m53 make - name collisions, the corpus tower,
+the real ledger - belong to those scripts and are already measured by them. The umbrella's claims
+are compositional, and a fixture can falsify a composition: an add walks to `ready`, a naming
+failure is in the queue when the walk returns, a cap parks the next add.
+
+**The decision.** `m55`'s shape, the plan's recommendation. The checks are functions over an install
+that both the script's `main()` and a test module, `backend/tests/test_m5_exit_criterion.py`, build:
+in-process, on the fixture, against `ops/fake_llm.py`, `ops/fake_jellyfin.py` and a canned web
+subclassed from `ops/m53_exit_criterion.py`'s. The script exits 2 with no Postgres or without either
+double, and makes no real request. The test module's per-clause tests close the umbrella row, one
+per numbered check plus `m53`'s statement-prepares test, and each builds its own install on the
+suite's per-process database. §12's M5 row gains how it is measured and which clauses only a real
+install signs: the first clause against a real Jellyfin and its Webhook plugin, real source sites, a
+real provider's billed call, the corpus tower and a wall-clock window; the naming-failure clause
+against the corpus's own ledger; and decision 466's drain timing. `docs/RELEASE.md`'s M5 row moves
+to `RUN, OUTPUT NOT COMMITTED` once the lane has run the script (decision 435's rule), with Blocking
+`yes`.
+
+**Cost.** This adds `ops/m5_exit_criterion.py` and `backend/tests/test_m5_exit_criterion.py`, one
+test per numbered check plus `m53`'s statement-prepares test. The exit-script sweeps and the
+environment-neutralisation guard in `test_static_contracts.py` read the new script the moment it
+exists. A green run on the fixture signs a composition and nothing about a real household's
+population, and the §12 row and RELEASE.md say so in the same place.
+
+### 466. Decision 438's owed measurement is recorded against the real install; the budget does not move
+
+**What the record says.** Decision 438 records that stage 6's walk may not fit `worker.py`'s 420 s
+drain budget, and that "the measurement the worker's comment asks for is owed by the milestone that
+wires stage 5 - the one that first makes stage 6 reachable". That is this milestone (decision 461),
+and `docs/RELEASE.md`'s M5.5 block points at it.
+
+**Why it changes.** Latency belongs to the provider, so a number taken on the double describes
+nothing. Decision 438 already refused a park on any plan whose worst case outruns the budget,
+because it would park the default plan at 600 s, and a smaller `DRAIN_LIMIT` would be a guess.
+
+**The decision.** Record it as an owed real-install check, the plan's recommendation, in
+`docs/RELEASE.md` §7 and in its M5 block. On decision 324's default plan with stage 6 live, time one
+drain tick, reading each attempt's `llm_call.at` against the tick's start, and say whether
+`DRAIN_LIMIT` titles fit in 420 s. RELEASE.md's M5.5 paragraph points there instead of at this
+milestone.
+
+**Cost.** `DRAIN_LIMIT` and the drain budget are unchanged. The path decision 438 describes - a plan
+that outruns the tick pays for calls it cannot keep - is reachable on a real install from this
+milestone on, bounded by the cap and metered, until the owner times it. RELEASE.md gains §7.4. This
+is one of the clauses only a real install signs.
+
+### 467. A stage-6 park re-enters at stage 5 once its own deadline has passed
+
+**What the record says.** The board is the resume point, and a park re-enters earlier only through
+its stage's `reask_from`, which only stage 4 declares. `acquire/pipeline.py`'s `Stage` docstring
+wrote that field for the park "whose answer can only change if an EARLIER stage runs again"
+(decision 421). Stage 6 parks on a missing pack with a reason saying stage 5 "is not wired in this
+build (decision 387)" and that "this title resumes here once a pack is stored (decision 432)".
+
+**Why it changes.** Wiring stage 5 helps new walks only. Every title an M5.5-M5.7 install parked at
+6 on "no DNA pack is stored" would re-ask at 6 and park again for ever, under a reason that is false
+once stage 5 is wired. On any install a title parked at 6 over the cap meets the same dead end once
+a bundle import changes the active vocabulary, because `dna_pack` is keyed by version (0027) and the
+pack it needs is one stage 5 has not built. An admin retry from stage 5 would find each such title
+only by reading a reason that is false, and a field that re-enters only the no-pack park would be a
+second mechanism for the case the first was written for.
+
+**The decision.** `reask_from=5` on stage 6's row, the plan's recommendation: the idiom the `Stage`
+docstring wrote for this case, and no new field. An expired stage-6 park rebuilds the pack before
+the gate asks again. Each re-ask costs one local build and one `raw_document` row and never a paid
+call, because the gate still runs before stage 6. It is keyed on `retry_after` passing, as stage 4's
+is, so a park made due early - an operator's retry, a Launch - still resumes at the board's stage
+(decision 421). `llm/extract.py`'s no-pack reason is restated to name stage 5 and this re-entry,
+keeping the substrings "no DNA pack is stored" and "stage 5". This completes decision 432's "this
+title resumes here once a pack is stored" rather than re-opening it.
+
+**Cost.** Every expired stage-6 park now re-enters at 5: over-cap, account, paused, plan and
+failed-for-good parks all rebuild the pack locally before the gate refuses again.
+`test_llm_stage.py` and `ops/m55_exit_criterion.py` make parks due early, moving `next_attempt_at`
+only, and walk as before. The `reask_from` paragraph in `acquire/pipeline.py` stops saying stage 4
+is the only stage with one, and decision 464's pre-check is unmoved by the flag, which sits on the
+paid stage's own row.
+
+---
+
+## Decisions taken (owner, 2026-09-25, M5 review cycle 1)
+
+Taken as M5's first adversarial review closed, under the same standing instruction: take the
+recommended remedy and record it here rather than ask. Numbers are spent from the top of this lane's
+block, 461-469, which the opening sitting left for this cycle. `current_milestone` stays `"M5"`.
+
+### 468. The worker's drain walks under the `job_run` row its tick opened
+
+**What the record says.** Decision 462: stage 7 reads "the `dna_reject` rows this walk's run filed
+for the title", with a plain `run_id = ctx.run_id`, "so a context with no run reads none". §8 stage
+7, as v2.1.4 amends it, records "the rejects its run filed". `worker._acquisition_drain`, the only
+production caller of `pipeline.drain`, passed no run: its docstring had recorded that seam since
+M5.3 (M53-C1-NET-03), because `Job.run` takes no arguments.
+
+**Why it changes.** M5's first review found that on the path a household runs, stage 6 filed every
+refusal under no run, and stage 7 wrote `rejected: {}` to the board for the life of the job - the
+board saying the trust boundary dropped nothing while `dna_reject` held what it dropped
+(M5-DNA-01). Exit check 2 was green because `ops/m5_exit_criterion.py` opens a `job_run` row of its
+own and passes it, which the worker never did, so CI could not fail on the production path. The
+review offered two remedies: give the production drain a run, or have stage 7 record the count as
+unknown when a walk has none and say so in §8. The first is taken, because it makes stage 7's record
+true on every real title, where the second would leave it empty on every real title and only label
+it.
+
+**The decision.** `_tick` hands each job the id `_record_start` returned through a context variable,
+`worker._JOB_RUN`, set before the job's await and reset after it, and `_acquisition_drain` passes it
+to `pipeline.drain(run_id=...)`. The signature every row in `JOBS` shares is unchanged. The drain
+does not read back "the newest unfinished `acquisition-drain` row", the alternative its docstring
+named: when `_record_start` could not write, that row is an earlier tick's that a killed worker left
+open, and this walk's refusals would be filed under, and counted against, another walk's run. A tick
+whose row could not be written walks with no run, and stage 7 records none, as decision 462 has it.
+Stage 2's documents, stage 5's pack and stage 6's stored answers carry the tick's run too, which is
+the provenance `raw_document.run_id` was written for (0024). This amends no earlier decision: 462's
+plain comparison stands, and it mandates no spec text, because §8's stage-7 sentence is what it
+makes true on a real install.
+
+**Cost.** Nothing in the schema: `raw_document.run_id` and `dna_reject.run_id` carry no foreign key
+(0024, 0027), so `_prune_job_runs` still ages ops rows out and leaves a dangling number, as 0024
+argues. Stage 7's count is per tick: a title whose stage 6 failed on one tick and succeeded on the
+next reads only the second tick's refusals, which is the walk decision 462 means. The first tick's
+rows stay in `dna_reject` under their own run for the rejects review. `test_acquire_drain.py` walks
+the path through `worker._tick`, and that test is added to the DNA-stages coverage row.
 
 ---
 

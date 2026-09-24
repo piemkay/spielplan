@@ -303,6 +303,70 @@ skipped, and section 5 reports `genome=0` where it reported 781, and both still 
 accounted-table check asks for a count OR a reason and the empty-block check already excluded
 `genome` by name.
 
+**M5 closes the wave, and it holds `current_milestone`: it raised the scalar from `"M5.1"`, where it
+had stood since M5.1 opened, to `"M5"`.** That arms the gate for every row at or before M5, M5.2's
+through M5.7's included, and every guard scoped to the current milestone.
+`docs/milestones/M5-plan.md` section 2.5 simulated the move before any of it was written and
+predicted exactly two reds: the umbrella row, which M5.1 filed at M5 with no `tests` key, and this
+block, which did not exist. The move turned red exactly those and no M5.2-M5.7 row or guard,
+because every one of them already named its tests. The row this milestone added joined the list on
+purpose, opening with no `tests` key, which is M5.4's and M5.5's opening again. So the red list was
+the test plan, and it closed by those tests being written, never by a waiver and never by a lower
+scalar. Naming tests on the umbrella then turned one more guard red, the one that refuses NOT
+BUILT beside a milestone the map names tests for: `docs/RELEASE.md` still called M5 NOT BUILT, and
+its row moved to RUN, OUTPUT NOT COMMITTED.
+
+**`jellyfin-acquisition-eval-the-dna-stages-are-wired` is the row M5 added**, filed at M5 under
+decision 321's rule that a row sits there only if `ops/m5_exit_criterion.py` measures it. It holds
+the wiring the umbrella's first clause needed and could not get: stage 5 stores the pack with its
+craft supplement (decision 461), stage 7 records the verdict stage 6 reached and verifies nothing a
+second time (462), stage 8 projects an acquired title's keywords and leaves a bundle title's
+projected rows alone (463), and a stage-6 park whose deadline has passed re-enters at stage 5 (467).
+Its tests are the stage tests in `test_acquire_pipeline.py` and `test_flywheel_feed.py`, the two
+stub-marker tests that since decision 463 hold "no stage is a declared no-op" and still catch a
+body behind `implemented=False`, and the clause tests for the script's checks 2 and 6.
+
+**The umbrella row is closed by its instrument, and CI runs the instrument (decision 465).**
+`ops/m5_exit_criterion.py` builds one install in-process on the fixture - the app's own intake,
+drain and routes over ASGI, `ops/fake_llm.py` behind the three provider hosts, the emitter in
+`ops/fake_jellyfin.py` for each add, and a canned web subclassed from `ops/m53_exit_criterion.py`'s
+behind every source host - on a scratch database it creates and drops, and it exits 2 with no
+Postgres or without either double. `backend/tests/test_m5_exit_criterion.py` builds the same
+install on the suite's per-process database and runs, one test per numbered check, the steps that
+check needs, beside the statement-prepares test `test_m53_exit_criterion.py` carries for its own
+script; those are the umbrella row's tests. No install is shared between them, because `-n 16`
+spreads one module's tests over workers, and none of them skips, because the release workflow's
+coverage gate fails a named test that skipped. A green run signs a composition on the fixture and
+nothing about a household: clause one against a real Jellyfin, real sources and a real billed call,
+the naming-failure clause against the corpus's own ledger, and decision 466's drain timing are the
+owner's to sign, and `docs/RELEASE.md` records them in its M5 block and section 7.4.
+
+**One row the map already had was amended in place rather than duplicated,** named so an auditor
+can check each rather than take the count: `jellyfin-acquisition-eval-flywheel-enqueues-naming-failures`,
+M5.6's flywheel row. Its two tests that pinned stage 8's stub were deleted when stage 8 gained its
+body, and the row now names their replacements - stage 8 is still the only stage that observes,
+and the thin-facet row lands after its projection - with its comment restated to cite decision
+463. The umbrella row is not counted here: it sits on the milestone writing this block, so it was
+added to rather than amended.
+
+Decisions **461-467** record the calls it needed, taken in one sitting as the milestone opened under
+the owner's standing instruction to take each plan's recommended option, and **468** its review's:
+the worker's drain walks under the `job_run` row its tick opened, so stage 7's record is true on a
+real install and not only in the harness. Four bind its code
+directly: 461 has stage 5 store the base `PackInfo` with `chars` and `sha` recomputed from the
+augmented text, because `packs.store_pack` refuses a pack whose digest is not the text's own; 462
+reads the walk's rejects with a plain `run_id` comparison, so a context with no run reads none; 463
+branches stage 8 on `origin`, because `project_title` refuses a bundle title and an unconditional
+call would fail every bundle walk after stage 6 had billed for it; and 467 gives stage 6
+`reask_from=5`, so only a passed `retry_after` re-enters at 5 and a park made due early still
+resumes at the board's stage. 464 keeps decision 444's pre-check outcome byte-identical over the
+same flags, 465 is the instrument above, and 466 leaves decision 438's owed timing to the real
+install and moves no budget. It writes no migration, and 0030 stays unclaimed. It ships no UI, so no
+placeholder in `e2e/specs/05-milestones.spec.js` moves; the one browser file whose comment rested on
+stage 5 being a no-op, `21-connectors.spec.js`, has that comment restated to the premise that now
+keeps a provider uncalled on the e2e stack, and the browser gate is expected to print what it
+printed before it.
+
 **M5.4 opened second, in one wave with M5.2 and M5.3, and the first milestone in this wave whose rows were
 appended to a map another milestone holds.** `current_milestone` is `"M5.1"` and stays there --
 M5.1 holds the scalar while six lanes build against the seams it published -- so M5.4's eight rows

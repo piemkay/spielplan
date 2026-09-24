@@ -743,7 +743,7 @@ def test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory(
 # The oracle is what the seed would seal, not the list the scripts now derive: every connector
 # variable conftest knows is set, and `registry.env_seeds` -- the function `seed_from_env` asks -- must
 # find nothing afterwards. `ops/m55_exit_criterion.py` is held to the same rule it introduced.
-_NEUTRALISING_SCRIPTS = ("m412", "m414", "m51", "m52", "m53", "m55")
+_NEUTRALISING_SCRIPTS = ("m412", "m414", "m51", "m52", "m53", "m55", "m5")
 _PROVIDER_SEEDS = ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
 
@@ -801,11 +801,11 @@ def test_no_exit_script_leaves_a_connector_key_in_its_environment(script, tmp_pa
     assert registry.env_seeds(core_config.Settings(_env_file=None)) == {}
 
 
-@pytest.mark.parametrize("script", ("m51", "m55"))
+@pytest.mark.parametrize("script", ("m51", "m55", "m5"))
 def test_an_exit_script_that_moves_away_from_the_dot_env_reads_no_provider_key_from_it(
     script, tmp_path, monkeypatch
 ):
-    """The file half, for the two scripts whose neutraliser also leaves the working directory as
+    """The file half, for the scripts whose neutraliser also leaves the working directory as
     `ops/m53_exit_criterion.py`'s does (the test above this block holds m53): a `.env` beside the
     operator carrying the three provider keys is not read once the neutraliser has run. m51 never
     moved, so a key only in that file reached its `Settings`. [M5.5 review cycle 1, KEYS-C1-03]"""

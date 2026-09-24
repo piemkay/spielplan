@@ -158,28 +158,35 @@ class Stage:
     `implemented`, it is a hand-written literal and a test is what ties it to reality:
     `test_acquire_pipeline.py::test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher`.
 
-    `reask_from` IS WHERE A PARK AT THIS STAGE RE-ENTERS ONCE ITS OWN DEADLINE HAS PASSED, and §8
-    stage 4 is the only stage that has one. The board is the resume point, which is right for
-    every park whose answer can change without the pipeline doing anything - a key typed into
-    Admin, a spend cap - and wrong for the one whose answer can only change if an EARLIER stage
-    runs again: the reviews gate counts rows stage 3 wrote out of documents stage 2 fetched, so a
-    window that re-entered at 4 re-counted day one's rows, opened no socket and parked again, and
-    §8's "new releases accrue reviews over weeks" could not be observed. Keyed on the deadline
+    `reask_from` IS WHERE A PARK AT THIS STAGE RE-ENTERS ONCE ITS OWN DEADLINE HAS PASSED, and two
+    stages declare one. The board is the resume point, which is right for every park whose answer
+    can change without the pipeline doing anything - a key typed into Admin, a spend cap - and
+    wrong for one whose answer can only change if an EARLIER stage runs again. §8 stage 4 was the
+    first: the reviews gate counts rows stage 3 wrote out of documents stage 2 fetched, so a window
+    that re-entered at 4 re-counted day one's rows, opened no socket and parked again, and §8's
+    "new releases accrue reviews over weeks" could not be observed. §8 stage 6 is the second
+    (decision 467): its no-pack park reads the pack stage 5 stores, keyed by vocabulary version, so
+    a title parked there - by a build that had not wired stage 5, or after a bundle import moved
+    the active vocabulary - could only re-ask at 6 and park again. An expired stage-6 park now
+    rebuilds the pack before the gate asks again: one local build and one stored document per
+    re-ask, never a paid call, because the gate still runs before stage 6. Keyed on the deadline
     PASSING rather than on the park alone, because the same park made due EARLY is an operator's
-    retry, which §12's M5.3 row says resumes at stage 4 with no request made - and the window's
-    instant is `retry_after`, which `_record_stop` wrote with the queue's `next_attempt_at` as one
-    value, so the clock is what tells the two events apart. A field for `fetches`' reason: a
-    driver testing `stage.number == 4` would be a second spelling of this tuple.
-    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
+    retry or a Launch, which resumes at the board's stage - §12's M5.3 row says a retry of the gate
+    resumes at stage 4 with no request made (decision 421) - and the window's instant is
+    `retry_after`, which `_record_stop` wrote with the queue's `next_attempt_at` as one value, so the
+    clock is what tells the two events apart. A field for `fetches`' reason: a driver testing a
+    stage number would be a second spelling of this tuple.
+    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decisions 421, 467]
 
     `observes_coverage` IS WHERE §8.4's THIN-FACET FEED IS WRITTEN, and only stage 8 carries it
     (decision 440). §8.4 says a thin-facet title's row "is written the moment its walk finishes
-    stage 8", and the stage that sentence names may not have a body: stage 8 is M5.4's declared
-    no-op, and the stub-marker test decision 348's gate relies on refuses it one. So the fact lives
+    stage 8", and when that was decided the stage it names had no body: stage 8 was M5.4's declared
+    no-op, and the stub-marker test decision 348's gate relies on refused it one. So the fact lives
     on the row and the driver acts on it - `run_task` calls `flywheel.thin.observe_title` once the
     stage has advanced and before the next board write, inside the walk that holds the title - in
     `fetches`' idiom and for its reason: `if stage.number == 8` would be a third spelling of this
-    tuple, and a job could not keep "the moment" at all.
+    tuple, and a job could not keep "the moment" at all. It stays the driver's now that stage 8 has
+    a body (decision 463), because that body has two branches and the observation belongs to both.
     """
 
     number: int
@@ -214,16 +221,20 @@ STAGES: tuple[Stage, ...] = (
     Stage(2, "enrich", stages.enrich, owner="M5.3", fetches=True),
     Stage(3, "derive", stages.derive, owner="M5.3"),
     Stage(4, "reviews gate", stages.reviews_gate, owner="M5.3", reask_from=2),
-    Stage(5, "dna pack", stages.dna_pack, implemented=False, owner="M5.4"),
+    # Stages 5, 7 and 8 have had bodies since M5 (decisions 461, 462, 463), each a call into the
+    # package M5.4 built, so they keep `owner="M5.4"` as provenance by the rule above.
+    Stage(5, "dna pack", stages.dna_pack, owner="M5.4"),
     # The only paid one, and since M5.5 the only stage besides 2 that fetches. Both flags M5.5 set
     # are on this one line: `implemented`, which the spend gate reads before the call, and
     # `fetches`, which hands the stage the drain's one Fetcher (decisions 348, 373, 432). See
-    # `refuse_uncapped_spend`.
-    Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True, owner="M5.5", fetches=True),
-    Stage(7, "verify", stages.verify, implemented=False, owner="M5.4"),
-    # Still M5.4's declared no-op; its finish is where the driver observes the title's facets
-    # (decision 440, `Stage.observes_coverage`).
-    Stage(8, "project", stages.project, implemented=False, owner="M5.4", observes_coverage=True),
+    # `refuse_uncapped_spend`. `reask_from=5` is decision 467: an expired park here rebuilds the
+    # pack at stage 5 before the gate asks again (`Stage`'s docstring).
+    Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True, owner="M5.5", fetches=True,
+          reask_from=5),
+    Stage(7, "verify", stages.verify, owner="M5.4"),
+    # Its finish is where the driver observes the title's facets (decision 440,
+    # `Stage.observes_coverage`), on both branches its body has (decision 463).
+    Stage(8, "project", stages.project, owner="M5.4", observes_coverage=True),
     Stage(9, "place", stages.place),
     Stage(10, "ready", stages.ready),
 )
@@ -551,7 +562,9 @@ async def _resume_index(conn: asyncpg.Connection, title_id: int) -> int:
 
     A PARK WHOSE OWN DEADLINE HAS PASSED RE-ENTERS AT ITS STAGE'S `reask_from`, when it declares
     one - §8 stage 4's window, which re-enters at stage 2 so that the reviews written in the
-    meantime are fetched and derived before the gate counts again. `now()` and not this process's
+    meantime are fetched and derived before the gate counts again, and §8 stage 6's park, which
+    re-enters at stage 5 so that the pack it waited on is stored before the gate asks again
+    (decision 467). `now()` and not this process's
     clock, because the queue leases on `next_attempt_at <= now()` and the window has to close by
     the same clock that made the task due. A `retry_after` still in the future is an operator
     making the task due early, and that re-enters at the board's stage as it always did.
@@ -724,8 +737,9 @@ async def _run_stage(
     AND A PAID STAGE IS HANDED THE SUPPLY, NOT THE FETCHER. Opening between the gate and the stage
     kept the client off a title the GATE parks and still built it before the stage's own parks: stage
     6's no pack, no vocabulary and failed-for-good reads all come after it, and the gate lets a title
-    with no stored pack through by design (`spend.cap_check` step 4) -- which decision 432 says is
-    every title's state at stage 6 until stage 5 is wired. So each daily re-ask of a capped install's
+    with no stored pack through by design (`spend.cap_check` step 4) -- which decision 432 said was
+    every title's state at stage 6 until stage 5 was wired (decision 461), and which a walk resumed
+    past stage 5 can still be in. So each daily re-ask of a capped install's
     waiting title built the Fetcher, and a factory that raised turned the park into the drain's
     failure, four of which closed it: the harm the paragraph above says was removed. A paid stage gets
     `ctx.open_fetcher`, and `llm/extract` asks it once every read that could refuse has passed and a

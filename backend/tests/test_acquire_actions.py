@@ -494,8 +494,9 @@ async def test_a_paid_stage_retry_over_the_cap_is_refused_with_the_meters_reason
     db, data_dir, secrets_key
 ):
     """The coverage row's clause: a manual retry of a parked stage-6 job that would breach the cap
-    "is refused with that reason rather than queued". A retry from 6, and from 5 - a declared no-op,
-    so the first stage that RUNS is 6, read off the flags - is refused with `spend.retry_refusal`'s
+    "is refused with that reason rather than queued". A retry from 6, and from 5 - which fetches
+    nothing and holds no re-ask window, so the first stage that could change what 6 is asked is 6
+    itself, read off the flags (decision 464) - is refused with `spend.retry_refusal`'s
     sentence, which is the board's own `over spend cap` reason, and neither table moves. A retry
     from 2 of the same title runs no paid stage first, is not the meter's to refuse, and is
     queued."""

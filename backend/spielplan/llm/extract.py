@@ -260,9 +260,9 @@ async def extract_title(
 
     `fetcher` is the drain's one Fetcher, or `open_fetcher` the drain's supply of it, asked only once
     every read above has passed and a request is next: a title that parks on no pack or no vocabulary
-    -- the state decision 432 says every title reaches this stage in until stage 5 is wired -- builds
-    no client, and a factory that raises cannot turn that park into a failure. Nothing here builds a
-    Fetcher either way (decision 373). [M5.5 review cycle 2, NBR-C2-01]
+    -- the state decision 432 recorded every title reaching this stage in until stage 5 was wired
+    (decision 461) -- builds no client, and a factory that raises cannot turn that park into a
+    failure. Nothing here builds a Fetcher either way (decision 373). [M5.5 review cycle 2, NBR-C2-01]
 
     The spend cap is not asked here. `acquire/pipeline.refuse_uncapped_spend` asks
     `spend.cap_check` before the driver reaches this stage and parks the title when the month
@@ -299,8 +299,8 @@ async def extract_title(
             NO_PACK,
             f"no DNA pack is stored for this title under vocabulary {version}, so there is nothing"
             " to extract from and no provider is called. Section 8 stage 5 builds the pack, and"
-            " stage 5 is not wired in this build (decision 387); this title resumes here once a"
-            " pack is stored (decision 432)",
+            " this walk resumed past it (decision 432); once this park's deadline passes the title"
+            " re-enters at stage 5, which stores one before stage 6 asks again (decision 467)",
             {"version": version},
         )
     if packs.sha(pack) != row["pack_sha"]:

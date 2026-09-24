@@ -13,14 +13,14 @@ were each written in the same change set as the surface they measure and none ha
 because none of those lanes could reach a real corpus bundle - and M5.1's could start neither a
 container nor a port; and M5.4's checks are the suite's, which runs them against the fixture and not
 against the real install and real bundle its criterion names; and M5.6's criterion is a surface
-the suite and the owner's browser gate measure, whose first clause no install can reach until
-stage 5 is wired; and M5.7's checks are the suite's and the owner's browser gate's. Three
-describe milestones that do not
-exist yet (M5, M6, M7). The rest have been measured by one of the scripts under `ops/`, and **not one
-of those scripts had a committed output** until M4.16 wrote the first. The newest measured one is
-M5.5's, written in the same change set as the surface it measures and, unlike M5.1's, M5.2's and
-M5.3's, run there, because its criterion is stated against a double a lane can reach; nothing it
-printed is committed either. The table below is the count;
+the suite and the owner's browser gate measure, whose first clause only a real install can sign,
+and a real install reaches it since M5 wired stage 5 (decision 461); and M5.7's checks are the suite's and
+the owner's browser gate's. M6 and M7 describe milestones that do not exist yet. The rest have been
+measured by one of the scripts under `ops/`, and **not one
+of those scripts had a committed output** until M4.16 wrote the first. The newest measured are
+M5.5's and M5's, each written in the same change set as the surface it measures and, unlike M5.1's,
+M5.2's and M5.3's, run there, because each criterion is stated against doubles a lane can reach;
+nothing either printed is committed. The table below is the count;
 this paragraph no longer restates it (decision 460). M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
@@ -79,7 +79,7 @@ is here because it is the one criterion this milestone actually ran.
 | M5.5 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5.6 | UNMEASURED | none | yes | `________` |
 | M5.7 | UNMEASURED | none | yes | `________` |
-| M5 | NOT BUILT | none | no | `________` |
+| M5 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
 
@@ -530,11 +530,13 @@ month's sum is the bill or, for a lost answer, more. None of the fourteen checks
 attempt: that is held by the suite, on the spend meter's coverage row, against the double's own
 bill.
 
-**What it measures is not yet what an unattended title meets on a real install**, and the script
-says so rather than hiding it. Stage 5 is M5.4's owed wiring (decision 432), so no title reaches
-stage 6 with a stored pack on its own: the script renders and stores each pack through `dna.packs`,
-the custody functions stage 5 will call, and puts the board at stage 6 with the driver's own writer.
-And an install that has set no cap parks every title at stage 6 under M5.1's no-cap sentence, by
+**What it measures was not, when it was written, what an unattended title meets on a real
+install**, and the script says so rather than hiding it. Stage 5 was M5.4's owed wiring (decision
+432), so no title reached stage 6 with a stored pack on its own. M5 wired it (decision 461), and
+the script still renders and stores each pack through `dna.packs`, the custody functions stage 5
+now calls, and puts the board at stage 6 with the driver's own writer: where it starts its walk is
+its own choice, and the unattended walk from the add is M5's instrument's to measure. And an
+install that has set no cap parks every title at stage 6 under M5.1's no-cap sentence, by
 design and without a paid call, until M5.7's spend guard gives the admin somewhere to set one
 (decisions 325 and 433).
 
@@ -544,8 +546,10 @@ walk the budget cancels keeps nothing it paid for. A title completes only if run
 latency fits what the drain has left when it reaches the title - at most two calls on the default
 plan, which fit unless each runs past about 210 s - and a plan that outruns it pays four walks, every
 call metered and inside the cap, for a title then closed under `queue.ABANDONED`'s stopped-worker
-sentence. None of the fourteen checks reaches it. The budget's stage-6 measurement is owed by the
-milestone that wires stage 5, which is the first that makes this path reachable.
+sentence. None of the fourteen checks reaches it. The budget's stage-6 measurement was owed by the
+milestone that wires stage 5, the first that makes this path reachable. M5 wired it and records the
+measurement as a real-install check owed in §7.4 (decision 466), because latency is the provider's
+and a figure taken on the double would describe nothing.
 
 ### M5.6 — Admin · Data: the board, the flywheel, the ledger editors, the rejects
 
@@ -570,11 +574,12 @@ its own §12 row when it opens. **It opened UNMEASURED rather than NOT BUILT**, 
 that opens it carries its migration, `0029_flywheel.sql`, and M5.4's first review cycle found that
 NOT BUILT beside shipped code is a false record. Like M5.4's, this criterion names no `ops/` script
 (decision 447): it is a surface, and every clause but the first is expressible against the suite and
-the browser gate. **The first clause cannot run on a real install.** No title reaches stage 8 until
-M5.4's owed stage-5 wiring lands, because stage 6 parks on a missing pack (decision 432), so the
-thin-facet feed is exercised through the real driver in the suite with the stages before it stood
-down, and it goes live the day stage 5 is wired (decision 440). A launch on a real install today
-therefore makes titles due at a stage 5 that is a no-op, and they park at stage 6 rather than bill.
+the browser gate. **The first clause could not run on a real install when this row was written.**
+No title reached stage 8 until M5.4's owed stage-5 wiring landed, because stage 6 parks on a missing
+pack (decision 432), so the thin-facet feed is exercised through the real driver in the suite with
+the stages before it stood down. It went live when M5 wired stage 5 (decisions 440 and 461): a
+launch on a real install now makes titles due at a stage 5 that stores the pack, and each launched
+title walks on to stage 6 and bills under the cap, as M5.6 designed it.
 
 ### M5.7 — admin connectors and System: the number comes before the setting
 
@@ -615,12 +620,42 @@ the stage and writes nothing; a re-derive of a title carrying a curated correcti
 afterwards; and a burst of adds for one series yields one job for the show rather than one per
 episode (decision 331)"
 
-**Status:** NOT BUILT. **Output file:** none. **Blocking:** no. **Owner verdict:** `________`
+§12's cell goes on, since decision 465, to say how the criterion is measured and which of its
+clauses only a real install signs; the paragraphs after the fields restate both.
+
+**Status:** RUN, OUTPUT NOT COMMITTED. **Output file:** none. **Blocking:** yes.
+**Owner verdict:** `________`
 
 Decision 331 amended the criterion above in place rather than forking it: clause one is the sentence
-this row has always carried, and the rest is the half `ops/m5_exit_criterion.py` will measure, written
-down so a build that satisfies only the first cannot be signed for the whole. M5 is now the umbrella
-over M5.1 through M5.7, and each of those writes its own row here as it opens.
+this row has always carried, and the rest is the half `ops/m5_exit_criterion.py` measures, written
+down so a build that satisfies only the first cannot be signed for the whole. M5 is the umbrella
+over M5.1 through M5.7, and each of those wrote its own row here as it opened.
+
+**It stood NOT BUILT, Blocking no, until M5 wired the three stages no walk could pass and wrote the
+instrument, and it moved to RUN, OUTPUT NOT COMMITTED in that change set, as M5.5's row did**
+(decisions 435 and 465). The script has M5.5's shape: in-process, on the fixture, against the
+refusing doubles `ops/fake_llm.py` and `ops/fake_jellyfin.py` and a canned web subclassed from
+`ops/m53_exit_criterion.py`'s, on a scratch database and data directory it creates and drops, with
+every connector and provider key taken out of its environment unread. It exits 2 with no Postgres
+or without either double. `backend/tests/test_m5_exit_criterion.py` builds the same install and
+runs each numbered check's steps, so CI runs the instrument, and those tests close the umbrella row.
+It was run from this lane on 2026-09-24 against a scratch database on the lane's own test cluster
+and exited 0 with every numbered check held. Nothing it printed is in the tree, which is what this
+status says and all it says: a run with its console committed beside `docs/milestones/M4.5-exit.txt`
+would move the fixture half to MEASURED, and the verdict stays the owner's either way.
+
+**What only a real install signs.** A green run on the fixture signs a composition and nothing about
+a household's population. Clause one, a new add reaching `ready` unattended, is signed only against
+a real Jellyfin and its Webhook plugin, real source sites, a real provider's billed call, the corpus
+tower and a wall-clock window; the naming-failure clause only against the corpus's own ledger, which
+`ops/m53_exit_criterion.py` measures on the real bundle; and the drain's stage-6 timing only on the
+owner's box, which §7.4 carries as owed (decision 466). The script first drove every drain under a
+`job_run` id it made itself, which is what its check 2 read stage 7's detail against; the
+production drain in `worker.py` passed none, so on a real install stage 7 read no rejects (decision
+462) while check 2 printed PASS. M5's review cycle closed that gap on both sides: `_tick` hands the
+drain the row it opened (decision 468), `test_acquire_drain.py` walks that path through
+`worker._tick`, and the script now drains only through `worker._tick` running the shipped job, so
+check 2 reads the run the worker's own tick wrote and goes red when that job withholds it.
 
 ### M6 — Map, compositional search, taste comparison viz
 
@@ -1316,6 +1351,19 @@ RELEASE.md records the restore leg's documentation as absent" - does not fire.
 Those four numbers moved once while this file was being written, because a sibling stage was editing
 README in the same wave. **Headings are the anchor and line numbers are the convenience** - in this
 file and in every record like it, which is half of why the corrections in §4 were needed at all.
+
+### 7.4 The drain's stage-6 timing on a real install (decision 466)
+
+Decision 438 records that one title's extraction is runs x 2 calls in sequence, each up to 300 s,
+inside `worker.py`'s 420 s drain budget, and that a walk the budget cancels keeps nothing it paid
+for; it made the milestone that wires stage 5 owe the measurement. M5 wired stage 5 (decision 461),
+so that path is reachable on a real install from M5 on, bounded by the cap and metered. The latency
+is the provider's, so a figure taken against `ops/fake_llm.py` would describe nothing.
+
+**Owed: the owner times one drain tick on the household box.** On decision 324's default plan with
+stage 6 live, read each attempt's `llm_call.at` against the tick's start, and say whether
+`DRAIN_LIMIT` titles fit in 420 s. `DRAIN_LIMIT` and the budget do not move (decision 438 stands),
+and no run in this tree can take the reading.
 
 ---
 

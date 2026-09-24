@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import signal
 from collections.abc import Awaitable, Callable
@@ -759,17 +760,15 @@ async def _acquisition_drain() -> dict[str, object] | None:
     later import turns into work. A skip here would hide all of that behind a log line. `basis` is
     null for that household, and for a tick that had nothing to lease.
 
-    `run_id` IS NOT PASSED, AND SINCE M5.3 THAT COSTS SOMETHING. `raw_document.run_id` is
-    provenance for bytes a stage fetched, and `Job.run` takes no arguments: wiring it means either
-    changing the callable signature every row in this registry shares, or reading back the row
-    `_record_start` has just written. At M5.1 the seam was free - stages 2-8 were declared no-ops,
-    so this job wrote no `raw_document` row at all - and M5.3 gave stage 2 a body, so every
-    document this production path files now carries a null `run_id` while the same walk driven from
-    a test with an explicit run does not. The rows are correct and complete; what is missing is the
-    line tying a batch of them to the tick that fetched them, which §6.6's board reads per title
-    rather than per run. Recorded here rather than fixed in a review pass, because the repair is
-    the callable signature every row in this table shares.
-    [M5.3 review cycle 1, noted beside M53-C1-NET-03]
+    THE TICK'S RUN IS PASSED, which it was not until M5's review cycle (decision 468).
+    `raw_document.run_id` and `dna_reject.run_id` are provenance for what a walk fetched and what
+    it refused, and §8 stage 7 reads the second back with a plain `run_id` comparison (decision
+    462). With no run here, stage 6 filed every refusal this production path made under none, and
+    stage 7 wrote `rejected: {}` to §6.6's board for the life of the job - the board saying the
+    trust boundary dropped nothing while `dna_reject` held what it dropped - while every walk that
+    showed otherwise carried a run its test or exit script had made. `Job.run` takes no arguments,
+    so the id `_record_start` returned reaches this body through `_JOB_RUN`, argued where it is
+    defined. [M5.3 review cycle 1, noted beside M53-C1-NET-03; M5 review cycle 1, M5-DNA-01]
     """
     from spielplan.acquire import pipeline, queue
 
@@ -779,7 +778,7 @@ async def _acquisition_drain() -> dict[str, object] | None:
         await pipeline.complete_landed_boards(conn)
         due = await queue.pending_count(conn, [pipeline.TASK_KIND])
         store = await _active_store(conn) if due else None
-        report = await pipeline.drain(conn, limit=pipeline.DRAIN_LIMIT)
+        report = await pipeline.drain(conn, limit=pipeline.DRAIN_LIMIT, run_id=_JOB_RUN.get())
         if not report.leased and not any(reclaimed.values()):
             return None
         detail = report.as_dict()
@@ -1231,7 +1230,10 @@ JOBS: tuple[Job, ...] = (
     Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
         _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT,
         timeout=1800),
-    Job("dna-projection", "M5", "acquisition", "<1 s"),
+    # Reached through the drain, as the Cold Tower's pass two rows up is: §8 stage 8 calls
+    # `dna.project.project_title` for an acquired title inside the walk that holds it (decision
+    # 463), so this loop does not fire it and the row has an owner and no `run`.
+    Job("dna-projection", "M5", "acquisition", "<1 s", owner="spielplan.dna.project"),
     # Not in §5.3's table, and beside the two rows whose trigger column names it rather than
     # appended at the end: §5.3 lists the acquisition pipeline's consumers - the Cold Tower's
     # forward pass above and the DNA projection - and never the thing that fires them, because §8
@@ -1778,6 +1780,19 @@ def due(
     return sorted(ready, key=lambda j: j.stage)
 
 
+# The `job_run` id `_tick` opened for the job it is running now, and None outside one. The drain
+# hands it to `pipeline.drain` (decision 468), so every row a walk files under its run - stage 2's
+# documents, stage 5's pack, stage 6's refusals - names the tick that wrote it, and §8 stage 7 reads
+# back exactly the refusals its own walk filed (decision 462). A context variable and not an
+# argument, because `Job.run` takes none and every row in `JOBS` shares that shape. And not the
+# drain reading back "the newest unfinished `acquisition-drain` row", because when `_record_start`
+# could not write, that row is an earlier tick's that a killed worker left open, and this walk's
+# refusals would be filed under - and stage 7 would count - another walk's run. This carries exactly
+# what `_record_start` returned, None included, so a tick with no row walks with no run and stage 7
+# records none: empty, never wrong. [M5 review cycle 1, M5-DNA-01]
+_JOB_RUN: contextvars.ContextVar[int | None] = contextvars.ContextVar("job_run", default=None)
+
+
 async def _record_start(name: str) -> int | None:
     """Open the job's `job_run` row before it runs. Returns the row id, or None if that failed.
 
@@ -1892,6 +1907,9 @@ async def _tick(
         if loud:
             log.info("job %s started", job.name)
         run_id = await _record_start(job.name)
+        # Scoped to this one job by the reset in the `finally` below, so no call made outside the
+        # job's own await reads a tick's run (decision 468).
+        job_run = _JOB_RUN.set(run_id)
         started = loop.time()
         try:
             # §5.3's budget, enforced rather than documented. Awaited bare, one job that never
@@ -1975,6 +1993,8 @@ async def _tick(
             await _record_finish(run_id, ok=True, detail=detail)
             if loud:
                 log.info("job %s done in %.1fs", job.name, loop.time() - started)
+        finally:
+            _JOB_RUN.reset(job_run)
 
 
 async def _seed_schedule(

@@ -549,9 +549,14 @@ def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means
     One of them is code that ships in another process: the incremental Ledger update runs in the
     web process on every tap. One is code that ships and is reached through another job - the
     Cold Tower's forward pass, which the placement sweep calls until §8's acquisition pipeline
-    exists. Only the last two rows here are genuinely unwritten. Pinned as sets rather than as
-    counts, because the failure being guarded is a row drifting from one bucket to another
-    silently, which a count cannot see. [M4.10 finding 35]
+    exists. Only the last row here is genuinely unwritten. Pinned as sets rather than as counts,
+    because the failure being guarded is a row drifting from one bucket to another silently,
+    which a count cannot see. [M4.10 finding 35]
+
+    **`dna-projection` crossed into the first set at M5**, the way `cold-tower-placement` sits
+    there: §8 stage 8 calls `dna.project.project_title` inside the walk that holds the title
+    (decision 463), so the row is reached through the acquisition drain and this loop does not fire
+    it. It carries an `owner` and no `run`, and the census stops naming it as awaiting M5.
 
     **`bundle-import` was in the first set until M4.14 and is now live.** It was the sharpest
     example the paragraph above had - work that ships and is triggered by a request - and §5.3
@@ -564,9 +569,9 @@ def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means
     elsewhere = {j.name: j.owner for j in worker.JOBS if j.run is None and j.owner is not None}
     awaiting = {j.name: j.milestone for j in worker.JOBS if j.run is None and j.owner is None}
 
-    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement"}
-    assert set(awaiting) == {"dna-projection", "explore-frontier-cache"}
-    assert sorted(awaiting.values()) == ["M5", "M6"], (
+    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement", "dna-projection"}
+    assert set(awaiting) == {"explore-frontier-cache"}
+    assert sorted(awaiting.values()) == ["M6"], (
         "a job with neither an implementation nor an owner has to name the milestone that owes "
         f"it one, and these name a milestone this build has already shipped: {awaiting}"
     )
@@ -1032,12 +1037,12 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
         worker._report_registry()
 
     line = _census_line(caplog)
-    assert line.endswith(
-        "2 awaiting their milestone: dna-projection(M5), explore-frontier-cache(M6)"
-    ), line
+    assert line.endswith("1 awaiting their milestone: explore-frontier-cache(M6)"), line
     outside = line.split("run outside it: ", 1)[1].split(";", 1)[0]
     assert "ledger-incremental(spielplan.ledger.refit)" in outside
     assert "cold-tower-placement(spielplan.placement.tower)" in outside
+    # M5 wired §8 stage 8, which reaches the projection through the drain (decision 463).
+    assert "dna-projection(spielplan.dna.project)" in outside
     # M4.14 moved the bundle import into this loop, so it is counted among the live and named
     # nowhere - the census lists the two categories that are NOT running here. Asserted as an
     # absence rather than deleted, because the line an operator reads would look the same if the

@@ -36,6 +36,11 @@
 
   let cfg = $state(null);
   let url = $state('');
+  // Typed and not yet saved. `refresh` is async and the page's first one is still in flight when a
+  // person starts typing; its late answer used to write the server's empty URL over what they had
+  // typed, so Save stored the key with no URL and the card stayed unconfigured -- the unsaved
+  // library pick's rule (`pickChanged` below), applied to the one text field refresh also sets.
+  let urlTyped = $state(false);
   let apiKey = $state('');
   let probe = $state(null);
   let jfUsers = $state([]);
@@ -102,7 +107,7 @@
       if (!keepPick) picked = [...(cfg.library_ids ?? [])];
       loadLibraries(cfg.configured);
       jfUsers = directory.users;
-      url = cfg.url ?? '';
+      if (!urlTyped) url = cfg.url ?? '';
       appUsers = await get('/admin/users');
     } catch (err) {
       error = err.message;
@@ -204,6 +209,7 @@
     try {
       await api('/admin/connectors/jellyfin', { method: 'PUT', body: { url, api_key: apiKey } });
       apiKey = '';
+      urlTyped = false;
       unminted = false;
       await refresh();
     } catch (err) {
@@ -355,7 +361,12 @@
   <div class="grid">
     <label>
       <span class="data">SERVER URL</span>
-      <input type="text" bind:value={url} placeholder="http://jellyfin.local:8096" />
+      <input
+        type="text"
+        bind:value={url}
+        oninput={() => (urlTyped = true)}
+        placeholder="http://jellyfin.local:8096"
+      />
     </label>
     <label>
       <span class="data">API KEY</span>

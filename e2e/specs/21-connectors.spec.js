@@ -30,11 +30,15 @@ import { signedIn } from '../helpers.js';
  * fresh one, and puts back what it changed: the extraction assignment through the same preview
  * and confirm the thesis proves, the library pick through the route that stores it. Three writes
  * cannot be put back, and each is harmless twice. The Gemini fixture key, because no route deletes
- * a key and no provider is ever called on this stack: stage 6 asks for the stored pack before it
- * builds a client, and stage 5, which stores packs, is not wired (decision 432). The cap, because
- * decision 452 offers no way back to "no cap", so the test alternates it between two figures it
- * derives from the one it finds. And the webhook token, because decision 418 mints it once and
- * never rotates: the desktop run generates it, and the phone run asserts nothing can show it again.
+ * a key and no provider is ever called on this stack: nothing there files an acquisition task. The
+ * one webhook delivery below names an item the fake does not hold, the delta poll reads nothing
+ * because the fake saved every item it holds before the install's floor (decision 412), and no
+ * spec presses Retry or Launch, so no walk reaches stage 6, the one stage that calls a provider.
+ * That is the whole premise now that stage 5 stores the pack stage 6 reads (decision 461), and a
+ * spec that files a task restates it here. The cap, because decision 452 offers no way back to "no
+ * cap", so the test alternates it between two figures it derives from the one it finds. And the
+ * webhook token, because decision 418 mints it once and never rotates: the desktop run generates
+ * it, and the phone run asserts nothing can show it again.
  *
  * NOTHING IS ACQUIRED. The one webhook delivery names an ItemId `ops/fake_jellyfin.py` does not
  * hold, so the intake records it - which is what decision 455's status reads - and the sweep files

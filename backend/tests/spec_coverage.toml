@@ -17,7 +17,7 @@
 #   e2e          Playwright driving the real UI
 #   static       a guard that reads the source, for rules no runtime can enforce
 
-current_milestone = "M5.1"
+current_milestone = "M5"
 
 [[requirement]]
 id = "platform-compose-http-port-and-volumes"
@@ -5054,7 +5054,9 @@ why = "DNA breadth is the measured binding constraint (zero owned titles carry `
 # the admin queue's read - the moment `run_task` returns from a walk past stage 8, with no drain,
 # job or sweep between; nothing is written before stage 8 finishes, for a title naming every facet
 # or with no vocabulary; one open row per title however often it is walked, 0029's index refusing a
-# second; a launched row closes at the next observation; stage 8 keeps its stub. The M6 feeds'
+# second; a launched row closes at the next observation; stage 8 is still the only stage carrying the
+# flag, and since it gained its body (decision 463) the row lands after its projection on either of
+# its branches. The M6 feeds'
 # writers name §6.4's reason, refuse a term outside the vocabulary (decision 344) and are called by
 # no M5 code. The launch half ("targets exactly the selected rows") is the launch's exactness test,
 # and "readable from the admin queue immediately" is asserted a second time through the route the
@@ -5065,8 +5067,8 @@ tests = [
     "backend/tests/test_flywheel_feed.py::test_a_title_naming_every_facet_or_an_install_with_no_vocabulary_is_not_queued",
     "backend/tests/test_flywheel_feed.py::test_a_second_walk_refreshes_the_titles_one_open_row_and_never_adds_one",
     "backend/tests/test_flywheel_feed.py::test_a_running_row_closes_done_at_the_next_finish_and_a_still_thin_title_is_queued_again",
-    "backend/tests/test_flywheel_feed.py::test_stage_eight_keeps_its_stub_and_is_the_only_stage_that_observes",
-    "backend/tests/test_flywheel_feed.py::test_stage_eights_body_is_still_the_stub_marker",
+    "backend/tests/test_flywheel_feed.py::test_stage_eight_is_still_the_only_stage_that_observes",
+    "backend/tests/test_flywheel_feed.py::test_the_thin_facet_row_lands_after_stage_eights_projection",
     "backend/tests/test_flywheel_feed.py::test_an_empty_predicate_is_queued_with_its_reason_as_the_spec_writes_it",
     "backend/tests/test_flywheel_feed.py::test_a_naming_failure_the_vocabulary_cannot_name_is_not_enqueued",
     "backend/tests/test_flywheel_feed.py::test_no_app_code_calls_either_writer_whose_producer_is_m6",
@@ -11284,4 +11286,50 @@ spec = "§12's M5 row (decision 331) + decision 321 + ops/m5_exit_criterion.py"
 milestone = "M5"
 kind = "integration"
 what = "§12's M5 umbrella criterion, measured end to end by ops/m5_exit_criterion.py: a new Jellyfin add reaches ready unattended, together with the second half decision 331 names - the flywheel's enqueue-and-launch, the spend cap's refusal, the two-attempt retry, a re-derive that keeps a curated correction, and a debounce that yields one job for a burst."
-why = "NOT IN THE PLAN'S COVERAGE SECTION - added because the plan's own re-pointing table moves all eleven existing M5 rows to M5.2-M5.7, which leaves the name \"M5\" holding zero rows and turns test_every_milestone_is_represented (covered == set(MILESTONES)) red the moment the seven names are inserted. Decision 321 keeps \"M5\" in MILESTONES as §12's umbrella and rules that a row may be filed there only if ops/m5_exit_criterion.py measures it; this is that row. It lands with no tests: M5 sorts after M5.1, so it is not owed one yet, and its red gate belongs to whoever closes the umbrella."
+why = "NOT IN THE PLAN'S COVERAGE SECTION - added because the plan's own re-pointing table moves all eleven existing M5 rows to M5.2-M5.7, which leaves the name \"M5\" holding zero rows and turns test_every_milestone_is_represented (covered == set(MILESTONES)) red the moment the seven names are inserted. Decision 321 keeps \"M5\" in MILESTONES as §12's umbrella and rules that a row may be filed there only if ops/m5_exit_criterion.py measures it; this is that row. It is closed by the per-clause tests of backend/tests/test_m5_exit_criterion.py, which build the script's own install and run its numbered checks in-process on the fixture against ops/fake_llm.py and ops/fake_jellyfin.py, so CI runs the instrument this row names (decision 465)."
+tests = [
+    "backend/tests/test_m5_exit_criterion.py::test_check_one_a_new_add_reaches_ready_unattended",
+    "backend/tests/test_m5_exit_criterion.py::test_check_two_the_dna_stages_run_in_the_walk_and_an_upgraded_park_re_enters_at_five",
+    "backend/tests/test_m5_exit_criterion.py::test_check_three_the_walk_is_retried_once_with_the_violation_named",
+    "backend/tests/test_m5_exit_criterion.py::test_check_four_a_second_violation_fails_for_good_and_writes_nothing",
+    "backend/tests/test_m5_exit_criterion.py::test_check_five_the_thin_title_is_in_the_flywheel_when_drain_returns",
+    "backend/tests/test_m5_exit_criterion.py::test_check_six_a_launch_takes_exactly_its_rows_and_leaves_bundle_projection_alone",
+    "backend/tests/test_m5_exit_criterion.py::test_check_seven_a_re_derive_keeps_the_shipped_and_the_household_correction",
+    "backend/tests/test_m5_exit_criterion.py::test_check_eight_a_burst_of_episode_adds_files_one_task_for_the_show",
+    "backend/tests/test_m5_exit_criterion.py::test_check_nine_the_cap_parks_and_never_auto_retries",
+    "backend/tests/test_m5_exit_criterion.py::test_every_statement_the_exit_script_sends_prepares_against_the_schema",
+    "backend/tests/test_m5_exit_criterion.py::test_check_two_goes_red_when_the_workers_own_drain_walks_with_no_run",
+    "backend/tests/test_m5_exit_criterion.py::test_check_four_goes_red_when_the_failing_retry_rewrites_the_tier",
+]
+
+# Filed at "M5" under decision 321's rule that a row may sit there only if ops/m5_exit_criterion.py
+# measures it: check 2 of M5-plan.md section 7 is this row's walk, and check 6 its Launch through
+# stage 8's bundle branch, so the clause tests for those two checks stand beside the stage tests.
+# It landed with no `tests` key as M5 opened - M5 holds the scalar, so its red gate was the test
+# plan - and was closed by writing those tests, never by a waiver or a lower scalar. The two
+# stub-marker tests are M5.1's and stay on its row too: since decision 463 they are what holds
+# "no stage is a declared no-op", and the doctored stage keeps them able to fail.
+[[requirement]]
+id = "jellyfin-acquisition-eval-the-dna-stages-are-wired"
+spec = "§8 stages 5, 7 and 8 + decisions 461, 462, 463, 467 and 468"
+milestone = "M5"
+kind = "integration"
+what = "Stage 5 stores the pack with its craft supplement under the task key and the active vocabulary, and stage 6 reads that pack back; stage 7 advances with the verdict stage 6 recorded and asks no second one, and the worker's drain walks under the run its tick opened, so a real install's stage 7 reads the rejects stage 6 filed; stage 8 projects an acquired title's keywords and leaves a bundle title's projected tier untouched; the thin-facet observation still fires after stage 8 advances; a stage-6 park whose deadline has passed re-enters at stage 5; and no stage is a declared no-op."
+why = "Decision 387 shipped the DNA half as a package with no caller and decision 432 recorded the wiring as owed, so every real title parked at stage 6 on a missing pack and §12's M5 clause one was false on every install."
+tests = [
+    "backend/tests/test_acquire_pipeline.py::test_stage_five_stores_the_augmented_pack_under_the_task_key_and_stage_six_reads_it_back",
+    "backend/tests/test_acquire_pipeline.py::test_stage_five_parks_with_a_deadline_when_no_vocabulary_is_active",
+    "backend/tests/test_acquire_pipeline.py::test_stage_seven_advances_with_the_rejects_stage_six_filed_and_asks_no_second_verdict",
+    "backend/tests/test_acquire_pipeline.py::test_stage_seven_with_no_run_reads_no_reject",
+    "backend/tests/test_acquire_drain.py::test_the_ticks_run_is_the_run_stage_six_files_under_and_stage_seven_reads",
+    "backend/tests/test_acquire_pipeline.py::test_an_expired_stage_six_park_re_enters_at_stage_five_and_stores_a_pack",
+    "backend/tests/test_acquire_pipeline.py::test_a_stage_six_park_made_due_early_resumes_at_stage_six",
+    "backend/tests/test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker",
+    "backend/tests/test_acquire_pipeline.py::test_the_stub_marker_check_names_the_stage_when_a_body_raises",
+    "backend/tests/test_flywheel_feed.py::test_stage_eight_projects_an_acquired_titles_keywords",
+    "backend/tests/test_flywheel_feed.py::test_stage_eight_leaves_a_bundle_titles_projected_rows_untouched",
+    "backend/tests/test_flywheel_feed.py::test_stage_eight_is_still_the_only_stage_that_observes",
+    "backend/tests/test_flywheel_feed.py::test_the_thin_facet_row_lands_after_stage_eights_projection",
+    "backend/tests/test_m5_exit_criterion.py::test_check_two_the_dna_stages_run_in_the_walk_and_an_upgraded_park_re_enters_at_five",
+    "backend/tests/test_m5_exit_criterion.py::test_check_six_a_launch_takes_exactly_its_rows_and_leaves_bundle_projection_alone",
+]

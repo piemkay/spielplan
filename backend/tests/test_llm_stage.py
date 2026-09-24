@@ -349,9 +349,11 @@ async def test_an_unassigned_extraction_parks_naming_the_setting_and_asks_no_pro
 async def test_under_the_cap_stage_six_writes_the_tier_and_the_board_moves_past_it(db, packed, double):
     """The gate lets stage 6 run, and stage 6 reaches its verdict inside itself (decision 432): the
     double's default first answer invents one term, the retry names it, the second answer complies,
-    and the tier is written. The board moves on - stages 7 and 8 are M5.4's declared no-ops, and
-    stage 9 parks for the bundle this install does not have - so "past 6" is a board row at 9. Both
-    attempts are metered, and the stage's own detail says what it wrote and what it cost."""
+    and the tier is written. The board moves on - stage 7 records the verdict stage 6 reached
+    (decision 462), stage 8 takes the bundle branch because this title's origin is `bundle`, the
+    column's default (decision 463), and stage 9 parks for the bundle this install does not have -
+    so "past 6" is a board row at 9. Both attempts are metered, and the stage's own detail says
+    what it wrote and what it cost."""
     await _settings(db, cap_usd=100)
     report = await _drain(db, double)
 
@@ -584,10 +586,11 @@ async def test_a_violation_then_a_provider_failure_is_bounded_by_the_queue_and_e
 
 
 async def test_a_title_with_no_pack_parks_at_stage_six_naming_stage_five(db, titled, double):
-    """Decision 432: stage 6 reads the STORED pack, and stage 5 - which builds it - is still M5.4's
-    owed wiring. So a keyed, assigned, capped install whose title has no pack reaches stage 6, the
-    gate lets it through (no pack is no reservation, and stage 6 says why itself), and the stage
-    parks naming stage 5, with a deadline, having asked nobody."""
+    """Decision 432: stage 6 reads the STORED pack, and stage 5 builds it (decision 461) - but the
+    fixture puts the board at stage 6, so the resume point skips stage 5 and this title reaches
+    stage 6 with no pack, as a walk resumed past stage 5 does. A keyed, assigned, capped install:
+    the gate lets it through (no pack is no reservation, and stage 6 says why itself), and the
+    stage parks naming stage 5, with a deadline, having asked nobody."""
     await _settings(db, cap_usd=100)
     report = await _drain(db, double)
 
@@ -685,8 +688,8 @@ async def test_titles_behind_one_account_refusal_all_park_rather_than_failing_on
 
 async def test_a_title_waiting_for_its_pack_under_a_cap_never_builds_the_fetcher(db, titled, double):
     """Moving the factory after the gate kept it off a title the GATE parks, and still opened it before
-    stage 6's own parks: a capped install's title with no stored pack -- decision 432 says every title
-    reaches stage 6 in that state until stage 5 is wired -- built the Fetcher on every daily re-ask, and a
+    stage 6's own parks: a capped install's title with no stored pack -- decision 432 said every title
+    reached stage 6 in that state until stage 5 was wired -- built the Fetcher on every daily re-ask, and a
     factory that raised turned the park into the drain's failure, spending the attempt, four of which
     closed the title for good. Stage 6 now opens the drain's Fetcher only when it is about to send.
     [M5.5 review cycle 2, NBR-C2-01]"""

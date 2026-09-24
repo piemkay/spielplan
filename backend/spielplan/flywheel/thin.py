@@ -16,11 +16,11 @@ and never of a weight, so §4.1 rule 2 is not in play here at all.
 WHERE AND WHEN (decision 440). The driver calls `observe_title` after stage 8 advances, inside the
 walk that holds the title's lock, because §8.4 says "the moment its walk finishes stage 8" and a
 job cannot keep that: a nightly sweep over the extracted tier passes every naive test and fails the
-feed's coverage row, which says "not after a nightly job". Stage 8 itself stays M5.4's declared
-no-op, whose body the stub-marker test refuses; the observation is the driver's, on a flag the stage
-row carries (`pipeline.Stage.observes_coverage`). Stated honestly, as §12's M5.6 paragraph does: on
-a real install no title reaches stage 8 until M5.4's stage 5 is wired, because stage 6 parks on a
-missing pack (decision 432), so this goes live the day stage 5 is wired.
+feed's coverage row, which says "not after a nightly job". Stage 8 has a body since M5 - it projects
+an acquired title and leaves a bundle title's projected tier alone (decision 463) - and the
+observation stays the driver's, on a flag the stage row carries (`pipeline.Stage.observes_coverage`),
+so it fires on both branches. It went live on a real install when stage 5 was wired (decision 461):
+until then stage 6 parked every title on a missing pack (decision 432) and no walk reached stage 8.
 """
 
 from __future__ import annotations

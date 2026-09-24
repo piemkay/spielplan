@@ -34,6 +34,7 @@ from spielplan import worker
 from spielplan.acquire import fetch, hosts, pipeline, queue, stages
 from spielplan.core.config import settings
 from spielplan.db import pool
+from spielplan.dna import verify
 from spielplan.importer import bundle as bundle_import
 from tests.fixtures import make_bundle as fx
 
@@ -168,6 +169,13 @@ def enrichment_stands_down(monkeypatch):
     again have nothing to measure. `implemented=False` is what stage 6 WAS until this milestone,
     the one shape decision 348 says cannot spend, and the pipeline these tests were written
     against. Stage 6 through the driver is `test_llm_stage.py`'s subject.
+
+    STAGES 5 AND 7 STAND DOWN TOO SINCE M5 GAVE THEM BODIES (decisions 461, 462). Every task here
+    walks under an imported bundle, whose vocabulary a live stage 5 would build and file a pack
+    under for each title - a raw-store write per task, which is not what a test of the worker job
+    is about - and stage 7 records what stage 6 filed, which is nothing once 6 stands down.
+    Neither is paid, so both keep `implemented=True`. Stage 8 stays live: a minted title has no
+    keywords, so it projects no row and advances (decision 463).
     """
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
 
@@ -178,7 +186,8 @@ def enrichment_stands_down(monkeypatch):
                               stage.implemented and not stage.paid, stage.owner)
 
     monkeypatch.setattr(pipeline, "STAGES", tuple(
-        stands_down(stage) if stage.number in (2, 3, 4, 6) else stage for stage in pipeline.STAGES
+        stands_down(stage) if stage.number in (2, 3, 4, 5, 6, 7) else stage
+        for stage in pipeline.STAGES
     ))
 
 
@@ -632,3 +641,60 @@ async def test_a_broken_install_still_corrects_the_board_the_reaper_closed(worke
     # The refusal itself is untouched: the second task keeps its attempt and nothing was placed.
     waiting = await _task_row(db, "jellyfin:jf-drain-2")
     assert (waiting["state"], waiting["attempts"]) == (queue.PENDING, 0)
+
+
+# --- M5 review cycle 1: the tick's run reaches the walk -----------------------------------------
+
+
+async def test_the_ticks_run_is_the_run_stage_six_files_under_and_stage_seven_reads(
+    worker_env, bundled, db, monkeypatch
+):
+    """Decision 468: the `job_run` row `_tick` opens for the drain is the run its walks carry.
+
+    Stage 7 records the refusals THIS run filed (decision 462), with `run_id = $2` so that a walk
+    with no run reads none. The worker's drain handed `pipeline.drain` no run, so on the one path a
+    household runs stage 6 filed every refusal under none and stage 7 wrote `rejected: {}` for the
+    life of the job - the board saying the trust boundary dropped nothing while `dna_reject` held
+    what it dropped - and every walk that proved otherwise (the exit scripts, the stage tests)
+    carried a run its test had made, which the worker never did.
+
+    Driven through `_tick`, because the run is the LOOP's row and the claim is that the walk the
+    loop fires carries it. Stage 6 stands in with the one write the real one makes for a refusal -
+    `verify.record_rejects` under the run the driver handed it, as `llm/extract` files it with the
+    `run_id` `stages.dna_extract` passes - so no provider is needed to see the seam; stage 7 is the
+    shipped body. [M5 review cycle 1, M5-DNA-01]
+    """
+    assert await pipeline.enqueue_item(db, _item(1)) is True
+
+    async def refuses_one_tag(ctx):
+        await verify.record_rejects(
+            ctx.conn, [verify.Rejection(ctx.title_id, "pass-0", "themes.invented", "unknown_term")],
+            run_id=ctx.run_id, provider="stand-in",
+        )
+        return stages.advance({"stood_in": "stage 6 filed one refusal under the walk's run"})
+
+    shipped_verify = next(stage for stage in _SHIPPED_STAGES if stage.number == 7)
+    monkeypatch.setattr(pipeline, "STAGES", tuple(
+        pipeline.Stage(6, stage.name, refuses_one_tag, stage.paid, False, stage.owner)
+        if stage.number == 6 else shipped_verify if stage.number == 7 else stage
+        for stage in pipeline.STAGES
+    ))
+    monkeypatch.setattr(worker, "JOBS", (_job(),))
+
+    await worker._tick(1e9, NOON, {}, {})
+
+    run = await db.fetchrow("SELECT id, ok, detail FROM job_run WHERE name = $1", DRAIN)
+    assert run["ok"] is True and run["detail"]["ready"] == 1, dict(run)
+    title_id = await db.fetchval("SELECT id FROM title WHERE origin = 'acquired'")
+    filed = [tuple(row) for row in await db.fetch(
+        "SELECT run_id, rule_violated FROM dna_reject WHERE title_id = $1", title_id
+    )]
+    assert filed == [(run["id"], "unknown_term")], (
+        f"stage 6 filed {filed} and the tick's run is {run['id']}: the drain handed its walk no run"
+    )
+    verdict = (await db.fetchval(
+        "SELECT detail FROM acquisition_job WHERE title_id = $1", title_id
+    ))["verify"]
+    assert verdict["rejected"] == {"unknown_term": 1}, (
+        f"stage 7 recorded {verdict} beside a refusal stage 6 filed in the same walk"
+    )

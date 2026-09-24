@@ -2,7 +2,7 @@
 
 Spec v2.1 §8 ("Failure at any stage parks the job with a reason, retryable from admin; paid stages
 (6) never auto-retry past the spend cap"), §6.6 Data's board clause as v2.1.3 amends it; decisions
-322, 330, 336, 345, 348, 421, 424, 431, 442, 443 and 444.
+322, 330, 336, 345, 348, 421, 424, 431, 442, 443, 444 and 464.
 
 THE LEVER EVERY EARLIER MILESTONE REFUSED TO BUILD, NOW THAT IT HAS AN OWNER. `acquire/queue.py`
 did not port the corpus's `retry_failed`, on the ground that "a lever that revives finished work
@@ -38,9 +38,14 @@ writing new ones, so a flywheel-launched task keeps the batch plan in its payloa
 THE PAID STAGE IS ASKED ABOUT BEFORE ANYTHING IS WRITTEN. §8's "never auto-retry past the spend cap"
 is held by the driver's gate on every walk whatever made the task due; what a retry adds is the
 coverage row's clause that a retry which would breach the cap "is refused with that reason rather
-than queued". So when the first implemented stage at or after N is the paid one - read off
-`pipeline.STAGES`' flags, never a literal 6 - `spend.retry_refusal` is asked with the plan the
-revived task will walk with, and its sentence is the refusal, with nothing changed.
+than queued". So when the first implemented stage at or after N that is paid, fetches or declares a
+re-ask window is the paid one - read off `pipeline.STAGES`' flags, never a literal 6 -
+`spend.retry_refusal` is asked with the plan the revived task will walk with, and its sentence is
+the refusal, with nothing changed. The predicate is decision 464's restatement of 444's, kept to
+444's outcome now that stage 5 has a body: nothing between such a click and the paid call fetches or
+holds a re-ask window, so the walk reaches the gate on the state the pre-check read, while a retry
+that meets a stage doing either first is queued. Either way the driver's gate stays the guarantee
+(decisions 325, 348).
 
 NOT WHILE A WALK HOLDS THE TITLE. Every action takes `pipeline._TITLE_LOCK` - the driver's own
 namespace, imported and never re-spelled - as a transaction-level lock, and refuses when a walk
@@ -361,7 +366,13 @@ async def _retry_from(
             f"stage {stage!r} is not one this job can be retried from: a retry resumes at a stage "
             f"from 1 to {reached}, the stage it reached, and never moves a job forward (decision 444)"
         )
-    first = next((s for s in pipeline.STAGES if s.number >= stage and s.implemented), None)
+    # Decision 464: the first stage the walk meets that could change what the paid stage is asked -
+    # one that fetches or holds a re-ask window - or the paid stage itself. See `retry_from`.
+    first = next(
+        (s for s in pipeline.STAGES
+         if s.number >= stage and s.implemented and (s.paid or s.fetches or s.reask_from is not None)),
+        None,
+    )
     if first is not None and first.paid:
         for plan in await _walking_plans(conn, title_id):
             refused = await spend.retry_refusal(conn, title_id=title_id, batch=plan)
@@ -378,8 +389,13 @@ async def retry_from(conn: asyncpg.Connection, title_id: int, stage: int) -> int
     """Walk the title again from `stage`, nothing before it running (decision 424). Tasks due.
 
     Admitted on every job that is not in flight (decision 444). When the first implemented stage at
-    or after `stage` is the paid one, the spend cap is asked first, with the plan the revived task
-    carries, and an over-cap month refuses the retry with the meter's sentence and changes nothing.
+    or after `stage` that is paid, fetches or declares `reask_from` is the paid one, the spend cap
+    is asked first, with the plan the revived task carries, and an over-cap month refuses the retry
+    with the meter's sentence and changes nothing (decision 464). That is the retry whose walk meets
+    nothing before the paid call that fetches or holds a re-ask window, so the cap it would breach is
+    the one read now: from 5 and from 6 on the shipped flags, stage 5 building its pack from what is
+    already stored. Every other retry is queued, and the driver's gate is still what guarantees the
+    cap on every walk (decisions 325, 348).
     """
     async with conn.transaction():
         job = await _open(conn, title_id)

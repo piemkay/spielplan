@@ -101,28 +101,26 @@ Three properties, each of which a later reader must keep:
      here and enforced somewhere else is a property worth reading in the place that enforces it.
      [M5.1 review cycle 4, d322-C4-MINT-01]
 
-WHY STAGES 5, 7 AND 8 ARE DECLARED NO-OPS AND NOT MISSING. Each advances and records
-`not implemented at M5.1 - owned by M5.<n>` in the board's `detail`, and names its owner in its
-own docstring. That is what makes the spine testable end to end before any lane opens - a task
-can walk 1 to 9 to 10 today and prove the driver, the queue and the two shipped stages agree -
-and it is what makes a stub that survives into M5.6 visible to a `grep` rather than invisible in
-a registry table. The owners are the roadmap's, not guesses: `:298-312` puts the pack, the trust
-boundary and the projection in M5.4; `:314-329` puts the LLM extraction in M5.5.
-THIS PARAGRAPH SAID "2-8" UNTIL M5.3 GAVE THREE OF THEM BODIES (`ROADMAP-M5.md:279-296`, the
-eight source adapters, the parsers and the reviews gate), AND "5-8" UNTIL M5.5 GAVE STAGE 6 ITS
-EXTRACTION (decision 432) - which reads the pack stage 5 will build and reaches inside itself the
-verdict §8's table files under stage 7, so a title walks from a no-op into a paid stage and out
-into two more. The count is restated rather than left to be read off the tuple because
-`pipeline.STAGES`' `implemented` flag is a hand-written literal and this sentence is the prose half
-of the same claim - and because three is now the number
-`test_every_stage_declared_a_no_op_returns_its_stub_marker` asserts.
+WHY NO STAGE IS A DECLARED NO-OP ANY MORE, AND WHY SEVEN OF THEM ONCE WERE. Until a lane wrote its
+body, each of stages 2 to 8 advanced with `not implemented at M5.1 - owned by M5.<n>` in the
+board's `detail` and named its owner in its own docstring. That is what made the spine testable end
+to end before any lane opened - a task could walk 1 to 9 to 10 and prove the driver, the queue and
+the shipped stages agreed - and what made a stub that survived visible to a `grep` rather than
+invisible in a registry table. The owners were the roadmap's (`ROADMAP-M5.md:279-296`, `:298-312`,
+`:314-329`), and every row keeps its owner as provenance. M5.3 gave stages 2, 3 and 4 their bodies,
+M5.5 stage 6 (decision 432), and M5 the last three: stage 5 stores the augmented pack stage 6 reads
+(decision 461), stage 7 records the verdict stage 6 reached (decision 462), and stage 8 projects an
+acquired title and leaves a bundle title's projected tier alone (decision 463). `NOT_IMPLEMENTED`
+stays, because the stub-marker test decision 348's gate relies on still needs the sentence for the
+next stage somebody declares without a body - and that test now also asserts there is none, which
+holds this paragraph's claim in the build rather than in a count written here.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -132,7 +130,10 @@ from spielplan.acquire import queue
 from spielplan.connectors import resolve
 from spielplan.connectors.jellyfin import TICKS_PER_SECOND
 from spielplan.core.config import settings
+from spielplan.db import dna_terms
 from spielplan.derive import gate, rebuild
+from spielplan.dna import craft, packs
+from spielplan.dna.project import project_title
 from spielplan.llm import extract
 from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
@@ -1446,16 +1447,84 @@ async def reviews_gate(ctx: StageContext) -> Outcome:
     return park(gate.reason(counts), until=gate.window_deadline(), detail=detail)
 
 
-# --- stage 5: a declared no-op -------------------------------------------------------------------
+# --- stage 5: the pack, with its craft supplement ------------------------------------------------
+
+# A bundle-less install at stage 5: stage 6's own `extract.NO_VOCABULARY` state, one stage earlier
+# and with the same lever. `dna_pack` is keyed by vocabulary version (0027), so there is no version
+# to store a pack under and nothing downstream could verify against one. Written for §6.6's board,
+# which shows it verbatim, and ASCII, since the exit scripts print it.
+NO_PACK_VOCABULARY = (
+    "no DNA vocabulary is active on this install, so there is no version to store this title's "
+    "pack under and nothing that could verify an extraction from it (section 3.1: a bundle-less "
+    "install is a legal state). Import the bundle, and this title resumes here (decision 461)"
+)
 
 
-async def dna_pack(_ctx: StageContext) -> Outcome:
-    """§8 stage 5: the ported `packs.py` plus the craft supplement.
-    **Owned by M5.4** (`ROADMAP-M5.md:298-312`).
+async def dna_pack(ctx: StageContext) -> Outcome:
+    """§8 stage 5: "ported packs.py (interleaving, caps, norm()) + craft supplement".
+    **Built by M5.4** as a package with no caller (decision 387, `ROADMAP-M5.md:298-312`), and
+    called here since M5 (decision 461).
 
-    A declared no-op at M5.1.
+    THE AUGMENTED PACK, NOT THE BASE ONE. §8's line names both halves and decision 391 ships both:
+    `packs.build_pack` interleaves and caps the reviews, and `craft.augment` appends the
+    encyclopaedia's craft sections and the short critic notices the pack's word floor drops, cut
+    at `craft.SENTINEL` so the base survives as an exact prefix. What is stored is what stage 6
+    reads - `llm/extract` sends exactly the text `verify.read_pack` returns - so a base pack stored
+    here would be an extraction that never saw the supplement, and a quote from the supplement
+    that could never verify against the pack it was measured by.
+
+    THE DIGEST IS RECOMPUTED, AND IT IS THE ONE LINE HERE A LATER READER WILL "SIMPLIFY". `augment`
+    returns a `CraftInfo`, which `store_pack` cannot take, so the only `PackInfo` in scope is the
+    base pack's - and `store_pack` refuses an info whose `sha` and `chars` are not the offered
+    text's own (decision 382), which the base's are not the moment a supplement exists. So the base
+    info is kept for what it truly describes - the title and the review and source counts, which
+    the supplement does not change - and its `chars` and `sha` are taken from the augmented text.
+    Stored unchanged it would raise for every title with a Wikipedia article or a critic notice and
+    pass for every title without one, which is the half a test with no article sees.
+
+    ONE TRANSACTION, FILED WHERE THE BOARD LOOKS. `store_pack` is two writes and deliberately not a
+    transaction itself (its own docstring says why), so this stage opens one. The document goes
+    under `ctx.task.key` and this walk's run, the only spelling `acquire/board.py` joins on: a pack
+    filed under anything else is a document §6.6's board can never list, and decision 345 makes
+    that board the only window onto bytes the backend cannot open. A rebuilt pack replaces its own
+    `dna_pack` row and adds a `raw_document` row; the store keeps the history.
+
+    NO VOCABULARY PARKS AND DOES NOT FAIL. A bundle-less install is legal under §3.1, nothing raised
+    and a retry cannot supply a version, so decision 336 calls it a wait - with a deadline, as stage
+    6 parks on the same state, because a park with none is `queue.skip` and closes the task for
+    good. A MISSING TITLE FAILS, as stages 3 and 4 do: `build_pack` answers None for a missing row
+    and for nothing else, and a pack for a title that is not there is not something to wait for.
+
+    NEITHER PAID NOR FETCHING. Every byte comes from the derived tables and the raw store stages 2
+    and 3 filled, so the stage is handed no Fetcher and builds none (decision 373), and it costs one
+    local build and one `raw_document` row - which is what makes decision 467's re-entry here from
+    an expired stage-6 park cheap enough to run without anyone asking.
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.4")})
+    if ctx.title_id is None:
+        return fail("stage 5 reached with no title id; stage 1 did not establish one")
+    version = await dna_terms.active_version(ctx.conn)
+    if version is None:
+        return park(NO_PACK_VOCABULARY, until=waiting_on_the_world(), detail={"version": None})
+    built = await packs.build_pack(ctx.conn, ctx.title_id)
+    if built is None:
+        return fail(f"title {ctx.title_id} no longer exists")
+    text, base = built
+    augmented, craft_info = await craft.augment(ctx.conn, ctx.title_id, text)
+    # The base info with the augmented text's own length and digest - see "THE DIGEST IS
+    # RECOMPUTED" above. Neither `craft_info` nor `base` unchanged would pass `store_pack`.
+    info = replace(base, chars=len(augmented), sha=packs.sha(augmented))
+    async with ctx.conn.transaction():
+        document = await packs.store_pack(
+            ctx.conn, ctx.title_id, version, augmented, info,
+            entity_key=ctx.task.key, run_id=ctx.run_id,
+        )
+    return advance({
+        "version": version, "pack_sha": info.sha, "chars": info.chars,
+        "base_chars": craft_info.base_chars, "n_reviews": info.n_reviews,
+        "n_sources": info.n_sources, "raw_document_id": document,
+        "wiki_chars": craft_info.wiki_chars, "n_sections": craft_info.n_sections,
+        "n_rt": craft_info.n_rt,
+    })
 
 
 # Another key's task for this title that a stage failed for good, and the sentence the other key waits
@@ -1537,8 +1606,10 @@ async def dna_extract(ctx: StageContext) -> Outcome:
       * `written` advances, with the rows and the calls on the board;
       * no pack, no vocabulary or a plan the settings cannot make PARKS WITH A DEADLINE - each
         waits on something a person or stage 5 does, and a deadline-less park is a task closed for
-        good (`waiting_on_the_world`). No pack is the state every title reaches this stage in
-        until M5.4 wires stage 5, and the reason says so;
+        good (`waiting_on_the_world`). No pack was the state every title reached this stage in
+        until stage 5 was wired (decision 461); it is now a walk that resumed past stage 5 without
+        one, and once the park's own deadline passes the title re-enters at stage 5, which stores
+        the pack before this stage asks again (decision 467). The reason says so;
       * a second contract violation, or a provider's own final refusal, FAILS PERMANENTLY: asking
         again cannot change the answer and would bill for it, so only the admin retry runs the
         title again -- except a refusal of the household's ACCOUNT (a balance, a spend limit, a
@@ -1557,12 +1628,12 @@ async def dna_extract(ctx: StageContext) -> Outcome:
     `extract`'s plain statuses and never on a transport exception's type, which is the property
     `StageContext.fetcher`'s annotation exists to keep.
 
-    WHAT HOLDS `implemented` TO REALITY IS STILL A TEST AND NOT A CONSTRUCTION, now pointed at the
-    three stages M5.4 owes:
+    WHAT HOLDS `implemented` TO REALITY IS STILL A TEST AND NOT A CONSTRUCTION:
     `test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker` calls
     every `implemented=False` stage and asserts the stub marker, so the next stage to gain a body
-    without its flag reddens the build at that stage. [M5.1 review cycle 1, M51-REV-04,
-    M51-REV-PAID-01]
+    without its flag reddens the build at that stage - and since M5 gave the last three their
+    bodies (decisions 461, 462, 463) it also asserts that no stage is declared one.
+    [M5.1 review cycle 1, M51-REV-04, M51-REV-PAID-01]
     """
     if ctx.title_id is None:
         return fail("stage 6 reached with no title id; stage 1 did not establish one")
@@ -1612,26 +1683,104 @@ async def dna_extract(ctx: StageContext) -> Outcome:
     return fail(f"stage 6's extraction answered {status!r}, which this stage maps to no verb")
 
 
-# --- stages 7 and 8: declared no-ops -------------------------------------------------------------
+# --- stages 7 and 8: the verdict recorded, and the projection -------------------------------------
 
 
-async def verify(_ctx: StageContext) -> Outcome:
-    """§8 stage 7: the ported trust boundary. Failures drop, never repaired.
-    **Owned by M5.4** (`ROADMAP-M5.md:298-312`).
+async def verify(ctx: StageContext) -> Outcome:
+    """§8 stage 7: "ported trust boundary verbatim ... Failures drop, never repaired" - reached
+    inside stage 6 and recorded here (decision 462). **Built by M5.4** (`dna/verify.py`,
+    `ROADMAP-M5.md:298-312`).
 
-    A declared no-op at M5.1.
+    THE VERDICT IS STAGE 6's (decision 432), because §9's retry has to name its violation to a call
+    that has not yet returned: `llm/extract` asks `verify_payload` of every answer inside the
+    two-attempt loop, files each refusal in `dna_reject` under the walk's run as it is reached
+    (decision 341), and writes the tier only when every run was accepted. By the time a walk
+    reaches this stage there is nothing left to decide.
+
+    SO IT RECORDS, AND THE TWO OTHER READINGS ARE REFUSED. A second check of the stored tier is
+    refused on decision 432's ground and a stronger one: the rows it would read are post-merge and
+    post-ledger - `consensus.store_title` merged the runs and `apply_adjudications` applied the
+    household's verdicts inside the same transaction - so it would judge rows stage 6 never judged,
+    and a disagreement would have no action §8 allows, since failures drop and are "never
+    repaired". A pass-through is refused because it is a stub flagged `implemented=True`: it would
+    advance having done nothing, and the stub-marker test decision 348's gate relies on calls only
+    the stages declared `implemented=False`, so nothing could ever see it.
+
+    WHAT IT READS IS THIS WALK'S, AND THE BOARD KEEPS IT. The title's extracted-tier count under the
+    active vocabulary, and the refusals filed under THIS run, grouped by the rule each broke - with
+    `run_id = $2` and deliberately not `IS NOT DISTINCT FROM`: a walk with no run reads none, where
+    the null-safe form would report every run-less refusal the title ever had as this walk's. The
+    board's upsert merges each stage's detail (`detail = acquisition_job.detail || EXCLUDED.detail`,
+    `pipeline.write_board`), so this detail stands beside stage 6's for the life of the job, the
+    board's lasting per-title record of what the trust boundary dropped. It asks no verdict, calls
+    no provider and writes no row.
+
+    THE WORKER'S WALKS CARRY THEIR TICK'S RUN (decision 468): `worker._acquisition_drain` hands
+    `pipeline.drain` the `job_run` id `_tick` opened for it, so on a real install stage 6 files its
+    refusals under the run this stage reads. Until M5's review cycle it handed none, and this detail
+    read `{}` on every real title while a walk driven with an explicit run - the exit scripts, the
+    tests - read its own. A walk with no run still reads none: a `run_task` called directly, or a
+    tick whose `job_run` row could not be written. Reading the run-less rows instead would report
+    other walks' refusals as this one's, so the record is exact where a run exists and empty, never
+    wrong, where it does not. [M5 review cycle 1, M5-DNA-01]
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.4")})
+    if ctx.title_id is None:
+        return fail("stage 7 reached with no title id; stage 1 did not establish one")
+    version = await dna_terms.active_version(ctx.conn)
+    tags = await ctx.conn.fetchval(
+        "SELECT count(*) FROM dna_tag WHERE title_id = $1 AND version = $2", ctx.title_id, version
+    )
+    rejected = await ctx.conn.fetch(
+        "SELECT rule_violated, count(*) AS n FROM dna_reject"
+        " WHERE title_id = $1 AND run_id = $2 GROUP BY rule_violated ORDER BY rule_violated",
+        ctx.title_id, ctx.run_id,
+    )
+    return advance({
+        "version": version, "tags": int(tags),
+        "rejected": {row["rule_violated"]: int(row["n"]) for row in rejected},
+    })
 
 
-async def project(_ctx: StageContext) -> Outcome:
-    """§8 stage 8: the per-title alias-map projection.
-    **Owned by M5.4** (`ROADMAP-M5.md:298-312`; `worker.py:1052`'s `dna-projection` row is its
-    registry entry, already present with no `run` callable).
+# What stage 8 records for a title the bundle supplied, shown on §6.6's board. §8 stage 8 projects
+# "for an acquired title"; a bundle title's projected rows came out of the corpus's own wholesale
+# projection, which decision 162 seeds once and no import can restore.
+BUNDLE_PROJECTION_KEPT = (
+    "a bundle title's projected rows are seeded once by the bundle import (decision 162), so this "
+    "stage leaves them as they are and projects nothing (decision 463)"
+)
 
-    A declared no-op at M5.1.
+
+async def project(ctx: StageContext) -> Outcome:
+    """§8 stage 8: "per-title alias-map projection of its keywords (incremental - new code, same
+    alias map) for an acquired title". **Built by M5.4** (`dna/project.py`,
+    `ROADMAP-M5.md:298-312`), and called here since M5 (decision 463); `worker.py`'s
+    `dna-projection` row names that module as what this stage reaches.
+
+    TWO BRANCHES, BECAUSE BUNDLE TITLES REACH THIS STAGE. The pipeline mints acquired titles, and
+    it also walks titles the bundle supplied: an add resolving to an unplaced bundle title walks on
+    to stage 9 (decision 411), an admin retry of a thin title's inbox row walks from the stage it
+    names (decision 444), and a flywheel Launch makes titles due at stage 5 (decision 443) - and
+    `title.origin` defaults to `bundle` (`0008_placement.sql:46`). `project_title` refuses any title
+    that is not acquired, rightly: a bundle title's projected tier is content decision 162 seeds
+    once, and re-deriving it would overwrite the corpus's `n_sources` weight with a local inventory
+    count no import could put back. Called unconditionally it would fail every such walk, after
+    stage 6 had billed for it. So an acquired title is projected and any other advances naming
+    decision 162, and the refusal stays in `project_title` as the guard behind this branch rather
+    than being caught here.
+
+    THE OBSERVATION IS NOT THIS FUNCTION'S. §8.4's thin-facet row is written "the moment its walk
+    finishes stage 8" by the driver, on the row's `observes_coverage` flag, once this stage has
+    advanced (decision 440) - so it fires on both branches, and a bundle title a Launch re-extracted
+    is measured as surely as a new acquisition. A missing title fails, as stage 10's does.
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.4")})
+    if ctx.title_id is None:
+        return fail("stage 8 reached with no title id; stage 1 did not establish one")
+    origin = await ctx.conn.fetchval("SELECT origin FROM title WHERE id = $1", ctx.title_id)
+    if origin is None:
+        return fail(f"title {ctx.title_id} no longer exists")
+    if origin != "acquired":
+        return advance({"origin": origin, "kept": BUNDLE_PROJECTION_KEPT})
+    return advance({"origin": origin, "projected": await project_title(ctx.conn, ctx.title_id)})
 
 
 # --- stage 9: place -----------------------------------------------------------------------------
