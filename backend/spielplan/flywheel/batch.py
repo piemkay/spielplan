@@ -57,6 +57,16 @@ from spielplan.llm.pricing import ModelPrice
 
 NOTHING_SELECTED = "select rows first: a batch launches the queue rows it names, and none is selected"
 
+# Decision 442 at the picker. A batch naming no provider is one `spend._batched` refuses, but in the
+# sentence for a launched task whose payload does not read - "launch it again" - said to an operator
+# who has launched nothing. So the empty selection is refused here, in the plan's place in decision
+# 441's order, and with nothing standing in for it: the stored assignment is never run as a batch
+# nobody chose, for `_batched`'s reason (a quote over one plan and a stage that runs another).
+NO_PROVIDER = (
+    "choose at least one provider for this batch: a batch extracts with the providers it names, and"
+    " this one names none (decision 442)"
+)
+
 # Decision 343 at the batch's scale. `extraction_plan` refuses an unpriced model by name before a
 # plan exists, so this is the sentence for a plan built around that refusal - which a cap can no
 # more be held against than the refusal itself.
@@ -235,6 +245,9 @@ async def quote(
     instant = now if now is not None else datetime.now(UTC)
     chosen = list(dict.fromkeys(providers))
     meter = await spend.meter(conn, now=instant)
+    if not chosen:
+        return assess(titles=titles, providers=chosen, passes=passes, prices=None,
+                      refused=NO_PROVIDER, meter=meter)
     plan = await spend.extraction_plan(
         conn, now=instant, batch={"providers": chosen, "passes": passes}
     )

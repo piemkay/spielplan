@@ -170,6 +170,26 @@ class JellyfinError(RuntimeError):
         return self.status in (401, 403)
 
 
+def _scrubbed(text: str, token: str | None) -> str:
+    """`text` with the token a request carried taken out, in every spelling an exception gives it.
+
+    h11 refuses a header value by quoting it as a bytes repr -- `Illegal header value b'KEY '` --
+    and `_request` put that message into a `JellyfinError`, which the library pick, the test button
+    and the users list answer with and the sync jobs log into §6.6's panel: a key stored with a
+    trailing space reached all four whole (§14.3: admin-equivalent). `llm/client._redacted`'s set of
+    spellings, for its reason (M5.5 KEYS-C1-01), and the URL-encoded one the MediaBrowser header
+    carries. Longest first, so a spelling inside another is never left half replaced.
+    [M5.7 review cycle 1, M57-KEYS-C1-01]
+    """
+    if not token:
+        return text
+    spellings = {token, token.strip(), quote(token, safe=""), repr(token)[1:-1],
+                 repr(token.encode("utf-8", "backslashreplace"))[2:-1]}
+    for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
+        text = text.replace(spelling, "[redacted]")
+    return text
+
+
 def _item_rows(payload: dict, what: str) -> list[dict]:
     """The envelope's `Items`, refused when it is not a list of objects.
 
@@ -371,7 +391,9 @@ class JellyfinClient:
             # library this module happens to use. `InvalidURL` is named because it is NOT an
             # `HTTPError`: a saved URL with a letter in its port raised it out of the admin PUT's
             # probe as a 500, after the save had committed. [M5.2 review cycle 4: M52-C4-TOKEN-01]
-            raise JellyfinError(f"{method} {path} failed: {exc}") from exc
+            # The token scrubbed out of the message and the cause not carried (`from None`), since
+            # a chained exception is a second message `_scrubbed` never saw. [M57-KEYS-C1-01]
+            raise JellyfinError(f"{method} {path} failed: {_scrubbed(str(exc), token)}") from None
 
         if 300 <= response.status_code < 400:
             # httpx follows no redirect by default, so a forward-auth portal's 302 or a proxy's

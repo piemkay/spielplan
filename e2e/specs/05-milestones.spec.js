@@ -97,8 +97,10 @@ test('the admin Data, Connectors, Users and System tabs are all real', async ({ 
   // §3.1 scopes the bundle-import page to M0: "that one page is M0 scope". §6.6's Jellyfin
   // card is M1. Users was assigned to M5 here and is now M4.6's, and System is now M4.7's:
   // §12 gained both rows with their milestones (decisions 166, 181), because §6.6 sketched
-  // each in one line and §12 scheduled neither. The LLM/TMDB half of Connectors stays M5, and
-  // so does the rest of §6.6's System list — queue depth, last syncs and logs (decision 182).
+  // each in one line and §12 scheduled neither. The LLM/TMDB half of Connectors and the rest of
+  // §6.6's System list - queue depth, last syncs and logs - were M5's until M5.7 shipped both
+  // (decisions 452-455), with no placeholder here to delete: this test asserts the tabs are
+  // links, and 21-connectors and 18-system assert what is behind them.
   //
   // The routine in docs/TESTING.md, applied to a tab rather than a surface: this test used to
   // accept Users as a bare `<span>`, so unlike the placeholder assertions above it would NOT

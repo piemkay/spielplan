@@ -329,11 +329,18 @@ async def test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading(db)
     Asserted as rows read rather than as elapsed time, because a timing threshold on a developer
     box is a flake and the defect is not about speed — it is about a read whose work is
     proportional to history rather than to the jobs it answers for.
+
+    Each row carries a report that reached its server, because that is what a healthy install's
+    rows say since `last_syncs` reads it and not `ok` alone (decision 454): a sync row that asked
+    nobody is, to that reader, what a failed row always was to the `ok` filter -- walked past, as
+    the backup read walks past a failing fortnight -- and `job-run-prune`'s window bounds both.
+    Measured at that window's worst, an unconfigured install's 25,000 unreached sync rows cost the
+    card 2-5 ms. [M5.7 review cycle 1, M57-JFSYS-01]
     """
     names = [job.name for job in worker.JOBS if job.run is not None]
     await db.execute(
-        "INSERT INTO job_run (name, started_at, finished_at, ok) "
-        " SELECT n, now() - (g * interval '1 minute'), now(), true "
+        "INSERT INTO job_run (name, started_at, finished_at, ok, detail) "
+        " SELECT n, now() - (g * interval '1 minute'), now(), true, '{\"reached\": true}'::jsonb "
         "   FROM unnest($1::text[]) AS n, generate_series(1, 500) AS g",
         names,
     )

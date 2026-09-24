@@ -2297,6 +2297,10 @@ PHONE_PROJECT_SPECS = {
     # M5.6's Admin · Data surface: plan section 6 puts the board, the review's ordering, Launch
     # disabled with its reason and the 48 px selection controls on the phone project.
     "20-admin-data.spec.js",
+    # Plan §7 check 14 -- every control on §6.6's Connectors and System pages at least 48 px on the
+    # phone -- is a measurement this project alone can take, so M5.7's spec joins it (decisions
+    # 454, 455).
+    "21-connectors.spec.js",
 }
 
 

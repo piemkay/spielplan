@@ -20,7 +20,8 @@ import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '
  * to touch, and this is where a browser is asked whether they hold.
  *
  * THE FILENAME IS LOAD-BEARING AND MUST NOT BE "TIDIED". `playwright.config.js`'s phone project
- * selects files with `testMatch: /(shell|library|responsive|13-rank|14-tonight)\.spec\.js/`, and
+ * selects files with
+ * `testMatch: /(shell|library|responsive|13-rank|14-tonight|21-connectors)\.spec\.js/`, and
  * the alternation is anchored on `\.spec\.js` immediately after - so only a name ENDING in
  * `shell.spec.js` runs on the phone at all. The plan's `17-shell-phone.spec.js` would have run
  * on desktop only, which is the one project where none of this can be measured; 17 and 18 are
@@ -32,18 +33,20 @@ import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '
  * meet this file's state - cleared cookies, the network taken away, a second household member
  * signed in on the same device - has already run. Playwright groups by PROJECT first, though:
  * every desktop test runs before the phone project starts, so the DESKTOP run of this file
- * completes and then five phone specs follow it - 02-shell, 03-library, 06-responsive, 13-rank
- * and 14-tonight - and 20-admin-data (M5.6) follows this file's own PHONE run too. That one reads
- * the Data page and writes nothing: it never presses Retry, Abandon, Launch or Save.
+ * completes, 20-admin-data's and 21-connectors' desktop runs follow it, and then seven phone specs -
+ * 02-shell, 03-library, 06-responsive, 13-rank and 14-tonight before this file's own phone run,
+ * and 20-admin-data (M5.6) and 21-connectors (M5.7, decisions 454 and 455) after it. 20-admin-data
+ * reads the Data page and writes nothing: it never presses Retry, Abandon, Launch or Save.
  *
  * What crosses that boundary is narrow, and is named here rather than covered by the sentence
  * above. Cookies live in per-test contexts and the offline flag with them; decision 117's switch
  * is put back in a `finally`. The durable footprint is one household member - `shell-switch`,
  * created with `reuse: true` and given a password - and whatever a test here writes against a
  * member. Nothing downstream reads the roster as a count (13-rank and 14-tonight seed per
- * project, 17-users is desktop-only), so this costs nothing today; but a test added here that
- * writes an observation, deletes a member or leaves a preference standing has to be argued safe
- * for those five specs rather than assumed safe by position.
+ * project, 17-users is desktop-only, and 21-connectors measures the mapping table's controls
+ * whatever rows it holds), so this costs nothing today; but a test added here that writes an
+ * observation, deletes a member or leaves a preference standing has to be argued safe for those
+ * six specs rather than assumed safe by position.
  * [decision 267; review cycle 3: M415-C3-E2E-05]
  *
  * WHAT THIS FILE CANNOT SEE, SAID OUT LOUD. `env()` resolves to 0 in every engine the suite

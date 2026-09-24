@@ -194,6 +194,11 @@ class SyncReport:
     # §6.6's "sync now"). Two sweeps of one user against two different library snapshots is worse
     # than one, so the loser reports rather than racing.
     already_running: bool = False
+    # Whether the library read answered, which is the one fact §6.6's "last syncs" asks of this job
+    # (decision 454): an unconfigured connector, an outage and a lost lock each return a report
+    # rather than raising (§3.3), so the worker closes those rows ok, and `ok` alone read a week
+    # of a down server as a sync a minute ago. [M5.7 review cycle 1, M57-JFSYS-01]
+    reached: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -215,6 +220,7 @@ class SyncReport:
             "failed_users": self.failed_users,
             "skipped_no_link": self.skipped_no_link,
             "already_running": self.already_running,
+            "reached": self.reached,
         }
 
     def _note_push_error(self, reason: str) -> None:
@@ -1057,6 +1063,7 @@ async def sync_all(
             # promotion at the foot of this function from reading an outage as health.
             _note_unreachable(exc)
             return report
+        report.reached = True
         _note_reachable()
         resolved = await resolve.upsert_items(conn, library)
         # Once per sweep, not once per user: resolution is user-independent, and assigning it per

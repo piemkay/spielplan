@@ -5,16 +5,18 @@ Spec v2.1 §6.6 (Connectors, Users, System), §3.1, §3.3, §7.
 button, sync now, webhook status)". M1 ships all of it but the library pick and the webhook —
 §7.2's webhook belongs to the acquisition trigger, which is M5. M5.2 adds the API half of both
 and none of their UI: the pick gains a writer and a list to pick from (decision 364), and the
-webhook token gains the single appearance decision 332 allows it. M5.7 renders them.
+webhook token gains the single appearance decision 332 allows it. M5.7 renders them, and the card's
+GET gains the webhook status itself, as the facts `acquire/intake.trigger_status` reads (decision
+455).
 
 §6.6's Users card is "the household's whole user management, and the **only** place accounts
 are made (decision 166)". The routes under `/api/admin/users` below are that card's row editor:
 create, rename, change role, password reset, PIN reset, the passkey list and its per-credential
 revoke, disable and delete. Jellyfin re-link/unlink are the two routes that already existed here.
 
-§6.6's System card is `GET /system` at the bottom of this file, and it is deliberately three
-facts rather than the five §6.6 lists (decision 182). Read-only: nothing on that surface is a
-control, so there is no second route.
+§6.6's System card is `GET /system` at the bottom of this file: decision 182's three facts, and
+since M5.7 the queue depth, last syncs and recent log lines that complete the five §6.6 lists
+(decision 454). Read-only: nothing on that surface is a control, so there is no second route.
 
 Every route in this module is `AdminUser`, which means three things at once (§3.1, §3.2,
 §6.6): a member gets 403, a signed-out caller gets 401, and an admin whose last password
@@ -36,13 +38,15 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, status
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
+from spielplan.acquire import intake, queue
 from spielplan.api.deps import DB, AdminUser, write_txn
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, canonical_id
 from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
-from spielplan.core import auth, secrets, webauthn
+from spielplan.core import auth, logs, secrets, webauthn
 from spielplan.core.config import settings
 from spielplan.importer import dna
+from spielplan.llm.client import header_key
 from spielplan.sync import playback, seen
 
 log = logging.getLogger("spielplan.api.admin")
@@ -109,7 +113,13 @@ class JellyfinSettings(BaseModel):
     # Empty means "keep the stored one" for both fields: the form shows the key as a mask and
     # a partial save must never blank the half it did not send.
     url: str = Field(default="", max_length=512)
-    api_key: str = ""
+    # Trimmed at the edge, for `llm/client.header_key`'s reason: whitespace around a key is no part
+    # of it. Double-click a key in Jellyfin's API Keys table and the trailing space comes with it;
+    # stored as typed, h11 refused it as a header value and quoted the whole key into the error the
+    # library pick prints and the WARNING §6.6's log panel holds (§14.3: admin-equivalent), and a
+    # field of spaces replaced the working key. Blank once trimmed is the empty field: keep.
+    # [M5.7 review cycle 1, M57-KEYS-C1-01]
+    api_key: Annotated[str, StringConstraints(strip_whitespace=True)] = ""
     # §6.6's "library pick", which decision 364 turns from a stored value nothing ever read into
     # the boundary §7.2's intake paths are scoped by. Nullable rather than empty-by-default, alone
     # among the fields here, because absent and empty are different answers and both have to be
@@ -244,6 +254,13 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         # distinguishable from a stored `false` (`registry.JellyfinConfig`). [M4.11 finding 16]
         "server_version": cfg.server_version,
         "server_supported": cfg.server_supported,
+        # §6.6's "webhook status", as the facts of what arrived and what the fallback did rather
+        # than a mode flag somebody sets (decision 455, plan D2). The domain reads both tables,
+        # because the vocabulary of an intake row and of a poll's report is `acquire/intake.py`'s;
+        # this route names the job and hands over the watermark it has already loaded.
+        "trigger": await intake.trigger_status(
+            conn, poll_job=DELTA_POLL_JOB, watermark=cfg.delta_watermark
+        ),
     }
 
 
@@ -261,6 +278,11 @@ async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[s
     (`mint_webhook_token`, decision 418), and the merge decides whether there was anything to mint.
     [M5.2 review cycle 4: M52-C4-TOKEN-01]
 
+    A key no header can carry -- whitespace or a control character inside it, anything past
+    printable ASCII -- is refused here rather than by the model, because FastAPI's own 422 quotes
+    the input it refused, and a card that renders its error would print the key (`api/llm._body`).
+    [M5.7 review cycle 1, M57-KEYS-C1-01]
+
     `save_jellyfin` mints deep inside the merge it serialises, so the only way to tell the save
     that minted one from the hundred that carry it forward is to read what was stored a moment
     earlier and compare. That read is deliberately outside the merge's lock: holding the row
@@ -270,6 +292,11 @@ async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[s
     disclosure to anybody else -- which is true because the merge takes the connector row before
     it reads it, and was not while the first save had no row to lock.
     """
+    if body.api_key and header_key(body.api_key) is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "api_key must be printable ASCII with no whitespace or control character inside it",
+        )
     before = await load_jellyfin(conn)
     cfg = await save_jellyfin(
         conn,
@@ -778,7 +805,7 @@ async def poll_now(_: AdminUser, conn: DB) -> dict[str, object]:
     return (await playback.poll(conn, registry.make_client(cfg))).as_dict()
 
 
-# --- §6.6 System: three facts, and no controls --------------------------------------------
+# --- §6.6 System: six facts, and no controls ----------------------------------------------
 
 # The one job §2 makes a promise about ("nightly pg_dump to /data/backups, rotation 14"), so it is
 # the one job this card reports on by name. Spelled here rather than imported from
@@ -786,6 +813,10 @@ async def poll_now(_: AdminUser, conn: DB) -> dict[str, object]:
 # every job's module — torch included — into the web process. `test_worker_registry.py` pins the
 # string to the registry entry, which is the drift this trade risks.
 BACKUP_JOB = "nightly-backup"
+
+# §7.2's fallback, spelled here for the same reason and pinned by the same test: the Jellyfin card
+# asks for its newest run as the poll's half of the webhook status (decision 455).
+DELTA_POLL_JOB = "jellyfin-delta-poll"
 
 # The registry's live job names, in its order, for the same reason and pinned by the same test.
 # They are a *parameter* rather than documentation: the card asks for the newest row of each named
@@ -821,10 +852,11 @@ JOB_NAMES: tuple[str, ...] = (
     # M5.2 registered §7.2's two intake paths, and they are the drain's entry above read from the
     # other end: the drain answers "is the thing that walks a new title running", and these two
     # answer "is anything telling it there IS one". A stopped sweep and a stopped poll look, from
-    # Tonight, exactly like a household that has added nothing - and until M5.7 renders the
-    # connector card's webhook status, the newest `job_run` row for these two names is the only
-    # place an operator can see that §7.2's intake is alive at all. [M5.2; decisions 363, 368]
-    "jellyfin-delta-poll",
+    # Tonight, exactly like a household that has added nothing. So the newest `job_run` row for
+    # each is answered here like any other job's, `last_syncs` below says when each last actually
+    # succeeded (decision 454), and the connector card's webhook status reads the poll's newest run
+    # beside the webhook's own deliveries (decision 455). [M5.2; decisions 363, 368]
+    DELTA_POLL_JOB,
     "jellyfin-intake-sweep",
     # M4.14 gave §5.3's ninth row a `run`, so the import is a job this loop fires and the card
     # answers for it like any other. Its own PHASE, and the report the Data tab renders while it
@@ -835,6 +867,21 @@ JOB_NAMES: tuple[str, ...] = (
     BACKUP_JOB,
 )
 
+# Decision 454's "last syncs": the jobs that talk to a connector, each with the connector a person
+# would name. A subset of `JOB_NAMES` (asserted in `test_admin_system.py`) and a list of its own
+# because the question differs: `jobs` is the newest run of every job whatever it said, and this is
+# when each connector last actually answered - the split `backup` already makes for the dump, and
+# read by the same statement for that reason. "Answered" is `job_health`'s predicate and not `ok`.
+# The drain's row is the newest tick that had work (a batch leased, or expired leases reclaimed),
+# which is when stage 2 asks the sources; whether they answered is each title's row on the board.
+SYNC_JOBS: dict[str, str] = {
+    "jellyfin-seen-sync": "Jellyfin",
+    DELTA_POLL_JOB: "Jellyfin",
+    "jellyfin-intake-sweep": "Jellyfin",
+    "jellyfin-sessions-poll": "Jellyfin",
+    "acquisition-drain": "Metadata sources",
+}
+
 # §2 promises one dump a night. 36 hours is a night plus half a day of slack: it cannot fire on a
 # household whose dump ran at last night's anchor hour, and it does fire before a second night has
 # been missed — which is the point, because the failure this exists for is silent and repeats.
@@ -844,9 +891,12 @@ BACKUP_STALE_AFTER = timedelta(hours=36)
 async def job_health(conn) -> dict[str, object]:
     """The worker's outcomes, as §6.6's System card reports them.
 
-    Two keys and not one: `jobs` is the newest row per job whatever it says, and `backup` is the
+    Three keys and not one: `jobs` is the newest row per job whatever it says, and `backup` is the
     newest *successful* dump — which is a different row on precisely the install that needs
-    reporting, the one whose backup has been failing since Tuesday.
+    reporting, the one whose backup has been failing since Tuesday. `last_syncs` is the same
+    distinction made for every job that talks to a connector (decision 454), so it is read by the
+    statement that used to read `backup` alone: one lookup per name down `job_run_name_started`,
+    and no second statement for the second question.
 
     A name the registry no longer has drops off the card rather than lingering: the question this
     answers is "how are this build's jobs doing", and a row left by a job that was renamed two
@@ -862,11 +912,31 @@ async def job_health(conn) -> dict[str, object]:
         " ORDER BY j.name",
         list(JOB_NAMES),
     )
-    backup = await conn.fetchrow(
-        "SELECT started_at, finished_at, detail FROM job_run "
-        " WHERE name = $1 AND ok ORDER BY started_at DESC LIMIT 1",
-        BACKUP_JOB,
-    )
+    # A sync job's row is a last sync only when its server answered, which `ok` does not say: the
+    # worker closes a run ok when no connector is set up and when the server is down (§3.3), so a
+    # fresh install and a week-long outage both read "synced a minute ago". A run that returned no
+    # report asked nobody (the intake jobs and the drain, with nothing to do or no client), and a
+    # report's own `reached` says whether the server answered; one without that field -- the delta
+    # poll, which raises on an outage -- answered if it reported at all. The dump keeps `ok` alone.
+    # `worker._prune_job_runs` exempts the newest such row, or a fortnight's outage would age it out
+    # and turn "15 days ago" into "never". [M5.7 review cycle 1, M57-JFSYS-01]
+    succeeded = {
+        r["name"]: r
+        for r in await conn.fetch(
+            "SELECT j.name, r.finished_at, r.detail "
+            "  FROM unnest($1::text[]) AS j(name) "
+            "  JOIN LATERAL ("
+            "       SELECT finished_at, detail FROM job_run "
+            "        WHERE name = j.name AND ok "
+            "          AND (j.name = $2 OR (detail IS NOT NULL"
+            "               AND coalesce((detail->>'reached')::boolean, true)))"
+            "        ORDER BY started_at DESC LIMIT 1"
+            "  ) r ON true",
+            [BACKUP_JOB, *SYNC_JOBS],
+            BACKUP_JOB,
+        )
+    }
+    backup = succeeded.get(BACKUP_JOB)
     backup_at = backup["finished_at"] if backup else None
     return {
         "jobs": [dict(r) for r in jobs],
@@ -881,6 +951,18 @@ async def job_health(conn) -> dict[str, object]:
             "stale": backup_at is None or datetime.now(UTC) - backup_at > BACKUP_STALE_AFTER,
             "stale_after_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
         },
+        # Every sync job, in `SYNC_JOBS`' order, and a null where none ever succeeded: "never" is
+        # the answer an operator setting up a connector needs to be able to read, and a job left
+        # off the list would read as one that does not exist.
+        "last_syncs": [
+            {
+                "name": name,
+                "connector": connector,
+                "at": succeeded[name]["finished_at"] if name in succeeded else None,
+                "detail": succeeded[name]["detail"] if name in succeeded else None,
+            }
+            for name, connector in SYNC_JOBS.items()
+        ],
     }
 
 
@@ -960,19 +1042,27 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
 
 @router.get("/system")
 async def system_card(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's System card, at exactly the size decision 182 gives it.
+    """§6.6's System card: "job health, queue depth, last syncs, backup status, logs", and custody.
 
-    Three facts and no more: the newest successful backup with its age, the SECRETS_KEY
-    fingerprint with the active `key_id`, and the newest `job_run` row per job. §6.6 names "job
-    health, queue depth, last syncs, backup status, logs" and §12 puts §6.6's admin surfaces at
-    M5; queue depth, last syncs and logs stay there. What pulled this much of it forward is that
-    M4.7 gives `job_run` and secrets custody a readable state and no surface reads either — and
-    "did last night's dump happen" is a question an operator has to be able to answer without
-    psql, which is the finding (ops-11) rather than a nice-to-have.
+    Decision 182's three facts first: the newest successful backup with its age, the SECRETS_KEY
+    fingerprint with the active `key_id`, and the newest `job_run` row per job. What pulled those
+    forward to M4.7 is that it gave `job_run` and secrets custody a readable state and no surface
+    read either — and "did last night's dump happen" is a question an operator has to be able to
+    answer without psql, which is the finding (ops-11) rather than a nice-to-have.
 
-    Read-only by construction. Rotation and repair are `spielplan-secrets`, an operator command
-    (§2: "an explicit admin action"), and §2's dump is the worker's; a card that could start
-    either would be the M5 surface this one is deliberately not.
+    Decision 454's three complete §6.6's list, and each is a read an operator without shell access
+    had no other way to make. `queue` is M5.1's `acquire.queue.stats` per kind and state with the
+    per-state totals beside it; `last_syncs` is when each connector's job last reached its server
+    (`job_health`), which `jobs` cannot say on the install whose sync has been failing for a week,
+    and `ok` cannot either, since a sync that swallows an outage closes ok; and `logs` is this
+    process's own recent `spielplan` lines, redacted, held in memory since it started
+    (`core/logs.py`) — the worker's stay in its container log, and its failures are `jobs`.
+
+    Read-only by construction, and M5.7 keeps it so (plan E5). Rotation and repair are
+    `spielplan-secrets`, an operator command (§2: "an explicit admin action"), §2's dump is the
+    worker's, and draining the queue is an acquisition action that belongs on the board if
+    anywhere; a card that could start any of them would be a different surface from this one. The
+    log level filter is applied on the card and issues no request.
 
     `secrets.unreadable` is asked here rather than inferred from the connector card: a household
     with no Jellyfin row at all still has custody, and the boot probe in `app.py` says this once
@@ -990,8 +1080,16 @@ async def system_card(_: AdminUser, conn: DB) -> dict[str, object]:
         # keeps a half-configured boot legal and this route's whole job is to describe custody,
         # so of every route in the app this is the one that must not answer 500 with it.
         unreadable = bool(await secrets.unreadable_key_ids(conn))
+    depth = await queue.stats(conn)
+    by_state = dict.fromkeys((queue.PENDING, queue.LEASED, queue.DONE, queue.FAILED, queue.SKIPPED), 0)
+    for row in depth:
+        by_state[row["state"]] = by_state.get(row["state"], 0) + row["count"]
     return {
         **await job_health(conn),
+        # Every state the table allows, zero included, so "nothing failed" is a 0 the card prints
+        # rather than a key it has to infer from an absence; `by_kind` is `stats` unchanged.
+        "queue": {"by_state": by_state, "by_kind": depth},
+        "logs": logs.snapshot(),
         "secrets": {
             # Absent is a legal state, not a failure: §3.1 lets an install boot before anyone
             # has configured a connector, and `require_secrets_key` is the refusal that binds.

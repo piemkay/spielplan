@@ -482,12 +482,16 @@ class SweepReport:
     # first would file the household's own add as deliberately unwanted.
     deferred: int = 0
     blocked: str = ""
+    # Whether the server answered anything this sweep asked, which is what §6.6's "last syncs" reads
+    # (decision 454): a sweep that met an outage defers its keys and returns this report rather
+    # than raising, and the worker closes its row ok. [M5.7 review cycle 1, M57-JFSYS-01]
+    reached: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "ripe": self.ripe, "enqueued": self.enqueued, "already_queued": self.already_queued,
             "skipped": self.skipped, "rows": self.rows, "deferred": self.deferred,
-            "blocked": self.blocked,
+            "blocked": self.blocked, "reached": self.reached,
         }
 
 
@@ -598,6 +602,8 @@ async def sweep_pending(
             "%d key(s) stay pending for the next sweep: %s", report.deferred, exc,
         )
         return report
+    # A pick is checked by a read the server answered; the whole server's is checked by none.
+    report.reached = bool(cfg.library_ids)
     if stale:
         report.blocked = _stale_pick(stale)
         log.warning("jellyfin intake sweep: %s", report.blocked)
@@ -612,6 +618,7 @@ async def sweep_pending(
             if _about_the_key(exc) or (
                 exc.status not in _SERVER_WIDE and await _server_answers(client)
             ):
+                report.reached = True
                 report.deferred += 1
                 log.warning(
                     "jellyfin intake sweep: the server would not answer for %a, which stays "
@@ -624,6 +631,7 @@ async def sweep_pending(
                 "for the next sweep: %s", report.deferred, exc,
             )
             return report
+        report.reached = True
         if item is None and stale:
             # In no live picked library, while the pick names one this server no longer lists --
             # which is where it may be. `report.blocked` already names that id, once.
@@ -957,3 +965,92 @@ async def poll_delta(
         log.info("jellyfin delta poll: %d title(s) saved since %s are now queued",
                  report.enqueued, since.isoformat())
     return report
+
+
+# --- what §6.6's card reads -----------------------------------------------------------------------
+
+# The reasons a row is written with when the delivery was not an `ItemAdded` at all: the wrong
+# template, or a body that never became a payload. Every other row WAS an add -- including one whose
+# template forgot a field and one the sweep later refused for the library or the server -- because
+# each of those says the trigger fired, and what became of it is reported beside it as a refusal.
+_NOT_AN_ADD = (NOT_ITEM_ADDED, UNREADABLE, PAYLOAD_TOO_LARGE, DELIVERY_INTERRUPTED)
+
+# One pass over a table nothing prunes, which at a household's rate is thousands of rows and is read
+# when an admin opens the card rather than on a timer.
+_WEBHOOK_FACTS = """
+SELECT max(received_at) FILTER (WHERE coalesce(reason, '') <> ALL($1::text[])) AS last_item_added_at,
+       max(received_at) AS last_delivery_at,
+       count(*) FILTER (WHERE received_at > now() - interval '7 days') AS deliveries_7d
+  FROM jellyfin_intake
+"""
+_NEWEST_REFUSAL = """
+SELECT received_at, reason FROM jellyfin_intake
+ WHERE state = $1 ORDER BY received_at DESC, id DESC LIMIT 1
+"""
+# The newest run and the newest success, each one lookup down `job_run_name_started`. A run that
+# closed ok with no report asked no server -- `worker._jellyfin_delta_poll` returns None when there
+# is no client -- so it is neither: an unconfigured install's poll line read "ok, last ok a minute
+# ago" for a poll that had never once asked Jellyfin. [M5.7 review cycle 1, M57-JFSYS-01]
+_NEWEST_RUN = (
+    "SELECT started_at, ok, detail FROM job_run WHERE name = $1 AND (ok IS NOT TRUE OR detail IS NOT"
+    " NULL) ORDER BY started_at DESC LIMIT 1"
+)
+_NEWEST_OK = (
+    "SELECT finished_at FROM job_run WHERE name = $1 AND ok AND detail IS NOT NULL"
+    " ORDER BY started_at DESC LIMIT 1"
+)
+
+
+async def trigger_status(
+    conn: asyncpg.Connection, *, poll_job: str, watermark: datetime | None
+) -> dict[str, Any]:
+    """§6.6's "webhook status", as the facts of what arrived and what the fallback did (decision
+    455, proposal 106's sketch).
+
+    FACTS AND NOT A MODE, which is plan D2's instruction: a flag saying "webhook" or "polling" would
+    report what somebody configured rather than what happened, and §7.2 runs both paths at once by
+    design (decision 366). So the card gets the evidence for each and the operator reads which one
+    is carrying the load:
+
+      * `webhook` -- the last `ItemAdded` received, which is NOT the last delivery: a plugin pointed
+        at the Playback templates delivers every evening and has never once told this app about an
+        add. Then the last delivery of any kind, the deliveries of the last seven days, and the
+        newest refusal with its reason, because decision 365 records what it cannot act on and this
+        card is where the record is read.
+      * `delta_poll` -- the watermark the next poll reads from, and the poll's newest run: when it
+        started, whether it was ok (None while it runs, or if it was killed mid-flight, which is
+        `worker._record_start`'s own distinction), and how many titles it filed. Beside it the
+        newest SUCCESS, which is a different row on precisely the install that needs this line --
+        the one whose fallback has been failing since Tuesday.
+
+    `poll_job` is passed in because the name is the worker registry's, and `api/admin.JOB_NAMES` is
+    where the web process spells that registry (pinned by `test_worker_registry.py`). `watermark`
+    is `JellyfinConfig.delta_watermark`, which the caller has already loaded. An install with no
+    connector and no deliveries answers nulls and a zero -- never a 500 on the screen an admin sets
+    the connector up from (§3.1).
+    """
+    facts = await conn.fetchrow(_WEBHOOK_FACTS, list(_NOT_AN_ADD))
+    refusal = await conn.fetchrow(_NEWEST_REFUSAL, SKIPPED)
+    newest = await conn.fetchrow(_NEWEST_RUN, poll_job)
+    succeeded = await conn.fetchval(_NEWEST_OK, poll_job)
+    # `DeltaReport.as_dict()`'s own key, read defensively: a failed run's detail is the runner's
+    # `{"error": ...}`, and an unconfigured poll returns no report at all.
+    detail = newest["detail"] if newest else None
+    filed = detail.get("enqueued") if isinstance(detail, dict) else None
+    return {
+        "webhook": {
+            "last_item_added_at": facts["last_item_added_at"],
+            "last_delivery_at": facts["last_delivery_at"],
+            "deliveries_7d": int(facts["deliveries_7d"]),
+            "last_refusal": (
+                {"at": refusal["received_at"], "reason": refusal["reason"]} if refusal else None
+            ),
+        },
+        "delta_poll": {
+            "watermark": watermark,
+            "last_run_at": newest["started_at"] if newest else None,
+            "last_run_ok": newest["ok"] if newest else None,
+            "last_ok_at": succeeded,
+            "last_filed": filed if isinstance(filed, int) else None,
+        },
+    }

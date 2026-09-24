@@ -271,13 +271,20 @@ test('Launch is disabled with its reason and the selection controls meet the tou
     for (const item of injected) await queue.getByLabel(`Select row ${item.id}`).check();
     await expect(queue.getByTestId('flywheel-titles')).toHaveText('2');
     const quote = await (await quoted).json();
-    expect(quote.launchable, 'the e2e stack configures no spend cap, so no batch may launch').toBe(false);
+    // Refused on both runs, under a sentence this file does not own. The cap and the extraction
+    // assignment are 21-connectors': it restores the assignment it found, none on a reset stack, so
+    // the page's default batch names no provider (decision 442); but it cannot put back "no cap"
+    // (decision 452), so the desktop run here meets no cap and the phone run meets its cap. Which
+    // refusal the route gives is the suite's order; that the page shows the one it gave is this test.
+    expect(quote.launchable, 'launchable: a provider is assigned beside a cap on this stack').toBe(false);
+    expect(quote.reason, 'the quote refused Launch without a reason').toMatch(/\S/);
 
     const launch = queue.getByTestId('flywheel-launch');
     await expect(launch).toBeDisabled();
     const reason = queue.getByTestId('flywheel-launch-reason');
     await expect(reason).toBeVisible();
-    await expect(reason).toContainText('no spend cap is configured');
+    // The route's own sentence, whole and as text (decision 441), not a refusal one stack state gives.
+    await expect(reason).toHaveText(quote.reason);
 
     if (testInfo.project.name === 'phone') {
       for (const item of injected) {

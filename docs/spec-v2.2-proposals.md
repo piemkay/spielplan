@@ -11673,6 +11673,321 @@ none, so Launch is not disabled for it in advance.
 
 ---
 
+## Decisions taken (owner, 2026-09-24, as M5.7 opened)
+
+Taken as M5.7 opened, under the owner's standing instruction to take each plan's recommended option
+and record it here rather than ask. 339 is the question `docs/milestones/ROADMAP-M5.md` files
+against M5.7, and it is taken under the number the roadmap gives it, on the rule M5.1's, M5.3's,
+M5.4's and M5.5's blocks followed: a number a planner allocated to a step is taken by the milestone
+that owns the step. The rest are spent from the bottom of this lane's own range, 450-459, which the
+owner handed out in an instruction, and the top of that range is left for this lane's review cycle.
+Where the plan marks a recommendation the entry takes it; where it poses the question and marks
+none - the acceptance check in 450, the rate's source in 451, the probes in 453 and whether logs
+ship in 454 - the entry says so in its own text and takes the option the exit criterion implies.
+
+The roadmap's other questions over this surface are not taken here. 324, 325 and 343 were taken by
+M5.5, and this lane builds to them as written. **330 is M5.6's**: that lane takes it in full in
+parallel, adopting proposal 107 - "The cap is editable in place and takes effect immediately;
+enabling a provider shows its per-title estimate first; at the cap, paid stages park with the reason
+"over spend cap" rather than failing silently, and the meter says so. The caption carries the
+thinking-token note" - and folding it into §6.6. This lane builds to that text, heads no entry for
+it, and leaves the two coverage rows that still cite bare proposals to the lane that repairs them.
+
+M5.7 does not hold `current_milestone`. M5.1 does and keeps it, and M5.7's rows are appended without
+raising the scalar. It writes no migration (plan §5): the cap, the assignment, the mode, the pass
+count and every model and price override live in `connector_config` rows that need no DDL. Its one
+normative edit is the one decision 331 reserves for a sub-milestone as it opens - its own §12 row and
+the paragraph under it. **339 mandates §6.6 text this milestone does not apply**, because M5.6 edits
+§6.6 in parallel to fold 330; the sentence owed is written out in full in the entry, in decision
+346's shape, for the milestone that holds the spec file to paste. All of them are normative from
+today under decision 177's rule whether or not that sentence lands.
+
+### 339. §6.6's per-task assignment ships with extraction alone
+
+**What the record says.** §6.6's Connectors bullet asks for "a per-task model assignment (extraction
+/ query parsing / conflict phrasing)" (`spec:322`), and §9 lists "per-task assignment" among the
+admin's settings (`spec:418`). Decision 324 named `extraction_provider` in the `llm` row as §6.6's
+assignment "for the one task M5 has a caller for"; `0028_llm_spend.sql` CHECKs `llm_call.task` to
+`'extraction'` alone; and `llm/spend.py:149-150` and 0028's own comment leave the rest of the
+question to M5.7 under this number. Plan §3 recommends extraction alone.
+
+**Why it changes.** The card has to render something, and a slot is a promise. Query parsing is
+§6.4's compositional search, which lands at M6. Conflict phrasing is §6.2/§6.5 copy, and nothing
+calls it before M6 or M7 - `ROADMAP-to-M5.md:578` files it as having "no caller for the same reason"
+the generic connector plumbing waited. A settings control for a task nothing calls is a promise the
+surface cannot keep: an admin who assigns Anthropic to conflict phrasing has configured nothing, and
+the page would say otherwise. Decision 338 made the same argument for batch.
+
+**The decision.** Extraction alone - the plan's recommendation. There is one control, the `llm`
+row's `extraction_provider`, which decision 324 already named, rendered as one assignment select in
+the spend guard's settings. The words "query parsing" and "conflict phrasing" appear on no surface
+and in no setting, and `llm_call.task`'s CHECK stays `'extraction'` only; the milestone that gives
+either task a caller adds its slot, its setting and the CHECK's widening together. **This decision
+mandates a spec amendment this milestone does not apply.** The text owed, replacing "(extraction /
+query parsing / conflict phrasing)" in §6.6's Connectors bullet at `spec:322`: "(extraction at M5;
+query parsing arrives with §6.4's compositional search and conflict phrasing with its caller
+(decision 339))". `llm/spend.py:150`'s comment, which calls 339 "M5.7's", is updated to cite it as
+taken; 0028's comment saying the same stays as written, because an applied migration is checksummed
+and is never edited.
+
+**Cost.** §6.6 over-promises by two slots until the milestone holding the spec file pastes the
+sentence, and this entry is what a reader of §6.6 is sent to meanwhile. A household that wants a
+different model for search cannot say so before search exists, which costs nothing, because nothing
+would read the answer.
+
+### 450. "Before enabling" is a preview that writes nothing, and the write carries the figure it was shown
+
+**What the record says.** §6.6's spend guard: "per-title cost estimate before enabling"
+(`spec:322`). The coverage row `map-taste-admin-cost-estimate-before-enabling` states it as an
+ordering - the estimate and the projected monthly figure are returned "before the setting is
+persisted" - and plan A2 recommends "an explicit preview call rather than ... an optimistic save plus
+a rollback". Decision 433 shipped `GET /api/admin/llm` and the test dispatch and no write, leaving
+the writes to the cards whose row fixes their ordering. Plan §7's checks 1-3 are the preview's
+response, the store unchanged after it, and the confirm.
+
+**Why it changes.** An optimistic save shows the number after the setting has persisted, and from
+that instant a drain tick can start spend at a figure nobody has read. A preview answers the
+ordering for one client that calls it; it does not stop a second client, a stale tab or a hand-typed
+request from writing past it. Making the confirm name its figure turns the ordering into a property
+of the API rather than of one page's behaviour, and it means a stale figure - a price that turned
+over at its `valid_until`, a model edited in another tab - is shown again rather than accepted in
+silence. The plan offers the preview and does not mark the acceptance check; the exit criterion's
+"cancelling leaves the stored configuration byte-identical" and "the number comes first" imply it,
+so it is taken.
+
+**The decision.** An explicit preview route plus a separate write, as plan A2 recommends over an
+optimistic save plus rollback.
+
+- `POST /api/admin/llm/preview` takes the proposed change: `extraction_provider`, `parallel`,
+  `parallel_providers`, `passes`, and per provider its model and price override. It answers the
+  per-title estimate with its price basis, the projected monthly figure (decision 451) and the meter
+  with its remaining cap. It writes nothing - not an upsert, not a timestamp.
+- `PUT /api/admin/llm` takes the same change plus `accepted_estimate`, the `per_title_usd` string the
+  preview showed. It recomputes the preview and persists in one transaction only when that string
+  still matches. Otherwise it answers 409 with the fresh preview and writes nothing.
+- A change that would put a provider with no usable key into the plan - the key absent, unreadable
+  under this `SECRETS_KEY`, or unfit for an HTTP header - is reported as `blocked` by the preview and
+  refused 409 by the PUT. Without this, a key typed later would start spend at a figure nobody was
+  shown.
+- In the body an absent field means keep and an explicit null means unset: un-assign the provider,
+  clear `parallel_providers`, return a model to its default, or return a price override to the
+  table. `registry.save_connector` learns a narrow `unset=` for declared config fields only.
+
+The preview reuses `spend._plan`, the function stage 6's gate plans with, so the gate and the figure
+the admin accepted cannot disagree about what the plan is.
+
+**Cost.** Two requests where one would do, and a 409 an admin meets whenever a price turns over
+between reading and confirming - which is the case the check exists for. `api/llm.py` gains the
+write routes decision 433 left to M5.7 and still runs no SQL of its own; `test_llm_api.py`'s
+unregistered "one read and one dispatch and no write" router test is rewritten to the new route set;
+`ADMIN_ROUTE_COUNT` moves from 28 to 33 with decision 452's routes. The confirm in the spend guard's
+settings is the only client path to `PUT /api/admin/llm`.
+
+### 451. The projected monthly figure is the per-title estimate times what this install filed in the last 30 days
+
+**What the record says.** Plan A3: "'Per-title x titles per month' needs a titles-per-month number;
+the honest source is the install's own recent acquisition rate rather than an invented constant. If
+there is no history, say so rather than printing a guess." The plan names no counting rule.
+
+**Why it changes.** "Titles per month" has three plausible readings and they differ by an order of
+magnitude on an upgraded install. A calendar month two days old projects from two days. And the
+queue holds tasks that never reach stage 6: an upgraded install's first delta poll files a re-offer
+for every bundle title the household already owns, and decision 411 closes each at stage 1 without
+walking, so counting them would project a bill for a library that is already paid for.
+
+**The decision.** Titles per month is the number of `acquisition_task` rows of kind `'acquire'`
+(`acquire/pipeline.py`'s `TASK_KIND`) whose `created_at` falls in the trailing 30 days. Tasks filed
+at `acquire/intake.py`'s `RE_OFFER_PRIORITY` are not counted, because those re-offers are closed by
+stage 1 without walking (decision 411). The projection is the per-title figure times that count,
+reported beside the meter's remaining cap together with whether it exceeds it.
+
+- No `'acquire'` task ever filed: `monthly_usd` is null and the reason says there is no acquisition
+  history yet.
+- The per-title figure is unknown (decision 343): `monthly_usd` is `"unknown"`.
+- No cap in force: the reason says stage 6 parks every title until one is set (decision 348's
+  refusal, which decision 325 keeps with no shipped default).
+
+The plan marks no option for the rate's source; the trailing window is the one its "the install's
+own recent acquisition rate" reads as without a two-day month.
+
+**Cost.** The count is a domain function in `acquire/queue.py` and the multiplication a pure function
+beside the preview in `llm/spend.py`. `llm/spend.py` must not import `acquire.intake`,
+`acquire.pipeline` or `acquire.stages` - pipeline imports spend, and that would be a cycle - so the
+caller passes the re-offer priority and the task kind in. A household whose acquisitions are bursty
+sees a projection that swings with the last month, which is what the last month cost.
+
+### 452. The cap is written in place by its own route, and keys by one generic route that never changes an estimate
+
+**What the record says.** Decision 325 made the cap a calendar month's sum over `llm_call` with no
+shipped default and zero a real value; decision 433 left the cap's and the keys' writes to M5.7.
+Proposal 107, as M5.6 adopts it under decision 330, says the cap "is editable in place and takes
+effect immediately". Decision 450 gates every change that alters the estimate.
+
+**Why it changes.** Every route that writes a spend setting either goes through 450's figure or has
+to argue why it need not, and the argument has to be readable off the handlers. Neither the cap nor a
+key is an estimate input - but a key save could enable spend if a provider were already assigned
+without one, and a generic route that also accepted a model would be a way round 450.
+
+**The decision.** `PUT /api/admin/llm/cap` takes `cap_usd`, which must be a finite number of at
+least 0; a bool, a string, NaN, infinity or a negative value is refused 422. The cap persists at once
+and the route answers the meter. It needs no preview, because the cap is the guard itself and
+changing it enables no provider. Zero is a real cap meaning "spend nothing" (decision 325), and the
+card offers no way back to unset.
+
+`PUT /api/admin/connectors/{name}` writes only a connector's secret fields: `api_key` for gemini,
+anthropic, openai, tmdb and omdb, and `client_id` plus `client_secret` for trakt. An empty field keeps
+the stored value. That route and `GET /api/admin/connectors` answer booleans only. The generic route
+refuses a model or a price override 422, because those change the estimate and go through decision
+450; it refuses `llm` with a sentence naming `PUT /api/admin/llm`. Jellyfin keeps its own PUT, which
+is mounted first and answers that path. Decision 450's refusal of a keyless assignment closes the one
+way a key save could enable spend: no provider is ever assigned without a key, so a key saved later
+changes no plan.
+
+**Cost.** Five new admin routes in total - the preview, the PUT on `llm`, the cap, and the generic
+read and write - and `api/llm.py` still holds no SQL. An admin who wants to go back to "no cap"
+cannot do it from the card; zero parks every paid stage, which is the same effect with a figure on
+it, and "unset" stays an install-time state rather than a choice the card offers.
+
+### 453. The three source cards test their keys through the shared fetcher, and no key reaches a log line on the way
+
+**What the record says.** §6.6: "TMDB / OMDb / Trakt keys with test buttons" (`spec:322`). Decision
+433 left the three to M5.7's source cards - "tmdb, omdb and trakt carry no test until M5.7's source
+cards" - and decision 434 kept `sources/credentials.py` as their reader. TMDB v3 and OMDb accept a
+key only as a query parameter.
+
+**Why it changes.** httpx writes every request URL into an INFO line of its own, so a test press
+built naively copies a query-string key into the web process's log - the exposure `push/send.py`
+already guards against for its own URLs. `sources/_views.py` records the stored-URL exposure for the
+adapters as bounded and accepted; a test button must not open a second one.
+
+**The decision.** The probes:
+
+- TMDB: `GET https://api.themoviedb.org/3/configuration`.
+- OMDb: one lookup of a fixed IMDb id.
+- Trakt: `GET https://api.trakt.tv/movies/trending?limit=1` with its three headers.
+
+Each probe reads its key through `sources/credentials.py` and goes through `acquire.fetch.Fetcher`
+under the host policies `acquire/hosts.py` already declares. Nothing is written to the raw store. A
+probe with no key answers without sending a request. The answer is `{ok, status, error}`, with the
+key scrubbed from any text a host echoed. The three probes are registered as the three
+`ConnectorSpec.test` entries, so the existing `POST /api/admin/connectors/{name}/test` dispatch serves
+them. A `logging.Filter` on the `httpx` logger masks the value of any `api_key` or `apikey` query
+parameter; it is installed when the probe module loads, before its first request, following
+`push/send.py`'s precedent. The plan names no probe; these are the cheapest requests each host
+answers that fail on a bad key.
+
+**Cost.** OMDb's probe spends one request of the key's daily quota, and the card says so.
+`test_connector_registry.py`'s registered dispatch test drops omdb from its "untested" list, its body
+changed and its id kept; the unregistered `test_llm_api.py` test that used tmdb as the example with no
+test moves to jellyfin or llm.
+
+### 454. §6.6's System card gains queue depth, last syncs and the web process's own recent log lines, and stays read-only
+
+**What the record says.** §6.6 System: "job health, queue depth, last syncs, backup status, logs".
+Decision 182 shipped three of the five - `backup`, `jobs`, `secrets` - and left the rest to M5, and
+`e2e/specs/18-system.spec.js` asserts the route answers exactly those three so the absence could not
+drift into a claim. `acquire/queue.py`'s `stats` calls the widening M5.7's budgeted diff. Plan E1
+reads last syncs off `job_run`; plan E2 asks for "the last N lines of the app's own log with a level
+filter", or a narrowed §6.6 if the owner would rather defer.
+
+**Why it changes.** Plan §5 writes no migration, which rules out a log table both processes could
+write, so "logs" is either what one process holds in memory or nothing. An empty panel is a promise
+the card cannot keep, and a narrowed §6.6 gives up the one place an operator without shell access can
+read why a sync failed. The exit criterion names "the recent log lines", which implies shipping them.
+
+**The decision.** `GET /api/admin/system` answers six keys. Decision 182's `backup`, `jobs` and
+`secrets` are unchanged. The three new keys:
+
+- `queue`: `acquire.queue.stats` per kind and state, plus per-state totals.
+- `last_syncs`: the newest SUCCESSFUL `job_run` row of each job that talks to a connector -
+  `jellyfin-seen-sync`, `jellyfin-delta-poll`, `jellyfin-intake-sweep`, `jellyfin-sessions-poll`,
+  `acquisition-drain` - null where none ever succeeded. It is read in the same single statement that
+  already finds the newest successful backup, so `api/admin.py`'s raw-SQL residue stays at 17.
+- `logs`: the last 200 records at INFO and above from the `spielplan` loggers of the web process,
+  held in memory since the process started and redacted of query-string keys and bearer values. The
+  `httpx` and `uvicorn` loggers are not captured. The level filter is applied on the card.
+
+Logs ship rather than §6.6 being narrowed. The worker's own lines stay in its container log and its
+failures stay in `jobs`, and the card says so. There is no control that starts a job, drains the queue
+or rotates a key. "Newest successful" is what separates `last_syncs` from `jobs`, which reports the
+newest run whatever its outcome.
+
+**Cost.** A web restart empties the log panel, and the worker's lines are not on it at all; the card
+says both. `e2e/specs/18-system.spec.js`'s `FACTS` goes from three to six by design, and its
+read-only assertion excepts only the level filter, which issues no request. The M4.7 row
+`platform-system-card-reports-backups-and-custody` has its `what` amended and its renamed test ids
+updated in the change that renames them. The comments in `queue.stats` and `api/admin.py` that call
+the widening M5.7's are updated.
+
+### 455. The Jellyfin card's two halves: a pick sent only when changed, a status made of facts, and a token minted only by a press that asks
+
+**What the record says.** Plan D1-D4: a multi-select over M5.2's library read writing
+`library_ids`, a webhook status reporting whether an `ItemAdded` has arrived and whether the delta
+poll is carrying the load - "Do not invent a mode flag nobody sets" - and the refused-match list.
+Decision 364 reads an empty pick as the whole server; decision 410 makes a picked library the server
+no longer lists a fault in the pick; decision 418 mints the webhook token only on a save that asks,
+and left rotation to the card that would offer it. Proposal 106 sketches the status.
+
+**Why it changes.** Each of the three halves has a way to do damage in silence. A pick sent on every
+save would overwrite the stored pick with whatever a half-loaded list held, and a failed list sends
+`[]`, which decision 364 reads as "acquire everything". A status built on a mode flag reports what
+somebody configured rather than what arrived. And a token press that rotated would let one of two
+simultaneous askers be shown a value the other had already replaced.
+
+**The decision.** Library pick: a multi-select over `GET /api/admin/connectors/jellyfin/libraries`.
+It writes `library_ids` through the existing PUT only when the admin changed the selection, using its
+own button. A library list that failed (`ok: false`) disables the pick and never sends `[]`. A picked
+id the server no longer lists is shown as stale (decision 410).
+
+Webhook status is facts, not a mode flag nobody sets (proposal 106's sketch): the last `ItemAdded`
+received; the last delivery of any kind; deliveries in the last 7 days; the newest refusal and its
+reason; and the delta poll's watermark and its newest run - when it ran, whether it was ok, and how
+many items it filed. One domain function in `acquire/intake.py` reads these, and
+`GET /api/admin/connectors/jellyfin` serves them as `trigger`.
+
+Token: a "Generate webhook token" press, offered only while `has_webhook_token` is false, sends
+`mint_webhook_token: true` (decision 418). It shows the returned value once, together with the
+`X-Spielplan-Token` header name and the `/events/jellyfin` path, and keeps it only in component state.
+The plain Save never sends the flag. There is no rotation.
+
+D4: the Sync-now result renders `resolve.unmatched_names`.
+
+**Cost.** An admin who loses the one-time reveal has no in-app way to a second token; the delta poll
+still carries every add, and the status line shows which path is working. Every Connectors-page
+locator in `08-jellyfin.spec.js` and `18-system.spec.js` gets scoped to the Jellyfin card, because
+several cards on one page make Playwright's substring matching ambiguous.
+
+### 456. M5.7's rows are closed by tests of the code that implements them, and its §12 row is recorded UNMEASURED with no exit script
+
+**What the record says.** M5.7 inherits two rows whose other halves are other milestones' code.
+`map-taste-admin-spend-cap-parks-paid-stage` asks for the stage-6 park (M5.5's), the next tick
+(M5.5's) and "an admin-initiated retry that would breach the cap is refused with that reason" - a
+route on M5.6's board (proposal 109, under decision 330).
+`map-taste-admin-cost-estimate-before-enabling`'s second clause is the flywheel's estimates
+recomputing at the configured pass count, which M5.6 renders. Decision 331 has each sub-milestone
+write its own §12 row as it opens, and decisions 371, 378 and 435 gave three of them exit scripts.
+
+**Why it changes.** A row closed by a test of a route this lane does not own is a test of code the
+lane cannot see, and a row left red for want of it would read as M5.7's defect. The owner bounded this
+run's cost, and M5.4 recorded its row without a script.
+
+**The decision.** The admin retry control and its refusal belong to M5.6's board. The spend-cap row is
+closed by M5.5's tests for the stage-6 park, the next tick and `spend.retry_refusal`, plus M5.7's own:
+that the cap route takes effect at once, and that the spend guard names the park and the refusal.
+M5.6 adds its route's test beside them. The flywheel half of the cost-estimate row is M5.6's surface
+and test; M5.7 registers the card half and a test of the default decision 324 took, and leaves a
+comment in the row naming the half M5.6 owes. M5.7 writes its own §12 row and paragraph (decision
+331) and records them in `docs/RELEASE.md` as UNMEASURED with output `none`. No
+`ops/m57_exit_criterion.py` is written. The plan names no option for either; this is the narrowest one
+decision 331 and M5.4's precedent leave standing.
+
+**Cost.** The spend-cap row goes green on M5.5's tests plus M5.7's until M5.6 lands its retry test,
+so for that interval the row's retry clause is held at the domain function and not at a route. The
+fourteen checks of the plan's §7 are held by the suite and by the owner's browser gate, and the
+RELEASE.md row and block for M5.7 read UNMEASURED / none / an unsigned verdict.
+
+---
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

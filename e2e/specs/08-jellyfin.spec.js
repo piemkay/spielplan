@@ -38,6 +38,16 @@ import {
 test.describe.configure({ mode: 'serial' });
 
 /**
+ * §6.6's Jellyfin card, and nothing else on the page. M5.7 put the spend guard, three provider
+ * cards and three source cards beside it, and Playwright matches a role's or a label's name as a
+ * case-insensitive SUBSTRING: `Save` is also "Save Gemini key", and a label is found by any text
+ * containing it. So every Connectors-page locator here is asked of this card, and `Save` is asked
+ * exactly, because "Save library pick" sits inside the card too (decision 455). The mapping table
+ * is its own section and is still read from the page.
+ */
+const jellyfinCard = (page) => page.getByTestId('connector-jellyfin');
+
+/**
  * Press §7.3's sweep on §6.6's connector card and return the result line it printed.
  *
  * One press is no longer certain to be a sweep. §5.3 fires `jellyfin-seen-sync` every fifteen
@@ -52,8 +62,9 @@ test.describe.configure({ mode: 'serial' });
 async function sweepFromTheCard(page, attempts = 3) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     await page.goto('/admin/connectors');
-    await page.getByRole('button', { name: 'Sync now' }).click();
-    const line = page.locator('[data-sync]');
+    const card = jellyfinCard(page);
+    await card.getByRole('button', { name: 'Sync now' }).click();
+    const line = card.locator('[data-sync]');
     await expect(line).toBeVisible();
     if ((await line.getAttribute('data-sync')) === 'done') return line;
   }
@@ -79,12 +90,13 @@ test.describe('jellyfin', () => {
     await page.goto('/admin/connectors');
     await expect(page.getByRole('heading', { name: 'Connectors' })).toBeVisible();
 
-    await page.getByLabel('SERVER URL').fill(JELLYFIN.url);
-    await page.getByLabel('API KEY').fill(JELLYFIN.apiKey);
-    await page.getByRole('button', { name: 'Save' }).click();
+    const card = jellyfinCard(page);
+    await card.getByLabel('SERVER URL').fill(JELLYFIN.url);
+    await card.getByLabel('API KEY').fill(JELLYFIN.apiKey);
+    await card.getByRole('button', { name: 'Save', exact: true }).click();
 
-    await page.getByRole('button', { name: 'Test connection' }).click();
-    const probe = page.locator('[data-probe]');
+    await card.getByRole('button', { name: 'Test connection' }).click();
+    const probe = card.locator('[data-probe]');
     await expect(probe).toHaveAttribute('data-probe', 'ok');
     await expect(probe).toContainText('Fake Jellyfin');
   });
@@ -93,8 +105,8 @@ test.describe('jellyfin', () => {
     // §14.3: the key is admin-equivalent on the whole media server, so the form shows a mask
     // and the page never receives the value.
     await page.reload();
-    await expect(page.getByLabel('API KEY')).toHaveAttribute('placeholder', /stored/);
-    await expect(page.getByLabel('API KEY')).toHaveValue('');
+    await expect(jellyfinCard(page).getByLabel('API KEY')).toHaveAttribute('placeholder', /stored/);
+    await expect(jellyfinCard(page).getByLabel('API KEY')).toHaveValue('');
     expect(await page.content()).not.toContain(JELLYFIN.apiKey);
   });
 

@@ -24,7 +24,7 @@ from decimal import Decimal
 import pytest
 
 from spielplan.acquire import pipeline
-from spielplan.flywheel import store
+from spielplan.flywheel import batch, store
 from spielplan.llm import client, pricing, spend
 from tests.test_acquire_pipeline import SHIPPED, STANDS_DOWN, _refuse_to_crawl, _stands_down
 from tests.test_acquisition_board import _bootstrap
@@ -216,6 +216,34 @@ async def test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with(db
 
     assert refused.status_code == 409
     assert refused.json()["detail"] == spend.NO_CAP_REASON
+    assert await db.fetchval("SELECT count(*) FROM flywheel_batch") == 0
+
+
+async def test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch(db, secrets_key, app):
+    """What the surface asks while no provider is ticked - `providers=` empty, its default on an
+    install whose stored plan names none. Decision 442 refuses a batch that names no provider, and
+    the sentence is the picker's: `_batched`'s is for a launched task whose payload does not read,
+    and it told an operator who had launched nothing to launch "it" again. Decision 441's order
+    stands - with no cap the no-cap sentence answers first - and Launch refuses with the same
+    sentence inside its transaction, writing nothing."""
+    admin, _member = await _bootstrap(app)
+    queued = await _install(db)
+
+    uncapped = await _quote(admin, titles=2, providers="", passes=1)
+    assert (uncapped["launchable"], uncapped["reason"]) == (False, spend.NO_CAP_REASON)
+
+    await _cap(db, BIG_CAP)
+    quoted = await _quote(admin, titles=2, providers="", passes=1)
+    assert quoted["launchable"] is False
+    assert "launched in" not in quoted["reason"], quoted["reason"]
+    assert quoted["reason"] == batch.NO_PROVIDER
+    assert (quoted["providers"], quoted["per_title_usd"], quoted["reserved_usd"]) == ([], None, None)
+
+    launched = await admin.post("/api/admin/flywheel/launch",
+                                json={"item_ids": [queued[A]], "providers": [], "passes": 1})
+    assert launched.status_code == 409
+    assert launched.json()["detail"] == quoted["reason"]
+    assert await db.fetchval("SELECT status FROM flywheel_item WHERE id = $1", queued[A]) == "queued"
     assert await db.fetchval("SELECT count(*) FROM flywheel_batch") == 0
 
 

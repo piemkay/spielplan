@@ -177,19 +177,23 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
     body = await _read(await _admin(app))
     after = datetime.now(UTC)
 
-    assert set(body) == {"providers", "settings", "meter", "estimate", "batch"}
+    # `projected` and each card's `models` and `price_basis` are M5.7's additions (decisions 343,
+    # 451); every key M5.5 shipped is still here and still spelled as it was.
+    assert set(body) == {"providers", "settings", "meter", "estimate", "projected", "batch"}
     assert [card["name"] for card in body["providers"]] == list(client.PROVIDERS)
     for name, card in _cards(body).items():
         model = pricing.DEFAULT_MODELS[name]
-        assert card == {
+        assert {key: value for key, value in card.items() if key not in ("models", "price_basis")} == {
             "name": name, "configured": False, "has_api_key": False, "secrets_unreadable": False,
             "model": model, "structured_output": ADAPTERS[name].STRUCTURED_OUTPUT,
             "price": _shape(pricing.price_for(name, model)),
         }, name
+        assert card["models"] == sorted(pricing.PRICING[name]), name
         assert card["price"] != "unknown", f"{name}'s default model must be one the table prices"
 
     assert body["settings"] == {
-        "extraction_provider": None, "parallel": None, "passes": None, "cap_usd": None,
+        "extraction_provider": None, "parallel": None, "parallel_providers": None, "passes": None,
+        "cap_usd": None,
     }
     meter = body["meter"]
     assert (meter["spent_usd"], meter["cap_usd"], meter["remaining_usd"]) == ("0", None, None)
@@ -228,14 +232,20 @@ async def test_a_configured_install_reads_back_its_settings_its_prices_and_the_e
     assert cards["openai"]["configured"] is False
 
     assert body["settings"] == {
-        "extraction_provider": "gemini", "parallel": False, "passes": 2, "cap_usd": 25,
+        "extraction_provider": "gemini", "parallel": False, "parallel_providers": None, "passes": 2,
+        "cap_usd": 25,
     }
     assert (body["meter"]["cap_usd"], body["meter"]["remaining_usd"]) == ("25", "25")
     expected = pricing.estimate_title(tokens_in=pricing.SPEC_INPUT_TOKENS, prices=[table], passes=2)
-    assert body["estimate"] == {
+    assert {key: value for key, value in body["estimate"].items()
+            if key not in ("output_tokens_assumed", "basis")} == {
         "per_title_usd": str(expected), "input_tokens_assumed": 23_500, "passes": 2,
         "providers": ["gemini"], "reason": None,
     }
+    assert body["estimate"]["output_tokens_assumed"] == pricing.MEAN_OUTPUT_TOKENS == 3_900
+    assert [(b["provider"], b["model"], b["source"]) for b in body["estimate"]["basis"]] == [
+        ("gemini", "gemini-3.7-flash", "table")
+    ]
     # (23,500 x in + 3,900 x out) / 1M per pass, twice: a string of six places, never a float.
     assert Decimal(body["estimate"]["per_title_usd"]) == 2 * (
         Decimal(23_500) * Decimal(str(table.input)) + Decimal(3_900) * Decimal(str(table.output))
@@ -391,18 +401,19 @@ async def test_the_test_button_reaches_the_provider_with_the_key_in_its_header_a
     assert not [line for line in lines if key in line], lines
 
 
-async def test_an_unknown_connector_and_one_with_no_test_yet_are_404_with_the_registrys_reason(
+async def test_an_unknown_connector_and_one_with_no_test_are_404_with_the_registrys_reason(
     secrets_key, db, app
 ):
     """Plan A4's one table refuses by name rather than guessing a probe: a connector the registry
-    does not know, and tmdb, whose test button is M5.7's source card (decision 433)."""
+    does not know, and `llm`, the settings row, which has nothing to test. TMDB was this test's
+    example until M5.7's source cards gave it a button (decision 453)."""
     admin = await _admin(app)
     unknown = await admin.post("/api/admin/connectors/nope/test")
     assert unknown.status_code == 404
     assert unknown.json()["detail"].startswith("no connector named 'nope'"), unknown.text
-    untested = await admin.post("/api/admin/connectors/tmdb/test")
+    untested = await admin.post("/api/admin/connectors/llm/test")
     assert untested.status_code == 404
-    assert untested.json()["detail"] == "connector tmdb has no test in this build"
+    assert untested.json()["detail"] == "connector llm has no test in this build"
 
 
 async def test_a_fault_inside_a_probe_is_a_server_error_and_never_a_404(
@@ -452,13 +463,16 @@ async def test_the_jellyfin_test_button_is_still_its_own_route_which_keeps_the_v
     assert (stored.server_version, stored.server_supported) == ("10.8.13", False)
 
 
-def test_the_llm_router_declares_one_read_and_one_dispatch_and_no_write():
-    """Decision 433 taken exactly: the keys, models, cap and mode are written by M5.7's routes
-    through `registry.save_connector`, because M5.7's row orders that write (the estimate before
-    the setting is persisted). A PUT added here would be a write path M5.7 rebuilds."""
+def test_the_llm_router_declares_the_read_the_gated_write_the_cap_the_keys_and_the_dispatch():
+    """Decision 433's two routes, and the five M5.7's cards brought (decisions 450, 452): the preview
+    and the confirm that must carry its figure, the cap written in place, and the credentials read and
+    write that never change an estimate. Exactly these: a second route that wrote a model or a price
+    would be a way round the figure decision 450 makes the write carry."""
     declared = {
         (method, route.path) for route in llm_api.router.routes for method in route.methods
     }
     assert declared == {
-        ("GET", "/api/admin/llm"), ("POST", "/api/admin/connectors/{name}/test"),
+        ("GET", "/api/admin/llm"), ("POST", "/api/admin/llm/preview"), ("PUT", "/api/admin/llm"),
+        ("PUT", "/api/admin/llm/cap"), ("GET", "/api/admin/connectors"),
+        ("PUT", "/api/admin/connectors/{name}"), ("POST", "/api/admin/connectors/{name}/test"),
     }

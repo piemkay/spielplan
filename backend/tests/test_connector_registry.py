@@ -961,7 +961,7 @@ async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_te
     assert await registry.test_connector(conn, "tmdb") == {"ok": True, "detail": "stub"}
     assert called == [conn]
 
-    for untested in ("omdb", "jellyfin", "llm"):
+    for untested in ("jellyfin", "llm"):
         with pytest.raises(LookupError, match=f"connector {untested} has no test in this build"):
             await registry.test_connector(conn, untested)
 
@@ -984,3 +984,52 @@ async def test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usab
     assert await registry.test_connector(db, "gemini") == {
         "ok": False, "error": registry.SECRETS_UNREADABLE_REASON,
     }
+
+
+# --- unset: an explicit null, for declared settings only (decision 450) --------------------------
+
+
+async def test_an_unset_removes_a_declared_setting_under_the_row_lock_and_nothing_else(db, secrets_key):
+    """Decision 450's "an explicit null means unset": the spend guard's confirm returns a model to its
+    default, a price override to the table and the extraction assignment to nobody, and the partial
+    merge -- where None means KEEP -- could say none of those. `unset` names the settings to remove,
+    in the same locked read-modify-write as the fields beside it; everything it does not name, the
+    sealed key included, is carried forward untouched, and naming a setting that is not stored is
+    not an error."""
+    await registry.save_connector(db, "llm", extraction_provider="gemini", passes=2, cap_usd=25)
+    await registry.save_connector(db, "gemini", api_key="KEY-NOT-REAL", model="gemini-3.6-flash",
+                                  price_input=1, price_output=4)
+
+    state = await registry.save_connector(db, "llm", unset=("extraction_provider",), parallel=False)
+    assert state.config == {"passes": 2, "cap_usd": 25, "parallel": False}
+    assert (await registry.load_connector(db, "llm")).config == state.config
+
+    await registry.save_connector(db, "gemini", unset=("model", "price_input", "price_output"))
+    gemini = await registry.load_connector(db, "gemini")
+    assert (gemini.config, gemini.secrets) == ({}, {"api_key": "KEY-NOT-REAL"})
+
+    await registry.save_connector(db, "gemini", unset=("model",))
+    assert (await registry.load_connector(db, "gemini")).config == {}
+
+
+async def test_an_unset_refuses_a_secret_an_undeclared_name_a_contradiction_and_jellyfin(db, secrets_key):
+    """`unset` is for declared SETTINGS alone. A key is removed by nobody: the card's empty field keeps
+    it, and a route that could clear it would silently disconnect a provider mid-acquisition. A name
+    the connector does not declare is refused as a misspelt field is. A field both set and unset in
+    one call is two answers to one question. And Jellyfin's merge has rules of its own -- decision
+    364's library pick above all, where an absent pick and an empty one mean different things -- so
+    the generic unset does not reach it, beside the mint that already does not."""
+    await registry.save_connector(db, "gemini", api_key="KEY-NOT-REAL", model="gemini-3.6-flash")
+    before = await db.fetch("SELECT * FROM connector_config ORDER BY name")
+
+    with pytest.raises(ValueError, match="api_key"):
+        await registry.save_connector(db, "gemini", unset=("api_key",))
+    with pytest.raises(ValueError, match="modle"):
+        await registry.save_connector(db, "gemini", unset=("modle",))
+    with pytest.raises(ValueError, match="model"):
+        await registry.save_connector(db, "gemini", model="gemini-3.7-flash", unset=("model",))
+    with pytest.raises(ValueError, match="jellyfin"):
+        await registry.save_connector(db, "jellyfin", unset=("library_ids",))
+    with pytest.raises(ValueError, match="decision 416"):
+        await registry.save_connector(db, "jellyfin", mint_webhook_token=True)
+    assert await db.fetch("SELECT * FROM connector_config ORDER BY name") == before

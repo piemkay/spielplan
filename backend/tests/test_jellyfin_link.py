@@ -75,10 +75,20 @@ async def test_the_connector_starts_unconfigured_and_says_so(admin):
     # And M5.2 adds §7.2's token as a third boolean, for `has_api_key`'s reason (decision 332,
     # §14.3): an install that has minted none holds `False` here, and the value itself appears in
     # exactly one response in this app, which is not this one.
+    #
+    # And M5.7 adds §6.6's webhook status as facts (decision 455), whose unconfigured reading is
+    # nulls and a zero: nothing has arrived and no poll has run, which is an answer and not a 500.
     assert body == {"url": "", "has_api_key": False, "configured": False,
                     "library_ids": [], "linked_users": 0, "secrets_unreadable": False,
                     "has_webhook_token": False,
-                    "server_version": "", "server_supported": None}
+                    "server_version": "", "server_supported": None,
+                    "trigger": {
+                        "webhook": {"last_item_added_at": None, "last_delivery_at": None,
+                                    "deliveries_7d": 0, "last_refusal": None},
+                        "delta_poll": {"watermark": None, "last_run_at": None,
+                                       "last_run_ok": None, "last_ok_at": None,
+                                       "last_filed": None},
+                    }}
 
 
 async def test_the_api_key_never_comes_back_out(admin):

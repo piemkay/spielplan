@@ -3246,13 +3246,53 @@ why = "Decision 164 takes member creation out of §3.1's sequence and §3.1 puts
 tests = ["e2e/specs/17-users.spec.js::accounts are made here and nowhere else, and there are two roles", "backend/tests/test_api_gating.py::test_the_spa_fallback_does_not_answer_for_the_api_namespace"]
 
 [[requirement]]
+# Two milestones' code under one row (decision 456). The card half - the preview that writes
+# nothing, the confirm that must carry the figure it was shown (decision 450), and decision 324's
+# default of parallel off at one pass - is M5.7's, and M5.7 registers its tests here. The second
+# clause, the flywheel's queued estimates recomputing at the configured pass count, is M5.6's
+# surface on the Data page: M5.6 adds that test beside these, and until it does the clause is
+# owed by M5.6 rather than by this lane.
 id = "map-taste-admin-cost-estimate-before-enabling"
 spec = "§6.6 Connectors spend guard + §8.4"
 milestone = "M5.7"
 kind = "integration"
 what = "Enabling an extraction provider or parallel mode returns its per-title cost estimate and the projected monthly figure against the remaining cap before the setting is persisted, and the flywheel's queued cost estimates recompute at the configured pass count once it changes."
-why = "§6.6 spend guard: 'per-title cost estimate before enabling'. Whether parallel mode defaults on or off is still an open question, so no test may assert the default."
-tests = []
+why = "§6.6 spend guard: 'per-title cost estimate before enabling'. Decision 324 settles the default: parallel mode is off and extraction runs one pass on a fresh install, so a test asserts it."
+# The card half, as an ordering asserted on the rows (decision 450): a preview of every change the
+# guard can propose leaves `connector_config` byte-identical, no row added; a confirm without its
+# figure is 422, with a wrong or a stale one 409 carrying the fresh preview and nothing stored, and
+# with the right one stores exactly the change and bills nothing; a provider with no usable key is
+# blocked however it would enter the plan; the figure doubles with the passes and quadruples with a
+# second provider at two passes; the projected month is decision 451's count; and decision 324's
+# default -- one provider at one pass, parallel off -- is what a fresh install previews. The
+# flywheel half, its queued estimates recomputing at the configured pass count, is M5.6's surface
+# and M5.6's test to add beside these (decision 456).
+tests = [
+    "backend/tests/test_spend_guard.py::test_a_preview_of_any_change_writes_nothing",
+    "backend/tests/test_spend_guard.py::test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409_storing_nothing",
+    "backend/tests/test_spend_guard.py::test_a_confirmed_change_is_stored_exactly_and_bills_nothing",
+    "backend/tests/test_spend_guard.py::test_a_figure_gone_stale_between_preview_and_confirm_is_refused_with_the_new_one",
+    "backend/tests/test_spend_guard.py::test_a_provider_without_a_usable_key_is_blocked_and_its_confirm_refused",
+    "backend/tests/test_spend_guard.py::test_an_unreadable_key_is_blocked_too",
+    "backend/tests/test_spend_guard.py::test_the_figure_scales_with_the_passes_and_the_providers",
+    "backend/tests/test_spend_guard.py::test_a_fresh_install_previews_decision_324s_default_of_one_provider_at_one_pass",
+    "backend/tests/test_spend_guard.py::test_the_projection_counts_what_this_install_filed_in_the_last_thirty_days",
+    # "However it would enter the plan" includes the one other route that writes `connector_config`:
+    # the setup wizard's seed stores a config whole and stays mounted after first boot, so it refuses
+    # the spend settings and the three providers (decision 450: a property of the API, a hand-typed
+    # request included). [M5.7 review cycle 1, M57-THESIS-01]
+    "backend/tests/test_spend_guard.py::test_the_setup_route_writes_no_spend_setting_and_no_provider",
+    # The same order in a browser, on both projects: the panel shows the per-title figure, the
+    # projected month and what is left of the cap while no PUT has left the page, Cancel sends
+    # nothing, and the one PUT a Confirm sends carries the figure the panel rendered (decision
+    # 450). The store that keeps that order on the page is asserted beside it in vitest.
+    "e2e/specs/21-connectors.spec.js::enabling extraction shows the estimate before anything is saved",
+    "frontend/src/lib/spendGuard.svelte.test.js::a proposal asks the preview and writes nothing",
+    "frontend/src/lib/spendGuard.svelte.test.js::a confirm carries exactly the change previewed and the figure the preview showed",
+    "frontend/src/lib/spendGuard.svelte.test.js::an edit after the preview makes the old figure unconfirmable at once",
+    "frontend/src/lib/spendGuard.svelte.test.js::cancel makes no request at all",
+    "frontend/src/lib/components/llm-cards.test.js::shows the three figures before anything is stored, and confirms the one it showed",
+]
 
 [[requirement]]
 # Left red and left to M5.6, which builds the three editors. Its second clause -
@@ -3366,7 +3406,8 @@ why = "§12's exit criterion runs at roughly a dollar a month, so the cap is not
 # launch through Postgres, marking exactly the selection and making exactly those titles due with
 # the batch plan, every refusal - over the cap, no cap, an unpriced model, a keyless provider, a
 # closed row, an unknown id, an M6 row, a title in flight - writing nothing in any of four tables,
-# and exactly the room left launching; and the quote and the launch over the routes the surface asks.
+# and exactly the room left launching; and the quote and the launch over the routes the surface asks,
+# a batch naming no provider refused there as the picker's fault and never as a relaunch.
 tests = [
     "backend/tests/test_flywheel_batch.py::test_five_titles_at_one_pass_total_exactly_five_per_title_estimates",
     "backend/tests/test_flywheel_batch.py::test_a_second_pass_doubles_every_figure",
@@ -3388,8 +3429,9 @@ tests = [
     "backend/tests/test_flywheel_api.py::test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap",
     "backend/tests/test_flywheel_api.py::test_launch_answers_200_with_the_batch_and_409_with_the_domains_sentence",
     "backend/tests/test_flywheel_api.py::test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with",
-    # The surface: two queued rows selected against the real quote route, Launch dark with the
-    # no-cap sentence as visible text, and the row checkboxes and Launch at 48 px on the phone; beside
+    "backend/tests/test_flywheel_api.py::test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch",
+    # The surface: two queued rows selected against the real quote route, Launch dark with that
+    # route's own refusal as visible text, and the row checkboxes and Launch at 48 px on the phone; beside
     # it (decision 226), a quote for a selection no longer on screen never arming the button.
     "e2e/specs/20-admin-data.spec.js::Launch is disabled with its reason and the selection controls meet the touch floor",
     "frontend/src/lib/flywheel.test.js::never arms Launch with a quote for a selection that is no longer on screen",
@@ -3442,7 +3484,142 @@ milestone = "M5.7"
 kind = "integration"
 what = "With the monthly meter at the cap, an acquisition job reaching stage 6 parks with reason 'over spend cap' instead of calling a provider or failing silently, never auto-retries, and an admin-initiated retry that would breach the cap is refused with that reason; the meter's spend includes provider thinking tokens."
 why = "§8: paid stages never auto-retry past the cap; §9: Gemini bills thinking tokens as output, so counting visible JSON understates cost ~5×."
-tests = []
+# Decision 456. The stage-6 park, the next tick and the refusal an admin retry is given are M5.5's
+# code and M5.5's tests (`spend.retry_refusal` is the reason the retry route will show), and the
+# meter charging Gemini's thought tokens is M5.5's arithmetic; M5.7's own is the cap written in
+# place and in force at once, with the preview's meter at nothing left and the gate's reason opening
+# `over spend cap`. The retry route itself is M5.6's board (proposal 109 under decision 330), and
+# its test joins these when it lands.
+tests = [
+    "backend/tests/test_llm_stage.py::test_at_the_cap_stage_six_parks_over_spend_cap_and_asks_no_provider",
+    "backend/tests/test_llm_stage.py::test_the_next_tick_leases_nothing_for_a_title_parked_over_the_cap",
+    "backend/tests/test_llm_stage.py::test_an_admin_retry_over_the_cap_is_refused_with_the_boards_reason",
+    "backend/tests/test_llm_spend.py::test_a_gemini_call_is_charged_for_the_thinking_tokens_it_was_billed_for",
+    "backend/tests/test_spend_guard.py::test_the_cap_takes_effect_at_once_and_at_the_cap_the_park_names_it",
+    # And on the card, both projects: the cap written in place is the figure the meter reads
+    # against at once, the thinking-token note is on every reading, and a meter at the cap says
+    # `over spend cap` and names the refusal an admin retry meets (decision 452).
+    "e2e/specs/21-connectors.spec.js::the cap is edited in place and the meter reads against it",
+    "frontend/src/lib/components/llm-cards.test.js::says what happens at the cap, and what an admin retry meets",
+    # And before the meter reaches it: the gate parks a title once what is left cannot hold its
+    # reservation, which is how a capped month normally ends, so the card says `over spend cap` and
+    # names the refusal in that band too, and not one micro-dollar early. [M5.7 review cycle 1,
+    # M57-THESIS-02]
+    "frontend/src/lib/components/llm-cards.test.js::says over spend cap once what is left cannot hold one more title",
+    "frontend/src/lib/components/llm-cards.test.js::keeps room for exactly one more title under the cap, and an unpriced plan too",
+]
+
+[[requirement]]
+# M5.7's three new rows sit beside the two the roadmap filed against it - the estimate before
+# enabling and the park at the cap, directly above - rather than beside the other `platform-` and
+# `map-taste-` ids, for M5.5's reason one milestone on: the five are one surface's argument read
+# from five sides, the number that comes before the setting, the cap that stops the bill, the cards
+# that hold the keys, the System card that says how much work is waiting, and the price every
+# estimate names. They OPEN with NO `tests` key, which is M4.10's, M4.16's, M5.4's and M5.5's
+# opening: THE RED LIST IS THE TEST PLAN, and each list is filled by the stage that writes the code
+# its row describes -- never by a waiver, never by renaming a registered test and never by lowering
+# `current_milestone`, which stays "M5.1" while M5.7 builds. [decisions 339, 450-456;
+# M5.7-plan.md §6]
+id = "map-taste-admin-provider-cards-say-what-they-are"
+spec = "§6.6 Connectors (\"per-provider key + model pick … Provider cards caption their structured-output mode\")"
+milestone = "M5.7"
+kind = "e2e"
+what = "Each of the three provider cards carries a write-only key field that never renders a stored key, a model pick, a test button, and a caption naming its structured-output mode; an un-configured provider is visibly un-configured rather than indistinguishable from a configured one; and saving with an empty key field keeps the stored key rather than clearing it."
+why = "§6.6 names the cards and the captions, and the wizard already tells the operator to configure LLM providers in Admin at M5 while nothing there exists. The empty-field-means-keep idiom is the Jellyfin card's, and it is the reason the page can only ever tell you whether there is a key - a card that cleared the key on an empty save would silently disconnect a provider mid-acquisition."
+# Both projects. The three cards carry their captions, key fields, model picks and Test buttons,
+# each says whether it is configured as the read does; the Gemini card takes a fixture key and
+# hands nothing back - the field empties, the placeholder says a key is stored, and neither the
+# page nor any /api/admin answer carries the value - and an empty save keeps it (decision 452).
+# The card and the store that empties its field are asserted beside it in vitest, never alone
+# (decision 226).
+tests = [
+    "e2e/specs/21-connectors.spec.js::each provider card says what it is and never shows a stored key",
+    "backend/tests/test_spend_guard.py::test_an_empty_key_field_keeps_the_stored_key_and_no_answer_carries_one",
+    # A field of whitespace is an empty one and keeps the key, whitespace around a key is trimmed, and
+    # a key no request can carry is a 422 that never quotes it -- on all six keyed connectors, at the
+    # route and in the store. [M5.7 review cycle 1, M57-KEYS-C1-02]
+    "backend/tests/test_spend_guard.py::test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_keeps_the_stored_one",
+    "frontend/src/lib/spendGuard.svelte.test.js::sends a key trimmed, and nothing for a field of whitespace (M57-KEYS-C1-02)",
+    "backend/tests/test_llm_api.py::test_no_stored_provider_key_is_ever_in_the_read",
+    "frontend/src/lib/components/llm-cards.test.js::never renders a stored key, masks it, and empties the field after a save",
+    "frontend/src/lib/components/llm-cards.test.js::marks an un-configured provider as such and says which half is missing",
+    "frontend/src/lib/components/llm-cards.test.js::captions each card with its adapter's structured-output mode",
+    "frontend/src/lib/spendGuard.svelte.test.js::empties the key field it was given, whether the save landed or not",
+    # A key the server holds and cannot open is un-configured as "restore or retype", never as "no
+    # key is stored" above the alert that says it is. [M5.7 review cycle 1, M57-KEYS-C1-03]
+    "frontend/src/lib/components/llm-cards.test.js::says a key that will not open is a restore or a retype, never that no key is stored",
+]
+
+[[requirement]]
+id = "map-taste-admin-the-system-card-says-how-much-work-is-waiting"
+spec = "§6.6 System (\"job health, queue depth, last syncs, backup status, logs\")"
+milestone = "M5.7"
+kind = "e2e"
+what = "The System card reports the acquisition queue's depth by state, each connector's last successful sync, and the application's recent log lines, alongside the three facts decision 182 shipped; it remains read-only, with no control that starts a job, drains the queue or rotates a key."
+why = "Decision 182 shipped three of §6.6's five and left queue depth, last syncs and logs to M5, with an e2e assertion that the route answers exactly three keys so the absence could not drift into a claim. §2 makes rotation an explicit operator action and the dump the worker's, so this card describes and never starts."
+# The route's six keys and the card's six sections in a browser, the level filter the one control
+# inside them and a filter that asks the server nothing (decision 454) - desktop only, for
+# 18-system's own reason. The payload's rules are the backend's, and the rendering vitest's.
+tests = [
+    "e2e/specs/18-system.spec.js::the System tab is a link to a card of six facts and no control that writes",
+    "e2e/specs/18-system.spec.js::the queue depth is reported by state and kind",
+    "e2e/specs/18-system.spec.js::the last successful sync of each connector is listed",
+    "e2e/specs/18-system.spec.js::the recent log lines are listed and filter by level",
+    "backend/tests/test_admin_system.py::test_the_card_reports_six_facts_and_no_more",
+    "backend/tests/test_admin_system.py::test_queue_depth_is_reported_by_state_and_by_kind",
+    "backend/tests/test_admin_system.py::test_a_last_sync_is_the_newest_successful_run_not_the_newest_run",
+    "backend/tests/test_admin_system.py::test_every_sync_job_is_a_job_the_card_already_reports",
+    # "Last successful sync" is the last time the server ANSWERED, fired through the worker's own job
+    # bodies: an unconfigured connector and an unreachable one leave every connector at "never", a
+    # reachable one does not, and a fortnight's outage does not age the last answer out.
+    # [M5.7 review cycle 1, M57-JFSYS-01]
+    "backend/tests/test_admin_system.py::test_a_sync_job_that_asked_no_server_is_no_last_sync",
+    "backend/tests/test_admin_system.py::test_a_sync_job_that_could_not_reach_its_server_is_no_last_sync",
+    "backend/tests/test_admin_system.py::test_a_sync_job_that_reached_its_server_is_a_last_sync",
+    "backend/tests/test_admin_system.py::test_a_fortnight_offline_does_not_turn_the_last_sync_into_never",
+    "backend/tests/test_admin_system.py::test_a_log_line_loses_every_credential_a_connector_could_have_written_into_it",
+    # The ring's redaction, from the key a connector really sends: a Jellyfin key saved padded is
+    # stored trimmed, and one stored padded before that is in no route's answer and no ring line.
+    # [M5.7 review cycle 1, M57-KEYS-C1-01]
+    "backend/tests/test_admin_system.py::test_a_jellyfin_key_pasted_with_a_space_is_stored_trimmed_and_printed_nowhere",
+    "backend/tests/test_admin_system.py::test_the_ring_hangs_off_the_spielplan_logger_and_no_other",
+    "backend/tests/test_admin_system.py::test_the_recent_log_lines_are_the_web_process_own_and_carry_no_key",
+    "backend/tests/test_admin_system.py::test_the_ring_holds_two_hundred_lines_however_many_are_written",
+    "backend/tests/test_admin_system.py::test_the_system_card_declares_a_read_and_nothing_else",
+    "backend/tests/test_acquisition_board.py::test_queue_depth_is_a_domain_function_the_system_card_reads",
+    "frontend/src/routes/admin/system/system-page.test.js::renders a section for each of the six keys the route answers",
+    "frontend/src/routes/admin/system/system-page.test.js::narrows the log lines by level and asks the server nothing to do it",
+    "frontend/src/routes/admin/system/system-page.test.js::carries no control that writes: the level filter is the only one",
+]
+
+[[requirement]]
+id = "map-taste-admin-a-cost-estimate-names-the-price-it-used"
+spec = "§6.6 spend guard + §9"
+milestone = "M5.7"
+kind = "integration"
+what = "Every cost estimate the admin surfaces show names the model and the price basis it was computed from, and an estimate for a model with no known price says so rather than printing a number; a price with a known expiry says when it changes."
+why = "§6.6's published baseline (~$0.005-0.01/title/pass on Gemini batch) reproduces only on a model family whose generateContent now answers 404 for new keys, so an estimator seeded from the caption is three to six times low against the current default; and the current default's introductory pricing doubles on a stated date. A prefix match that inherits another model's price is how a cost estimate quietly invents a number."
+# Decision 343's caption, at the price and on the wire: `pricing.price_basis` names the source, the
+# `valid_until` and the table's price after it (gemini-3.7-flash's doubling on 2027-01-01), an
+# override as an override and half of one as the table's, and no basis at all for a model nobody
+# priced; the read, the cards and the preview carry that basis beside every figure; and an unknown
+# model is "unknown" on its card, in the estimate and in the projected month -- M5.5's read test of
+# the same spelling stays registered here.
+tests = [
+    "backend/tests/test_llm_pricing.py::test_a_table_basis_names_the_price_its_end_and_the_price_after_it",
+    "backend/tests/test_llm_pricing.py::test_an_override_basis_says_override_and_a_half_one_is_the_tables",
+    "backend/tests/test_llm_pricing.py::test_an_unpriced_model_has_no_basis_until_an_override_gives_it_one",
+    "backend/tests/test_spend_guard.py::test_every_estimate_names_its_model_and_its_price_basis",
+    "backend/tests/test_spend_guard.py::test_an_unknown_model_estimates_to_unknown_and_prints_no_figure_for_it",
+    "backend/tests/test_llm_api.py::test_an_unknown_models_price_and_the_estimate_over_it_read_unknown",
+    # On the card and in the panel, both projects: the Gemini basis names its model, its rates, the
+    # shipped table, and the day gemini-3.7-flash's price ends with what it becomes; an unpriced
+    # model typed into the pick previews "unknown", names the model nobody priced, and prints no
+    # dollar figure for it (decision 343).
+    "e2e/specs/21-connectors.spec.js::the estimate names the model and the price it used",
+    "frontend/src/lib/spendGuard.svelte.test.js::names the model, the rates, their source and the date the price changes (decision 343)",
+    "frontend/src/lib/components/llm-cards.test.js::prints unknown and its reason for an unpriced plan, never a figure",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-new-title-trigger-one-job-per-title"
@@ -3633,6 +3810,10 @@ tests = [
     "backend/tests/test_jellyfin_client.py::test_an_item_answers_only_under_a_library_that_holds_it",
     "backend/tests/test_jellyfin_client.py::test_a_row_no_listed_library_can_place_is_a_failed_read_and_never_an_absence",
     "backend/tests/test_jellyfin_intake.py::test_a_403_on_one_key_is_that_keys_and_the_sweep_goes_on",
+    # §6.6's library pick in a browser, both projects: the card lists the server's libraries, sends
+    # `library_ids` alone from its own button once the selection changed, and the pick survives a
+    # reload (decision 455). The sweep and the poll honouring it are the rows above.
+    "e2e/specs/21-connectors.spec.js::the jellyfin card picks libraries and keeps the pick",
 ]
 # Decision 364's last sentence - a membership read that FAILS leaves the row pending - had one
 # test, and it used a transport where nothing answers at all. A 4xx the one id in `ids=` provoked
@@ -3746,6 +3927,15 @@ tests = [
     "backend/tests/test_jellyfin_webhook.py::test_a_title_the_plugin_writes_into_the_json_keeps_its_add_and_its_name",
     "backend/tests/test_jellyfin_webhook.py::test_a_two_brace_field_is_encoded_the_way_the_plugins_handlebars_encodes_it",
     "backend/tests/test_jellyfin_webhook.py::test_the_published_template_names_the_item_types_to_untick_and_not_only_those_to_tick",
+    # The token an operator pastes is shown once, on the press that asked for it, and never again
+    # on a reload; and the card's status names the ItemAdded that token then delivered, for an
+    # item the double does not hold, so nothing is acquired mid-suite (decision 455).
+    "e2e/specs/21-connectors.spec.js::the jellyfin card says when the last ItemAdded arrived",
+    # The press is offered only where `save_jellyfin` mints -- a configured connector -- and a `null`
+    # answer reads "a token already existed" only when the server then says one does; otherwise it
+    # says nothing was minted and the press stays. [M5.7 review cycle 1, M57-JFSYS-02]
+    "frontend/src/routes/admin/connectors/connectors-page.test.js::offers no Generate until the connector is configured, the only state it mints in",
+    "frontend/src/routes/admin/connectors/connectors-page.test.js::never says a token already existed unless the server says one does",
 ]
 # THE CLAUSE WIDENED IN REVIEW CYCLE 1, TWICE, BECAUSE BOTH HALVES OF IT WERE TRUE ONLY OF WHAT
 # THE SUITE HAPPENED TO SEND. "A wrong token is 401" held for tokens spelled in ASCII: a header
@@ -5766,10 +5956,15 @@ id = "platform-system-card-reports-backups-and-custody"
 spec = "§6.6 System; §2; decision 182"
 milestone = "M4.7"
 kind = "e2e"
-what = "The admin System card reads back three facts and no more: the newest successful backup with its age, the SECRETS_KEY fingerprint with the active key_id, and the newest job_run row per job — and it reports custody as unreadable while any sealed row is, including after the Connectors card's repair has retired the key the rest of them name. Both halves of that repair are rendered: this card warns that a sealed row will not open, and the Connectors card, where the repair is offered, says what pressing Save costs the secrets it is not about."
+what = "The admin System card reads back decision 182's three facts — the newest successful backup with its age, the SECRETS_KEY fingerprint with the active key_id, and the newest job_run row per job — plus decision 454's queue depth by state, each connector's last successful sync and the web process's recent log lines, and no more, with no control on it that writes; it reports custody as unreadable while any sealed row is, including after the Connectors card's repair has retired the key the rest of them name. Both halves of that repair are rendered: this card warns that a sealed row will not open, and the Connectors card, where the repair is offered, says what pressing Save costs the secrets it is not about."
 why = "Decision 182 keeps the card minimal while §6.6's full contents wait for M5; without a surface, the job_run table this milestone adds has no reader and the operator still cannot answer \"did last night's dump happen\"."
 tests = [
-    "e2e/specs/18-system.spec.js::the System tab is a link to a card of exactly three facts",
+    "e2e/specs/18-system.spec.js::the System tab is a link to a card of six facts and no control that writes",
+    # Decision 454's three, which this row's `what` names beside decision 182's: the FACTS array
+    # and this row moved in the same change, as plan E3 requires of the budgeted red diff.
+    "e2e/specs/18-system.spec.js::the queue depth is reported by state and kind",
+    "e2e/specs/18-system.spec.js::the last successful sync of each connector is listed",
+    "e2e/specs/18-system.spec.js::the recent log lines are listed and filter by level",
     "e2e/specs/18-system.spec.js::custody is reported as a fingerprint and a key_id, never as the key",
     "e2e/specs/18-system.spec.js::the backup fact names the newest successful dump, and warns when there is none",
     "e2e/specs/18-system.spec.js::every job the worker has recorded is listed with its outcome",
@@ -5789,7 +5984,7 @@ tests = [
     # [M4.7 dd03, §14.3]
     "e2e/specs/18-system.spec.js::the Connectors card says what its own custody repair costs",
     "e2e/specs/05-milestones.spec.js::the admin Data, Connectors, Users and System tabs are all real",
-    "backend/tests/test_admin_system.py::test_the_card_reports_exactly_three_facts_and_no_more",
+    "backend/tests/test_admin_system.py::test_the_card_reports_six_facts_and_no_more",
     "backend/tests/test_admin_system.py::test_the_fingerprint_is_short_stable_and_not_the_key",
     "backend/tests/test_admin_system.py::test_two_keys_have_two_fingerprints",
     "backend/tests/test_admin_system.py::test_the_card_never_hands_the_secrets_key_to_the_browser",
@@ -9017,6 +9212,15 @@ why = "§6 preamble is normative and design.css:73 sets --touch: 48px, while the
 # sweep COULD reach - they are unconditional markup on a page `19-phone-shell.spec.js` already
 # opens on the phone project - so the source rule is the weaker holder here and is recorded as
 # such rather than as the same argument the other nine carry. [M4.16 cycle 2, M416-C2-ATTR-03]
+#
+# M5.7 REVIEW CYCLE 1 registers the sweep of section 6.6's Connectors and System pages here, for
+# the reason 13-rank's sits here: both skip themselves off the phone project, and
+# `ops/coverage_gate.py` reads a `skipped` result as evidence that did not run only for ids a row
+# at or before `current_milestone` names. Under an M5.7 row the gate would not read it until the
+# wave raises the scalar; left out of the map, as it shipped, a mistyped project name in its skip
+# line would skip it on both projects with phase 2 green and plan section 7 check 14 -- every
+# control on both pages at least 48 px on the phone -- resting on nothing while every row read
+# covered. The guard beside it holds the class, not the instance. [M5.7 cycle 1, M57-C1-E2E-01]
 tests = [
     "e2e/specs/06-responsive.spec.js::touch targets meet the 48 px rule on a phone",
     "e2e/specs/19-phone-shell.spec.js::the account menu's entries and the overlay exits meet the touch floor",
@@ -9026,6 +9230,8 @@ tests = [
     "backend/tests/test_static_contracts.py::test_the_title_panels_heading_clears_its_close_control",
     "backend/tests/test_harness_contracts.py::test_the_phone_project_selects_the_specs_the_coverage_map_believes_it_runs",
     "backend/tests/test_harness_contracts.py::test_the_phone_spec_names_the_specs_that_run_after_its_desktop_pass",
+    "e2e/specs/21-connectors.spec.js::every control on both admin pages is at least 48 px on the phone",
+    "backend/tests/test_spec_coverage.py::test_a_test_that_runs_on_one_project_is_named_where_the_release_gate_reads_it",
 ]
 
 [[requirement]]

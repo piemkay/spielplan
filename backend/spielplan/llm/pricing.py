@@ -261,6 +261,52 @@ def effective_price(
     return price_for(provider, model, on=on)
 
 
+@dataclass(frozen=True)
+class PriceBasis:
+    """What an estimate was priced at, as §6.6's caption has to name it (decision 343, M5.7).
+
+    `source` is `BASIS_OVERRIDE` when the admin's whole override priced it and `BASIS_TABLE` when
+    this table did. `then` is the table's price in effect on `price.valid_until` -- the figure a
+    dated price turns into -- and None for an override, for a price with no announced end, and for
+    one that ends with nothing after it (which `price_for` answers None for from that day).
+    """
+
+    provider: str
+    model: str
+    source: str
+    price: ModelPrice
+    then: ModelPrice | None
+
+
+BASIS_TABLE = "table"
+BASIS_OVERRIDE = "override"
+
+
+def price_basis(
+    provider: str,
+    model: str,
+    *,
+    override: Mapping[str, Any] | None = None,
+    on: date | None = None,
+) -> PriceBasis | None:
+    """The price `effective_price` answers for `model` on `on`, with where it came from and what it
+    becomes -- or None, which every caller renders "unknown" (decision 343).
+
+    M5.7's caption, and the reason it names a date. gemini-3.7-flash's introductory price doubles
+    on 2027-01-01, so a per-title figure accepted in December is half of January's; a caption
+    that names only the figure lets the admin accept a price that is already known to be wrong on
+    a known day. An override has no `then`: the table's end is not the admin's, and the override
+    keeps winning past it.
+    """
+    price = effective_price(provider, model, override=override, on=on)
+    if price is None:
+        return None
+    if all(_is_price((override or {}).get(name)) for name in OVERRIDE_FIELDS):
+        return PriceBasis(provider, model, BASIS_OVERRIDE, price, None)
+    then = None if price.valid_until is None else price_for(provider, model, on=price.valid_until)
+    return PriceBasis(provider, model, BASIS_TABLE, price, then)
+
+
 def _is_price(value: Any) -> bool:
     """A JSON number an admin could mean as a price. `bool` is refused although Python counts it an
     `int`: `true` is a checkbox's answer, not one dollar."""

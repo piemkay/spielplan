@@ -344,15 +344,14 @@ async def test_both_acquisition_routes_refuse_a_member_and_a_stranger(app, db, p
 # --- F4: queue depth is published, not rendered ------------------------------------------------
 
 
-async def test_queue_depth_is_a_domain_function_and_not_a_fourth_system_key(app, db):
+async def test_queue_depth_is_a_domain_function_the_system_card_reads(app, db):
     """§6.6 names "queue depth" on the System card and M5.7 owns that card.
 
-    `e2e/specs/18-system.spec.js` asserts the key set is exactly three, and that assertion is
-    M5.7's to fail with the card it widens. M5.1's obligation is the other half: the number has
-    to be readable by then, as a domain function rather than as a route somebody has to invent.
-    Both halves are asserted here, because the failure mode is one of them landing alone - a
-    fourth key added now reddens the browser gate for a milestone that has not opened, and a
-    milestone that opens to find no function writes the query into `api/` instead.
+    M5.1's obligation was that the number be readable by then, as a domain function rather than as
+    a route somebody had to invent, and this asserted that the card had not grown a fourth key
+    before M5.7 opened. M5.7 has now widened it (decision 454), so the second half becomes the
+    seam itself: the card's `queue.by_kind` is `stats` unchanged, which is what keeps the query in
+    `acquire/queue.py` and out of `api/`.
     """
     await db.execute(
         "INSERT INTO acquisition_task (kind, key) VALUES ('acquire', 'jellyfin:abc123')"
@@ -361,9 +360,7 @@ async def test_queue_depth_is_a_domain_function_and_not_a_fourth_system_key(app,
 
     admin, _member = await _bootstrap(app)
     card = (await admin.get("/api/admin/system")).json()
-    assert set(card) == {"jobs", "backup", "secrets"}, (
-        f"M5.1 widened §6.6's System card, which is M5.7's diff to make: {sorted(card)}"
-    )
+    assert card["queue"]["by_kind"] == await queue.stats(db)
 
 
 # --- the board's own reach --------------------------------------------------------------------

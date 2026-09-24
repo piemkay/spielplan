@@ -135,8 +135,13 @@
       </p>
       <ul class="rows">
         <li><span>Jellyfin</span><span class="data">configure in Admin · M1</span></li>
-        <li><span>LLM providers</span><span class="data">configure in Admin · M5</span></li>
-        <li><span>TMDB / OMDb / Trakt</span><span class="data">configure in Admin · M5</span></li>
+        <!-- Plan C3: the cards these two rows promised exist now, so the rows go there. -->
+        <li>
+          <span>LLM providers</span><a class="go" href="/admin/connectors">configure in Admin</a>
+        </li>
+        <li>
+          <span>TMDB / OMDb / Trakt</span><a class="go" href="/admin/connectors">configure in Admin</a>
+        </li>
       </ul>
     {:else}
       <p class="why">
@@ -276,6 +281,14 @@
     border-radius: var(--r-sm);
     background: var(--card);
     font-size: 13px;
+  }
+  /* A link and not the data voice: it is a way somewhere, and the phone's 48 px floor applies to
+     it as it does to a button (§6 preamble). */
+  .go {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    font-size: 12.5px;
   }
   code {
     font-family: var(--mono);

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
@@ -724,7 +724,9 @@ async def _load_state(
     return ConnectorState(name=name, config=dict(config), secrets=dict(secret))
 
 
-async def _save_state(name: str, conn: asyncpg.Connection, **fields: Any) -> ConnectorState:
+async def _save_state(
+    name: str, conn: asyncpg.Connection, *, unset: tuple[str, ...] = (), **fields: Any
+) -> ConnectorState:
     """Merge a partial update into any connector but Jellyfin.
 
     Partial for `save_jellyfin`'s reason: a card shows a stored secret as a mask and posts it empty,
@@ -733,6 +735,13 @@ async def _save_state(name: str, conn: asyncpg.Connection, **fields: Any) -> Con
     is refused before anything is written, because a misspelt `apikey` would otherwise be stored in
     the plaintext half beside the model while the provider went on refusing the key the admin
     believes they saved.
+
+    `unset` names declared SETTINGS to remove, under the same row lock, because None already means
+    "keep" and decision 450's spend guard has to be able to say "back to the default": a model to
+    `pricing.DEFAULT_MODELS`, a price override to the table, the extraction assignment to nobody.
+    A secret cannot be unset -- an empty field keeps a key, and a route that could clear one would
+    silently disconnect a provider mid-acquisition (decision 452) -- and neither can an undeclared
+    name or a field this same call sets, which would be two answers to one question.
     """
     spec = CONNECTORS[name]
     declared = spec.config_fields + spec.secret_fields
@@ -742,6 +751,15 @@ async def _save_state(name: str, conn: asyncpg.Connection, **fields: Any) -> Con
             f"connector {name} has no field {', '.join(unknown)}; "
             f"it declares {', '.join(declared) or 'none'}"
         )
+    refused = sorted(set(unset) - set(spec.config_fields))
+    if refused:
+        raise ValueError(
+            f"connector {name} cannot unset {', '.join(refused)}; only its settings are unset "
+            f"({', '.join(spec.config_fields) or 'none'}), and a secret is kept by an empty field"
+        )
+    both = sorted(key for key in unset if fields.get(key) is not None)
+    if both:
+        raise ValueError(f"connector {name} was asked to set and unset {', '.join(both)} at once")
     typed = {key: fields[key] for key in spec.secret_fields if fields.get(key) not in (None, "")}
     if typed:
         # §2's refusal, before anything is written: a typed credential with no custody has nowhere
@@ -757,6 +775,8 @@ async def _save_state(name: str, conn: asyncpg.Connection, **fields: Any) -> Con
         current = await _load_state(name, conn, for_update=True)
         config = dict(current.config)
         config.update({key: fields[key] for key in spec.config_fields if fields.get(key) is not None})
+        for key in unset:
+            config.pop(key, None)
         if not typed:
             # Nothing new to seal, so the sealed columns are left exactly as they are. On an install
             # whose DEK will not open that is what keeps a ciphertext which is unreadable only until
@@ -794,6 +814,22 @@ async def _probe_provider(name: str, conn: asyncpg.Connection) -> dict[str, Any]
         return await client.probe(fetcher, name, key=key, model=state.config.get("model") or None)
 
 
+async def _probe_source(name: str, conn: asyncpg.Connection) -> dict[str, Any]:
+    """A source card's test button: `connectors/probes`' cheap request for TMDB, OMDb or Trakt
+    (decision 453).
+
+    Imported here rather than at the top, for `_probe_provider`'s reason: the probes read
+    `sources/credentials` and the shared fetcher, and this module is on the path of every route
+    that reads a connector while those are wanted by three buttons. The fetcher is
+    `client.open_fetcher`, the one built outside a drain, looked up at the press so a test that
+    replaces it for the provider buttons replaces it for these too.
+    """
+    from spielplan.connectors import probes
+    from spielplan.llm import client
+
+    return await probes.PROBES[name](conn, open_fetcher=client.open_fetcher)
+
+
 def _stored(
     name: str,
     *,
@@ -827,11 +863,14 @@ CONNECTORS: dict[str, ConnectorSpec] = {
             test=None, seeded=True,
         ),
         # The three keyed sources, whose adapters keep reading through `sources/credentials.py`
-        # (decision 434); their test buttons are M5.7's source cards (decision 433). Trakt's client
-        # id is config and not a secret, which is `env_seeds`' own split above.
-        _stored("tmdb", secret_fields=("api_key",), seeded=True),
-        _stored("omdb", secret_fields=("api_key",), seeded=True),
-        _stored("trakt", config_fields=("client_id",), secret_fields=("client_secret",), seeded=True),
+        # (decision 434); their test buttons are M5.7's source cards (decisions 433, 453). Trakt's
+        # client id is config and not a secret, which is `env_seeds`' own split above.
+        _stored("tmdb", secret_fields=("api_key",), test=partial(_probe_source, "tmdb"),
+                seeded=True),
+        _stored("omdb", secret_fields=("api_key",), test=partial(_probe_source, "omdb"),
+                seeded=True),
+        _stored("trakt", config_fields=("client_id",), secret_fields=("client_secret",),
+                test=partial(_probe_source, "trakt"), seeded=True),
         _stored("gemini", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
                 test=partial(_probe_provider, "gemini"), seeded=True),
         _stored("anthropic", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
@@ -872,7 +911,7 @@ async def load_connector(
 
 
 async def save_connector(
-    conn: asyncpg.Connection, name: str, **fields: Any
+    conn: asyncpg.Connection, name: str, *, unset: Iterable[str] = (), **fields: Any
 ) -> JellyfinConfig | ConnectorState:
     """Any connector's partial merge: `save_jellyfin(conn, **fields)` for Jellyfin, since that is
     its row's `save`, and the generic merge for every other.
@@ -882,6 +921,11 @@ async def save_connector(
     asks make the one appearance decision 332 allows, so a generic write that forwarded it would
     hand that gesture to whatever body a future card posts. Every other argument reaches
     `save_jellyfin` untouched, and its own signature refuses what it does not take.
+
+    `unset` removes declared settings of any connector but Jellyfin (`_save_state`, decision 450),
+    and is not forwarded when empty, so a save that names none is the call it always was. Jellyfin
+    refuses it: its merge carries decision 364's library pick, where an absent pick and an empty
+    one are different answers, and a generic removal is a third nobody argued for.
     """
     spec = spec_for(name)
     if spec.name == JELLYFIN and "mint_webhook_token" in fields:
@@ -889,7 +933,15 @@ async def save_connector(
             "the jellyfin webhook token is minted only by the admin's own save "
             "(api/admin.put_jellyfin, decision 416), never through save_connector"
         )
-    return await spec.save(conn, **fields)
+    removed = tuple(unset)
+    if not removed:
+        return await spec.save(conn, **fields)
+    if spec.name == JELLYFIN:
+        raise ValueError(
+            "the jellyfin connector unsets nothing through save_connector: its merge is"
+            " save_jellyfin's, and decision 364's library pick is not a setting to remove"
+        )
+    return await spec.save(conn, unset=removed, **fields)
 
 
 async def test_connector(conn: asyncpg.Connection, name: str) -> dict[str, Any]:

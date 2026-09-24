@@ -87,7 +87,14 @@ export default defineConfig({
       // 20-admin-data joins them because M5.6's plan puts its surface there by name: the board's
       // stage names and verbatim reasons, the review's ordering, Launch disabled with its reason
       // and the 48 px selection controls a batch of spend is chosen with. Its tests only read.
-      testMatch: /(shell|library|responsive|13-rank|14-tonight|20-admin-data)\.spec\.js/,
+      // 21-connectors joins them for the preamble's other number. M5.7's plan §7 check 14 is
+      // "every control on both pages is at least 48 px on the phone", which only this project
+      // can measure, and the rest of that file runs here too, so the admin's key fields, the
+      // spend guard's Confirm and the library pick are driven with a thumb as well as a mouse.
+      // Playwright runs the whole desktop pass before this one on the same stack, so every
+      // test in it reads its starting state and puts back what it changed (decisions 450,
+      // 452, 455).
+      testMatch: /(shell|library|responsive|13-rank|14-tonight|20-admin-data|21-connectors)\.spec\.js/,
     },
   ],
 });

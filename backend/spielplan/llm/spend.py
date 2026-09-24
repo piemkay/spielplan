@@ -146,7 +146,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("spielplan.llm.spend")
 
 # The `connector_config` row §6.6's settings live in (decisions 324, 325), and the one task M5 has
-# a caller for (0028's CHECK on `llm_call.task`; decision 339 is M5.7's).
+# a caller for (0028's CHECK on `llm_call.task`): decision 339 ships §6.6's per-task assignment with
+# extraction alone, because query parsing and conflict phrasing have no caller before M6.
 SETTINGS = "llm"
 TASK = "extraction"
 
@@ -500,6 +501,22 @@ def _providers_of(config: Mapping[str, Any]) -> tuple[str, ...] | Refusal:
     return tuple(dict.fromkeys(chosen))
 
 
+def proposed(stored: Mapping[str, Any], change: Mapping[str, Any]) -> dict[str, Any]:
+    """A connector row's settings as a change would leave them, written nowhere (decision 450).
+
+    The spend guard's grammar: a field the change does not name keeps its stored value, a value
+    replaces it, and None removes it -- un-assigning the provider, returning a model to its default
+    or a price to the table, the same removal `registry.save_connector(unset=...)` stores.
+    """
+    merged = dict(stored)
+    for name, value in change.items():
+        if value is None:
+            merged.pop(name, None)
+        else:
+            merged[name] = value
+    return merged
+
+
 _BATCH_ADVICE = "Launch it again from the extraction queue in Admin, and this title resumes here"
 
 
@@ -554,7 +571,17 @@ def _batched(config: Mapping[str, Any], batch: Any) -> Mapping[str, Any] | Refus
     return merged
 
 
-async def _plan(conn: asyncpg.Connection, config: Mapping[str, Any], *, on: date) -> Plan | Refusal:
+async def _plan(
+    conn: asyncpg.Connection,
+    config: Mapping[str, Any],
+    *,
+    on: date,
+    providers: Mapping[str, Mapping[str, Any]] | None = None,
+) -> Plan | Refusal:
+    """`providers` is a proposed change to provider rows -- a model, a price override, a removal --
+    laid over each stored row before it is priced, so `preview` plans through this same function
+    and the figure an admin accepts is the plan stage 6's gate will make of the stored change
+    (decision 450). The gate passes none."""
     passes = _passes_of(config)
     if isinstance(passes, Refusal):
         return passes
@@ -564,6 +591,8 @@ async def _plan(conn: asyncpg.Connection, config: Mapping[str, Any], *, on: date
     planned = []
     for name in names:
         state = await registry.load_connector(conn, name)
+        if providers and providers.get(name):
+            state = replace(state, config=proposed(state.config, providers[name]))
         # Unreadable before keyless, `registry._probe_provider`'s order and for its reason: an
         # unreadable row's secrets are empty, and "no key" would send the admin to type a key that
         # exists and only needs the right SECRETS_KEY back.
@@ -638,6 +667,154 @@ async def extraction_plan(
     if isinstance(config, Refusal):
         return config
     return await _plan(conn, config, on=_clock(now).today)
+
+
+@dataclass(frozen=True)
+class Preview:
+    """§6.6's "per-title cost estimate before enabling", as plain values (decision 450).
+
+    `plan` is `_plan`'s answer for the proposed settings; `per_title` is `pricing.estimate_title`
+    over it at `pricing.SPEC_INPUT_TOKENS`, None when the plan refuses; `basis` names the price
+    each planned provider was priced at (decision 343). `blocked` is the sentence for a proposed
+    plan naming a provider with no usable key, whatever else the plan refuses first.
+    """
+
+    plan: Plan | Refusal
+    per_title: Decimal | None
+    basis: tuple[pricing.PriceBasis, ...]
+    blocked: str | None
+
+
+def _key_fault(name: str, state: registry.ConnectorState) -> str | None:
+    """Why `_plan` would refuse this provider's key, in `_plan`'s order -- unreadable, absent, unfit
+    for a header -- or None when the key is one stage 6 could send."""
+    if state.secrets_unreadable:
+        return f"the {name} key cannot be read: {registry.SECRETS_UNREADABLE_REASON}"
+    key = str(state.secrets.get("api_key") or "")
+    if not key:
+        return f"no API key is configured for {name}"
+    if client.header_key(key) is None:
+        return (f"the {name} key holds a character no HTTP header can carry (whitespace inside it, a"
+                " control character or a non-ASCII letter)")
+    return None
+
+
+async def _blocked(conn: asyncpg.Connection, config: Mapping[str, Any]) -> str | None:
+    """The first provider the settings would plan whose key stage 6 could not send, as a sentence.
+
+    EVERY PLANNED PROVIDER, NOT THE PLAN'S FIRST REFUSAL. `_plan` stops at the first thing it can
+    refuse, and a parallel pair whose first provider is unpriced is refused for its price with the
+    second provider's missing key never read -- so a preview reading only the refusal would let the
+    pair be stored at "unknown", and the key typed later would make the plan billable at a figure
+    nobody was shown, which is the one thing decision 450 refuses. Keys are never part of a
+    proposed change (decision 452 writes them apart), so the stored rows are the ones to ask.
+    """
+    names = _providers_of(config)
+    if isinstance(names, Refusal):
+        return None
+    for name in names:
+        fault = _key_fault(name, await registry.load_connector(conn, name))
+        if fault is not None:
+            return (f"{fault}, so {name} cannot be put into the extraction plan: a key saved later"
+                    " would start spend at a figure nobody was shown (decision 450). Save a usable"
+                    f" {name} key on its card first")
+    return None
+
+
+async def preview(
+    conn: asyncpg.Connection,
+    *,
+    change: Mapping[str, Any] | None = None,
+    providers: Mapping[str, Mapping[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> Preview:
+    """What stage 6 would cost per title if `change` and `providers` were stored -- stored nowhere.
+
+    Decision 450's preview and the read's estimate are this one function: `change` laid over the
+    `llm` row by `proposed`, `providers` over each provider row inside `_plan`, and the plan priced
+    on the install's own day, as the gate prices it. With neither, it is the stored plan, which is
+    `extraction_plan`'s. READS ONLY: `registry.load_connector` locks nothing and inserts nothing,
+    so a change previewed and never confirmed leaves every row as it was.
+    """
+    clock = _clock(now)
+    config = proposed(await _settings(conn), change or {})
+    plan = await _plan(conn, config, on=clock.today, providers=providers)
+    blocked = await _blocked(conn, config)
+    if isinstance(plan, Refusal):
+        return Preview(plan=plan, per_title=None, basis=(), blocked=blocked)
+    per_title = pricing.estimate_title(
+        tokens_in=pricing.SPEC_INPUT_TOKENS,
+        prices=[chosen.price for chosen in plan.providers],
+        passes=plan.passes,
+    )
+    basis = tuple(
+        found for chosen in plan.providers
+        if (found := pricing.price_basis(chosen.provider, chosen.model, override=chosen.override,
+                                         on=clock.today)) is not None
+    )
+    return Preview(plan=plan, per_title=per_title, basis=basis, blocked=blocked)
+
+
+# Decision 451's window: the trailing thirty days, so a calendar month two days old does not project
+# a month from two days.
+PROJECTION_DAYS = 30
+
+NO_HISTORY_REASON = (
+    "there is no acquisition history yet: this install has filed no title, so there is no rate to"
+    " project a month from (decision 451)"
+)
+UNKNOWN_MONTH_REASON = (
+    "the per-title figure is unknown, so the month is too (decision 343)"
+)
+# `NO_CAP_REASON`'s point, said about a projection rather than about one title.
+NO_CAP_PROJECTION_REASON = (
+    "no spend cap is configured, so stage 6 parks every title until one is set (decisions 325, 348)"
+)
+
+
+@dataclass(frozen=True)
+class Projection:
+    """Decision 451's projected month, as plain values. `monthly` is None both when nothing was ever
+    filed and when the per-title figure is unknown; `ever_filed` tells the two apart."""
+
+    titles: int
+    ever_filed: bool
+    monthly: Decimal | None
+    remaining: Decimal | None
+    exceeds_remaining: bool | None
+    reason: str | None
+
+
+def projection(
+    per_title: Decimal | None, *, titles: int, ever_filed: bool, remaining: Decimal | None
+) -> Projection:
+    """The per-title figure times the titles this install filed in the window, beside what is left
+    of the month's cap (decision 451, plan A3).
+
+    "If there is no history, say so rather than printing a guess": no task ever filed is no figure
+    and a reason, never zero. An unknown per-title figure is an unknown month (decision 343). No
+    cap in force has no remaining to compare against, and the reason says what that means: stage 6
+    parks everything until a cap is set. `exceeds_remaining` compares the month against what is
+    left of THIS month's cap, because that is the figure the guard will refuse at.
+    """
+    reasons = []
+    monthly = None
+    if not ever_filed:
+        reasons.append(NO_HISTORY_REASON)
+    elif per_title is None:
+        reasons.append(UNKNOWN_MONTH_REASON)
+    else:
+        monthly = per_title * titles
+    if remaining is None:
+        reasons.append(NO_CAP_PROJECTION_REASON)
+    return Projection(
+        titles=titles,
+        ever_filed=ever_filed,
+        monthly=monthly,
+        remaining=remaining,
+        exceeds_remaining=None if monthly is None or remaining is None else monthly > remaining,
+        reason="; ".join(reasons) or None,
+    )
 
 
 async def reservation(conn: asyncpg.Connection, plan: Plan, *, title_id: int) -> Decimal | None:
@@ -844,8 +1021,11 @@ __all__ = [
     "OVER_CAP",
     "OVER_CAP_PREFIX",
     "PLAN",
+    "PROJECTION_DAYS",
     "UNSETTLED_PREFIX",
     "Plan",
+    "Preview",
+    "Projection",
     "ProviderPlan",
     "Refusal",
     "attempt_price",
@@ -855,6 +1035,9 @@ __all__ = [
     "local_zone",
     "meter",
     "period",
+    "preview",
+    "projection",
+    "proposed",
     "record_call",
     "reservation",
     "retry_refusal",

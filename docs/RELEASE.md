@@ -14,7 +14,8 @@ because none of those lanes could reach a real corpus bundle - and M5.1's could 
 container nor a port; and M5.4's checks are the suite's, which runs them against the fixture and not
 against the real install and real bundle its criterion names; and M5.6's criterion is a surface
 the suite and the owner's browser gate measure, whose first clause no install can reach until
-stage 5 is wired. Three describe milestones that do not
+stage 5 is wired; and M5.7's checks are the suite's and the owner's browser gate's. Three
+describe milestones that do not
 exist yet (M5, M6, M7). The rest have been measured by one of the scripts under `ops/`, and **not one
 of those scripts had a committed output** until M4.16 wrote the first. The newest measured one is
 M5.5's, written in the same change set as the surface it measures and, unlike M5.1's, M5.2's and
@@ -77,6 +78,7 @@ is here because it is the one criterion this milestone actually ran.
 | M5.4 | UNMEASURED | none | yes | `________` |
 | M5.5 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5.6 | UNMEASURED | none | yes | `________` |
+| M5.7 | UNMEASURED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
@@ -573,6 +575,34 @@ M5.4's owed stage-5 wiring lands, because stage 6 parks on a missing pack (decis
 thin-facet feed is exercised through the real driver in the suite with the stages before it stood
 down, and it goes live the day stage 5 is wired (decision 440). A launch on a real install today
 therefore makes titles due at a stage 5 that is a no-op, and they park at stage 6 rather than bill.
+
+### M5.7 — admin connectors and System: the number comes before the setting
+
+**Criterion (§12, abbreviated):** enabling an extraction provider, turning parallel mode on or
+changing the pass count returns the per-title cost estimate, the projected monthly figure - or "no
+acquisition history yet" - and the remaining cap before the setting is persisted, and declining
+leaves the stored configuration byte-identical; a confirm carrying a stale or missing figure is
+refused with nothing stored, and one carrying the figure stores the change without moving the meter;
+the estimate names the model and its price basis, with the price's `valid_until` and the figure after
+it, moves in proportion to the pass count, and reads "unknown" for a model whose price is not known;
+with the meter at the cap, stage 6 parks `over spend cap` and the spend guard says so and names the
+refusal an admin retry meets; a save with an empty key field keeps the stored key, and no stored key
+is rendered, returned or logged anywhere; the Jellyfin card persists a library pick the delta poll
+then honours, names the last `ItemAdded` received, and shows a webhook token once, on an explicit
+Generate; `GET /api/admin/system` answers backup, jobs, secrets, queue, last syncs and logs, and no
+control on System writes; and every control on both pages is at least 48 px on the phone.
+
+**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes. **Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone
+writes its own §12 row when it opens. Like M5.4's, it names no `ops/` script (decision 456): its
+checks are held by the suite - the preview's store left byte-identical, the confirm's refusal of a
+stale figure, the key that never leaves the server, the six System keys - and by the owner's browser
+gate on the phone project, which is where "every control is at least 48 px" and "the token appears
+once" can be read at all. What neither supplies is the criterion's first words, "on a real install":
+a real provider key's first billed call against the figure the admin accepted, and a real Jellyfin
+server's libraries and Webhook plugin behind the pick and the status line. The flywheel's recompute
+at the new pass count and the admin retry's route are M5.6's, and this row does not claim them.
 
 ### M5 — acquisition pipeline, admin connector UI, LLM layer, extraction flywheel
 

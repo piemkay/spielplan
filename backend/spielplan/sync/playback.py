@@ -121,6 +121,11 @@ class WatchReport:
     # [M4.11 review cycle 2: m411-rev2-pb-02; decision 210(c), ops-15]
     undecided: list[str] = field(default_factory=list)
     skipped_no_link: bool = False
+    # Whether `/Sessions` answered: `poll` returns this report for an unconfigured connector and for
+    # an outage alike (§3.3), the worker closes both rows ok, and §6.6's "last syncs" asks when the
+    # server last answered, not when the job last ran (decision 454). [M5.7 review cycle 1,
+    # M57-JFSYS-01]
+    reached: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +135,7 @@ class WatchReport:
             "unresolved": self.unresolved[:10],
             "undecided": self.undecided[:10],
             "skipped_no_link": self.skipped_no_link,
+            "reached": self.reached,
         }
 
 
@@ -393,6 +399,7 @@ async def poll(conn: asyncpg.Connection, client: JellyfinClient | None = None) -
     except JellyfinError as exc:
         _note_unreachable(exc)
         return report
+    report.reached = True
     _note_reachable()
     await observe(conn, sessions, report, client=client)
     return report

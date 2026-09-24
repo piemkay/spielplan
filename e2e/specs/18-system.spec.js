@@ -1,17 +1,22 @@
 import { expect, test } from '@playwright/test';
 
-import { signedIn } from '../helpers.js';
+import { JELLYFIN, signedIn } from '../helpers.js';
 
 /**
  * Admin > System, end to end. Spec v2.1 §6.6, §2 (Backups, Configuration), §14.3;
- * decisions 181, 182.
+ * decisions 181, 182, 454.
  *
  * This file is the reader half of M4.7. The milestone gives `job_run` its rows and secrets
  * custody a readable state, and until this card existed nothing read either: "did last night's
  * dump happen" was a question only `psql` could answer, on the install least likely to have
- * anyone able to ask it. §6.6 names five things for this card; decision 182 ships three and
- * leaves queue depth, last syncs and logs to M5 — so the assertions below are as much about
- * what is NOT here as about what is.
+ * anyone able to ask it. §6.6 names five things for this card; decision 182 shipped three and
+ * left queue depth, last syncs and logs to M5, and M5.7's decision 454 ships those as three more
+ * keys - the acquisition queue by state, each connector job's last SUCCESSFUL run, and the web
+ * process's own recent log lines. The card is still read-only, with one control that narrows
+ * what was already read, so the assertions below are as much about what is NOT here - a key
+ * past the six, a control that writes, a filter that asks the server anything - as about what
+ * is. Six keys failed this file's three-key assertion on the day they landed, by design (plan
+ * E3): the FACTS array and the coverage row moved together, with no waiver.
  *
  * A browser test rather than a `curl` transcript because the claim is about a surface: a route
  * that returns a fingerprint proves nothing about whether an operator can find it, and the
@@ -25,9 +30,11 @@ import { signedIn } from '../helpers.js';
  * disagreement as a defect is worse than one that does not look.
  *
  * ONE PAGE FOR THE FILE. Playwright hands each test a fresh context and this file's admin
- * session is worth keeping across five reads. Desktop only, for the reason 15-tonight-group
+ * session is worth keeping across every read below. Desktop only, for the reason 15-tonight-group
  * and 17-users are: the phone project exists for the one-handed gestures §6's preamble is
- * about, and this surface is read-only — it has no gesture to be primary about.
+ * about, and this surface is read-only — it has no gesture to be primary about. Its one control
+ * is measured against the 48 px floor on the phone by 21-connectors, which walks both admin
+ * pages on that project (M5.7's plan §7 check 14).
  *
  * The last test is the Connectors card and not this one, on purpose. Custody has two warnings
  * and they are one thing: this card says that some sealed row will not open, that card is where
@@ -38,8 +45,9 @@ import { signedIn } from '../helpers.js';
  */
 test.describe.configure({ mode: 'serial' });
 
-/** Decision 182's three facts, and the fact that there are three. */
-const FACTS = ['backup', 'jobs', 'secrets'];
+/** Decision 182's three facts and decision 454's three, sorted as the route's keys are compared,
+ *  and the fact that there are six. */
+const FACTS = ['backup', 'jobs', 'last_syncs', 'logs', 'queue', 'secrets'];
 
 test.describe('the System card', () => {
   /** @type {import('@playwright/test').Page} */
@@ -70,7 +78,7 @@ test.describe('the System card', () => {
 
   // --- 1 ------------------------------------------------------------------------------------
 
-  test('the System tab is a link to a card of exactly three facts', async () => {
+  test('the System tab is a link to a card of six facts and no control that writes', async () => {
     await admin.goto('/admin/data');
     await admin.getByRole('link', { name: 'System' }).click();
     await expect(admin.getByRole('heading', { name: 'System' })).toBeVisible();
@@ -80,19 +88,48 @@ test.describe('the System card', () => {
       await expect(admin.getByTestId(`system-${fact}`)).toBeVisible();
     }
 
-    // "and no more" is the half of decision 182 a screenshot cannot check: §6.6 also names
-    // queue depth, last syncs and logs, and those are M5's. Asserted on the route's own keys,
-    // because a fourth fact would arrive there before it arrived on the page.
+    // "and no more" is the half a screenshot cannot check: §6.6's five things are now decision
+    // 182's three and decision 454's three, and a seventh would be a claim this card never made.
+    // Asserted on the route's own keys, because a new fact would arrive there before it arrived
+    // on the page.
     const body = await (await admin.request.get('/api/admin/system')).json();
     expect(Object.keys(body).sort()).toEqual(FACTS);
 
-    // Read-only, asserted inside the three facts rather than over the whole document — the
-    // shell's nav rail and account chip are buttons, and they are not this card's. Rotation is
-    // `spielplan-secrets` and the dump is the worker's; §2 makes both the operator's.
+    // Read-only, asserted inside the six facts rather than over the whole document - the shell's
+    // nav rail and account chip are buttons, and they are not this card's. Rotation is
+    // `spielplan-secrets`, the dump is the worker's and draining the queue is the board's (plan
+    // E5); §2 makes the first two the operator's. The one control inside the facts is the log
+    // level filter, so the count is one and that one is the logs section's select.
     const controls = admin
       .locator(FACTS.map((f) => `[data-testid="system-${f}"]`).join(', '))
       .locator('button, input, select, [role=button]');
-    await expect(controls).toHaveCount(0);
+    await expect(controls).toHaveCount(1);
+    const level = admin.getByTestId('system-logs').getByLabel('LOG LEVEL');
+    await expect(admin.getByTestId('system-logs').locator('select')).toHaveCount(1);
+    await expect(level).toBeVisible();
+
+    // And that control writes nothing and asks nothing: it narrows the lines the one read already
+    // returned (decision 454). Watched from before the first change, and closed by a round trip
+    // to the same server, so a request the filter fired has had the time to leave the page. The
+    // round trip is `admin.request`, which is not the page's network and is not seen here.
+    const asked = [];
+    const watch = (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() !== 'GET' || path === '/api/admin/system') {
+        asked.push(`${request.method()} ${path}`);
+      }
+    };
+    admin.on('request', watch);
+    try {
+      for (const value of ['warning', 'error', 'all']) {
+        await level.selectOption(value);
+        await expect(level).toHaveValue(value);
+      }
+      expect((await admin.request.get('/api/admin/system')).ok()).toBeTruthy();
+    } finally {
+      admin.off('request', watch);
+    }
+    expect(asked, 'the log level filter sent a request').toEqual([]);
   });
 
   // --- 2 ------------------------------------------------------------------------------------
@@ -185,6 +222,104 @@ test.describe('the System card', () => {
 
   // --- 5 ------------------------------------------------------------------------------------
 
+  test('the queue depth is reported by state and kind', async () => {
+    // Decision 454's first key: `acquire.queue.stats` per kind and state, and the per-state totals
+    // beside it. All five states arrive, zeros included, so "nothing failed" is a 0 on the card
+    // rather than an absence - and an absence is what an operator cannot tell from a card that
+    // never asked.
+    const { queue } = await render();
+    const states = ['pending', 'leased', 'done', 'failed', 'skipped'];
+    expect(Object.keys(queue.by_state).sort()).toEqual([...states].sort());
+
+    const card = admin.getByTestId('system-queue');
+    for (const state of states) {
+      // Word-bounded, because "pending 1" is a substring of "pending 10".
+      await expect(card).toContainText(new RegExp(`\\b${state} ${queue.by_state[state]}\\b`));
+      // The totals are the rows' sum, not a second count that could drift from them.
+      const rows = queue.by_kind.filter((row) => row.state === state);
+      expect(rows.reduce((sum, row) => sum + row.count, 0), `${state} total`).toBe(
+        queue.by_state[state]
+      );
+    }
+    if (queue.by_kind.length === 0) {
+      await expect(card.locator('[data-empty="queue"]')).toBeVisible();
+    }
+    for (const row of queue.by_kind) {
+      await expect(card.locator(`[data-queue-kind="${row.kind}"]`)).toContainText(
+        new RegExp(`\\b${row.state} ${row.count}\\b`)
+      );
+    }
+    // A read, and nothing beside it drains or retries: that is the board's (plan E5).
+    await expect(card.locator('button, input, select, [role=button]')).toHaveCount(0);
+  });
+
+  // --- 6 ------------------------------------------------------------------------------------
+
+  test('the last successful sync of each connector is listed', async () => {
+    // Decision 454's second key, and the question `jobs` cannot answer: its row is the newest
+    // ATTEMPT, which on the install whose sync has failed since Tuesday is the failure. Every job
+    // that talks to a connector is listed whether or not it ever succeeded, because a job left
+    // off the list reads as one that does not exist.
+    const { jobs, last_syncs } = await render();
+    expect(last_syncs.map((sync) => sync.name)).toEqual([
+      'jellyfin-seen-sync',
+      'jellyfin-delta-poll',
+      'jellyfin-intake-sweep',
+      'jellyfin-sessions-poll',
+      'acquisition-drain'
+    ]);
+    for (const sync of last_syncs) {
+      const row = admin.locator(`[data-last-sync="${sync.name}"]`);
+      await expect(row).toHaveAttribute('data-synced', sync.at ? 'yes' : 'never');
+      await expect(row).toContainText(sync.connector);
+      await expect(row).toContainText(sync.at ? /ago/ : /never succeeded/);
+      // A job whose newest row reached its server has a last sync no older than that row. Not
+      // equal: the two are separate reads, and the minute poll can finish between them. A row
+      // closed ok that asked nobody is not a sync -- no report (the drain with nothing leased, the
+      // sweep with nothing ripe) or a report saying the server never answered. [M57-JFSYS-01]
+      const newest = jobs.find((job) => job.name === sync.name);
+      if (newest?.ok === true && newest.detail != null && newest.detail.reached !== false) {
+        expect(sync.at, `${sync.name} succeeded and is listed as never`).not.toBeNull();
+        expect(Date.parse(sync.at)).toBeGreaterThanOrEqual(Date.parse(newest.finished_at));
+      }
+    }
+  });
+
+  // --- 7 ------------------------------------------------------------------------------------
+
+  test('the recent log lines are listed and filter by level', async () => {
+    // Decision 454's third key: the web process's own `spielplan` lines since it started, at INFO
+    // and above, at most 200, redacted before they were kept (`core/logs.py`). The worker's lines
+    // stay in its container log, and the card says so rather than implying a log it lacks.
+    const { logs } = await render();
+    expect(logs.scope).toBe('web process');
+    expect(logs.records.length).toBeLessThanOrEqual(200);
+    for (const record of logs.records) {
+      expect(Object.keys(record).sort()).toEqual(['at', 'level', 'logger', 'message']);
+      // Never httpx or uvicorn: the first is where a query-string key would have been written.
+      expect(record.logger === 'spielplan' || record.logger.startsWith('spielplan.')).toBe(true);
+    }
+    // 08-jellyfin put this key into the connector, and every sweep since has sent it.
+    expect(JSON.stringify(logs)).not.toContain(JELLYFIN.apiKey);
+
+    const card = admin.getByTestId('system-logs');
+    await expect(card).toContainText('web process');
+    await expect(card).toContainText('container log');
+
+    // Python's level numbers, which are what `core/logs` records the names of.
+    const RANK = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
+    const lines = card.locator('[data-log-level]');
+    const level = card.getByLabel('LOG LEVEL');
+    for (const [value, floor] of [['all', 0], ['warning', 30], ['error', 40], ['all', 0]]) {
+      await level.selectOption(value);
+      const expected = logs.records.filter((r) => (RANK[r.level] ?? 0) >= floor).length;
+      await expect(lines, `lines at ${value}`).toHaveCount(expected);
+      await expect(card.locator('[data-empty="logs"]')).toHaveCount(expected === 0 ? 1 : 0);
+    }
+  });
+
+  // --- 8 ------------------------------------------------------------------------------------
+
   test('the card is admin-only and the schema is not published to anonymous callers', async ({
     request
   }) => {
@@ -209,7 +344,7 @@ test.describe('the System card', () => {
     }
   });
 
-  // --- 6 ------------------------------------------------------------------------------------
+  // --- 9 ------------------------------------------------------------------------------------
 
   test('custody says so when SECRETS_KEY no longer opens every stored secret', async () => {
     // Fact 2's other half, and the half a healthy stack cannot reach. `unreadable` turns true
@@ -253,7 +388,7 @@ test.describe('the System card', () => {
     }
   });
 
-  // --- 7 ------------------------------------------------------------------------------------
+  // --- 10 -----------------------------------------------------------------------------------
 
   test('the Connectors card says what its own custody repair costs', async () => {
     // The test above's twin, and it had exactly the same hole: every `secrets_unreadable`
@@ -285,7 +420,10 @@ test.describe('the System card', () => {
     // table is the anchor: `refresh()` assigns `cfg` before it awaits `/admin/users`, so a row
     // on screen means the branch above was evaluated and declined.
     await expect(admin.locator('tr[data-user]').first()).toBeVisible();
-    await expect(admin.locator('[data-secrets="unreadable"]')).toHaveCount(0);
+    // The Jellyfin card and not the page: M5.7 put six more cards beside it, each with a Save
+    // of its own, and Playwright matches a name as a substring (decision 455).
+    const card = admin.getByTestId('connector-jellyfin');
+    await expect(card.locator('[data-secrets="unreadable"]')).toHaveCount(0);
 
     // Not the live payload with one boolean flipped, which is what the test above does: this
     // route cannot answer that shape. `registry.load_jellyfin` degrades an unreadable row to
@@ -308,7 +446,7 @@ test.describe('the System card', () => {
     try {
       const degraded = await load();
       expect(degraded.secrets_unreadable).toBe(true);
-      const warning = admin.locator('[data-secrets="unreadable"]');
+      const warning = card.locator('[data-secrets="unreadable"]');
       await expect(warning).toBeVisible();
       // The two ways back, named the same way the System card names them: the `.env` that was
       // current when the dump was taken, or the command that retires what will not open.
@@ -325,7 +463,7 @@ test.describe('the System card', () => {
       // The repair the paragraph points at has to be reachable from the state that needs it.
       // An unreadable row reads as `configured: false`, which is what disables Test and Sync;
       // a Save gated on the same bit would leave the advice with nothing to act on.
-      await expect(admin.getByRole('button', { name: 'Save' })).toBeEnabled();
+      await expect(card.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
     } finally {
       await admin.unroute('**/api/admin/connectors/jellyfin');
     }

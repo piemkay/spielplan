@@ -25,7 +25,7 @@ import sys
 import uuid
 from collections.abc import Sequence
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +33,7 @@ from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Cookie, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
@@ -48,12 +49,16 @@ sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
 from spielplan.acquire import actions as acquire_actions  # noqa: E402 - decision 444's table
+from spielplan.acquire import intake  # noqa: E402 - the real refusal reasons
+from spielplan.api import admin as admin_api  # noqa: E402 - the real sync jobs and their connectors
 from spielplan.api import curated as curated_api  # noqa: E402 - each ledger's `applies` sentence
 from spielplan.api import llm as llm_api  # noqa: E402 - the real provider card and batch reason
+from spielplan.api import setup as setup_api  # noqa: E402 - the rows setup may not seed
 from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
 from spielplan.connectors import registry  # noqa: E402 - the real connector table
+from spielplan.core import logs as core_logs  # noqa: E402 - the real redaction and scope
 from spielplan.core.config import settings  # noqa: E402
 from spielplan.curated import adjudications as curated_verdicts  # noqa: E402 - the real refusals
 from spielplan.curated import axes as curated_axes  # noqa: E402
@@ -75,6 +80,7 @@ from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10
 from spielplan.rank import tiers as rank_tiers  # noqa: E402 - decision 11's real rules
 from spielplan.rate import VERDICT_LABELS, balance, battle, queue  # noqa: E402
 from spielplan.rate import session as rate_session  # noqa: E402
+from spielplan.sources import base as sources  # noqa: E402 - the adapters' own key registry
 from spielplan.tonight import combine as tonight_combine  # noqa: E402 - the real slate
 from spielplan.tonight import pool as tonight_pool  # noqa: E402 - the real §6.2 step 3 pool
 from spielplan.tonight import rooms as tonight_rooms_mod  # noqa: E402 - the real room code
@@ -129,7 +135,8 @@ STATE: dict[str, Any] = {
     # stays empty-and-unknown — which is the state a fresh install is in, and the one the card must
     # render as "nobody has probed" rather than as a refusal. [M4.11 finding 16]
     "jellyfin": {"url": "", "has_api_key": False, "configured": False, "library_ids": [],
-                 "linked_users": 0, "server_version": "", "server_supported": None},
+                 "linked_users": 0, "server_version": "", "server_supported": None,
+                 "secrets_unreadable": False, "has_webhook_token": False},
 }
 
 app = FastAPI(title="Spielplan dev harness")
@@ -297,9 +304,20 @@ def create_admin(body: AdminInit, response: Response) -> dict[str, Any]:
     return _sign_in(response, user)
 
 
+class ConnectorSeed(BaseModel):
+    name: str
+    config: dict = Field(default_factory=dict)
+    secrets: dict | None = None
+
+
 @app.post("/api/setup/connectors")
-def seed_connector() -> dict[str, Any]:
-    return {"ok": True, "name": "jellyfin", "has_secrets": False}
+def seed_connector(body: ConnectorSeed) -> dict[str, Any]:
+    # The app's own refusal and sentence: the spend guard's rows are written only through the routes
+    # that carry the figure, and a harness that seeded them would teach the UI a door the app keeps
+    # shut (decision 450). [M5.7 review cycle 1, M57-THESIS-01]
+    if body.name in setup_api._SPEND_GUARDED:
+        raise HTTPException(409, f"{body.name}{setup_api._SPEND_GUARDED_REFUSAL}")
+    return {"ok": True, "name": body.name, "has_secrets": bool(body.secrets)}
 
 
 @app.post("/api/setup/onboarding/complete")
@@ -1031,6 +1049,10 @@ class PromptAnswer(BaseModel):
 class JellyfinSettings(BaseModel):
     url: str = ""
     api_key: str = ""
+    # The app's two M5.2 fields, which M5.7's card sends: absent keeps the pick and `[]` is the whole
+    # server (decision 364), and the mint is asked for only by the card's own press (decision 418).
+    library_ids: list[str] | None = None
+    mint_webhook_token: bool = False
 
 
 class LinkRequest(BaseModel):
@@ -1098,26 +1120,69 @@ def answer_finish_prompt(event_id: int, body: PromptAnswer) -> dict[str, Any]:
     raise HTTPException(404, "no open prompt with that id")
 
 
+def _trigger() -> dict[str, Any]:
+    """`intake.trigger_status`'s shape (decision 455). A connector nobody has configured answers the
+    app's fresh-install nulls; a configured one answers invented facts in the shape the card has to
+    render hardest -- a Webhook plugin on the wrong template, whose newest delivery is a refusal
+    newer than the last add, beside a delta poll that is carrying the load. The reasons are the
+    app's own sentences. Nothing here receives a delivery or runs a poll."""
+    if not STATE["jellyfin"]["configured"]:
+        return {
+            "webhook": {"last_item_added_at": None, "last_delivery_at": None, "deliveries_7d": 0,
+                        "last_refusal": None},
+            "delta_poll": {"watermark": None, "last_run_at": None, "last_run_ok": None,
+                           "last_ok_at": None, "last_filed": None},
+        }
+    now = datetime.now(UTC)
+    return {
+        "webhook": {"last_item_added_at": (now - timedelta(days=3)).isoformat(),
+                    "last_delivery_at": (now - timedelta(minutes=40)).isoformat(),
+                    "deliveries_7d": 11,
+                    "last_refusal": {"at": (now - timedelta(minutes=40)).isoformat(),
+                                     "reason": intake.NOT_ITEM_ADDED}},
+        "delta_poll": {"watermark": (now - timedelta(minutes=11)).isoformat(),
+                       "last_run_at": (now - timedelta(minutes=6)).isoformat(),
+                       "last_run_ok": True, "last_ok_at": (now - timedelta(minutes=6)).isoformat(),
+                       "last_filed": 2},
+    }
+
+
 @app.get("/api/admin/connectors/jellyfin")
 def get_jellyfin() -> dict[str, Any]:
     # Like the real route, this never returns the key itself (§14.3) — only whether one is set.
-    return dict(STATE["jellyfin"])
+    return {**STATE["jellyfin"], "trigger": _trigger()}
 
 
 @app.put("/api/admin/connectors/jellyfin")
 def put_jellyfin(body: JellyfinSettings) -> dict[str, Any]:
+    before = STATE["jellyfin"]
+    has_key = bool(body.api_key) or before["has_api_key"]
+    # Empty keeps, as in the app: the library pick's own button sends the pick and nothing else,
+    # and a save that blanked the address would unconfigure the connector it was narrowing.
+    url = body.url or before["url"]
+    configured = bool(url) and has_key
+    # As `registry.save_jellyfin` mints: only for a connector this save leaves configured, so a
+    # Generate pressed on a fresh install is answered `null` here as it is by the app, and a card
+    # that misread that answer cannot pass against the harness while failing against the app.
+    # [M5.7 review cycle 1, M57-JFSYS-02]
+    minted = body.mint_webhook_token and configured and not before["has_webhook_token"]
     STATE["jellyfin"] = {
-        "url": body.url,
-        "has_api_key": bool(body.api_key) or STATE["jellyfin"]["has_api_key"],
-        "configured": bool(body.url) and (bool(body.api_key) or STATE["jellyfin"]["has_api_key"]),
-        "library_ids": [],
+        "url": url,
+        "has_api_key": has_key,
+        "configured": configured,
+        "library_ids": before["library_ids"] if body.library_ids is None else body.library_ids,
         "linked_users": 0,
         # The real PUT probes after saving and returns the pair it stored; nothing here can be
         # probed, so the stored pair is carried forward rather than invented.
-        "server_version": STATE["jellyfin"]["server_version"],
-        "server_supported": STATE["jellyfin"]["server_supported"],
+        "server_version": before["server_version"],
+        "server_supported": before["server_supported"],
+        "secrets_unreadable": False,
+        "has_webhook_token": before["has_webhook_token"] or minted,
     }
-    return STATE["jellyfin"]
+    # Decision 418's one appearance, on the save that asked, and `null` on every other. The value
+    # is a label and not a credential: `/events/jellyfin` below checks no token.
+    return {**STATE["jellyfin"],
+            "webhook_token": "devstub-webhook-token-not-a-credential" if minted else None}
 
 
 @app.post("/api/admin/connectors/jellyfin/test")
@@ -1172,13 +1237,13 @@ def jellyfin_sync() -> dict[str, Any]:
     return {"pushed": 0, "adopted": 0, "unchanged": 0, "needs_relink": [], "owed_unreachable": 0,
             "owed_no_token": 0, "push_failed": 0, "push_errors": [], "wrote": [], "unowned": 0,
             "resolve": {}, "users": [], "completed": [], "failed_users": [],
-            "skipped_no_link": True, "already_running": False}
+            "skipped_no_link": True, "already_running": False, "reached": False}
 
 
 @app.post("/api/admin/connectors/jellyfin/poll")
 def jellyfin_poll() -> dict[str, Any]:
     return {"armed": 0, "already_armed": 0, "watching": 0, "unresolved": [], "undecided": [],
-            "skipped_no_link": True}
+            "skipped_no_link": True, "reached": False}
 
 
 # --- §7.2's intake webhook, the one route here no browser calls ---------------------------
@@ -1333,16 +1398,48 @@ def admin_delete_user(user_id: int) -> dict[str, bool]:
 
 @app.get("/api/admin/system")
 def admin_system() -> dict[str, Any]:
-    """§6.6's System card at decision 182's three facts, invented like every number here.
+    """§6.6's System card at decision 182's three facts and decision 454's three, invented like every
+    number here.
 
     The harness runs no worker, so the rows are made up — but they are made up in the two shapes
     the page has to render differently: a job that failed carries `job_run.detail`'s `error` key
     and no report, and a successful one carries its report. The backup is deliberately fresh and
     not stale; the stale branch is what `18-system.spec.js` drives against the real stack, which
     is the only place a 36-hour clock means anything. [M4.7 ops-11; decision 182]
+
+    Decision 454's three the same way: a queue with work waiting and one failure, the seen-sync
+    whose newest run failed still naming its last success while the other sync jobs never ran, and
+    two log lines -- one carrying a URL the app's own `core/logs.redact` has already masked, since
+    that is the line the panel exists to show safely. The sync jobs and their connectors are the
+    app's `SYNC_JOBS`, not a copy.
     """
     now = datetime.now(UTC)
+    by_kind = [{"kind": "acquire", "state": "failed", "count": 1},
+               {"kind": "acquire", "state": "pending", "count": 9}]
+    by_state = dict.fromkeys(("pending", "leased", "done", "failed", "skipped"), 0)
+    for row in by_kind:
+        by_state[row["state"]] += row["count"]
+    synced = {"jellyfin-seen-sync": {"at": (now - timedelta(hours=26)).isoformat(),
+                                     "detail": {"pushed": 3, "adopted": 1}}}
     return {
+        "queue": {"by_state": by_state, "by_kind": by_kind},
+        "last_syncs": [
+            {"name": name, "connector": connector,
+             "at": synced.get(name, {}).get("at"), "detail": synced.get(name, {}).get("detail")}
+            for name, connector in admin_api.SYNC_JOBS.items()
+        ],
+        "logs": {
+            "scope": core_logs.SCOPE,
+            "since": (now - timedelta(hours=2)).isoformat(),
+            "records": [
+                {"at": (now - timedelta(minutes=50)).isoformat(), "level": "INFO",
+                 "logger": "spielplan", "message": "applied migrations: none pending"},
+                {"at": (now - timedelta(minutes=3)).isoformat(), "level": "WARNING",
+                 "logger": "spielplan.connectors.probes",
+                 "message": core_logs.redact("tmdb probe: GET https://api.themoviedb.org/3/"
+                                             "configuration?api_key=devstub-not-a-key -> 401")},
+            ],
+        },
         "jobs": [
             {"name": "fold-in-tick", "started_at": now.isoformat(),
              "finished_at": now.isoformat(), "ok": True, "detail": {"users": 2}},
@@ -1481,54 +1578,242 @@ def admin_acquisition_abandon(title_id: int) -> dict[str, Any]:
     return _board_action(title_id, acquire_actions.ABANDON)
 
 
-# §6.6's LLM settings read and the one connector test dispatch (M5.5, decision 433): two routes and
-# no write, as in the app, because M5.7 builds the cards and every write behind them. Answered here
-# for the reason the acquisition rows above give -- `test_devstub_contract.py` asks the harness for
-# every path the app serves, and M5.1's precedent for a clientless route is to answer it rather
-# than to exempt it.
+# §6.6's provider cards, spend guard and source cards (M5.5's read and dispatch, decision 433; M5.7's
+# writes, decisions 450-453). Answered here for the reason the acquisition rows above give --
+# `test_devstub_contract.py` asks the harness for every path the app serves -- and built from the
+# app's own pieces rather than restated: `api/llm`'s bodies, spellers and card builders, `llm/spend`'s
+# merge, settings readers, refusals and projection, `llm/pricing`'s table.
 #
-# The install this harness really is: no provider keyed, no setting stored, no call ever metered
-# and no cap in force (decision 325 ships none). So the read is the app's own fresh-install answer,
-# built from the app's own pieces rather than restated -- `api/llm.provider_card` over an empty
-# connector state for each card, `llm/spend`'s refusal sentence for the estimate a household with
-# no assignment gets, decision 338's reason for batch. Nothing here can reach a provider, so the
-# dispatch answers a provider's button the way the app answers a card with no key, and refuses
-# every other name with the registry's own table, as the app does.
+# THE ORDERING IS THE APP'S, because it is the one thing a card developed here must learn: the
+# preview writes nothing, and the confirm stores only when it carries the per-title figure a preview
+# of the same change prints now -- otherwise 409 with the fresh preview (decision 450). A harness
+# that saved on the first press would teach the card an optimistic save the app refuses.
+#
+# THE ONE THING THE HARNESS CANNOT HOLD IS A KEY, as `/events/jellyfin` above says of the webhook
+# token: this process has no secrets. So a saved credential is recorded as saved and its value is
+# dropped on arrival; the harness plans with `_NOT_A_KEY` in its place, which no provider would
+# accept and no response carries (every card reports booleans, as the app's do). Nothing here can
+# reach a provider or a source, and nothing is metered: the month is always unspent, and with no
+# task ever filed the projection says there is no history, in `llm/spend`'s own words.
+
+# The plaintext half of each connector row this harness was told about, keyed by connector name, and
+# which credential fields were saved for each.
+_ROWS: dict[str, dict[str, Any]] = {}
+_SAVED: dict[str, set[str]] = {}
+_NOT_A_KEY = "devstub-placeholder-not-a-key"
+
+
+def _state(name: str, overlay: dict[str, Any] | None = None) -> registry.ConnectorState:
+    """A connector as a real row would load it, with `overlay` laid over the plaintext half the way
+    `spend.preview` lays a proposed change -- `spend.proposed`, so None removes."""
+    config = llm_spend.proposed(_ROWS.get(name, {}), overlay or {})
+    saved = _SAVED.get(name, set())
+    if "client_id" in saved:
+        # Trakt's client id is plaintext config in the app (`api/llm._CREDENTIALS`' note).
+        config["client_id"] = _NOT_A_KEY
+    return registry.ConnectorState(
+        name=name, config=config,
+        secrets={field: _NOT_A_KEY for field in saved if field != "client_id"},
+    )
+
+
+def _stub_plan(
+    config: dict[str, Any], providers: dict[str, dict[str, Any]], today: Any
+) -> llm_spend.Plan | llm_spend.Refusal:
+    """`spend._plan`'s order over the harness's rows: passes, providers, and each provider's key and
+    price. The per-provider sentences are the harness's own and cite the app's decisions; the app's
+    are `spend._plan`'s, and it wins on any disagreement."""
+    passes = llm_spend._passes_of(config)
+    if isinstance(passes, llm_spend.Refusal):
+        return passes
+    names = llm_spend._providers_of(config)
+    if isinstance(names, llm_spend.Refusal):
+        return names
+    planned = []
+    for name in names:
+        state = _state(name, providers.get(name))
+        fault = llm_spend._key_fault(name, state)
+        if fault is not None:
+            return llm_spend._refused(f"{fault} (dev harness; decision 324)", provider=name)
+        model = str(state.config.get("model") or llm_pricing.DEFAULT_MODELS[name])
+        price = llm_pricing.effective_price(name, model, override=state.config, on=today)
+        if price is None:
+            return llm_spend._refused(
+                f"no price is known for {name} model {model!r} (dev harness; decision 343)",
+                provider=name, model=model,
+            )
+        planned.append(llm_spend.ProviderPlan(
+            provider=name, model=model, key=_NOT_A_KEY, price=price,
+            override={f: state.config.get(f) for f in llm_pricing.OVERRIDE_FIELDS},
+        ))
+    return llm_spend.Plan(providers=tuple(planned), passes=passes)
+
+
+def _reading(now: datetime) -> dict[str, Any]:
+    """`spend.meter`'s plain values for a month nothing was spent in."""
+    start, end = llm_spend.period(now)
+    cap = llm_spend._cap_of(_ROWS.get(llm_spend.SETTINGS, {}))
+    return {"spent_usd": Decimal(0), "unsettled_usd": Decimal(0), "cap_usd": cap,
+            "remaining_usd": cap, "period_start": start, "period_end": end, "tz": settings().tz}
+
+
+def _preview(
+    change: dict[str, Any] | None = None, providers: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """`api/llm._preview_body` over the harness's rows: the same four keys, spelled by the app."""
+    now = datetime.now(UTC)
+    today = now.astimezone(llm_spend.local_zone()).date()
+    providers = providers or {}
+    config = llm_spend.proposed(_ROWS.get(llm_spend.SETTINGS, {}), change or {})
+    plan = _stub_plan(config, providers, today)
+    names = llm_spend._providers_of(config)
+    blocked = None
+    if not isinstance(names, llm_spend.Refusal):
+        for name in names:
+            fault = llm_spend._key_fault(name, _state(name))
+            if fault is not None:
+                blocked = (f"{fault}, so {name} cannot be put into the extraction plan until a"
+                           " usable key is saved on its card (dev harness; decision 450)")
+                break
+    per_title, basis = None, ()
+    if not isinstance(plan, llm_spend.Refusal):
+        per_title = llm_pricing.estimate_title(
+            tokens_in=llm_pricing.SPEC_INPUT_TOKENS,
+            prices=[chosen.price for chosen in plan.providers], passes=plan.passes,
+        )
+        basis = tuple(
+            found for chosen in plan.providers
+            if (found := llm_pricing.price_basis(chosen.provider, chosen.model,
+                                                 override=chosen.override, on=today)) is not None
+        )
+    reading = _reading(now)
+    return {
+        "estimate": llm_api._estimate(llm_spend.Preview(plan, per_title, basis, blocked)),
+        "projected": llm_api._projected(llm_spend.projection(
+            per_title, titles=0, ever_filed=False, remaining=reading["remaining_usd"])),
+        "meter": llm_api._meter(reading),
+        "blocked": blocked,
+    }
+
+
+def _llm_read() -> dict[str, Any]:
+    """`api/llm._read`'s body over the harness's rows."""
+    today = datetime.now(UTC).astimezone(llm_spend.local_zone()).date()
+    figures = _preview()
+    stored = _ROWS.get(llm_spend.SETTINGS, {})
+    return {
+        "providers": [llm_api.provider_card(name, _state(name), on=today)
+                      for name in llm_client.PROVIDERS],
+        "settings": {name: stored.get(name) for name in llm_api._SETTINGS},
+        "meter": figures["meter"],
+        "estimate": figures["estimate"],
+        "projected": figures["projected"],
+        "batch": {"available": False, "reason": llm_api.BATCH_UNAVAILABLE},
+    }
+
+
+def _store(name: str, fields: dict[str, Any]) -> None:
+    """One row's share of a confirmed change, `api/llm._save`'s grammar: values set, None unsets."""
+    _ROWS[name] = llm_spend.proposed(_ROWS.get(name, {}), fields)
 
 
 @app.get("/api/admin/llm")
 def admin_llm() -> dict[str, Any]:
-    now = datetime.now(UTC)
-    start, end = llm_spend.period(now)
-    today = now.astimezone(llm_spend.local_zone()).date()
-    unassigned = llm_spend._providers_of({})
+    return _llm_read()
+
+
+@app.post("/api/admin/llm/preview")
+async def admin_llm_preview(request: Request) -> dict[str, Any]:
+    """Decision 450's preview. Writes nothing, here as in the app."""
+    change, providers = llm_api._change(await llm_api._body(request, llm_api.LlmChange))
+    return _preview(change, providers)
+
+
+@app.put("/api/admin/llm", response_model=None)
+async def admin_llm_confirm(request: Request) -> dict[str, Any] | JSONResponse:
+    """Decision 450's write: stored only with the figure a preview of the same change prints now."""
+    body = await llm_api._body(request, llm_api.LlmConfirm)
+    change, providers = llm_api._change(body)
+    if not change and not providers:
+        raise HTTPException(422, "the change names no setting (dev harness; decision 450)")
+    fresh = _preview(change, providers)
+    refused = None
+    if fresh["blocked"] is not None:
+        refused = f"{fresh['blocked']}. Nothing was stored"
+    elif body.accepted_estimate != fresh["estimate"]["per_title_usd"]:
+        refused = (f"the per-title estimate is now {fresh['estimate']['per_title_usd']}, not"
+                   f" {body.accepted_estimate}; nothing was stored (dev harness; decision 450)")
+    if refused is not None:
+        return JSONResponse(status_code=409, content={"detail": refused, "preview": fresh})
+    for name, fields in providers.items():
+        _store(name, fields)
+    if change:
+        _store(llm_spend.SETTINGS, change)
+    return _llm_read()
+
+
+@app.put("/api/admin/llm/cap")
+async def admin_llm_cap(request: Request) -> dict[str, Any]:
+    """Decision 452: in force at once, no preview, a finite number of at least 0 and never null."""
+    body = await llm_api._body(request, llm_api.CapChange)
+    _store(llm_spend.SETTINGS, {"cap_usd": body.cap_usd})
+    return {"meter": llm_api._meter(_reading(datetime.now(UTC)))}
+
+
+@app.get("/api/admin/connectors")
+def admin_connectors() -> dict[str, Any]:
+    """The source cards: `api/llm._source_card` over the harness's rows, and the adapters' own
+    registry for which kinds read each key and which sources need none (proposal 137)."""
+    sources.load_all()
+    order = sources.available_kinds({name: True for name in llm_api._SOURCES})
     return {
-        "providers": [
-            llm_api.provider_card(name, registry.ConnectorState(name=name), on=today)
-            for name in llm_client.PROVIDERS
+        "sources": [
+            llm_api._source_card(name, _state(name), used_by=[
+                kind for kind in order if sources.REGISTRY[kind].requires == name])
+            for name in llm_api._SOURCES
         ],
-        "settings": {"extraction_provider": None, "parallel": None, "passes": None, "cap_usd": None},
-        "meter": {"spent_usd": "0", "unsettled_usd": "0", "cap_usd": None, "remaining_usd": None,
-                  "period_start": start.isoformat(), "period_end": end.isoformat(),
-                  "tz": settings().tz},
-        "estimate": {"per_title_usd": llm_api.UNKNOWN,
-                     "input_tokens_assumed": llm_pricing.SPEC_INPUT_TOKENS, "passes": None,
-                     "providers": [], "reason": unassigned.reason},
-        "batch": {"available": False, "reason": llm_api.BATCH_UNAVAILABLE},
+        "keyless": list(dict.fromkeys(
+            sources.REGISTRY[kind].source for kind in order
+            if sources.REGISTRY[kind].requires is None)),
     }
+
+
+@app.put("/api/admin/connectors/{name}")
+async def admin_connector_credentials(name: str, request: Request) -> dict[str, Any]:
+    """Decision 452's key route: credentials only, empty keeps, booleans back -- and the value is
+    dropped here, since the harness holds none. `/api/admin/connectors/jellyfin` above is
+    registered first and answers its own path, as in the app."""
+    if name == llm_spend.SETTINGS:
+        raise HTTPException(409, "the llm settings are written by PUT /api/admin/llm and the cap by"
+                                 " PUT /api/admin/llm/cap (dev harness; decisions 450, 452)")
+    try:
+        registry.spec_for(name)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    carried = llm_api._CREDENTIALS.get(name)
+    if carried is None:
+        raise HTTPException(409, f"connector {name} is saved by its own card, not by this route")
+    body = await llm_api._body(request, llm_api.Credentials)
+    stray = sorted(body.model_fields_set - set(carried))
+    if stray:
+        raise HTTPException(422, f"connector {name} takes {', '.join(carried)}; not {', '.join(stray)}")
+    _SAVED.setdefault(name, set()).update(field for field in carried if getattr(body, field))
+    return llm_api._credentials(name, _state(name))
 
 
 @app.post("/api/admin/connectors/{name}/test")
 def connector_test(name: str) -> dict[str, Any]:
     # Registered after `/api/admin/connectors/jellyfin/test` above, which is the order `app.py`
-    # keeps too: the first route registered answers a path both match.
+    # keeps too: the first route registered answers a path both match. `status` is every card's
+    # answer key in the app (`client.probe`, `connectors/probes._answer`); nothing here can reach
+    # a host, so there is never one to report.
     try:
         spec = registry.spec_for(name)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     if spec.test is None:
         raise HTTPException(status_code=404, detail=f"connector {name} has no test in this build")
-    return {"ok": False, "error": f"no API key is configured for {name}"}
+    return {"ok": False, "status": None, "error": f"the dev harness cannot reach {name}"}
 
 
 # §6.6 Data's extraction queue (M5.6; decisions 441-443): the queue read, the quote and Launch.
@@ -1595,7 +1880,7 @@ def _flywheel_quote(titles: int, providers: list[str], passes: int) -> dict[str,
     unkeyed = [name for name in chosen if name not in _FLYWHEEL_KEYED]
     refused = None
     if not chosen:
-        refused = "the flywheel batch names no provider; a batch names one or more of gemini, anthropic"
+        refused = flywheel_batch.NO_PROVIDER
     elif unkeyed:
         refused = (f"no API key is configured for {unkeyed[0]}, which extraction is assigned to. Add it"
                    " in Admin, and this title resumes here")

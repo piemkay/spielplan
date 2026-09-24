@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from spielplan.api.deps import DB, ActiveUser, AdminUser, current_user, set_session_cookie, write_txn
 from spielplan.core import auth, secrets
 from spielplan.core.config import settings
+from spielplan.llm import client, spend
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -50,6 +51,19 @@ class ConnectorSeed(BaseModel):
     name: str
     config: dict = Field(default_factory=dict)
     secrets: dict | None = None
+
+
+# The rows §6.6's spend guard owns: the `llm` settings and the three providers, whose model, price
+# override and key each change what stage 6 bills. None is seeded here, because this route stores a
+# config whole and with no figure, and it stays mounted after first boot (decision 450: the order
+# is "a property of the API", a hand-typed request included). The sentence names the three doors.
+_SPEND_GUARDED = frozenset((spend.SETTINGS, *client.PROVIDERS))
+_SPEND_GUARDED_REFUSAL = (
+    " is not seeded here: the extraction plan, the models and the price overrides are written by"
+    " PUT /api/admin/llm with the estimate the preview showed (decision 450), the cap by"
+    " PUT /api/admin/llm/cap (decision 452), and a provider's key by"
+    " PUT /api/admin/connectors/<provider>"
+)
 
 
 async def _optional_user(
@@ -156,7 +170,15 @@ async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[st
 async def seed_connector(body: ConnectorSeed, _: AdminUser, conn: DB) -> dict[str, object]:
     """§2: connectors are configured in the admin UI and stored in `connector_config`;
     env vars may only *seed* them on first boot. Writing a secret requires SECRETS_KEY —
-    the app refuses rather than falling back."""
+    the app refuses rather than falling back.
+
+    Not for the rows the spend guard owns (`_SPEND_GUARDED`): through here a plan at three passes, a
+    provider priced at zero -- whose calls then meter $0, so the cap never binds -- or a keyless
+    assignment a key saved later turns billable was each stored with no figure shown. 409 before
+    anything is read or written, with the sentence naming the three routes that do write them.
+    [M5.7 review cycle 1, M57-THESIS-01]"""
+    if body.name in _SPEND_GUARDED:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{body.name}{_SPEND_GUARDED_REFUSAL}")
     if body.secrets:
         settings().require_secrets_key()
     # `retire_unreadable`: the same admin gesture as the Connectors card's PUT, on the same page

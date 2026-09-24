@@ -50,7 +50,7 @@ from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
 from spielplan.api.deps import carry_slid_session_cookie
 from spielplan.connectors import registry
-from spielplan.core import secrets
+from spielplan.core import logs, secrets
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
 from spielplan.ledger import hyperparams
@@ -74,6 +74,11 @@ from spielplan.scoring import backbone
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s"
 )
+# §6.6 names logs as the operator's data, and the System card is where an operator without shell
+# access reads them: this process's own `spielplan` lines, redacted and held in a ring of 200 since
+# it started (decision 454). Installed here and not in `worker.py`, whose lines stay in its
+# container log and whose failures reach the card as `jobs`.
+logs.install()
 log = logging.getLogger("spielplan")
 
 # The errnos that mean "this host could not be reached", for the handler below. Python raises a

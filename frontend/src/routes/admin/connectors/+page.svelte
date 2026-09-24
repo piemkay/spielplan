@@ -1,23 +1,38 @@
 <script>
   /**
-   * Admin → Connectors. Spec v2.1 §6.6, §3.3, §7.
+   * Admin → Connectors. Spec v2.1 §6.6, §3.3, §7, §9; decisions 339, 364, 410, 418, 450-455.
    *
-   * §6.6's Jellyfin card in full but for two pieces: "URL, API key, library pick,
-   * user-mapping table, test button, sync now, webhook status". The library pick and the
-   * webhook belong to §7.2's acquisition trigger, which is M5, and say so rather than
-   * appearing as controls that do nothing.
+   * §6.6's Connectors card in full and in its own order: Jellyfin ("URL, API key, library pick,
+   * user-mapping table, test button, sync now, webhook status"), the three LLM providers with the
+   * spend guard and the one task assignment M5 has a caller for (decision 339), and "TMDB / OMDb
+   * / Trakt keys with test buttons".
    *
-   * The API key is never displayed. §14.3: "Jellyfin API keys are unscoped and
-   * admin-equivalent — no read-only variant exists", so the field posts empty to mean "keep
-   * the stored one" and the page can only tell you *whether* there is a key.
+   * No stored credential is ever displayed. §14.3: "Jellyfin API keys are unscoped and
+   * admin-equivalent — no read-only variant exists", and a provider key bills the household, so
+   * every key field posts empty to mean "keep the stored one" and the page can only tell you
+   * *whether* there is a key.
    *
-   * LLM providers, TMDB, OMDb and Trakt are the rest of §6.6's Connectors card and arrive
-   * with M5.
+   * The spend settings are never saved from a control. Each change is previewed, and only a
+   * Confirm carrying the figure it was shown stores it (decision 450) -- the order lives in
+   * `spendGuard.svelte.js`, which the cards below share.
+   *
+   * The Jellyfin card's two M5 halves each have a way to do damage in silence, and each is built
+   * against it (decision 455). The library pick is its own write, sent only when it changed and
+   * never from a list that failed to load, because decision 364 reads `[]` as the whole server.
+   * The webhook status is the facts of what arrived and what the poll did, not a mode flag. And
+   * the token is minted only by a press that asks for it, shown once and kept in this component's
+   * state alone (decision 418).
    */
   import { onMount } from 'svelte';
   import { get, post, api } from '$lib/api.js';
   import { jellyfinDirectory } from '$lib/jellyfin.js';
+  import { session } from '$lib/session.svelte.js';
+  import { KEYLESS_LABELS, openSpendGuard, spend } from '$lib/spendGuard.svelte.js';
   import AdminTabs from '$lib/components/AdminTabs.svelte';
+  import SpendMeter from '$lib/components/SpendMeter.svelte';
+  import ExtractionSettings from '$lib/components/ExtractionSettings.svelte';
+  import LlmProviderCard from '$lib/components/LlmProviderCard.svelte';
+  import SourceConnectorCard from '$lib/components/SourceConnectorCard.svelte';
 
   let cfg = $state(null);
   let url = $state('');
@@ -33,18 +48,153 @@
   // password entry that buys the least-privilege write path.
   let form = $state({});
 
-  onMount(refresh);
+  // §6.6's library pick (decision 364). `libraries` is the server's list envelope, or null while
+  // unasked; `picked` is the selection on screen, which is sent only by its own button and only
+  // when it differs from what is stored -- the plain Save never carries it.
+  let libraries = $state(null);
+  let picked = $state([]);
+  let librarySeq = 0;
+
+  // The one-time reveal (decisions 332, 418): the value the minting PUT answered, held here and
+  // nowhere else -- not in storage, not in the URL -- so leaving the page is losing it.
+  let minted = $state(null);
+  // A press the server answered with no token while none is held: nothing was minted, and saying
+  // so is the whole of it -- the press stays offered, because nothing was spent.
+  let unminted = $state(false);
+  // `save_jellyfin`'s own mint condition, read off the card rather than guessed at: it mints only
+  // for a connector that is configured, which a key this SECRETS_KEY cannot open is not. A press
+  // offered anywhere else is answered 200 with `webhook_token: null`. [M5.7 review cycle 1,
+  // M57-JFSYS-02]
+  const mintable = $derived(Boolean(cfg?.configured) && !cfg?.secrets_unreadable);
+
+  const sorted = (ids) => JSON.stringify([...(ids ?? [])].sort());
+  const sameIds = (a, b) => sorted(a) === sorted(b);
+  const pickChanged = $derived(Boolean(cfg) && !sameIds(picked, cfg.library_ids));
+  // A picked id the server no longer lists is a fault in the pick, not a boundary (decision 410):
+  // only a list that loaded can say which ids those are.
+  const stale = $derived(
+    libraries?.ok
+      ? (cfg?.library_ids ?? []).filter((id) => !libraries.libraries.some((lib) => lib.id === id))
+      : []
+  );
+  const listed = $derived(
+    libraries?.ok
+      ? libraries.libraries
+      : (cfg?.library_ids ?? []).map((id) => ({ id, name: id }))
+  );
+  // Where the plugin posts: `PUBLIC_URL` as the wizard shows it, the origin §2 serves.
+  const webhookUrl = $derived(
+    `${(session.publicUrl || '<PUBLIC_URL>').replace(/\/+$/, '')}/events/jellyfin`
+  );
+
+  onMount(() => {
+    refresh();
+    openSpendGuard();
+  });
 
   async function refresh() {
     error = '';
     try {
       const directory = await jellyfinDirectory();
+      // An unsaved pick survives a Sync or a Test; only a pick nobody touched follows the server.
+      const keepPick = pickChanged;
       cfg = directory.cfg;
+      if (!keepPick) picked = [...(cfg.library_ids ?? [])];
+      loadLibraries(cfg.configured);
       jfUsers = directory.users;
       url = cfg.url ?? '';
       appUsers = await get('/admin/users');
     } catch (err) {
       error = err.message;
+    }
+  }
+
+  /**
+   * The list to pick from. Not awaited by `refresh`: it reaches the media server on a forty-five
+   * second budget, and the mapping table must not wait on it. A read that threw is the same answer
+   * as one that said `ok: false` -- no list -- and the pick is disabled rather than built from it.
+   */
+  async function loadLibraries(configured) {
+    const mine = ++librarySeq;
+    if (!configured) {
+      libraries = null;
+      return;
+    }
+    let answer;
+    try {
+      answer = await get('/admin/connectors/jellyfin/libraries');
+    } catch (err) {
+      answer = { ok: false, error: err.message, libraries: [] };
+    }
+    if (mine === librarySeq) libraries = answer;
+  }
+
+  function pick(id, on) {
+    const next = new Set(picked);
+    if (on) next.add(id);
+    else next.delete(id);
+    // Listed order first, then the stale ids, so the stored pick reads the way the card does.
+    const order = [...listed.map((lib) => lib.id), ...stale];
+    picked = order.filter((each) => next.has(each));
+  }
+
+  /**
+   * `library_ids` alone, through the same PUT: absent `url` and `api_key` keep what is stored. An
+   * empty selection is sent as `[]` on purpose -- deselecting the last library is the one gesture
+   * that widens the boundary back to the whole server (decision 364) -- but never from a list that
+   * failed, where `[]` would be the shape of a choice nobody made.
+   */
+  async function savePick() {
+    if (!libraries?.ok || !pickChanged) return;
+    error = '';
+    busy = 'pick';
+    try {
+      const answer = await api('/admin/connectors/jellyfin', {
+        method: 'PUT',
+        body: { library_ids: [...picked] }
+      });
+      // The pick as stored -- the route keeps a GUID in the server's spelling (decision 410) -- so
+      // the button reads "nothing changed" against the value that is actually there.
+      picked = [...(answer?.library_ids ?? picked)];
+      await refresh();
+    } catch (err) {
+      error = err.message;
+    } finally {
+      busy = '';
+    }
+  }
+
+  /**
+   * Decision 418's explicit ask, offered only while no token exists and the connector is one the
+   * server mints for. `save_jellyfin` mints only when none is held and never rotates, so a second
+   * press could only ever be told "one exists".
+   *
+   * A `null` answer is two different facts, and only the server's next read tells them apart: a
+   * token another tab minted first, which cannot be shown again, or no token at all, because the
+   * connector stopped being configured between the read and the press. Reading every `null` as the
+   * first told a fresh install its token was lost for good -- decision 332 allows no rotation, so an
+   * admin who believed it never set up the plugin and §7.2's trigger never ran. [M5.7 review cycle
+   * 1, M57-JFSYS-02]
+   */
+  async function mintToken() {
+    error = '';
+    unminted = false;
+    busy = 'mint';
+    try {
+      const answer = await api('/admin/connectors/jellyfin', {
+        method: 'PUT',
+        body: { mint_webhook_token: true }
+      });
+      if (answer?.webhook_token) minted = { token: answer.webhook_token };
+      await refresh();
+      if (!minted) {
+        if (cfg?.has_webhook_token) minted = { token: null };
+        else unminted = true;
+      }
+    } catch (err) {
+      error = err.message;
+    } finally {
+      busy = '';
     }
   }
 
@@ -54,6 +204,7 @@
     try {
       await api('/admin/connectors/jellyfin', { method: 'PUT', body: { url, api_key: apiKey } });
       apiKey = '';
+      unminted = false;
       await refresh();
     } catch (err) {
       error = err.message;
@@ -136,6 +287,29 @@
   function set(userId, field, value) {
     form = { ...form, [userId]: { ...(form[userId] ?? {}), [field]: value } };
   }
+
+  const stamp = (iso) => (iso ? new Date(iso).toLocaleString() : null);
+
+  /** The System card's rule, for the same reason: the age answers the question (`admin/system`). */
+  function ago(iso) {
+    if (!iso) return '';
+    const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+    const days = Math.round(hours / 24);
+    return `${days} days ago`;
+  }
+
+  const when = (iso) => (iso ? `${stamp(iso)} · ${ago(iso)}` : null);
+
+  /** The poll's newest run in one word; a run with no verdict yet is in flight or was killed. */
+  function pollOutcome(poll) {
+    if (!poll?.last_run_at) return 'never';
+    if (poll.last_run_ok === true) return 'ok';
+    if (poll.last_run_ok === false) return 'failed';
+    return 'unfinished';
+  }
 </script>
 
 <AdminTabs active="connectors" />
@@ -144,7 +318,7 @@
 
 {#if error}<p class="err" role="alert">{error}</p>{/if}
 
-<section class="card">
+<section class="card" data-testid="connector-jellyfin">
   <h2>Jellyfin</h2>
   <p class="why">
     The API key grants full server access — Jellyfin has no read-only variant. This app uses it
@@ -310,6 +484,15 @@
            which is the assertion becoming the implementation compared to itself. [§7.2, §6.6] -->
       {#if syncResult.resolve?.unmatched}· {syncResult.resolve.unmatched} library
         item(s) matched no title{/if}
+      <!-- D4: the names beside the count, which `SyncReport.as_dict` caps at twenty. The operator's
+           only view of what the household holds that the resolver could not identify (§7.2). -->
+      {#if syncResult.resolve?.unmatched_names?.length}
+        <div class="unmatched" data-unmatched-names>
+          {syncResult.resolve.unmatched > syncResult.resolve.unmatched_names.length
+            ? `the first ${syncResult.resolve.unmatched_names.length}: `
+            : ''}{syncResult.resolve.unmatched_names.join(', ')}
+        </div>
+      {/if}
       {#if syncResult.push_failed}
         <!-- A failure, not a count in a row of counts. This card printed
              "pushed 0 · adopted 0 · unchanged 87" while every Played write in the sweep was being
@@ -323,7 +506,155 @@
     </div>
   {/if}
 
-  <p class="why milestone">Library pick and webhook status arrive with M5 (§7.2).</p>
+  {#if cfg?.configured}
+    <!-- §6.6's library pick (decisions 364, 410, 455). Checkboxes are outside design.css's coarse
+         block, so each sits in a label that is the 48 px target. -->
+    <div
+      class="pick"
+      data-library-pick={libraries === null ? 'loading' : libraries.ok ? 'ready' : 'unavailable'}
+    >
+      <span class="data">LIBRARY PICK</span>
+      {#if libraries && !libraries.ok}
+        <p class="alert" role="alert">
+          The library list did not load: {libraries.error ?? 'no reason was reported'}. The pick
+          stays as stored until it does, and nothing is sent from here.
+        </p>
+      {:else if libraries === null}
+        <span class="data">asking Jellyfin for its libraries…</span>
+      {/if}
+      {#each listed as lib (lib.id)}
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={picked.includes(lib.id)}
+            disabled={!libraries?.ok || busy === 'pick'}
+            onchange={(e) => pick(lib.id, e.currentTarget.checked)}
+          />
+          <span>{lib.name || lib.id}</span>
+        </label>
+      {/each}
+      {#if stale.length}
+        <div class="stale" data-library-stale>
+          <p class="alert">
+            Picked but no longer listed by the server: {stale.join(', ')}. Adds that no listed
+            picked library holds are held until the pick is saved again (decision 410).
+          </p>
+          {#each stale as id (id)}
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={picked.includes(id)}
+                disabled={busy === 'pick'}
+                onchange={(e) => pick(id, e.currentTarget.checked)}
+              />
+              <span>{id} (no longer listed)</span>
+            </label>
+          {/each}
+        </div>
+      {/if}
+      <p class="why">
+        {#if picked.length === 0}
+          Nothing picked: every library on the server is acquired (decision 364).
+        {:else}
+          Only what is added to the picked libraries is acquired; an add anywhere else is recorded
+          and left alone (decision 364).
+        {/if}
+      </p>
+      <div class="row">
+        <button
+          class="btn-ghost"
+          onclick={savePick}
+          disabled={!libraries?.ok || !pickChanged || busy === 'pick'}
+        >
+          Save library pick
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  <!-- §6.6's "webhook status" as the facts of both paths (decision 455, proposal 106): §7.2 runs
+       the webhook and the delta poll at once by design, so there is no mode to report, only what
+       each last did. The last ItemAdded is not the last delivery: a plugin pointed at the playback
+       templates delivers every evening and has never told this app about an add. Read with `?.`,
+       because a card served without `trigger` (an older backend, 18-system's fixture) is legal. -->
+  {#if cfg?.trigger}
+    {@const webhook = cfg.trigger.webhook ?? {}}
+    {@const poll = cfg.trigger.delta_poll ?? {}}
+    <div
+      class="data probe"
+      data-trigger="webhook"
+      data-item-added={webhook.last_item_added_at ? 'received' : 'none'}
+    >
+      webhook · last ItemAdded {when(webhook.last_item_added_at) ?? 'none received yet'}
+      · last delivery of any kind {when(webhook.last_delivery_at) ?? 'none'} ·
+      {webhook.deliveries_7d ?? 0} in the last 7 days
+      {#if webhook.last_refusal}
+        <div>newest refusal {when(webhook.last_refusal.at)}: {webhook.last_refusal.reason}</div>
+      {/if}
+    </div>
+    <div class="data probe" data-trigger="delta-poll" data-poll-outcome={pollOutcome(poll)}>
+      delta poll · newest run {when(poll.last_run_at) ?? 'never'} · {pollOutcome(poll)}
+      {#if poll.last_filed !== null && poll.last_filed !== undefined}· filed {poll.last_filed}{/if}
+      · last ok {when(poll.last_ok_at) ?? 'never'} · reads from {stamp(poll.watermark) ?? 'the start'}
+    </div>
+  {/if}
+
+  <!-- §7.2's token (decisions 332, 418, 455): minted only by the press below, shown once, never
+       rotated. The header and the path are shown beside it because the plugin needs all three. -->
+  {#if minted}
+    <div class="token" data-webhook-token-state="revealed">
+      {#if minted.token}
+        <p class="alert" role="alert">
+          Copy this into the Jellyfin Webhook plugin now: it is shown once, here, and never again.
+        </p>
+        <code class="data-lg" data-webhook-token>{minted.token}</code>
+      {:else}
+        <p class="why">
+          A token already existed, so none was minted, and it cannot be shown again.
+        </p>
+      {/if}
+      <div class="data">
+        header X-Spielplan-Token · POST {webhookUrl} · template ops/jellyfin-webhook-template.json
+      </div>
+    </div>
+  {:else if cfg?.has_webhook_token === false}
+    <!-- The press is offered only where the server would mint (M57-JFSYS-02). The card lays the
+         URL and the key out above the token, so on first setup this block is reached before they
+         are saved, and it says what it is waiting for rather than offering a press that mints
+         nothing. -->
+    <div class="token" data-webhook-token-state={mintable ? 'none' : 'unconfigured'}>
+      {#if unminted}
+        <p class="alert" role="alert" data-webhook-unminted>
+          Nothing was minted, and no token is stored: the server mints one only for a connector
+          saved with its URL and an API key it can read.
+        </p>
+      {/if}
+      <p class="why">
+        {#if mintable}
+          No webhook token yet, so the Webhook plugin cannot deliver and the delta poll carries every
+          add. Generating one shows it once; nothing can show it again.
+        {:else}
+          No webhook token yet. One can be generated once the server URL and API key are saved: the
+          server mints it only for a configured connector, and shows it once.
+        {/if}
+      </p>
+      <div class="data">
+        header X-Spielplan-Token · POST {webhookUrl} · template ops/jellyfin-webhook-template.json
+      </div>
+      {#if mintable}
+        <div class="row">
+          <button class="btn-ghost" onclick={mintToken} disabled={busy === 'mint'}>
+            Generate webhook token
+          </button>
+        </div>
+      {/if}
+    </div>
+  {:else if cfg?.has_webhook_token}
+    <p class="why" data-webhook-token-state="exists">
+      A webhook token exists. It was shown once, when it was generated, and cannot be shown again;
+      the delta poll carries every add without it.
+    </p>
+  {/if}
 </section>
 
 <section class="card">
@@ -416,6 +747,25 @@
   </table>
 </section>
 
+<SpendMeter />
+<ExtractionSettings />
+{#each spend.llm?.providers ?? [] as card (card.name)}
+  <LlmProviderCard {card} />
+{/each}
+
+{#if spend.sourcesError}<p class="err" role="alert">{spend.sourcesError}</p>{/if}
+{#each spend.sources?.sources ?? [] as source (source.name)}
+  <SourceConnectorCard {source} />
+{/each}
+{#if spend.sources?.keyless?.length}
+  <!-- Proposal 137's point (plan C2): which of stage 2's sources need a card at all, so a failure
+       from one that needs none is not chased on this page. -->
+  <p class="why" data-keyless>
+    {spend.sources.keyless.map((name) => KEYLESS_LABELS[name] ?? name).join(', ')} need no key: a
+    stage-2 failure from one of them is not fixed on this page.
+  </p>
+{/if}
+
 <style>
   h1 {
     margin: 0 0 12px;
@@ -453,8 +803,43 @@
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
   }
-  .milestone {
+  .pick {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stale {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .check {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    min-height: var(--touch);
+    min-width: var(--touch);
+    cursor: pointer;
+    font-size: 13.5px;
+  }
+  .check input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+  }
+  .check input:disabled + span {
     color: var(--ink-4);
+  }
+  .token {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .token code {
+    word-break: break-all;
+  }
+  .unmatched {
+    margin-top: 4px;
   }
   .alert {
     margin: 0;

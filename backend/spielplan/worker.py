@@ -295,6 +295,15 @@ async def _prune_job_runs() -> None:
     `id <> NULL` is NULL, which would have exempted every row of every job that only ever failed.
     The correlated subquery is one `job_run_name_started` lookup per candidate row rather than
     the whole-table `DISTINCT ON` both readers were rewritten away from. [M4.7 cycle 2 finding 7]
+
+    **Nor its newest row that reached a server**, for the same reason one reader later. §6.6's
+    `last_syncs` reads a sync job's newest ok row whose report says its server answered
+    (`api/admin.job_health`, decision 454), and a sync job keeps closing ok rows through an outage
+    it swallows (§3.3) -- so after a fortnight of a down Jellyfin the newest ok row is an unreached
+    one, and by the first exemption alone the card turned "synced 15 days ago" into "never". Asked
+    once over the registry's names rather than per candidate: the walk to a reached row can cross
+    every row a sixty-second job wrote in the window, and per candidate that is quadratic.
+    [M5.7 review cycle 1, M57-JFSYS-01]
     """
     async with pool.acquire() as conn:
         result = await conn.execute(
@@ -302,8 +311,15 @@ async def _prune_job_runs() -> None:
             " WHERE r.started_at < now() - ($1::int * interval '1 day') "
             "   AND r.id IS DISTINCT FROM ("
             "       SELECT id FROM job_run "
-            "        WHERE name = r.name AND ok ORDER BY started_at DESC LIMIT 1)",
+            "        WHERE name = r.name AND ok ORDER BY started_at DESC LIMIT 1)"
+            "   AND r.id NOT IN ("
+            "       SELECT s.id FROM unnest($2::text[]) AS j(name) JOIN LATERAL ("
+            "              SELECT id FROM job_run WHERE name = j.name AND ok"
+            "                 AND detail IS NOT NULL"
+            "                 AND coalesce((detail->>'reached')::boolean, true)"
+            "               ORDER BY started_at DESC LIMIT 1) s ON true)",
             JOB_RUN_KEEP_DAYS,
+            [job.name for job in JOBS],
         )
         gone = str(result).rsplit(" ", 1)[-1]
         if gone != "0":

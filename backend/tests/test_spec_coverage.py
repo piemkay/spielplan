@@ -396,6 +396,23 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # 329, 330, 342 and 344 - the five the roadmap files against it - and 440-447 record the calls it
 # needed, and its one migration is 0029_flywheel.sql. See docs/milestones/M5.6-plan.md and
 # ROADMAP-M5.md.
+#
+# M5.7 opened once M5.5 had landed, in one wave with M5.6, and like the three before it it adds no
+# name to the list: M5.1 landed all seven positionally, so what this entry owes a reader is why
+# "M5.7" sits where it already does. It sits AFTER "M5.5" because it is the surface over what M5.5
+# publishes and does not render - the per-title estimate, the meter, the price table with its
+# `valid_until`, and the `ConnectorSpec` table that decision 433 shipped with no write route - so
+# section 6.6's "per-title cost estimate before enabling" can read as shipped only once the
+# estimate it shows does. It sits AFTER "M5.6" and BEFORE "M5" for the reason M5.1's entry gives
+# the umbrella: every part sorts before the row that names them all, and the two admin pages are
+# parallel lanes whose only shared subject - the admin retry at the cap and the flywheel's
+# recompute at the pass count - is split by decision 456 rather than by position. It does NOT hold
+# `current_milestone`; M5.1 does, and its rows are appended without raising the scalar. Three are
+# new and open with no `tests` key, and two are rows the roadmap filed against it with `tests = []`;
+# the red list is the test plan, closed by writing those tests and never by a waiver, by renaming a
+# registered test, or by lowering the scalar. Decision 339 - the question the roadmap files against
+# it - and 450-456 record the calls it needed, and it writes no migration (plan section 5).
+# See docs/milestones/M5.7-plan.md and ROADMAP-M5.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
               "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]
@@ -2786,6 +2803,71 @@ def test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take():
             f"{len(scoped)} still skip:\n  " + "\n  ".join(scoped)
             + "\n  Scope the sentence to what the milestone did, or name the survivors."
         )
+
+
+# --- M5.7 review cycle 1: a test that runs on one project is evidence only where the gate reads it
+#
+# `test.skip(testInfo.project.name !== 'phone', ...)` makes a Playwright test report `skipped` on
+# every project but one, and nothing in this suite runs Playwright. What holds such a test is
+# `ops/coverage_gate.py`, which reads a `skipped` result as evidence that did not run -- for the ids
+# this map names in a row at or before `current_milestone`, and for no others. So a one-project
+# test the map does not name, or names only in a row the gate does not read yet, is a test every
+# run of which can skip with phase 2 green: mistype the project in its one skip line, or rename the
+# project and repair every skip but that one, and the assertion is gone while every row it could
+# have closed reads covered. 13-rank's board sweep is registered in
+# the M4.15 row for exactly that reason; M5.7's sweep of the Connectors and System pages, plan
+# section 7 check 14's only evidence, carried the same skip and shipped outside the map.
+# [M5.7 review cycle 1, M57-C1-E2E-01]
+_ONE_PROJECT_SKIP = re.compile(
+    r"test\.skip\(\s*[^;]*?project\.name\s*!==?\s*(['\"])(?P<project>[^'\"]+)\1", re.S
+)
+
+
+def _one_project_playwright_tests(specs: Path = REPO / "e2e" / "specs") -> dict[str, str]:
+    """`path::title` -> the project it runs on, for every test that skips itself on all the rest.
+
+    Titles are read as `_playwright_ids` reads them, so an id found here is spelt the way the map
+    has to spell it. A test's body runs to the next `test(` head; both sweeps open with the skip.
+    """
+    out: dict[str, str] = {}
+    for path in sorted(specs.glob("*.spec.js")):
+        rel = path.relative_to(REPO).as_posix()
+        text = path.read_text(encoding="utf-8")
+        heads = list(re.finditer(r"^\s*test\(\s*(['\"`])(.+?)\1", text, re.M | re.S))
+        for head, following in zip(heads, [*heads[1:], None], strict=True):
+            body = text[head.end():following.start() if following else len(text)]
+            skip = _ONE_PROJECT_SKIP.search(body)
+            if skip:
+                out[f"{rel}::{head.group(2)}"] = skip.group("project")
+    return out
+
+
+def test_a_test_that_runs_on_one_project_is_named_where_the_release_gate_reads_it():
+    """A one-project Playwright test the gate cannot see is a test that may skip everywhere.
+
+    Scoped to rows at or before `current_milestone` because that is what `ops/coverage_gate.check`
+    reads: an M5.x row names its tests for the milestone that will raise the scalar, and until
+    then a `skipped` result against it is read by nobody. The reader is held to the two sweeps
+    this tree has, one skip on a line and one across three, so a reader gone blind fails here
+    rather than passing on an empty set. [§6 preamble; M5.7-plan.md section 7 check 14]
+    """
+    found = _one_project_playwright_tests()
+    sweeps = {
+        "e2e/specs/13-rank.spec.js::every control on the board meets the 48 px touch floor",
+        "e2e/specs/21-connectors.spec.js::every control on both admin pages is at least 48 px on the phone",
+    }
+    assert sweeps <= found.keys(), f"the reader lost a sweep this tree has: {sorted(sweeps - found.keys())}"
+
+    gated = {t for r in REQUIREMENTS if _at_or_before(r["milestone"]) for t in r.get("tests", [])}
+    loose = sorted(
+        f"{test_id} (runs on {on!r} only)" for test_id, on in found.items() if test_id not in gated
+    )
+    assert not loose, (
+        "these Playwright tests skip themselves on every project but one, and no row at or before "
+        f"current_milestone ({CURRENT}) names them, so ops/coverage_gate.py cannot object when every "
+        "run of one reports skipped:\n  " + "\n  ".join(loose) + "\n  Name each in the shipped row "
+        "whose clause it measures -- the 48 px sweeps sit in platform-every-touch-target-meets-the-token."
+    )
 
 
 # `## Decisions taken (owner, <date>[, as <milestone> opened])` heads one block of the register and

@@ -346,3 +346,50 @@ def test_an_estimate_refuses_a_pass_count_below_one(passes):
     gemini = pricing.price_for("gemini", "gemini-3.7-flash", on=TODAY)
     with pytest.raises(ValueError, match="at least one pass"):
         pricing.estimate_title(tokens_in=1000, prices=[gemini], passes=passes)
+
+
+# --- the price basis a caption names (M5.7, decision 343) ----------------------------------------
+
+
+def test_a_table_basis_names_the_price_its_end_and_the_price_after_it():
+    """Plan §2.7's second trap, as the caption has to state it: gemini-3.7-flash's introductory price
+    doubles on 2027-01-01, so an estimate costed today names the price it used, the day it stops
+    being true, and what the table says it becomes -- the one sentence that keeps a figure accepted
+    in December from reading as January's. On the day itself the doubled price is the price and has
+    no announced end, so the caption has nothing after it to name."""
+    basis = pricing.price_basis("gemini", "gemini-3.7-flash", on=TODAY)
+    assert (basis.provider, basis.model, basis.source) == ("gemini", "gemini-3.7-flash", "table")
+    assert (basis.price.input, basis.price.output, basis.price.valid_until) == (
+        0.75, 3.75, date(2027, 1, 1))
+    assert (basis.then.input, basis.then.output) == (1.5, 7.5)
+
+    doubled = pricing.price_basis("gemini", "gemini-3.7-flash", on=date(2027, 1, 1))
+    assert (doubled.price.input, doubled.price.output, doubled.price.valid_until) == (1.5, 7.5, None)
+    assert doubled.then is None
+    # A price with no announced end has nothing to say after it either.
+    sonnet = pricing.price_basis("anthropic", "claude-sonnet-5", on=TODAY)
+    assert (sonnet.source, sonnet.price.valid_until, sonnet.then) == ("table", None, None)
+
+
+def test_an_override_basis_says_override_and_a_half_one_is_the_tables():
+    """Decision 343's override wins when both halves are numbers, and the caption says so: the figure
+    is the admin's and carries no table date, because the table's end is not the override's. Half an
+    override is ignored by `effective_price`, so the basis it prices at is the table's and says so
+    rather than claiming a figure the admin was still typing."""
+    both = pricing.price_basis(
+        "gemini", "gemini-3.7-flash", override={"price_input": 1, "price_output": 4.5}, on=TODAY)
+    assert (both.source, both.price.input, both.price.output) == ("override", 1.0, 4.5)
+    assert (both.price.valid_until, both.then) == (None, None)
+
+    half = pricing.price_basis("gemini", "gemini-3.7-flash", override={"price_input": 1}, on=TODAY)
+    assert (half.source, half.price.input, half.price.valid_until) == ("table", 0.75, date(2027, 1, 1))
+
+
+def test_an_unpriced_model_has_no_basis_until_an_override_gives_it_one():
+    """Decision 343's "unknown" at the source: a model neither the table nor an override prices has no
+    basis at all, so no caller can print a price for it; the override is what gives it one."""
+    assert pricing.price_basis("gemini", "gemini-9-ultra", on=TODAY) is None
+    assert pricing.price_basis("openai", "gpt-5.6", on=TODAY) is None
+    priced = pricing.price_basis(
+        "gemini", "gemini-9-ultra", override={"price_input": 2, "price_output": 8}, on=TODAY)
+    assert (priced.source, priced.model, priced.price.input) == ("override", "gemini-9-ultra", 2.0)

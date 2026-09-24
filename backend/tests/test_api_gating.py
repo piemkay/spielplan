@@ -69,7 +69,12 @@ MEMBER_PASSWORD = "a-member-password"
 # 441-443), and the three ledger editors' four routes each with the review's two reads
 # (`api/curated.py`, decisions 445 and 446). Each arrives here by taking `AdminUser`, and
 # re-stating the number is the whole of what this equality asks of the milestone that added them.
-ADMIN_ROUTE_COUNT = 48
+# M5.7 then brought the writes decision 433 left to its cards - `POST /api/admin/llm/preview`
+# and `PUT /api/admin/llm`, the preview and the confirm that must carry its figure (decision 450),
+# `PUT /api/admin/llm/cap`, and `GET /api/admin/connectors` and `PUT /api/admin/connectors/{name}`,
+# the credentials read and write that never change an estimate (decision 452). The generic PUT's
+# pattern matches Jellyfin's own save too, and Jellyfin's answers, mounted first.
+ADMIN_ROUTE_COUNT = 53
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

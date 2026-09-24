@@ -601,3 +601,30 @@ async def pending_count(
             PENDING, list(kinds) if kinds else None, paid,
         )
     )
+
+
+async def filed_since(
+    conn: asyncpg.Connection, kind: str, since: datetime, *, except_priority: int
+) -> tuple[int, bool]:
+    """How many tasks of `kind` were filed at or after `since`, and whether one was ever filed.
+
+    §6.6's projected monthly spend is the per-title estimate times this count over the trailing
+    thirty days (decision 451): the install's own recent rate, never an invented constant, and "no
+    history" when nothing was ever filed rather than a zero that reads like a forecast. `created_at`
+    is the filing and not the walk, because the question is how many titles arrive in a month.
+
+    `except_priority` leaves out the tasks filed at one priority, and both answers leave them out.
+    The caller passes `intake.RE_OFFER_PRIORITY`: a re-offer is a title the household already owns,
+    which stage 1 closes without walking (decision 411), and an upgraded install's first delta poll
+    files one for every title added since the install -- a projection counting those bills a month
+    for a library that is already paid for. The kind and the priority are the caller's to name
+    because the constants live in `acquire/pipeline.py` and `acquire/intake.py`, which import
+    `llm/spend` -- and the spend guard that asks this question may import neither back.
+    """
+    row = await conn.fetchrow(
+        "SELECT count(*) FILTER (WHERE created_at >= $2)::bigint AS recent,"
+        "       count(*) > 0 AS ever"
+        "  FROM acquisition_task WHERE kind = $1 AND priority <> $3",
+        kind, since, except_priority,
+    )
+    return int(row["recent"]), bool(row["ever"])
