@@ -2283,11 +2283,12 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # published a figure nobody re-derived. Every rule below was read against
 # `ops/m53_exit_criterion.py` before the number moved. [M5.3, decision 378]
 #
-# THE HAND-MERGE LANDED ON 11. M5.2 and M5.3 each moved the number from 9 to 10 in their own tree,
-# so git saw one identical edit on both sides and took it once, silently - the shape the paragraph
-# above predicted. `ls ops/m*_exit_criterion.py` on the merged tree says eleven, and the five
-# assertions below say 11 because each of the two new scripts had already been read against every
-# rule here in its own lane. [M5.2 merge]
+# THE HAND-MERGE LANDED ON 11 -- and then the count came out altogether. M5.2 and M5.3 each moved
+# it from 9 to 10 in their own tree, git took the identical edit once and silently, and five
+# assertions read 10 over a directory holding eleven. A constant every new script has to bump, and
+# every parallel merge has to re-derive, buys no rule this block does not already hold: each sweep
+# below reads EVERY script the glob finds, so a new script is held to all of them the moment it
+# exists. The five assertions now require only that the glob finds something. [decision 460]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2394,7 +2395,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
+    assert EXIT_SCRIPTS, "no ops/m*_exit_criterion.py found, so every rule below reads nothing"
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2663,7 +2664,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
+    assert EXIT_SCRIPTS, "no ops/m*_exit_criterion.py found, so every rule below reads nothing"
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2911,7 +2912,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
+    assert EXIT_SCRIPTS, "no ops/m*_exit_criterion.py found, so every rule below reads nothing"
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -3191,7 +3192,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
+    assert EXIT_SCRIPTS, "no ops/m*_exit_criterion.py found, so every rule below reads nothing"
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3824,7 +3825,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
+    assert EXIT_SCRIPTS, "no ops/m*_exit_criterion.py found, so every rule below reads nothing"
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -5827,14 +5828,6 @@ def test_the_clamp_control_arithmetic_moves_when_the_simulation_does():
 # `docs/TESTING.md` are what a later milestone reads BEFORE the code, and a number handed out
 # twice is two normative rules under one heading, over source files that already cite the first.
 
-_DECISION_HEADING = re.compile(r"^### (\d+)\. ", re.M)
-# "leaving **264-266** spare": the ledger's form for a number a later cycle may take. The end of
-# the range is optional because a single number is published as "**264** spare".
-_LEDGER_SPARE = re.compile(r"\*\*(\d+)(?:-(\d+))?\*\* spare")
-# "**247-266 is spent**": the claim that replaces it, and the half that can be wrong in the other
-# direction -- a range published as spent with a number nobody ever wrote in it, which is what
-# `0019` is in the migration ledger.
-_LEDGER_SPENT = re.compile(r"\*\*(\d+)-(\d+) is spent\*\*")
 
 # The register spells its own counts. Both spellings are read so the guard below rules on the
 # count rather than on how a preamble chose to write it.
@@ -5843,162 +5836,6 @@ _COUNT_WORDS = (
     "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
     "nineteen", "twenty",
 )
-
-
-def _register_decisions() -> set[int]:
-    """Every decision number the register carries as an argued section."""
-    return {int(n) for n in _DECISION_HEADING.findall(REGISTER.read_text(encoding="utf-8"))}
-
-
-def _range_claims(text: str) -> tuple[list[int], list[int]]:
-    """The decision numbers `text` publishes as still available, and the ones it calls spent."""
-    spare = [
-        number
-        for start, end in _LEDGER_SPARE.findall(text)
-        for number in range(int(start), int(end or start) + 1)
-    ]
-    spent = [
-        number
-        for start, end in _LEDGER_SPENT.findall(text)
-        for number in range(int(start), int(end) + 1)
-    ]
-    return spare, spent
-
-
-def test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent():
-    """The ledger says which numbers a lane has left; the register says which it has taken.
-
-    `docs/TESTING.md` published "leaving **264-266** spare" over a register carrying 264, 265 and
-    266 as argued sections, each cited by number from `importer/dna.py`, `importer/bundle.py`,
-    `importer/validate.py`, three test files and `spec_coverage.toml`. CLAUDE.md sends the next
-    reader to the ledger "rather than assuming status", so a cycle needing a rule takes 264 on the
-    ledger's word and writes a second `### 264.`: two normative decisions under one number, over
-    five files already citing the first, and nothing re-derives the count to say so. It is not a
-    hypothetical - this review run's own brief repeats that sentence's three numbers, and the
-    range had to be corrected by hand.
-
-    Both directions, because the repair introduces the other one. A number published as SPARE may
-    not exist in the register; a range published as SPENT must exist in it end to end, since a
-    hole in a spent range is a number allocated and never written - which is exactly what `0019`
-    is in the migration ledger and exactly what must not be reused. Decision 177 is why either
-    matters: a decision is normative from the day it is taken, so the register - not the ledger -
-    is the record of which numbers have been taken at all. [M4.14 cycle 3, m414-c3-rec-01]
-    """
-    spare, spent = _range_claims(TESTING_LEDGER.read_text(encoding="utf-8"))
-    taken = _register_decisions()
-
-    handed_out = sorted(set(spare) & taken)
-    assert not handed_out, (
-        "docs/TESTING.md publishes these decision numbers as available and the register has "
-        f"already argued them: {handed_out}. Restate the sentence over the register as it is - "
-        "a number handed out twice is two rules under one heading."
-    )
-    unwritten = sorted(set(spent) - taken)
-    assert not unwritten, (
-        "docs/TESTING.md publishes a decision range as spent and the register carries no section "
-        f"for these: {unwritten}. A number inside a spent range that was never written is one a "
-        "later cycle will reuse, which is the hole 0019 is in the migration ledger."
-    )
-
-
-def test_the_range_guard_reads_both_claims_the_ledger_can_make():
-    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
-
-    Four shapes: the sentence that shipped, the sentence that replaces it, the single-number form,
-    and a paragraph making neither claim - which is the direction that keeps the guard honest,
-    because a ledger saying nothing about the range is not one this can report on.
-    """
-    assert _range_claims("join `rail.AWAITING_PRODUCER`), leaving **264-266** spare.") == (
-        [264, 265, 266],
-        [],
-    )
-    assert _range_claims("**247-266 is spent**: the sentence this one replaces") == (
-        [],
-        list(range(247, 267)),
-    )
-    assert _range_claims("and **264** spare after it") == ([264], [])
-    assert _range_claims("a paragraph that claims neither") == ([], [])
-
-
-def _decision_blocks_for(milestone: str) -> list[tuple[str, str]]:
-    """Every `## Decisions taken` block whose heading names `milestone`, as (heading, body)."""
-    body = REGISTER.read_text(encoding="utf-8")
-    heads = list(re.finditer(r"^## [^\n]*$", body, re.M))
-    out = []
-    for index, head in enumerate(heads):
-        end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
-        if head.group(0).startswith("## Decisions taken") and milestone in head.group(0):
-            out.append((head.group(0), body[head.end():end]))
-    return out
-
-
-def _published_and_carried(block: str) -> tuple[int | None, int]:
-    """The count a block's preamble publishes, and the number of sections it carries.
-
-    `None` for a block whose preamble opens on something other than a number word: M4.12's
-    review-cycle block opens straight on its one `###` section, and a claim nobody made is not
-    this guard's to invent.
-    """
-    lead = next((line for line in block.splitlines() if line.strip()), "")
-    word = re.match(r"\**([A-Za-z]+)\b", lead)
-    published = (
-        _COUNT_WORDS.index(word.group(1).lower())
-        if word and word.group(1).lower() in _COUNT_WORDS
-        else None
-    )
-    return published, len(_DECISION_HEADING.findall(block))
-
-
-def test_the_registers_decision_blocks_count_the_decisions_they_carry():
-    """The register's own convention, held for the milestone under review.
-
-    Every block here opens by counting itself - "Thirteen", "Eight", "Three more" - and that count
-    is how a reader knows a block is whole. M4.14's review-cycle-1 heading said "Four decisions
-    the adversarial review forced" over seven sections, because review cycle 2 appended 264, 265
-    and 266 under it rather than opening a heading of its own: every citation of those three in
-    the tree is tagged `[M4.14 cycle 2, ...]`, 264 rules on code decision 261 had already shipped
-    and 266 on decision 256's refusal message, so neither could have been taken in the cycle the
-    heading names. An auditor reconciling the milestone's history then cannot tell a stale
-    preamble from three decisions filed under the wrong cycle with no owner sign-off, which is the
-    ambiguity decision 177 depends on being absent.
-
-    Scoped to the blocks whose heading names `current_milestone`, and that is a real scope rather
-    than a convenience: four older blocks carry the same drift from their own later cycles
-    (2026-09-07's "One" over three sections, 2026-09-09's "Seven" over twelve, 2026-09-10's "Ten"
-    over eleven, M4.11's "Three" over four), and rewriting history to satisfy a guard is the
-    opposite of what a register is for. What is repairable is the block a milestone is still
-    writing. [M4.14 cycle 3, m414-c3-rec-02]
-    """
-    milestone = tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["current_milestone"]
-    blocks = _decision_blocks_for(milestone)
-    assert blocks, (
-        f"the register carries no `## Decisions taken` heading naming {milestone}. Since M4.11 "
-        "every block names its milestone in the heading, and that is the only handle a reader - "
-        "or this guard - has on which block belongs to which milestone."
-    )
-    drift = [
-        f"  {heading}: publishes {published}, carries {carried}"
-        for heading, block in blocks
-        for published, carried in [_published_and_carried(block)]
-        if published is not None and published != carried
-    ]
-    assert not drift, (
-        "a decision block in docs/spec-v2.2-proposals.md counts itself wrong. A later cycle's "
-        "decisions appended under an earlier cycle's heading are recorded under the wrong cycle: "
-        "give that cycle its own heading, or restate the count.\n" + "\n".join(drift)
-    )
-
-
-def test_the_block_counter_reads_the_preamble_the_register_writes():
-    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none."
-
-    The three shapes the register writes: the preamble that shipped, the same pair of blocks once
-    they are split, and a block that publishes no count at all.
-    """
-    shipped = "\n\nFour decisions the review forced.\n\n### 260. a\n\nwhy\n\n### 264. b\n\nwhy\n"
-    assert _published_and_carried(shipped) == (4, 2)
-    assert _published_and_carried("\n\nTwo decisions.\n\n### 260. a\n\n### 261. b\n") == (2, 2)
-    assert _published_and_carried("\n\n### 227. straight in\n\nwhy\n") == (None, 1)
 
 
 # --- M4.15: the weights the stylesheet declares are the weights the repository ships -------
@@ -6556,9 +6393,10 @@ def test_every_contrast_figure_the_record_publishes_is_the_one_it_measures():
     "no worse than 9.6" is 9.56, which rounds the wrong way.
 
     So the figures are re-derived from design.css rather than compared with a copy of themselves,
-    the way `test_every_published_decision_range_ends_where_the_register_does` re-derives a range
-    from the register. Rounding is read off the figure's own precision: a record that publishes two
-    decimals is held to two, and one that publishes one is held to one.
+    the way the register's range guard once re-derived a range from the register (retired by
+    decision 460 with the other counts of the tree). Rounding is read off the figure's own
+    precision: a record that publishes two decimals is held to two, and one that publishes one is
+    held to one.
     [§6.8; decisions 275 as amended, 276; decision 184;
      row `platform-quiet-reasons-are-prose-and-legible`; review cycle 2: M415-C2-CSS-06]
     """
@@ -10796,256 +10634,11 @@ def test_the_step_citation_guard_sees_a_citation_the_fold_left_behind(name, rela
 
 # --- M4.16 spec-10: the decision register counts itself, and two documents publish that count ---
 
-# `### 7. ...`, `### 288. ...`: one heading per numbered entry, proposals and owner decisions in
-# one sequence. This is the population; everything below is a claim about it.
-_REGISTER_ENTRY = re.compile(r"^### (\d+)\. ", re.M)
-
-# The figure both documents publish, in the one wording they share. Counted as well as read,
-# because a document publishing it twice is two claims to keep in step and this guard would
-# otherwise hold whichever it met first.
-_ENTRY_COUNT = re.compile(r"(\d+) numbered entries")
 
 # A decision range as either document spells it -- `162-303`, and the en dash a markdown editor
 # substitutes. Three digits each side on purpose: `2026-09-17` and `1-161` are not decision
 # ranges, and a line reference like `:126-134` never appears inside the two blocks read here.
 _DECISION_RANGE = re.compile(r"\b(\d{3})\s*[-\u2013]\s*(\d{3})\b")
-
-
-def _publication_block(path: Path) -> tuple[str, int]:
-    """The block of prose in which a document publishes the register's size, and its first line.
-
-    A markdown list item in README and a paragraph in the register's header, so the walk stops on
-    a blank line or the next `- ` bullet rather than assuming either shape. The block matters
-    because the range clause is read inside it: README states `187-193` and `167-178` elsewhere --
-    both real decision ranges, neither a claim about where the register ends -- and a sweep over
-    the whole file would hold this guard to a sentence it is not about.
-    """
-    lines = _src(path).splitlines()
-    anchor = [i for i, line in enumerate(lines) if _ENTRY_COUNT.search(line)]
-    assert len(anchor) == 1, (
-        f"{path.relative_to(REPO).as_posix()} publishes the register's size in {len(anchor)} "
-        "places. One file states it once, or this guard holds whichever it read first."
-    )
-    first = last = anchor[0]
-    while first > 0 and lines[first - 1].strip() and not lines[first].startswith("- "):
-        first -= 1
-    while last + 1 < len(lines) and lines[last + 1].strip() and not lines[last + 1].startswith("- "):
-        last += 1
-    return "\n".join(lines[first: last + 1]), first + 1
-
-
-# The THIRD claim in the same sentence, and the one nothing read. README published "132 of them
-# over fourteen dated sittings, 2026-08-29 to 2026-09-17" beside two figures that ARE derived, so
-# it inherited their credibility -- and at M4.16 cycle 4 that 14 was neither the 24
-# `## Decisions taken` blocks the register then held nor the 12 distinct dates they fell on nor
-# the 11 dates that carried a numbered decision. All three have moved since, and the sentence is
-# dated rather than re-typed because only the last two are what `_held_sittings` derives: a
-# diagnosis says when it was taken, and the guard below is what keeps an undated one honest.
-# The range was wrong with it: entry 162 sits on 2026-09-01, and the 2026-08-29 sitting
-# holds none of the numbered decisions at all, being the seven answers indexed rather than
-# numbered. A SITTING is a distinct date, which is the idiom this file already uses one guard over
-# ("286 entries across twelve sittings"), and the count is over the sittings that actually carry
-# one of the entries the sentence is about. [decision 184; M4.16 cycle 4, REL-C4-03]
-_SITTINGS = re.compile(
-    r"(?P<count>[A-Za-z]+) dated sittings?, (?P<first>\d{4}-\d{2}-\d{2}) to "
-    r"(?P<last>\d{4}-\d{2}-\d{2})"
-)
-_SITTING_BLOCK = re.compile(r"^## Decisions taken \(owner, (\d{4}-\d{2}-\d{2})", re.M)
-
-
-def _held_sittings() -> tuple[int, str, str]:
-    """The dates on which a numbered owner decision was actually taken, counted off the register."""
-    text = _src(REGISTER)
-    blocks = list(_SITTING_BLOCK.finditer(text))
-    dates = set()
-    for index, block in enumerate(blocks):
-        end = blocks[index + 1].start() if index + 1 < len(blocks) else len(text)
-        numbers = [int(n) for n in _REGISTER_ENTRY.findall(text[block.end():end])]
-        if any(number >= 162 for number in numbers):
-            dates.add(block.group(1))
-    assert dates, "the register carries no dated sitting holding a numbered owner decision"
-    return len(dates), min(dates), max(dates)
-
-
-def _publication_claims(block: str) -> tuple[int, int, tuple[int, str, str] | None]:
-    """What a block claims about the register: how many entries it holds, where its numbering ends,
-    and -- where it states one -- over how many dated sittings and between which dates."""
-    count = _ENTRY_COUNT.search(block)
-    sittings = _SITTINGS.search(block)
-    spelled = sittings.group("count").lower() if sittings else ""
-    return (
-        int(count.group(1)) if count else 0,
-        max((int(end) for _, end in _DECISION_RANGE.findall(block)), default=0),
-        (
-            _COUNT_WORDS.index(spelled) if spelled in _COUNT_WORDS else -1,
-            sittings.group("first"),
-            sittings.group("last"),
-        ) if sittings else None,
-    )
-
-
-def _register_drift(held: int, highest: int, published: dict[str, tuple]):
-    """The three ways a published figure goes stale, kept apart because they fail differently."""
-    wrong = [f"{where} publishes {n} entries" for where, (n, *_) in published.items() if n != held]
-    stale = [
-        f"{where} states a decision range ending at {end}"
-        for where, (_, end, *_) in published.items() if end != highest
-    ]
-    sittings = []
-    derived = _held_sittings()
-    for where, claim in published.items():
-        if claim[2] is None:
-            continue
-        count, first, last = claim[2]
-        if (count, first, last) != derived:
-            spelled = _COUNT_WORDS[count] if 0 <= count < len(_COUNT_WORDS) else "an unreadable"
-            sittings.append(
-                f"{where} states {spelled} dated sittings, {first} to {last}, and the register "
-                f"holds {_COUNT_WORDS[derived[0]]} carrying a numbered decision, "
-                f"{derived[1]} to {derived[2]}"
-            )
-    if not any(claim[2] for claim in published.values()):
-        sittings.append(
-            "neither document states the sittings the decisions were taken over any more, so the "
-            "one figure in that sentence a grep disproves is now unpublished rather than derived"
-        )
-    return wrong, stale, sittings
-
-
-def _register_publications() -> tuple[int, int, dict[str, tuple[int, int]]]:
-    numbers = [int(match.group(1)) for match in _REGISTER_ENTRY.finditer(_src(REGISTER))]
-    assert numbers, "docs/spec-v2.2-proposals.md holds no `### N.` entries at all"
-    published = {}
-    for path in (README, REGISTER):
-        block, line = _publication_block(path)
-        published[f"{path.relative_to(REPO).as_posix()}:{line}"] = _publication_claims(block)
-    return len(numbers), max(numbers), published
-
-
-def test_the_proposal_ledger_counts_itself():
-    """Decision 184's rule applied to a number two documents had both typed rather than read.
-
-    README and the register's own header said "161 proposals" and "all seven owner decisions were
-    taken on 2026-08-29" over a file that had grown to 286 entries across twelve sittings -- while
-    README itself cited decisions 162 and 163 five hundred lines further down and the coverage map
-    cited 303. Nothing was wrong with the file; what was wrong is that its size was published
-    twice and derived never, so a reader could not tell which of the two was the measurement.
-
-    Two claims, and they fail differently. The COUNT catches a block of decisions landing without
-    the header being restated -- the ordinary drift, and the one that happens every wave. The
-    RANGE catches the subtler version: a wave that restates the count and leaves the range ending
-    where the previous wave stopped, which reads as precise and is the form an auditor trusts
-    most. Both are re-derived from the headings, so a review cycle taking decision 304 turns this
-    red until both documents say so, which is the intended cost rather than an accident.
-    [README.md; docs/spec-v2.2-proposals.md header; decision 184;
-     row `platform-the-proposal-ledger-counts-itself`]
-    """
-    held, highest, published = _register_publications()
-    wrong, stale, sittings = _register_drift(held, highest, published)
-    assert not wrong, (
-        f"docs/spec-v2.2-proposals.md holds {held} `### N.` entries and:\n  "
-        + "\n  ".join(wrong)
-        + "\n\nRe-derive it (`grep -cE '^### [0-9]+\\.'`) rather than adjusting whichever figure "
-        "looks wrong. A count nobody re-derived is a measurement nobody made."
-    )
-    assert not stale, (
-        f"the register's highest numbered entry is {highest} and:\n  "
-        + "\n  ".join(stale)
-        + "\n\nA range ending one wave back is worse than no range: it is the form an auditor "
-        "trusts, and it sends them looking for the newest decisions in a file that has them."
-    )
-    assert not sittings, (
-        "the decomposition of that same sentence is typed rather than counted:\n  "
-        + "\n  ".join(sittings)
-        + "\n\nA SITTING is a distinct date carrying a numbered owner decision. The 2026-08-29 "
-        "block holds none of them -- it is the seven answers indexed rather than numbered -- so a "
-        "range that starts there sends a reader looking for entry 162 in a sitting without it."
-    )
-
-
-@pytest.mark.parametrize(
-    ("name", "claim", "expect_count", "expect_range", "expect_sittings"),
-    [
-        ("a wave landed and nobody restated the count", (270, 303, None), True, False, True),
-        ("the count moved and the range did not", (286, 287, None), False, True, True),
-        ("a document states neither", (0, 0, None), True, True, True),
-        ("both are current and neither states a sitting", (286, 303, None), False, False, True),
-        # The derived triple, which moves with the register: M5.2's first two review cycles took
-        # five decisions on a day of their own, so the sittings this file holds were thirteen and
-        # the last of them 2026-09-19; its third review cycle took seven more on 2026-09-23, so
-        # they were fourteen; its fourth took three on 2026-09-24, so they are fifteen now.
-        # [M5.2 review cycles 1-2: decisions 404-407, which were 393-396, and 416, which was 392;
-        # review cycle 3: 410-415 and 417; review cycle 4: 408, 409 and 418]
-        ("every figure derived", (286, 303, (15, "2026-09-01", "2026-09-24")), False, False, False),
-        # Review cycle 4: the sentence as README published it. Two derived figures and a third
-        # that matched no available reading -- not the 24 blocks, not the 12 dates, not the 11
-        # dates carrying a decision -- inside the same clause, which is what lent it their
-        # credibility. The range was wrong with it. [decision 184; M4.16 cycle 4, REL-C4-03]
-        ("the sittings count typed beside two derived figures",
-         (286, 303, (14, "2026-08-29", "2026-09-17")), False, False, True),
-        ("the count right and the range starting a sitting too early",
-         (286, 303, (11, "2026-08-29", "2026-09-17")), False, False, True),
-    ],
-)
-def test_the_ledger_count_guard_reads_all_three_halves(
-        name, claim, expect_count, expect_range, expect_sittings):
-    """Each claim shown refusing, and shown not refusing what the others are about.
-
-    The third case is the one an earlier draft passed: a block that publishes nothing at all reads
-    as agreeing with every figure unless the absence is itself a drift, and "the header stopped
-    saying how big the file is" is exactly how this record went quiet the first time. The fourth
-    and fifth are the sittings clause's version of the same pair -- nobody states it, and it is
-    right -- and the last two are the two ways it was wrong at once.
-    """
-    wrong, stale, sittings = _register_drift(286, 303, {"docs/somewhere.md:1": claim})
-    assert bool(wrong) is expect_count, name
-    assert bool(stale) is expect_range, name
-    assert bool(sittings) is expect_sittings, name
-
-
-# README's second sittings figure, one sentence after the one `_SITTINGS` reads: "The register
-# holds fifteen sittings in all; the first, on 2026-08-29, is seven answers indexed there rather
-# than numbered". `_publication_claims` reads the FIRST sittings clause and nothing past it, so
-# when M5.2's review cycles restated the first figure the second stayed where it was, and the two
-# adjacent sentences disagreed by one with every guard green. This one counts every dated block's
-# date, the 2026-08-29 sitting included, which is what "in all" means beside the first figure's
-# "carrying a numbered decision". [decision 184; M5.2 review cycle 3: M52-C3-PAPER-04]
-_SITTINGS_IN_ALL = re.compile(r"(?P<count>[A-Za-z]+) sittings in\s+all\b")
-
-
-def _sittings_in_all_drift(block: str, dates: int) -> list[str]:
-    """Every "<N> sittings in all" in `block` that does not state `dates`."""
-    return [
-        f"'{' '.join(claim.group(0).split())}' over a register whose dated blocks fall on {dates} "
-        "distinct dates"
-        for claim in _SITTINGS_IN_ALL.finditer(block)
-        if claim.group("count").lower() not in _COUNT_WORDS
-        or _COUNT_WORDS.index(claim.group("count").lower()) != dates
-    ]
-
-
-def test_the_sittings_the_register_holds_in_all_are_counted_too():
-    """The half of README's sittings sentence the ledger guard never read, and its falsifier.
-
-    Stated beside the derived figure, it borrowed that figure's credibility -- the shape
-    `_SITTINGS`' own comment describes one clause over -- and it went stale the way that comment
-    says such a figure does: M5.2's review cycles moved "twelve dated sittings" to "thirteen" and
-    left "thirteen sittings in all", which was then fourteen. [M5.2 review cycle 3: M52-C3-PAPER-04]
-    """
-    block, line = _publication_block(README)
-    dates = len(set(_SITTING_BLOCK.findall(_src(REGISTER))))
-    assert _SITTINGS_IN_ALL.search(block), (
-        f"README.md:{line} no longer says how many sittings the register holds in all, so this "
-        "guard holds nothing. Restate it from the dated blocks, or take the guard out with it."
-    )
-    drift = _sittings_in_all_drift(block, dates)
-    assert not drift, (
-        f"README.md:{line} publishes a sittings total the register does not have:\n  "
-        + "\n  ".join(drift)
-    )
-    assert _sittings_in_all_drift(f"holds {_COUNT_WORDS[dates - 1]} sittings in all", dates), (
-        "the guard read a total one short of the register's as agreeing with it"
-    )
 
 
 # --- M4.16 spec-15: a comment that names a file names one that is there ------------------------
@@ -13223,64 +12816,6 @@ def test_every_escalated_claim_names_a_record_that_exists():
     )
 
 
-# The `why` of the row that is ABOUT this record published a never-run count of its own, inherited
-# from the plan's pre-milestone diagnosis and never re-measured: "three of five criteria have never
-# been run" beside a record that counted fifteen build-order rows and five never run when M4.16
-# cycle 2 read it, and beside docs/TESTING.md, which said five in the same wave. Both figures have
-# moved since, which is the rule working rather than an erratum: the guard below re-derives them
-# and the paragraph is dated. Decision 184 refuses a figure nobody derived, and this is that rule
-# applied to the one figure this record exists to establish.
-# [M4.16 cycle 2, M416-C2-REL-05]
-_NEVER_RUN_CLAIM = re.compile(
-    r"(?P<count>\w+) of (?:the )?(?P<total>\w+) criteria have never been run", re.I
-)
-
-
-def _count_word(token: str) -> int | None:
-    lowered = token.lower()
-    if lowered.isdigit():
-        return int(lowered)
-    return _COUNT_WORDS.index(lowered) if lowered in _COUNT_WORDS else None
-
-
-def test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured():
-    """One milestone, one fact, three documents, two answers.
-
-    At M4.16 cycle 2 `docs/RELEASE.md` counted the build order's rows on that branch and found five
-    never run of fifteen; `docs/TESTING.md` said five in the same wave; and the coverage row that
-    GOVERNS both said "three of five", the plan's own pre-milestone sentence carried in unrevised.
-    The denominator was wrong in the direction that reads harsher and the numerator in the
-    direction that reads kinder, so neither half was a measurement.
-
-    Derived from the record's own Status fields rather than from a number typed anywhere, which is
-    the shape `test_the_gate_and_its_guard_publish_the_vitest_count_the_map_actually_holds` uses
-    for the same failure one file over.
-    [decision 184; row `platform-exit-criteria-are-closed-by-a-committed-measurement`]
-    """
-    rows = _release_rows()
-    owed = _section_12_milestones()
-    never = sorted(
-        name
-        for name in owed
-        if (fields := _RELEASE_FIELDS.search(rows.get(name, ""))) is not None
-        and fields.group(1).strip() == "UNMEASURED"
-    )
-    claim = _NEVER_RUN_CLAIM.search(_src(COVERAGE))
-    assert claim, (
-        "spec_coverage.toml no longer states how many build-order criteria have never been run, "
-        "in the form `<count> of the <total> criteria have never been run`. That sentence is "
-        "the `why` of the row this record answers to, so it states the figure or this guard "
-        "reads nothing."
-    )
-    published = (_count_word(claim.group("count")), _count_word(claim.group("total")))
-    assert published == (len(never), len(owed)), (
-        f"spec_coverage.toml publishes {claim.group(0)!r}; docs/RELEASE.md records {len(never)} of "
-        f"the build order's {len(owed)} rows as UNMEASURED ({never}). Re-derive it from the record "
-        "rather than adjusting whichever figure looks wrong -- a count nobody re-derived is a "
-        "measurement nobody made."
-    )
-
-
 # --- M5.4 review cycle 1: two words the record defines as different claims, read as one ---------
 #
 # `_UNMEASURED` groups `NOT BUILT` with `UNMEASURED` because both mean "no output file, and that is
@@ -13332,65 +12867,6 @@ def test_a_row_this_record_calls_not_built_is_a_milestone_the_map_names_no_test_
         "for exists and has not been run against its criterion, which is UNMEASURED. Move the "
         "Status field, the summary table cell, this file's opening paragraph and the never-run "
         "count in spec_coverage.toml together, the way M5.1's row records doing."
-    )
-
-
-# The record's opening paragraph publishes the same figures its table holds -- how many rows the
-# build order carries, how many criteria have never been run, and which rows describe milestones
-# that do not exist yet, by name -- and no guard read any of them. It is the first statement a
-# reader meets and it is prose rather than a field, so the rule above can be green while the
-# paragraph contradicts the table it summarises. Decision 184 is what applies to all three.
-_RECORD_TOTAL = re.compile(r"carries\s+\*\*(?P<count>\w+)\*\*\s+rows")
-_RECORD_NEVER_RUN = re.compile(
-    r"\*\*(?P<count>\w+)\s+of\s+them\s+have\s+never\s+been\s+run\s+at\s+all\*\*"
-)
-_RECORD_NOT_BUILT = re.compile(
-    r"(?P<count>\w+)\s+describe\s+milestones\s+that\s+do\s+not\s+exist\s+yet\s*\((?P<names>[^)]*)\)"
-)
-
-
-def test_the_records_opening_paragraph_counts_the_rows_its_own_table_records():
-    """Three figures in prose, over a table that answers all three.
-
-    The same failure `test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured`
-    holds one file over, in the file that file trusts. Both of the paragraph's counts moved when
-    M5.4's row moved, and neither is a field any pattern here was reading.
-    [decision 184; M5.4 cycle 1, M54-REV1-DOC-01]
-    """
-    intro = re.split(r"^## ", _src(RELEASE_RECORD), maxsplit=1, flags=re.M)[0]
-    rows = _release_rows()
-    owed = _section_12_milestones()
-    status = {
-        name: fields.group(1).strip()
-        for name in owed
-        if (fields := _RELEASE_FIELDS.search(rows.get(name, ""))) is not None
-    }
-    never = [name for name in owed if status.get(name) == "UNMEASURED"]
-    unbuilt = [name for name in owed if status.get(name) == "NOT BUILT"]
-    problems = []
-    for label, pattern, measured in (
-        ("the build order's row count", _RECORD_TOTAL, len(owed)),
-        ("the never-run count", _RECORD_NEVER_RUN, len(never)),
-        ("the not-built count", _RECORD_NOT_BUILT, len(unbuilt)),
-    ):
-        claim = pattern.search(intro)
-        if claim is None:
-            problems.append(f"the opening of docs/RELEASE.md no longer states {label}")
-        elif _count_word(claim.group("count")) != measured:
-            problems.append(
-                f"{label}: the opening says {claim.group('count')!r}, the table records {measured}"
-            )
-    listed = _RECORD_NOT_BUILT.search(intro)
-    if listed is not None:
-        named = [part.strip() for part in listed.group("names").split(",") if part.strip()]
-        if named != unbuilt:
-            problems.append(
-                f"the opening names {named} as the milestones that do not exist yet; the table "
-                f"records {unbuilt}"
-            )
-    assert not problems, "; ".join(problems) + (
-        ". That paragraph is the first thing a reader meets and nothing else reads it, so a figure "
-        "it carries is a measurement only while it matches the rows underneath it."
     )
 
 
@@ -13601,159 +13077,10 @@ def test_the_coexistence_guard_sees_the_premise_that_shipped():
     assert not _coexistence_problems(_src(_normative_file()), importer)
 
 
-# --- M4.16 review cycle 4: the record's own citations, re-derived ------------------------------
-#
-# CLAUDE.md makes a `file:line` citation load-bearing - it is how a reader follows an argument to
-# the object beneath it - and this milestone filed stale ones as a numbered defect. The document
-# that CORRECTS them had four of its own, and three had drifted twice: they matched neither the
-# tree they ship with nor `HEAD`. Section 5.6's was the worst, because that section is one of the
-# three claims escalated to the owner rather than edited into the map, and its whole content is
-# where the third exception lives: it pointed 105 lines away. Section 7.3's four are the numbers
-# the paragraph immediately below them says "moved once while this file was being written"; they
-# had moved again, in the one section that discharges §12's M4.7 criterion by inspection.
-#
-# Re-derived rather than re-typed, which is that paragraph's own ruling ("headings are the anchor
-# and line numbers are the convenience") turned into a rule: each citation is held against the
-# literal it is a citation TO, so the next edit above it reddens the sentence rather than leaving
-# it to be believed. Scoped to the citations this cycle measured rather than to all forty-five in
-# the file: a table entry per citation is a needle somebody has to write, and a rule that demanded
-# one for every path would be a rule nobody could satisfy honestly.
-# [decision 184; CLAUDE.md Conventions; M4.16 cycle 4, REL-C4-11]
-_RELEASE_CITATIONS = (
-    (r"`backend/spielplan/worker\.py:(\d+)` registers", "backend/spielplan/worker.py",
-     'Job("nightly-backup"'),
-    (r"`backend/tests/test_backup\.py:(\d+)`", "backend/tests/test_backup.py", "sync/resolve.py"),
-    (r"`frontend/src/routes/account/\+page\.svelte:(\d+)` mounts it",
-     "frontend/src/routes/account/+page.svelte", "<DataSources />"),
-)
-
-# Section 7.3 names four README headings and then their four line numbers, in the same order. Both
-# lists are read out of the paragraph rather than restated here, so the pairing is the document's.
-_README_HEADING = re.compile(r"`(#{2,3} [^`]+)`")
-_README_LINE = re.compile(r"`:(\d+)`")
-
-
 def _md_subsection(text: str, heading: str) -> str:
     """One `### N.M` block of a Markdown record, in `_gate_record`'s idiom."""
     parts = text.split(heading, 1)
     return re.split(r"^#{2,3} ", parts[1], maxsplit=1, flags=re.M)[0] if len(parts) == 2 else ""
-
-
-def _cites(path: str, line: int, needle: str) -> str | None:
-    """None when `needle` is on that line of that file, else where it actually is.
-
-    The line it DID find is quoted, because "1112 is not 1121" sends a reader back to count and
-    the line itself says at a glance what moved. Escaped rather than quoted raw for the reason
-    `_gate_record_problems` gives one section up: this message reaches whatever console the suite
-    is read on, and the first of these citations landed on a comment carrying a section mark.
-    """
-    lines = _src(REPO / path).splitlines()
-    if 1 <= line <= len(lines) and needle in lines[line - 1]:
-        return None
-    found = [i + 1 for i, text in enumerate(lines) if needle in text]
-    reads = lines[line - 1].strip() if 1 <= line <= len(lines) else "<past the end of the file>"
-    return (
-        f"docs/RELEASE.md cites {path}:{line} for {needle!r}; that line reads "
-        f"{reads.encode('ascii', 'backslashreplace').decode()!r} and the subject is at "
-        f"{found or 'no line in that file'}"
-    )
-
-
-def _citation_problems(record: str) -> list[str]:
-    """Every citation in the record that no longer lands on its subject."""
-    problems = []
-    for pattern, path, needle in _RELEASE_CITATIONS:
-        matches = list(re.finditer(pattern, record))
-        if not matches:
-            problems.append(
-                f"docs/RELEASE.md no longer cites {path} in the form this guard reads, so the "
-                "citation it held is held by nothing"
-            )
-            continue
-        problems += [p for p in (_cites(path, int(m.group(1)), needle) for m in matches) if p]
-
-    readme = _md_subsection(record, "### 7.3 ")
-    if not readme:
-        problems.append("docs/RELEASE.md carries no `### 7.3` section, and README's anchors are it")
-        return problems
-    headings = _README_HEADING.findall(readme)
-    numbers = [int(n) for n in _README_LINE.findall(readme)]
-    if not headings or len(headings) != len(numbers):
-        problems.append(
-            f"section 7.3 names {len(headings)} README heading(s) and {len(numbers)} line "
-            "number(s); they are published as two lists in one order, so they pair or neither can "
-            "be checked"
-        )
-        return problems
-    pairs = zip(headings, numbers, strict=True)
-    problems += [p for p in (_cites("README.md", n, h) for h, n in pairs) if p]
-    return problems
-
-
-def test_the_release_record_cites_the_lines_its_subjects_are_on():
-    """The corrections document, held to the standard it exists to enforce.
-
-    A citation that lands 105 lines from its subject costs the next reader the hour it cost the
-    last one, and these four were published inside the same diff as the corrections they carry.
-    Held by re-derivation rather than by re-typing, because re-typed numbers go stale on the next
-    edit above them - which is exactly how three of these four came to match neither this tree nor
-    `HEAD`. [decision 184; M4.16 cycle 4, REL-C4-11]
-    """
-    problems = _citation_problems(_src(RELEASE_RECORD))
-    assert not problems, "\n  ".join(
-        ["docs/RELEASE.md points a reader at a line its subject is not on:", *problems]
-    )
-
-
-def test_the_citation_guard_sees_a_subject_that_moved():
-    """Each half fed the number it published before this cycle re-derived it."""
-    record = _src(RELEASE_RECORD)
-    assert _citation_problems(record) == [], "the guard does not pass the record it describes"
-    for stale, shipped in (
-        # M5.1 re-derived the first pair rather than inheriting it: `_acquisition_drain` and
-        # its registry row went in above `Job("nightly-backup"`, which moved the subject 99
-        # lines. Review cycle 1 moved it 14 further, arguing in that registry row's own budget
-        # paragraph that `DRAIN_LIMIT` bounds tasks and not work; review cycle 2 moved it 6 more,
-        # adding the paragraph that says `_acquisition_drain`'s due-count asks for the work this
-        # drain would take; review cycle 3 moved it 14 more, giving that job the board half of the
-        # reaper it had taken the queue half of and the paragraph arguing why the two travel
-        # together. 1240 - the number the record published until this cycle - becomes the stale
-        # half. The pair keeps meaning what it says rather than being retyped.
-        #
-        # M5.2 moved it 139 further, and for the same structural reason rather than by
-        # coincidence: §7.2's two intake drivers and the registry rows that fire them go in above
-        # `Job("nightly-backup")` because a driver must be defined before the tuple that names it,
-        # so every milestone that gives this loop a job moves the last row in it. 1254 - the
-        # number the record published until this milestone - becomes the stale half.
-        # [M5.2; plan C4, decision 368] Review cycle 3 moved it 4 more, correcting the intake
-        # sweep's budget paragraph that promised the minute poll a bound its timeout breaks, so
-        # 1393 is the stale half now. [M5.2 review cycle 3: M52-C3-PAPER-08]
-        # M5.3's review cycle 1 moved it 29 further on its own branch (decision 347's owed
-        # measurement, prose in the drain's budget paragraph), and the merge of M5.2 with M5.3
-        # added both movements, so 1397 - M5.2's last-published number - is the stale half now.
-        # [M5.3 review cycle 1, M53-C1-NET-03; M5.2 merge]
-        ("backend/spielplan/worker.py:1426", "backend/spielplan/worker.py:1397"),
-        # M5.2 moved the second subject 8 lines, classifying `jellyfin_intake` beside the
-        # acquisition spine's three tables in that file's EXCLUDED sets (decision 363), so
-        # 1378 - the number the record published until this milestone - is now the stale
-        # half of a pair that keeps meaning what it says. The pair fed 1262 until review cycle 2,
-        # which is a line this file has handed the guard since M4.16 rather than a number the
-        # record ever published. Either of them fires - `_cites` has no tolerance and
-        # `sync/resolve.py` is on exactly one line of `test_backup.py` - so what the
-        # last-published number buys is not a stronger assertion but a pair that says what the
-        # paragraph above it says, which is the whole of what a re-derived citation is for.
-        # [M5.2; review cycle 2: m52-c2-citepair-01]
-        # M5.4 moved the same subject 13 lines on its own branch, classifying `dna_reject` and
-        # `dna_pack` in the EXCLUDED sets, and the merge added both classifications, so 1391 - the
-        # number main published until this merge - is the stale half. [decisions 341, 382; M5.4;
-        # M5.2 merge]
-        ("backend/tests/test_backup.py:1399", "backend/tests/test_backup.py:1391"),
-        ("account/+page.svelte:332", "account/+page.svelte:330"),
-        ("(`:94`, `:102`", "(`:93`, `:101`"),
-    ):
-        moved = record.replace(stale, shipped)
-        assert moved != record, f"docs/RELEASE.md no longer spells {stale!r}"
-        assert _citation_problems(moved), f"the guard passed a citation published as {shipped!r}"
 
 
 # --- M4.16 review cycle 4: the one leg cell that claimed a run nothing has made -----------------
@@ -13946,7 +13273,6 @@ def test_the_attribution_guard_sees_the_sentence_decision_311_shipped():
 # because a pattern that finds nothing reports nothing. [M5.3 review cycle 2, m53-c2-dim-exit-01]
 _PUBLISHED_CHECKS = re.compile(r"(\d+|[A-Za-z]+)\s+numbered\s+checks?\b")
 _PUBLISHED_LINES = re.compile(r"\b([\d,]+) lines\b")
-_PUBLISHED_SCRIPT_COUNT = re.compile(r"(\d+|[A-Za-z]+) scripts under `ops/`")
 _NAMED_SCRIPT = re.compile(r"ops/(m[a-z0-9]+_exit_criterion\.py)")
 
 
@@ -14025,91 +13351,6 @@ def _published_figure_problems(label: str, text: str) -> list[str]:
                     f"{held}"
                 )
     return problems
-
-
-def test_every_figure_published_about_a_milestone_script_is_the_scripts_own():
-    """Section 12 and `docs/RELEASE.md` describe the instruments; the instruments answer for it.
-
-    M5.2 through M5.7 each owe a script under decision 321 and review cycles routinely add a
-    check, so the row an owner signs would go on naming an instrument shape that no longer exists.
-    Held over both documents at once because they publish the same sentence: section 12 states the
-    criterion and the record quotes the cell back, so a figure corrected in one and not the other
-    is the same drift with an extra step. [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
-    """
-    spec = _normative_file()
-    problems = _published_figure_problems(spec.relative_to(REPO).as_posix(), _src(spec))
-    problems += _published_figure_problems("docs/RELEASE.md", _src(RELEASE_RECORD))
-    assert not problems, "\n  ".join(
-        ["a document publishes a figure about a milestone script that the script does not hold:",
-         *problems]
-    )
-
-
-def test_the_release_record_counts_the_scripts_under_ops_that_the_tree_holds():
-    """The third figure, and the one the five `== 9` assertions already move deliberately.
-
-    Published twice in one sentence -- "one of the nine scripts under `ops/`" and "not one of those
-    nine" -- so both spellings are read: a sentence that half-corrects itself is how a figure goes
-    stale while looking maintained. [decision 184; M5.1 review cycle 1, M51-REV-REG-02]
-    """
-    text = _src(RELEASE_RECORD)
-    claims = _PUBLISHED_SCRIPT_COUNT.findall(text)
-    assert len(claims) == 1, (
-        f"docs/RELEASE.md publishes '<count> scripts under `ops/`' {len(claims)} times. One file "
-        "states it once, or this guard holds whichever it read first."
-    )
-    published = _published_number(claims[0])
-    assert published == len(EXIT_SCRIPTS), (
-        f"docs/RELEASE.md says {claims[0]} scripts under ops/ and the tree holds "
-        f"{len(EXIT_SCRIPTS)}: {[path.name for path in EXIT_SCRIPTS]}"
-    )
-    claim = _PUBLISHED_SCRIPT_COUNT.search(text)
-    sentence = re.split(r"\.\s", text[claim.start():], maxsplit=1)[0]
-    repeats = [_published_number(token) for token in re.findall(r"those (\d+|[A-Za-z]+)", sentence)]
-    assert all(repeat == published for repeat in repeats), (
-        f"the sentence publishing the script count restates it as {repeats} and says "
-        f"{published} at the front"
-    )
-
-
-def test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown():
-    """The three ways the reading fails, each over the real document rather than over an invention.
-
-    A check added to `ops/m51_exit_criterion.py` and a line added to it are the two edits a later
-    wave actually makes; the third is the sentence that counts checks without saying whose, which
-    is what a naive reading of this rule would pass in silence.
-    """
-    record = _src(RELEASE_RECORD)
-    assert not _published_figure_problems("docs/RELEASE.md", record), (
-        "docs/RELEASE.md is not clean to start with, so this self-test proves nothing"
-    )
-
-    grown = record.replace("twelve numbered checks", "eleven numbered checks")
-    assert grown != record, (
-        "docs/RELEASE.md no longer publishes 'twelve numbered checks', so this mutation is about a "
-        "sentence nobody has any more -- restate it from the file"
-    )
-    caught = _published_figure_problems("docs/RELEASE.md", grown)
-    assert caught and all("m51_exit_criterion.py" in problem for problem in caught), caught
-
-    lines = _PUBLISHED_LINES.search(record)
-    assert lines, "docs/RELEASE.md no longer publishes a line count for a milestone script"
-    shrunk = record.replace(lines.group(0), "1,000 lines")
-    assert _published_figure_problems("docs/RELEASE.md", shrunk), (
-        "the guard read a line count a thousand short as the script's own"
-    )
-
-    assert _published_figure_problems("probe.md", "It holds twelve numbered checks.") == [
-        "probe.md:1: 'twelve numbered checks' names no exit script in its own paragraph, so there "
-        "is nothing to derive it from. Name the script beside the count."
-    ]
-
-    # The fourth: a figure a paragraph re-wrap has split across a line break is still a figure.
-    # `docs/RELEASE.md`'s M5.3 block publishes its count exactly that way, and a line-bound reading
-    # passed any number there. [M5.3 review cycle 2, m53-c2-dim-exit-01]
-    assert _published_figure_problems(
-        "probe.md", "Measured by `ops/m51_exit_criterion.py`, eleven numbered\nchecks."
-    ), "a figure wrapped across a line break was not read at all"
 
 
 # A test id an exit script's docstring hands a criterion clause to. The docstring wraps long ids
@@ -14312,20 +13553,6 @@ _SELF_TALLIES = (
 )
 
 
-def _live_tallies() -> dict[str, int]:
-    """How big each of the three is, off the reader this file already uses to read it."""
-    return {
-        "build-order": len(_section_12_milestones()),
-        "section-1": len(_release_summary(_release_section_one())),
-        "sitting": len(_SITTING_BLOCK.findall(_src(REGISTER))),
-    }
-
-
-def _spelt_as(count: int) -> set[str]:
-    """Both ways this tree writes a number, and the digits alone once it outgrows the words."""
-    return {str(count)} | ({_COUNT_WORDS[count]} if count < len(_COUNT_WORDS) else set())
-
-
 def _self_tallies(path: Path) -> list[tuple[int, str, str, str]]:
     """Every sentence of `path`'s prose that sizes one of those registries, and how it spells it.
 
@@ -14346,32 +13573,6 @@ def _self_tallies(path: Path) -> list[tuple[int, str, str, str]]:
                     if word.isdigit() or word in _COUNT_WORDS:
                         found.append((line, sentence.strip(), word, registry))
     return found
-
-
-def test_no_prose_in_this_file_states_a_registry_size_that_registry_does_not_have():
-    """The readers above already answer; a copy of their answer in prose has a shelf life.
-
-    Read against every spelling rather than against today's, which is the half a guard looking only
-    for the live figure cannot do: a count that was already wrong when it was written is exactly
-    the count nobody re-derived. Repeated back with `!a` rather than `!r`, because the sentence is
-    somebody else's -- this file quotes spec prose and carries its em dashes, and a failure has to
-    print on the cp1252 console this repository keeps its output ASCII for.
-    """
-    live = _live_tallies()
-    for registry, count in sorted(live.items()):
-        assert count, f"the {registry} reader found nothing at all - it is measuring itself"
-
-    stale = [
-        f"line {line} sizes {registry} at {word!a} where it holds {live[registry]}: {sentence!a}"
-        for line, sentence, word, registry in _self_tallies(Path(__file__))
-        if word not in _spelt_as(live[registry])
-    ]
-
-    assert not stale, (
-        "a comment in this file states a registry size the registry does not have, in the file "
-        "that holds the guard over that registry: re-derive it, drop the numeral, or date the "
-        f"sentence with the cycle that measured it: {stale}"
-    )
 
 
 def test_the_registry_size_reader_reads_the_sentences_this_file_shipped(tmp_path):

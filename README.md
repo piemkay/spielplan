@@ -12,12 +12,11 @@ non-obvious decision in the source cites the section that mandates it.
 
 - [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) — current spec
 - [`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) — the decision record, amended
-  in place and never forked into a v2.2 (decision 288). **381 numbered entries** in two registers:
-  proposals 1-161 are dated reasoning from the UI-prototype review, citable as provenance and
-  nothing more, and entries **162-425 are the numbered owner decisions** — 220 of them over
-  fifteen dated sittings, 2026-09-01 to 2026-09-24 — each normative from the day it is taken
-  until the amendment it mandates lands in the spec file. The register holds sixteen sittings in
-  all; the first, on 2026-08-29, is seven answers
+  in place and never forked into a v2.2 (decision 288). Two registers: proposals 1-161 are dated
+  reasoning from the UI-prototype review, citable as provenance and nothing more, and entries from
+  **162 onward are the numbered owner decisions**, each normative from the day it is taken until
+  the amendment it mandates lands in the spec file. The file carries no count of itself any more
+  (decision 460): `grep -c '^### '` is the count. Its first sitting, on 2026-08-29, is seven answers
   indexed there rather than numbered, one of which is **§6.2 — Tonight, rewritten**,
   replacing the fixed ten-vote round with an adaptive one. The numbering is neither contiguous nor
   confined to that file, and the file's own header says where the gaps went

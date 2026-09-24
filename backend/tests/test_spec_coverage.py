@@ -31,7 +31,6 @@ import re
 import subprocess
 import tomllib
 from functools import cache
-from itertools import zip_longest
 from pathlib import Path
 
 import pytest
@@ -1252,8 +1251,8 @@ def _uncited_authority(rows: list[dict]) -> list[str]:
     admitted because many rows answer to `CLAUDE.md`'s conventions or to `docs/TESTING.md` rather
     than to a §, and a rule that reddened those would be narrowed by the first person it stopped.
     Decision 305's entry records 308, the count cycle 1 took before its own decision 306 added a
-    row; a dated entry is superseded rather than edited (decision 304), so the figure that moves is
-    this one, and `test_the_authority_rule_publishes_the_count_it_holds` derives it.
+    row; a dated entry is superseded rather than edited (decision 304), and no live copy of the
+    figure is published any more (decision 460).
     [decision 305; M4.16 cycle 1, M416-C1-COV-03; M4.16 cycle 3, M416-C3-COV-03]
     """
     return [
@@ -1261,65 +1260,6 @@ def _uncited_authority(rows: list[dict]) -> list[str]:
         for r in rows
         if _at_or_before(r["milestone"]) and not _AUTHORITY.search(r["spec"])
     ]
-
-
-# --- M4.16 review cycle 3: the figure decision 305 was taken on ---------------------------------
-#
-# "all 308 shipped rows" was true the moment it was measured in review cycle 1 and false by the end
-# of it: decision 306's own row landed under the measurement and made the map 309. The SUBSTANCE
-# still holds -- every shipped row names an authority, which is the whole of what the rule asserts
-# -- but the figure was pasted into three places and derived in none, which is the defect
-# `test_the_testing_ledger_counts_the_ids_the_map_actually_holds` sits ten screens above this one
-# to catch. Decision 305's entry in the register keeps the 308 it was taken with: a dated entry is
-# superseded rather than edited, which is decision 304's own mechanism and the reason entries are
-# numbered. The two LIVE copies are the ones that say "over this tree", so those are the two held
-# to it. [decision 184; decision 304; M4.16 cycle 3, M416-C3-COV-03]
-_AUTHORITY_SIZE = re.compile(
-    r"all (?P<count>\d+) shipped rows (?:already )?name a section, a numbered decision or a "
-    r"document path"
-)
-
-
-def test_the_authority_rule_publishes_the_count_it_holds():
-    """Rule 5's positive half, held to the map it says it was measured over.
-
-    The number is not decoration: it is the whole argument for asserting the positive rather than
-    narrowing the `what` (decision 305, "MEASURED before it was written, which is what makes this
-    the cheap option"). A reader who cannot reproduce it cannot tell whether the rule lands green
-    because the map is clean or because the sentence stopped describing the map.
-    [decision 305; M4.16 cycle 3, M416-C3-COV-03]
-    """
-    shipped = [r for r in REQUIREMENTS if _at_or_before(r["milestone"])]
-    named = [r for r in shipped if _AUTHORITY.search(r["spec"])]
-    assert len(named) == len(shipped), (
-        f"{len(shipped) - len(named)} shipped row(s) name no authority, so the sentence these two "
-        "files publish is no longer the claim rule 5 asserts. `_uncited_authority` above names "
-        "them; this guard only holds the figure."
-    )
-
-    wrong, missing = [], []
-    for path in (MAP, TESTS / "test_spec_coverage.py"):
-        # The map carries the sentence as a wrapped TOML comment, so the `#` that opens each
-        # continuation line is stripped before the clause is read. Flattening whitespace alone
-        # leaves it mid-sentence, which is a guard that reads nothing and reports green.
-        body = re.sub(r"(?m)^[ \t]*#[ \t]?", "", path.read_text(encoding="utf-8"))
-        claims = [int(m.group("count")) for m in _AUTHORITY_SIZE.finditer(" ".join(body.split()))]
-        if not claims:
-            missing.append(path.name)
-        wrong += [f"{path.name} publishes {n}" for n in claims if n != len(shipped)]
-    assert not missing, (
-        f"{missing} no longer publish the count rule 5 was measured over, so this guard reads "
-        'less than it says it does. The published form is "all <N> shipped rows name a section, '
-        'a numbered decision or a document path".'
-    )
-    assert not wrong, (
-        f"the map holds {len(shipped)} shipped rows and:\n  "
-        + "\n  ".join(dict.fromkeys(wrong))
-        + "\n\nRe-derive it rather than adjusting whichever figure looks wrong. Decision 305's own "
-        "entry is NOT one of these two: a dated entry records the tree it was taken on and is "
-        "superseded rather than edited (decision 304)."
-    )
-
 
 
 # --- M4.16 review cycle 2: rule 5 resolves the authority it reads -------------------------------
@@ -2397,36 +2337,6 @@ def test_report(capsys):
         print("\n".join([f"\nspec coverage - current milestone {CURRENT}", "", *_report_lines()]))
 
 
-def test_the_testing_ledger_publishes_the_counts_the_gate_prints():
-    """`docs/TESTING.md`'s "Current state" block is this report, or it is a number nobody ran.
-
-    CLAUDE.md sends readers to that file for milestone status "rather than assuming status", so
-    a count published there is read as measured. M4.8's own block said `M4.8 9/9` while this
-    file printed `10/10`: it was pasted from a run made before review cycle 1 added the tenth
-    row, and nothing compared the two -- so a later milestone auditing that no milestone had
-    lost a test would have reconciled against a baseline one row low, and deleting the tenth
-    row would have made the document true. Decision 184 refuses to invent a number in that
-    ledger; this refuses to leave one there that a run has since overtaken.
-    [M4.8 review cycle 2: m48-rev2-testing-ledger-publishes-a-count-the-instrument-does-not-print]
-    """
-    block = re.search(
-        r"### Current state\s*\n+```\n(.*?)\n```", LEDGER.read_text(encoding="utf-8"), re.S
-    )
-    assert block, "docs/TESTING.md has no `### Current state` block for the ledger to publish"
-    published = block.group(1).splitlines()
-    # The block is the report with the two-space indent stripped, which is how it is pasted.
-    printed = [line.removeprefix("  ") for line in _report_lines()]
-    drift = [
-        f"  line {i + 1}: published {p!r}, printed {q!r}"
-        for i, (p, q) in enumerate(zip_longest(published, printed))
-        if p != q
-    ]
-    assert not drift, (
-        "docs/TESTING.md's ledger no longer matches this file's report. Re-paste the block "
-        "`pytest backend/tests/test_spec_coverage.py -q -s` prints:\n" + "\n".join(drift)
-    )
-
-
 # The number words the ledger's prose uses. It spells small counts and prints the id total as a
 # figure, which is the house voice; both spellings are read here so the guard rules on the count
 # rather than on how the sentence chose to write it.
@@ -2435,14 +2345,6 @@ _NUMBER_WORDS = [
     "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
     "eighteen", "nineteen", "twenty",
 ]
-
-# "-- 84 ids across twelve pytest files and two e2e specs --". One sentence per re-paste: the
-# block is rewritten by the milestone it is re-pasted for rather than appended to, so a second
-# match means two milestones are both claiming it and the reader cannot tell which run produced
-# which figure.
-_LEDGER_ID_COUNT = re.compile(
-    r"(\d+|[A-Za-z]+) ids across (\d+|[A-Za-z]+) pytest files? and (\d+|[A-Za-z]+) e2e specs?"
-)
 
 
 def _spelled(token: str) -> int | None:
@@ -2455,196 +2357,7 @@ def _spelled(token: str) -> int | None:
     return _NUMBER_WORDS.index(token.lower()) if token.lower() in _NUMBER_WORDS else None
 
 
-def _milestone_ids(milestone: str) -> list[int]:
-    """[distinct ids, pytest files, e2e spec files] one milestone's rows name, off the live map."""
-    ids = {t for r in REQUIREMENTS if r["milestone"] == milestone for t in r.get("tests", [])}
-    files = {t.partition("::")[0] for t in ids}
-    return [
-        len(ids),
-        len({f for f in files if f.startswith("backend/tests/")}),
-        len({f for f in files if f.startswith("e2e/specs/")}),
-    ]
-
-
-def test_the_testing_ledger_counts_the_ids_the_map_actually_holds():
-    """The sibling above holds the fenced block; this holds the sentence beside it.
-
-    Both publish a measurement and only one of them was mechanical, so the prose drifted exactly
-    as the block had before M4.8: `docs/TESTING.md` said "84 ids across twelve pytest files and
-    two e2e specs" for a map that held 89, because five tests were registered by a review cycle
-    after the paragraph was written and nothing compared the two. The failure is the one decision
-    184 legislates against from the other side -- it refuses to invent a count that no run
-    produced, and this refuses to leave one standing that the map has since overtaken -- and it
-    matters because CLAUDE.md sends the next reader to this file "rather than assuming status":
-    an auditor checking whether a review cycle's tests were registered counts the map, reads the
-    ledger, and cannot tell a stale sentence from ids added with no row to hold them.
-
-    Scoped to `current_milestone` because the paragraph is always about the milestone the block
-    was last re-pasted for, and that is what raising `current_milestone` means.
-    [M4.11 review cycle 2: m411-c2-ledger-02]
-    """
-    matches = _LEDGER_ID_COUNT.findall(LEDGER.read_text(encoding="utf-8"))
-    assert len(matches) == 1, (
-        f"docs/TESTING.md publishes {len(matches)} 'N ids across ... pytest files and ... e2e "
-        f"specs' sentences; the block is re-pasted per milestone, so exactly one is owed"
-    )
-    published = [_spelled(token) for token in matches[0]]
-    assert None not in published, (
-        f"a count in that sentence is neither a figure nor a number word: {matches[0]}"
-    )
-
-    held = _milestone_ids(CURRENT)
-    assert published == held, (
-        f"docs/TESTING.md's {CURRENT} paragraph publishes "
-        f"{published[0]} ids across {published[1]} pytest files and {published[2]} e2e specs; "
-        f"the map holds {held[0]} distinct ids across {held[1]} pytest files and {held[2]} e2e "
-        "specs. Restate the sentence -- a count nobody re-derived is decision 184's defect."
-    )
-
-
-# The same sentence after its milestone closes, with "across" traded for "in". That trade is not
-# cosmetic and was never meant to be a discharge: the guard above asserts exactly ONE match of the
-# guarded form in the whole file and compares it with `current_milestone`'s map, so a milestone
-# handing the form on has to spell its own figure some other way -- and the demoted spelling was
-# then read by nothing at all. M4.14's said "134 ids in fourteen pytest files and one e2e spec"
-# over a map holding 138, and the four extra were added TO M4.14'S OWN ROWS by M4.16, so the
-# sentence did not go stale by neglect: a later milestone moved the thing it counts. Five of the
-# six figures the ledger publishes re-derived exactly when this was written; the sixth is what a
-# demoted figure is worth when nothing holds it.
-#
-# Read against the milestone whose BLOCK it sits in rather than against `current_milestone`, which
-# is the whole difference: each block opens with its own name in bold at the start of a line, and
-# the figure belongs to the block it is inside. [decision 184; M4.16 cycle 4, M416-C4-LEDGER-01]
-_LEDGER_DEMOTED_COUNT = re.compile(
-    r"(\d+|[A-Za-z]+) ids in (\d+|[A-Za-z]+) pytest files? and (\d+|[A-Za-z]+) e2e specs?"
-)
 _LEDGER_BLOCK = re.compile(r"^\*\*(M\d+(?:\.\d+)?)\b", re.M)
-
-
-def test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes():
-    """The guard above, for the milestones that are no longer current.
-
-    CLAUDE.md sends the next reader to this file "rather than assuming status", and what that
-    reader does with a shipped milestone's block is reconcile it against the map to see whether a
-    review cycle's tests were registered. They count 138 and read 134, and cannot tell four ids
-    added with no row to hold them from a sentence a later milestone overtook. Every one of those
-    blocks is a published measurement; a count nobody re-derives is a measurement nobody made
-    (decision 184), and "the milestone that published it has closed" is not a reason it stopped
-    being about this map. It is still about this map -- which is exactly how M4.16 could move it.
-    [decision 184; M4.16 cycle 4, M416-C4-LEDGER-01]
-    """
-    text = LEDGER.read_text(encoding="utf-8")
-    blocks = [(match.start(), match.group(1)) for match in _LEDGER_BLOCK.finditer(text)]
-    assert blocks, (
-        "docs/TESTING.md no longer opens a milestone's block with its own name in bold at the "
-        "start of a line, so this guard cannot tell which map a published figure is about"
-    )
-    figures = list(_LEDGER_DEMOTED_COUNT.finditer(text))
-    assert figures, (
-        "docs/TESTING.md publishes no 'N ids in ... pytest files and ... e2e specs' sentence for "
-        "any milestone that has closed, so this guard is reading nothing. If the ledger has "
-        "stopped publishing those figures, it comes out together with this guard."
-    )
-    drift = []
-    for figure in figures:
-        owner = [name for start, name in blocks if start < figure.start()]
-        line = text[: figure.start()].count("\n") + 1
-        if not owner:
-            drift.append(f"line {line}: {figure.group(0)!r} sits above every milestone block")
-            continue
-        published = [_spelled(token) for token in figure.groups()]
-        if None in published:
-            drift.append(f"line {line}: {figure.group(0)!r} is neither figures nor number words")
-            continue
-        held = _milestone_ids(owner[-1])
-        if published != held:
-            drift.append(
-                f"line {line}: the {owner[-1]} block publishes {published[0]} ids in "
-                f"{published[1]} pytest files and {published[2]} e2e specs; the map holds "
-                f"{held[0]}, {held[1]} and {held[2]}"
-            )
-    assert not drift, "\n  ".join(
-        ["docs/TESTING.md publishes a milestone count the map has overtaken:", *drift]
-    )
-
-# "...and the count includes the seventeen vitest ids". The figure the guard above holds is the
-# ALL-LAYER total and the clause beside it names two of the three, so a reader reconciling it
-# against the twelve pytest files and the one e2e spec is short by exactly the vitest ids. That is
-# how M4.14's paragraph came to read "118 ids across twelve pytest files and one e2e spec, with
-# seventeen vitest ids beside them" over a figure that already held those seventeen: described
-# once inside the count and once as sitting next to it. The guard above cannot see it -- it
-# compares the figure with `len(ids)` over all three layers and the file counts over two, so both
-# halves pass while they are about different sets. What is held here is the disclosure M4.12's
-# paragraph made and M4.14's dropped, that the count INCLUDES them, and the number with it:
-# decision 226 admits a vitest id as supporting evidence beside a backend or Playwright test and
-# never instead of one, which is the distinction a reader cannot draw without knowing how many of
-# the published total are which. Matched word by word, because the ledger wraps its prose and
-# this clause is as likely to arrive with a newline inside it as not.
-_LEDGER_VITEST_COUNT = re.compile(r"the\s+count\s+includes\s+the\s+(\d+|[A-Za-z]+)\s+vitest\s+ids")
-
-
-def _ledger_paragraph(pattern: re.Pattern) -> str:
-    """The blank-line-delimited block `pattern` matches in -- one re-paste of the banner.
-
-    Scoped to the paragraph rather than the file because the ledger keeps every earlier
-    milestone's block below the current one, and M4.12's still carries its own disclosure in the
-    demoted "ids in ten pytest files" form.
-    """
-    text = LEDGER.read_text(encoding="utf-8")
-    match = pattern.search(text)
-    assert match, f"docs/TESTING.md publishes no sentence matching {pattern.pattern!r}"
-    start = text.rfind("\n\n", 0, match.start()) + 2
-    end = text.find("\n\n", match.end())
-    return text[start: end if end != -1 else len(text)]
-
-
-def test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes():
-    """The second ledger guard's blind spot: one figure over three layers, two of them named.
-
-    `docs/TESTING.md` published "**118 ids across twelve pytest files and one e2e spec**, with
-    seventeen vitest ids beside them" for a map whose 118 is 100 backend ids, 17 vitest ids and
-    one Playwright id -- so the thirteen files the sentence names hold 101, and an auditor doing
-    the obvious reconciliation (open the twelve pytest files, count the registered ids) is
-    seventeen short with no way to tell a stale figure from ids registered in files the sentence
-    does not name. Decision 226's point is exactly the distinction the wording blurred: a vitest
-    id is supporting evidence BESIDE a backend or Playwright test, never instead of one, and
-    "beside them" said that of the figure instead.
-
-    The repair is the disclosure M4.12's own paragraph carried one milestone earlier -- "and the
-    count includes the vitest ids" -- with the number added, because a count published alone is
-    decision 184's defect and this is the one layer figure nothing else in this file re-derives.
-    Read out of the paragraph the figure sits in, so a later milestone re-pasting the banner
-    restates its own count rather than inheriting M4.14's.
-    [M4.14 cycle 3, m414-c3-rec-07]
-    """
-    beside = sorted(
-        test_id
-        for requirement in REQUIREMENTS
-        if requirement["milestone"] == CURRENT
-        for test_id in requirement.get("tests", [])
-        if not test_id.startswith(("backend/tests/", "e2e/specs/"))
-    )
-    claims = _LEDGER_VITEST_COUNT.findall(_ledger_paragraph(_LEDGER_ID_COUNT))
-
-    if not beside:
-        assert not claims, (
-            f"docs/TESTING.md's {CURRENT} paragraph discloses vitest ids inside its figure and "
-            "the map registers none on this milestone"
-        )
-        return
-
-    assert len(claims) == 1, (
-        f"docs/TESTING.md's {CURRENT} paragraph publishes an id figure that includes "
-        f"{len(beside)} vitest id(s) and makes {len(claims)} 'the count includes the N vitest "
-        "ids' disclosures. The figure counts three layers and names two of them, so without that "
-        "clause the sentence cannot be reconciled against the files it does name."
-    )
-    published = _spelled(claims[0])
-    assert published == len(beside), (
-        f"docs/TESTING.md's {CURRENT} paragraph says the count includes {claims[0]} vitest ids "
-        f"and the map holds {len(beside)}: {beside}. Restate it -- a count nobody re-derived is "
-        "decision 184's defect."
-    )
 
 
 # "**Twelve rows the map already had were amended in place rather than duplicated,**" is the one
@@ -2790,33 +2503,6 @@ def test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard():
     )
 
 
-def test_the_amended_rows_guard_reads_the_banner_a_one_row_milestone_writes():
-    """The sentence M5.1 shipped, in the form the widened pattern asks for.
-
-    Not an invented string: this is the claim that stood in the ledger, rewritten into the banner
-    rather than left outside it, and every clause of the guard has to survive the singular. The
-    count comes back as a number, the marker is found, and the one id is extracted -- which is the
-    whole reading M5.2 through M5.7 will each need. [M5.1 review cycle 1, M51-REV-REG-03]
-    """
-    banner = (
-        "**One row the map already carried was amended in place rather than duplicated,** named "
-        "so an auditor can check each rather than take the count: "
-        "`platform-compose-http-port-and-volumes`, M0's compose guard."
-    )
-    headline = _LEDGER_AMENDED.search(banner)
-    assert headline, (
-        "the amended-rows guard reads a plural banner only, so a milestone that amends ONE row -- "
-        "which each of M5.2 through M5.7 is sized to do -- publishes a count, a list and a set of "
-        "ids that nothing reconciles against this map"
-    )
-    assert _spelled(headline.group(1)) == 1
-    marker = _LEDGER_AMENDED_MARK.search(banner)
-    assert marker, "the singular banner carries the same marker phrase the plural one does"
-    assert _LEDGER_ROW_ID.findall(banner[marker.end():]) == [
-        "platform-compose-http-port-and-volumes"
-    ]
-
-
 # --- M5.1 review cycle 4: the amended-rows list, re-derived off the map rather than trusted -----
 #
 # The guard above holds the COUNT to the LIST and cannot hold either to the map, for the reason its
@@ -2935,44 +2621,6 @@ def test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing():
     assert not mark.search("# M5.10 review cycle 1 found something else entirely")
 
 
-# "**21 ids** written against the plan's own rows, **3 ids** registered by the stages ..." -- the
-# series the total above decomposes into, each part bolded so the prose can be read as arithmetic.
-# The total itself carries "across N pytest files", so the two sentences cannot be confused for
-# each other, and a part re-wrapped across a line break stops being read -- which the sum then
-# catches, because the parts no longer reach the whole.
-_LEDGER_ID_PARTS = re.compile(r"\*\*(\d+) ids?\*\*")
-
-
-def test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes():
-    """The sibling above holds the total; this holds the series a reader reconciles it from.
-
-    The total was honest and the decomposition under it was not: M4.15 published 21 + 3 + 1 + 6 for
-    a map that already held 35 by then and 42 now, because the first review cycle registered ten
-    ids and the sentence said six -- and the four it left out are the four that brought two further
-    pytest files into the count, so the same paragraph also told a reader the wrong cycle bought
-    them. That is the defect the guard above was written for, one granularity down: an auditor sent
-    here by CLAUDE.md "rather than assuming status" sums the parts, misses the whole by seven, and
-    cannot tell a stale sentence from ids registered with no row to hold them.
-
-    Conditional on the ledger making the claim at all. A milestone whose figure never moved owes no
-    decomposition and this stays quiet for it; what it may not do is publish a series that does not
-    reach its own total. Rounded numerals rather than number words on purpose -- these are addends,
-    and the sentence they sit in is doing arithmetic in front of the reader.
-    [decision 184; M4.15 review cycle 2: M415-C2-COV-01]
-    """
-    parts = [int(n) for n in _LEDGER_ID_PARTS.findall(LEDGER.read_text(encoding="utf-8"))]
-    if not parts:
-        return
-    ids = {t for r in REQUIREMENTS if r["milestone"] == CURRENT for t in r.get("tests", [])}
-    assert sum(parts) == len(ids), (
-        f"docs/TESTING.md decomposes {CURRENT}'s id count as "
-        + " + ".join(str(p) for p in parts)
-        + f" = {sum(parts)}, and the map holds {len(ids)}. Restate the series from the map: a "
-        "reader reconciling the total against these parts is exactly who this paragraph is for, "
-        "and a part that no longer adds up tells them nothing about which of the two is stale."
-    )
-
-
 # "...and it takes the last `pytest.skip` out of a registered Tonight test". The qualifier is
 # OPTIONAL in this pattern on purpose. The sentence is read for the scope it claims, and the
 # guard below then holds exactly that scope: widen the wording back to "a registered test" and
@@ -3086,29 +2734,6 @@ def test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take():
 _REGISTER_BLOCK = re.compile(r"^## Decisions taken \(.*\)\s*$", re.M)
 _REGISTER_DECISION = re.compile(r"^### (\d+)\. ", re.M)
 
-# The files that publish a decision RANGE as prose: the ledger's milestone paragraph, the map's
-# section header, this file's comment above `MILESTONES`, and the register's own preamble.
-# `docs/milestones/*.md` is excluded for the reason test_static_contracts.py gives for the same
-# exclusion -- the plan is the plan, the workflow forbids editing it, and a correction owed there
-# goes to the owner by hand -- and ROADMAP-to-M5.md is why that exclusion has to be stated rather
-# than assumed: it cites a connector's LINE range in this pattern exactly, starting at the number
-# M4.15's decisions start at. The first number is what scopes the sweep -- only a range that
-# STARTS where this milestone's decisions start is a claim about this milestone -- which is also
-# why no range literal is written anywhere else in this file: it would be read as a claim.
-_RANGE_PUBLISHERS = (LEDGER, MAP, REGISTER, TESTS / "test_spec_coverage.py")
-_PUBLISHED_RANGE = re.compile(r"\b(\d+)-(\d+)\b")
-
-# The register's THIRD spelling of the same claim, and the one that escaped the sweep above by
-# writing its endpoint in a phrase instead of a hyphenated pair. The M4.16 block's opening
-# sentence named an endpoint three decisions short of the register's own, over blocks it points
-# the reader to, and eighteen lines below it the SAME preamble named the right one -- so the
-# register contradicted itself about its own range, in the file decision 288 makes normative and
-# CLAUDE.md sends the next reader to. A fixed clause rather than a sweep over every way an
-# endpoint can be phrased, for `_FAMILY_SIZE`'s reason one file over: a rule over prose is not a
-# rule. No literal endpoint is written in this comment, for the reason the paragraph above gives.
-# [M4.16 cycle 3: M416-C3-REG-01, M416-C4-REG-01]
-_RANGE_RUNS_TO = re.compile(r"the milestone's range runs to (\d+)")
-
 
 def _current_milestone_blocks(milestone: str = CURRENT) -> list[tuple[str, str, list[int]]]:
     """Every `## Decisions taken` block the register heads for `current_milestone`.
@@ -3137,126 +2762,6 @@ def _current_milestone_blocks(milestone: str = CURRENT) -> list[tuple[str, str, 
         preamble = block[:decisions[0].start()] if decisions else block
         out.append((head.group(0).strip(), preamble, [int(m.group(1)) for m in decisions]))
     return out
-
-
-def test_every_published_decision_range_ends_where_the_register_does():
-    """Four documents publish this milestone's decision range, and only one of them was derived.
-
-    The register numbers the decisions; `docs/TESTING.md`'s ledger paragraph, the map's section
-    header and the comment above `MILESTONES` each restate the RANGE in prose -- and prose written
-    before a browser gate appends four more decisions stays where it was. M4.15 shipped three
-    spellings of one range at once: the ledger's ended at the last decision taken, the map's stopped
-    one short of it and this file's comment two, so an auditor reconciling the record against the
-    register met neither the decision that replaced logout's exit with `location.assign('/login')`
-    nor the one that made 272 conditional on a sign-out the server confirmed.
-
-    Decision 184 refuses to publish a measurement no run produced; this is the same rule from the
-    other side, applied to a figure a later run overtook, which is what the two ledger guards above
-    already hold for the milestone counts and the id total. Neither of them can see a range.
-    [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
-
-    A MILESTONE THAT DOES NOT HOLD `current_milestone` PUBLISHES ITS RANGE UNHELD, and this guard
-    says so rather than implying otherwise. M5.4 is the first milestone to ship rows without the
-    scalar, and its first two review cycles took ten decisions while four documents -- the three
-    this guard reads and the spec's own §12 row -- went on publishing the range it opened with; the
-    guard was scoped to M5.1 and saw none of it. It could not simply be pointed at M5.4 either: a
-    range is recognised here by starting at the milestone's lowest number, and M5.4's lowest is 341,
-    a number a planner filed against it, so it publishes "341 and 382-N" and no range beginning at
-    341 exists to read. Until that milestone holds the scalar, keeping its range current is the
-    milestone's own review work and nothing mechanical checks it.
-    [M5.4 review cycle 3, M54-C3-EVID-03]
-    """
-    blocks = _current_milestone_blocks()
-    assert blocks, f"the register heads no `## Decisions taken` block for {CURRENT}"
-    held = sorted(n for _, _, numbers in blocks for n in numbers)
-    assert held, f"the register's {CURRENT} block holds no `### <n>.` decision"
-    lo, hi = held[0], held[-1]
-
-    published, stale = 0, []
-    for path in _RANGE_PUBLISHERS:
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for first, last in _PUBLISHED_RANGE.findall(line):
-                if int(first) != lo:
-                    continue
-                published += 1
-                if int(last) != hi:
-                    stale.append(
-                        f"{path.relative_to(REPO).as_posix()}:{number}: publishes {first}-{last}"
-                    )
-            for last in _RANGE_RUNS_TO.findall(line):
-                published += 1
-                if int(last) != hi:
-                    stale.append(
-                        f"{path.relative_to(REPO).as_posix()}:{number}: says the range runs to "
-                        f"{last}"
-                    )
-    assert published, (
-        f"no file publishes {CURRENT}'s decision range, so this guard holds nothing. Either the "
-        "ledger paragraph states it, in the shape M4.7's block uses -- the full range, then the "
-        "sittings it decomposes into -- or this guard comes out."
-    )
-    assert not stale, (
-        f"{CURRENT}'s decisions are {lo}-{hi} in docs/spec-v2.2-proposals.md, and these publish a "
-        "range that stops short of it. A reader reconciling the record against the register never "
-        "meets the decisions past the end they name:\n  " + "\n  ".join(stale)
-    )
-
-
-def test_the_register_block_opens_with_the_number_of_decisions_it_holds():
-    """The same drift one document in, and the only place it cannot be read as scoped.
-
-    Every dated block in the register opens with the count it holds -- "Ten, taken as M4.10
-    opened", "Thirteen, taken as M4.12 opened" -- and M4.15's opened "Fifteen" over a block holding
-    twenty, because the four decisions the browser gate produced and the one review cycle 1 took
-    were appended under the header that already said fifteen. A reader of the preamble is then told
-    a smaller number than the block under it contains, which is the id-count guard's failure in the
-    other document: a figure published as measured that a later run overtook.
-
-    Held per block rather than per milestone, because the house may put a milestone's later
-    decisions under a dated header of their own (`as M4.13 closed`, `M4.12 review cycle 1`) and
-    each header then owns its own count. Either arrangement passes; neither may miscount.
-    [M4.15 review cycle 1: M415-C1-COV-01]
-    """
-    drift = []
-    for header, preamble, numbers in _current_milestone_blocks():
-        first = preamble.split()[0].strip(",.") if preamble.split() else ""
-        spelled = _spelled(first)
-        assert spelled is not None, (
-            f"the register's block `{header}` opens with {first!r} rather than the count it "
-            "holds. Open it the way every dated block above it does, so the count can be read."
-        )
-        if spelled != len(numbers):
-            drift.append(f"{header}: opens {first!r}, holds {len(numbers)} decisions")
-    assert not drift, (
-        "the register publishes a decision count its own block has overtaken. Restate the count, "
-        "and disclose the later sittings inside the sentence the way the 2026-09-10 block does "
-        "for its eleventh:\n  " + "\n  ".join(drift)
-    )
-
-
-def test_a_milestone_building_beside_the_current_one_counts_its_blocks_too():
-    """The rule above, for the blocks a parallel wave writes while `current_milestone` stays put.
-
-    Scoped to `current_milestone` because the block in flight is the one that milestone writes --
-    and in this wave it is not: M5.1 holds the scalar, M5.2, M5.3 and M5.4 build beside it, and
-    none of them may raise it. So a lane's own blocks were read by nothing. M5.2's first review
-    cycle opened `### 392.` with no count at all over five decisions, two of them taken by its
-    SECOND cycle under the first cycle's heading, and both register guards were green only because
-    they looked at M5.1. Every milestone after the current one is still being written; the ones
-    before it are history this rule leaves alone for the reason `_current_milestone_blocks` gives.
-    [M5.2 review cycle 3: M52-C3-PAPER-05]
-    """
-    drift = []
-    for milestone in MILESTONES[MILESTONES.index(CURRENT) + 1:]:
-        for header, preamble, numbers in _current_milestone_blocks(milestone):
-            first = preamble.split()[0].strip(",.") if preamble.split() else ""
-            if _spelled(first) != len(numbers):
-                drift.append(f"{header}: opens {first!r}, holds {len(numbers)} decisions")
-    assert not drift, (
-        "a block written beside the current milestone does not open with the count it holds. Open "
-        "it the way every dated block does, and give a later cycle a heading of its own rather "
-        "than appending under an earlier one's:\n  " + "\n  ".join(drift)
-    )
 
 
 # --- M5.1 review cycle 4: a number is spent once, by the milestone the roadmap files it under ---
@@ -3401,78 +2906,6 @@ def test_a_number_headed_twice_is_refused_rather_than_kept_in_silence(tmp_path, 
         _register_entries.__wrapped__()
     monkeypatch.undo()
     assert _register_entries(), "the live register heads no numbered entry at all"
-
-
-# --- M5.3 review cycle 1: a number left unspent is a hole, and a hole has to be named ------------
-#
-# Decision 346's cost paragraph is what the practice above is for, and this is its other half. M5.1
-# spent 346 because "the register's two hole enumerations and `docs/TESTING.md`'s both list every
-# number M5.1 left unspent and omit 346", and the collision surfaced in the lane that owned the
-# number, over a plan file no agent may edit. The guard above catches a number the ROADMAP files
-# elsewhere; nothing caught a number the register neither heads nor mentions at all, which is the
-# state that made 346 lootable in the first place.
-#
-# M5.3's own sitting accounted for 372-378 as spent, for the 324-359 the M5.1 blocks leave unspent
-# and for 362-371 and 382-391 as the two sibling lanes' -- and left 379-381, the rest of its own
-# block, named nowhere in the file. An auditor reading the register alone meets three numbers under
-# the highest entry with nothing said about them, and takes one.
-#
-# Read off the file's header and the sitting PREAMBLES, because that is where this file enumerates
-# holes; a number inside an entry's body is a citation of a rule, not a claim about who owns a
-# number. A range opening at the register's own first decision is skipped for the reason
-# `test_every_published_decision_range_ends_where_the_register_does` keys on that same number:
-# `162-N` is the file's extent, and reading it as an allocation would mark every hole in the file
-# accounted for ever after. [decision 346; M5.3 review cycle 1, M53-REG-06]
-_ALLOCATION = re.compile(r"(?<![:\d])(\d{3})(?:\s*[-\u2013]\s*(\d{3}))?\b")
-_SPAN_IN_WORDS = re.compile(r"between (\d{3}) and (\d{3})")
-
-
-def _numbers_the_register_speaks_for() -> set[int]:
-    """Every decision number the file's header paragraphs and its sitting preambles account for."""
-    body = REGISTER.read_text(encoding="utf-8")
-    opening = _REGISTER_DECISION.search(body)
-    assert opening, "the register heads no `### <n>.` entry at all, so this reads nothing"
-    regions = [body[:opening.start()]]
-    heads = list(_REGISTER_BLOCK.finditer(body))
-    for index, head in enumerate(heads):
-        end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
-        block = body[head.end():end]
-        first = _REGISTER_DECISION.search(block)
-        regions.append(head.group(0) + (block[:first.start()] if first else block))
-    spoken: set[int] = set()
-    for region in regions:
-        for first, last in _ALLOCATION.findall(region):
-            if int(first) == _FIRST_DECISION and last:
-                continue
-            spoken.update(range(int(first), int(last or first) + 1))
-        for first, last in _SPAN_IN_WORDS.findall(region):
-            spoken.update(range(int(first), int(last) + 1))
-    return spoken
-
-
-def test_the_register_accounts_for_every_number_below_the_last_one_it_spends():
-    """A hole the file does not enumerate is indistinguishable from a number nobody wanted.
-
-    Held below the highest entry only. Above it there is nothing to read: a number no sitting has
-    reached yet is the next one, and a lane's block is orchestration that reaches this file when
-    the sitting that spent from it is written. [decision 346; M5.3 review cycle 1, M53-REG-06]
-    """
-    headed = {number for number in _register_entries() if number >= _FIRST_DECISION}
-    assert headed, "the register heads no numbered owner decision, so this guard holds nothing"
-    spoken = _numbers_the_register_speaks_for()
-    unaccounted = sorted(
-        number for number in range(_FIRST_DECISION, max(headed))
-        if number not in headed and number not in spoken
-    )
-    assert not unaccounted, (
-        f"the register heads no entry at {unaccounted} and says nothing about those numbers "
-        "either, while heading numbers above them. A number neither spent nor named as unspent "
-        "reads as free to the next reader, and decision 346 records what that costs: the "
-        "milestone that owns it cannot renumber its own citation, so the day it opens the file "
-        "holds two `### N.` headings under one number, the later one wins, and every citation in "
-        "the tree resolves against the wrong rule while staying green. Name them in the sitting "
-        "that left them unspent, the way that sitting already names the sibling lanes' blocks."
-    )
 
 
 # The owed device checks in `docs/TESTING.md`: the bullets, and the signature line under them.

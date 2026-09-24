@@ -7,17 +7,12 @@ surface by surface, with an adversarial pass over every claimed divergence.*
 **Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
 there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
 amended in place, recording each wave as a dated point release in its own Status block. This
-file holds 381 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+file holds two registers. **Proposals 1-161** are dated reasoning from
 the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
-numbered owner decisions** - 220 of them, spanning 162-425, the latest being M5.1's 321-361; M5.2's
-362-371, the 404-407 its first two review cycles took and the 408-418 its third and fourth took, 416
-being the first cycle's token decision renumbered out of a sibling lane's range; M5.4's 341 and
-382-403; and M5.3's 326, 334, 335, 346 and 372-378, the 420, 421 and 422 its second review cycle
-took and the 423, 424 and 425 its first took as 392-394 and the merge renumbered - and each is
-normative from the day it is taken until the amendment it mandates lands in
-`spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03, this
-one on 2026-09-17 and M5.2's on 2026-09-23. The decision numbering
+numbered owner decisions**, and each is normative from the day it is taken until the amendment it
+mandates lands in `spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03,
+this one on 2026-09-17 and M5.2's on 2026-09-23. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
 decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
@@ -10237,6 +10232,62 @@ widens. What an `llm_call` whose pack has since been rebuilt points at stays M5.
 applied to no durable install -- said loudly in the file and here for that reason. The key is now a
 superset of the primary key and so constrains nothing the primary key does not; it exists to be the
 target 0028's foreign key names, which is the whole of what 395 wanted it for.
+
+---
+
+## Decisions taken (owner, 2026-09-24, the documents stop counting themselves)
+
+One, taken by the owner in so many words ("please trim the guards") after being shown what the
+M5 wave had cost: about 209 million subagent tokens, of which the build of a milestone was three
+to five million and a review run fourteen to thirty-five, and a large share of every change set
+spent re-deriving numbers that prose documents publish about the tree. It is numbered 460 because
+the wave's lanes hold 436-459 in parallel and a number that only looks free here is how 392 came to
+be written three times.
+
+### 460. The records stop publishing counts of the tree, and the guards that held those counts are retired
+
+**What the record says.** Decision 184 refuses a figure nobody measured, and the milestones since
+M4.8 applied it outward as a rule about prose: README and this file's header published the
+register's entry count, decision range and sittings; each dated block opened with the number of
+decisions it held and named every number it left unspent; `docs/TESTING.md` published the coverage
+banner, per-milestone id totals and their decomposition; `docs/RELEASE.md` published how many §12
+rows had never run, how many scripts `ops/` holds, how many lines and checks each script has, a
+pasted coverage-gate transcript, and `file:line` citations into the code; and the five sweeps over
+the exit scripts asserted how many there were. Thirty tests held those sentences to the tree,
+so every change that added a decision, a test id, a row, a script or a line above a cited subject
+had to re-derive and re-paste them -- and every parallel merge had to re-derive them again, because
+git takes an identical bump on two branches once and silently.
+
+**Why it changes.** None of those guards holds a rule about the application. A stale count
+misleads nobody about what the code does; it costs every change set a pass over ten-thousand-line
+files to keep it true, and it cost the M5 wave its largest single merge tax. The guards that DO
+protect meaning stay: a decision the map or the spec cites must exist, a number may not be headed
+twice or spent against another milestone's allocation, a row's evidence must run, a waiver must
+name a real test, and every exit script is still held to every rule the sweeps apply.
+
+**The decision.** The documents stop stating counts of the tree, and the thirty guards that
+held them are removed together with the helpers only they used:
+
+- the register's published count, range, sittings, block counts and hole lists
+  (`test_the_proposal_ledger_counts_itself` and its self-test, the sittings guard, both block-count
+  guards, the published-range guard, the unspent-numbers guard, and the ledger's range guard and
+  its self-test);
+- `docs/TESTING.md`'s banner, id totals, per-milestone totals, vitest disclosure, decomposition
+  and one-row amended-count form;
+- `docs/RELEASE.md`'s never-run count, opening-paragraph count, script count and per-script
+  figures, its `file:line` citations and the pasted leg-two transcript;
+- the prose sizes of the gate's vitest hole, the silent-skip families and phase 1, the authority
+  rule's published count, and the registry sizes `test_static_contracts.py` states about itself;
+- the five `len(EXIT_SCRIPTS) == N` constants, which now require only that the glob finds a script.
+
+README and this header now describe the register without counting it, and where a record keeps a
+number it is a dated reading, not a maintained figure. The coverage rows that registered those
+tests keep their ids and lose the clauses only those tests held.
+
+**Cost.** Figures already in the records will drift, and nothing will say so; the ones left are
+dated or historical, and a reader who needs a live count runs the command that produces it. A
+future milestone may be tempted to reintroduce a counting guard to catch a typo; this entry is the
+argument against it.
 
 ---
 

@@ -11,9 +11,8 @@ real stack, a built image, a real phone) still work.
      half `test_spec_coverage.py` structurally cannot ask -- a check on whether the suite ran
      cannot live inside the suite. The `CORPUS_BUNDLE_DIR` family closes 3 rows, the `pg_dump`
      family closes 3 rows and the `test_migrations.py` family closes 9 rows, every one of
-     which reads as covered on the wrong checkout while its evidence asserted nothing. All
-     three figures are counted off the live map rather than typed; see
-     `test_the_gate_and_its_guards_publish_the_skip_family_sizes_the_map_holds`.
+     which reads as covered on the wrong checkout while its evidence asserted nothing. The
+     three figures are a dated reading (decision 460), not counts a guard keeps current.
   2. `.github/workflows/release.yml`, read as text. Its five legs run in order, each uploads an
      artifact, none carries `continue-on-error`, and no leg can pass by skipping its whole body.
      This file is the only thing that can hold those properties: no test anywhere can observe a
@@ -457,38 +456,6 @@ def test_the_gate_counts_the_rows_that_failed_and_not_the_lines_it_printed(repor
     assert printed.count(row_id) >= len(victims), printed
 
 
-def test_the_gate_and_its_guard_publish_the_vitest_count_the_map_actually_holds():
-    """`ops/coverage_gate.py`'s docstring and the guard below it both state how many named ids the
-    gate cannot see, and both said 44 over a map holding 47 -- three of which this same milestone
-    added, so the number went stale inside the diff that published it.
-
-    The house already knows the failure mode: `test_the_testing_ledger_publishes_the_counts_the
-    _gate_prints` exists because docs/TESTING.md once published `M4.8 9/9` against a printed
-    `10/10`, and decision 184 refuses to invent a number. Counted the way `check()` counts, so
-    the sentence and the printed line cannot mean two different things.
-    [M4.16 cycle 1, M416-C1-REL-06]
-    """
-    coverage = tomllib.loads(MAP.read_text(encoding="utf-8"))
-    order = coverage_gate.authored_milestones()
-    current = order.index(coverage["current_milestone"])
-    held = sum(
-        1
-        for row in coverage["requirement"]
-        if order.index(row["milestone"]) <= current
-        for test_id in row.get("tests", [])
-        if test_id.startswith(coverage_gate.VITEST_PREFIX)
-    )
-    published = re.compile(r"(\d+) named ids live in\s+`?frontend/src`?")
-    for path in (REPO / "ops" / "coverage_gate.py", Path(__file__)):
-        claims = [int(n) for n in published.findall(_read(path))]
-        assert claims, f"{path.name} no longer publishes a vitest count, so this guard reads nothing"
-        assert all(claim == held for claim in claims), (
-            f"{path.name} publishes {claims} named vitest ids and the map at "
-            f"{coverage['current_milestone']} holds {held}"
-        )
-
-
-
 # --- M4.16 review cycle 5: decision 312's split, held to the only thing it buys -----------------
 #
 # The one-sentence criterion is "counts only rows whose named tests actually executed AT OR ABOVE
@@ -689,88 +656,6 @@ def _skip_families() -> dict[str, set[str]]:
         "pg_dump": rows(lambda t: t in pg_dump),
         "test_migrations.py": rows(lambda t: t.startswith("backend/tests/test_migrations.py::")),
     }
-
-
-def test_the_gate_and_its_guards_publish_the_skip_family_sizes_the_map_holds():
-    """The vitest guard above, turned on the three families that sentence sits beside.
-
-    A checkout with no corpus bundle and no `pg_dump` is the case this whole leg exists for, and
-    three documents told a maintainer it costs four rows. Counted the way the gate counts --
-    shipped rows, distinct ids -- so a sentence and a run cannot mean two different things, and so
-    that a family whose membership changes reddens the sentences that size it rather than leaving
-    them to be believed. [decision 184; M4.16 cycle 2, M416-C2-CG-04]
-
-    A FOURTH file since review cycle 4: `.github/workflows/release.yml`, which sized two of these
-    three families in prose of its own -- two rows for the corpus family and eight for the
-    migrations one -- and so was green here while being read by the one person the numbers are
-    for, the maintainer deciding how to provision a runner. It states all three in the published
-    form now, which is what lets this loop include it rather than a second regex over its wording.
-    [M4.16 cycle 4, CG-C4-COUNT-01]
-
-    AND A FIFTH: `.github/workflows/ci.yml`, where the same sentence recurred one file further on
-    -- "eight rows are closed by `test_migrations.py`" against a family of nine, in prose the
-    published form cannot match, arguing for the pglite install step to the one reader the figure
-    is for. It is read for CORRECTNESS and not for completeness, which is what the `seen` arm
-    below is: ci.yml sizes the one family its own job is about, and may not size it wrongly.
-    [M4.16 cycle 4, M416-C4-CI-02]
-    """
-    families = _skip_families()
-    held = {family: len(ids) for family, ids in families.items()}
-    assert all(held.values()), (
-        f"a silent-skip family now closes no shipped row at all: {held}. If one has genuinely gone "
-        "away, the sentences that size it come out together with this guard rather than going to "
-        "zero."
-    )
-    # Derived rather than added up, for the reason `_skip_families` hands back ids at all: the
-    # families are disjoint on this tree and nothing makes them stay that way.
-    # [M4.16 cycle 4, REL-C4-06]
-    whole = len(set().union(*families.values()))
-    wrong = []
-    for path in (REPO / "ops" / "coverage_gate.py", Path(__file__), MAP, RELEASE, CI):
-        flat = " ".join(_read(path).split())
-        seen = set()
-        for claim in _FAMILY_SIZE.finditer(flat):
-            family, published = claim.group("family"), int(claim.group("count"))
-            seen.add(family)
-            if published != held[family]:
-                wrong.append(
-                    f"{path.name} publishes {claim.group(0)!r} and the map holds {held[family]}"
-                )
-        for claim in _FAMILY_TOTAL.finditer(flat):
-            if int(claim.group("count")) != whole:
-                wrong.append(
-                    f"{path.name} publishes {claim.group(0)!r} and the three families close "
-                    f"{whole} rows between them"
-                )
-        if path == CI:
-            # Read for correctness, not for completeness. ci.yml's one figure argues for the
-            # pglite install step in the job that needs it; making it size the corpus and pg_dump
-            # families too would be prose about provisioning this workflow does not do. What it
-            # may not do is publish a figure the map disproves -- it said EIGHT rows are closed by
-            # `test_migrations.py` when nine are, the same sentence cycle 4 had already corrected
-            # one file over, in the fifth file, held by nothing.
-            # [M4.16 cycle 4, M416-C4-CI-02]
-            assert seen, (
-                "ci.yml no longer sizes any silent-skip family, so the argument for its pglite "
-                "install step rests on nothing this guard can read. The published form is "
-                "\"`<family>` family closes <N> rows\"."
-            )
-            continue
-        missing = sorted(set(held) - seen)
-        assert not missing, (
-            f"{path.name} no longer sizes {missing}, so this guard reads less than it says it "
-            "does. The published form is \"`<family>` family closes <N> rows\"."
-        )
-    # The whole hole is sized in ONE place -- the block heading this guard -- and that is the
-    # sentence a maintainer reads before deciding to provision a runner, so its absence is a
-    # failure rather than a silence. The other four files size the families their own readers are
-    # about, which is why only this one is held to carrying the union. [M4.16 cycle 4, REL-C4-06]
-    assert _FAMILY_TOTAL.search(" ".join(_read(Path(__file__)).split())), (
-        "the sentence sizing the whole silent-skip hole is gone from the block that heads this "
-        "guard. The published form is \"the three silent-skip families close <N> rows between "
-        "them\", and N is a union rather than a sum, because a row can be closed by two families."
-    )
-    assert not wrong, "\n  ".join(["a published size the map has overtaken:", *dict.fromkeys(wrong)])
 
 
 # --- M4.16 review cycle 2: leg 2's input outlives the cadence that consumes it ------------------
@@ -2787,63 +2672,6 @@ def test_the_harness_keeps_phase_ones_report_for_the_gate():
 # [decision 184; decision 299; M4.16 cycle 4, CG-C4-COUNT-02]
 PHASE_ONE_SPEC = "e2e/specs/01-first-boot.spec.js"
 
-# The published form, in all three files: "phase 1 alone closes <N> shipped rows". A fixed clause
-# for `_FAMILY_SIZE`'s reason -- a rule over every way a count can be phrased is a rule over prose.
-_PHASE_ONE_SIZE = re.compile(r"phase 1 alone closes (?P<count>\d+) shipped rows")
-
-
-def _phase_one_rows() -> int:
-    """Shipped rows closed by a test that only runs in phase 1, counted off the live map.
-
-    Counted the way `_skip_families` counts and for the same reason: shipped rows, distinct ids,
-    so a sentence and a run cannot mean two different things. Which tests those are is not
-    re-derived here -- phase 1 is one file and phase 2 is `--grep-invert` over the tag that file's
-    describe title carries, and `test_harness_contracts.py::
-    test_phase_two_inverts_the_tag_the_first_boot_file_carries` is what holds that partition.
-    """
-    coverage = tomllib.loads(MAP.read_text(encoding="utf-8"))
-    order = coverage_gate.authored_milestones()
-    current = order.index(coverage["current_milestone"])
-    return len(
-        {
-            row["id"]
-            for row in coverage["requirement"]
-            if order.index(row["milestone"]) <= current
-            if any(test.startswith(f"{PHASE_ONE_SPEC}::") for test in row.get("tests", []))
-        }
-    )
-
-
-def test_the_instruments_publish_the_phase_one_size_the_map_holds():
-    """The family guard above, turned on the one count it is structurally unable to read.
-
-    Three sentences justify `PHASE_ONE_REPORT`, and the justification IS the figure: eight rows
-    whose evidence the gate would otherwise be told never ran. A figure nobody re-derives is a
-    measurement nobody made (decision 184), and this one was wrong on the day it was typed rather
-    than stale afterwards -- the same eight rows stand at `HEAD`. [M4.16 cycle 4, CG-C4-COUNT-02]
-    """
-    held = _phase_one_rows()
-    assert held, (
-        f"no shipped row names a test in {PHASE_ONE_SPEC}, so the write-back this guards is "
-        "protecting nothing. If phase 1 has genuinely stopped closing rows, the three sentences "
-        "that size it come out together with this guard rather than going to zero."
-    )
-    assert PHASE_ONE_SPEC.removeprefix("e2e/") in _read(RUNNER), (
-        f"{PHASE_ONE_SPEC} is no longer the file phase 1 selects, so this count is taken over a "
-        "file the harness does not run alone"
-    )
-
-    wrong, missing = [], []
-    for path in (RELEASE, RUNNER, Path(__file__)):
-        claims = [int(m.group("count")) for m in _PHASE_ONE_SIZE.finditer(" ".join(_read(path).split()))]
-        if not claims:
-            missing.append(path.name)
-        wrong += [f"{path.name} publishes {n} and the map holds {held}" for n in claims if n != held]
-    assert not missing, (
-        f"{missing} no longer size phase 1, so this guard reads less than it says it does. The "
-        'published form is "phase 1 alone closes <N> shipped rows".'
-    )
-    assert not wrong, "\n  ".join(["a published size the map has overtaken:", *dict.fromkeys(wrong)])
 
 # --- M4.16 review cycle 5: the one published figure block nothing re-derived --------------------
 #
@@ -2865,77 +2693,6 @@ def test_the_instruments_publish_the_phase_one_size_the_map_holds():
 # inside the dated console paste, and the prose around it claims nothing about it.
 # [decision 184; decision 313; M4.16 cycle 5: M416-C5-REL-01, REL-C4-09]
 RECORD = REPO / "docs" / "RELEASE.md"
-_TRANSCRIPT_READ = re.compile(r"coverage gate: (\d+) test result\(s\) read")
-_TRANSCRIPT_CONFIRMED = re.compile(r"coverage gate: (\d+) row-and-test pair\(s\) confirmed")
-_TRANSCRIPT_VITEST = re.compile(r"coverage gate: (\d+) named vitest id\(s\)")
-_TRANSCRIPT_FAILED = re.compile(
-    r"coverage gate: (\d+) row\(s\) name evidence that did not run, in (\d+) line\(s\)"
-)
-
-
-def _this_files_test_names() -> set[str]:
-    """Every test function defined at the top level of this module, by name.
-
-    What a JUnit of this file collapses to: `junit_outcomes` folds a parameterised case back onto
-    its base name, so the number of RESULTS the gate reads is the number of functions.
-    """
-    return {
-        node.name
-        for node in ast.parse(_read(Path(__file__))).body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-        if node.name.startswith("test_")
-    }
-
-
-def _leg_two_figures() -> dict[str, int]:
-    """What decision 313's recorded run would print over today's map, derived not remembered."""
-    named = sorted(
-        test_id for test_id in _live_ids()[0]
-        if test_id.startswith("backend/tests/test_release_gate.py::")
-    )
-    failures, invisible, confirmed = coverage_gate.check({t: {"executed"} for t in named})
-    return {
-        "read": len(_this_files_test_names()),
-        "confirmed": confirmed,
-        "vitest": len(invisible),
-        "rows": len({row for row, _ in failures}),
-        "lines": len(failures),
-    }
-
-
-def test_the_leg_two_transcript_publishes_the_figures_this_map_would_print():
-    """Section 2.1's one pasted console, held to the map it was taken over.
-
-    The block is dated now, so a later reading is a supersession rather than a contradiction - but
-    dating alone still leaves a reader re-running the command, getting different numbers and
-    having nothing tell them which state is which. This re-derives the four figures the block's
-    own argument rests on and reddens the day one of them moves, which is what "a figure nobody
-    re-derives is a measurement nobody made" means applied to a transcript rather than a sentence.
-    [decision 184; decision 313; M4.16 cycle 5, M416-C5-REL-01]
-    """
-    record = _read(RECORD)
-    held = _leg_two_figures()
-    published = {}
-    for key, pattern in (("read", _TRANSCRIPT_READ), ("confirmed", _TRANSCRIPT_CONFIRMED),
-                         ("vitest", _TRANSCRIPT_VITEST)):
-        match = pattern.search(record)
-        assert match, (
-            f"docs/RELEASE.md no longer pastes the gate's {key!r} line, so decision 313's "
-            "transcript is held by nothing. If the block has gone, this guard goes with it."
-        )
-        published[key] = int(match.group(1))
-    failed = _TRANSCRIPT_FAILED.search(record)
-    assert failed, (
-        "docs/RELEASE.md no longer pastes the gate's failure summary, which is the half decision "
-        "313 records as what that run does NOT prove"
-    )
-    published["rows"], published["lines"] = int(failed.group(1)), int(failed.group(2))
-    assert published == held, (
-        f"docs/RELEASE.md publishes {published} for decision 313's scoped run and this map would "
-        f"print {held}. Re-run the two commands section 2.1 prints and re-paste the block, or "
-        "supersede it in section 4's dated idiom: a transcript the command no longer reproduces "
-        "is the defect that section exists to refuse."
-    )
 
 
 # --- M4.16 review cycle 3: the shell three legs' exit codes rest on -----------------------------

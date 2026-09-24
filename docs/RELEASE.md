@@ -7,15 +7,15 @@ and where the output lives; and what nobody has ever measured at all.
 
 It exists because "the suite is green" had been standing in for §12's exit criteria, and those are
 different statements. A green suite answers *is the map covered*. §12 asks *does this build ship*.
-Counted on this branch rather than inherited. §12 carries **nineteen** rows. **Nine of them have
-never been run at all**, and the nine are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
-under `ops/` at all and never have; M5.1's, M5.2's and M5.3's instruments were each written in the
-same change set as the surface they measure and none has ever been run, because none of those lanes
-could reach a real corpus bundle - and M5.1's could start neither a container nor a port; and M5.4's
-checks are the suite's, which runs them against the fixture and not against the real install and
-real bundle its criterion names. Three describe milestones that do not exist yet (M5, M6, M7). The
-remaining seven have been measured by one of the eleven scripts under `ops/`, and **not one of those
-eleven had a committed output** until M4.16 wrote the first. M4.5's own eighteen checks
+Several of §12's rows have never been run at all, and they are not one kind: M0, M2, M4.6, M4.7
+and M4.10 have no script under `ops/` at all and never have; M5.1's, M5.2's and M5.3's instruments
+were each written in the same change set as the surface they measure and none has ever been run,
+because none of those lanes could reach a real corpus bundle - and M5.1's could start neither a
+container nor a port; and M5.4's checks are the suite's, which runs them against the fixture and not
+against the real install and real bundle its criterion names. Three describe milestones that do not
+exist yet (M5, M6, M7). The rest have been measured by one of the scripts under `ops/`, and **not one
+of those scripts had a committed output** until M4.16 wrote the first. The table below is the count;
+this paragraph no longer restates it (decision 460). M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
 
@@ -602,12 +602,12 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 312 row(s) name evidence that did not run, in 2272 line(s): ...
 ```
 
-**Four of those five figures are re-derived rather than remembered**, which is why this block is
-dated and not merely pasted. It was pasted once and went stale inside the diff that published it —
+**These figures are a dated reading, and since decision 460 nothing keeps them current.** For a
+while four of them were re-derived rather than remembered, which is why the block is dated. It was pasted once and went stale inside the diff that published it —
 it read 92 and 2071 against a command already printing 95 and 2076, because the review cycle that
 added tests to this file did not re-run the one command this section prints. Every other count
 this milestone publishes has a guard that counts it off the live map, and this one had none.
-`test_the_leg_two_transcript_publishes_the_figures_this_map_would_print` now derives what the
+`test_the_leg_two_transcript_publishes_the_figures_this_map_would_print` (retired by decision 460) derived what the
 parser READ (one result per test function in that file), what it CONFIRMED (one per row-and-test
 pair), the vitest line and both halves of the failure summary, so the block reddens the day the map
 moves instead of quietly ceasing to be true. It has done that twice already, which is the only

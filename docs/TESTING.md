@@ -244,6 +244,9 @@ Two things happen on the way that are easy to miss:
 
 ### Current state
 
+A dated reading (2026-09-24), not a maintained figure (decision 460): run
+`pytest backend/tests/test_spec_coverage.py -q -s` for the live one.
+
 ```
 > M0   34/35  covered (1 waived: data-rules-platform-rating-display-only)
 > M1   10/10  covered
@@ -566,7 +569,7 @@ the routing note above `ANONYMOUS` to the routers this app actually mounts.
 `platform-exit-criteria-are-closed-by-a-committed-measurement` gained the three
 `test_static_contracts.py` ids that hold this file's own prose to the registries it sizes, one of
 the three registered on both. That last row also carries a two-word `why` refresh nobody chose:
-`test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured` derives both figures
+`test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured` (retired by decision 460) derives both figures
 from `docs/RELEASE.md` and §12, and M5.1's own unmeasured §12 row moved them from five of fifteen
 to six of sixteen. Five of those six are disclosed a second time in M4.16's block below, where the
 id-total guard forced 144 to be restated as 149 and then, for the four ids below, as 153; the
@@ -636,25 +639,10 @@ subject IS this map, so a row naming a test that did not exist yet would have be
 describing work it had not done, inside the one milestone written to stop records doing exactly
 that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
 waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
-reach **158 ids in four pytest files and one e2e spec**, and the count includes the three
-vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
-never instead of one — they sit in the frontend's suite rather than in the five files the figure
-names, so an auditor reconciling the two subtracts them first. The series is published rather than
-left as a total to take on trust (decision 184): 20 ids in `test_layering_guards.py` for the
-two layering rules (two of them M5.1's review cycle 2, holding the routing note above
-`ANONYMOUS` to the tree it describes), 42 ids in `test_release_gate.py` for the release
-workflow, the executed-coverage gate and the harness's own fixture, 67 ids in `test_static_contracts.py` for
-the documents this milestone rewrote (three of them M5.1's review cycle 3, holding this file's own
-prose to the registries it sizes, one M5.2's review cycle 3, holding README's sittings total, and
-two M5.4's review cycle 1, holding the release record's NOT BUILT rows to the coverage map and its
-opening paragraph to the table beneath it), 25 ids in `test_spec_coverage.py` for the rules the
-instrument gained (four of them M5.1's review cycle 4, holding the register's numbering and
-the normative file's own decision citations, one M5.2's review cycle 3, refusing a number the
-register heads twice, and one M5.3's review cycle 1, holding the register to naming every number
-it leaves unspent below the last one it heads), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
-`data-sources.test.js` for the /account attribution block. It decomposed by instrument rather than
-by review cycle because no review cycle had run when it was first written, and it is restated here
-from the map rather than grown: review cycle 1 added twenty-three ids across the three instrument files
+are spread across four pytest files and one e2e spec, beside three vitest ids decision 226 admits
+as supporting evidence next to a Playwright or backend test and never instead of one. The
+per-instrument totals this paragraph used to publish were retired by decision 460 -- the map is
+the count -- and what stays is how the list grew: review cycle 1 added twenty-three ids across the three instrument files
 — the workflow's per-leg body and job-condition rules, the executed-coverage gate's third absence
 shape and its own console encoding, the record's release-gate row, the waiver count and the device
 checks, the normative file's two omitted surfaces and the genome premise, the vendored extract's
@@ -718,7 +706,7 @@ the executed-coverage gate's two JUnit rulings, that an `xfail` is a skip and an
 execution, were each held by prose because the fixture could write neither element. A guard
 shown failing against one spelling of the case it was written for is
 widened rather than replaced, and the widening is not a new id. That is
-what `test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` is for. Its second
+what `test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` (retired by decision 460) is for. Its second
 round added fourteen, and they are about the instruments' own records rather than about the app:
 the gate's failure summary counted (row, test) PAIRS and printed them as rows, so a partial report
 told an operator more requirements had failed than the map holds rows; decision 312's
@@ -753,7 +741,7 @@ the next scratch directory re-point them rather than outliving them. M4.15's own
 below, keeps its numbers and loses its bold for the same reason M4.14's figure lost the word
 "across": those two guards read every match in this file against the CURRENT milestone's map, so
 only one milestone's arithmetic may stand in the form at a time. Demoted is not unheld, since
-review cycle 4: `test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes` reads the
+review cycle 4: `test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes` (retired by decision 460) reads the
 demoted sentence against the milestone whose BLOCK it sits in, so a figure goes on being
 re-derived after the milestone that published it closes. Nothing did that until this cycle, and
 M4.14's figure said 134 over a map holding 138 -- the four extra added to M4.14's own rows by this
@@ -853,7 +841,7 @@ onto rows that already stood, 1 id the browser gate added, 10 ids the first adve
 review cycle registered, 8 ids the second and 6 ids the third. That decomposition stood at "six
 more" for the first cycle until review cycle 2 added it up — a figure published as measured that the map had
 overtaken, which is the id total's own defect one granularity down, and
-`test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` now sums the parts against
+`test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes` (retired by decision 460) now sums the parts against
 the map rather than leaving the arithmetic to the reader. Cycle 1's ten are also what bring the
 SECOND AND THIRD pytest files into the count, and each of them is a rule that was already shipped
 and held by nothing: four controls sitting under `--touch` on an axis or a pointer no sweep in this
@@ -1460,7 +1448,7 @@ now holds this paragraph and the comment beside `BOUNDARY_Z` to the harness that
 counterweight; `0019` stays the permanent gap it has been since M4.10 and `0022` belongs to M4.13,
 built in parallel with this one. **No waiver was added and the milestone was not lowered.** The
 mechanical id sentence moved here from M4.11's paragraph below, which states the same count in a
-phrasing the guard does not read: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds`
+phrasing the guard does not read: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds` (retired by decision 460)
 is scoped to `current_milestone`, and exactly one sentence in this file may carry that shape.
 
 **The M4.12 exit criterion is written and has not been run.** `ops/m412_exit_criterion.py` is the
@@ -1540,7 +1528,7 @@ the one migration — `0020_jellyfin_items.sql`, the Jellyfin copy set — does 
 no sync-closed prompt left to label. **No waiver was added and the milestone was not lowered.** No
 count beyond the block above is published here until a run prints one, which is decision 184's rule.
 The id count that used to stand in this paragraph's first sentence now stands in M4.13's
-block instead: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds` admits exactly one
+block instead: `test_the_testing_ledger_counts_the_ids_the_map_actually_holds` (retired by decision 460) admits exactly one
 such sentence per file and re-derives it from the map, so it is rewritten by the milestone the block
 was last re-pasted for rather than appended to — which is what keeps two milestones from both
 claiming it with figures from different runs.
@@ -1737,7 +1725,7 @@ in review, for the two defects this milestone's own new code committed — `e2e/
 parser and 14-tonight's stray-write watcher — which is why the block above reads **10/10**. That
 block used to be pasted by hand, and this one was pasted from a run made before the tenth row
 landed: it published `9/9`, a count no run produced, four lines above the paragraph where decision
-184 refuses to invent one. `test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints`
+184 refuses to invent one. `test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints` (retired by decision 460)
 now reads it back against the report, so the ledger CLAUDE.md sends readers to cannot drift from the
 gate again. No waiver, and the milestone never lowered. Decisions **183–186** are numbered in `docs/spec-v2.2-proposals.md`. It
 writes no migration and amends no normative clause, which is why §12 gained no row for it — M4.5's

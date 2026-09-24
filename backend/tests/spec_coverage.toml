@@ -5376,64 +5376,17 @@ id = "platform-the-suite-says-whether-the-integration-layer-ran"
 spec = "§12 (a green suite is the evidence a milestone closes on)"
 milestone = "M4.8"
 kind = "backend"
-what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside `current_milestone` whose source carries one of that milestone's review cycles as provenance is one of the rows it names. An id total published over three layers discloses how many of it are vitest ids, a milestone's id total goes on being re-derived after that milestone closes - against the map of the block the sentence sits in rather than the current one - and a decision number the ledger publishes as still available is one the register has not already argued; and the milestone whose block is being written states its amended-rows count in the form that guard reads, in the singular as well as the plural, because a claim the guard cannot see satisfies it for free; and every register block written for a milestone building beside the current one opens with the count it holds, a later review cycle under a heading of its own."
+what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside `current_milestone` whose source carries one of that milestone's review cycles as provenance is one of the rows it names."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run. M5.1 review cycle 1 found the amended-rows guard reading nothing at all for this milestone: it matches a bolded PLURAL banner (`N rows the map already had were amended in place`), M5.1 amended one row, and `One rows ... were amended` is the only sentence that form admits - so the milestone wrote the truth in prose and all five clauses skipped it, including the one clause nothing else in the tree covers, that an id has not been renamed out from under the ledger. M5.2 through M5.7 are each sized to amend about one row, so the blind spot was six claims wide. The pattern is widened to the singular rather than the prose bent to the plural, and the milestone currently being written is held to the form, which is the half a conditional guard cannot hold by itself."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes", "backend/tests/test_spec_coverage.py::test_every_published_decision_range_ends_where_the_register_does", "backend/tests/test_spec_coverage.py::test_the_register_block_opens_with_the_number_of_decisions_it_holds", "backend/tests/test_static_contracts.py::test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent", "backend/tests/test_static_contracts.py::test_the_range_guard_reads_both_claims_the_ledger_can_make", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes", "backend/tests/test_spec_coverage.py::test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard", "backend/tests/test_spec_coverage.py::test_the_amended_rows_guard_reads_the_banner_a_one_row_milestone_writes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended", "backend/tests/test_spec_coverage.py::test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing", "backend/tests/test_spec_coverage.py::test_a_milestone_building_beside_the_current_one_counts_its_blocks_too"]
-# The ledger guard is registered here rather than given an eleventh row, and the row it lands on
-# is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
-# run is published, so a count no run produced is the same defect as a silent skip, one document
-# further out. An eleventh row would also flip the published block to 11/11 and make that guard
-# fail on its own registration until the block was re-pasted. [M4.8 review cycle 3: m48-c3-cov-01]
-# M4.14's review cycle 3 adds two more on the same argument, and its self-test with them: the
-# ledger's id figure is a three-layer total published beside a two-layer clause, and its statement
-# of which decision numbers a lane has left was three numbers the register had already argued. The
-# self-test is registered because the range guard's live branch reads a claim the ledger need not
-# make, and rule 2 is then the only thing standing between a rename and a guard nobody runs. The
-# sibling that holds the REGISTER's own block headings is deliberately not registered here: this
-# row is about the suite and its ledger reporting truthfully on themselves, and the register is a
-# different document - `test_decision_244_names_every_file_the_parallel_lane_harness_repair_touched`
-# is the same class and sits on no row either. [M4.14 cycle 3, m414-c3-rec-01]
-# M4.16's review cycle 4 adds the fourth on the same argument, one milestone out: the two guards
-# above read every match against the CURRENT milestone's map, so a block handing the form on
-# stopped being read at all - and M4.14's figure said 134 over a map holding 138, the four extra
-# added to M4.14's own rows by M4.16 itself. A closed milestone's count is still a count about
-# THIS map, which is exactly how a later milestone can move it. [M4.16 cycle 4, M416-C4-LEDGER-01]
-#
-# The third lands here for the same two reasons, and it is that same silent skip taken literally:
-# M4.12's paragraph published "it takes the last `pytest.skip` out of a registered test" over a
-# tree in which four registered tests still skip, none of them Tonight's. All four are argued and
-# belong to M4.7 and M4.8, so the repair is the sentence, not the rule -- and the guard reads the
-# qualifier out of the prose, so a maintainer who widens the wording gets the wider rule with it.
-# [M4.12 review cycle 2: M412-C2-LEDGER-01]
-#
-# `..._counts_the_ids_the_map_actually_holds` joins it for the same reason, one sentence further
-# out: the fenced block was mechanical and the prose beside it was not, so the ledger published
-# "84 ids across twelve pytest files" for a map holding 99 -- five of them registered by a review
-# cycle after the paragraph was written, and nothing compared the two. Decision 184 refuses to
-# invent a count no run produced; this refuses to leave one standing that the map has overtaken,
-# which is the same rule read from the other end. [M4.11 review cycle 2: m411-c2-ledger-02]
-#
-# `..._names_the_rows_it_says_it_amended` is the fourth, and it is that same defect one sentence
-# further out again: M4.14's banner published "Ten rows the map already had were amended in place"
-# over eleven, the eleventh -- M4.9's rail row -- disclosed by name one paragraph above it. This is
-# the only one of the four whose subject no field here holds and no diff restores, because once the
-# milestone commits `HEAD:spec_coverage.toml` IS the amended file; so the repair is an enumeration
-# in the ledger and a guard that reads it back, and the row this guard lands on is by that act the
-# twelfth amended row. [M4.14 review cycle 2: m414-c2-dim-record-03]
-#
-# The fifth and sixth are that rule applied to the figure the other two cannot see: the DECISION
-# range and the count the register's own block opens with. Neither existing guard can reach one --
-# they parse the fenced block and the id-count sentence -- and M4.15 published three spellings of
-# one range simultaneously, the ledger ending at the last decision taken, the map's section header
-# one short of it and this file's own `MILESTONES` comment two, because all three were written
-# before the browser gate appended four more. They land here rather than on an M4.15 row for this
-# row's two reasons exactly: the defect is a published figure a later run overtook, and a twelfth
-# M4.15 row would flip that milestone's published block to 12/12 and redden the sibling guard
-# above until the block was re-pasted. [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
-# The last id is the block-count guard for the milestones building BESIDE the current one, which
-# a parallel wave has and the guard above cannot read: M5.2's first review cycle opened on no
-# count over five decisions, two of them its second cycle's, while M5.1 held the scalar and no
-# lane could raise it. [M5.2 review cycle 3: M52-C3-PAPER-05]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended", "backend/tests/test_spec_coverage.py::test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing"]
+# The ledger guards that remain on this row read claims docs/TESTING.md makes in words -- which
+# skip a run takes, which rows a milestone amended -- because a sentence naming the wrong rows or
+# the wrong skip misleads an operator in a way no re-pasted number would. The guards that held the
+# ledger's published COUNTS (the fenced coverage block, the id totals and their decomposition, the
+# decision ranges and the register's block counts) were retired by decision 460: every one of
+# them made a routine change re-derive prose, and none held a rule. [M4.8 review cycle 3:
+# m48-c3-cov-01; M4.12 review cycle 2: M412-C2-LEDGER-01; M4.14 review cycle 2:
+# m414-c2-dim-record-03; decision 460]
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -5474,9 +5427,9 @@ id = "platform-exit-scripts-can-report-their-own-failure"
 spec = "§12 M2/M3/M4 exit criteria; §13"
 milestone = "M4.8"
 kind = "static"
-what = "No milestone exit script contains a check whose verdict is settled before the run -- a predicate built only out of literals, `not`, `and`/`or` and comparisons between them that comes out true, or a boolean expression an operand pins -- read at the first positional argument, at the `ok` keyword every one of those scripts declares its verdict with, and at the verdict every numbered `check_*` returns -- followed through a name the check binds once, because five of the nine scripts publish their verdicts from such a function and reach `check()` only as a local name inside one shared dispatcher, and every one of those functions must still publish a verdict this reader can follow; a predicate over anything the run itself decides, `placed >= 0` among them, is outside what a static reader can settle and is not claimed here; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and the M4.12 script's small-pool check reads the state its seat reads left behind, with no read of a settling route after them; and a figure a script's docstring publishes as measured is one the script's own constants give, so the M4.13 script's clamp control is recomputed from DROPS, K_FITTED and K_GROWN and held against both that docstring and the paragraph docs/TESTING.md publishes it in; and the same rule outward, where a figure a DOCUMENT publishes about one of these scripts -- how many numbered checks it holds, how many lines it is, how many scripts there are under `ops/` -- is derived from the script rather than typed, in §12's row and in docs/RELEASE.md alike; and a citation one of these scripts makes into the application is a NAME that application still declares rather than a line number, which its own milestone's edits move inside the change set that writes the citation; and every whole SQL statement `ops/m53_exit_criterion.py` holds as a literal prepares against a migrated schema."
+what = "No milestone exit script contains a check whose verdict is settled before the run -- a predicate built only out of literals, `not`, `and`/`or` and comparisons between them that comes out true, or a boolean expression an operand pins -- read at the first positional argument, at the `ok` keyword every one of those scripts declares its verdict with, and at the verdict every numbered `check_*` returns -- followed through a name the check binds once, because five of the nine scripts publish their verdicts from such a function and reach `check()` only as a local name inside one shared dispatcher, and every one of those functions must still publish a verdict this reader can follow; a predicate over anything the run itself decides, `placed >= 0` among them, is outside what a static reader can settle and is not claimed here; the M4 script computes its verdict before it dereferences the winner, so an unresolved evening prints a diagnosis and exits non-zero instead of raising; the M3 script returns non-zero when a checkable precondition fails and names a section it could not measure instead of dropping it; a refused write while seeding stops the run and names the precondition it broke rather than counting the refusal as a verdict, and a refused read counts the same way -- the M3 script checks the pair draw as well as the answer, so a queue that refuses is reported rather than read as an exhausted one; the M4.5 script's staging tree is removed rather than left open on disk, nothing that can fail runs between the creation of its scratch database and the block whose finally drops it, and an exception inside the block that measures is reported as a failed check with its traceback rather than propagating as a bare one that loses the sections below it and the tally; and every string a milestone script prints encodes in the OEM code page, including the strings it did not author -- the importer's finding messages in the M4.5 script and the corpus-written winner name in the M4 script; and the M4.12 script's small-pool check reads the state its seat reads left behind, with no read of a settling route after them; and a figure a script's docstring publishes as measured is one the script's own constants give, so the M4.13 script's clamp control is recomputed from DROPS, K_FITTED and K_GROWN and held against both that docstring and the paragraph docs/TESTING.md publishes it in; and a citation one of these scripts makes into the application is a NAME that application still declares rather than a line number, which its own milestone's edits move inside the change set that writes the citation; and every whole SQL statement `ops/m53_exit_criterion.py` holds as a literal prepares against a migrated schema."
 why = "ops/m45_exit_criterion.py passes `placed == 0 or True` for §12's M2 criterion and a literal True for the count-encoded blocks, and both counted toward the published 18/18; ops/m3_exit_criterion.py ends in an unconditional `return 0`; ops/m4_exit_criterion.py prints result['winner']['name'] before computing ok, so its single detectable failure is a TypeError. CLAUDE.md requires ASCII console output and four printed sites, including the coverage report's own header, break under cp850. Review cycle 1 found the same shape one layer down, where reading the scripts as source could not reach it: the staged tree's removal is a silent no-op on Windows while two NpzFile handles into it are open, check() printed the importer's own em-dashed finding messages -- 51 such literals, most inside the 150-character slice -- straight at the console, and the M4 script's rate() returned its full target after 24 refused writes and printed that number as verdicts written. Review cycle 2 found the class three more times, twice in code this milestone had just repaired: sharpen() read the answer's status and not the draw's, so a refused queue printed as an exhausted one over comparisons never made; the M4 script's RESOLVED line printed title.name -- the corpus's text, of which 104 of v20260828's 19,071 names leave the OEM code page -- through a `!r` that leaves the codepoint raw; and the M4.5 script compared max(id) to the id floor, which is None the moment an import lands no rows, three lines after the check that reported it. Review cycle 3 found the repair of that last one guarded only halfway: the reader searched every handler of the measurement block for a `check(False, ...)` and never read what the handler catches, so narrowing `except Exception` to a type the documented failure does not raise -- `asyncpg.PostgresError` for an async DB harness, `ValueError` for a parse -- left the guard green while the run reverted to the bare traceback that loses the sections below and the passed/total tally. The sibling guard on this same row, _unguarded_seeding, already reads handler.type. Review cycle 3 found the one clause of this `what` with nothing behind it, in the milestone whose thesis is that a claim nothing can falsify is the defect: sixteen tests covered the constant predicates, the verdict ordering, the terminal return, both console arms, the staging tree, the scratch window, the measurement block and both seeding halves, and none of them reached the `else` that prints `1. PERSONAL: NOT MEASURED`. Measured: with that branch deleted -- restoring a report numbered 2, 3, 4 that reads like a complete run -- every one of the sixteen stayed green. The new guard is stated over all three scripts rather than over the branch that was wrong, because the M4 script's `1. UNRESOLVED` is the same shape and is the rule being held. Review cycle 4 found that guard reading 15 of the 19 numbered headings its three subjects print: the heading class required an uppercase ASCII letter after the number, and the four it excluded are the section-sign headings (m3:249, m4:268, m4:273, m4:276) -- the §13/§14 instrument readings, whose data is optional at runtime and which are therefore the sections most likely to acquire the `if` with no `else` this guard exists to report. The letter never was the discriminator: `\\d+\\.\\s+` already excludes a decimal. M4.12 review cycle 2 found the same family one layer in, in a check rather than in a verdict: check 8 of the M4.12 script grades decision 215's clause -- a pool of two or three candidates reaches the ballot rather than waiting silently -- and on such a pool only the round read can end a seat, because there is no pair to answer and the escape is refused below pair six. It issued one more GET of the session AFTER its loop of seat reads, and every read of the session, the ballot and the result calls `play.settle`: so the trailing GET moved the room itself, the verdict came back 'ballot' whichever way the round read behaved, and the detail line the check prints -- that 'voting' is the silent wait this milestone closed -- named the one thing it could not see. No client produces that order either, which is M412-PLAY-4's defect read from the other end: `refresh()` GETs the session and only then calls `loadRound`. M4.13 review cycle 2 found the same class in a docstring rather than in a predicate: check 5 of `ops/m413_exit_criterion.py` said \"Measured that way the clamp reports 20/60 (33%)\", and the clamp is the one quantity in that check nothing computes -- the run measures the rescale. The stream the check builds, `round(i * (k_to - 1) / (DROPS - 1))` over `range(DROPS)`, puts 19 of 60 drops out of a 7-level history's reach, not 20; the published pair is what a probe over `range(1, DROPS + 1)` gives. It changed no verdict -- both sit inside the plan's 30-60% band -- but decision 246 makes `docs/TESTING.md`'s M4.13 paragraph the record of what the script measured, and the one figure in it nobody could reproduce was the one never re-derived from the code that shipped. M5.1 review cycle 1 found the same class one document further out and measured it drifting inside the cycle itself: §12's M5.1 row and docs/RELEASE.md publish `ops/m51_exit_criterion.py`'s check count as a typed word, docs/RELEASE.md publishes its length and the number of scripts under ops/ the same way, and the length was 1,522 when the sentence was written and 1,540 by the time a sibling review group had finished repairing that script -- a stale figure in the file CLAUDE.md calls normative, on the row an owner signs, with M5.2-M5.7 each owing a script and every review cycle free to add a check. M5.1 review cycle 4 found the rule at the top of this row reading four dispatch calls and none of the fifty-four numbered checks the five function-shaped scripts publish their verdicts from: `ops/m51_exit_criterion.py` holds its twelve in `check_one`..`check_twelve`, its four `check(` call sites are all inside one dispatcher, and two of those pass the deliberate `False` this rule allows. Not one of those fifty-four functions contains a `check(` call at all, so the rule settled nothing about any of them. Measured by mutation rather than argued: `ok = True` and `return True, 'the board carried counts'` injected into `check_one` each left every reader in this file silent -- M4.5's own \"a summary recorded as a pass\", one call frame out of reach, in the milestone six others are scheduled against and whose dispatcher shape each of them will copy. M5.3 review cycle 1 found the class from the other end, where a static reader cannot reach it at all: `derived_snapshot` in the M5.3 script selected `value` from `display.platform_rating`, which has carried `score` since 0003 and gained only `metric` and `scale` at 0015 - `value` is the corpus BUNDLE's name for that column, mapped at importer/load.py:283 - so three of the eleven checks raised UndefinedColumnError before asserting anything, `measure()` caught each and printed it as that check's failure, and the run reported a criterion red that it had never measured. The three were decision 375's idempotence, the zero-outbound retry and the raw-store-before-parse check. Every one of the 539 static guards over these scripts passed on that tree, because reading a file says nothing about what a database would answer it."
-tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reaches_every_verdict_the_scripts_publish", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_small_pool_check_grades_the_state_the_seat_reads_left", "backend/tests/test_static_contracts.py::test_the_settling_read_guard_catches_a_trailing_session_get", "backend/tests/test_static_contracts.py::test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give", "backend/tests/test_static_contracts.py::test_the_clamp_control_arithmetic_moves_when_the_simulation_does", "backend/tests/test_static_contracts.py::test_every_figure_published_about_a_milestone_script_is_the_scripts_own", "backend/tests/test_static_contracts.py::test_the_release_record_counts_the_scripts_under_ops_that_the_tree_holds", "backend/tests/test_static_contracts.py::test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown", "backend/tests/test_static_contracts.py::test_no_milestone_script_cites_the_applications_routing_rule_by_line_number", "backend/tests/test_static_contracts.py::test_the_application_citation_reader_tells_a_coordinate_from_a_name", "backend/tests/test_m53_exit_criterion.py::test_every_statement_the_exit_script_sends_prepares_against_the_schema"]
+tests = ["backend/tests/test_static_contracts.py::test_no_milestone_exit_check_has_a_constant_predicate", "backend/tests/test_static_contracts.py::test_the_m4_script_computes_its_verdict_before_it_dereferences_the_winner", "backend/tests/test_static_contracts.py::test_the_m3_script_returns_a_verdict_rather_than_a_constant", "backend/tests/test_static_contracts.py::test_no_console_output_leaves_the_oem_code_page", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_catches_a_real_violation", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reads_the_argument_the_scripts_declare", "backend/tests/test_static_contracts.py::test_the_constant_predicate_guard_reaches_every_verdict_the_scripts_publish", "backend/tests/test_static_contracts.py::test_the_console_encoding_guard_catches_a_non_ascii_print", "backend/tests/test_static_contracts.py::test_the_m45_script_removes_a_staging_tree_it_still_holds_open", "backend/tests/test_static_contracts.py::test_the_m45_script_prints_a_finding_message_the_console_cannot_encode", "backend/tests/test_static_contracts.py::test_the_m4_script_stops_seeding_when_a_write_is_refused", "backend/tests/test_static_contracts.py::test_nothing_that_can_fail_runs_between_creating_the_scratch_database_and_dropping_it", "backend/tests/test_static_contracts.py::test_the_scratch_window_guard_sees_a_statement_left_outside_the_block", "backend/tests/test_static_contracts.py::test_the_seeding_scripts_name_the_precondition_a_refused_write_broke", "backend/tests/test_static_contracts.py::test_the_seeding_guard_sees_an_unguarded_call", "backend/tests/test_static_contracts.py::test_the_m4_script_escapes_the_winner_name_it_did_not_author", "backend/tests/test_static_contracts.py::test_the_m3_script_counts_a_refused_draw_as_well_as_a_refused_answer", "backend/tests/test_static_contracts.py::test_the_m45_script_reports_a_failure_inside_its_measurement_block", "backend/tests/test_static_contracts.py::test_the_m3_script_names_the_section_it_could_not_measure", "backend/tests/test_static_contracts.py::test_the_small_pool_check_grades_the_state_the_seat_reads_left", "backend/tests/test_static_contracts.py::test_the_settling_read_guard_catches_a_trailing_session_get", "backend/tests/test_static_contracts.py::test_the_m413_scripts_clamp_control_is_the_number_its_own_constants_give", "backend/tests/test_static_contracts.py::test_the_clamp_control_arithmetic_moves_when_the_simulation_does", "backend/tests/test_static_contracts.py::test_no_milestone_script_cites_the_applications_routing_rule_by_line_number", "backend/tests/test_static_contracts.py::test_the_application_citation_reader_tells_a_coordinate_from_a_name", "backend/tests/test_m53_exit_criterion.py::test_every_statement_the_exit_script_sends_prepares_against_the_schema"]
 # Decision 184: M4.5's published "18/18" counted two of these constants, so the count no longer
 # describes what the script prints. It is restated in words in docs/TESTING.md's ledger and
 # corrected by a real run against a real bundle, not by a number nobody measured.
@@ -5859,9 +5812,8 @@ tests = [
 # The rows below land BEFORE the code, with no `tests` key, so the gate's red list is the milestone's
 # test plan and says which rows are still owed rather than which test names were guessed at. Each
 # stage fills in its own row's `tests` as the tests land. The list is closed by writing them — never
-# by a waiver, never by lowering `current_milestone`. `docs/TESTING.md`'s ledger block is re-pasted
-# whenever this report changes, which is what `test_the_testing_ledger_publishes_the_counts_the_gate_prints`
-# is for.
+# by a waiver, never by lowering `current_milestone`. `docs/TESTING.md`'s ledger block is a dated
+# reading rather than a maintained copy of this report (decision 460).
 #
 # Nine earlier rows are amended in place above rather than duplicated here: the concurrency clause on
 # `tonight-rank-queue-pair-is-single-use`, the adjacency and nearer-cut clauses on
@@ -9255,7 +9207,7 @@ id = "platform-coverage-counts-only-executed-tests"
 spec = "docs/TESTING.md 'The coverage map' (rule 2); §12 exit criteria"
 milestone = "M4.16"
 kind = "static"
-what = "The executed-coverage gate reads the pytest JUnit reports and the Playwright JSON report and fails when a test named by a row at or before `current_milestone` is absent from every report, present with a skipped result, registered by the reporter with nothing run under it, or returned under a Playwright status outside an explicit executed set - `interrupted`, any word the gate does not know, and the compound a cancelled two-project run writes - while `failed` and `timedOut` still count as the executions they are; fed a synthetic report in which one named test skipped, the gate exits non-zero and names the row, in ASCII; the gate reads no `kind` at all and names `platform-coverage-rows-are-proven-at-their-kind` as the half it does not carry; and no count the gate, its guard, the release workflow that runs it, the integration workflow that writes the per-push JUnits or the browser harness that feeds it publishes is one the map disproves - of the vitest ids it cannot see, of the rows each silent-skip family closes, of the rows phase 1 alone closes, or of the four figures docs/RELEASE.md section 2.1 pastes from the one scoped run leg 2 has ever had; and the failure summary states the ROWS that named evidence which did not run and the LINES it printed as two counts rather than printing one under the other's name."
+what = "The executed-coverage gate reads the pytest JUnit reports and the Playwright JSON report and fails when a test named by a row at or before `current_milestone` is absent from every report, present with a skipped result, registered by the reporter with nothing run under it, or returned under a Playwright status outside an explicit executed set - `interrupted`, any word the gate does not know, and the compound a cancelled two-project run writes - while `failed` and `timedOut` still count as the executions they are; fed a synthetic report in which one named test skipped, the gate exits non-zero and names the row, in ASCII; the gate reads no `kind` at all and names `platform-coverage-rows-are-proven-at-their-kind` as the half it does not carry; and the failure summary states the ROWS that named evidence which did not run and the LINES it printed as two counts rather than printing one under the other's name."
 why = "Rule 2 checks that a named test exists, not that it ran, and three families of test go silent on the wrong checkout: the CORPUS_BUNDLE_DIR family closes 3 rows, the pg_dump family closes 3 rows and the test_migrations.py family closes 9 rows, so a milestone can read fully covered while its evidence never executed."
 # `kind = "static"` and yet it runs as a release-workflow leg: a check on whether the suite RAN
 # cannot live inside the suite. pytest's rootdir is `backend/`, so JUnit `classname` arrives as
@@ -9282,14 +9234,6 @@ tests = [
     # [M4.16 cycle 1: CG-01, CG-02, M416-C1-REL-06]
     "backend/tests/test_release_gate.py::test_the_gate_names_the_row_whose_spec_the_reporter_registered_and_never_ran",
     "backend/tests/test_release_gate.py::test_the_gate_names_a_row_without_crashing_the_console_it_prints_to",
-    "backend/tests/test_release_gate.py::test_the_gate_and_its_guard_publish_the_vitest_count_the_map_actually_holds",
-    # Review cycle 2, and the same sentence one clause along. Three documents sized the hole
-    # this leg exists for and all three were typed rather than counted: "two rows ... and two
-    # more" over three and three, because a reader assumed one test closes one row and
-    # `test_bundle_validation.py::test_the_validator_reports_over_a_real_bundle` closes two.
-    # A maintainer on a checkout with no corpus and no pg_dump read four rows at risk.
-    # [decision 184; M4.16 cycle 2, M416-C2-CG-04]
-    "backend/tests/test_release_gate.py::test_the_gate_and_its_guards_publish_the_skip_family_sizes_the_map_holds",
     # Review cycle 2: the fixture was not the shape the runner writes. pytest's default
     # `junit_family = xunit2` allows `classname`, `name` and `time` on a `<testcase>` and filters
     # `file` out, and `backend/pyproject.toml` pins no family - so every JUnit leg 1 can produce
@@ -9297,15 +9241,6 @@ tests = [
     # every gate test here fed a report carrying `file=` and proved the other one. The live branch
     # is correct today; it was asserted by nothing. [M4.16 cycle 2, M416-C2-GATE-01]
     "backend/tests/test_release_gate.py::test_the_junit_fixture_is_the_shape_this_repository_writes",
-    # Review cycle 3, and the same sentence one clause further. Cycle 2's repair reached the three
-    # files its guard could see and left the workflow, which published two of the same numbers in
-    # prose the fixed clause cannot match - two rows for the corpus family and eight for the
-    # migrations one. The fourth count had no guard at all: three files sized the hole
-    # `PHASE_ONE_REPORT` covers and all three published the number of first-boot TESTS the map
-    # names rather than the number of ROWS they close, which was wrong on the day it was typed.
-    # release.yml now sizes all three families in the published form, so the guard above reads it
-    # too. [decision 184; M4.16 cycle 4: CG-C4-COUNT-01, CG-C4-COUNT-02]
-    "backend/tests/test_release_gate.py::test_the_instruments_publish_the_phase_one_size_the_map_holds",
     # Review cycle 4, and it is cycle 1's CG-01 defect in the branch four lines below the comment
     # that argues against it: the rule was `SKIPPED if status == SKIPPED else "executed"`, so
     # `interrupted` and every word a later reporter invents read as PROOF that the row's test ran,
@@ -9341,12 +9276,6 @@ tests = [
     # tidy-up it is written to catch. [decision 312; M4.16 cycle 5, M416-C5-GATE-01]
     "backend/tests/test_release_gate.py::test_each_half_of_the_executed_at_its_kind_criterion_names_the_other",
     "backend/tests/test_release_gate.py::test_the_split_guard_sees_a_docstring_tightened_and_a_clause_dropped",
-    # And the transcript decision 313 pasted, which went stale inside the diff that published it -
-    # 92 and 2071 over a command already printing 95 and 2076 - in the one section whose
-    # stated job is refusing a partial recorded as a pass. Four of its five figures are derived
-    # here; pytest's `N passed` counts parameterised cases and stays inside the dated paste.
-    # [decisions 184 and 313; M4.16 cycle 5: M416-C5-REL-01, REL-C4-09]
-    "backend/tests/test_release_gate.py::test_the_leg_two_transcript_publishes_the_figures_this_map_would_print",
 ]
 # `ops/coverage_gate.py` counts the vitest ids this map names and lists them as evidence it
 # cannot see, then fails a row whose ONLY evidence is invisible to it - decision 226 puts those
@@ -9357,7 +9286,7 @@ id = "platform-coverage-report-counts-every-waiver"
 spec = "docs/TESTING.md (\"the report counts every waived row and PRINTS ITS ID rather than letting it vanish\")"
 milestone = "M4.16"
 kind = "static"
-what = "A row carrying `waived` is counted and printed as waived whether or not it also names tests; the milestone line prints the waived count and the waived ids, and the block docs/TESTING.md pastes as the current state matches the block the instrument prints; a waiver whose reason leans on a named test fails unless some row registers that test."
+what = "A row carrying `waived` is counted and printed as waived whether or not it also names tests; the milestone line prints the waived count and the waived ids; a waiver whose reason leans on a named test fails unless some row registers that test."
 why = "A partially waived row - the honest, common case - read as fully covered, so the one mechanism built to make partial coverage visible lost exactly the partial cases, and the document that pastes the number could not catch it."
 # Keep the output ASCII and keep it narrow: the report prints to whatever console the developer
 # has, a Windows cp1252 terminal turns a decorative glyph into a crash, and the waived-ids line
@@ -9371,7 +9300,6 @@ why = "A partially waived row - the honest, common case - read as fully covered,
 # the id printed beside it so the premise can be re-read rather than accepted.
 tests = [
     "backend/tests/test_spec_coverage.py::test_a_waived_row_that_also_names_tests_still_prints_as_waived",
-    "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints",
     # Review cycle 2. The last clause is the other half of "a partially waived row is the
     # honest, common case": such a row says which half it does NOT waive, and the map's one
     # standing waiver said so by naming two tests in prose that no row registered. Rule 2
@@ -9457,8 +9385,8 @@ why = "Fourteen shipped rows rested their authority on a document that says of i
 # a rule that reddened those would be narrowed by the first person it stopped. Decision 305's entry
 # says 308: that is what cycle 1 measured, before its own decision 306 added a row under the
 # measurement. The entry keeps its figure - a dated entry is superseded rather than edited
-# (decision 304) - and `test_the_authority_rule_publishes_the_count_it_holds` derives this one, so
-# the two copies that claim to describe THIS tree cannot drift from it again.
+# (decision 304). The live copies of the figure and the guard that derived them were retired by
+# decision 460: the rule is asserted over every shipped row, and nothing publishes its size.
 # [decision 305; M4.16 cycle 1, M416-C1-COV-03; M4.16 cycle 3, M416-C3-COV-03]
 # REVIEW CYCLE 1, ROUND 2: the rule could be discharged by WORDING rather than by substance, in
 # four ways. The `what` above GAINED a third clause rather than losing one, and it is not a new
@@ -9511,14 +9439,6 @@ tests = [
     # without opening a file. The roadmap half is held to its premise beside the rule, the way
     # the two section conventions above are. [decision 305; M4.16 cycle 3: M416-C3-COV-01]
     "backend/tests/test_spec_coverage.py::test_the_roadmap_half_of_the_decision_register_is_not_stale",
-    # Review cycle 3, and the subject is the figure rather than the rule. Decision 305 chose to
-    # assert the positive rather than narrow the `what` BECAUSE it had measured the map first, so
-    # "all 308 shipped rows" is the whole argument for the cheap option - and cycle 1's own
-    # decision 306 added a row under the measurement, leaving 308 pasted in three places and
-    # derived in none. The rule still lands green over 309; the figure is now derived in the two
-    # copies that claim to describe this tree, and the register's dated entry keeps the count it
-    # was taken with. [decision 184; decision 304; M4.16 cycle 3, M416-C3-COV-03]
-    "backend/tests/test_spec_coverage.py::test_the_authority_rule_publishes_the_count_it_holds",
 ]
 
 [[requirement]]
@@ -9701,65 +9621,22 @@ tests = [
 
 [[requirement]]
 id = "platform-the-proposal-ledger-counts-itself"
-spec = "README.md; docs/spec-v2.2-proposals.md header"
+spec = "docs/spec-v2.2-proposals.md (decision 288's register; decision 460)"
 milestone = "M4.16"
 kind = "static"
-what = "The number of `### N.` entries in docs/spec-v2.2-proposals.md equals the count README publishes and the count the file's own header publishes, the decision range each states ends at the highest decision the register holds, any sittings clause either publishes states the number of distinct dated sittings that actually carry a numbered owner decision and the first and last of those dates, and no `### N.` entry spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it; every number below the highest entry that the file does not head is named as unspent by its header or by the sitting that left it; no number is headed twice, and README's count of the sittings the register holds in all is the number of distinct dates its dated blocks fall on."
-why = "README and the header both said \"161 ... all seven owner decisions were taken on 2026-08-29\" over a file holding 270 entries and nine sittings, while README itself cited decisions 162 and 163 fifty lines further down. A count nobody re-derives is a measurement nobody made."
-# 286 entries as this milestone opens, the last of them 303. Both figures move again if a review
-# cycle takes a decision, which is the point: the guard re-derives rather than pasting.
+what = "No `### N.` entry in docs/spec-v2.2-proposals.md spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it, and no number is headed twice."
+why = "A number written twice is two normative rules under one heading, and the collision surfaces only at a merge, where every citation of it resolves against whichever heading the reader keeps: M5.1 spent 346, which the roadmap files against M5.3, and three lanes of one wave headed 392-396 in three trees. The row's id is kept from the day it also held the register's published counts; decision 460 retired those, because a stale count misleads nobody about a rule while a doubled number corrupts every citation of it."
+# Decision 460 removed the count, range, sittings and hole-list guards this row used to carry.
+# What stays is the numbering itself. [decision 460]
 tests = [
-    "backend/tests/test_static_contracts.py::test_the_proposal_ledger_counts_itself",
-    # Review cycle 4 renames this case list, because the reader grew a third claim. README's
-    # sentence published two DERIVED figures and one typed one - "132 of them over fourteen dated
-    # sittings, 2026-08-29 to 2026-09-17" - and the typed one inherited their credibility. 14 is
-    # neither the 24 `## Decisions taken` blocks nor the 12 dates they fall on nor the 11 dates
-    # carrying a numbered decision, and the range started in a sitting that holds none of them:
-    # entry 162 sits on 2026-09-01 and 2026-08-29 is the seven answers indexed rather than
-    # numbered. [decision 184; M4.16 cycle 4, REL-C4-03]
-    "backend/tests/test_static_contracts.py::test_the_ledger_count_guard_reads_all_three_halves",
-    # Review cycle 3 lists the same name on two rows on purpose, the way the two M0 rules list
-    # their widened self-tests. The third of the three claims is argued in a comment above
-    # `_SITTINGS` that contrasts it with the register's block count, and M5.1's own two sittings
-    # made that contrast wrong while leaving the two figures beside it right - a sentence that
-    # half-corrects itself, which is the shape this row exists to refuse. The guard reads the
-    # block count off the register rather than out of the paragraph, so the paragraph is now
-    # dated instead. [decision 184; M5.1 review cycle 3, M51-C3-REG-04]
-    "backend/tests/test_static_contracts.py::test_no_prose_in_this_file_states_a_registry_size_that_registry_does_not_have",
-    # Review cycle 4 adds the claim about the NUMBERING, one clause out from the count. M5.1
-    # recorded the drain's per-tick bound as `### 346.` and ROADMAP-M5.md files 346 against
-    # M5.3, whose plan is bound to record it there and which no agent may edit - so the day
-    # that milestone opens the register holds two `### 346.` headings, `_register_entries`
-    # keys by number and silently keeps the later one, and four live citations of 346 resolve
-    # against a rule about `dna_vocab/v1/` with every reader green. The register's own
-    # preamble states the harm - a number written twice is two normative rules under one
-    # heading - in the paragraph that enumerates the holes 346 was missing from. The reader is
-    # paired because it has two ways to be wrong: taking a milestone out of the QUESTION
-    # rather than out of the cell that files it, and reading `everything` or `all seven` as an
-    # allocation. [M5.1 review cycle 4, M51-C4-REG-01]
+    # A number the roadmap files against another milestone, read off the owner cell rather than
+    # the question. [M5.1 review cycle 4, M51-C4-REG-01]
     "backend/tests/test_spec_coverage.py::test_the_register_spends_no_number_another_milestone_is_bound_to",
     "backend/tests/test_spec_coverage.py::test_the_allocation_reader_reads_the_owner_cell_and_not_the_question",
-    # M5.2 review cycle 3 adds two. The roadmap guard above cannot see a lane's range, because the
-    # owner hands those out in an instruction and `ROADMAP-M5.md` allocates questions: M5.2's first
-    # review cycle headed `### 392.` inside M5.4's range, and a synthetic merge stayed green with
-    # the lane's token citations resolving against the sibling's rule. The collision exists in one
-    # tree only at the merge, so the reader every guard passes through refuses a number headed
-    # twice. The second is README's "sittings in all", the one figure in its sentence that nothing
-    # read, left a sitting short when the first figure was restated. [M5.2 review cycle 3:
-    # M52-C3-PAPER-01, M52-C3-STATE-08, M52-C3-PAPER-04]
+    # A number headed twice, refused at the one reader every guard passes through, because the
+    # collision exists in one tree only at the merge. [M5.2 review cycle 3: M52-C3-PAPER-01]
     "backend/tests/test_spec_coverage.py::test_a_number_headed_twice_is_refused_rather_than_kept_in_silence",
-    "backend/tests/test_static_contracts.py::test_the_sittings_the_register_holds_in_all_are_counted_too",
-    # Review cycle 1 of M5.3 adds the other half of the same clause. The guard above holds a
-    # number the ROADMAP files elsewhere; nothing held a number the register neither heads nor
-    # mentions, which is the state 346 was in when M5.1 spent it. M5.3 left 379-381 - the rest
-    # of its own lane block - out of all three hole lists while heading 372-378 above them.
-    # [decision 346; M5.3 review cycle 1, M53-REG-06]
-    "backend/tests/test_spec_coverage.py::test_the_register_accounts_for_every_number_below_the_last_one_it_spends",
 ]
-# Both the count and the RANGE ENDPOINT are held, because they fail differently: a wave that
-# restates the count and leaves the range a wave back reads as precise. Each claim is read
-# inside its own file's publication block - README states 187-193 and 167-178 elsewhere, both
-# real decision ranges and neither a claim about where the register ends.
 
 [[requirement]]
 id = "platform-comments-name-files-that-exist"
@@ -9940,8 +9817,8 @@ id = "platform-exit-criteria-are-closed-by-a-committed-measurement"
 spec = "§12 exit criteria; docs/TESTING.md (\"A second workflow decides whether the build SHIPS\")"
 milestone = "M4.16"
 kind = "static"
-what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; the never-run count the map publishes is the one the record measured; and a row the record calls NOT BUILT names a milestone the map registers no test against, while the record's own opening paragraph counts the rows its table records."
-why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: nine of the nineteen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
+what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; and a row the record calls NOT BUILT names a milestone the map registers no test against."
+why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: several of §12's criteria had never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
 # The unfilled half is decision 297's and decision 298's, in the idiom of
 # `test_the_owed_device_checks_are_recorded_and_still_unsigned`: M2's criterion has never been
 # measured and the TMDB logo is an owed asset, and neither may be quietly signed. The guard goes
@@ -9972,7 +9849,6 @@ tests = [
     # record that counts five of fifteen and a ledger that says five.
     # [decisions 184, 296; M4.16 cycle 2: M416-C2-ATTR-02, M416-C2-REL-05]
     "backend/tests/test_static_contracts.py::test_every_escalated_claim_names_a_record_that_exists",
-    "backend/tests/test_static_contracts.py::test_the_never_run_count_the_map_publishes_is_the_one_the_record_measured",
     # Review cycle 5, and the half of this `what` that was enforced by nothing. "A row recorded as
     # unmeasured carries an UNFILLED verdict" was read for the field's PRESENCE and never for its
     # value, so fifteen of the sixteen section-1 rows could be signed off one cell at a time with
@@ -9993,34 +9869,12 @@ tests = [
     # row because the reader is shared and this half of it is M4.16's.
     # [decisions 281, 297, 302; M4.16 cycle 5, M416-C5-COV-08]
     "backend/tests/test_spec_coverage.py::test_the_beside_the_blank_rule_reads_the_whole_paragraph_the_blank_sits_in",
-    # Review cycle 4, and the corrections document's own citations: four of them pointed at lines
-    # their subjects are not on, three matching neither this tree nor HEAD, and section 5.6's was
-    # 105 lines out in the one section whose whole content is where the third exception lives.
-    # Re-derived rather than re-typed, because re-typed numbers go stale on the next edit above
-    # them. [decision 184; M4.16 cycle 4, REL-C4-11]
-    "backend/tests/test_static_contracts.py::test_the_release_record_cites_the_lines_its_subjects_are_on",
-    "backend/tests/test_static_contracts.py::test_the_citation_guard_sees_a_subject_that_moved",
     # And the one per-leg cell that claimed a run nothing has made. Leg 3 is two commands; the
     # first selects two tests skipif-gated on CORPUS_BUNDLE_DIR, which no registered runner has
     # ever supplied, and the cell said `yes` while leg 1's was qualified and decision 313 had
     # moved leg 2's to a partial for a weaker reason. [decision 183; M4.16 cycle 4, REL-C4-10]
     "backend/tests/test_static_contracts.py::test_the_release_record_does_not_record_the_real_bundle_leg_as_run",
     "backend/tests/test_static_contracts.py::test_the_leg_three_guard_sees_the_cell_that_shipped",
-    # M5.1 review cycle 3, and the same class one level in from the documents. Every guard above
-    # derives its figures; the PROSE that explains them did not. M5.1 put a row into §12 and a row
-    # and a block into section 1, corrected the matching figure by hand in docs/RELEASE.md, and
-    # left three sentences in test_static_contracts.py stating the sizes those registries had
-    # before it - the comment on `_EXTRA_RELEASE_ROWS`, `_release_section_one`'s docstring and the
-    # note introducing the release-workflow block - with the whole suite green, because nothing
-    # reads a comment. Decision 331 puts each of M5.2 through M5.7 into §12 as it opens, so the
-    # same sentences drift six more times in the file that holds the guard over the table being
-    # counted. Anchored on the noun naming the set rather than on the bare word "rows", which this
-    # file also uses of coverage, map, genome and bundle rows; `_comment_paragraphs` is the reader
-    # `_router_tallies` needed as well, since the sentence that went stale one file over wrapped
-    # its count onto the line under its noun. Registered here rather than on a row of its own
-    # because two of the three registries are this row's subject.
-    # [decision 184; decision 331; M5.1 review cycle 3: M51-C3-REG-03, M51-C3-REG-04]
-    "backend/tests/test_static_contracts.py::test_no_prose_in_this_file_states_a_registry_size_that_registry_does_not_have",
     "backend/tests/test_static_contracts.py::test_the_registry_size_reader_reads_the_sentences_this_file_shipped",
     "backend/tests/test_static_contracts.py::test_the_paragraph_reader_glues_a_wrapped_comment_and_leaves_the_docstring_whole",
     # M5.4 review cycle 1, and the taxonomy this record states at its top held by nothing. Section
@@ -10034,7 +9888,6 @@ tests = [
     # figures in prose and which nothing read. [decisions 184, 296, 331; M5.4 cycle 1,
     # M54-REV1-DOC-01]
     "backend/tests/test_static_contracts.py::test_a_row_this_record_calls_not_built_is_a_milestone_the_map_names_no_test_for",
-    "backend/tests/test_static_contracts.py::test_the_records_opening_paragraph_counts_the_rows_its_own_table_records",
 ]
 # `docs/milestones/M4.5-exit.txt` is the first committed output any exit script has ever had, and
 # it reads 17/17 rather than the 18/18 the plan records: M4.8 turned the eighteenth check into a
