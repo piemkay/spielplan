@@ -14,7 +14,10 @@ because none of those lanes could reach a real corpus bundle - and M5.1's could 
 container nor a port; and M5.4's checks are the suite's, which runs them against the fixture and not
 against the real install and real bundle its criterion names. Three describe milestones that do not
 exist yet (M5, M6, M7). The rest have been measured by one of the scripts under `ops/`, and **not one
-of those scripts had a committed output** until M4.16 wrote the first. The table below is the count;
+of those scripts had a committed output** until M4.16 wrote the first. The newest measured one is
+M5.5's, written in the same change set as the surface it measures and, unlike M5.1's, M5.2's and
+M5.3's, run there, because its criterion is stated against a double a lane can reach; nothing it
+printed is committed either. The table below is the count;
 this paragraph no longer restates it (decision 460). M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
@@ -70,6 +73,7 @@ is here because it is the one criterion this milestone actually ran.
 | M5.2 | UNMEASURED | none | yes | `________` |
 | M5.3 | UNMEASURED | none | yes | `________` |
 | M5.4 | UNMEASURED | none | yes | `________` |
+| M5.5 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
@@ -313,7 +317,7 @@ on the fixture".
 The row was written as the milestone opened, under decision 321's split of M5 into seven and decision
 331's rule that each sub-milestone writes its own §12 row when it opens rather than having one
 pre-written for it. **The status moved from NOT BUILT to UNMEASURED inside the same change set**, and
-the two words are not the same claim: `ops/m51_exit_criterion.py` is now in this tree, 1,540 lines and
+the two words are not the same claim: `ops/m51_exit_criterion.py` is now in this tree, 1,606 lines and
 twelve numbered checks, and it has never been run. The lane that built the spine could start no server
 and no container by construction, which is why the instrument was written to degrade rather than to
 assume: checks 9 (`/data/raw` absent from the backend image) and 11 (`POST /events/nothing` answering
@@ -324,6 +328,23 @@ the nine that an owner can close by running something rather than by first writi
 M5.3's blocks below are the others, and they are the same sequence one milestone on. Five of the others have no script
 under `ops/` at all, and M5.4's criterion names none because its checks are expressible against the
 suite.
+
+**The instrument could not pass from M5.3 until M5.5's review cycle 1 repaired it, and it has still
+never been run.** The criterion is stated "with stages 2-8 declared no-ops", and the script drained
+whatever pipeline shipped. M5.3 gave stages 2, 3 and 4 bodies and M5.5 gave stage 6 one, so on a real
+bundle check 1 parked at stage 4 - the film it invents has no reviews - after stage 2 had asked
+Wikidata, Wikipedia, TVmaze, Rotten Tomatoes and Metacritic about it from the household's own
+address; checks 3, 4, 5 and 10 inherited that park, stage 6's no-cap park stood behind it, and the
+script's promise to send nothing to a third party was false. Nothing in this file said so. The
+script's install now declares every stage from 2 to 8 a no-op, `implemented=False`, and refuses the
+drain's default fetcher, so a run measures the spine the criterion names and opens no socket but
+check 11's; the stages it stands down are measured by their own milestones' instruments. Its
+connector neutraliser now also takes the three provider keys M5.5 seeds out of its environment and
+moves away from the `.env` beside the operator. `backend/tests/test_m51_exit_criterion.py` runs
+check 1 through the script's own install against the fixture bundle, which the script itself refuses
+on purpose: that holds the pipeline the script drains, not the criterion's measurement, and this row
+stays UNMEASURED until an owner runs the script against the corpus. The lane that repaired it has no
+corpus bundle and did not run it end to end.
 
 ### M5.2 — the trigger: the webhook, the debounce and the delta poll
 
@@ -351,7 +372,7 @@ the suite, and this copy dropped it without a word until M5.2's third review cyc
 The row was written as the milestone opened, under decision 331's rule that each sub-milestone
 writes its own §12 row when it opens rather than having one pre-written for it. **The status moved
 from NOT BUILT to UNMEASURED inside the same change set**, and the two words are not the same
-claim: `ops/m52_exit_criterion.py` is now in this tree, 1,531 lines and eleven numbered checks, and
+claim: `ops/m52_exit_criterion.py` is now in this tree, 1,540 lines and eleven numbered checks, and
 it has never been run. M5.1's row made exactly that move one milestone ago. Decision 371 gave this
 milestone an instrument of its own rather than a second section inside the umbrella script decision
 331 reserves for §12's M5 row.
@@ -444,6 +465,82 @@ under the pack's 50-word floor and none of them from Rotten Tomatoes, and which 
 `wikipedia` raw document at all until M5.3 lands that fetcher (decision 391). "On a real install
 with the real corpus bundle" is therefore still an unasked question, and that is the column this
 file exists for.
+
+### M5.5 — the LLM connector layer: the validator is the guarantee, and the meter counts what is billed
+
+**Criterion (§12, abbreviated):** a provider response that satisfies the request schema but
+violates the extraction contract is rejected by M5.4's validator and retried exactly once, with the
+violated rule and the offending value named in the retry prompt; a second violation fails stage 6
+permanently and leaves the title's `dna_tag` rows unchanged; the outcome is identical across the
+Gemini, Anthropic and OpenAI adapters; a Gemini call reporting 1,600 candidate and 2,300 thought
+tokens is metered at 3,900; with the month's meter at the cap a job reaching stage 6 parks
+`over spend cap` without a provider request, is still parked on the next tick, and an admin retry
+over the cap is refused with that reason; no provider key appears in any URL, `raw_document.url` or
+httpx log line; and a model the price table does not know is unpriced rather than guessed. The cell
+names the instrument: "Measured by `ops/m55_exit_criterion.py`, fourteen numbered checks, run
+in-process against the refusing double `ops/fake_llm.py`".
+
+**Status:** RUN, OUTPUT NOT COMMITTED. **Output file:** none. **Blocking:** yes.
+**Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone writes
+its own §12 row when it opens rather than having one pre-written for it. **It opened NOT BUILT and
+left it inside the same change set, and it did not stop at UNMEASURED**, which is the one way it
+differs from M5.1's, M5.2's and M5.3's rows above: `ops/m55_exit_criterion.py` is in this tree,
+1,548 lines and fourteen numbered checks, and it has been run. Those three instruments could not be
+run by the lanes that wrote them, because each criterion names something a lane cannot reach - a
+container, a port, a real corpus bundle. This one names a double. Everything it drives is
+in-process - the application's own `pipeline.drain` over a real `Fetcher` whose transport is
+`ops/fake_llm.py`, on a scratch database the script creates and drops - with no container, no port,
+no corpus bundle and no provider key, which it takes out of its environment unread. It was run from
+this lane on 2026-09-24 against a scratch database on the lane's own test cluster and exited 0,
+once by the step that wrote it and once by the step that wrote this record, and again on the same
+day after review cycle 1 had changed the adapters, the meter and the double they are driven
+against: 14 of 14, 39 provider requests answered and 39 answers in the raw store, over the tree as
+that cycle's operator group left it. It was run once more on the same day over the tree as review
+cycle 2's operator group left it - the double now counting Anthropic's input as the pricing page
+does, and check 7 asserting the zero Fetchers it had only printed beside a sentence naming the
+ordering cycle 1 removed (M55-C2-DOC-03) - and exited 0: 14 of 14, 39 requests answered, 39 answers
+stored, the meter at 1.353448 USD. Nothing any run printed is in the tree, which is what this
+status says and all it says:
+M3's and M4.11's rows above are the same state, a lane's run against a fixture and against a double
+with no output committed. Decision 435 moves the row to the status this file's legend gives the
+facts, and those are the facts.
+
+**A lane's console is not the record.** A verdict signed against output nobody can re-read is the
+claim decision 184 refuses, so what closes this row is one more run with its console committed
+beside `docs/milestones/M4.5-exit.txt`, after which it reads MEASURED and the verdict is the
+owner's to fill. Every run from this lane also printed that the month was bounded on the process's
+own clock, because that Python carries no tz database - the fallback decision 325 names and logs on
+every read - so a run on a Python that carries one is the one that measures the install's own `TZ`
+month.
+
+**"The meter counts what is billed" is the milestone's title, and review cycle 1 found it false of
+every attempt a provider refused.** A `max_tokens` cut-off, a refusal, a blocked prompt and prose
+where a tool was forced were each metered at $0 while the provider billed them, so a cut-off re-run
+on the queue's curve passed the cap on every walk. Since decision 436 every attempt is in the meter
+from before it is sent, at its ceiling, and is settled to what the provider reported - to zero where
+the provider says no work was done, and left at the ceiling where the answer never arrived - so the
+month's sum is the bill or, for a lost answer, more. None of the fourteen checks meters a failed
+attempt: that is held by the suite, on the spend meter's coverage row, against the double's own
+bill.
+
+**What it measures is not yet what an unattended title meets on a real install**, and the script
+says so rather than hiding it. Stage 5 is M5.4's owed wiring (decision 432), so no title reaches
+stage 6 with a stored pack on its own: the script renders and stores each pack through `dna.packs`,
+the custody functions stage 5 will call, and puts the board at stage 6 with the driver's own writer.
+And an install that has set no cap parks every title at stage 6 under M5.1's no-cap sentence, by
+design and without a paid call, until M5.7's spend guard gives the admin somewhere to set one
+(decisions 325 and 433).
+
+**A title's walk may not fit the drain's tick, and that is recorded, not fixed (decision 438).** One
+extraction is runs x 2 calls in sequence, each up to 300 s, inside `worker.py`'s 420 s budget, and a
+walk the budget cancels keeps nothing it paid for. A title completes only if runs x 2 x each call's
+latency fits what the drain has left when it reaches the title - at most two calls on the default
+plan, which fit unless each runs past about 210 s - and a plan that outruns it pays four walks, every
+call metered and inside the cap, for a title then closed under `queue.ABANDONED`'s stopped-worker
+sentence. None of the fourteen checks reaches it. The budget's stage-6 measurement is owed by the
+milestone that wires stage 5, which is the first that makes this path reachable.
 
 ### M5 — acquisition pipeline, admin connector UI, LLM layer, extraction flywheel
 
@@ -599,7 +696,7 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 42 test result(s) read from 1 JUnit and 0 Playwright report(s)
   coverage gate: 42 row-and-test pair(s) confirmed executed
   coverage gate: 47 named vitest id(s) not visible here (decision 226: no row rests on one alone)
-  coverage gate: 312 row(s) name evidence that did not run, in 2272 line(s): ...
+  coverage gate: 312 row(s) name evidence that did not run, in 2289 line(s): ...
 ```
 
 **These figures are a dated reading, and since decision 460 nothing keeps them current.** For a
@@ -641,13 +738,24 @@ two guards registered on a row M4.16 already owned moved the line figure and lef
 it was, and it went red in that milestone's green pass rather than in the fix round that wrote them,
 because that round ran the test files it had touched and this figure is held in a file it had not.
 The commands above were re-run rather than the number edited, and re-run again when the M5.3 and M5.4
-lanes merged, which is where the figure above comes from. The line
+lanes merged. **M5.5 is the tenth**, the seventh's shape from a milestone that does not hold
+`current_milestone` either: fourteen ids registered on M0's connector-seed row - the generic
+connector table's twelve and the two guards that read the provider keys - took the line figure to
+2286 with the row figure still 312, and the two commands above were re-run on this branch rather than
+the number edited. **Its review cycle 1 is the eleventh**, and the ninth's lesson again: three ids
+registered on shipped rows - M4.8's harness row took the two guards that hold every older exit
+script to leaving no provider key in its environment, and M5.1's acquisition row took the test that
+runs `ops/m51_exit_criterion.py`'s check 1 - took the line figure to 2289 with the row figure still
+312, and it went red in the milestone's green pass rather than in the fix rounds that wrote them,
+because those rounds ran the test files they had touched and this figure is held in a file none of
+them touched. The two commands above were re-run rather than the number edited, which is where the
+figure above comes from. The line
 figure is NOT decomposed in this paragraph any more: the decomposition was a second copy of a
 measurement, it went stale in the same cycle that moved the figure, and that is what the sentence
 below strikes decision 313's own copy for. [M5.1, green pass; M5.1 review cycle 1, green pass;
 M5.1 review cycle 4, green pass; M5.1 review cycle 4 second pass, green pass; M5.2 review
 cycle 3, re-run; M5.2 review cycle 4, re-run; M5.4 review cycle 1, green pass; the M5.2 merge,
-re-run] The fifth, pytest's
+re-run; M5.5, re-run; M5.5 review cycle 1, green pass] The fifth, pytest's
 own `N passed` line, counts parameterised CASES; no static rule can take it without evaluating every
 `parametrize` list, so it stays what it is — a dated console reading, with nothing below claiming
 anything about it. It is NAMED here rather than restated: this paragraph carried a second copy of
@@ -1038,7 +1146,7 @@ docstring in `db/library.py` because `0004_dna.sql` is applied and checksummed; 
 `frontend/static/tmdb-logo.svg`, decision 298's owed asset, which is a comment about an ABSENCE
 rather than a citation to follow and is deleted together with section 7.1 the day the owner drops
 the file in; (3) `sync/resolve.py`, named at `backend/spielplan/backup/movie_data.py:32` and
-`backend/tests/test_backup.py:1399` — a genuine uncorrected citation, since the module is
+`backend/tests/test_backup.py:1409` — a genuine uncorrected citation, since the module is
 `connectors/resolve.py`.
 
 **Escalated, not edited.** The owner's call is whether (3) is repaired and (2) amended in decision

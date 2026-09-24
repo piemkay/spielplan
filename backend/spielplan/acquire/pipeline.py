@@ -49,14 +49,16 @@ THE DRIVER MUST NEVER RELY ON THE SWEEP TO ADVANCE ANYTHING: the sweep's insert 
 every row this module has already written, so a stage that left work for it would leave it for
 ever.
 
-THE PAID SEAM, WHICH IS ALL M5.1 OWES M5.5. §8: "paid stages (6) never auto-retry past the spend
+THE PAID SEAM, WHICH IS ALL M5.1 OWED M5.5. §8: "paid stages (6) never auto-retry past the spend
 cap." A stage that runs and then checks a cap has already spent the money, so the contract has to
 carry a stage that REFUSES TO RUN. `Stage.paid` marks which one, the driver consults a gate before
-calling it, and `refuse_uncapped_spend` is the default: it lets a declared no-op through and
-refuses an IMPLEMENTED paid stage while no cap is configured. No cap, no price table and no meter
-are built here - those are M5.5's and M5.7's. What is built is the refusal, and the reason it is
-built now is that it cannot be retrofitted: the day stage 6 gets a body is the day the gate has to
-already exist, or the first drain after that commit bills the household.
+calling it, and `refuse_uncapped_spend` is the default: it lets a declared no-op through and asks
+the cap about an IMPLEMENTED paid stage, parking it while no cap is configured or while the month
+has no room for it. No cap, no price table and no meter are built here - they are M5.5's
+`llm/spend.py`, which the gate asks, and M5.7 renders them. What M5.1 built was the refusal, and
+the reason it was built first is that it cannot be retrofitted: the day stage 6 got a body was the
+day the gate had to already exist, or the first drain after that commit would have billed the
+household. M5.5 is that day, and the gate kept its name and became the cap check (decision 348).
 
 THIS FILE BUILDS THE FETCHER AND `stages.py` STILL DOES NOT NAME IT (decision 373). It used to
 say "NOTHING HERE FETCHES ... a dependency on the HTTP layer would be a dependency on a module
@@ -95,6 +97,7 @@ import asyncpg
 
 from spielplan.acquire import fetch, queue, stages
 from spielplan.connectors import registry, resolve
+from spielplan.llm import spend
 
 log = logging.getLogger("spielplan.acquire.pipeline")
 
@@ -147,11 +150,11 @@ class Stage:
     stage - the first because a stage that runs and then checks a cap has already spent, the
     second because a Fetcher built for a walk that never reaches stage 2 is an HTTP client built
     for nothing. A boolean on the stage rather than a stage number in `run_task` because the
-    number is exactly the kind of fact that goes stale: §8's stage 2 is the only one that fetches
-    today, M5.5's stage 6 calls an LLM provider over HTTP and may well want the same handle, and a
-    driver testing `if stage.number == 2` would be a second spelling of the stage list this
-    module exists to keep single. Like `implemented`, it is a hand-written literal and a test is
-    what ties it to reality:
+    number is exactly the kind of fact that goes stale: §8's stage 2 was the only one that fetched
+    when this was written, M5.5's stage 6 then took the same handle for its LLM provider calls
+    (decision 432) by setting the same flag, and a driver testing `if stage.number == 2` would have
+    been a second spelling of the stage list this module exists to keep single. Like
+    `implemented`, it is a hand-written literal and a test is what ties it to reality:
     `test_acquire_pipeline.py::test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher`.
 
     `reask_from` IS WHERE A PARK AT THIS STAGE RE-ENTERS ONCE ITS OWN DEADLINE HAS PASSED, and §8
@@ -192,17 +195,20 @@ class Stage:
 # `if not s.implemented`, so what `owner` means for an implemented stage was never asserted and is
 # settled here rather than left to whoever next reads the tuple. [M5.3, decision 373]
 #
-# Stage 2 is the only `fetches=True`. Not a list of "the network stages": one boolean per row,
-# where the row already carries `paid`, so the day M5.5's extraction wants the same handle it sets
-# the same flag on the same line.
+# Stage 2 was the only `fetches=True`. Not a list of "the network stages": one boolean per row,
+# where the row already carries `paid`, so the day M5.5's extraction wanted the same handle it set
+# the same flag on the same line - which is stage 6 below.
 STAGES: tuple[Stage, ...] = (
     Stage(1, "identify", stages.identify),
     Stage(2, "enrich", stages.enrich, owner="M5.3", fetches=True),
     Stage(3, "derive", stages.derive, owner="M5.3"),
     Stage(4, "reviews gate", stages.reviews_gate, owner="M5.3", reask_from=2),
     Stage(5, "dna pack", stages.dna_pack, implemented=False, owner="M5.4"),
-    # The only paid one, and marked so while it still spends nothing. See `refuse_uncapped_spend`.
-    Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=False, owner="M5.5"),
+    # The only paid one, and since M5.5 the only stage besides 2 that fetches. Both flags M5.5 set
+    # are on this one line: `implemented`, which the spend gate reads before the call, and
+    # `fetches`, which hands the stage the drain's one Fetcher (decisions 348, 373, 432). See
+    # `refuse_uncapped_spend`.
+    Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True, owner="M5.5", fetches=True),
     Stage(7, "verify", stages.verify, implemented=False, owner="M5.4"),
     Stage(8, "project", stages.project, implemented=False, owner="M5.4"),
     Stage(9, "place", stages.place),
@@ -244,24 +250,38 @@ TITLE_GONE = (
 StageGate = Callable[[Stage, stages.StageContext], Awaitable[stages.Outcome | None]]
 
 
-async def refuse_uncapped_spend(stage: Stage, _ctx: stages.StageContext) -> stages.Outcome | None:
+async def refuse_uncapped_spend(stage: Stage, ctx: stages.StageContext) -> stages.Outcome | None:
     """The default gate. None means "run it"; an `Outcome` means "do not, and record this".
 
     §8's clause is about a stage that BILLS: "paid stages (6) never auto-retry past the spend
     cap". Two readings were available and only one of them survives contact with M5.1's tree.
 
-    A gate that refuses every paid stage unconditionally would park every task at stage 6 today,
-    because stage 6 is `paid=True` from this commit. §8's own ten-stage walk would then be
-    unreachable and M5.1's exit criterion - a task reaching `ready` with stages 2-8 declared
-    no-ops - would be unsatisfiable, so the spine could not be proved before the lanes that plug
-    into it opened. That is the outcome the milestone exists to prevent.
+    A gate that refused every paid stage unconditionally would have parked every task at stage 6
+    from the day M5.1 marked it `paid=True`, while it was still a declared no-op. §8's own
+    ten-stage walk would then have been unreachable and M5.1's exit criterion - a task reaching
+    `ready` with stages 2-8 declared no-ops - unsatisfiable, so the spine could not have been
+    proved before the lanes that plug into it opened.
 
     So the gate asks the question §8 is actually asking: is this stage going to spend money? A
-    declared no-op cannot. An implemented paid stage can, and until a cap exists there is nothing
-    for "past the spend cap" to mean - so it parks, with a reason an operator can act on, and
-    parking never auto-fails (decision 336). The day M5.5 gives `stages.dna_extract` a body,
-    `implemented` becomes True and this refusal starts firing, which is the seam holding: M5.5
-    cannot ship a billing stage that runs without a cap having been supplied.
+    declared no-op cannot, and is waved through without a read. An implemented paid stage can,
+    and M5.5 gave `stages.dna_extract` its body with `implemented=True` on the same row (decision
+    432) - the moment this gate started firing, which is the seam holding: M5.5 could not ship a
+    billing stage that runs without a cap having been supplied, and it did not.
+
+    THE GATE KEPT ITS NAME AND BECAME THE CAP CHECK, rather than being routed around (decision
+    348, three documents and the tests cite it by this name). It asks and does not decide: the
+    arithmetic is `llm/spend.cap_check`'s, in the order decision 325 gives it - no cap, then a
+    plan the settings cannot make, then a month already at the cap (nothing is estimated), then a
+    month this title's reservation of BOTH attempts of every run would take past it - and the gate
+    maps its answer onto the driver's verbs. None runs the stage. An unset cap parks under
+    `NO_SPEND_CAP`, M5.1's sentence unchanged, because no default cap ships (decision 325) and an
+    install that has not set one is in exactly the state M5.1 wrote that sentence for. Every other
+    refusal parks under the meter's own sentence, which is what §6.6's board shows and what an
+    admin retry is refused with - `over spend cap: ...` for the month, the missing setting or the
+    unpriced model for a plan (decisions 324, 343). A check that raises - a meter the database will
+    not answer, a stored pack whose bytes are not the ones its row names - raises inside
+    `_run_stage`'s guard, which records decision 336's `failed` rather than running the stage on an
+    answer nobody got.
 
     WHAT HOLDS `implemented` TO REALITY IS A TEST AND NOT A CONSTRUCTION, and the sentence that
     used to stand here - "neither milestone has to remember, because neither can forget" - was
@@ -280,16 +300,31 @@ async def refuse_uncapped_spend(stage: Stage, _ctx: stages.StageContext) -> stag
     the same arithmetic: a park with no deadline is `queue.skip`, which closes the task on attempt
     one and is therefore strictly worse than the failure this paragraph rejects. Configuring a cap
     is a thing a person does, so this is `stages.waiting_on_the_world()`; the stage never runs and
-    nothing is billed while it waits. M5.5's own "over the spend cap" park is a different sentence
-    about a different state - a cap that EXISTS and is reached - and §8's "never auto-retry past
-    the spend cap" is about that one, which M5.5 writes. [M5.1 review cycle 1, M51-CRASH-01]
+    nothing is billed while it waits. [M5.1 review cycle 1, M51-CRASH-01]
+
+    THE OVER-CAP PARK CARRIES THE SAME DEADLINE, and it is a different sentence about a different
+    state - a cap that EXISTS and is reached - which is the state §8's "never auto-retry past the
+    spend cap" is about. Parked is not retried: the task is deferred with its attempt handed back,
+    re-asked once a day, and each re-ask is this gate and not a paid call, so a title resumes by
+    itself only when the month has rolled over or the cap has been raised - the two events after
+    which running it is no longer "past the cap" at all (decision 325). The driver refuses a gate
+    park with no deadline (`_run_stage`), so this is also the one spelling that reaches the board.
     """
     if not stage.paid or not stage.implemented:
         return None
+    refusal = await spend.cap_check(ctx.conn, title_id=ctx.title_id)
+    if refusal is None:
+        return None
+    if refusal.kind == spend.NO_CAP:
+        return stages.park(
+            NO_SPEND_CAP,
+            until=stages.waiting_on_the_world(),
+            detail={"paid_stage": stage.name},
+        )
     return stages.park(
-        NO_SPEND_CAP,
+        refusal.reason,
         until=stages.waiting_on_the_world(),
-        detail={"paid_stage": stage.name},
+        detail={"paid_stage": stage.name, **refusal.detail},
     )
 
 
@@ -593,7 +628,8 @@ class _OneFetcher:
 
 
 async def _run_stage(
-    stage: Stage, ctx: stages.StageContext, gate: StageGate
+    stage: Stage, ctx: stages.StageContext, gate: StageGate,
+    open_fetcher: FetcherSupply | None = None,
 ) -> stages.Outcome:
     """One stage, gated, with a raise turned into `fail` and a bad return turned into one too.
 
@@ -652,6 +688,26 @@ async def _run_stage(
     `refuse_uncapped_spend` (cycle 1) and in `stages.place` (cycle 2); a class this milestone has
     shipped twice is not hypothetical at the one extension point it publishes for a milestone that
     bills real money. [M5.1 review cycle 4 second pass, M51-C4-PAID-04]
+
+    THE FETCHER IS OPENED BETWEEN THE GATE AND THE STAGE, which is the one order that honours both
+    of decision 373's reasons at once. `run_task` used to open it before calling this function, so
+    a title the gate then parked had its HTTP client built for a walk that would make no request --
+    every daily re-ask of every title parked at stage 6 -- and a factory that raised turned a park,
+    which refunds the attempt, into the drain's failure, which spends it: four such re-asks closed
+    a waiting title for good. It is still opened OUTSIDE the stage's guard, for the reason
+    `run_task` gave: a factory that raises is the drain's fault and not this title's.
+    [M5.5 review cycle 1, NBR-02, M55-SPEND-05]
+
+    AND A PAID STAGE IS HANDED THE SUPPLY, NOT THE FETCHER. Opening between the gate and the stage
+    kept the client off a title the GATE parks and still built it before the stage's own parks: stage
+    6's no pack, no vocabulary and failed-for-good reads all come after it, and the gate lets a title
+    with no stored pack through by design (`spend.cap_check` step 4) -- which decision 432 says is
+    every title's state at stage 6 until stage 5 is wired. So each daily re-ask of a capped install's
+    waiting title built the Fetcher, and a factory that raised turned the park into the drain's
+    failure, four of which closed it: the harm the paragraph above says was removed. A paid stage gets
+    `ctx.open_fetcher`, and `llm/extract` asks it once every read that could refuse has passed and a
+    request is next; a factory that raises there fails the stage that was about to send, which is
+    the true sentence for it. Stage 2 keeps the opened fetcher. [M5.5 review cycle 2, NBR-C2-01]
     """
     try:
         refusal = await gate(stage, ctx)
@@ -677,6 +733,15 @@ async def _run_stage(
                     "thing that may change (decision 348, decision 336)"
                 )
             return refusal
+    except Exception as exc:                                             # noqa: BLE001
+        log.exception("acquisition stage %d (%s) raised", stage.number, stage.name)
+        return stages.fail(f"{type(exc).__name__}: {exc}")
+    if stage.fetches and ctx.fetcher is None and open_fetcher is not None:
+        if stage.paid:
+            ctx.open_fetcher = open_fetcher
+        else:
+            ctx.fetcher = await open_fetcher()
+    try:
         outcome = await stage.run(ctx)
     except Exception as exc:                                             # noqa: BLE001
         log.exception("acquisition stage %d (%s) raised", stage.number, stage.name)
@@ -736,9 +801,9 @@ async def run_task(
     `open_fetcher` IS ASKED FOR ONLY BY A STAGE THAT DECLARED IT FETCHES (decision 373), and it is
     asked for INSIDE the walk rather than before it - which is what makes "a resume at stage 4
     opens no socket" a property of the loop rather than of a caller remembering. None is a legal
-    value and means nobody supplied one: `stages.enrich` then fails with a reason naming the
-    driver instead of constructing a Fetcher of its own, because one drain has one set of per-host
-    token buckets or it has none (`_OneFetcher`).
+    value and means nobody supplied one: `stages.enrich` and `stages.dna_extract` then fail with a
+    reason naming the driver instead of constructing a Fetcher of their own, because one drain has
+    one set of per-host token buckets or it has none (`_OneFetcher`).
     """
     ctx = stages.StageContext(
         conn=conn, task=task, title_id=_payload_title_id(task), run_id=run_id
@@ -776,16 +841,17 @@ async def run_task(
         while index < len(STAGES):
             stage = STAGES[index]
             report.stage = stage.number
-            if stage.fetches and ctx.fetcher is None and open_fetcher is not None:
-                # OUTSIDE `_run_stage`'s guard on purpose, unlike the spend gate one line into it.
-                # A factory that raises is the drain's failure and not this stage's: it means the
-                # connector read or the client construction broke, which will break identically
-                # for every task in this batch, and `drain`'s own `except Exception` closes the
-                # task with "the driver failed outside any stage" - which is the true sentence.
-                # Recording it as a stage failure would spend this title's attempt on a fault that
-                # has nothing to do with this title.
-                ctx.fetcher = await open_fetcher()
-            outcome = await _run_stage(stage, ctx, gate)
+            # The fetcher is opened inside `_run_stage`, AFTER the gate and OUTSIDE the stage's
+            # guard. A factory that raises is the drain's failure and not this stage's: it means the
+            # connector read or the client construction broke, which will break identically for
+            # every task in this batch, and `drain`'s own `except Exception` closes the task with
+            # "the driver failed outside any stage" - which is the true sentence. That spends the
+            # attempt the lease took, exactly as a stage failure would; what it no longer does is
+            # spend it for a title the gate would have parked, because the gate now answers first.
+            # [M5.5 review cycle 1, NBR-02] A paid stage is handed the supply instead and opens it
+            # only when a request is next, so its own parks build nothing either (`_run_stage`).
+            # [M5.5 review cycle 2, NBR-C2-01]
+            outcome = await _run_stage(stage, ctx, gate, open_fetcher)
             report.stages_run.append(stage.name)
             detail = {stage.name: outcome.detail} if outcome.detail else {}
 
@@ -936,11 +1002,24 @@ async def _record_stop(
     `status` is `failed` either way (decision 336 makes `failed` the state that "raised and will
     raise again"); what the detail adds is the one thing an operator cannot infer from it, which
     is whether the machine will try again or whether they must.
+
+    A PERMANENT FAILURE IS THE THIRD INPUT TO THAT SAME ARITHMETIC (decision 431). The stage says
+    it on the outcome, `queue.fail` receives it as the `permanent` it has carried since M5.1 and
+    closes the task in the same statement, and `retrying` is false whatever attempts are left -
+    because the queue will not try again, and a board that said it would would send the operator
+    away from the only lever that exists, the admin retry.
+
+    AND THE PERMANENCE IS WRITTEN ONTO THE TASK, in one transaction with `queue.fail`: the payload
+    gains `stages.FAILED_FOR_GOOD_MARK` on a permanent failure and loses it on any other. Stage 6
+    reads it to park a title's other keys (decision 431 per title), and used to infer it from
+    `attempts < max_attempts` instead -- which a permanent failure on the task's last attempt does not
+    satisfy, since it writes exactly the row exhaustion writes. [M5.5 review cycle 2, C2-PAID-01]
     """
     task = ctx.task
     if outcome.verb == stages.FAIL:
         detail = {stage.name: outcome.detail | {
-            "attempts": task.attempts, "retrying": task.attempts < task.max_attempts,
+            "attempts": task.attempts,
+            "retrying": not outcome.permanent and task.attempts < task.max_attempts,
         }}
     # CHECKED HERE TOO, and not only at the top of `run_task`, because a title can vanish DURING a
     # walk and `stages.ready` has a guard for exactly that - `fail(f"title {id} no longer exists")`.
@@ -962,7 +1041,18 @@ async def _record_stop(
         else:
             await queue.skip(conn, task.id, outcome.reason)
     else:
-        await queue.fail(conn, task.id, outcome.reason)
+        async with conn.transaction():
+            await conn.execute(_PERMANENCE, task.id, outcome.permanent)
+            await queue.fail(conn, task.id, outcome.reason, permanent=outcome.permanent)
+
+
+# `jsonb_build_object` rather than a bound jsonb, for `_BOARD`'s reason above: a dict bound against a
+# jsonb parameter is encoded twice by `db/pool.py`'s codec. `payload` is NOT NULL (0024).
+_PERMANENCE = (
+    "UPDATE acquisition_task SET payload = CASE WHEN $2::bool"
+    f" THEN payload || jsonb_build_object('{stages.FAILED_FOR_GOOD_MARK}', true)"
+    f" ELSE payload - '{stages.FAILED_FOR_GOOD_MARK}' END WHERE id = $1"
+)
 
 
 def _payload_title_id(task: queue.Task) -> int | None:
@@ -1004,7 +1094,11 @@ async def drain(
 
     `paid` IS NOT PASSED, so `queue.lease` takes free work only - its default, and the WHERE-clause
     refusal its docstring argues for. A paid task kind does not exist at M5.1; when one does, the
-    caller that drains it will be the one that knows a cap has been checked.
+    caller that drains it will be the one that knows a cap has been checked. §8 STAGE 6 BILLS AND
+    IS NOT ONE: an acquisition task stays `paid=False` for its whole walk, because what costs money
+    is one STAGE of it and the cap is asked at that stage, by the gate, before the call
+    (decision 348). Enqueueing acquisition work as paid would not add a check; it would hide every
+    title from this lease.
 
     ONE TASK'S FAILURE COSTS ONE TASK, which the loop below is written to guarantee and did not.
     `queue.lease` claims the whole batch in one statement and counts an attempt ON THE CLAIM, so a

@@ -66,12 +66,20 @@ class Settings(BaseSettings):
     # for automated installs." These fields are that seed and nothing else: they are read once
     # at boot by `connectors.registry.seed_from_env`, only for a connector with no row yet, and
     # no runtime code path reads them again. After first boot the database is the source.
+    #
+    # §2's list is "Jellyfin, LLM, TMDB, OMDb, Trakt", and the LLM half is one key per provider
+    # §9 ports (M5.5 plan A3). A key and nothing else: no model override is declared, because the
+    # plan offered one only "if the owner wants them" and nobody asked, and no spend cap, because
+    # decision 325 ships none -- a cap arriving from an env file would be the default it refused.
     jellyfin_url: str = ""
     jellyfin_api_key: str = ""
     tmdb_api_key: str = ""
     omdb_api_key: str = ""
     trakt_client_id: str = ""
     trakt_client_secret: str = ""
+    gemini_api_key: str = ""
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
 
     @field_validator("public_url")
     @classmethod

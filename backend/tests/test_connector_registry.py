@@ -20,7 +20,9 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import logging
 from datetime import UTC, datetime
 
 import asyncpg
@@ -720,3 +722,265 @@ async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermar
     kept = await registry.load_jellyfin(db)
     assert kept.library_ids == ["jf-lib-films"], "a URL correction must not widen the boundary"
     assert kept.delta_watermark == polled
+
+
+# --- §6.6: one generic surface, with Jellyfin as its first instance (M5.5 plan A1-A4) ---------
+
+
+def test_the_jellyfin_spec_is_load_jellyfin_and_save_jellyfin_themselves():
+    """Plan A2: the two hardened functions become the spec's callables BY IDENTITY, not through a
+    wrapper that could drift from them. M5.2's four review cycles are written into those two bodies
+    -- the mint a save has to ask for (decisions 416, 418), the origin rule of §14.3, the custody
+    degrade of M4.7 dd03 -- and a parallel generic path would be a second answer to every one.
+
+    The secret fields are held to what `JellyfinConfig` actually hides from its repr, so the list
+    the spec declares cannot name a credential the dataclass prints or miss one it seals.
+    """
+    spec = registry.spec_for("jellyfin")
+    assert spec.load is registry.load_jellyfin
+    assert spec.save is registry.save_jellyfin
+    assert spec.seeded is True
+    assert spec.test is None, "api/admin.test_jellyfin stores the 7.1 verdict as it tests (decision 433)"
+    hidden = {f.name for f in dataclasses.fields(registry.JellyfinConfig) if not f.repr}
+    assert set(spec.secret_fields) == hidden == {"api_key", "user_tokens", "webhook_token"}
+    declared = {f.name for f in dataclasses.fields(registry.JellyfinConfig)}
+    assert set(spec.config_fields) <= declared
+
+
+async def test_the_generic_calls_answer_for_jellyfin_exactly_as_its_own_functions_do(
+    db, secrets_key
+):
+    """`load_connector` / `save_connector` on `jellyfin` are `load_jellyfin` / `save_jellyfin`, and
+    the one argument the generic path refuses is the mint: decision 416 gives it to
+    `api/admin.put_jellyfin` alone, and a generic write that forwarded it would hand a card's body
+    field the one gesture decision 418 says only a save that asks may make.
+    """
+    saved = await registry.save_connector(db, "jellyfin", url="http://jf/", api_key="k")
+    assert isinstance(saved, registry.JellyfinConfig)
+    assert (saved.url, saved.api_key) == ("http://jf", "k")
+    assert saved.webhook_token == "", "a save that did not ask mints nothing (decision 418)"
+    assert saved == await registry.load_jellyfin(db)
+    assert await registry.load_connector(db, "jellyfin") == await registry.load_jellyfin(db)
+
+    with pytest.raises(ValueError, match="decision 416"):
+        await registry.save_connector(db, "jellyfin", url="http://jf", mint_webhook_token=True)
+    assert (await registry.load_jellyfin(db)).webhook_token == ""
+
+
+async def test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plaintext(
+    db, secrets_key
+):
+    """§2: a connector's secret is AEAD-sealed under the DEK and its settings are not. A provider
+    key bills the household, so it belongs with the sealed half; the model is what the card shows.
+
+    The masked save is the form's idiom, which `save_jellyfin` argues: the key is shown as a mask
+    and posted empty, and a whole-row write would blank it every time the admin changed the model.
+    """
+    state = await registry.save_connector(
+        db, "gemini", api_key="GEMINI-KEY-NOT-REAL", model="gemini-3.6-flash"
+    )
+    assert state == registry.ConnectorState(
+        name="gemini", config={"model": "gemini-3.6-flash"},
+        secrets={"api_key": "GEMINI-KEY-NOT-REAL"},
+    )
+    row = await db.fetchrow(
+        "SELECT config, secrets_encrypted, secrets_key_id FROM connector_config WHERE name = 'gemini'"
+    )
+    assert row["secrets_key_id"] is not None
+    assert b"GEMINI-KEY-NOT-REAL" not in bytes(row["secrets_encrypted"])
+    assert row["config"] == {"model": "gemini-3.6-flash"}, "the key must not leak into plaintext"
+
+    masked = await registry.save_connector(db, "gemini", api_key="", model="gemini-3.7-flash")
+    assert masked.secrets == {"api_key": "GEMINI-KEY-NOT-REAL"}
+    assert masked.config == {"model": "gemini-3.7-flash"}
+    assert await registry.load_connector(db, "gemini") == masked
+
+
+async def test_a_settings_save_needs_no_secrets_key_and_a_key_save_refuses_without_one(
+    db, no_secrets_key
+):
+    """The admin picks a model before pasting a key, as they type Jellyfin's address first; and the
+    `llm` row (decisions 324, 325) holds no secret at all, so neither may demand SECRETS_KEY. A key,
+    though, is §2's refusal: without custody there is nowhere to seal it, and nothing is written.
+    """
+    chosen = await registry.save_connector(db, "openai", model="gpt-5.6-terra")
+    assert chosen.config == {"model": "gpt-5.6-terra"} and chosen.secrets == {}
+    assert await db.fetchval(
+        "SELECT secrets_encrypted FROM connector_config WHERE name = 'openai'"
+    ) is None
+
+    await registry.save_connector(db, "llm", cap_usd=25.0, extraction_provider="openai")
+    merged = await registry.save_connector(db, "llm", passes=2, cap_usd=None)
+    assert merged.config == {"cap_usd": 25.0, "extraction_provider": "openai", "passes": 2}, (
+        "a value of None keeps what is stored"
+    )
+
+    with pytest.raises(RuntimeError, match="SECRETS_KEY"):
+        await registry.save_connector(db, "anthropic", api_key="would-be-stored-in-the-clear")
+    assert await db.fetchval(
+        "SELECT count(*) FROM connector_config WHERE name = 'anthropic'"
+    ) == 0, "a refused save writes nothing, not even the row it would have locked"
+
+
+async def test_a_save_names_the_fields_a_connector_declares(db):
+    """A misspelt field is refused rather than stored: `apikey` would otherwise land in the
+    plaintext half, beside the model, and the provider would go on answering 401 to the key the
+    admin believes they saved. The refusal names what is declared, so the fix is one read."""
+    with pytest.raises(ValueError, match="api_key") as refused:
+        await registry.save_connector(db, "gemini", apikey="KEY-IN-THE-WRONG-PLACE")
+    assert "apikey" in str(refused.value)
+    assert await db.fetchval("SELECT count(*) FROM connector_config") == 0
+
+    with pytest.raises(LookupError, match="gemini"):
+        registry.spec_for("gemeni")
+    with pytest.raises(LookupError, match="jellyfin"):
+        await registry.load_connector(db, "plex")
+
+
+async def test_an_unreadable_provider_secret_degrades_and_only_a_typed_key_retires_it(
+    db, secrets_key, monkeypatch, caplog
+):
+    """M4.7 dd03 for every connector the generic path serves, argued in `load_jellyfin` and
+    `save_jellyfin`: an unreadable DEK must not take a route down, so the read degrades -- the
+    plaintext half kept, the secrets empty, the state said out loud -- and is logged at ERROR on
+    every read. A save that types no key writes the config half alone, so a ciphertext that is
+    unreadable only until the right .env returns is not erased; a save that types one is the
+    admin's repair, and retires the row nothing can open.
+    """
+    from spielplan.core.config import settings
+
+    await registry.save_connector(db, "anthropic", api_key="OLD-KEY-NOT-REAL", model="claude-a")
+    sealed = await db.fetchval(
+        "SELECT secrets_encrypted FROM connector_config WHERE name = 'anthropic'"
+    )
+
+    # The .env came back wrong, or did not come back at all.
+    monkeypatch.setenv("SECRETS_KEY", "a-different-secrets-key-not-a-real-one")
+    settings.cache_clear()
+    caplog.set_level(logging.ERROR, logger="spielplan.connectors")
+    degraded = await registry.load_connector(db, "anthropic")
+    assert (degraded.secrets_unreadable, degraded.secrets) == (True, {})
+    assert degraded.config == {"model": "claude-a"}, "the plaintext half opened perfectly"
+    assert any(
+        r.levelno == logging.ERROR and "anthropic" in r.getMessage() for r in caplog.records
+    )
+
+    kept = await registry.save_connector(db, "anthropic", api_key="", model="claude-b")
+    assert kept.secrets_unreadable is True
+    assert bytes(await db.fetchval(
+        "SELECT secrets_encrypted FROM connector_config WHERE name = 'anthropic'"
+    )) == bytes(sealed), "a settings save must not erase the ciphertext it could not read"
+    assert (await registry.load_connector(db, "anthropic")).config == {"model": "claude-b"}
+
+    resealed = await registry.save_connector(db, "anthropic", api_key="NEW-KEY-NOT-REAL")
+    assert (resealed.secrets, resealed.secrets_unreadable) == ({"api_key": "NEW-KEY-NOT-REAL"}, False)
+    reloaded = await registry.load_connector(db, "anthropic")
+    assert reloaded.secrets == {"api_key": "NEW-KEY-NOT-REAL"}
+    assert reloaded.config == {"model": "claude-b"}
+
+
+async def test_no_connector_state_prints_its_secrets(db, secrets_key):
+    """`JellyfinConfig`'s rule for every other connector: a provider key bills the household and
+    a default repr copies it into any traceback or `%r` log line holding the state (§14.3)."""
+    state = await registry.save_connector(
+        db, "openai", api_key="BILLABLE-KEY-NOT-REAL", model="gpt-5.6-terra"
+    )
+    assert state.secrets["api_key"] == "BILLABLE-KEY-NOT-REAL", "held, and usable"
+    printed = repr(state)
+    assert "BILLABLE-KEY-NOT-REAL" not in printed
+    assert "openai" in printed and "gpt-5.6-terra" in printed, "what makes the line worth printing"
+
+
+def test_the_llm_providers_seed_their_key_and_the_llm_settings_seed_nothing():
+    """§2 names LLM among the connectors env may seed ("Jellyfin, LLM, TMDB, OMDb, Trakt"). Each
+    provider's key and nothing else: no model override is declared (plan A3's "if the owner wants
+    them" was not asked for), and no cap is seeded because decision 325 ships none."""
+    assert registry.env_seeds(_settings(gemini_api_key="g")) == {"gemini": ({}, {"api_key": "g"})}
+    seeds = registry.env_seeds(
+        _settings(gemini_api_key="g", anthropic_api_key="a", openai_api_key="o")
+    )
+    assert seeds == {
+        "gemini": ({}, {"api_key": "g"}),
+        "anthropic": ({}, {"api_key": "a"}),
+        "openai": ({}, {"api_key": "o"}),
+    }
+    assert "llm" not in seeds
+
+
+async def test_the_three_providers_seed_on_first_boot_and_never_over_an_admins_edit(
+    db, secrets_key
+):
+    """The two properties the Jellyfin tests above hold, for the connector family M5 is about."""
+    cfg = _settings(gemini_api_key="g-env", anthropic_api_key="a-env", openai_api_key="o-env")
+    assert await registry.seed_from_env(db, cfg) == ["gemini", "anthropic", "openai"]
+    for name, key in (("gemini", "g-env"), ("anthropic", "a-env"), ("openai", "o-env")):
+        assert (await registry.load_connector(db, name)).secrets == {"api_key": key}
+    row = await db.fetchrow(
+        "SELECT secrets_encrypted, secrets_key_id FROM connector_config WHERE name = 'gemini'"
+    )
+    assert row["secrets_key_id"] is not None and b"g-env" not in bytes(row["secrets_encrypted"])
+
+    await registry.save_connector(db, "gemini", api_key="typed-by-hand", model="gemini-3.6-flash")
+    assert await registry.seed_from_env(db, cfg) == []
+    edited = await registry.load_connector(db, "gemini")
+    assert edited.secrets == {"api_key": "typed-by-hand"}
+    assert edited.config == {"model": "gemini-3.6-flash"}
+
+
+def test_every_connector_the_registry_calls_seeded_is_one_env_can_seed():
+    """`seeded` is a claim about `env_seeds`, held to it rather than restated beside it: with every
+    seed variable `Settings` declares for a registered connector set, the connectors env seeds are
+    exactly the ones the registry marks. The variables are found through the registry's own names,
+    so a connector added to either side without the other fails here."""
+    from spielplan.core.config import Settings
+
+    prefixes = tuple(f"{name}_" for name in registry.CONNECTORS)
+    fields = [name for name in Settings.model_fields if name.startswith(prefixes)]
+    assert {"gemini_api_key", "anthropic_api_key", "openai_api_key"} <= set(fields)
+    every = _settings(**{name: f"http://{name}.example" for name in fields})
+    seeded = {spec.name for spec in registry.CONNECTORS.values() if spec.seeded}
+    assert seeded == set(registry.env_seeds(every))
+    assert "llm" in registry.CONNECTORS and "llm" not in seeded
+
+
+async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_test(monkeypatch):
+    """Plan A4: "One dispatch table, not a route per provider". The table is `ConnectorSpec.test`,
+    and a connector with none is refused by name rather than answered with a guessed probe -- which
+    the API maps to 404. Jellyfin is one of those on purpose: its card's test stores §7.1's verdict
+    as it tests, and stays `api/admin.test_jellyfin` (decision 433)."""
+    conn = object()
+    called: list[object] = []
+
+    async def probe(given):
+        called.append(given)
+        return {"ok": True, "detail": "stub"}
+
+    monkeypatch.setitem(
+        registry.CONNECTORS, "tmdb", dataclasses.replace(registry.CONNECTORS["tmdb"], test=probe)
+    )
+    assert await registry.test_connector(conn, "tmdb") == {"ok": True, "detail": "stub"}
+    assert called == [conn]
+
+    for untested in ("omdb", "jellyfin", "llm"):
+        with pytest.raises(LookupError, match=f"connector {untested} has no test in this build"):
+            await registry.test_connector(conn, untested)
+
+
+async def test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usable_key(
+    db, secrets_key, monkeypatch
+):
+    """The provider test answers the two states it can know without a request, in the sentences
+    the card shows: no key typed yet, and a key that will not open (the rail's own sentence,
+    `SECRETS_UNREADABLE_REASON`). Neither reaches `spielplan.llm`, which is only imported once
+    there is a key to send."""
+    from spielplan.core.config import settings
+
+    assert await registry.test_connector(db, "gemini") == {
+        "ok": False, "error": "no API key is configured for gemini",
+    }
+    await registry.save_connector(db, "gemini", api_key="KEY-NOT-REAL")
+    monkeypatch.setenv("SECRETS_KEY", "a-different-secrets-key-not-a-real-one")
+    settings.cache_clear()
+    assert await registry.test_connector(db, "gemini") == {
+        "ok": False, "error": registry.SECRETS_UNREADABLE_REASON,
+    }

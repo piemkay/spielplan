@@ -38,13 +38,14 @@ import httpx
 import pytest
 
 from spielplan.acquire import fetch, pipeline, queue, stages
-from spielplan.connectors import resolve
+from spielplan.connectors import registry, resolve
 from spielplan.core import secrets
 from spielplan.core.config import settings
 from spielplan.db.pool import _init_connection as pool_init
 from spielplan.derive import gate
 from spielplan.home import shelves
 from spielplan.importer import bundle as bundle_import
+from spielplan.llm import spend
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from tests.fixtures import make_bundle as fx
@@ -141,15 +142,21 @@ def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_tha
     already how stages 1, 9 and 10 carry the default, and `pipeline.Stage`'s docstring settles it.
     This comprehension is scoped to `not s.implemented` and therefore never sees them, which is
     exactly why that question had to be settled somewhere else.
+
+    THREE STUBS SINCE M5.5, which gave stage 6 its body (decision 432) and keeps `owner = "M5.5"`
+    as provenance by the same rule. Every read below is of `SHIPPED` and not of `pipeline.STAGES`,
+    because this file's autouse fixture now stands stage 6 down as a DECLARED NO-OP - its
+    `implemented` flag is what the spend gate reads - so the patched tuple would report a stub
+    that the build does not ship.
     """
-    assert [s.number for s in pipeline.STAGES if s.paid] == [6]
-    assert {s.number: s.owner for s in pipeline.STAGES if not s.implemented} == {
-        5: "M5.4", 6: "M5.5", 7: "M5.4", 8: "M5.4",
+    assert [s.number for s in SHIPPED if s.paid] == [6]
+    assert {s.number: s.owner for s in SHIPPED if not s.implemented} == {
+        5: "M5.4", 7: "M5.4", 8: "M5.4",
     }
     assert {s.number: s.owner for s in SHIPPED if s.implemented} == {
-        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 9: "M5.1", 10: "M5.1",
+        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 6: "M5.5", 9: "M5.1", 10: "M5.1",
     }
-    for stage in pipeline.STAGES:
+    for stage in SHIPPED:
         if stage.implemented:
             continue
         doc = stage.run.__doc__ or ""
@@ -164,8 +171,13 @@ def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_tha
     # docstring an M5.5 author reads first, so under the old sentence the correct outcome of their
     # own commit was a pipeline parked for two further milestones - a state M5.5's own exit
     # criterion forbids. [M5.1 review cycle 4 second pass, M51-C4-PAID-06]
-    paid = next(s for s in pipeline.STAGES if s.paid)
-    owes = re.search(r"until (M5\.\d) supplies the cap", paid.run.__doc__ or "")
+    #
+    # RE-POINTED AT M5.5, whose commit this sentence was about: the stage has its body and the
+    # docstring now says in the present tense which milestone supplies the cap it parks against.
+    # The property is the one above - the stage's owner is the cap's owner - read off the new
+    # sentence rather than off the future tense it replaced (decisions 348, 432).
+    paid = next(s for s in SHIPPED if s.paid)
+    owes = re.search(r"\b(M5\.\d) supplies the cap\b", paid.run.__doc__ or "")
     assert owes and owes.group(1) == paid.owner, (
         f"the paid stage hands the cap to {owes and owes.group(1)} and its own owner is "
         f"{paid.owner}; decision 348 says the milestone that fills the stage is the one that owes "
@@ -173,7 +185,7 @@ def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_tha
     )
 
 
-async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_not():
+async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_not(monkeypatch):
     """The seam M5.1 owes M5.5, asserted on the gate itself.
 
     §8 says a paid stage "never auto-retries past the spend cap", which is a rule about a stage
@@ -189,16 +201,35 @@ async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_no
 
     The day M5.5 gives `stages.dna_extract` a body, `implemented` becomes True and this refusal
     starts firing. That is the seam holding rather than a test of a flag.
-    """
-    ctx = stages.StageContext(conn=None, task=None)
-    shipped = next(s for s in pipeline.STAGES if s.paid)
-    assert await pipeline.refuse_uncapped_spend(shipped, ctx) is None
 
-    billing = pipeline.Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True)
-    refusal = await pipeline.refuse_uncapped_spend(billing, ctx)
+    M5.5 IS THAT DAY, AND THE GATE NOW ASKS THE CAP. The shipped stage 6 is implemented (decision
+    432), so the gate no longer answers from the flag alone: it asks `llm/spend.cap_check`, and the
+    answer here is whatever that function says. It is replaced for this test, which keeps it off
+    the database and makes the MAPPING the subject - an unset cap parks under decision 348's own
+    sentence, an over-cap refusal parks under the meter's, both with a deadline, and None runs the
+    stage. What `cap_check` itself decides is `test_llm_spend.py`'s, and what the driver does with
+    these parks on both tables is `test_llm_stage.py`'s. The two stages that cannot spend - a
+    declared no-op and a free stage - are waved through WITHOUT asking, which is the half that
+    keeps every walk-to-ready test in this file from reading a meter.
+    """
+    asked: list[int | None] = []
+    answers: list[spend.Refusal | None] = []
+
+    async def cap_check(conn, *, title_id, now=None):
+        asked.append(title_id)
+        return answers.pop(0)
+
+    monkeypatch.setattr(spend, "cap_check", cap_check)
+    ctx = stages.StageContext(conn=None, task=None, title_id=1_000_000_001)
+    shipped = next(s for s in SHIPPED if s.paid)
+    assert shipped.implemented, "stage 6 has its body (decision 432)"
+
+    answers.append(spend.Refusal(spend.NO_CAP, spend.NO_CAP_REASON, {"cap_usd": None}))
+    refusal = await pipeline.refuse_uncapped_spend(shipped, ctx)
     assert refusal is not None
     assert refusal.verb == stages.PARK
-    assert "spend cap" in refusal.reason
+    assert refusal.reason == pipeline.NO_SPEND_CAP
+    assert refusal.detail == {"paid_stage": "dna extract"}
     # WITH A DEADLINE, which is the one property of this gate nothing asserted while its own
     # paragraph called a deadline-less park "strictly worse than the failure this paragraph
     # rejects". Deleting the `until=` from the shipped gate passed every test in the tree and
@@ -209,8 +240,22 @@ async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_no
         "nothing in this tree moves a row out of skipped before decision 330 arrives at M5.6"
     )
 
-    free = next(s for s in pipeline.STAGES if not s.paid and not s.implemented)
+    over = "over spend cap: $1.00 of the $1.00 monthly cap is spent"
+    answers.append(spend.Refusal(spend.OVER_CAP, over, {"spent_usd": "1.00", "cap_usd": "1"}))
+    refusal = await pipeline.refuse_uncapped_spend(shipped, ctx)
+    assert (refusal.verb, refusal.reason) == (stages.PARK, over)
+    assert refusal.until is not None, "decision 325: the month rolls over, so the park re-asks"
+    assert refusal.detail == {"paid_stage": "dna extract", "spent_usd": "1.00", "cap_usd": "1"}
+
+    answers.append(None)
+    assert await pipeline.refuse_uncapped_spend(shipped, ctx) is None, "room under the cap runs it"
+    assert asked == [ctx.title_id] * 3, "the gate asks the cap about the title it is gating"
+
+    declared = pipeline.Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=False)
+    assert await pipeline.refuse_uncapped_spend(declared, ctx) is None
+    free = next(s for s in SHIPPED if not s.paid and not s.implemented)
     assert await pipeline.refuse_uncapped_spend(free, ctx) is None
+    assert len(asked) == 3, "a stage that cannot spend was made to read the meter"
 
 
 # --- the integration fixtures --------------------------------------------------------------------
@@ -324,18 +369,31 @@ async def _task_row(db, key: str):
 #     three stages down restores exactly the pipeline those tests were written against and changes
 #     no assertion in any of them.
 #
-# The substitutes keep `paid`, `implemented` and `owner` and change only `run` and `fetches`, so
-# the tuple a test reads for its flags is still the shipped one. The tests that read the SHIPPED
-# flags statically read `SHIPPED`, which is captured above for this reason.
+# The substitutes keep `paid`, `implemented` (stage 6's excepted, below) and `owner` and change
+# only `run` and `fetches`, so the tuple a test reads for its flags is still the shipped one. The
+# tests that read the SHIPPED flags statically read `SHIPPED`, which is captured above for this
+# reason.
+#
+# M5.5 GAVE STAGE 6 ITS BODY AND IT STANDS DOWN TOO, WITH ONE FLAG CHANGED (decision 432). Stage 6
+# is paid, and the driver's gate reads `implemented` before it reads anything else: a substitute
+# that kept the shipped `implemented=True` would still be a billing stage to the gate, which then
+# asks the meter, finds no cap on a test database and parks every walk-to-ready test in this file
+# at stage 6 under decision 348's sentence - for a body the substitute does not even have. So a
+# paid stage stands down as what it now is, a DECLARED NO-OP, which is the one shape decision 348
+# says cannot spend and the gate waves through. That is exactly the pipeline these tests were
+# written against: stage 6 was a declared no-op from M5.1 until this milestone. The tests whose
+# subject IS stage 6 put it back with `extraction_live`, and `test_llm_stage.py` walks it through
+# the driver against the refusing double.
 STOOD_DOWN = "stage {} stood down by this file's fixture; the live stages are asserted under `live`"
+STANDS_DOWN = (2, 3, 4, 6)
 
 
 def _stands_down(stage: pipeline.Stage) -> pipeline.Stage:
     async def stood_down(_ctx):
         return stages.advance({"stood_down": STOOD_DOWN.format(stage.number)})
 
-    return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid, stage.implemented,
-                          stage.owner)
+    return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid,
+                          stage.implemented and not stage.paid, stage.owner)
 
 
 async def _refuse_to_crawl(_conn):
@@ -348,10 +406,20 @@ async def _refuse_to_crawl(_conn):
 
 @pytest.fixture(autouse=True)
 def enrichment_stands_down(monkeypatch):
-    """Stages 2, 3 and 4 advance without doing anything, unless a test asks for the real ones."""
+    """Stages 2, 3, 4 and 6 advance without doing anything, unless a test asks for the real ones."""
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
     monkeypatch.setattr(pipeline, "STAGES", tuple(
-        _stands_down(stage) if stage.number in (2, 3, 4) else stage for stage in SHIPPED
+        _stands_down(stage) if stage.number in STANDS_DOWN else stage for stage in SHIPPED
+    ))
+
+
+def _put_back(monkeypatch, numbers: tuple[int, ...]) -> None:
+    """The shipped stage for each of `numbers`, over whatever the tuple holds now. Stage by stage
+    rather than the whole tuple, so `live` and `extraction_live` commute: either order of the two
+    fixtures leaves both sets of stages shipped."""
+    monkeypatch.setattr(pipeline, "STAGES", tuple(
+        shipped if shipped.number in numbers else current
+        for shipped, current in zip(SHIPPED, pipeline.STAGES, strict=True)
     ))
 
 
@@ -363,8 +431,23 @@ def live(monkeypatch):
     already patched the attribute and the order between two patches of one name is the kind of
     thing that works until someone reorders a decorator. pytest runs autouse fixtures of a scope
     before the explicitly requested ones, so this always lands second.
+
+    STAGE 6 STAYS A DECLARED NO-OP UNDER `live`, which is what this fixture meant when it was
+    written: the tests that take it walk a title through the crawl, the derive and the gate to
+    `ready`, and a shipped stage 6 would park every one of them at the spend gate with no cap on
+    a test database (decision 432). `extraction_live` is the way back for stage 6.
     """
-    monkeypatch.setattr(pipeline, "STAGES", SHIPPED)
+    _put_back(monkeypatch, (2, 3, 4))
+
+
+@pytest.fixture
+def extraction_live(monkeypatch):
+    """Put stage 6's shipped body back. For the tests whose subject is §8 stage 6 in the driver.
+
+    `live`'s shape and its reason, for the one stage M5.5 wrote: the autouse fixture stands stage 6
+    down as a declared no-op, and a test about what the shipped stage does has to say so.
+    """
+    _put_back(monkeypatch, (6,))
 
 
 # --- the mint, the placement and the badge -------------------------------------------------------
@@ -550,6 +633,7 @@ async def test_a_park_writes_its_reason_verbatim_and_the_resume_re_enters_at_tha
     """
     until = datetime.now(UTC) + timedelta(days=30)
     reason = "thin: 1 review source, 0 words of plot; the window closes in 30 days"
+    stood_down = pipeline.STAGES
     _park_at(monkeypatch, 5, stages.park(reason, until=until))
 
     task = await _leased(db, item=MOVIE)
@@ -571,8 +655,10 @@ async def test_a_park_writes_its_reason_verbatim_and_the_resume_re_enters_at_tha
     assert row["last_error"] is None, "waiting is not failing (decision 336)"
 
     # The stage stops parking and the window closes. Nothing else about the world is moved by
-    # hand -- see the note on moving time in `test_acquire_queue.py`.
-    monkeypatch.setattr(pipeline, "STAGES", SHIPPED)
+    # hand -- see the note on moving time in `test_acquire_queue.py`. The tuple put back is the
+    # one the fixture installed and not `SHIPPED`: the resume walks 5 to 10, and a shipped stage 6
+    # would park this walk at the spend gate, which is not this test's subject (decision 432).
+    monkeypatch.setattr(pipeline, "STAGES", stood_down)
     await db.execute(
         "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 second'"
     )
@@ -976,6 +1062,51 @@ async def test_a_stage_that_raises_is_failed_and_the_board_says_whether_it_will_
     assert row["next_attempt_at"] > datetime.now(UTC), "the backoff is in the future"
 
 
+async def test_a_stage_that_fails_for_good_closes_its_task_and_the_board_says_no_retry_is_coming(
+    db, data_dir, monkeypatch
+):
+    """Decision 431's driver half: a stage that KNOWS a retry cannot change its answer says so, and
+    the driver hands that to `queue.fail(permanent=True)` - a parameter the queue has carried since
+    M5.1, "for a stage that knows it never should", with nothing able to reach it.
+
+    §8 stage 6 is the stage that needs it: a provider that has twice answered in breach of the
+    contract it was told about would otherwise be re-run on the queue's curve, two more paid calls
+    a time, and "retried exactly once" would hold per walk and not per title. So the task is closed
+    on its FIRST attempt, with three left, and the board says no retry is coming - the one thing an
+    operator cannot read off `failed` itself, and here the true answer is that only they can act.
+
+    Asserted on a stand-in stage rather than on stage 6, because the subject is the driver's
+    bookkeeping and not the extraction; `test_llm_stage.py` walks stage 6's own verdict through it.
+    The field defaults to False, so every outcome an existing stage returns is unchanged, which the
+    test above this one holds.
+    """
+    assert stages.fail("boom").permanent is False, "a stage that says nothing keeps the curve"
+    reason = "the provider broke the contract again after the retry that named it"
+
+    async def final(_ctx):
+        return stages.fail(reason, detail={"calls": 2}, permanent=True)
+
+    patched = tuple(
+        pipeline.Stage(s.number, s.name, final, s.paid, s.implemented, s.owner)
+        if s.number == 5 else s
+        for s in pipeline.STAGES
+    )
+    monkeypatch.setattr(pipeline, "STAGES", patched)
+
+    task = await _leased(db, item=MOVIE)
+    report = await pipeline.run_task(db, task)
+
+    assert (report.status, report.stage, report.reason) == ("failed", 5, reason)
+    board = await _board(db, report.title_id)
+    assert (board["stage"], board["status"], board["reason"]) == (5, "failed", reason)
+    assert board["detail"]["dna pack"] == {"calls": 2, "attempts": 1, "retrying": False}
+    row = await _task_row(db, "jellyfin:jf-acq-1")
+    assert row["state"] == queue.FAILED, "closed on attempt one of four: nothing will re-run it"
+    assert row["attempts"] == 1 and row["attempts"] < row["max_attempts"]
+    assert row["last_error"] == reason
+    assert await queue.lease(db, [pipeline.TASK_KIND], limit=1) == []
+
+
 # --- the seams the stage contract has to keep ----------------------------------------------------
 
 
@@ -1159,6 +1290,16 @@ def _fetcher_uses(source: str) -> list[str]:
     shape alone is let through; a call, an alias or an argument is a request made by the stage
     machine instead of by an adapter through `sources/_views`. [decision 373; M5.3 review cycle
     2, M53-C2-NET-04]
+
+    AND ONE HAND-OFF, SPELLED EXACTLY: `extract.extract_title(..., fetcher=ctx.fetcher)`, which is
+    §8 stage 6 giving the drain's one Fetcher to the LLM layer (decisions 373, 432). It is stage
+    2's own arrangement one layer along rather than an exception to it. Stage 2 hands its adapters
+    the whole context and never names the attribute; stage 6 hands `llm/extract.py` the handle by
+    keyword, because that module takes no `StageContext` - it imports nothing from the stage
+    machine, on purpose - and every request it makes is one `llm/client` POST that the raw store
+    and the meter both record, which is the property "one no board row records" was guarding.
+    Only that callee and only that keyword: the same attribute passed to anything else, or passed
+    to it positionally, is still the stage machine reaching for the network.
     """
     tree = ast.parse(source)
     presence = {
@@ -1168,10 +1309,18 @@ def _fetcher_uses(source: str) -> list[str]:
         and isinstance(node.ops[0], ast.Is | ast.IsNot)
         and isinstance(node.comparators[0], ast.Constant) and node.comparators[0].value is None
     }
+    handed = {
+        id(keyword.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "extract.extract_title"
+        for keyword in node.keywords
+        if keyword.arg == "fetcher"
+    }
     return sorted(
         f"line {node.lineno}"
         for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "fetcher" and id(node) not in presence
+        if isinstance(node, ast.Attribute) and node.attr == "fetcher"
+        and id(node) not in presence | handed
     )
 
 
@@ -1218,10 +1367,18 @@ def test_the_transport_guard_reports_every_spelling_of_the_violation():
         "async def f(ctx):\n    return await ctx.fetcher.get('u')\n",
         "def f(ctx):\n    client = ctx.fetcher\n",
         "def f(ctx):\n    return helper(ctx.fetcher)\n",
+        # Stage 6's hand-off is let through by callee AND keyword, so each half alone is refused,
+        # and so is a use of the handle dressed up as the keyword's value. [M5.5, decision 432]
+        "async def f(ctx):\n    return await other.extract_title(ctx.conn, fetcher=ctx.fetcher)\n",
+        "async def f(ctx):\n    return await extract.extract_title(ctx.conn, ctx.fetcher)\n",
+        "async def f(ctx):\n    return await extract.extract_title(fetcher=ctx.fetcher.client)\n",
     ):
         assert _fetcher_uses(spelling), f"{spelling!r} walked past the guard"
     assert _fetcher_uses("def f(ctx):\n    if ctx.fetcher is None:\n        return 1\n") == []
     assert _fetcher_uses('"""`ctx.fetcher.get` is the adapters\' call."""\n') == []
+    assert _fetcher_uses(
+        "async def f(ctx):\n    return await extract.extract_title(ctx.conn, fetcher=ctx.fetcher)\n"
+    ) == [], "stage 6 hands the drain's one Fetcher to the LLM layer by keyword (decision 373)"
 
 
 def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
@@ -1327,12 +1484,16 @@ async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
     it one. [M5.1 review cycle 4, M51-C4-PAID-03]
     """
     ctx = stages.StageContext(conn=None, task=None)
-    stubs = [s for s in pipeline.STAGES if not s.implemented]
-    # FOUR SINCE M5.3, which gave stages 2, 3 and 4 bodies. The count is asserted rather than
-    # derived because it is the half of this test that notices a stage going the OTHER way: a
-    # milestone that wrote a body and left `implemented=False` is caught by the loop below, and a
-    # milestone that set the flag on a stage it had not written is caught by this line.
-    assert len(stubs) == 4, "stages 5-8 are the declared no-ops that remain (D3)"
+    # `SHIPPED` AND NOT `pipeline.STAGES`, because the flag under test is the one the build ships:
+    # this file's autouse fixture stands stage 6 down as a declared no-op, and reading the patched
+    # tuple would call the fixture's substitute and count it as a stub.
+    stubs = [s for s in SHIPPED if not s.implemented]
+    # THREE SINCE M5.5, which gave stage 6 its body (decision 432), after M5.3 gave stages 2, 3 and
+    # 4 theirs. The count is asserted rather than derived because it is the half of this test that
+    # notices a stage going the OTHER way: a milestone that wrote a body and left
+    # `implemented=False` is caught by the loop below, and a milestone that set the flag on a stage
+    # it had not written is caught by this line.
+    assert len(stubs) == 3, "stages 5, 7 and 8 are the declared no-ops that remain, M5.4's (D3)"
     stale = (
         "is declared `implemented=False` and no longer returns the stub marker - it has a body, "
         "and the flag the spend gate reads is stale"
@@ -2526,20 +2687,27 @@ async def test_the_stub_marker_check_names_the_stage_when_a_body_raises(monkeypa
     needs a connection. The build went red either way; what was missing is the sentence saying
     why, and a maintainer who reads "the test needs a context" is one step from giving it one.
     [M5.1 review cycle 4, M51-C4-PAID-03]
+
+    RE-POINTED FROM STAGE 6 TO STAGE 7 AT M5.5, and from `pipeline.STAGES` to `SHIPPED`. Stage 6
+    now ships its body with the flag set (decision 432), so the mistake this test rehearses is no
+    longer available there; it is available on M5.4's three owed stages, and stage 7 is one of
+    them. And the check reads `SHIPPED` now (its own comment says why), so the doctored build goes
+    where the check looks - which is what this test did before, through the attribute the check
+    used to read.
     """
     async def bodied(ctx):
         return await ctx.conn.fetchval("SELECT 1")
 
     patched = tuple(
         pipeline.Stage(s.number, s.name, bodied, s.paid, s.implemented, s.owner)
-        if s.number == 6 else s
-        for s in pipeline.STAGES
+        if s.number == 7 else s
+        for s in SHIPPED
     )
-    monkeypatch.setattr(pipeline, "STAGES", patched)
+    monkeypatch.setitem(globals(), "SHIPPED", patched)
     with pytest.raises(AssertionError) as caught:
         await test_every_stage_declared_a_no_op_returns_its_stub_marker()
     message = str(caught.value)
-    assert "stage 6 (dna extract)" in message, message
+    assert "stage 7 (verify)" in message, message
     assert "the flag the spend gate reads is stale" in message, message
 
 
@@ -2790,7 +2958,8 @@ async def test_a_gate_that_parks_with_no_deadline_is_refused_rather_than_closing
 #
 # Everything below runs the SHIPPED stages, through `live`, against a canned web. It is the half
 # of this file the fixture above stands down, and it is deliberately the only half: a driver test
-# and a crawl test that share a fixture are two tests that redden for each other's reasons.
+# and a crawl test that share a fixture are two tests that redden for each other's reasons. Stage
+# 6 is the one shipped stage `live` leaves standing down (decision 432; see the fixture).
 #
 # THE CANNED WEB IS A REFUSER BY DEFAULT. An unrouted host answers 404, which is what the five
 # sources these tests do not route are meant to get - decision 334 makes each of them a note and
@@ -3065,10 +3234,12 @@ async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_r
         )
         return await real_derive(ctx)
 
+    # Over `live`'s tuple and not `SHIPPED`, which would park this walk at the spend gate before it
+    # reached `ready` - stage 6 stays a declared no-op here (decision 432).
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         pipeline.Stage(s.number, s.name, watched, s.paid, s.implemented, s.owner, s.fetches)
         if s.number == 3 else s
-        for s in SHIPPED
+        for s in pipeline.STAGES
     ))
     assert await pipeline.enqueue_item(db, MOVIE) is True
 
@@ -3686,7 +3857,10 @@ async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
         return pipeline.Stage(stage.number, stage.name, run, stage.paid, stage.implemented,
                               stage.owner, stage.fetches)
 
-    monkeypatch.setattr(pipeline, "STAGES", tuple(watching(s) for s in SHIPPED))
+    # Over `live`'s tuple rather than `SHIPPED`: this walk ends at `ready`, and a shipped stage 6
+    # would park it at the spend gate (decision 432). Stage 2 is still the FIRST stage that fetches,
+    # which is the property; stage 6's own fetch is `test_llm_stage.py`'s, through the driver.
+    monkeypatch.setattr(pipeline, "STAGES", tuple(watching(s) for s in pipeline.STAGES))
     assert await pipeline.enqueue_item(db, MOVIE) is True
     report = await pipeline.drain(db, limit=1,
                                   fetcher_factory=_factory(_CannedWeb(_enrichable()), _Clock()))
@@ -3698,8 +3872,11 @@ async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
         "rather than at the stage that declared it - and a walk that parks at stage 1 then pays "
         "for an HTTP client it never uses"
     )
-    assert [s.number for s in SHIPPED if s.fetches] == [2], (
-        "§8 stage 2 is the only stage that reaches the network today; a second one sets the same "
+    # TWO SINCE M5.5, and the second arrived exactly the way this message said it would: §8 stage
+    # 6 posts to an LLM provider through the drain's one Fetcher (decisions 373, 432) and set the
+    # same flag on its own row.
+    assert [s.number for s in SHIPPED if s.fetches] == [2, 6], (
+        "§8 stages 2 and 6 are the stages that reach the network; another one sets the same "
         "flag on the same line rather than teaching the driver a stage number"
     )
 
@@ -3730,3 +3907,31 @@ async def test_a_stage_two_handed_no_fetcher_fails_and_names_the_driver(db, bund
         "a failure records whether the machine will try again; this one is a code defect and "
         "will not fix itself, but the board must still say which it is"
     )
+
+
+async def test_a_stage_six_handed_no_fetcher_fails_and_names_the_driver(
+    db, data_dir, secrets_key, extraction_live
+):
+    """The test above, for the other stage that fetches: §8 stage 6 posts to an LLM provider
+    through the drain's one Fetcher (decisions 373, 432) and never builds one of its own.
+
+    Reached through the gate, which is the order the driver keeps: a cap is set and Gemini is keyed
+    and assigned, so `refuse_uncapped_spend` finds room - no pack is stored, so there is nothing to
+    reserve, and the stage is the one that would say so - and lets stage 6 run. It then fails with
+    a sentence naming the driver, for stage 2's reason: a failure and not a park, because the
+    repair is a code change, and nothing was asked of any provider because nothing could be.
+    """
+    await registry.save_connector(db, "gemini", api_key="GEMINI-KEY-NOT-A-REAL-ONE-0006")
+    await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=100)
+
+    task = await _leased(db, item=MOVIE)
+    report = await pipeline.run_task(db, task)
+
+    assert report.status == "failed", report.as_dict()
+    assert report.stage == 6
+    assert report.reason == stages.NO_EXTRACTION_FETCHER
+    assert "pipeline.drain" in report.reason and "decision 373" in report.reason
+    board = await _board(db, report.title_id)
+    assert (board["stage"], board["status"]) == (6, "failed")
+    assert board["detail"]["dna extract"]["retrying"] is True
+    assert await db.fetchval("SELECT count(*) FROM llm_call") == 0

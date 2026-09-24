@@ -234,17 +234,38 @@ def test_an_unknown_host_is_crawled_at_the_slow_default():
     assert policy.respect_robots is True
 
 
-def test_no_paid_provider_host_is_declared_by_this_milestone():
-    """The corpus's three LLM hosts are dropped, and that is a decision rather than an oversight.
+def test_the_three_paid_provider_hosts_are_declared_with_the_corpus_numbers_and_their_reasoning():
+    """§8 stage 6's three hosts, with `mdc/config.py:98-110`'s numbers verbatim. [M5.5 phase B]
 
-    M5.1 adds no provider dependency: §8 stage 6 is M5.5's, and so is the spend cap that gates it.
-    A rate declared here for `api.anthropic.com` would be configuration for a feature with no
-    caller, and - worse - would read to a later agent as permission to reach it. Asserted by
-    substring so that a differently-spelled provider host fails the same way.
+    M5.1 dropped these rows on purpose - "a rate declared here for `api.anthropic.com` would be
+    configuration for a feature with no caller" - and asserted their absence, which was true for
+    exactly as long as nothing in the tree could reach a provider. M5.5 is the caller: every
+    provider POST goes through this fetcher (§9, "one POST per provider through the rate-limited
+    fetcher"), so each host needs the rate the corpus set for it, and each turns robots off, which
+    decision 340 permits only "documented with its reasoning beside the policy it changes". So the
+    absence test is replaced rather than deleted: the three rows exist with the corpus's numbers,
+    each override carries a note that argues it, `undocumented_overrides()` is still empty, and no
+    fourth provider host has crept in under a spelling the substring check would catch.
     """
+    expected = {
+        "api.anthropic.com": (2.0, 4, 4),
+        "api.openai.com": (2.0, 4, 4),
+        "generativelanguage.googleapis.com": (1.5, 3, 3),
+    }
+    for host, (rps, burst, concurrency) in expected.items():
+        policy = HOST_POLICIES[host]
+        assert (policy.rps, policy.burst, policy.max_concurrency) == (rps, burst, concurrency), host
+        assert policy.breaker_cooldown_s == 120, host
+        assert policy.breaker_threshold == 8, f"{host}: the corpus sets no threshold of its own"
+        assert policy.respect_robots is False, host
+        assert "politeness is not the constraint" in policy.note, host
+        assert "rate limit" in policy.note, host
+        assert policy_for(host) is policy
+    assert undocumented_overrides() == []
     for marker in ("anthropic", "openai", "googleapis", "generativelanguage"):
-        assert not [h for h in HOST_POLICIES if marker in h], (
-            f"{marker} belongs to M5.5's connector layer with its spend cap, not to the spine"
+        assert len([h for h in HOST_POLICIES if marker in h]) == 1, (
+            f"one {marker} host is declared; a second spelling of a provider is a second bucket "
+            "and a second breaker for one rate limit"
         )
 
 
@@ -1944,3 +1965,59 @@ async def test_a_negative_retry_after_does_not_delete_the_backoff_curve():
         with pytest.raises(FetchError):
             await f.get(f"https://{FAST}/3/movie/604", max_attempts=2)
     assert nan_clock.slept == [pytest.approx(1.6 * 0.7)]
+
+
+# --- a request that is not idempotent (decision 436 (1)) ------------------------------------
+
+
+@pytest.mark.parametrize(("failure", "posts"), [
+    (httpx.ReadTimeout, 1), (httpx.RemoteProtocolError, 1), (503, 1), (504, 1), (520, 1),
+    (httpx.ConnectError, 3), (httpx.PoolTimeout, 3), (429, 3), (408, 3),
+])
+async def test_a_post_is_sent_again_only_when_it_provably_never_reached_the_host(failure, posts):
+    """RFC 9110 9.2.2: POST is not idempotent. This layer's retry loop was written for GETs and ran
+    every method through it, so a POST whose reply was lost, or which a gateway timed out after the
+    origin had done the work, was sent again up to `max_attempts` times -- and the one POST this app
+    makes is a paid LLM generation. A POST is re-sent now only on a connect-phase failure, which never
+    delivered it, or on 408, 425 or 429, which the host answered without doing the work; anything
+    else raises after the one send. The GET below keeps every retry it had.
+    [M5.5 review cycle 1, M55-METER-02, M55-BUDGET-01]"""
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.method)
+        if isinstance(failure, int):
+            return httpx.Response(failure)
+        raise failure("no answer", request=request)
+
+    async with _fetcher(handler, _Clock()) as f:
+        with pytest.raises(FetchError):
+            await f.get(f"https://{FAST}/3/list", method="POST", json_body={"a": 1}, max_attempts=3)
+    assert sent == ["POST"] * posts
+
+    sent.clear()
+    async with _fetcher(handler, _Clock()) as f:
+        with pytest.raises(FetchError):
+            await f.get(f"https://{FAST}/3/movie/603", max_attempts=3)
+    assert sent == ["GET"] * 3, "a GET is re-sent exactly as before"
+
+
+async def test_a_server_error_outside_the_retry_set_counts_toward_the_breaker():
+    """A 5xx outside `RETRYABLE_STATUS` -- Anthropic's 529 "overloaded_error" is the one this app
+    meets -- fell into the 4xx arm and called `_note_success`, RESETTING the host's run of failures on
+    the one status its provider uses to say it is overloaded. It is still not retried here; it is
+    counted as the failure it is. A 4xx outside the set stays an answer. [M5.5 review cycle 1,
+    M55-DBL-05]"""
+    async with _fetcher(_always(529), _Clock()) as f:
+        for _ in range(2):
+            with pytest.raises(FetchError) as caught:
+                await f.get(f"https://{FAST}/3/movie/603")
+            assert caught.value.retryable is False
+        [overloaded] = f.host_report()
+    assert (overloaded["requests"], overloaded["errors"]) == (2, 2)
+
+    async with _fetcher(_always(410), _Clock()) as f:
+        with pytest.raises(FetchError):
+            await f.get(f"https://{FAST}/3/movie/603")
+        [gone] = f.host_report()
+    assert (gone["requests"], gone["errors"]) == (1, 0)

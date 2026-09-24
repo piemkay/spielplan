@@ -11,12 +11,15 @@ is the rate a real crawl of that host survived, and re-guessing it from an armch
 away the only evidence anyone has. The changes are four, each a consequence of this app not being
 that CLI:
 
-  1. **The three LLM hosts are dropped** - `api.anthropic.com`, `api.openai.com` and
-     `generativelanguage.googleapis.com`. M5.1 adds no provider dependency at all, and those rows
-     are not politeness policy: the corpus's own comment says so ("politeness is not the
-     constraint - the provider's own rate limit is"). They belong with §8 stage 6's connector
-     layer at M5.5, which is also where the spend cap that gates that stage lives. Declaring a
-     rate here for a host nothing in the tree can reach would be config for an absent feature.
+  1. **The three LLM hosts arrived with M5.5, not M5.1** - `api.anthropic.com`, `api.openai.com`
+     and `generativelanguage.googleapis.com`. M5.1 dropped them because nothing in its tree could
+     reach a provider, and a rate declared for a host no code calls is config for an absent
+     feature. §8 stage 6's connector layer is that code: every provider POST goes through this
+     fetcher (§9, "one POST per provider through the rate-limited fetcher"), so M5.5 declares the
+     three rows below with the corpus's numbers verbatim, and each carries the corpus's reasoning
+     as its `note` because each turns robots off - which decision 340 permits only documented
+     beside the policy. The rows are still not politeness policy, and the note says so in the
+     corpus's words: "politeness is not the constraint - the provider's own rate limit is".
   2. **`note` is a field rather than a code comment.** The corpus documents its one robots
      override in a comment above the row; decision 340 makes the documented reasoning part of the
      clause, so it has to be readable by the thing that shows the policy. `undocumented_overrides`
@@ -93,6 +96,17 @@ _API_TERMS = (
     "rate limit apply, and are what the rps beside this note is set under"
 )
 
+# The three LLM providers' override, stated once and cited per row for `_API_TERMS`' reason. It is
+# the corpus's reasoning in a sentence an operator reads on §6.6: these are paid calls made with the
+# household's own key, robots.txt governs crawlers and not them, and the numbers are the provider's
+# rate limit respected from below rather than manners toward a stranger's site.
+_LLM_TERMS = (
+    "a paid LLM endpoint reached with the household's own key, not a crawl robots.txt governs: "
+    "politeness is not the constraint, the provider's own rate limit is, and these numbers sit "
+    "below any tier's limit so a 429 pauses the call rather than failing it; the breaker cooldown "
+    "is long because a 429 storm is worth backing off from"
+)
+
 
 # Tuned per host by the corpus, against real crawls. API hosts get real throughput; HTML hosts stay
 # at the "one request per second, politely" level, and the two §8 stage 2 names stay slower still.
@@ -139,6 +153,21 @@ HOST_POLICIES: dict[str, HostPolicy] = {
         rps=1.0, burst=1, max_concurrency=1, respect_robots=False,
         note="a published bulk dataset download - a handful of files fetched whole, not a crawl "
              "of a site"),
+    # --- LLM APIs: §8 stage 6's three providers (M5.5, named change 1) ---
+    # `mdc/config.py:98-110`'s rows, numbers verbatim, and its comment verbatim:
+    # Paid endpoints we hold a key for, so politeness is not the constraint -
+    # the provider's own rate limit is.  These are set below any tier's limit
+    # and the 429 handling in http.py does the rest; a tier-1 key will pause
+    # itself rather than fail.  The breaker cooldown is long because a 429
+    # storm is worth backing off from properly.
+    # "http.py" is the corpus's fetcher; here the 429 rule is `acquire/fetch.py`'s, ported verbatim.
+    "api.anthropic.com": HostPolicy(rps=2.0, burst=4, max_concurrency=4, respect_robots=False,
+                                    breaker_cooldown_s=120, note=_LLM_TERMS),
+    "api.openai.com": HostPolicy(rps=2.0, burst=4, max_concurrency=4, respect_robots=False,
+                                 breaker_cooldown_s=120, note=_LLM_TERMS),
+    "generativelanguage.googleapis.com": HostPolicy(
+        rps=1.5, burst=3, max_concurrency=3, respect_robots=False, breaker_cooldown_s=120,
+        note=_LLM_TERMS),
     # --- HTML connectors: deliberately slow ---
     "letterboxd.com": HostPolicy(rps=0.8, burst=1, max_concurrency=1, breaker_cooldown_s=600),
     # The two hosts §8 stage 2 names by hand - "rt:page" and "metacritic:page->reviews". They are

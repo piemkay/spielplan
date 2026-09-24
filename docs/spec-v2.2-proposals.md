@@ -10235,6 +10235,851 @@ target 0028's foreign key names, which is the whole of what 395 wanted it for.
 
 ---
 
+## Decisions taken (owner, 2026-09-24, as M5.5 opened)
+
+Eleven, taken as M5.5 opened, under the owner's standing instruction to take each plan's
+recommended option and record it here rather than ask. Five are questions
+`docs/milestones/ROADMAP-M5.md` files against M5.5 that every sitting above left unspent for it -
+324, 325, 337, 338 and 343 - and each is taken under the number the roadmap gives it rather than
+re-issued, on the rule M5.1's blocks followed for 332, 336, 340 and 345, M5.3's for 326, 334, 335
+and 346 and M5.4's for 341: a number a planner allocated to a step is taken by the milestone that
+owns the step, and one question spent under two numbers is two normative rules for one rule
+(228-233). The other six are spent from the bottom of this lane's own block, 430-439. Where the plan
+marks a recommendation the entry takes it;
+where it poses a question and marks none - the second half of 325, and every one of 430-435 - the
+entry says so in its own text and takes the option this milestone's exit criterion implies, or,
+where the criterion is silent, the narrowest one the decisions it builds on leave standing.
+
+**436, 437, 438 and 439 are the rest of that block and stay unspent**, for the reason M5.3's block
+gave for 379-381: a number is taken by the owner rather than reserved by a planner. (M5.5's review
+cycle 1 took 436 and 437, in the block after 435, and its review cycle 2 took 438 and 439
+in the block after that.) **426, 427, 428
+and 429 stay unspent too, and are claimed here for nobody**: they are the rest of M5.3's range
+420-429, which its review cycle 1's block names as that lane's own when it renumbered three entries
+into it, and no sitting has spent them since. They sit below this block's highest entry, so they are
+named here or they read as free, which is how decision 346's cost paragraph records a number being
+lost - and they are not this lane's to spend. Every other hole below 435 stands as the header and the
+blocks above leave it, less the five spent here: 327-330, 333, 339, 342 and 344 are filed by the
+roadmap against M5.2, M5.6 and M5.7 - 330 among them, whether proposals 104, 107, 109 and 135 are
+adopted or struck, which is M5.6's and M5.7's to take and is why
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` goes on citing proposals 107 and 109
+rather than a decision; 350-359 were never spent; 379-381 are the rest of M5.3's block; and 419 stays
+unspent in M5.2's.
+
+M5.5 does not hold `current_milestone`. M5.1 does and keeps it (`spec_coverage.toml:20`), so this
+block mandates schema, domain rules and coverage rows, and M5.5's rows are appended without raising
+the scalar. Its one normative edit is the one decision 331 reserves for a sub-milestone as it opens -
+its own §12 build-order row and the paragraph under it - and it deliberately makes no other. **Four
+of the entries below mandate spec text this milestone does not apply**: 324 and 325 owe §6.6's spend
+guard its two defaults, 337 owes §6.6's caption the population its numbers were measured over, and
+338 owes §9 and §6.6 the narrowing that sync-only makes. Each is written down in full in its own
+entry and recorded as owed, in decision 346's shape, so the milestone that holds the spec file can
+paste it. All eleven are normative from today under decision 177's rule whether or not those
+sentences land, and the Status block's dated point release is left to the milestone that closes the
+wave, as M5.4's block left it.
+
+### 324. Parallel mode is off and extraction runs one pass on a fresh install
+
+**What the record says.** §8 stage 6: "1..N providers per admin config; two passes recommended
+(union +13pp recall)" (`docs/spielplan-spec_v2.1.md:387-389`). §6.6 makes parallel mode a toggle -
+"run extraction on N selected models and merge by the measured consensus rule" - and its spend guard
+asks for a "per-title cost estimate before enabling" (`spec:322`); §9 lists parallel/consensus mode
+and the per-task assignment among the admin's settings (`spec:418`). No section states a default for
+the mode or for the pass count, and the coverage row `map-taste-admin-cost-estimate-before-enabling`
+says so in its `why`: "Whether parallel mode defaults on or off is still an open question, so no
+test may assert the default." Proposal 160 records that the prototype ships `parallel: true` and
+argues for the off default taken here; it is provenance only, and this entry is what makes it a rule.
+
+**Why it changes.** Stage 6 cannot run without an answer, and this is the milestone that gives it a
+body. The two defaults are the whole cost surface: two providers at two passes is four times the
+single-run bill, and a household that never opens the toggle must never double its bill. §6.6's own
+wording answers the direction - an estimate shown "before enabling" is shown to an admin turning
+something ON, which reads as an off default.
+
+**The decision.** Off, one pass - the plan's recommendation. Both live in the `llm` row of
+`connector_config`, with no DDL (plan §5): `parallel` (absent = false), `passes` (absent = 1),
+`extraction_provider` - §6.6's per-task assignment for the one task M5 has a caller for - and
+`parallel_providers`, read only when `parallel` is true, each of which must hold a key. An absent
+`extraction_provider` parks stage 6 with a reason naming the missing assignment; it is never answered
+with a guessed provider. As built: the four fields are the `llm` row's `config_fields` in
+`connectors/registry.py:845-851`, declared `seeded=False`, and `_passes_of` and `_providers_of`
+(`llm/spend.py:425`, `:436`) read them -
+`passes` absent is 1, `parallel` absent is false, and an unassigned provider, a hand-typed value that
+does not read or a provider this build does not call is a refusal that names the setting rather than
+a default chosen for it. **This decision mandates a spec amendment this milestone does not apply.**
+The text owed, to follow "the numbers ship as the toggle's caption)" in §6.6's Connectors bullet at
+`spec:322`: "Parallel mode is **off** on a fresh install and extraction runs **one pass**; both are
+settings the admin turns up after reading the per-title cost estimate below (decision 324)."
+
+**Cost.** Lower recall out of the box: union's 93% is what the toggle buys, and a single run is what
+an unconfigured household gets. Parallel mode is still built - per-provider calls, decision 337's
+pooled merge, a row per provider - so turning it on is configuration and not code. The premise of
+`map-taste-admin-cost-estimate-before-enabling`'s last sentence is discharged here, so M5.5's own
+tests may assert off and one pass; restating that row's `why` is M5.7's, which owns the row. The §6.6
+sentence stays owed until the milestone holding the spec file pastes it.
+
+### 325. The cap is a calendar month in the install's TZ, summed over llm_call, with no shipped default, and attempt 2 is budgeted inside it
+
+**What the record says.** §6.6's spend guard: "monthly cap, running meter reading '$4.12 of $25.00
+this month'" (`spec:322`). §8: "paid stages (6) never auto-retry past the spend cap" (`spec:403`).
+Decision 348 gave the driver a gate, `refuse_uncapped_spend`, that parks an implemented paid stage
+with `NO_SPEND_CAP` while no cap exists, and left the cap to M5.5. The "$25.00" is an example inside a
+caption, not a stated default.
+
+**Why it changes.** A cap with no period is not a cap, and two coverage rows rest on this one -
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` and M5.7's
+`map-taste-admin-spend-cap-parks-paid-stage`. Nothing says whether the month is a calendar month or
+a rolling thirty days, which clock bounds it, where the rows live, what the cap is before anybody
+sets one, or - the half plan §3 leaves open - whether the two-attempt retry's second call is budgeted
+inside the cap or checked against it, two readings that differ by up to 100% on a violating title.
+
+**The decision.** A calendar month in `settings().tz`, §2's `TZ` (compose default Europe/Berlin); an
+unresolvable zone falls back the way `worker._local_zone` does and is logged, because §3.1 will not
+let a spelling stop a loop. The meter is `SUM(llm_call.usd)` over [the first instant of the local
+month, the first instant of the next) - a SUM, never a counter, because a counter can drift and a
+drifted cap is not a cap. The cap is `cap_usd` in the `llm` row of `connector_config`. **No default
+cap ships.** The plan's recommendation leaves the figure to the owner and plan §8 says M5.5 "does not
+set a default cap or a default mode on its own", so an unset cap keeps decision 348's `NO_SPEND_CAP`
+refusal exactly as M5.1 shipped it - which is also the option the exit criterion implies, since it
+names parking at the cap and never a figure. **Attempt 2 is budgeted inside the cap**, and the plan
+marks no recommendation on this half: before attempt 1 the gate reserves 2 x passes x providers x the
+per-call estimate - prompt tokens estimated from the real system and user prompt, `MEAN_OUTPUT_TOKENS`
+out, decision 343's effective price - and parks `over spend cap` when spent plus that reservation
+exceeds the cap; at or above the cap it parks without estimating at all. Budgeted-inside is the
+reading whose outcomes are exactly the two the exit criterion names, a park with zero paid calls or
+both attempts run to a verdict. Checked-against adds a third state the criterion does not name: a
+title that paid for attempt 1 and then parked before the retry attempt 1 needed. The gate keeps
+decision 348's name, `refuse_uncapped_spend`, and BECOMES the cap check rather than being routed
+around; the over-cap reason starts `over spend cap`, and the acquisition task stays `paid = false`, so
+the drain still leases the walk and the gate - not the lease filter - is what stands between stage 6
+and a provider. Every gate park carries `until = stages.waiting_on_the_world()`, because the driver
+refuses a deadline-less gate park, so a parked title is re-asked daily with no paid call and resumes
+by itself when the month rolls over or the cap is raised. That is not a retry past the cap: nothing
+is billed until the check passes. As built: `llm/spend.py:230-272` bounds the month and sums
+`llm_call.usd` over it, `:625-663` is the check in that order - no cap, a plan the settings cannot
+make, spent at or over the cap with nothing estimated, no stored pack, spent plus the reservation
+over it - and `:556` prices the reservation over the real prompt; `acquire/pipeline.py:253` is the
+gate that asks it, parking `NO_SPEND_CAP` (`:225`) unchanged for an unset cap and the meter's own
+sentence otherwise, each with `until`. No admin retry route exists until M5.6 builds the one
+proposal 109 asks for, which `ROADMAP-M5.md` leaves open under question 330, so
+`spend.retry_refusal` (`:666`) is the refusal that route will ask, and a task made due by any other
+means walks back into the same gate. **This decision mandates a spec amendment this milestone does
+not apply.** The text owed, to follow "monthly cap" in §6.6's spend guard at `spec:322`: "- a calendar
+month in the install's `TZ`, metered as the sum of every provider call's cost - each written before
+it is sent at a ceiling that bounds its bill by every margin its provider publishes, and settled to
+what the provider reported billing, thinking tokens and refused or cut-off answers included, or left
+at that ceiling when no answer came back - and checked before a paid call is made, with the retry's
+second call reserved inside it; no cap ships, and until one is set stage 6 parks rather than bills
+(decisions 325, 348, 436)". M5.5's review cycle 1 restated that sentence: it first read "metered as
+the sum of every provider call's billed cost", which the meter did not keep for any attempt an
+adapter refused (M55-DOC-01). Review cycle 2 restated it again: it said each call was "written at the
+most it can bill", which the ceiling was not on Claude until decision 436 (b) and is since only by
+the margins the providers publish, and "settled to what the provider reported", which an answer that
+never arrived never is (M55-C2-DOC-01).
+
+**Cost.** Overshoot is bounded and recorded rather than closed, and the bound is the one decision
+436's settle path keeps. Every paid attempt is in the meter from before it is sent - written at its
+ceiling, its input as `client.ceiling_input` bounds it plus the request's `max_tokens` of 8,000, at
+the attempt's own price and the dearest rate the request can be billed at - and settled to what the
+provider reported, so each check reads what every earlier attempt cost, or at least that much. The
+reservation, though, is of the mean: R = 2 x passes x providers x (estimated prompt x input price +
+`MEAN_OUTPUT_TOKENS`' 3,900 x output price), priced at the dearer of the gate's day's price and the
+next day's so a dated price that turns over mid-title is inside it, while one title can bill at most
+its ceiling, W, the same product over each attempt's `pricing.ceiling`. Worked from the shipped
+prices and default models, W/R is 1.43 (OpenAI), 1.44 (Gemini) and 1.83 (Anthropic, whose ceiling
+carries the tool prompt, the tokenizer margin and US-only inference's 1.1) on the largest pack
+`packs.render_pack` builds, rising to about 2.0 (2.27) on a 1,000-token prompt. So with one worker the
+month can end at most W - R past its cap, the last title that fitted having been checked on R - 0.43
+R to 0.83 R on the largest pack, up to 1.27 R on the shortest; with k loops checking at once, the
+rolling-restart state, at most (W - R) + (k - 1) x W, because a written-ahead row shows another loop's
+call on the wire and nothing reserves the attempts that loop has not begun - with two loops 2W - R,
+1.87 R to 2.66 R on the largest pack and up to 3.54 R on the shortest (`llm/spend.py`'s module
+docstring); and per TASK a retryable failure keeps decision 431's curve, each walk passing the check
+afresh, so at most `max_attempts` walks of 2 x passes x providers metered calls per task, each inside
+the cap when it was asked. A title holds one task per key (decision 322), each on its own curve, and
+the per-title mark `stages._FAILED_FOR_GOOD` reads catches a permanent failure and never an exhausted
+one, so a title can buy up to keys x `max_attempts` x 2 x passes x providers calls, the named retry
+among them once per walk of each key: 16 calls and 8 named retries for a film with two library
+copies on the default plan, measured by
+`test_llm_stage.py::test_a_title_with_two_keys_buys_the_named_retry_once_per_walk_of_each_key`. This
+clause said "per title" over the per-task figure, which holds only for a title with one key (M5.5
+review cycle 2, C2-PAID-03). This paragraph
+read "about 1.6 R on a full pack and 2 R on a short one", from a W that counted the prompt text alone
+and so was not a bound on Claude, with a reservation priced on the gate's day that a title crossing
+2027-01-01 could outrun by 1.77 R with one worker (M5.5 review cycle 2, M55-CAP-C2-01,
+M55-CAP-C2-03); and it cited "2.2 to 3.0 reservations" as measured with two loops, a figure no test
+or script in the tree produces - it was (W - R) + W worked at those two ratios, arithmetic labelled
+as a measurement (M55-C2-DOC-07). The check is not serialised across workers - a
+lock held across a provider call measured in minutes is worse than the overshoot it prevents. This
+paragraph first said "a call billing more than its estimate lands in the meter" and "at most one
+title's reservation per extra worker", and neither held: every attempt an adapter refused - a
+`max_tokens` cut-off, a refusal, a blocked prompt, prose where a tool was forced - was a row at $0,
+so a cut-off re-run on the queue's curve passed the gate on every walk and billed the household
+against a SUM that never moved (M5.5 review cycle 1 measured five walks, the double billing $0.90
+against a $0.50 cap with the meter at $0 - M55-DOC-01), and a concurrent title bills its ceiling,
+not its reservation. The bound above holds only because every billed attempt is written ahead and
+settled (decision 436). Until
+M5.7's spend guard ships an in-app control, a cap can only be set by writing the row (decision 433).
+M5.7's guard renders `llm.spend.meter()`; M5.6's admin retry calls `llm.spend.retry_refusal` before
+it makes a parked stage-6 task due. The §6.6 sentence stays owed.
+
+### 337. Agreement counts runs, and merge_passes is ported verbatim
+
+**What the record says.** §6.6 ships the consensus numbers as the parallel toggle's caption - "union
+with per-tag agreement as confidence — union recalls 93% vs 67% for intersection; agreement is a
+weight, never a filter" (`spec:322`) - and §4.1 rule 2 makes the constraint binding: "`salience`,
+`confidence`, `n_sources` are **weights, never filters**" (`spec:99`). Neither states the function
+from agreement to `dna_tag.confidence`, or whether agreement counts passes, providers or runs.
+
+**Why it changes.** Rule 2 cannot be enforced against a function nobody wrote down, and decision
+324's parallel mode writes the rows it governs. The corpus states it exactly and argues the salience
+rule, in `mdc/dna/store.py:246-275`'s `merge_passes`: "Salience is the max any pass assigned; a pass
+that saw a trait as core is better evidence than one that saw it as minor, and the confidence weight
+already records how alone it was in seeing it at all."
+
+**The decision.** Port `merge_passes` verbatim: the union of every run's verified tags; `confidence
+= round(agreeing_runs / total_runs, 2)`; `n_sources = agreeing_runs`, the corpus's `runs_found`;
+salience the maximum any run assigned, with the corpus's argument; evidence kept from every run that
+found the term and not only the winner's; and a tag found by one run of one written with confidence
+1.0, never dropped. A run is a (provider, pass-index) pair pooled across providers, so a two-pass
+single-provider union and a two-provider union are the same arithmetic. The merge is written as one
+`dna_tag` row per (term, provider that found it) through `UNIQUE (title_id, version, term, provider)`
+(`0004_dna.sql:84`, made functional by `0018`'s `''` for a NULL provider), each row carrying the
+pooled weights, with `dna_evidence` rows for that provider's own quotes; and the write replaces the
+title's extracted tier for the active version in one transaction - `store_title`'s "Replace, not
+accumulate" (`mdc/dna/store.py:296`). One named change: the salience comparison is bound to a local
+(`level`), as `dna/verify.py` already does, because `test_landmine_guards.py`'s Python arm reads every
+comparison one side of which names a weight, over every module under `spielplan/`. As built,
+`llm/consensus.py:143-186` keeps the arithmetic to the corpus's line - the union, `round(counts /
+n_runs, 2) if n_runs else 1.0`, the strict-greater salience rule and every run's evidence - and
+returns it in the app's container rather than the corpus's dict: a frozen `MergedTag` carrying
+`n_sources`, with every run keyed `<provider>:<pass>` so a row's provider is read off its own
+evidence and never off a field the model's payload could set. Neither moves a number.
+`consensus.store_title` (`:208`) is the corpus's `store_title` rewritten for per-provider rows, and
+`llm/extract.py:313-315` applies the curation ledger in the same transaction after it, because a
+fresh extraction must not put back a term the household ruled off the title (§14.5).
+
+**Cost.** §6.6's caption measures PROVIDERS and the port counts runs, so the caption is owed a label
+saying which population its numbers were measured over (plan E4). **This decision mandates a spec
+amendment this milestone does not apply.** The text owed, to replace "the numbers ship as the
+toggle's caption" at `spec:322`: "the numbers ship as the toggle's caption, labelled as measured over
+providers; the merge counts runs - one provider at one pass - so two passes of one provider pool
+exactly as two providers do (decision 337)". The rule-2 guard plan E3 asks for is the existing pair
+in `test_landmine_guards.py`, which already reads every module under `spielplan/` and so reads
+`llm/consensus.py` too; it is registered on the new row `map-taste-agreement-is-a-weight-across-runs`
+rather than written a second time.
+
+### 338. Batch mode does not ship at M5
+
+**What the record says.** §9: "Ported design (no vendor SDKs; one POST per provider through the
+rate-limited fetcher; batch endpoints supported)" (`spec:415`), with a batch-vs-sync toggle among
+the admin's settings (`spec:418`); §6.6's provider cards caption their structured-output mode,
+Gemini's as "batch" (`spec:322`). The corpus carries `mdc/llm/batch.py`, 488 lines, with the same
+reasoning-token correction.
+
+**Why it changes.** Batch endpoints answer in hours. §6.6's board shows each title at a stage an
+operator reads, §12's criterion says nothing about latency, and nothing in the tree says what a
+stage 6 waiting on a batch looks like on that board or whether "unattended" tolerates a title that
+sleeps overnight. A toggle shipped enabled and inert is a promise the surface cannot keep.
+
+**The decision.** Sync only at M5 - the plan's recommendation. `mdc/llm/batch.py` stays unported and
+plan §8 names it as out of scope. `GET /api/admin/llm` (decision 433) reports batch as unavailable
+with its reason - `api/llm.py:64-67`, answered as `{"available": false, "reason": ...}` rather than
+omitted - so M5.7's toggle ships disabled with that reason rather than enabled and inert.
+**This decision mandates a spec amendment this milestone does not apply**, in two places: §9's
+"batch endpoints supported" (`spec:415`) is owed "batch endpoints are not used at M5 - every call is
+synchronous, and the batch-vs-sync toggle ships disabled with its reason (decision 338)"; and §6.6's
+Gemini caption at `spec:322` is owed "responseSchema" in place of "batch", because that is the
+structured-output mode the shipped adapter uses.
+
+**Cost.** No batch discount, which `ROADMAP-M5.md`'s own cost table puts at about half the sync price
+on the one provider it prices both ways. If the owner rules the other way, batch is its own step and
+its own coverage row, and §6.6's board needs a state for a title waiting on a batch. Both spec texts
+stay owed.
+
+### 343. Model prices ship as a dated table, an unknown model is unpriced rather than guessed, and the admin can override
+
+**What the record says.** §6.6's meter quotes a baseline - "corpus baseline: ~$0.005–0.01/title/pass
+on Gemini batch" (`spec:322`) - and §9 asks for "spend caps + meter" (`spec:418`). Nothing says where
+a model's price comes from or what happens when it goes stale.
+
+**Why it changes.** Three facts from the corpus's `mdc/config.py`, each of which a naive table gets
+wrong. The whole Gemini 2.5 family answers 404 for new keys (`:152-154`), and §6.6's baseline
+reproduces only at 2.5-flash batch pricing, so the caption is three to six times low against the
+current default. gemini-3.7-flash's introductory price is dated - "from 2027-01-01 these double to
+$1.50 / $7.50" (`:158-160`) - so a figure typed once is known to be wrong on a known day. And a bare
+`startswith` "is how a cost estimate quietly invents a number" (`:189-203`): `gpt-5.6-terra` would
+inherit `gpt-5`'s price. A cap enforced against an invented price is not a cap.
+
+**The decision.** `llm/pricing.py` ports `PRICING` (`mdc/config.py:134-164`), `DEFAULT_MODELS`
+(`:169-173`) and `MEAN_OUTPUT_TOKENS` with the corpus's measurement comment verbatim (`:181-186`),
+and `price_for`'s name-boundary rule verbatim (`:189-203`), so `gpt-5.6-terra` does not inherit
+`gpt-5`'s price. Each price carries a `valid_until`: gemini-3.7-flash and gemini-3.6-flash ship both
+the introductory $0.75/$3.75, valid until 2027-01-01, and the doubled $1.50/$7.50 from that date,
+both figures from `mdc/config.py:158-162`. A price past its `valid_until` with no successor answers
+None; an unknown model answers None; the estimator then reports "unknown" rather than a number, and
+stage 6's gate parks naming the unpriced model, because a cap cannot be enforced against a price
+nobody knows. The admin overrides with `price_input` and `price_output` - USD per million tokens,
+both or neither - in the provider's `connector_config` row, and an override wins over the table; M5.7
+renders the control and the caption's date. As built: the two dated Gemini entries are
+`llm/pricing.py:143-146`, `price_for` is `:196` with the corpus's boundary rule and docstring,
+`effective_price` (`:227-261`) lets a whole override win even over a model the table never heard of
+and ignores a half one - logged on every read, the table answering - because completing it from the
+table would bill at a figure the admin was in the middle of replacing, and `estimate_title` (`:312`)
+answers None when any provider in the plan is unpriced. The Anthropic rows were re-read from the
+published page in M5.5's review cycle 1 (decision 437).
+
+**Cost.** A price table is a thing somebody has to keep current, and a stale one now parks stage 6
+rather than billing at a wrong rate, which is the direction this record wants a stale price to fail
+in. Exit-criterion checks 13 and 14 hold the boundary rule and the "unknown". No price ever reaches
+`llm_call.usd` from a guess.
+
+### 430. `llm_call` cites the pack by the raw document it read, and a deleted title does not delete its spend
+
+**What the record says.** Decision 382: "M5.5's `llm_call` (migration `0028`) REFERENCES
+`dna_pack.pack_sha` and does not re-carry pack custody". Decision 403 widened `dna_pack`'s key to
+`(title_id, version, pack_sha)` so that `llm_call` could reference it, and left one question to this
+milestone in words: "What an `llm_call` whose pack has since been rebuilt points at stays M5.5's to
+answer in 0028". Plan §5 lists `llm_call`'s columns and says nothing about what happens to them when
+their title is deleted.
+
+**Why it changes.** `store_pack` upserts `dna_pack` IN PLACE on a rebuild - `ON CONFLICT (title_id,
+version) DO UPDATE SET pack_sha = EXCLUDED.pack_sha` (`dna/packs.py:385-386`) - keeping one row per
+(title, version) and no history. A foreign key from `llm_call` to that row's `(title_id, version, pack_sha)` therefore has
+two behaviours available and both are wrong: ON UPDATE NO ACTION refuses every rebuild of a title
+that has calls, so a pack could never change again once a provider had read it, and ON UPDATE
+CASCADE rewrites the call's history to claim it read the new pack. Neither is custody. The title is
+the other half: the meter is a SUM over `llm_call` (decision 325), so a row that cascades away with
+its title hands the month back its money.
+
+**The decision.** `llm_call.pack_document_id bigint NOT NULL REFERENCES raw_document(id) ON DELETE
+RESTRICT` - the immutable, content-addressed `raw_document` that `dna_pack.raw_document_id` named
+when the call was made - and no foreign key to `dna_pack`. The sha stays derivable rather than
+re-carried: `raw_document.content_sha256[:16]` is `packs.sha()` of the same bytes, because the raw
+store digests the UTF-8 text `store_pack` hands it and `packs.sha()` is the first sixteen hex digits
+of that digest. So `0028` adds no `pack_sha` of its own and 382's rule holds - one migration holds
+custody and the other cites it - with the citation made to the half that cannot move.
+`llm_call.title_id REFERENCES title(id) ON DELETE SET NULL`: the spend outlives the title, and a NULL
+title is a call whose subject was deleted, never a call that had none. `response_document_id`
+cites the stored provider response, under the same RESTRICT, wherever a 200 envelope came back to
+store - a refused or cut-off one included since decision 436 - and is NULL for a call still in
+flight, a request that never left, an answer lost on the way, an error status (whose body is never
+stored) and a 200 whose usage block did not read. The plan names no option on either
+half; this is the one decisions 382 and 403 leave standing. As built, `0028_llm_spend.sql:118-136`
+carries the three references (`:125`, `:133`, `:134`), one row per attempt numbered 1 or 2 under a
+`pass_index` of at least 1 - decision 337's run - `tokens_out_billed` under the name §9's correction
+is about, `usd` as `numeric(12, 6)` because a SUM of floats drifts, and a CHECK that a failed call
+names its failure and an answered one names none.
+
+**Cost.** Two RESTRICT references into `raw_document` beside `dna_pack`'s one. Nothing in the tree
+deletes from that table today, so they block no path that exists, and a retention prune written later
+has to leave a billed call's pack and response alone - which is the audit trail decision 382 exists
+for. `llm_call` is excluded from the movie-data archive beside `dna_pack` and `dna_reject`, for their
+reason: its rows name raw documents the archive does not carry and spend this install's own
+configuration made, and a restore carrying them would start another household's month partly spent
+(`backend/tests/test_backup.py:164`).
+
+### 431. A second contract violation fails stage 6 for good; a transient provider failure keeps the queue's curve
+
+**What the record says.** §9: "Two-attempt pattern: retry once with the specific contract violation
+named" (`spec:419`). Plan C2: "A second violation fails the stage and writes nothing." Decision 336
+makes `failed` a stage that raised and will raise again, and `queue.fail` puts a failed task back on
+its backoff curve up to `max_attempts` unless it is told `permanent=True` - a parameter it already
+has, "for a stage that knows it never should" (`acquire/queue.py:393`). `stages.Outcome` carries no
+such field, so no stage can say so today.
+
+**Why it changes.** Read literally, "fails the stage" hands the acquisition task back to the queue,
+which re-runs it automatically up to `max_attempts` times, each re-run billing two more calls against
+a title whose provider has twice answered in violation of the contract. "Retried exactly once" -
+the exit criterion's first measure - would then be true per walk and false per title. The corpus
+raises `Permanent` in exactly this position (`mdc/sources/llm.py:136`) and says why in its header:
+the task fails, and "a payload that cost money is never discarded silently" (`:17-19`).
+
+**The decision.** No: a second violation fails stage 6 permanently. `stages.Outcome` gains
+`permanent: bool = False` and `stages.fail(..., permanent=False)`; `pipeline._record_stop` passes it
+to `queue.fail(permanent=...)` and writes `retrying: false` on the board. Stage 6 also fails
+permanently on a non-retryable `LLMError`: OpenAI's `message.refusal`, Gemini's
+`promptFeedback.blockReason`, a forced tool call answered in prose at a `stop_reason` other than
+`max_tokens`, and a provider 4xx other than the two decision 439 parks - a refusal of the
+household's account and a 404 naming the model. A retryable `LLMError` - a `max_tokens` cut-off, an
+exhausted 5xx or 429 - is an ordinary failure on the queue's curve, every re-run gated by the cap
+(decision 325), except a 429 of the household's account and the fetcher's breaker refusing to send
+before anything was billed, which park under decision 439. The admin retry is the only way back
+after a permanent failure. The plan names no option here; this is the one its exit criterion
+implies. (Amended in place at M5.5 review cycle 2 to cite decision 439: this paragraph said "and a
+provider 4xx" without qualification over a tree that parked three refusals, and the only text
+recording them disclaimed any authority of its own - C2-PAID-04, M55-C2-DOC-05.) As built: the field is `acquire/stages.py:487` and the verb
+`:507-516`; `stages.dna_extract` maps a violation and a refusal onto it and a transient failure onto
+the ordinary `fail` (`:1583-1586`); and `acquire/pipeline.py:966-1022` writes `retrying` false for a
+permanent outcome and hands `permanent` to `queue.fail`. The gate on those re-runs held only once
+decision 436 made the meter see them: a cut-off was metered at $0 until M5.5's review cycle 1, so a
+re-run passed a cap whose SUM its own earlier walks had never moved (M55-DOC-01). And the same cycle
+built one exception to "a provider 4xx" beside the rule, at `:1574`: a refusal of the household's
+ACCOUNT - a balance run out, a spend limit or a quota reached, read in the provider's own words by
+`llm/client._account_refusal` - parks with decision 336's deadline rather than failing the title for
+good (M55-BUDGET-07); it was recorded here as built with no entry of its own, and decision 439 now
+takes it, with the two below. Review cycle 2
+found that read dead for Gemini - it matched the Interactions API's string `code` "quota_exceeded",
+which generateContent never sends - and it now reads generateContent's own 429 RESOURCE_EXHAUSTED
+with a per-day `QuotaFailure`, and OpenAI's `error.type` `insufficient_quota` under any code
+(DBL-C2-03, DBL-C2-06). The same cycle built two more exceptions on the same reasoning, each a
+setting and not the title: a 404, which a paid endpoint answers only about the model it was asked
+for, parks naming the model as the plan's own refusals do, where it failed every title for good on a
+retired model (DBL-C2-05); and the fetcher's breaker refusing to send before anything in the
+extraction was billed parks until the pause ends with its attempt refunded, where every title after
+the eighth account refusal of a drain spent an attempt on it and closed as exhausted (C2-PAID-02) - a
+pause met after a billed attempt keeps the curve, whose four walks bound what each of a title's
+tasks can re-buy (decision 325's per-task bound, C2-PAID-03).
+And "the admin retry is the only way back" is held per title by a mark the driver writes onto the
+task that failed for good (`pipeline._record_stop`, read by `stages._FAILED_FOR_GOOD`), because a
+permanent failure on the task's last attempt wrote exactly the row exhaustion writes and the
+attempts count could not tell them apart (C2-PAID-01).
+
+**Cost.** M5.1's driver gains one field with a False default, so every outcome an existing stage
+returns is byte-identical, and no existing test of the driver changed for this field. Tests of the
+driver did change in the same milestone, for stage 6's other two flags; decision 432's Cost lists
+each. This paragraph used to say every existing test "passes unmodified", which was true of this
+field and false of the tree (M5.5 review cycle 1, NBR-04). §6.6's board shows
+`failed` with `retrying` false for a violating title, which is the state an operator needs to read:
+nothing will happen to it until somebody acts. Both paid attempts are in the meter either way (plan
+C3), and since decision 436 so is every attempt a provider refused or cut off, at what it billed.
+
+### 432. Stage 6 reaches its verdict inside itself and writes the tier; stages 5, 7 and 8 stay M5.4's owed wiring
+
+**What the record says.** §8's table puts the pack at stage 5, extraction at 6 and verification at 7
+(`spec:382-393`). Decision 387 shipped M5.4 as a domain package that wires no pipeline stage: stages
+5, 7 and 8 keep their no-op declarations, owner M5.4. §9's two-attempt pattern retries against a
+verdict, and plan §8 says M5.5 calls the validator and does not build the pack.
+
+**Why it changes.** The retry needs the verdict before stage 6 ends. A stage 7 that reached it one
+stage later could not hand a named violation back to a call that had already returned, and a stage 7
+re-verifying what stage 6 had already judged would be `verify_payload` asked the same question twice.
+Something also has to say what stage 6 reads while stage 5 is still a no-op.
+
+**The decision.** `stages.dna_extract` becomes `implemented=True, paid=True, fetches=True`. It reads
+the stored pack through `dna.verify.read_pack` and, when there is none, parks with a deadline and a
+reason naming stage 5; it calls each planned provider through the drain's one fetcher (decision 373);
+it judges every response with M5.4's `verify_payload` inside the two-attempt loop, re-implementing
+none of its checks; it records every attempt's refusals with `verify.record_rejects` (decision 341);
+and on success it merges (decision 337) and writes `dna_tag` and `dna_evidence`. Stages 5, 7 and 8
+stay `implemented=False`, owner M5.4. The plan names no option; this is the one its exit criterion
+implies, since "rejected by the validator and retried exactly once" is a sentence about one stage.
+As built: the row is `acquire/pipeline.py:211`, the stage `acquire/stages.py:1471-1557`, and the loop
+`llm/extract.py:231` - it reads the pack at `:272`, calls through `client.complete` at `:345`, asks
+`verify_payload` at `:387`, records the refusals at `:392` and names them in attempt 2's prompt with
+`contract.violation_prompt` at `:398`, and writes nothing until every run has come back accepted.
+
+**Cost.** On a real install a title reaches stage 6 with no pack until stage 5 is wired, and parks
+there; the §12 paragraph says so rather than leaving a reader to find it on the board. Every pipeline
+test that walks a task to `ready` would now park at stage 6, because the gate reads `implemented`, so
+those tests stand stage 6 down as a declared no-op - M5.3's stand-down pattern for its own stages,
+extended in the autouse fixtures of `backend/tests/test_acquire_pipeline.py` and
+`backend/tests/test_acquire_drain.py`, with `live` now putting back stages 2-4 only and a new
+`extraction_live` putting back stage 6 - and no registered test was renamed. The two flags also
+moved ASSERTIONS in `test_acquire_pipeline.py`, each for a stated reason and each listed here,
+because this paragraph used to say the change was confined to "test bodies only" and a reader who
+trusted it would not re-read them (M5.5 review cycle 1, NBR-04): the stub count went from four to
+three and the owner maps moved stage 6 from the no-op map to the implemented one, read off the
+shipped tuple rather than the stood-down one; the owed-cap pattern read off stage 6's docstring went
+from "until (M5.x) supplies the cap" to "(M5.x) supplies the cap", because the docstring now says the
+cap is supplied; `test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_not` lost its
+assertion that the shipped paid stage is waved through - it is implemented now, so the gate asks the
+meter - and replaces `spend.cap_check` to test the gate's mapping, the real cap check being driven
+unpatched through the driver in `test_llm_stage.py`;
+`test_the_stub_marker_check_names_the_stage_when_a_body_raises` was re-pointed from stage 6 to stage
+7, the stub stage 6 no longer is; the fetching stages went from `[2]` to `[2, 6]`, because stage 6
+takes the drain's fetcher; the static read of the stage machine admits one hand-off of that fetcher,
+`extract.extract_title(..., fetcher=ctx.fetcher)`; and three walk tests read the stood-down tuple
+where they read the shipped one.
+
+### 433. M5.5's HTTP surface is one read and one test dispatch; the writes arrive with M5.7's cards
+
+**What the record says.** Plan §8: M5.5 "does not build any UI ... This milestone ships APIs and a
+domain estimate function." Plan A4: "§6.6 gives every card a test button. One dispatch table, not a
+route per provider; M5.7 renders the buttons." Neither says which routes.
+
+**Why it changes.** A route is a promise the surface keeps, and a write route shipped now is one M5.7
+rebuilds: M5.7's row `map-taste-admin-cost-estimate-before-enabling` fixes that write's ordering -
+the estimate "before the setting is persisted" - and decision 339's task slots are M5.7's to settle.
+
+**The decision.** `api/llm.py` ships two routes and holds no SQL. `GET /api/admin/llm` answers, per
+provider, `configured`, `has_api_key`, `model`, `secrets_unreadable`, the structured-output mode, and
+the effective price with its `valid_until` or "unknown"; the settings `extraction_provider`,
+`parallel`, `passes` and `cap_usd`; the meter; the per-title estimate; and batch availability per
+decision 338. `POST /api/admin/connectors/{name}/test` is plan A4's one dispatch table over
+`ConnectorSpec.test`. No PUT: provider keys and models, the cap and the mode are written by M5.7's
+routes through `registry.save_connector`. Jellyfin keeps its own test route in `api/admin.py`, which
+stores §7.1's probed verdict as it tests; a provider's test is a free models-list GET with the key in
+a header; and tmdb, omdb and trakt carry no test until M5.7's source cards. The plan names no option;
+this is the narrowest one its exit criterion allows. As built: the two routes are `api/llm.py:176`
+and `:207`, the module runs no SQL of its own, the dispatch is `ConnectorSpec.test` over
+`connectors/registry.py:816`'s table with the provider probe at `:775`, and `create_app` mounts the
+router after `admin` and `acquisition`.
+
+**Cost.** Until M5.7 an in-app install cannot set a cap, so stage 6 stays parked `NO_SPEND_CAP`
+there - decision 348's refusal holding, which is the safe direction. Env seeding (plan A3) covers the
+provider keys for an automated install; the cap is not seeded, because decision 325 ships none. The
+admin route count moves by two, to `ADMIN_ROUTE_COUNT = 28` (`backend/tests/test_api_gating.py:67`),
+and the `llm` router is registered after `admin` so that Jellyfin's own test path still answers
+first.
+
+### 434. `sources/credentials.py` stays the three keyed sources' reader
+
+**What the record says.** Decision 377 made `sources/credentials.py` the narrow per-source form
+M5.5's generic loader would replace, and its header says so in capitals: it is meant "to be deleted
+rather than grown". Plan A1 builds the generic `ConnectorSpec`, and plan §1 says M5.3 consumes it for
+tmdb, omdb and trakt.
+
+**Why it changes.** The generic loader now exists to be pointed at, so the header's forward reference
+comes due, and deleting or re-pointing the module are the two readings it invites. Neither buys a
+reader. Both paths read through `core.secrets.get_connector_secrets`, so there is already one store
+and one reader rather than two answers to "what is configured". What `credentials.py` returns is
+source-shaped request parts - TMDB's headers and params, OMDb's query value, Trakt's headers - which
+is an adapter's concern rather than connector plumbing; its registered test pins a degrade log line
+naming the skipped source, which a generic loader cannot name; and re-pointing it would edit three
+adapters and `stages.py` for no new reader.
+
+**The decision.** Neither. The generic `ConnectorSpec` registers `tmdb`, `omdb` and `trakt` - load,
+save and env seeding - and `credentials.py` keeps its three functions unchanged. The plan names no
+option, because the module post-dates it, and the exit criterion is silent on it; this is the
+narrowest reading decision 377 leaves standing, the one that edits no adapter this milestone does not
+measure. Only its header's
+forward-looking paragraph is amended, to cite this decision: `sources/credentials.py:14-26`, beside
+the three `_stored` rows at `connectors/registry.py:832-834`, and the one clause at
+`sources/credentials.py:45-46` that still called a generic reader M5.5's work to be done.
+
+**Cost.** Two modules know the three names, and the header says which does what. M5.7's source cards
+write through `save_connector` and the adapters read the same row, so nothing a card writes is
+missed. The narrow form's stated plan - to be deleted - is withdrawn here rather than carried as a
+debt nobody owns.
+
+### 435. M5.5 writes its own §12 row and `ops/m55_exit_criterion.py`, fourteen checks against the refusing double
+
+**What the record says.** Decision 331 says each sub-milestone writes its own §12 row when it opens.
+Decisions 371 and 378 gave M5.2 and M5.3 an exit script each, one numbered check per measure in their
+plans' pass tables, and `docs/RELEASE.md` a row recorded NOT BUILT while the instrument is owed and
+moved to UNMEASURED in the change set that lands it. Plan §7 states M5.5's criterion as fourteen
+measures, "against a refusing double speaking all three providers' envelopes".
+
+**Why it changes.** The criterion is itself stated against a double, so it is something a script can
+run and a release record can hold, and "the suite is green" is not that record (decision 296). A run
+against a real provider would bill a household for a measurement and would need a key this
+repository must never hold.
+
+**The decision.** M5.5 adds its §12 build-order row and the paragraph under it, and no other spec
+text. The row names `ops/m55_exit_criterion.py` once the script is in the tree - a figure published
+about an instrument nobody can open is the claim decision 184 refuses - and the script is the plan's
+fourteen measures (§7), one `CHECKS` entry each, run in-process against `ops/fake_llm.py` mounted
+through `httpx.ASGITransport` inside the real `Fetcher`, on a scratch database the script creates and
+drops: no container, no port, and no real provider key, which it never reads from the environment.
+Exit 0 is a pass, 1 a failure, 2 a refused precondition. `docs/RELEASE.md` records the row NOT BUILT
+as the milestone opens and moves it, in the change set that lands the script, to the status that
+file's own legend gives what has happened by then: UNMEASURED for an instrument nobody has run, which
+is where M5.1's, M5.2's and M5.3's landed because none of those lanes could reach what their criteria
+name, and RUN, OUTPUT NOT COMMITTED for one its lane has run with nothing committed, which is M3's and
+M4.11's state against a fixture and a double. The plan names no option; this is decision 331's rule
+and M5.2's and M5.3's precedent applied to the criterion as the plan states it, with the status read
+off the facts rather than fixed before them.
+
+**Cost.** It landed RUN, OUTPUT NOT COMMITTED, and the difference from the three rows before it is
+the criterion's own: stated against a double, nothing it needs is out of a lane's reach, and the lane
+ran `ops/m55_exit_criterion.py` on 2026-09-24 against a scratch database on its own test cluster, to
+exit 0 - and ran it again that day, 14 of 14 to exit 0, after M5.5's review cycle 1 had changed the
+adapters, the meter and the double they are measured against. No output is committed, so the
+verdict stays unfilled, and `docs/RELEASE.md`'s opening paragraph counts twenty §12 rows, nine
+never run - M5.5's not among them - and twelve scripts. The
+exit-script count guards in `test_static_contracts.py` moved from 11 to 12 in the same change.
+`ops/fake_llm.py` is a refuser in `ops/fake_jellyfin.py`'s sense, built from each provider's
+published response envelope rather than from what the adapters happen to expect, because M5.2's last
+review cycle found a double that agreed with the code where the real server did not.
+
+---
+
+## Decisions taken (owner, 2026-09-24, M5.5 review cycle 1)
+
+Two, taken as M5.5's first adversarial review closed, under the same standing instruction as the
+blocks above: take the recommended remedy and record it here rather than ask. 436 and 437 are the
+next two numbers of this lane's own block, 430-439, the block above having spent 430-435; 438 and
+439 stay unspent. Neither reopens a question the owner settled. 436 is what decision 325's meter
+and plan C3's "both attempts are metered" always required and the build did not keep - a household
+billed for attempts the meter recorded at $0, or never recorded - and it restates 325's overshoot
+bound to the one its settle path keeps. 437 corrects rows of decision 343's table where the corpus's
+family prefixes priced the current models at a neighbour's figure, which is the invented number 343
+refuses.
+
+`current_milestone` stays `"M5.1"`. This block mandates no DDL. `0028_llm_spend.sql` is applied to
+no durable install, so its COMMENTS were corrected IN PLACE to say what 436 builds - no statement in
+it changed - and an e2e database that applied the earlier text needs `npm --prefix e2e run fresh`,
+because `db/migrate.py` checksums the file whole.
+
+### 436. Every paid attempt is metered before it is sent and settled to what the provider reported; a POST is re-sent only when it provably never reached the provider
+
+**What the record says.** §9: "Port verbatim, including the reasoning-token accounting corrections
+(Gemini bills thinking tokens as output — counting visible JSON understates cost ~5×)"
+(`spec:417`). Decision 325 makes the meter `SUM(llm_call.usd)` and the cap a check against it; plan
+C3 says both attempts are metered; 0028's comment kept a failed call as a row "for the corpus's
+reason" that a failed call still cost money. M5.1's fetcher re-sent every method on a transport
+failure and on its retryable statuses, up to four times.
+
+**Why it changes.** M5.5's review cycle 1 found the household billed where the meter said nothing,
+on three paths. The adapters raised every 200 they refused - a `max_tokens` cut-off, OpenAI's
+`message.refusal`, Gemini's `blockReason` and SAFETY finish, prose where a tool was forced, truncated
+JSON - without the usage block the envelope carried, and stage 6 metered each at zero tokens and $0
+with nothing stored; a retryable cut-off, re-run on decision 431's curve, passed the cap on every walk
+against a SUM it never moved (five walks measured, the double billing $0.90 against a $0.50 cap
+while the meter read $0 - M55-DOC-01, M55-METER-01). The row was written after the answer and after
+the raw store, so a drain cancelled mid-call - the ordinary end of a tick `worker.py` bounds at 420 s,
+against one call's 300 s timeout - a raw store that raised, and a title deleted while its call was
+out each left the call unmetered (M55-METER-03, M55-BUDGET-03, M55-BUDGET-04). And the fetcher
+re-sent a paid POST on a read failure, a 5xx or a 504, so one attempt could be four generations the
+provider billed; RFC 9110 §9.2.2 says why that is wrong for POST, which is not idempotent
+(M55-METER-02, M55-BUDGET-01). §9's own rule is the argument: a cap computed from the wrong number is
+not a cap.
+
+**The decision.** Three parts, as the review's recommended remedy states them.
+(1) The fetcher re-sends a POST only on a connect-phase failure (`httpx.ConnectError`,
+`ConnectTimeout`, `PoolTimeout`) or on status 408, 425 or 429, keeping 429's Retry-After rule. Any
+other failure after the request was sent - `ReadTimeout`, `ReadError`, `RemoteProtocolError`, a 5xx,
+Cloudflare's 52x - raises after one send and goes to the queue's curve behind the cap gate. Anthropic's
+529 stays unretried in-process, and now counts toward its host's breaker rather than resetting it.
+(2) Before the POST, each attempt INSERTs its `llm_call` row at its ceiling - the prompt as the
+reservation estimates it plus the request's `max_tokens`, at the price, every input token priced as a
+cache write where the provider bills a write above input - with `ok` false and an error naming the
+estimate, committed at once so every concurrent cap check sees it.
+(3) The row is then settled by UPDATE: to the envelope's reported usage whenever a 200 envelope's
+usage block is readable, whether the attempt succeeded or failed (a cut-off, a refusal, a
+`blockReason`, prose, truncated JSON), with that envelope stored in the raw store and cited; to zero
+when the provider's own error status (a 4xx, an exhausted 408/425/429, a 5xx other than 504, 520 or
+524) or a never-sent failure (connect-phase, breaker) says no work was done; and left at the ceiling
+when the answer never arrived (a lost response, a 504, 520 or 524, a cancellation, a crash, a raise
+before the settle). The tokens are settled before the envelope is stored, and a 4xx body is never
+stored, because it can echo the request. (520 was added by review cycle 2: Cloudflare sends it "when
+the origin server returns an empty, unknown, or unexpected response",
+https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-520/,
+the same lost answer as 524, and it had been settled to $0 - M55-C2-METER-02.)
+Two readings of (3) were settled in the same cycle, each from the provider's own page, and both are
+part of this decision. Gemini's 504 settles to zero with its other errors, because Google's billing
+page says "If your request fails with a 400 or 500 error, you won't be charged for the tokens used"
+(https://ai.google.dev/gemini-api/docs/billing); 504 and 524 keep the ceiling for Anthropic and
+OpenAI, whose pages say no such thing (M55-SPEND-04). The same silence covers their other 5xx:
+neither error page says what a 500, a 529 or a 503 bills, so the zero those settle to is this
+decision's own reading and not a provider's statement - a status the provider's API sends in its
+documented error envelope answers the request, where a 504, 520 or 524 is a gateway's word that the
+answer was lost - and it stands until a provider page says otherwise; `llm/client.py` and
+`ops/fake_llm.py` had each called it the provider's word (M5.5 review cycle 2, DBL-C2-04). And an
+Anthropic refusal that arrives before
+any output settles to zero, its envelope still stored and cited, because it is the one readable
+usage block its provider says it does not charge: "You are not billed for a refusal that arrives
+before any output. `content` is empty, and token counts appear in `usage` but are not charged",
+while "A mid-stream refusal bills the input tokens and the output already streamed at normal rates"
+(https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) - so a refusal carrying
+any content block settles to its usage (M55-DBL-08). The literal remedy would have billed one prompt
+per pre-output refusal that Anthropic does not.
+Review cycle 2 settled three more, each from the provider's own page and each part of this decision.
+(a) "The envelope's reported usage" includes the price setting the envelope reports. OpenAI serves a
+request with no `service_tier` "with the service tier configured in the Project settings" and reports
+"the processing mode actually used" (https://developers.openai.com/api/reference/resources/chat),
+Fast reported as "priority" at twice the Standard row (https://developers.openai.com/api/docs/pricing);
+Anthropic serves one with no `inference_geo` at the workspace's `default_inference_geo`, reports
+`usage.inference_geo`, and prices US-only inference "at 1.1x the standard rate across all token
+pricing categories" (https://platform.claude.com/docs/en/manage-claude/data-residency). So OpenAI's
+request pins `service_tier` "default", "processed with the standard pricing", and each attempt is
+settled at the multiplier its envelope names - 2x for "priority" or a tier the page does not price,
+1.1x for a "us" geo - where every attempt had been priced at the standard row and a Fast project was
+metered at half its bill (M55-C2-METER-01, DBL-C2-01). Anthropic's geo is read and not pinned,
+because a workspace whose `allowed_inference_geos` leaves out the geo a request names refuses it.
+(b) (2)'s ceiling is the most an attempt can bill and not an estimate of it: the input is the prompt
+and the schema at `estimate_tokens` times each adapter's published margin plus its fixed overhead -
+on Claude 1.35 for the newer tokenizer's "approximately 30% more tokens", the dearest tool-use system
+prompt the pricing page lists (804), and US-only inference's 1.1 as the rate - where it counted the
+prompt text alone and a lost Sonnet 5 cut-off stood about 6% below its bill on a spec-size pack
+(M55-CAP-C2-01, M55-C2-METER-03). (c) A cancellation is written into the row before it propagates,
+the ceiling kept, and the write-ahead sentence names when the figure was written rather than
+claiming a call in flight, which a crash or a cancellation left true of nothing (M55-C2-METER-04,
+M55-CAP-C2-05).
+As built: (1) is `acquire/fetch.py:140-164` (`IDEMPOTENT_METHODS`, `CONNECT_PHASE`,
+`UNPROCESSED_STATUS`, `never_sent`) and the two arms at `:1088` and `:1135`, with the breaker arm at
+`:1165`; (2) is `llm/extract.py:415` (`_write_ahead`), called from `_run` at `:342`, through
+`spend.record_call` (`llm/spend.py:291`) at `pricing.ceiling` (`llm/pricing.py:304`) and each
+attempt's own day's price, `spend.attempt_price` (`llm/spend.py:373`); (3) is `client.LLMError`
+(`llm/client.py:152`) carrying `answer` or `unbilled`, `client.billed` (`:252`), `client.post`
+(`:341`, its unbilled rule at `:363`, `LOST_STATUS` at `:145` and Gemini's empty set at
+`llm/gemini.py:79`), `anthropic.call`'s pre-output refusal at `llm/anthropic.py:132`,
+`extract._settle_failure` (`llm/extract.py:440`) and `spend.settle_call` (`llm/spend.py:339`); and
+`spend.meter` names the part standing at ceilings as `unsettled_usd` (`:700`), which the over-cap
+reason repeats.
+
+**Cost.** The meter now reads high rather than low on every path the providers publish: an attempt
+whose answer was lost stands at its ceiling, up to 8,000 output tokens it may not have produced, until
+nothing settles it - it is marked `unsettled` and shown apart - and a household that loses answers
+pays for them in cap room, which is the direction a cap should fail in. The one way a ceiling left
+standing reads below its bill is a prompt that tokenizes denser than its adapter's margin allows,
+which no provider's page bounds. This sentence first read "HIGH and never low", which review cycle 2
+measured false for a lost Claude cut-off and for every call an account-level tier or geo priced above
+the standard row. A transient provider fault is no longer retried inside the
+fetcher: it is one send, then the queue's curve, hours and not seconds, each re-walk behind the gate.
+Every attempt costs one INSERT and one or two UPDATEs. A 4xx is a row at zero with its reason and no
+stored body. And two fetched bodies miss the raw store: a 200 whose usage block does not read is left
+at its ceiling and not stored, the conservative bill standing in for bytes whose bill nobody can
+read; and an answer whose walk ended between its arrival and its store - a cancellation or a database
+fault inside the settle - is left where its last settle put it, the bytes unkept (0028's comment says
+both; review cycle 2, M55-C2-METER-04). Decision 325's overshoot bound is restated in its own entry to the one this path keeps, and
+holds only because every billed attempt is written ahead and settled. `ops/m55_exit_criterion.py`
+still has fourteen checks and none meters a failed attempt; the suite holds that path, on the spend
+meter's row (`backend/tests/spec_coverage.toml`), against the double's own bill.
+
+### 437. The Anthropic price rows are re-read from Anthropic's published page
+
+**What the record says.** Decision 343 ports the corpus's `PRICING` (`mdc/config.py:134-164`), whose
+Anthropic half is three family prefixes - `claude-opus` at $15/$75, `claude-sonnet` at $3/$15,
+`claude-haiku` at $1/$5 per million tokens - under `price_for`'s name-boundary rule, and ships
+`claude-sonnet-5` as the provider's default model.
+
+**Why it changes.** The prefixes were true when the corpus typed them and are not now. `price_for`
+matched `claude-sonnet-5` to `claude-sonnet` and priced the shipped default as Sonnet 4, $3/$15
+against a published $2/$10, and every Opus from 4.5 on as Opus 4, three times its price: the
+confident number from a neighbouring name that `price_for`'s own docstring refuses, and a cap
+computed from it parks a household at two thirds of what it set (M55-METER-05, M55-DOC-04).
+
+**The decision.** Re-read them - the review's recommended remedy. Model rows are added under
+`price_for`'s existing boundary rule: `claude-sonnet-5` at $2/$10, `claude-opus-5-5` at $4/$20, and
+`claude-opus-5` and `claude-opus-4-5` through `claude-opus-4-8` at $5/$25. The corpus's prefixes stay
+for the older models they still price correctly: Sonnet 4.x at $3/$15, Opus 4 and 4.1 at $15/$75,
+Haiku at $1/$5. The OpenAI and Gemini default rows were checked against their pages and only a row
+that disagreed changed: `gpt-5.6-terra` keeps $2.00/$12.00 and now carries the page's cache write
+($2.50) and cached input ($0.20) beside them, because GPT-5.6 writes every prompt to OpenAI's cache
+by default and bills the write at 1.25x input (M55-DBL-02); Gemini's matched on 2026-09-24 and did
+not change. As built: `llm/pricing.py:105-117`, read 2026-09-24 from
+https://platform.claude.com/docs/en/about-claude/pricing - whose footnote says of Sonnet 5 that "The
+$2/$10 per million input/output token pricing ... is now the standard price" - and `gpt-5.6-terra`
+at `:131`. Claude Fable 5.1, Mythos 5.1, Fable 5 and Mythos 5 have no row and park unpriced under
+decision 343 (Mythos 5 was left out of this list, though the page prices it and the deprecations page
+lists `claude-mythos-5` as active - M5.5 review cycle 2, M55-C2-DOC-04).
+Opus 5.5, now priced, is one of the three models that answer the Anthropic adapter's forced
+`tool_choice` with a 400 on every request (https://platform.claude.com/docs/en/api/errors), so
+`spend.extraction_plan` parks on it, and on Fable 5.1 and Mythos 5.1, naming the model before
+anything is sent, in the unpriced model's shape (`llm/spend.py:515`, `llm/anthropic.py:83-90`); a
+priced row would otherwise have walked every title into decision 431's permanent failure
+(M55-DBL-04).
+
+**Cost.** A price table somebody has to keep current, as 343 said. A model released after this
+reading still falls to its family prefix until its row is typed, which `pricing.py`'s named change 9
+states rather than hides. The Claude 3.x ids match no prefix at all - `claude-3-5-haiku-20241022`
+and its alias `claude-3-5-haiku-latest` do not begin `claude-haiku` - so `price_for` answers None and
+such a model parks unpriced under decision 343 rather than being metered at a neighbour's figure;
+Haiku 3.5 is retired from the API this app calls in any case (the deprecations page lists
+`claude-3-5-haiku-20241022` as Retired on February 19, 2026,
+https://platform.claude.com/docs/en/about-claude/model-deprecations). This sentence said the
+`claude-haiku` prefix would price Haiku 3.5 at $1/$5, which named the wrong one of decision 343's two
+failure modes for an old id (M5.5 review cycle 2, M55-C2-DOC-04).
+
+## Decisions taken (owner, 2026-09-24, M5.5 review cycle 2)
+
+Two, taken as M5.5's second adversarial review closed, under the same standing instruction: take the
+recommended remedy and record it here rather than ask. 438 and 439 are the last two numbers of this
+lane's block, 430-439, which is now spent to its end. The cycle's other findings are readings of
+decisions already taken and are recorded in their entries: 436 (the price setting an envelope
+reports, a ceiling that bounds the bill, a cancelled attempt's words, Cloudflare's 520, and the zero
+a 5xx settles to named as its own reading rather than a provider's), 431 (the account read fixed for
+Gemini and widened for OpenAI, a 404 and a breaker pause parked as settings, permanence marked on the
+task, and its ruling paragraph amended to cite 439), 437 (its Cost corrected: a Claude 3.x id parks
+unpriced rather than meeting a prefix, and Mythos 5 is among the unpriced) and 325 (the overshoot
+bound re-derived, the reservation held at the dearer of two days' prices, the queue's curve
+restated per task, and its owed §6.6 sentence restated).
+`current_milestone` stays `"M5.1"`. This block mandates no DDL; `0028_llm_spend.sql`'s comments on
+`response_document_id` and on a row left at its ceiling were corrected IN PLACE again, no statement
+changed, so an e2e database that applied the earlier text needs `npm --prefix e2e run fresh`.
+
+### 438. Stage 6's walk-length bound is recorded and owed, not enforced, until stage 5 is wired
+
+**What the record says.** `worker.py` bounds the acquisition drain at 420 s and argues the figure
+from M5.3's crawl - 69 s of pacing plus one 300 s `Retry-After` - and from `LEASE_SECONDS`, and says
+"the milestone that gives a stage a fetch ... owes this line a measurement". `queue.py` and
+`pipeline._walk_batch` record M5.1's choice that a stage which cannot finish inside one tick keeps its
+attempt and is closed at `max_attempts` under `queue.ABANDONED`. Plan §8: M5.5 "does not touch
+`worker.py`".
+
+**Why it changes.** Stage 6 makes runs x 2 calls in sequence, each up to `client.TIMEOUT_S` (300 s),
+and keeps nothing a cancelled walk reached. So a plan whose calls outrun the tick - parallel mode or
+more passes, or answers slow enough on one provider - pays for every call it sent on each walk and
+writes no tag, and after four walks is closed with a sentence that says a worker was stopped. The
+money is inside decision 325's bound, per task and so per key (C2-PAID-03), and every call is
+metered; the yield and the closing
+sentence were recorded nowhere, and no decision said which milestone owes the budget line its
+stage-6 measurement (M5.5 review cycle 2, NBR-C2-02).
+
+**The decision.** Record it, as the review recommends, and change neither the budget nor the plan
+check. A title's extraction completes only if runs x 2 x each call's latency fits in what the drain
+has left of 420 s when it reaches the title; on decision 324's default plan, one provider at one
+pass, that is at most two calls, which fit unless each takes over about 210 s once the title leads
+the batch. A
+park on any plan whose worst case (runs x 2 x 300 s) exceeds the budget was considered and refused:
+it would park the default plan too (600 s). The measurement the worker's comment asks for is owed by
+the milestone that wires stage 5 - the one that first makes stage 6 reachable, since no pack is ever
+stored before it - and until then the path is latent. As built: the bound is stated in
+`llm/spend.py`'s module docstring beside the per-title curve, and in `docs/RELEASE.md`'s M5.5 block.
+
+**Cost.** A household that turns on parallel mode or passes > 1 on slow providers, once stage 5 is
+wired, may pay up to four walks of its plan per key of a title that is then closed under a sentence
+naming a stopped worker, with every call metered and inside the cap. Nothing in this milestone
+detects it.
+
+### 439. A refusal of the household's account, of its chosen model, or by the fetcher's breaker before anything was billed parks stage 6; it does not fail the title
+
+**What the record says.** Decision 431: stage 6 "fails permanently on a non-retryable `LLMError`:
+... and a provider 4xx", and a retryable one - "an exhausted 5xx or 429" - "is an ordinary failure
+on the queue's curve". Decision 336 makes a park with a deadline the state of a title waiting on
+something that may change. M5.5's review cycles 1 and 2 built three refusals that park instead -
+M55-BUDGET-07, DBL-C2-05 and C2-PAID-02 - and recorded them only in 431's As-built line, which said of
+the first that "no entry of its own takes it".
+
+**Why it changes.** An As-built note is not an owner decision. Under CLAUDE.md's rule the numbered
+entry is normative and code that disagrees with it is the bug, so 431's ruling paragraph read
+literally told a later milestone to "fix" each park back into a permanent failure - and a household
+with a monthly limit set in its provider's console would then lose every title that reached stage 6
+for the rest of the month, each needing an admin retry (M5.5 review cycle 2, C2-PAID-04,
+M55-C2-DOC-05). The review reproduced the shipped behaviour with Anthropic's published own-limit
+body: three titles, three requests, all three parked with their attempts refunded and $0 metered.
+
+**The decision.** Take it, the review's recommended remedy. Three refusals are the account's or a
+setting's and not the title's, and each parks stage 6 with a deadline under decision 336, its attempt
+handed back:
+(1) A refusal of the household's ACCOUNT, read in the provider's own documented words and nothing
+looser: any 402 (Anthropic's "402 - `billing_error`"); Anthropic's 400 whose message begins "You have
+reached your specified API usage limits" or "You have reached your specified workspace API usage
+limits", and its 429 whose `error.details.error_code` is `enforced_spend_limit_reached`
+(https://platform.claude.com/docs/en/api/rate-limits); OpenAI's 429 with the code
+`credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` or
+`organization_usage_limit_exceeded`, or with `error.type` `insufficient_quota` under any code
+(https://developers.openai.com/api/docs/guides/error-codes); and Gemini's 429 `RESOURCE_EXHAUSTED`
+carrying a `QuotaFailure` whose `quotaId` names a per-day quota. It parks until
+`stages.waiting_on_the_world()`, so the title is asked again daily. A per-minute rate limit is not
+the account's and keeps 431's curve.
+(2) A 404 from a paid endpoint, whose url names nothing but the model: it parks naming the model, in
+the shape the plan's own refusals take, and resumes once the admin chooses another.
+(3) The fetcher's breaker refusing to send before anything in the extraction was billed: it parks
+until the pause ends. A pause met after an attempt of the extraction was billed keeps the curve,
+whose walks are decision 325's bound on what a task can re-buy.
+Every other provider 4xx stays 431's permanent failure, and 431's ruling paragraph is amended in
+place to cite this entry. As built: `llm/client._account_refusal` (`llm/client.py:537`) over the codes
+at `:508-533`; `LLMError`'s `account`, `model_refused` and `paused_for` (`:190-192`), set by
+`client.post` at `:431` and `:440-443`; `extract._run`'s three arms (`llm/extract.py:392`, `:401`,
+`:414`); and `stages.dna_extract`'s two parks (`acquire/stages.py:1574`, `:1579`).
+
+**Cost.** A title parked under (1) or (2) costs a request each time it is asked again and is billed
+nothing for it, because a 4xx settles to zero under decision 436 (3); one parked under (3) sent
+nothing. (1) and (2) re-ask such a title daily - one refused request per title per day on a 400, a
+402 or a 404, and up to four on a 429, which the fetcher re-sends under its own pacing (436 (1)) and
+counts toward the host's breaker; once
+eight such failures open it, the drain's remaining titles park under (3) without a request, so a
+drain of four titles behind one exhausted OpenAI balance sends eight
+(`test_llm_stage.py::test_titles_behind_one_account_refusal_all_park_rather_than_failing_on_the_breaker`).
+A refusal a provider words differently from its page reads as a refusal of the request and fails the
+title for good, which is 431's default and costs a retry rather than a bill; the read is only as
+good as each page's words, and review cycle 2 already found it dead for Gemini once (DBL-C2-03).
+
+---
+
 ## Decisions taken (owner, 2026-09-24, the documents stop counting themselves)
 
 One, taken by the owner in so many words ("please trim the guards") after being shown what the

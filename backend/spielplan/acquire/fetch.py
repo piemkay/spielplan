@@ -85,6 +85,12 @@ host for ever. What changed, and why:
      keeps the household's own Jellyfin on `http://box:8096` reachable through this layer. See
      `_check_robots`. [M5.1 review cycle 3, M51-C3-340-04]
 
+ 13. **A request that is not idempotent is sent again only when it provably never arrived**, or
+     when the host answered 408, 425 or 429 without doing the work (`IDEMPOTENT_METHODS`). The
+     corpus's loop re-sent every method, and the one POST this app makes is a paid generation.
+     And a 5xx outside the retry set counts toward the breaker instead of resetting it (see the
+     `>= 400` arm). [M5.5 review cycle 1, M55-METER-02, M55-DBL-05; decision 436]
+
 Changes 9 to 11 and the widened `except` in `get` are review cycle 1's and 2's, change 12 is
 review cycle 3's, and each is argued at the line it changes rather than only here.
 
@@ -119,6 +125,41 @@ log = logging.getLogger("spielplan.acquire.fetch")
 # their origin is unhappy. Everything else in 4xx is a real answer and is raised at once: retrying
 # a 404 is how a crawl turns one wrong url into four.
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}
+
+# THE METHODS A RETRY MAY REPEAT, and the one rule this layer adds to the corpus's retry loop
+# (decision 436 (1)). RFC 9110 §9.2.2 makes these idempotent and POST not: "the intended effect on
+# the server of multiple identical requests ... is the same as the effect for a single such request"
+# holds for them and not for a request that creates something. The corpus's loop, written for GETs,
+# sent every method through it, and the one POST this app makes is a paid LLM generation - so a
+# reply lost after the provider generated it, or a gateway 504 after the work was done, was bought up
+# to `max_attempts` times, while the one meter row the caller wrote could see only the last. A method
+# outside this set is re-sent only when it provably never reached the host, or when the host said it
+# did not do the work: `CONNECT_PHASE` below, and `UNPROCESSED_STATUS`. Every other failure after a
+# send raises at once, and the caller's own schedule - the queue's curve, behind the spend gate for
+# stage 6 - is what asks again. [M5.5 review cycle 1, M55-METER-02, M55-BUDGET-01]
+IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"})
+
+# A connection that was never made carried no request, so re-sending one costs the host nothing it
+# has not already been spared. httpx raises exactly these three before a byte of the request is
+# written; a read-phase failure, a write-phase one and a remote protocol error all come after it.
+CONNECT_PHASE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+# The statuses a host answers WITHOUT having done the work: 408 "the server did not receive a
+# complete request message", 425 "the server is unwilling to risk processing a request that might be
+# replayed", and 429 "the user has sent too many requests" (RFC 9110 §15.5.9, RFC 8470 §5.2, RFC 6585
+# §4). A non-idempotent request answered with one of these may be sent again, under `_retry_after`
+# and the 429 rule as ever.
+UNPROCESSED_STATUS = frozenset({408, 425, 429})
+
+
+def never_sent(exc: FetchError) -> bool:
+    """Whether a failure raised by `get` provably put no request in front of the host: the breaker's
+    refusal, which is raised before anything is sent, or a transport failure in `CONNECT_PHASE` - or
+    h11 refusing to write a header value it cannot carry, which fails before the request line.
+    Decision 436 (3) settles a paid attempt that never left to zero, and this is the one layer that
+    can tell; `llm/client.py` may not import httpx to ask it itself."""
+    return isinstance(exc, HostPaused) or isinstance(
+        exc.__cause__, (*CONNECT_PHASE, httpx.LocalProtocolError, httpx.UnsupportedProtocol))
 
 # The statuses `get` follows itself, one hop at a time, so each hop meets its own host's policy.
 REDIRECT_STATUS = {301, 302, 303, 307, 308}
@@ -933,6 +974,9 @@ class Fetcher:
             conditioned = bool(etag or last_modified)
 
         last_exc: Exception | None = None
+        # `IDEMPOTENT_METHODS`' rule: a request that may not be repeated gets one send unless the
+        # failure proves the host never had it or never acted on it.
+        repeatable = method.upper() in IDEMPOTENT_METHODS
         for attempt in range(1, max_attempts + 1):
             hop_url, hop_host, hop_rt, hop_scheme = url, host, rt, scheme
             hop_headers, hop_method, hop_json, hop_params = dict(req_headers), method, json_body, params
@@ -1041,7 +1085,7 @@ class Fetcher:
                     hop_method, hop_json = "GET", None
 
             if resp is None:
-                if attempt >= max_attempts:
+                if attempt >= max_attempts or not (repeatable or isinstance(last_exc, CONNECT_PHASE)):
                     raise FetchError(
                         f"{type(last_exc).__name__}: {last_exc}", url=url
                     ) from last_exc
@@ -1088,7 +1132,7 @@ class Fetcher:
 
             if status in RETRYABLE_STATUS:
                 await self._note_failure(hop_host, hop_rt)
-                if attempt >= max_attempts:
+                if attempt >= max_attempts or not (repeatable or status in UNPROCESSED_STATUS):
                     if status not in allow_status:
                         raise FetchError(f"HTTP {status}", status=status, url=url)
                     # The caller named this status as an answer it can read, so it gets the body -
@@ -1110,7 +1154,18 @@ class Fetcher:
             if status >= 400 and status not in allow_status:
                 # A 4xx that is not in the retryable set is a real answer rather than a glitch, and
                 # is not the host's fault - so it does not count toward the breaker.
-                self._note_success(hop_rt)
+                #
+                # A 5xx IS the host's fault, whatever its number, and this arm used to reach it as
+                # though it were a 4xx: Anthropic's 529 "overloaded_error" is outside the corpus's
+                # set, so the one status that provider uses to say it is overloaded called
+                # `_note_success`, RESET the host's run of failures, and left `host_report` showing a
+                # healthy host. Still not retried from here and still `retryable=False` - the caller
+                # decides what a 529 means - but counted as the failure it is.
+                # [M5.5 review cycle 1, M55-DBL-05]
+                if status >= 500:
+                    await self._note_failure(hop_host, hop_rt)
+                else:
+                    self._note_success(hop_rt)
                 raise FetchError(f"HTTP {status}", status=status, retryable=False, url=url)
 
             self._note_success(hop_rt)

@@ -11,17 +11,18 @@ off a `Config` loaded from disk (`mdc/sources/tmdb.py:34-41`, `omdb.py:31`, `tra
 source asks for - TMDB wants `(headers, params)`, OMDb wants one query parameter, Trakt wants
 three headers - so the adapters read here exactly what they read there.
 
-NARROW BY CONSTRUCTION, AND MEANT TO BE DELETED RATHER THAN GROWN. M5.5 builds the generic
-`ConnectorSpec` that `connectors/registry.py` will carry and M5.7 builds §6.6's per-source admin
-cards; this module is the three-function form that exists until then, and decision 377 chose it
-precisely so the milestone that widens the seam deletes a file instead of reconciling a second
-design in a file two other lanes are editing. It exposes `tmdb_auth`, `omdb_key` and
-`trakt_headers` and nothing generic, and this milestone edits neither `connectors/registry.py`
-nor `core/config.py`: `registry.env_seeds` (`:88-98`) already seeds all three from env with the
-comment "§6.6 configures these in the admin UI at M5", `core/config.py:71-74` already declares
-the four settings, and `test_static_contracts.py`'s
-`test_compose_forwards_every_connector_seed_variable` already holds compose forwarding all six
-variables. The seam was complete; what it lacked was a reader.
+NARROW BY CONSTRUCTION, AND KEPT WHEN THE GENERIC SEAM ARRIVED. Decision 377 chose the
+three-function form so that the milestone building the generic `ConnectorSpec` could delete this
+file rather than reconcile a second design. M5.5 built it - `registry.CONNECTORS` registers tmdb,
+omdb and trakt for loading, saving and env seeding - and kept this module (decision 434), because
+deleting or re-pointing it buys no reader. Both paths read through
+`core.secrets.get_connector_secrets`, so there is one store and one reader, not two answers to
+"what is configured". What this module returns is source-shaped request parts - TMDB's headers
+and params, OMDb's query value, Trakt's headers - which are an adapter's concern and not
+connector plumbing. Its registered test pins a degrade line naming the skipped source, which a
+generic loader cannot name. And re-pointing it would edit three adapters and `acquire/stages.py`
+for no new reader. It exposes `tmdb_auth`, `omdb_key` and `trakt_headers` and nothing generic;
+M5.7's source cards write through `registry.save_connector`, into the rows this module reads.
 
 AN ABSENT CREDENTIAL IS `None` AND NEVER AN EXCEPTION. The corpus raises `Skip`
 (`mdc/sources/tmdb.py:41`, `mdc/sources/trakt.py:23`) and `mdc/runner.py` catches it; decision
@@ -41,9 +42,9 @@ five keyless sources down with the three keyed ones, and the repair is an admin 
 than a retry.
 
 READ THROUGH THE SHIPPED PATH, WITH NO SQL OF ITS OWN. `secrets.get_connector_secrets` is the
-function `registry.load_jellyfin` calls; `registry` exposes no generic reader and adding one is
-M5.5's work, not this module's. A second `SELECT ... FROM connector_config` here would be a
-second answer to "what is configured" the day the admin UI starts writing these rows.
+function `registry.load_jellyfin` and M5.5's generic `registry.load_connector` both call
+(decision 434). A second `SELECT ... FROM connector_config` here would be a second answer
+to "what is configured" the day the admin UI starts writing these rows.
 """
 
 from __future__ import annotations

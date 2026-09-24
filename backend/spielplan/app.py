@@ -38,6 +38,7 @@ from spielplan.api import auth as auth_api
 from spielplan.api import events as events_api
 from spielplan.api import home as home_api
 from spielplan.api import library as library_api
+from spielplan.api import llm as llm_api
 from spielplan.api import passkeys as passkeys_api
 from spielplan.api import push as push_api
 from spielplan.api import rank as rank_api
@@ -337,6 +338,12 @@ def create_app() -> FastAPI:
     app.include_router(push_api.router)
     app.include_router(admin_api.router)
     app.include_router(acquisition_api.router)
+    # After `admin`, and the order is the rule: the connector test dispatch's path matches
+    # `/api/admin/connectors/jellyfin/test` too, and the router registered first answers a path
+    # both match. Jellyfin's button has to reach `api/admin.test_jellyfin`, which stores §7.1's
+    # probed verdict as it tests; mounted ahead of it, the dispatch answers that button 404
+    # because the Jellyfin row carries no test (decision 433).
+    app.include_router(llm_api.router)
     # §7.2, §7.3 and §11 put routes under `/events`, and the namespace is mounted from M5.1 with
     # none of them in it: `SpaFallback` below declines the namespace (decision 332), and the
     # router that declines it and the router that will serve it have to be the same one, or M5.2

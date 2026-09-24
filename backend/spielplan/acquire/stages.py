@@ -45,7 +45,9 @@ THE THREE VERBS, and decision 336 is the line between the last two.
     a person and not for a log.
   * `fail(reason)` - "this stage raised and will raise again". The only state offering a plain
     retry, and the driver also writes it for an unhandled exception, because an exception is
-    exactly that sentence.
+    exactly that sentence. `fail(reason, permanent=True)` is the one variant, for a stage that
+    KNOWS the next attempt would give the same answer at the same cost: the task is closed rather
+    than put back on the curve, and only the admin retry runs it again (decision 431, §8 stage 6).
 
 WHAT MAKES EVERY WRITE IN THIS FILE SAFE, stated because decision 162 makes it unrecoverable if
 it is not: the corpus is no longer somewhere the content can be fetched from again, so a
@@ -80,6 +82,14 @@ Three properties, each of which a later reader must keep:
      basis `active_store` has already asserted matches the active bundle. The list a stage author
      for M5.2-M5.7 reads before adding a write has to name it.
      [M5.1 review cycle 3, d323-C3-SPINE-03]
+     M5.5 NAMES ITS OWN, as that sentence asks: `dna_extract` writes the title's extracted tier
+     - `dna_tag` and `dna_evidence`, never `title` - through `llm/extract.py`, which REPLACES the
+     tier for the active vocabulary rather than adding to it (decision 337's "Replace, not
+     accumulate"), so rows a bundle import wrote for this title are among the rows replaced. What
+     makes that safe is argued in `llm/extract.py` and `llm/consensus.py`: nothing is written
+     unless every planned run passed M5.4's validator, the replace is one transaction with the
+     curation ledger applied inside it (a household's verdict outlives the write), and the stage
+     runs only for the title this walk holds `_TITLE_LOCK` on. [decisions 337, 432]
   3. **A minted row is written in ONE transaction with its assertion**, so a refusal leaves no
      half-minted title - and that transaction also holds the claim on the film's identity, so two
      workers cannot both discover there is no such title and both create one. Every other write
@@ -91,7 +101,7 @@ Three properties, each of which a later reader must keep:
      here and enforced somewhere else is a property worth reading in the place that enforces it.
      [M5.1 review cycle 4, d322-C4-MINT-01]
 
-WHY STAGES 5-8 ARE DECLARED NO-OPS AND NOT MISSING. Each advances and records
+WHY STAGES 5, 7 AND 8 ARE DECLARED NO-OPS AND NOT MISSING. Each advances and records
 `not implemented at M5.1 - owned by M5.<n>` in the board's `detail`, and names its owner in its
 own docstring. That is what makes the spine testable end to end before any lane opens - a task
 can walk 1 to 9 to 10 today and prove the driver, the queue and the two shipped stages agree -
@@ -99,9 +109,12 @@ and it is what makes a stub that survives into M5.6 visible to a `grep` rather t
 a registry table. The owners are the roadmap's, not guesses: `:298-312` puts the pack, the trust
 boundary and the projection in M5.4; `:314-329` puts the LLM extraction in M5.5.
 THIS PARAGRAPH SAID "2-8" UNTIL M5.3 GAVE THREE OF THEM BODIES (`ROADMAP-M5.md:279-296`, the
-eight source adapters, the parsers and the reviews gate). The count is restated rather than left
-to be read off the tuple because `pipeline.STAGES`' `implemented` flag is a hand-written literal
-and this sentence is the prose half of the same claim - and because four is now the number
+eight source adapters, the parsers and the reviews gate), AND "5-8" UNTIL M5.5 GAVE STAGE 6 ITS
+EXTRACTION (decision 432) - which reads the pack stage 5 will build and reaches inside itself the
+verdict §8's table files under stage 7, so a title walks from a no-op into a paid stage and out
+into two more. The count is restated rather than left to be read off the tuple because
+`pipeline.STAGES`' `implemented` flag is a hand-written literal and this sentence is the prose half
+of the same claim - and because three is now the number
 `test_every_stage_declared_a_no_op_returns_its_stub_marker` asserts.
 """
 
@@ -120,6 +133,7 @@ from spielplan.connectors import resolve
 from spielplan.connectors.jellyfin import TICKS_PER_SECOND
 from spielplan.core.config import settings
 from spielplan.derive import gate, rebuild
+from spielplan.llm import extract
 from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
@@ -347,6 +361,18 @@ NO_FETCHER = (
     "decision 373); this is a defect in the driver rather than anything about this title"
 )
 
+# The same refusal for §8 stage 6, the other stage that declares it fetches, and for the same
+# reason: a provider call made through a Fetcher the stage built for itself would be paced and
+# broken by nothing the drain knows about (decision 373). Its own sentence rather than a `format`
+# of the one above, because "no source could be asked" is stage 2's state and not this one - and
+# ASCII, since it is shown verbatim on §6.6's board and printed by the exit scripts.
+NO_EXTRACTION_FETCHER = (
+    "stage 6 was handed no fetcher, so no extraction provider could be asked. Every provider call "
+    "goes through the one rate-limited fetcher `pipeline.drain` builds per drain (spec v2.1 section "
+    "8, section 9, decision 373); this is a defect in the driver rather than anything about this "
+    "title"
+)
+
 # Decision 334's park: the one source §8 stage 2 requires answered and did not answer well.
 # Written for §6.6's board, which `0005_ledger.sql:138` says shows this string verbatim, and it
 # names the lever twice over - the TMDB card in Admin for the configuration case, and the retry
@@ -452,6 +478,13 @@ class Outcome:
     # its title does (decision 322), so the title id is established rather than known, and this
     # is the one fact a stage hands forward out of band.
     title_id: int | None = None
+    # A `fail` only: this stage knows a retry cannot change its answer (decision 431). The driver
+    # hands it to `queue.fail(permanent=...)`, which has carried the parameter since M5.1 "for a
+    # stage that knows it never should" with no way for a stage to say so. §8 stage 6 is the one
+    # that must: a provider that has twice broken the contract it was told about, re-run on the
+    # queue's curve, bills two more calls a time, and §9's "retry once" would hold per walk and
+    # not per title. False by default, so every outcome an existing stage returns is unchanged.
+    permanent: bool = False
 
 
 def advance(detail: dict[str, Any] | None = None, *, title_id: int | None = None) -> Outcome:
@@ -471,9 +504,16 @@ def park(
     return Outcome(PARK, reason=reason, until=until, detail=detail or {})
 
 
-def fail(reason: str, *, detail: dict[str, Any] | None = None) -> Outcome:
-    """This stage raised and will raise again (decision 336). The only plain-retry state."""
-    return Outcome(FAIL, reason=reason, detail=detail or {})
+def fail(
+    reason: str, *, detail: dict[str, Any] | None = None, permanent: bool = False
+) -> Outcome:
+    """This stage raised and will raise again (decision 336). The only plain-retry state.
+
+    `permanent=True` closes the task instead of scheduling the retry, and only the admin retry
+    runs it again (decision 431). It is for a stage that KNOWS the next attempt would give the
+    same answer at the same cost - never for a fault that might clear, which keeps the curve.
+    """
+    return Outcome(FAIL, reason=reason, detail=detail or {}, permanent=permanent)
 
 
 @dataclass
@@ -502,6 +542,10 @@ class StageContext:
     title_id: int | None = None
     run_id: int | None = None
     fetcher: Any = None
+    # The drain's SUPPLY of that fetcher, handed to a paid stage in place of the opened fetcher so it
+    # is asked for only when a request is next -- `Any` for the reason above. See
+    # `pipeline._run_stage`. [M5.5 review cycle 2, NBR-C2-01]
+    open_fetcher: Any = None
 
     @property
     def item(self) -> dict[str, Any]:
@@ -1402,7 +1446,7 @@ async def reviews_gate(ctx: StageContext) -> Outcome:
     return park(gate.reason(counts), until=gate.window_deadline(), detail=detail)
 
 
-# --- stages 5-8: declared no-ops -----------------------------------------------------------------
+# --- stage 5: a declared no-op -------------------------------------------------------------------
 
 
 async def dna_pack(_ctx: StageContext) -> Outcome:
@@ -1414,33 +1458,136 @@ async def dna_pack(_ctx: StageContext) -> Outcome:
     return advance({"stub": NOT_IMPLEMENTED.format("M5.4")})
 
 
-async def dna_extract(_ctx: StageContext) -> Outcome:
-    """§8 stage 6: the LLM structured call(s). **Owned by M5.5** (`ROADMAP-M5.md:314-329`).
+# Another key's task for this title that a stage failed for good, and the sentence the other key waits
+# under. See `dna_extract`.
+#
+# READ OFF A MARK AND NOT OFF THE COUNT. This used to be "closed with attempts still left", which only
+# `queue.fail(permanent=True)` does -- and on a task's LAST attempt a permanent failure writes exactly
+# the row exhaustion writes (failed, attempts = max_attempts). Attempts are spent by any earlier
+# transient failure, a stage-2 fetch or a 529 at this stage, and none refunds its attempt, so a title
+# whose extraction failed for good on its fourth walk was not seen, and every other key of it walked
+# back in and bought attempt 1 and the named retry again. `pipeline._record_stop` now writes the
+# outcome's permanence onto the task's payload in the statement's transaction with `queue.fail` --
+# set on a permanent failure, removed on any other -- so a revived task that later fails on the curve
+# does not keep a stale mark, and a revived one that is `pending` does not match at all. The count is
+# kept beside it for a task closed early by any `queue.fail(permanent=True)` that did not come through
+# the driver. [M5.5 review cycle 2, C2-PAID-01]
+FAILED_FOR_GOOD_MARK = "failed_for_good"
+_FAILED_FOR_GOOD = (
+    "SELECT key FROM acquisition_task"
+    " WHERE kind = $1 AND state = $2 AND id <> $3 AND payload ->> 'title_id' = $4"
+    f"   AND (attempts < max_attempts OR payload ->> '{FAILED_FOR_GOOD_MARK}' = 'true')"
+    " ORDER BY updated_at DESC LIMIT 1"
+)
+FAILED_FOR_GOOD = (
+    "stage 6's extraction failed for good for this title under task {key}, and decision 431 makes an "
+    "admin retry of that task the only way back. This task waits rather than paying for the same "
+    "extraction again, and resumes by itself once that task is retried"
+)
 
-    A declared no-op at M5.1, AND THE ONLY PAID STAGE. It is marked `paid=True` in `pipeline.
-    STAGES` today although it spends nothing, because the flag is what the driver's spend gate
-    reads and a flag first set by the milestone that starts billing is a flag nobody tested. The
-    gate lets a declared no-op through and refuses an implemented paid stage with no cap
-    configured, so the day M5.5 gives this function a body is the day the pipeline parks here
-    until M5.5 supplies the cap - which is §8's "paid stages (6) never auto-retry past the spend
-    cap". THE MILESTONE IN THAT SENTENCE USED TO BE M5.7, which is decision 348's own title read
-    backwards: "M5.1 owns the refusal, M5.5 owns the cap", and `ROADMAP-M5.md:314-329` puts both
-    the cap and `0028` in M5.5 while M5.7 writes no migration at all. M5.7 owns the SURFACE for
-    setting a spend guard (`ROADMAP-M5.md:348`), not the cap's existence - and this is the
-    docstring an M5.5 author reads first, so it told them the correct outcome of their own commit
-    was a pipeline parked at stage 6 for two further milestones.
-    [M5.1 review cycle 4 second pass, M51-C4-PAID-06]
 
-    ONE CLAIM THAT USED TO BE MADE HERE IS WITHDRAWN: "enforced by construction rather than by
-    remembering". It is not. `implemented` is a hand-written literal in `pipeline.STAGES`, and
-    nothing ties it to whether this function has a body - a milestone that writes the billing call
-    and leaves the flag reads as a declared no-op to the gate and runs. What now holds the pair
-    together is a test rather than a construction:
+async def dna_extract(ctx: StageContext) -> Outcome:
+    """§8 stage 6: the LLM structured call(s). **Written by M5.5** (`ROADMAP-M5.md:314-329`).
+
+    THE ONLY PAID STAGE, AND THE CAP IS ASKED BEFORE THIS FUNCTION RUNS, NOT INSIDE IT. It was
+    marked `paid=True` from M5.1 while it was still a declared no-op, because the flag is what the
+    driver's spend gate reads and a flag first set by the milestone that starts billing is a flag
+    nobody tested. M5.5 gave it this body and set `implemented=True` on the same row, which is the
+    moment decision 348's refusal started firing: `pipeline.refuse_uncapped_spend` now asks
+    `llm/spend.cap_check` before the driver calls this function, and parks the title - no cap, a
+    plan it cannot make, or a month without room for both attempts of every run (decision 325) -
+    with nothing billed. That is §8's "paid stages (6) never auto-retry past the spend cap" held
+    where it can be held, since a stage that ran and then checked would already have spent.
+    The milestone that owns this stage owns what it parks against, so M5.5 supplies the cap, as
+    decision 348's own title has it - "M5.1 owns the refusal, M5.5 owns the cap". THE MILESTONE IN
+    THAT SENTENCE ONCE READ M5.7, which owns the SURFACE for setting a spend guard
+    (`ROADMAP-M5.md:348`) and not the cap's existence; `ROADMAP-M5.md:314-329` puts the cap and
+    `0028` in M5.5. [M5.1 review cycle 4 second pass, M51-C4-PAID-06]
+
+    THE VERDICT IS REACHED INSIDE THIS STAGE (decision 432), because §9's retry has to name its
+    violation to a call that has not yet returned: `llm/extract.extract_title` calls each planned
+    provider through the drain's one Fetcher, judges every answer with M5.4's `verify_payload`,
+    retries once with the violation named, meters both attempts, and writes the tier only when
+    every run was accepted. Nothing in that sentence is decided here. This function turns what
+    it came to into a verb, and decision 431 is the whole of the mapping:
+
+      * `written` advances, with the rows and the calls on the board;
+      * no pack, no vocabulary or a plan the settings cannot make PARKS WITH A DEADLINE - each
+        waits on something a person or stage 5 does, and a deadline-less park is a task closed for
+        good (`waiting_on_the_world`). No pack is the state every title reaches this stage in
+        until M5.4 wires stage 5, and the reason says so;
+      * a second contract violation, or a provider's own final refusal, FAILS PERMANENTLY: asking
+        again cannot change the answer and would bill for it, so only the admin retry runs the
+        title again -- except a refusal of the household's ACCOUNT (a balance, a spend limit, a
+        quota), which PARKS WITH A DEADLINE beside the three above, because it lifts by itself, and
+        a 404 for the model, which `extract` answers as a plan to correct (review cycle 2,
+        DBL-C2-05);
+      * a transient provider failure is an ordinary failure on the queue's curve, every re-run of
+        it behind the same gate -- except the breaker refusing to send before anything was billed,
+        which parks until the pause ends (review cycle 2, C2-PAID-02).
+
+    THE FETCHER IS HANDED ON, NEVER NAMED. `llm/extract` takes the handle by keyword and this
+    module still imports no transport (decision 373): stage 2 gives its adapters the whole
+    context, stage 6 gives the LLM layer the drain's supply of the one Fetcher, which `extract`
+    asks only when a request is next, and neither builds one - a stage handed none fails naming
+    the driver, for `NO_FETCHER`'s reason. The verbs are decided on
+    `extract`'s plain statuses and never on a transport exception's type, which is the property
+    `StageContext.fetcher`'s annotation exists to keep.
+
+    WHAT HOLDS `implemented` TO REALITY IS STILL A TEST AND NOT A CONSTRUCTION, now pointed at the
+    three stages M5.4 owes:
     `test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker` calls
-    every `implemented=False` stage and asserts the marker above, so giving one a body reddens the
-    build at the stage that got it. [M5.1 review cycle 1, M51-REV-04, M51-REV-PAID-01]
+    every `implemented=False` stage and asserts the stub marker, so the next stage to gain a body
+    without its flag reddens the build at that stage. [M5.1 review cycle 1, M51-REV-04,
+    M51-REV-PAID-01]
     """
-    return advance({"stub": NOT_IMPLEMENTED.format("M5.5")})
+    if ctx.title_id is None:
+        return fail("stage 6 reached with no title id; stage 1 did not establish one")
+    closed = await ctx.conn.fetchval(_FAILED_FOR_GOOD, ctx.task.kind, queue.FAILED, ctx.task.id,
+                                     str(ctx.title_id))
+    if closed is not None:
+        # PERMANENCE IS THE TITLE'S, NOT THE TASK'S (decision 431): "retried exactly once" would
+        # otherwise be "true per walk and false per title". `queue.fail(permanent=True)` closes one
+        # task, and decision 322 gives a title several keys by design, so a second library copy of a
+        # film whose extraction had failed for good walked back into this stage and paid for attempt
+        # 1 and the named retry again with no admin action -- while the board told the operator only
+        # an admin retry could. Which task failed for good is read off the mark `_FAILED_FOR_GOOD`
+        # describes. Read before any call and before the fetcher is asked for -- which is true since
+        # this stage is handed the drain's supply and `extract` asks it only when a request is next
+        # -- and answered with a park that carries a deadline, so this key comes back by itself once
+        # the admin revives the task that failed. [M5.5 review cycle 1, M55-BUDGET-06; review cycle 2,
+        # C2-PAID-01, NBR-C2-01]
+        return park(FAILED_FOR_GOOD.format(key=closed), until=waiting_on_the_world(),
+                    detail={"failed_for_good_under": closed})
+    if ctx.fetcher is None and ctx.open_fetcher is None:
+        return fail(NO_EXTRACTION_FETCHER)
+    extraction = await extract.extract_title(
+        ctx.conn, title_id=ctx.title_id, fetcher=ctx.fetcher, task_key=ctx.task.key,
+        run_id=ctx.run_id, open_fetcher=ctx.open_fetcher,
+    )
+    status = extraction.status
+    if status == extract.WRITTEN:
+        return advance({**extraction.detail, "tags": extraction.n_tags, "calls": extraction.calls})
+    # A refusal of the household's account waits like a missing setting does: it lifts when the
+    # provider's period rolls over or the balance is topped up (decision 336), where failing it
+    # would close every title that reached stage 6 while the account was refused. [M55-BUDGET-07]
+    if status in (extract.NO_PACK, extract.NO_VOCABULARY, extract.PLAN, extract.ACCOUNT):
+        return park(extraction.reason, until=waiting_on_the_world(), detail=extraction.detail)
+    # A breaker pause met before anything was billed waits out the pause and no longer, with its
+    # attempt refunded like every park: the next drain asks again once the host may answer.
+    # [M5.5 review cycle 2, C2-PAID-02]
+    if status == extract.PAUSED:
+        paused = float(extraction.detail.get("paused_for_s") or 0.0)
+        return park(extraction.reason, until=datetime.now(UTC) + timedelta(seconds=max(paused, 1.0)),
+                    detail=extraction.detail)
+    if status in (extract.VIOLATED, extract.REFUSED):
+        return fail(extraction.reason, detail=extraction.detail, permanent=True)
+    if status == extract.TRANSIENT:
+        return fail(extraction.reason, detail=extraction.detail)
+    return fail(f"stage 6's extraction answered {status!r}, which this stage maps to no verb")
+
+
+# --- stages 7 and 8: declared no-ops -------------------------------------------------------------
 
 
 async def verify(_ctx: StageContext) -> Outcome:

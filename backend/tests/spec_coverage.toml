@@ -246,7 +246,13 @@ why = "§2: the owner wants connector setup in the admin UI; env may only seed f
 # declared `env_file`, and `.dockerignore` keeps `.env` out of the image. None of the ten asked
 # whether the shipped stack delivers them, which is what the compose guard and its self-test are
 # for — the row stops certifying a path this deployment cannot exercise. [M4.7 ds01, dd-compose]
-tests = ["backend/tests/test_connector_registry.py::test_no_env_means_no_seed", "backend/tests/test_connector_registry.py::test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable", "backend/tests/test_connector_registry.py::test_the_other_connectors_seed_too", "backend/tests/test_connector_registry.py::test_the_first_boot_seeds_and_records_the_wizard_step", "backend/tests/test_connector_registry.py::test_a_second_boot_leaves_the_admins_edit_alone", "backend/tests/test_connector_registry.py::test_seeding_is_idempotent", "backend/tests/test_connector_registry.py::test_a_secret_without_secrets_key_refuses_rather_than_falls_back", "backend/tests/test_connector_registry.py::test_a_stored_secret_is_ciphertext_carrying_its_key_id", "backend/tests/test_static_contracts.py::test_env_example_names_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_env_example_marks_the_seed_variables_optional", "backend/tests/test_static_contracts.py::test_compose_forwards_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_the_seed_guard_sees_a_variable_that_stopped_being_forwarded"]
+# M5.5 (plan A1-A3) puts the LLM half of the row's list behind the same storage: the three provider
+# keys seed on first boot only, every connector reads and writes through one ConnectorSpec table with
+# Jellyfin's own two functions as its row, and the `llm` settings row is never seeded (decisions 325,
+# 433, 434). The compose and `.env.example` guards read the three provider keys too since M5.5 - their
+# prefix tuple named the four M0 families until then - and the last two tests are the widened guard's
+# own mutation and the self-test that derives its subject from `registry.env_seeds`.
+tests = ["backend/tests/test_connector_registry.py::test_no_env_means_no_seed", "backend/tests/test_connector_registry.py::test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable", "backend/tests/test_connector_registry.py::test_the_other_connectors_seed_too", "backend/tests/test_connector_registry.py::test_the_first_boot_seeds_and_records_the_wizard_step", "backend/tests/test_connector_registry.py::test_a_second_boot_leaves_the_admins_edit_alone", "backend/tests/test_connector_registry.py::test_seeding_is_idempotent", "backend/tests/test_connector_registry.py::test_a_secret_without_secrets_key_refuses_rather_than_falls_back", "backend/tests/test_connector_registry.py::test_a_stored_secret_is_ciphertext_carrying_its_key_id", "backend/tests/test_static_contracts.py::test_env_example_names_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_env_example_marks_the_seed_variables_optional", "backend/tests/test_static_contracts.py::test_compose_forwards_every_connector_seed_variable", "backend/tests/test_static_contracts.py::test_the_seed_guard_sees_a_variable_that_stopped_being_forwarded", "backend/tests/test_connector_registry.py::test_the_jellyfin_spec_is_load_jellyfin_and_save_jellyfin_themselves", "backend/tests/test_connector_registry.py::test_the_generic_calls_answer_for_jellyfin_exactly_as_its_own_functions_do", "backend/tests/test_connector_registry.py::test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plaintext", "backend/tests/test_connector_registry.py::test_a_settings_save_needs_no_secrets_key_and_a_key_save_refuses_without_one", "backend/tests/test_connector_registry.py::test_a_save_names_the_fields_a_connector_declares", "backend/tests/test_connector_registry.py::test_an_unreadable_provider_secret_degrades_and_only_a_typed_key_retires_it", "backend/tests/test_connector_registry.py::test_no_connector_state_prints_its_secrets", "backend/tests/test_connector_registry.py::test_the_llm_providers_seed_their_key_and_the_llm_settings_seed_nothing", "backend/tests/test_connector_registry.py::test_the_three_providers_seed_on_first_boot_and_never_over_an_admins_edit", "backend/tests/test_connector_registry.py::test_every_connector_the_registry_calls_seeded_is_one_env_can_seed", "backend/tests/test_connector_registry.py::test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_test", "backend/tests/test_connector_registry.py::test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usable_key", "backend/tests/test_static_contracts.py::test_the_seed_guard_sees_a_provider_key_that_stopped_being_forwarded", "backend/tests/test_static_contracts.py::test_every_variable_env_seeds_reads_is_one_the_seed_guards_read"]
 
 [[requirement]]
 id = "platform-bundleless-boot-is-legal"
@@ -4116,7 +4122,112 @@ milestone = "M5.5"
 kind = "integration"
 what = "The spend meter charges billed output tokens including a provider's reasoning/thinking tokens, not the visible JSON alone; once the running month is at the configured cap, stage 6 parks with the reason `over spend cap` without issuing any paid call, and a manual retry of a parked stage-6 job that would breach the cap is refused with that reason rather than queued."
 why = "Gemini bills thinking tokens as output — counting visible JSON understates cost ~5× — and §8 forbids paid stages auto-retrying past the cap; a cap computed from the wrong number is not a cap."
-tests = []
+# The price half of "a cap computed from the wrong number is not a cap" (decision 343): a model
+# name is priced only at a name boundary, so gpt-5.6-terra never inherits gpt-5's figure (exit
+# check 13); an unknown model and an estimate over it are None, never a number (check 14); and a
+# dated price changes on its day and answers None once it has passed with nothing after it.
+tests = [
+    "backend/tests/test_llm_schema.py::test_a_deleted_title_leaves_its_spend_in_the_meter",
+    "backend/tests/test_llm_schema.py::test_the_meter_keeps_billed_tokens_and_cost_exactly",
+    "backend/tests/test_llm_pricing.py::test_gpt_5_6_terra_is_the_terra_price_and_not_gpt_5s",
+    "backend/tests/test_llm_pricing.py::test_price_for_matches_a_prefix_only_at_a_name_boundary",
+    "backend/tests/test_llm_pricing.py::test_a_name_that_runs_on_past_a_prefix_without_a_boundary_is_unpriced",
+    "backend/tests/test_llm_pricing.py::test_an_unknown_model_is_unpriced_and_its_estimate_is_unknown",
+    "backend/tests/test_llm_pricing.py::test_the_gemini_introductory_price_ends_on_the_day_the_provider_said",
+    "backend/tests/test_llm_pricing.py::test_a_price_past_its_valid_until_with_no_successor_answers_none",
+    # The meter and the check (decisions 325, 343, 348): a SUM over the household's calendar month
+    # and not the UTC one; a Gemini call charged for its 2,300 thought tokens (exit check 5's
+    # arithmetic) and both attempts metered; an unset cap still decision 348's sentence; at the cap
+    # `over spend cap` with nothing estimated; the retry reserved inside the cap, so a month with
+    # room for one attempt refuses the title, and the admin retry's reason is the board's.
+    "backend/tests/test_llm_spend.py::test_the_meter_sums_the_households_calendar_month_and_not_the_utc_one",
+    "backend/tests/test_llm_spend.py::test_a_gemini_call_is_charged_for_the_thinking_tokens_it_was_billed_for",
+    "backend/tests/test_llm_spend.py::test_both_attempts_of_a_run_are_metered",
+    "backend/tests/test_llm_spend.py::test_an_uncapped_install_is_refused_with_decision_348s_sentence_before_anything_else",
+    "backend/tests/test_llm_spend.py::test_an_unpriced_model_is_refused_naming_the_provider_and_the_model",
+    "backend/tests/test_llm_spend.py::test_at_the_cap_the_title_is_refused_without_estimating_anything",
+    "backend/tests/test_llm_spend.py::test_the_retry_is_budgeted_inside_the_cap",
+    "backend/tests/test_llm_spend.py::test_comfortably_under_the_cap_the_title_may_run",
+    "backend/tests/test_llm_spend.py::test_parallel_mode_with_two_providers_at_two_passes_reserves_eight_calls",
+    # Exit checks 5 and 6 through stage 6 itself, against the refusing double: a Gemini call
+    # reporting 1,600 candidate and 2,300 thought tokens is an `llm_call` row at 3,900 (1,600 when
+    # the model did not think), and OpenAI's `completion_tokens` is metered as it comes.
+    "backend/tests/test_llm_extract.py::test_a_gemini_call_is_metered_at_its_candidate_plus_its_thought_tokens",
+    "backend/tests/test_llm_extract.py::test_openai_completion_tokens_are_metered_as_they_come",
+    # The meter as M5.7's spend guard will read it (decision 433): that 3,900-token Gemini row is the
+    # month's spend in `GET /api/admin/llm` to the digit, spelled as a string, and so is what is left.
+    "backend/tests/test_llm_api.py::test_the_meter_read_includes_a_gemini_calls_billed_thinking_tokens",
+    # Exit checks 7, 8 and 9 through the driver (decisions 325, 348): with the month at the cap a
+    # job reaching stage 6 parks `over spend cap` and the refusing double receives zero requests;
+    # the next tick leases nothing; a retry made due walks back into the gate, re-parks with the
+    # same reason and asks nothing, and `retry_refusal` gives that reason. An unset cap keeps
+    # decision 348's sentence, and room under the cap is the control that lets stage 6 run.
+    "backend/tests/test_llm_stage.py::test_at_the_cap_stage_six_parks_over_spend_cap_and_asks_no_provider",
+    "backend/tests/test_llm_stage.py::test_the_next_tick_leases_nothing_for_a_title_parked_over_the_cap",
+    "backend/tests/test_llm_stage.py::test_an_admin_retry_over_the_cap_is_refused_with_the_boards_reason",
+    "backend/tests/test_llm_stage.py::test_an_uncapped_install_parks_stage_six_with_decision_348s_sentence",
+    "backend/tests/test_llm_stage.py::test_under_the_cap_stage_six_writes_the_tier_and_the_board_moves_past_it",
+    # M5.5 review cycle 1 (decision 436, the Anthropic rows' re-read): every attempt a provider may
+    # have billed is an `llm_call` row, written at its ceiling before the POST and settled to what
+    # the provider reported -- a refused 200's usage with its envelope stored, zero for a status
+    # the provider says served nothing (a Gemini 504 included), the ceiling for an answer that was
+    # lost or cancelled -- so a cancelled drain, a raw store that raises and a title deleted
+    # mid-call all leave the spend in the month the gate sums; OpenAI's default cache write is
+    # metered at its published rate, each attempt at its own day's price, every Anthropic model at
+    # the page's figure; the meter names the part standing at ceilings; and a title the gate parks
+    # never builds the fetcher, so a factory fault cannot turn a park into a failure.
+    "backend/tests/test_llm_extract.py::test_an_attempt_cancelled_mid_call_stays_in_the_meter_at_its_ceiling",
+    "backend/tests/test_llm_extract.py::test_an_answer_lost_on_the_way_back_is_sent_once_and_metered_at_its_ceiling",
+    "backend/tests/test_llm_extract.py::test_a_provider_error_status_is_settled_to_what_the_provider_says_it_billed",
+    "backend/tests/test_llm_extract.py::test_an_anthropic_or_openai_504_after_sending_stays_at_its_ceiling",
+    "backend/tests/test_llm_extract.py::test_a_raw_store_that_refuses_the_answer_leaves_the_attempt_settled_to_its_bill",
+    "backend/tests/test_llm_extract.py::test_a_title_deleted_while_its_call_is_out_keeps_its_spend",
+    "backend/tests/test_llm_extract.py::test_openai_cache_writes_are_metered_at_the_published_write_rate",
+    "backend/tests/test_llm_extract.py::test_each_attempt_is_priced_on_its_own_day",
+    "backend/tests/test_llm_adapters.py::test_a_failed_answer_carries_the_usage_its_envelope_reported",
+    "backend/tests/test_llm_adapters.py::test_a_malformed_answer_is_an_llm_error_and_keeps_the_usage_it_can_read",
+    "backend/tests/test_llm_adapters.py::test_openai_cache_writes_and_reads_are_read_out_of_the_prompt_breakdown",
+    "backend/tests/test_llm_pricing.py::test_every_anthropic_model_is_priced_at_its_published_figure",
+    "backend/tests/test_llm_pricing.py::test_a_cache_write_and_a_cache_read_are_priced_at_their_published_rates",
+    "backend/tests/test_llm_spend.py::test_a_call_left_at_its_ceiling_is_named_apart_in_the_meter_and_the_over_cap_reason",
+    "backend/tests/test_llm_stage.py::test_a_drain_cancelled_mid_call_leaves_the_call_in_the_meter_where_the_gate_sees_it",
+    "backend/tests/test_llm_stage.py::test_a_title_the_gate_parks_never_builds_the_fetcher",
+    "backend/tests/test_llm_stage.py::test_a_factory_that_raises_cannot_turn_a_park_into_a_failure",
+    # M5.5 review cycle 1 (M55-DOC-03): the failure path, on the row that owns the claim. The month's
+    # SUM equals the double's own bill across every scenario it documents -- each failure envelope,
+    # each server error, a violation retried and one repeated -- with a row for every request that
+    # reached a provider; each refused 200 is settled to its reported usage with its envelope stored
+    # and cited; and Anthropic's refusal before any output, which its page says is not charged, is
+    # settled to zero with its envelope kept (decision 436, M55-DBL-08). The second id is also the
+    # two-attempt row's, where it asserted the opposite -- a billed failure at $0 -- until this cycle.
+    # And M55-DOC-01's own reproduction: a cut-off re-run behind the gate is stopped by a $0.50 cap
+    # before its fifth walk, where the gate used to let all five through against a SUM of $0.
+    "backend/tests/test_llm_extract.py::test_the_meter_sums_to_the_doubles_own_bill_across_every_scenario",
+    "backend/tests/test_llm_extract.py::test_a_cut_off_re_run_on_the_queues_curve_is_stopped_by_the_cap",
+    "backend/tests/test_llm_extract.py::test_an_envelope_that_refuses_fails_for_good_and_a_cut_off_keeps_the_queues_curve",
+    "backend/tests/test_fake_llm.py::test_an_anthropic_refusal_is_the_published_empty_one_and_bills_nothing",
+    # M5.5 review cycle 2 (decision 436 as amended): the price is the one the provider applied -- an
+    # OpenAI project defaulting to Fast and an Anthropic workspace defaulting to US-only inference are
+    # each metered at what the double billed, OpenAI's request pinned to the standard tier and each
+    # adapter reading the tier or geo its envelope names; a write-ahead ceiling is a bound on a lost
+    # Claude cut-off's bill on a short pack and the largest one, the double now counting Anthropic's
+    # input as the pricing page does; a cancelled attempt says so and keeps its ceiling; a gate asked a
+    # second before a dated price turns over reserves at the dearer price; and a title waiting for its
+    # pack under a cap never asks for the fetcher, so a factory fault cannot fail it.
+    "backend/tests/test_llm_extract.py::test_an_account_default_tier_or_geo_is_metered_at_what_the_provider_billed",
+    "backend/tests/test_llm_adapters.py::test_each_adapter_reads_the_price_setting_its_envelope_says_it_was_billed_at",
+    "backend/tests/test_llm_extract.py::test_a_lost_anthropic_cut_off_stays_in_the_meter_at_no_less_than_its_bill",
+    "backend/tests/test_llm_extract.py::test_a_cancelled_attempt_says_it_was_cancelled_and_not_that_it_is_in_flight",
+    "backend/tests/test_llm_spend.py::test_a_gate_asked_just_before_a_dated_price_turns_over_reserves_at_the_dearer_price",
+    "backend/tests/test_llm_stage.py::test_a_title_waiting_for_its_pack_under_a_cap_never_builds_the_fetcher",
+    # And the instrument and the double themselves: `ops/m55_exit_criterion.py` check 7 fails a drain
+    # that builds a Fetcher for the title it parks, where it printed the fixed ordering as shipped
+    # and never read its own count (M55-C2-DOC-03); and the double answers OpenAI's 503 and 500 in
+    # the shape the error-codes page publishes, its zero bill for a 5xx recorded as decision 436's
+    # reading rather than a provider's word (DBL-C2-04).
+    "backend/tests/test_llm_stage.py::test_exit_check_seven_fails_when_a_fetcher_is_built_for_the_title_it_parks",
+    "backend/tests/test_fake_llm.py::test_an_openai_server_error_is_answered_in_the_shape_its_error_page_publishes",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-extraction-verify-trust-boundary"
@@ -4590,7 +4701,208 @@ milestone = "M5.5"
 kind = "backend"
 what = "A provider response that satisfies the request schema but violates the extraction contract (an out-of-vocabulary term, an unquotable evidence string) is rejected by the validator and retried exactly once with the specific violation named in the retry prompt; a second violation fails the stage and writes nothing. The behaviour is identical across the Gemini, Anthropic and OpenAI adapters despite their different structured-output mechanisms."
 why = "\"The schema is a cost-saving device, not the guarantee — the guarantee is the validator\"; the three adapters solve structured output in three different ways (forced tool-use, strict-schema stripping, responseSchema) and must not diverge in enforcement."
-tests = []
+# The adapter and contract halves: one schema-valid, contract-violating answer judged identically
+# through all three mechanisms, every error branch with the retryability decision 431 reads, the
+# three request shapes, and the retry message naming each violated rule and its value (plan C4).
+# The two-attempt loop that spends them is stage 6's, whose step appends its own tests here.
+# Phase F's refusing double (F1, F2): `ops/fake_llm.py` speaking all three published envelopes,
+# read back through the real adapters inside the real fetcher. Its default first answer carries
+# one fabricated term; each content scenario breaks the one rule it names; its quotes are cut
+# verbatim from the pack it was sent; a retry is complied with or repeated; and it refuses what
+# each server refuses and nothing stricter - so the parity above is measured against a server.
+tests = [
+    "backend/tests/test_llm_adapters.py::test_one_schema_valid_answer_reaches_the_same_verdict_through_all_three_adapters",
+    "backend/tests/test_llm_adapters.py::test_every_error_branch_is_a_named_llm_error_with_its_retryability",
+    "backend/tests/test_llm_adapters.py::test_the_anthropic_request_forces_the_one_tool_and_sends_no_temperature",
+    "backend/tests/test_llm_adapters.py::test_the_openai_request_is_strict_and_uses_max_completion_tokens",
+    "backend/tests/test_llm_adapters.py::test_the_gemini_request_carries_the_response_schema_under_generation_config",
+    "backend/tests/test_llm_contract.py::test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it",
+    "backend/tests/test_llm_contract.py::test_the_retry_names_each_violated_rule_and_its_offending_value",
+    "backend/tests/test_llm_contract.py::test_the_retry_message_is_deduplicated_bounded_and_escaped",
+    "backend/tests/test_llm_contract.py::test_a_retry_with_nothing_to_name_is_refused",
+    "backend/tests/test_fake_llm.py::test_each_provider_answers_in_its_published_envelope",
+    "backend/tests/test_fake_llm.py::test_the_three_adapters_read_identical_tags_and_verdicts_from_the_double",
+    "backend/tests/test_fake_llm.py::test_the_default_first_answer_carries_exactly_one_term_the_vocabulary_does_not",
+    "backend/tests/test_fake_llm.py::test_each_content_scenario_breaks_exactly_the_rule_it_names",
+    "backend/tests/test_fake_llm.py::test_every_quote_the_double_did_not_embellish_is_cut_verbatim_from_the_pack_it_was_sent",
+    "backend/tests/test_fake_llm.py::test_a_retry_in_comply_drops_the_named_tag_and_in_stubborn_repeats_it",
+    "backend/tests/test_fake_llm.py::test_the_retry_opening_the_double_recognises_is_the_one_the_app_sends",
+    "backend/tests/test_fake_llm.py::test_a_wrong_key_is_refused_in_each_providers_documented_error_shape",
+    "backend/tests/test_fake_llm.py::test_openai_refuses_max_tokens_and_a_temperature_its_reasoning_models_do_not_take",
+    "backend/tests/test_fake_llm.py::test_openai_strict_mode_refuses_what_its_subset_lacks_and_answers_what_it_now_carries",
+    "backend/tests/test_fake_llm.py::test_gemini_refuses_a_response_schema_field_its_schema_object_does_not_declare",
+    "backend/tests/test_fake_llm.py::test_each_documented_failure_envelope_reaches_the_adapters_named_error",
+    # Stage 6's two-attempt loop (decisions 431, 432), each case on all three adapters against the
+    # double: a fabricated term rejected and retried exactly once with the rule and the term in the
+    # retry the provider received; a second violation of each rule final, with the title's
+    # `dna_tag` count unchanged; the three providers' outcomes compared as one tuple; a provider's
+    # refusal final and its cut-off on the queue's curve; nothing called without a plan, a
+    # vocabulary or a pack; and the module read for the checks it must leave to the validator.
+    "backend/tests/test_llm_extract.py::test_a_fabricated_term_is_rejected_and_retried_once_with_the_rule_and_the_term_named",
+    "backend/tests/test_llm_extract.py::test_a_second_violation_fails_for_good_and_leaves_the_tier_as_it_was",
+    "backend/tests/test_llm_extract.py::test_the_three_adapters_reach_identical_outcomes_in_every_scenario",
+    "backend/tests/test_llm_extract.py::test_an_envelope_that_refuses_fails_for_good_and_a_cut_off_keeps_the_queues_curve",
+    "backend/tests/test_llm_extract.py::test_a_provider_that_refuses_the_key_fails_for_good_without_a_retry",
+    "backend/tests/test_llm_extract.py::test_one_failed_run_ends_the_extraction_before_the_next_run_is_paid_for",
+    "backend/tests/test_llm_extract.py::test_nothing_is_called_without_a_plan_a_vocabulary_or_a_pack",
+    "backend/tests/test_llm_extract.py::test_the_extraction_asks_the_validator_and_reimplements_none_of_its_checks",
+    # "Fails the stage", as the driver records it (decision 431): a second violation walked through
+    # `pipeline.drain` is two requests and never a third, the task closed on its first attempt with
+    # the board saying no retry is coming, and the title's `dna_tag` count unchanged; and the
+    # driver's own half, a stage's permanent failure reaching `queue.fail(permanent=True)`.
+    "backend/tests/test_llm_stage.py::test_a_second_violation_fails_stage_six_for_good_and_writes_nothing",
+    "backend/tests/test_acquire_pipeline.py::test_a_stage_that_fails_for_good_closes_its_task_and_the_board_says_no_retry_is_coming",
+    # M5.5 review cycle 1: "retried exactly once" held per TITLE -- a second key does not re-run an
+    # extraction that failed for good -- and the bound of a violation followed by a provider
+    # failure is max_attempts walks of two metered calls per TASK, each one request on the wire;
+    # a refusal of the household's account (a balance, a spend limit, a quota) parks rather than
+    # failing the title, in the provider's own words, while a rate limit and a request refusal
+    # keep decision 431's verbs.
+    "backend/tests/test_llm_stage.py::test_a_second_key_does_not_rerun_a_title_whose_extraction_failed_for_good",
+    "backend/tests/test_llm_stage.py::test_a_violation_then_a_provider_failure_is_bounded_by_the_queue_and_every_call_metered",
+    "backend/tests/test_llm_stage.py::test_a_refusal_of_the_households_account_parks_the_title_with_its_attempt_refunded",
+    "backend/tests/test_llm_extract.py::test_a_refusal_of_the_households_account_waits_rather_than_failing_the_title",
+    "backend/tests/test_llm_adapters.py::test_a_billing_or_spend_refusal_is_the_accounts_and_says_so_in_the_providers_words",
+    "backend/tests/test_llm_adapters.py::test_a_rate_limit_or_a_request_refusal_is_not_the_accounts_and_keeps_its_words",
+    # M5.5 review cycle 1 (M55-DBL-04, M55-DBL-09): the three Anthropic models that refuse forced
+    # tool use are on the double's list and refuse it with the errors page's 400, and stage 6 parks
+    # naming such a model before anything is sent rather than failing every title for good under
+    # decision 431; and the double refuses an Anthropic request only where the reference does - a
+    # sampling parameter off its default, manual extended thinking whatever the tool choice.
+    "backend/tests/test_llm_extract.py::test_a_model_that_refuses_forced_tool_use_parks_before_anything_is_sent",
+    "backend/tests/test_fake_llm.py::test_a_model_that_refuses_forced_tool_use_is_listed_and_refuses_it_as_published",
+    "backend/tests/test_fake_llm.py::test_anthropic_refuses_what_its_reference_and_the_corpus_say_it_refuses",
+    # M5.5 review cycle 2: permanence read off a mark on the task, so a title that failed for good on
+    # its LAST attempt still parks its other keys; titles behind one account refusal all park, the
+    # breaker's pause included, rather than failing one by one once it opens; a Gemini daily quota in
+    # generateContent's own shape is the account's through the double; and a retired model's 404
+    # parks naming the model rather than failing every title for good (decision 431 as amended).
+    "backend/tests/test_llm_stage.py::test_a_title_failed_for_good_on_its_last_attempt_still_parks_its_other_keys",
+    "backend/tests/test_llm_stage.py::test_titles_behind_one_account_refusal_all_park_rather_than_failing_on_the_breaker",
+    "backend/tests/test_llm_extract.py::test_a_gemini_daily_quota_waits_as_the_accounts_through_the_double",
+    "backend/tests/test_llm_extract.py::test_a_retired_model_parks_naming_the_model_rather_than_failing_the_title",
+    # M5.5 review cycle 2 (C2-PAID-03): that bound is per task, and a title holds one task per key
+    # (decision 322) -- a film with two library copies, attempt 1 violating and attempt 2 meeting a
+    # 5xx, buys 16 metered calls and sends the named retry 8 times, each walk behind its own cap
+    # check, where decision 325 and the test above had called 8 the per-title bound.
+    "backend/tests/test_llm_stage.py::test_a_title_with_two_keys_buys_the_named_retry_once_per_walk_of_each_key",
+]
+
+[[requirement]]
+# M5.5's three new rows sit beside the gate they elaborate - the two-attempt validator directly
+# above - rather than beside the other `platform-` and `map-taste-` ids, for M5.4's reason one
+# milestone on: the gate and these three are one milestone's argument read from four sides, the
+# verdict the retry answers to, the one client every provider call passes through, the header a key
+# travels in, and the arithmetic that turns runs into a weight. They OPEN with NO `tests` key, which
+# is M4.10's, M4.11's, M4.16's and M5.4's opening: THE RED LIST IS THE TEST PLAN, and each list is
+# filled by the stage that writes the code its row describes -- never by a waiver, never by
+# renaming a registered test and never by lowering `current_milestone`, which stays "M5.1" while
+# M5.5 builds. So these rows are owed rather than armed, and owed is what they are, not waived.
+# The third row's arithmetic is decision 337's port of the corpus's `merge_passes`, and its last
+# clause is the rule-2 pair `test_landmine_guards.py` already runs over every module under
+# `spielplan/`, registered here rather than written twice. [decisions 324, 325, 337, 338, 343,
+# 430-435; M5.5-plan.md §6]
+id = "platform-no-vendor-sdk-reaches-the-llm-layer"
+spec = "§9 (\"no vendor SDKs; one POST per provider through the rate-limited fetcher\")"
+milestone = "M5.5"
+kind = "static"
+what = "A guard over backend/pyproject.toml fails when a vendor SDK for any LLM provider is declared, and a guard over backend/spielplan/llm/ fails when a module imports one; every provider call is a single POST issued through the shared rate-limited fetcher rather than through its own client."
+why = "§9 states the constraint and it is satisfied today only by absence - the dependency list carries httpx and no provider SDK - so the first person who adds one breaks a spec clause nothing was watching. The fetcher is also where the per-host politeness, the breaker and the retry budget live, and a provider client that bypasses it has none of them."
+# Plan B6's two static guards, each fed its synthetic violation before it is trusted with the real
+# file: the dependency spec read for the three providers' SDKs under every published name and the
+# wrapper families (a denylist, argued beside it), and every module under `spielplan/llm/` read for
+# an import of one - or of an HTTP client of its own, httpx included - with each adapter held to
+# importing `acquire.fetch`, the one door a provider call has.
+tests = [
+    "backend/tests/test_static_contracts.py::test_no_llm_provider_sdk_is_declared_in_the_dependency_spec",
+    "backend/tests/test_static_contracts.py::test_the_sdk_dependency_guard_sees_a_declared_sdk",
+    "backend/tests/test_static_contracts.py::test_no_llm_module_imports_a_vendor_sdk_or_an_http_client_of_its_own",
+    "backend/tests/test_static_contracts.py::test_the_llm_import_guard_sees_every_spelling_of_an_sdk_or_a_client",
+    # M5.5 review cycle 1 (decision 436 (1)): the fetcher's retry budget meets a paid POST as RFC 9110
+    # 9.2.2 says it must -- re-sent only when it provably never reached the provider, or when the
+    # provider answered 408, 425 or 429 without doing the work -- while every GET keeps its retries;
+    # and its breaker counts a 5xx outside the retry set, Anthropic's 529, as the failure it is.
+    "backend/tests/test_llm_adapters.py::test_a_paid_post_is_sent_again_only_when_it_never_reached_the_provider",
+    "backend/tests/test_llm_adapters.py::test_a_connect_failure_that_clears_is_sent_again_and_answers",
+    "backend/tests/test_llm_adapters.py::test_an_overloaded_anthropic_counts_toward_its_hosts_breaker",
+    "backend/tests/test_acquire_fetch.py::test_a_post_is_sent_again_only_when_it_provably_never_reached_the_host",
+    "backend/tests/test_acquire_fetch.py::test_a_server_error_outside_the_retry_set_counts_toward_the_breaker",
+]
+
+[[requirement]]
+id = "platform-a-provider-key-never-reaches-a-log-or-the-raw-store"
+spec = "§9 (\"Gemini responseSchema + header-only API key so credentials never hit logs\") + §2"
+milestone = "M5.5"
+kind = "backend"
+what = "Every provider credential travels in a request header and never in a URL: no llm module builds a URL containing a key, the raw store's url column for a provider call carries none, and the httpx INFO line for a provider request carries none."
+why = "A URL with a credential in it ends up in logs, in any HTTP cache and in the raw store's url column, and this app already has all three: push/send.py had to install a logging filter because httpx logs one INFO line per request with the full URL, and the acquisition raw store keeps url per document. The corpus puts the Gemini key in a header for exactly this reason and §9 names the behaviour."
+# The header and url halves, read off the requests a real Fetcher put on the wire and off the
+# modules themselves; the raw store's url column and the stored log line are appended by the steps
+# that write them.
+tests = [
+    "backend/tests/test_llm_adapters.py::test_each_adapter_posts_once_through_the_fetcher_with_the_key_in_its_documented_header",
+    "backend/tests/test_llm_adapters.py::test_the_probe_reads_the_free_models_list_with_the_key_in_a_header",
+    "backend/tests/test_llm_adapters.py::test_a_gemini_model_name_stays_one_path_segment_and_never_opens_a_query",
+    "backend/tests/test_llm_adapters.py::test_an_error_message_never_repeats_the_key",
+    "backend/tests/test_llm_adapters.py::test_no_llm_module_builds_a_url_with_a_key_or_passes_params",
+    "backend/tests/test_llm_adapters.py::test_the_url_reader_reports_every_spelling_it_exists_to_catch",
+    # The raw store's url column and the stored log line, read off what stage 6 RECORDED on each
+    # provider: every stored url the documented endpoint with no query, every url the double saw
+    # key-free with the key in the documented header, httpx's INFO line per call key-free, no row of
+    # any table and no stored byte holding the plaintext key -- and a provider error quoting the
+    # key written with it redacted.
+    "backend/tests/test_llm_extract.py::test_no_provider_key_reaches_the_raw_store_the_wire_the_log_or_any_row",
+    "backend/tests/test_llm_extract.py::test_a_provider_error_that_quotes_the_key_is_written_without_it",
+    # And §6.6's test button, through the route: the models-list GET the double recorded carries the
+    # key in each provider's documented header and a url that never held it, and httpx's line is clean.
+    "backend/tests/test_llm_api.py::test_the_test_button_reaches_the_provider_with_the_key_in_its_header_and_never_in_a_url",
+    # M5.5 review cycle 1: a key quoted across the 300-character cut is redacted before the cut; a
+    # key with whitespace around it is sent trimmed; one no header can carry is refused before any
+    # request, and parks the plan, in words that never quote it; and every spelling an exception
+    # gives a key -- h11's bytes repr above all -- is redacted.
+    "backend/tests/test_llm_adapters.py::test_a_key_quoted_across_the_cut_is_redacted_before_the_message_is_cut",
+    "backend/tests/test_llm_adapters.py::test_a_proxy_page_that_echoes_the_key_across_the_cut_is_redacted_too",
+    "backend/tests/test_llm_adapters.py::test_a_key_with_whitespace_around_it_is_sent_trimmed",
+    "backend/tests/test_llm_adapters.py::test_a_key_no_header_can_carry_is_refused_before_any_request_and_never_quoted",
+    "backend/tests/test_llm_adapters.py::test_every_spelling_of_the_key_an_exception_can_carry_is_redacted",
+    "backend/tests/test_llm_spend.py::test_a_key_no_header_can_carry_is_refused_by_name_and_never_quoted",
+    # M5.5 review cycle 2: the raw store's redaction held by what was RECORDED -- a proxy echoing the
+    # request's key header into every readable answer, refused or accepted, leaves no stored byte
+    # holding it, and the test fails with the redaction removed -- and every envelope field an adapter
+    # quotes into its error is redacted and bounded like the text beside it.
+    "backend/tests/test_llm_extract.py::test_a_proxy_that_echoes_the_key_into_a_readable_answer_never_puts_it_in_the_raw_store",
+    "backend/tests/test_llm_adapters.py::test_a_field_an_adapter_quotes_is_redacted_and_bounded_like_the_text_beside_it",
+]
+
+[[requirement]]
+id = "map-taste-agreement-is-a-weight-across-runs"
+spec = "§6.6 (\"union with per-tag agreement as confidence\") + §4.1 rule 2"
+milestone = "M5.5"
+kind = "integration"
+what = "Merging N runs for one title unions their verified tags, sets confidence to the share of runs that found each term and n_sources to the count, takes the highest salience any run assigned, and keeps the evidence from every run that found it; a tag found by one run of one is written with confidence 1.0 rather than dropped; and no query anywhere filters on confidence, salience or n_sources."
+why = "§6.6 ships the 93%/67% union-versus-intersection numbers as the toggle's caption and §4.1 rule 2 makes agreement a weight and never a filter, but neither states the function from agreement to confidence. The corpus states it exactly and argues the salience rule: a run that saw a trait as core is better evidence than one that saw it as minor, and the confidence weight already records how alone it was."
+# Decision 337's arithmetic with no database, the per-provider write through the four-column key
+# against Postgres, and the rule-2 pair `test_landmine_guards.py` already runs over every module
+# under `spielplan/` -- `llm/consensus.py` among them, whose salience comparison is bound to locals
+# because the corpus's own spelling of it fails the second -- registered here as plan E3's static
+# guard rather than written a second time.
+tests = [
+    "backend/tests/test_llm_consensus.py::test_two_passes_of_one_provider_weigh_each_term_by_the_share_that_found_it",
+    "backend/tests/test_llm_consensus.py::test_two_providers_at_one_pass_each_are_the_same_arithmetic_as_two_passes_of_one",
+    "backend/tests/test_llm_consensus.py::test_agreement_counts_runs_and_not_providers",
+    "backend/tests/test_llm_consensus.py::test_a_tag_found_by_one_run_of_one_is_kept_at_a_confidence_of_one",
+    "backend/tests/test_llm_consensus.py::test_a_run_that_found_nothing_is_still_a_run",
+    "backend/tests/test_llm_consensus.py::test_the_highest_salience_any_run_assigned_wins_in_every_run_order",
+    "backend/tests/test_llm_consensus.py::test_the_evidence_of_every_run_that_found_the_term_is_kept",
+    "backend/tests/test_llm_consensus.py::test_a_key_that_spells_no_run_is_refused",
+    "backend/tests/test_llm_consensus.py::test_a_term_two_providers_found_is_two_rows_with_the_pooled_weights_and_their_own_quotes",
+    "backend/tests/test_llm_consensus.py::test_a_second_store_replaces_the_first_whoever_wrote_it",
+    "backend/tests/test_llm_consensus.py::test_a_tag_one_run_in_three_found_is_written_and_not_dropped",
+    "backend/tests/test_llm_consensus.py::test_a_write_that_fails_part_way_leaves_the_previous_tier_standing",
+    "backend/tests/test_llm_consensus.py::test_no_run_at_all_never_erases_a_tier_and_empty_runs_do",
+    "backend/tests/test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter",
+    "backend/tests/test_landmine_guards.py::test_no_weight_column_is_compared_in_python",
+]
 
 [[requirement]]
 id = "map-taste-admin-kind-partition-ranked-lists-only"
@@ -5376,7 +5688,7 @@ id = "platform-the-suite-says-whether-the-integration-layer-ran"
 spec = "§12 (a green suite is the evidence a milestone closes on)"
 milestone = "M4.8"
 kind = "backend"
-what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside `current_milestone` whose source carries one of that milestone's review cycles as provenance is one of the rows it names."
+what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside that milestone whose source carries one of its review cycles as provenance is one of the rows it names -- for `current_milestone` and for every milestone ahead of it whose block the ledger already holds."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run. M5.1 review cycle 1 found the amended-rows guard reading nothing at all for this milestone: it matches a bolded PLURAL banner (`N rows the map already had were amended in place`), M5.1 amended one row, and `One rows ... were amended` is the only sentence that form admits - so the milestone wrote the truth in prose and all five clauses skipped it, including the one clause nothing else in the tree covers, that an id has not been renamed out from under the ledger. M5.2 through M5.7 are each sized to amend about one row, so the blind spot was six claims wide. The pattern is widened to the singular rather than the prose bent to the plural, and the milestone currently being written is held to the form, which is the half a conditional guard cannot hold by itself."
 tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended", "backend/tests/test_spec_coverage.py::test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing"]
 # The ledger guards that remain on this row read claims docs/TESTING.md makes in words -- which
@@ -5387,6 +5699,9 @@ tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the
 # them made a routine change re-derive prose, and none held a rule. [M4.8 review cycle 3:
 # m48-c3-cov-01; M4.12 review cycle 2: M412-C2-LEDGER-01; M4.14 review cycle 2:
 # m414-c2-dim-record-03; decision 460]
+# M5.5 review cycle 2 (M55-C2-DOC-02) widened the marked-rows clause and the body of the guard
+# that holds it: M5.5's banner named two amended rows while two more carried its review cycle 1's
+# mark, and the guard read `current_milestone`'s block alone, so it could not see M5.4's or M5.5's.
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -5404,9 +5719,19 @@ id = "platform-app-fixture-is-isolated-from-the-operators-env"
 spec = "§2 (env vars seed connector config on first boot); §7.3"
 milestone = "M4.8"
 kind = "integration"
-what = "The `app` fixture starts with no connector configured regardless of a .env in pytest's working directory: the connector seed variables Settings declares are cleared and .env is resolved in an empty directory, and a test that wants a seeded connector seeds it explicitly; `ops/m53_exit_criterion.py` does both before it builds the install its eleven checks run against."
+what = "The `app` fixture starts with no connector configured regardless of a .env in pytest's working directory: the connector seed variables Settings declares are cleared and .env is resolved in an empty directory, and a test that wants a seeded connector seeds it explicitly; `ops/m53_exit_criterion.py` does both before it builds the install its eleven checks run against, and every exit script that neutralises the environment -- m412, m414, m51, m52, m53 and m55 -- leaves none of the connector seed variables, the three provider keys among them, in it afterwards, in any spelling of their names, since Settings reads the environment case-insensitively."
 why = "The fixture runs the genuine lifespan, which calls registry.seed_from_env, and Settings reads .env from the cwd. A household that follows its own README gets two red tests unrelated to the code, on the machine where the release is cut, and its encrypted credentials written into per-process test databases. conftest already records this incident for SECRETS_KEY and fixed it for one fixture only. M5.3 review cycle 1 found the third site: `ops/m53_exit_criterion.py` inherited the name half from `ops/m51_exit_criterion.py:378` and not the chdir, so a household running the exit criterion from its own repository root had JELLYFIN_URL and JELLYFIN_API_KEY read out of `.env` and `registry.seed_from_env` encrypted the key into the scratch database under the script's throwaway DEK. TMDB, OMDb and Trakt survived only because `_seed_throwaway_credentials` overwrites those three outright."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_app_fixture_ignores_a_dot_env_in_the_working_directory", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_clears_every_connector_seed_variable", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_mutates_the_process_only_through_monkeypatch", "backend/tests/test_harness_fixtures.py::test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_app_fixture_ignores_a_dot_env_in_the_working_directory", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_clears_every_connector_seed_variable", "backend/tests/test_harness_fixtures.py::test_the_app_fixture_mutates_the_process_only_through_monkeypatch", "backend/tests/test_harness_fixtures.py::test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory", "backend/tests/test_harness_fixtures.py::test_no_exit_script_leaves_a_connector_key_in_its_environment", "backend/tests/test_harness_fixtures.py::test_an_exit_script_that_moves_away_from_the_dot_env_reads_no_provider_key_from_it"]
+# M5.5 review cycle 1 adds the last two (KEYS-C1-03, M55-DOC-07): five exit scripts filtered on the
+# four M0-era connector prefixes while saying their list was "derived from `Settings`", so the three
+# provider keys M5.5 seeds stayed in the environment the scripts' installs seed from; every script that
+# neutralises is now held to `registry.env_seeds` finding nothing, and m51, which never left the
+# working directory, to reading no key out of the `.env` beside the operator.
+# M5.5 review cycle 2 (M55-KEYS-C2-04) widened the `what` to those scripts and held both the
+# scripts and this fixture to every spelling: pydantic-settings reads the environment with
+# `case_sensitive` False, so on POSIX a lower-case `openai_api_key` survived every neutraliser,
+# which popped the upper-case name alone, and `seed_from_env` sealed it. The two tests' bodies now
+# stand POSIX's environment in with a case-preserving dict holding both spellings.
 
 [[requirement]]
 id = "platform-landmine-guards-catch-the-shapes-a-regression-would-take"
@@ -10448,6 +10773,12 @@ tests = [
     "backend/tests/test_acquire_pipeline.py::test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_minting",
     "backend/tests/test_acquire_pipeline.py::test_an_original_title_the_resolver_never_probes_does_not_mint_a_second_row",
     "backend/tests/test_acquire_pipeline.py::test_a_runaway_runtime_drops_the_value_rather_than_losing_the_title",
+    # M5.5 review cycle 1 (NBR-03, M55-DOC-06): the criterion's own instrument, run. Check 1 of
+    # `ops/m51_exit_criterion.py` through the script's own install walks its item to stage 10 with
+    # stages 2-8 declared no-ops, as the row's criterion states them; since M5.3 and M5.5 gave four
+    # of them bodies the script had drained the shipped stages, crawling five keyless sources and
+    # parking at stage 4 on any real bundle.
+    "backend/tests/test_m51_exit_criterion.py::test_check_one_walks_the_ten_stages_with_stages_two_to_eight_declared_no_ops",
 ]
 # Review cycle 4's second pass adds the last three, and the first two are one defect seen from two
 # sides: stage 1 read `resolve_title_id` returning None as "there is no such title" when its

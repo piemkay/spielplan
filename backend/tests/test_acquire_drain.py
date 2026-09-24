@@ -158,19 +158,27 @@ def enrichment_stands_down(monkeypatch):
 
     `test_acquire_pipeline.py` carries the same fixture and the same argument, and is where the
     three stages are asserted for real, against an `httpx.MockTransport`. No assertion in this
-    file changes: the substitutes keep `paid`, `implemented` and `owner` and restore exactly the
-    pipeline every test below was written against.
+    file changes: the substitutes keep `paid`, `implemented` (stage 6's excepted, below) and
+    `owner` and restore exactly the pipeline every test below was written against.
+
+    STAGE 6 STANDS DOWN TOO SINCE M5.5, AS A DECLARED NO-OP (decision 432). It bills, and the
+    driver's gate reads `implemented` first: kept True, a substitute would still be a paid stage to
+    the gate, which would ask the meter, find no cap on a test database and park every task in this
+    file at stage 6 under decision 348's sentence - so "the drain completes what it leased" would
+    again have nothing to measure. `implemented=False` is what stage 6 WAS until this milestone,
+    the one shape decision 348 says cannot spend, and the pipeline these tests were written
+    against. Stage 6 through the driver is `test_llm_stage.py`'s subject.
     """
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
 
     def stands_down(stage):
         async def stood_down(_ctx):
             return stages.advance({"stood_down": f"stage {stage.number} stood down by this file"})
-        return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid, stage.implemented,
-                              stage.owner)
+        return pipeline.Stage(stage.number, stage.name, stood_down, stage.paid,
+                              stage.implemented and not stage.paid, stage.owner)
 
     monkeypatch.setattr(pipeline, "STAGES", tuple(
-        stands_down(stage) if stage.number in (2, 3, 4) else stage for stage in pipeline.STAGES
+        stands_down(stage) if stage.number in (2, 3, 4, 6) else stage for stage in pipeline.STAGES
     ))
 
 

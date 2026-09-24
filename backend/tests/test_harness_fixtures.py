@@ -619,11 +619,16 @@ async def test_the_app_fixture_ignores_a_dot_env_in_the_working_directory(
 
 @pytest.fixture
 def every_connector_seeded_in_the_environment(monkeypatch):
+    """Every seed name in both spellings, in a case-preserving stand-in for POSIX's environment: see
+    `test_no_exit_script_leaves_a_connector_key_in_its_environment` for why a lower-case name is a
+    seed too. [M5.5 review cycle 2, M55-KEYS-C2-04]"""
     names = conftest._connector_seed_env_names()
     assert names, "Settings should declare the connector seed fields"
-    for name in names:
-        monkeypatch.setenv(name, f"set-by-the-operators-environment-{name.lower()}")
-    return names
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    spellings = [*names, *(name.lower() for name in names)]
+    for name in spellings:
+        monkeypatch.setenv(name, f"set-by-the-operators-environment-{name}")
+    return spellings
 
 
 async def test_the_app_fixture_clears_every_connector_seed_variable(
@@ -721,3 +726,108 @@ def test_the_exit_criterion_script_ignores_a_dot_env_in_the_working_directory(
         "the operator's own .env was moved or removed; the script must stop reading that file, "
         "not edit it"
     )
+
+
+
+# --- M5.5 review cycle 1: the three provider keys every older exit script let through ------------
+#
+# Five exit scripts each said their neutraliser was "derived from `Settings` rather than listed, so a
+# seventh connector variable cannot be forgotten here", and each filtered on the four M0-era prefixes
+# `jellyfin_`, `tmdb_`, `omdb_` and `trakt_`. M5.5 seeds three more -- `GEMINI_API_KEY`,
+# `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` (§2, M5.5 plan A3) -- so an operator with a provider key
+# exported had it left in `os.environ`, where m412's, m414's and m52's lifespans and m53's
+# `build_install` hand it to `registry.seed_from_env`, sealed under a SECRETS_KEY printed in the
+# repository, and where m414's and m51's children inherit it. [M5.5 review cycle 1, KEYS-C1-03,
+# M55-DOC-07]
+#
+# The oracle is what the seed would seal, not the list the scripts now derive: every connector
+# variable conftest knows is set, and `registry.env_seeds` -- the function `seed_from_env` asks -- must
+# find nothing afterwards. `ops/m55_exit_criterion.py` is held to the same rule it introduced.
+_NEUTRALISING_SCRIPTS = ("m412", "m414", "m51", "m52", "m53", "m55")
+_PROVIDER_SEEDS = ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+
+
+def _load_exit_script(name: str, tmp_path: Path, monkeypatch):
+    """One exit script as a module of its own, everything process-wide it touches put back by
+    `monkeypatch`: the variables it sets at import, DATA_DIR (a directory this run owns), its
+    `sys.modules` entry, and the working directory, which three of them move."""
+    import importlib.util
+
+    for variable, placeholder in {
+        "SESSION_SECRET": "a-session-secret-this-test-puts-back-afterwards",
+        "SECRETS_KEY": "a-secrets-key-this-test-puts-back-afterwards",
+        "PUBLIC_URL": "http://localhost:8080",
+    }.items():
+        monkeypatch.setenv(variable, os.environ.get(variable, placeholder))
+    work = tmp_path / "a-run-of-its-own"
+    work.mkdir(exist_ok=True)
+    monkeypatch.setenv("DATA_DIR", str(work))
+    monkeypatch.chdir(Path.cwd())
+    script = conftest.ROOT.parent / "ops" / f"{name}_exit_criterion.py"
+    spec = importlib.util.spec_from_file_location(f"{name}_exit_criterion_under_test", script)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("script", _NEUTRALISING_SCRIPTS)
+def test_no_exit_script_leaves_a_connector_key_in_its_environment(script, tmp_path, monkeypatch):
+    """Every connector variable an operator could have exported, the three provider keys included,
+    is gone from the environment once the script's neutraliser has run, so the seed its install
+    boots through has nothing to seal.
+
+    In either spelling. pydantic-settings reads the environment with `case_sensitive` False, so on
+    POSIX -- where `os.environ` keeps `openai_api_key` and `OPENAI_API_KEY` apart -- a lower-case key
+    reaches `Settings` as surely as the upper-case one, and every neutraliser popped the upper-case
+    spelling alone. Windows folds the case of every name it stores, so POSIX's environment is stood
+    in by a case-preserving dict, put back by `monkeypatch`. [M5.5 review cycle 2, M55-KEYS-C2-04]"""
+    from spielplan.connectors import registry
+    from spielplan.core import config as core_config
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    names = set(conftest._connector_seed_env_names()) | set(_PROVIDER_SEEDS)
+    names |= {name.lower() for name in names}
+    for name in names:
+        monkeypatch.setenv(name, f"set-by-the-operators-environment-{name}")
+    module = _load_exit_script(script, tmp_path, monkeypatch)
+
+    module._neutralise_connector_env()
+
+    assert not [name for name in names if name in os.environ], (
+        f"ops/{script}_exit_criterion.py left {sorted(n for n in names if n in os.environ)} in its "
+        "environment, where the install it boots seeds them"
+    )
+    assert registry.env_seeds(core_config.Settings(_env_file=None)) == {}
+
+
+@pytest.mark.parametrize("script", ("m51", "m55"))
+def test_an_exit_script_that_moves_away_from_the_dot_env_reads_no_provider_key_from_it(
+    script, tmp_path, monkeypatch
+):
+    """The file half, for the two scripts whose neutraliser also leaves the working directory as
+    `ops/m53_exit_criterion.py`'s does (the test above this block holds m53): a `.env` beside the
+    operator carrying the three provider keys is not read once the neutraliser has run. m51 never
+    moved, so a key only in that file reached its `Settings`. [M5.5 review cycle 1, KEYS-C1-03]"""
+    from spielplan.connectors import registry
+    from spielplan.core import config as core_config
+
+    for name in (*conftest._connector_seed_env_names(), *_PROVIDER_SEEDS):
+        monkeypatch.delenv(name, raising=False)
+    home = tmp_path / "operator"
+    home.mkdir()
+    (home / ".env").write_text(
+        "".join(f"{name}=an-operators-real-{name.lower()}\n" for name in _PROVIDER_SEEDS)
+        + "JELLYFIN_URL=http://jellyfin.invalid\nJELLYFIN_API_KEY=an-operators-real-admin-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(home)
+    module = _load_exit_script(script, tmp_path, monkeypatch)
+
+    module._neutralise_connector_env()
+
+    assert registry.env_seeds(core_config.Settings()) == {}, (
+        f"ops/{script}_exit_criterion.py reads connector keys out of the .env in the directory it "
+        "was run from"
+    )
+    assert (home / ".env").is_file()

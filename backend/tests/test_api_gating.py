@@ -59,7 +59,12 @@ MEMBER_PASSWORD = "a-member-password"
 # jellyfin/libraries` (`api/admin.py`, decision 364). It is a read of the media server behind the
 # same `AdminUser` as the two beside it, and re-stating the number here is the whole of what this
 # equality asks of the milestone that added it.
-ADMIN_ROUTE_COUNT = 26
+# 26 until M5.5 added §6.6's LLM settings read and the one connector test dispatch - `GET
+# /api/admin/llm` and `POST /api/admin/connectors/{name}/test` (`api/llm.py`, decision 433) - and
+# no write, which is M5.7's. The dispatch's pattern also matches Jellyfin's own test path, and the
+# two are counted apart because they are two routes: the walk sees both, and Jellyfin's is the one
+# that answers, because `app.py` mounts the dispatch after `admin`.
+ADMIN_ROUTE_COUNT = 28
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

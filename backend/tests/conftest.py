@@ -437,8 +437,21 @@ def _connector_seed_env_names() -> tuple[str, ...]:
     return tuple(
         name.upper()
         for name in Settings.model_fields
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_"))
+        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_", "gemini_", "anthropic_", "openai_"))
     )
+
+
+def _connector_seed_variables_present() -> list[str]:
+    """Every variable in the environment that seeds a connector, in whatever case it was exported.
+
+    `Settings` matches the environment case-insensitively (pydantic-settings' `case_sensitive` is
+    False), and a POSIX environment keeps `jellyfin_url` apart from `JELLYFIN_URL`, so deleting the
+    upper-case spelling alone left a lower-case one for the lifespan's seed. Read here rather than in
+    the `app` fixture, whose body is held to mutating the process only through `monkeypatch`.
+    [M5.5 review cycle 2, M55-KEYS-C2-04]
+    """
+    seeds = set(_connector_seed_env_names())
+    return [variable for variable in os.environ if variable.upper() in seeds]
 
 
 @pytest.fixture
@@ -481,7 +494,7 @@ async def app(db, pg_url, tmp_path, monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", pg_url)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    for name in _connector_seed_env_names():
+    for name in _connector_seed_variables_present():
         monkeypatch.delenv(name, raising=False)
     # A subdirectory and not `tmp_path` itself: DATA_DIR points there, so the app writes into it.
     neutral = tmp_path / "no-dot-env"

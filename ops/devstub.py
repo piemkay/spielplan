@@ -44,9 +44,11 @@ sys.path.insert(0, str(ROOT / "backend"))
 # so a developer who has a real `.env` and wants the refusals can export it as 0.
 os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
+from spielplan.api import llm as llm_api  # noqa: E402 - the real provider card and batch reason
 from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
+from spielplan.connectors import registry  # noqa: E402 - the real connector table
 from spielplan.core.config import settings  # noqa: E402
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
@@ -54,6 +56,9 @@ from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
 from spielplan.importer.dna import app_facet  # noqa: E402 - the real facet rule, not a copy
 from spielplan.importer.report import ImportReport  # noqa: E402 - `_real_report`'s return type
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
+from spielplan.llm import client as llm_client  # noqa: E402 - the three providers, in order
+from spielplan.llm import pricing as llm_pricing  # noqa: E402 - §8's midpoint, not a copy
+from spielplan.llm import spend as llm_spend  # noqa: E402 - decision 325's month and refusal
 from spielplan.rank import board as rank_board  # noqa: E402 - the real badges
 from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10 selector
 from spielplan.rank import tiers as rank_tiers  # noqa: E402 - decision 11's real rules
@@ -1404,6 +1409,56 @@ def admin_acquisition_job(title_id: int) -> dict[str, Any]:
              "content_type": "application/json", "fetched_at": now, "ok": True, "error": None},
         ],
     }
+
+
+# §6.6's LLM settings read and the one connector test dispatch (M5.5, decision 433): two routes and
+# no write, as in the app, because M5.7 builds the cards and every write behind them. Answered here
+# for the reason the acquisition rows above give -- `test_devstub_contract.py` asks the harness for
+# every path the app serves, and M5.1's precedent for a clientless route is to answer it rather
+# than to exempt it.
+#
+# The install this harness really is: no provider keyed, no setting stored, no call ever metered
+# and no cap in force (decision 325 ships none). So the read is the app's own fresh-install answer,
+# built from the app's own pieces rather than restated -- `api/llm.provider_card` over an empty
+# connector state for each card, `llm/spend`'s refusal sentence for the estimate a household with
+# no assignment gets, decision 338's reason for batch. Nothing here can reach a provider, so the
+# dispatch answers a provider's button the way the app answers a card with no key, and refuses
+# every other name with the registry's own table, as the app does.
+
+
+@app.get("/api/admin/llm")
+def admin_llm() -> dict[str, Any]:
+    now = datetime.now(UTC)
+    start, end = llm_spend.period(now)
+    today = now.astimezone(llm_spend.local_zone()).date()
+    unassigned = llm_spend._providers_of({})
+    return {
+        "providers": [
+            llm_api.provider_card(name, registry.ConnectorState(name=name), on=today)
+            for name in llm_client.PROVIDERS
+        ],
+        "settings": {"extraction_provider": None, "parallel": None, "passes": None, "cap_usd": None},
+        "meter": {"spent_usd": "0", "unsettled_usd": "0", "cap_usd": None, "remaining_usd": None,
+                  "period_start": start.isoformat(), "period_end": end.isoformat(),
+                  "tz": settings().tz},
+        "estimate": {"per_title_usd": llm_api.UNKNOWN,
+                     "input_tokens_assumed": llm_pricing.SPEC_INPUT_TOKENS, "passes": None,
+                     "providers": [], "reason": unassigned.reason},
+        "batch": {"available": False, "reason": llm_api.BATCH_UNAVAILABLE},
+    }
+
+
+@app.post("/api/admin/connectors/{name}/test")
+def connector_test(name: str) -> dict[str, Any]:
+    # Registered after `/api/admin/connectors/jellyfin/test` above, which is the order `app.py`
+    # keeps too: the first route registered answers a path both match.
+    try:
+        spec = registry.spec_for(name)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    if spec.test is None:
+        raise HTTPException(status_code=404, detail=f"connector {name} has no test in this build")
+    return {"ok": False, "error": f"no API key is configured for {name}"}
 
 
 # --- M2: shared reading of the fixture catalog -------------------------------

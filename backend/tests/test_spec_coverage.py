@@ -358,6 +358,25 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # milestone deliberately does not make (decision 387). Decisions 341 and 382-403 record the calls
 # it needed, and its one migration is 0027_dna_extraction.sql.
 # See docs/milestones/M5.4-plan.md and ROADMAP-M5.md.
+#
+# M5.5 opened once the wave M5.2, M5.3 and M5.4 built in had landed, and like M5.4 it adds no
+# name to the list: M5.1 landed all seven positionally, so what this entry owes a reader is why
+# "M5.5" sits where it already does. It sits AFTER "M5.4" because section 9's two-attempt pattern
+# retries against a verdict and the verdict is M5.4's `verify_payload` - "the schema is a
+# cost-saving device, not the guarantee, the guarantee is the validator" - so the milestone that
+# first calls a provider can read as shipped only once the validator it answers to does. It sits
+# BEFORE "M5.6" and "M5.7" because both stand on what it publishes: the admin retry's cap refusal
+# and the flywheel's batch estimate are M5.6's callers, and the provider cards and the spend guard
+# are M5.7's surface over the meter, the per-title estimate and the one `ConnectorSpec` table this
+# milestone exports and does not render. It does NOT hold `current_milestone`; M5.1 does, and its
+# five rows are appended without raising the scalar. Three were new and opened with no `tests` key
+# - the red list was the test plan, closed by writing those tests and never by a waiver, by
+# renaming a registered test, or by lowering the scalar - and the other two are the pair M5.1
+# re-pointed here, the two-attempt validator and the spend meter, the second of which goes on
+# citing proposals 107 and 109, because whether they are adopted or struck is the roadmap's
+# question 330 and that number is M5.6's and M5.7's to spend. Decisions 324, 325, 337, 338 and 343
+# - the five the roadmap files against it - and 430-435 record the calls it needed, and its one
+# migration is 0028_llm_spend.sql. See docs/milestones/M5.5-plan.md and ROADMAP-M5.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
               "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]
@@ -2401,12 +2420,24 @@ def test_the_testing_ledger_names_the_rows_it_says_it_amended():
     holds, none of them sits on `current_milestone` -- a row there is one the milestone ADDED, and
     the block publishes that count separately -- and each names at least one test, which is the
     banner's other clause. [M4.14 review cycle 2: m414-c2-dim-record-03]
+
+    "The milestone" is the one whose block the banner sits in, which is `current_milestone` only
+    for the block being written by it. A milestone building ahead of the scalar adds rows on
+    itself and amends rows on the milestone that holds it: M5.5's review cycle 1 gave M5.1's
+    acquired-title row a test, and the marked-rows guard below requires M5.5's banner to name it,
+    which this clause refused while it read every banner against `current_milestone`.
+    [M5.5 review cycle 2, M55-C2-DOC-02]
     """
     by_id = {r["id"]: r for r in REQUIREMENTS}
-    for banner in LEDGER.read_text(encoding="utf-8").split("\n\n"):
+    text = LEDGER.read_text(encoding="utf-8")
+    blocks = [(match.start(), match.group(1)) for match in _LEDGER_BLOCK.finditer(text)]
+    offset = 0
+    for banner in text.split("\n\n"):
+        start, offset = offset, offset + len(banner) + 2
         headline = _LEDGER_AMENDED.search(banner)
         if not headline:
             continue
+        owner = next((name for at, name in reversed(blocks) if at <= start), CURRENT)
         published = _spelled(headline.group(1))
         assert published is not None, (
             "an amended-rows count in docs/TESTING.md is neither a figure nor a number word: "
@@ -2428,11 +2459,11 @@ def test_the_testing_ledger_names_the_rows_it_says_it_amended():
             f"docs/TESTING.md names amended rows this map does not hold: {unknown}. An id renamed "
             "out from under the ledger is a count nobody can reconcile again."
         )
-        added = [i for i in named if by_id[i]["milestone"] == CURRENT]
+        added = [i for i in named if by_id[i]["milestone"] == owner]
         assert not added, (
-            f"docs/TESTING.md counts rows on {CURRENT} among the ones it amended in place: "
-            f"{added}. A row on the current milestone is one this milestone ADDED, and the ledger "
-            "publishes those two counts separately."
+            f"docs/TESTING.md's {owner} block counts rows on {owner} among the ones it amended in "
+            f"place: {added}. A row on the milestone writing the banner is one it ADDED, and the "
+            "ledger publishes those two counts separately."
         )
         bare = [i for i in named if not by_id[i].get("tests")]
         assert not bare, (
@@ -2532,14 +2563,14 @@ _MAP_ROW_HEAD = re.compile(r"^\[\[requirement\]\]\s*$", re.M)
 _MAP_ROW_FIELD = re.compile(r'^(id|milestone) = "([^"]+)"', re.M)
 
 
-def _rows_this_milestone_marked_as_amended() -> dict[str, str]:
-    """Every row outside `current_milestone` whose source carries this milestone's review cycle.
+def _rows_this_milestone_marked_as_amended(milestone: str = CURRENT) -> dict[str, str]:
+    """Every row outside `milestone` whose source carries that milestone's review cycle.
 
     The milestone name is read with a boundary of its own, for `_current_milestone_blocks`' reason
     one file over: `\\b` counts the dot as a boundary, so `M5.1` would match inside `M5.10`.
     """
     text = MAP.read_text(encoding="utf-8")
-    mark = re.compile(re.escape(CURRENT) + r"(?![\d.])[^\n]{0,40}?review cycle")
+    mark = re.compile(re.escape(milestone) + r"(?![\d.])[^\n]{0,40}?review cycle")
     heads = list(_MAP_ROW_HEAD.finditer(text))
     marked: dict[str, str] = {}
     for index, head in enumerate(heads):
@@ -2547,20 +2578,20 @@ def _rows_this_milestone_marked_as_amended() -> dict[str, str]:
         block = text[head.start():end]
         fields = dict(_MAP_ROW_FIELD.findall(block))
         hit = mark.search(block)
-        if hit is None or "id" not in fields or fields.get("milestone") == CURRENT:
+        if hit is None or "id" not in fields or fields.get("milestone") == milestone:
             continue
         line = text[: head.start() + hit.start()].count("\n") + 1
         marked[fields["id"]] = f"{fields.get('milestone', '?')}, spec_coverage.toml:{line}"
     return marked
 
 
-def _rows_the_current_block_says_it_amended() -> set[str]:
-    """The ids every amended-rows banner in `current_milestone`'s own ledger block names."""
+def _rows_the_current_block_says_it_amended(milestone: str = CURRENT) -> set[str]:
+    """The ids every amended-rows banner in `milestone`'s own ledger block names."""
     text = LEDGER.read_text(encoding="utf-8")
     blocks = [(match.start(), match.group(1)) for match in _LEDGER_BLOCK.finditer(text)]
-    opens = [start for start, name in blocks if name == CURRENT]
+    opens = [start for start, name in blocks if name == milestone]
     assert len(opens) == 1, (
-        f"docs/TESTING.md opens {len(opens)} blocks named {CURRENT} in bold at the start of a "
+        f"docs/TESTING.md opens {len(opens)} blocks named {milestone} in bold at the start of a "
         "line, and this guard reads the one the milestone is writing now"
     )
     end = min([start for start, _ in blocks if start > opens[0]], default=len(text))
@@ -2589,13 +2620,25 @@ def test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended():
     Scoped to the block being written now, for the reason the conditional guard above is: another
     milestone's block naming a row does not record what THIS one did to it.
     [M4.14 review cycle 2: m414-c2-dim-record-03; M5.1 review cycle 4, M51-C4-LEDGER-01]
+
+    AND TO EVERY BLOCK WRITTEN AHEAD OF THE SCALAR, each against its own milestone's marks. M5.4 and
+    M5.5 append rows while M5.1 holds `current_milestone`, so their blocks are being written now too,
+    and this guard read none of them: M5.5's banner named two amended rows over a map in which two
+    more, M4.8's app-fixture row and M5.1's acquired-title row, carried M5.5 review cycle 1's mark.
+    A milestone ahead of the scalar with no ledger block yet has no banner to hold, and is not read.
+    [M5.5 review cycle 2, M55-C2-DOC-02]
     """
-    marked = _rows_this_milestone_marked_as_amended()
-    named = _rows_the_current_block_says_it_amended() if marked else set()
-    unrecorded = sorted(f"{row} ({where})" for row, where in marked.items() if row not in named)
+    ahead = MILESTONES[MILESTONES.index(CURRENT) + 1:]
+    written = {match.group(1) for match in _LEDGER_BLOCK.finditer(LEDGER.read_text(encoding="utf-8"))}
+    unrecorded = []
+    for milestone in [CURRENT, *(name for name in ahead if name in written)]:
+        marked = _rows_this_milestone_marked_as_amended(milestone)
+        named = _rows_the_current_block_says_it_amended(milestone) if marked else set()
+        unrecorded += sorted(f"{row} ({where}): {milestone}'s block"
+                             for row, where in marked.items() if row not in named)
     assert not unrecorded, (
-        f"these rows carry a {CURRENT} review cycle's provenance in spec_coverage.toml and no "
-        f"amended-rows banner in {CURRENT}'s docs/TESTING.md block names them:\n  "
+        "these rows carry a milestone's review-cycle provenance in spec_coverage.toml and no "
+        "amended-rows banner in that milestone's docs/TESTING.md block names them:\n  "
         + "\n  ".join(unrecorded)
         + "\n\nA row this milestone changed and the ledger does not count is the defect the "
         "banner exists to make checkable, and a count restated without the ids is the half "

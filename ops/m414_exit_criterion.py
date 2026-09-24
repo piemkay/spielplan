@@ -267,14 +267,25 @@ def _neutralise_connector_env() -> None:
     `backend/tests/conftest.py` records the incident this repeats: the genuine lifespan calls
     `registry.seed_from_env`, so a household that followed its own README boots this scratch
     install with their real Jellyfin configured -- and their encrypted credentials are then
-    written into a throwaway database under a throwaway key. Derived from `Settings` rather than
-    listed, so a seventh connector variable cannot be forgotten here.
+    written into a throwaway database under a throwaway key. Derived from the connectors
+    `registry.CONNECTORS` seeds, so a connector added there is neutralised here without anyone
+    remembering this list. It used to say "derived from `Settings`" over four M0-era prefixes, and
+    the three provider keys M5.5 seeds (§2, M5.5 plan A3) passed straight through it into the
+    lifespan's `registry.seed_from_env` and into the worker pump's environment.
+    [M5.5 review cycle 1, KEYS-C1-03, M55-DOC-07]
     """
+    from spielplan.connectors import registry
     from spielplan.core.config import Settings
 
-    for name in Settings.model_fields:
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_")):
-            os.environ.pop(name.upper(), None)
+    seeded = tuple(f"{name}_" for name, spec in registry.CONNECTORS.items() if spec.seeded)
+    # Matched case-insensitively, as `Settings` matches it: pydantic-settings reads the environment
+    # with `case_sensitive` False, and a POSIX environment keeps `openai_api_key` apart from
+    # `OPENAI_API_KEY`, so popping the upper-case spelling alone left a lower-case key for the seed.
+    # [M5.5 review cycle 2, M55-KEYS-C2-04]
+    wanted = {name.upper() for name in Settings.model_fields if name.startswith(seeded)}
+    for variable in list(os.environ):
+        if variable.upper() in wanted:
+            os.environ.pop(variable, None)
 
 
 # --- the tree the probes are cut from ---------------------------------------------------------

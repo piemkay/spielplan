@@ -67,6 +67,21 @@ the reserved `.invalid` TLD is that transport; nothing leaves the box, and the p
 its own §8 ("M5.1's tests drive the fetcher against a local double"). The one probe that does
 leave the process is check 11's, and it goes to an origin the operator named.
 
+STAGES 2-8 ARE DECLARED NO-OPS IN THIS RUN, BECAUSE THE CRITERION IS STATED WITH THEM SO. The row
+reads "with stages 2-8 declared no-ops", and they were when this script was written. Since then
+M5.3 gave stages 2, 3 and 4 bodies and M5.5 gave stage 6 one, and this script went on draining
+the shipped pipeline with the real default fetcher: stage 2 asked Wikidata, Wikipedia, TVmaze,
+Rotten Tomatoes and Metacritic about a film nobody made, from the household's own address, and
+stage 4 then parked it for want of reviews -- so check 1 could not reach stage 10 on any real
+bundle, checks 3, 4, 5 and 10 inherited the park, and the paragraph above was false. Stage 6
+stood behind that, parked by decision 348's no-cap refusal. `build_install` now stands every
+stage from 2 to 8 down as a declared no-op, `implemented=False` -- the one shape decision 348
+says cannot spend, and the pipeline the checks measure the spine through -- and replaces the
+drain's default fetcher with one that refuses, so a stage that still asked for it would fail a
+check rather than open a socket. The test suite does the same for its walk-to-ready tests
+(`backend/tests/test_acquire_pipeline.py`'s `enrichment_stands_down`). The stages this stands
+down are measured by their own milestones' instruments. [M5.5 review cycle 1, NBR-03, M55-DOC-06]
+
 It connects through `db/pool._init_connection` and never a bare `asyncpg.connect`: without the
 json/jsonb codec `title_meta.payload` dies with "expected str, got dict", which is the defect
 M4.5's harness spent three runs believing was in the importer (`M4.14-plan.md:911-912`).
@@ -123,7 +138,7 @@ import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 from m45_exit_criterion import check, console, discard_staged_artifacts, results  # noqa: E402
 from spielplan.acquire import fetch, pipeline, queue, rawstore, stages  # noqa: E402
-from spielplan.connectors import resolve  # noqa: E402
+from spielplan.connectors import registry, resolve  # noqa: E402
 from spielplan.core import config as core_config  # noqa: E402
 from spielplan.db import migrate  # noqa: E402
 from spielplan.db import pool as db_pool  # noqa: E402
@@ -380,16 +395,61 @@ def _neutralise_connector_env() -> None:
 
     `backend/tests/conftest.py` records the incident this repeats: a household that followed its
     own README runs this script with their real Jellyfin configured, and their encrypted
-    credentials would be written into a throwaway database under a throwaway key. Derived from
-    `Settings` rather than listed, so a seventh connector variable cannot be forgotten here.
+    credentials would be written into a throwaway database under a throwaway key. Derived from the
+    connectors `registry.CONNECTORS` seeds, so a connector added there is neutralised here without
+    anyone remembering this list. It used to say "derived from `Settings`" over four M0-era
+    prefixes, and the three provider keys M5.5 seeds (§2, M5.5 plan A3) passed straight through it,
+    into `os.environ` and so into check 5's child. [M5.5 review cycle 1, KEYS-C1-03, M55-DOC-07]
 
     It matters twice over in this script. `acquire/hosts.policy_for` takes a `jellyfin_host` and
     exempts it from the throttle and the robots check, and a run that inherited a real one could
     exempt a host checks 6 and 7 believe they are pacing.
+
+    BOTH HALVES, for `ops/m53_exit_criterion.py`'s reason: `Settings` also reads `.env` from the
+    working directory, so the process moves into a directory of this run's own DATA_DIR, which
+    `main` sets on the line before this call and removes after moving back out.
     """
-    for name in core_config.Settings.model_fields:
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_")):
-            os.environ.pop(name.upper(), None)
+    seeded = tuple(f"{name}_" for name, spec in registry.CONNECTORS.items() if spec.seeded)
+    # Matched case-insensitively, as `Settings` matches it: pydantic-settings reads the environment
+    # with `case_sensitive` False, and a POSIX environment keeps `openai_api_key` apart from
+    # `OPENAI_API_KEY`, so popping the upper-case spelling alone left a lower-case key for the seed.
+    # [M5.5 review cycle 2, M55-KEYS-C2-04]
+    wanted = {name.upper() for name in core_config.Settings.model_fields if name.startswith(seeded)}
+    for variable in list(os.environ):
+        if variable.upper() in wanted:
+            os.environ.pop(variable, None)
+    neutral = Path(os.environ["DATA_DIR"]) / "no-dot-env"
+    neutral.mkdir(parents=True, exist_ok=True)
+    os.chdir(neutral)
+
+
+async def _refuse_to_fetch(_conn: asyncpg.Connection) -> fetch.Fetcher:
+    """The drain's default fetcher for this run: refused, because every stage that fetches is a
+    declared no-op here and nothing this criterion names is fetched from a third party."""
+    raise PreconditionFailed(
+        "a stage asked for the drain's fetcher, and every stage from 2 to 8 is declared a no-op in "
+        "this run (spec section 12, M5.1): nothing this criterion measures is fetched from a third "
+        "party, so the request was refused rather than sent"
+    )
+
+
+def _stand_down_stages_two_to_eight() -> None:
+    """§12's "with stages 2-8 declared no-ops", made true of the pipeline this run drains. See the
+    module docstring: each stage keeps its number, name, `paid` and `owner`, advances without
+    running, fetches nothing and is `implemented=False`; the drain's default fetcher refuses."""
+
+    def declared_no_op(stage: pipeline.Stage) -> pipeline.Stage:
+        async def stood_down(_ctx: stages.StageContext) -> stages.Outcome:
+            return stages.advance({"stood_down": f"stage {stage.number} is declared a no-op by "
+                                                 "ops/m51_exit_criterion.py (spec section 12, M5.1)"})
+
+        return pipeline.Stage(stage.number, stage.name, stood_down, paid=stage.paid,
+                              implemented=False, owner=stage.owner)
+
+    pipeline.STAGES = tuple(
+        declared_no_op(stage) if 2 <= stage.number <= 8 else stage for stage in pipeline.STAGES
+    )
+    pipeline._default_fetcher = _refuse_to_fetch
 
 
 async def build_install(conn: asyncpg.Connection, bundle_root: Path, work: Path) -> Install:
@@ -398,8 +458,10 @@ async def build_install(conn: asyncpg.Connection, bundle_root: Path, work: Path)
     Everything the twelve checks need and nothing they do not: the content, the artifacts staged
     under the temporary DATA_DIR, the active `artifact_bundle` row, and one `app_user` for
     check 4's shelf. No admin account and no HTTP client, because no check here goes through a
-    route -- check 11 is the exception and it probes an install this script did not build.
+    route -- check 11 is the exception and it probes an install this script did not build. And
+    stages 2-8 declared no-ops, as the criterion states the install (see the module docstring).
     """
+    _stand_down_stages_two_to_eight()
     bundle = bundle_import.Bundle.open(bundle_root)
     began = time.perf_counter()
     report = await bundle_import.import_bundle(conn, bundle, work / "artifacts")
@@ -1428,6 +1490,9 @@ async def main() -> int:
     conn: asyncpg.Connection | None = None
     work: Path | None = None
     ctx: Install | None = None
+    # Resolved before anything moves this process: `_neutralise_connector_env` chdirs into the
+    # scratch tree, and Windows will not delete the tree a process is standing in.
+    started_in = Path.cwd()
     try:
         work = Path(tempfile.mkdtemp(prefix="spielplan-m51-exit-"))
         # A temporary DATA_DIR, removed in the `finally`. It is the artifacts root AND the raw
@@ -1510,6 +1575,7 @@ async def main() -> int:
             logging.getLogger("spielplan").removeHandler(ctx.log)
         if conn is not None:
             await conn.close()
+        os.chdir(started_in)
         discard_staged_artifacts(work, None)
         admin = await asyncpg.connect(dsn.rsplit("/", 1)[0] + "/postgres")
         try:

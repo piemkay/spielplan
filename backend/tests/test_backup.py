@@ -154,8 +154,18 @@ JELLYFIN_INTAKE = {"jellyfin_intake"}
 # corpus. [decisions 341, 382; M5.4]
 DNA_EXTRACTION = {"dna_reject", "dna_pack"}
 
+# 0028_llm_spend's one table, and it is DNA_EXTRACTION's argument rather than a new one. `llm_call`
+# is this box's spend on this box's own provider keys, and every row cites raw documents - the pack
+# the call read and the response it got back - that the archive does not carry (decision 349), so
+# a restore carrying it would point at bytes the restored install does not hold (decision 382).
+# And the meter is a SUM over these rows for this install's own month (decision 325): carrying
+# them would start another household's month partly spent and park its stage 6 over a cap it never
+# came near. Not corpus. [decisions 325, 349, 382, 430; M5.5]
+LLM_SPEND = {"llm_call"}
+
 EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
-            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | JELLYFIN_INTAKE | DNA_EXTRACTION)
+            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | JELLYFIN_INTAKE | DNA_EXTRACTION
+            | LLM_SPEND)
 
 
 # --- the postgres client binaries -------------------------------------------------------------

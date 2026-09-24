@@ -1021,13 +1021,26 @@ def test_both_app_services_declare_a_stop_grace_period():
     assert not missing, f"Docker SIGKILLs these after its 10s default: {missing}"
 
 
+# The `Settings` field prefixes of every connector §2 lets the environment seed, and ONE tuple for
+# the compose guard and the two `.env.example` guards below, because three copies of it is how all
+# three went stale together. Each was written for the four M0 connectors, so when M5.5 gave
+# `Settings` the three LLM providers' keys (plan A3) the guards went on reading jellyfin_, tmdb_,
+# omdb_ and trakt_ and would have passed a compose file and a `.env.example` that carried no
+# GEMINI_API_KEY at all. The plan's risk note -- this guard "fails the moment you add a config field
+# without forwarding it", so the new fields "will otherwise fail, by design" -- was therefore false
+# until this widening: a field the tuple does not name is a field no guard reads. What holds it to
+# the code from now on is `test_every_variable_env_seeds_reads_is_one_the_seed_guards_read`, which
+# derives the fields from `registry.env_seeds` itself. [M5.5 plan A3, §9's risks]
+_SEED_PREFIXES = ("jellyfin_", "tmdb_", "omdb_", "trakt_", "gemini_", "anthropic_", "openai_")
+
+
 def _seed_fields() -> list[str]:
     from spielplan.core.config import Settings
 
     return [
         name.upper()
         for name in Settings.model_fields
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_"))
+        if name.startswith(_SEED_PREFIXES)
     ]
 
 
@@ -1189,6 +1202,55 @@ def test_the_grace_period_guard_sees_a_service_without_one():
 def test_the_seed_guard_sees_a_variable_that_stopped_being_forwarded():
     dropped = _compose().replace("  TMDB_API_KEY: ${TMDB_API_KEY:-}\n", "")
     assert _unforwarded_seeds(dropped) == ["TMDB_API_KEY"]
+
+
+def test_the_seed_guard_sees_a_provider_key_that_stopped_being_forwarded():
+    """The same mutation on the family M5.5 added, which the guard could not see until the tuple
+    above was widened: with the M0 prefixes it read the compose file without GEMINI_API_KEY as
+    complete, so an automated install's Gemini key would have seeded nothing and said nothing."""
+    compose = _compose()
+    dropped = compose.replace("  GEMINI_API_KEY: ${GEMINI_API_KEY:-}\n", "")
+    assert dropped != compose, "compose no longer forwards GEMINI_API_KEY in the form this removes"
+    assert _unforwarded_seeds(dropped) == ["GEMINI_API_KEY"]
+
+
+def _fields_env_seeds_reads() -> set[str]:
+    """Every `Settings` field `registry.env_seeds` reads, off its source: each `cfg.<field>`.
+
+    Read from the function rather than listed, because the list is the thing that went stale: the
+    seed guards were a copy of which connectors seed, and the copy stopped at four.
+    """
+    tree = ast.parse(_src(REPO / "backend" / "spielplan" / "connectors" / "registry.py"))
+    body = next(
+        (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "env_seeds"),
+        None,
+    )
+    assert body is not None, "connectors/registry.py no longer defines env_seeds"
+    return {
+        node.attr for node in ast.walk(body)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+        and node.value.id == "cfg"
+    }
+
+
+def test_every_variable_env_seeds_reads_is_one_the_seed_guards_read():
+    """The seed guards' subject, derived: a field `env_seeds` seeds from is a field they read.
+
+    The compose guard, the `.env.example` guards and the operator's first boot all turn on the same
+    set, and until M5.5 the guards' set was a literal that named four connector families while
+    `env_seeds` read seven -- so GEMINI_API_KEY, ANTHROPIC_API_KEY and OPENAI_API_KEY could have
+    been missing from compose and from the template with every one of those guards green. Held here
+    so the next connector family `env_seeds` learns is a red line in this file rather than a quiet
+    gap in three. [M5.5 plan A3]
+    """
+    read = _fields_env_seeds_reads()
+    # Not vacuous: the reader has to find the M0 family and the M5.5 one, or it is reading nothing.
+    assert {"jellyfin_url", "tmdb_api_key", "gemini_api_key"} <= read, read
+    unguarded = sorted(name.upper() for name in read if not name.startswith(_SEED_PREFIXES))
+    assert not unguarded, (
+        "registry.env_seeds seeds from these and no seed guard reads them, so compose and "
+        f".env.example could drop them with this file green: {unguarded}"
+    )
 
 
 def test_postgres_is_pinned_to_16():
@@ -1818,7 +1880,7 @@ def test_env_example_names_every_connector_seed_variable():
     seeds = [
         name.upper()
         for name in Settings.model_fields
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_"))
+        if name.startswith(_SEED_PREFIXES)
     ]
     assert seeds, "Settings should carry the connector seed fields"
     missing = [name for name in seeds if f"{name}=" not in example]
@@ -1830,7 +1892,7 @@ def test_env_example_marks_the_seed_variables_optional():
     as absent, and "configured empty" is a state §2 never wants."""
     example = (REPO / ".env.example").read_text(encoding="utf-8")
     for line in example.splitlines():
-        if line.startswith(("JELLYFIN_", "TMDB_", "OMDB_", "TRAKT_")):
+        if line.startswith(tuple(prefix.upper() for prefix in _SEED_PREFIXES)):
             raise AssertionError(f"connector seed left uncommented in .env.example: {line}")
 
 
@@ -1982,6 +2044,218 @@ def test_the_dependency_guard_catches_a_production_import_of_a_dev_only_package(
     production module doing `import pytest` must fail here, and say why."""
     undeclared, _ = _undeclared_imports(PYPROJECT.read_text(encoding="utf-8"), {"pytest"})
     assert undeclared and "the image does not install" in undeclared[0], undeclared
+
+
+# --- §9: no vendor SDK reaches the LLM layer ----------------------------------------------------
+#
+# §9's constraint is "no vendor SDKs; one POST per provider through the rate-limited fetcher", and
+# until M5.5 it held only by absence: the dependency spec carried httpx and nothing that speaks to a
+# provider, so the first person to reach for `openai` to write a shorter adapter would have broken a
+# spec clause nothing was watching. It is two guards in the torch guard's shape, each read off an
+# artifact rather than a runtime - the dependency spec every consumer installs from, and the modules
+# under `spielplan/llm/` - because the second is what the first cannot see: a module can import a
+# package the spec never names, and one that opens its own HTTP client has left the fetcher without
+# importing any SDK at all. The fetcher is where the per-host politeness, the breaker and the retry
+# budget live (`acquire/fetch.py`), so a provider client that bypasses it has none of the three.
+# [M5.5 plan B6, §6]
+#
+# A DENYLIST AND NOT AN ALLOWLIST, and the difference is what keeps this a rule about §9 rather than
+# about taste. The allowlist of this project's dependencies IS `pyproject.toml`; a second copy of it
+# here would go red on every unrelated addition - a guard about LLM SDKs failing because someone
+# added a compression library - and would be updated by rote, which is how an allowlist stops being
+# read. What §9 forbids is a class, and the class is enumerable: each provider's own SDK under every
+# distribution name it has shipped (Google alone has published four), and the wrappers that make the
+# call through one of those or through a client of their own. The list's blind spot is a wrapper
+# nobody has named yet, and that is the import guard's job: whatever the distribution is called, a
+# module under `llm/` that imports it, or that imports an HTTP client instead of `acquire.fetch`,
+# fails there.
+LLM_SDK_DISTRIBUTIONS = frozenset({
+    # The three providers M5.5 speaks to, under every name each has published a Python SDK as.
+    "anthropic", "openai",
+    "google-generativeai", "google-genai", "google-ai-generativelanguage",
+    "google-cloud-aiplatform", "vertexai",
+    # Wrappers that route a provider call through one of those or through a client of their own.
+    "litellm", "instructor", "openai-agents",
+})
+# Families published as one distribution per integration (`langchain-openai`, `llama-index-llms-
+# gemini`, `pydantic-ai-slim`): the family's name and any `<name>-...` distribution.
+LLM_SDK_FAMILIES = ("langchain", "llama-index", "pydantic-ai")
+
+# The same class as import paths, plus the HTTP clients a module would reach for instead of the
+# fetcher. `urllib.request` and `http.client` and not `urllib` or `http`: `gemini.py` quotes its model
+# name with `urllib.parse`, which opens nothing.
+LLM_SDK_MODULES = (
+    "anthropic", "openai", "google.generativeai", "google.genai", "google.ai.generativelanguage",
+    "google.cloud.aiplatform", "vertexai", "litellm", "instructor",
+)
+LLM_SDK_MODULE_FAMILIES = ("langchain", "llama_index", "pydantic_ai")
+HTTP_CLIENT_MODULES = ("httpx", "requests", "aiohttp", "urllib3", "urllib.request", "http.client")
+
+LLM_PACKAGE = REPO / "backend" / "spielplan" / "llm"
+
+
+def _is_llm_sdk(dist: str) -> bool:
+    """A normalised distribution name (`_dist`'s) that §9 forbids: listed, or of a listed family."""
+    return dist in LLM_SDK_DISTRIBUTIONS or any(
+        dist == family or dist.startswith(family + "-") for family in LLM_SDK_FAMILIES
+    )
+
+
+def _declared_llm_sdks(pyproject_text: str) -> list[str]:
+    """Every LLM SDK the dependency spec declares, in the image's list or in any extra.
+
+    The extras are read as well as the image's list, and on purpose: `[dev]` is what the tests and
+    `ops/` run under, and an SDK there is the one a test double or an exit script would be written
+    against instead of the fetcher - a second door to the provider that the image then lacks.
+    """
+    runtime, extras_only = _declared_dependencies(pyproject_text)
+    return sorted(dist for dist in runtime | extras_only if _is_llm_sdk(dist))
+
+
+def _imports_around_the_fetcher(source: str, label: str) -> list[str]:
+    """Every import in `source` of an LLM SDK or of an HTTP client, as `label:line: module`.
+
+    Judged on the MODULE PATH and never on the name bound: `from spielplan.llm import openai` is
+    this package's own adapter and names nothing third-party, while `from openai import OpenAI` is
+    the SDK. A relative import is the package's own by definition. For `from X import Y` both `X`
+    and `X.Y` are candidates, because `from google import genai` and `from urllib import request`
+    spell the forbidden path across the two halves of the statement.
+    """
+    banned = LLM_SDK_MODULES + HTTP_CLIENT_MODULES
+    hits: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            candidates = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            candidates = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
+        else:
+            continue
+        for path in candidates:
+            if any(path == name or path.startswith(name + ".") for name in banned) or any(
+                path.split(".")[0].startswith(family) for family in LLM_SDK_MODULE_FAMILIES
+            ):
+                hits.append(f"{label}:{node.lineno}: {path}")
+                break
+    return hits
+
+
+def test_no_llm_provider_sdk_is_declared_in_the_dependency_spec():
+    """§9: "no vendor SDKs; one POST per provider through the rate-limited fetcher".
+
+    Read off `pyproject.toml` because that is what every consumer installs from - the image, CI's
+    jobs and a developer's `-e ".[dev]"` alike, which is the torch guard's argument above for the
+    same file. The premise is asserted beside the rule: the spec carries the one HTTP library the
+    fetcher is built on, so a reader that parsed nothing would fail here rather than pass.
+    """
+    text = PYPROJECT.read_text(encoding="utf-8")
+    runtime, _ = _declared_dependencies(text)
+    assert "httpx" in runtime, "the dependency reader no longer finds httpx, so it is reading nothing"
+    declared = _declared_llm_sdks(text)
+    assert not declared, (
+        "backend/pyproject.toml declares an LLM provider SDK or wrapper, and section 9 allows none: "
+        f"every provider call is one POST through acquire.fetch.Fetcher: {declared}"
+    )
+
+
+def test_the_sdk_dependency_guard_sees_a_declared_sdk():
+    """docs/TESTING.md: "a guard that cannot fail reads as coverage while providing none".
+
+    Each shape a real addition takes - a provider's own SDK in the image's list with an extra of its
+    own, a Google name, a wrapper family's integration package in `[dev]` - and the near misses
+    that must stay silent, `openapi-*` above all: a substring rule would read the OpenAPI tooling a
+    FastAPI project plausibly adds as the OpenAI SDK.
+    """
+    def toml_list(items: list[str]) -> str:
+        return "[" + ", ".join(f'"{item}"' for item in items) + "]"
+
+    def spec(runtime: list[str], dev: list[str]) -> str:
+        return (f"[project]\nname = \"probe\"\ndependencies = {toml_list(runtime)}\n"
+                f"[project.optional-dependencies]\ndev = {toml_list(dev)}\n")
+
+    caught = _declared_llm_sdks(spec(
+        ["httpx>=0.27", "openai>=1.40", "anthropic[vertex]>=0.34", "google-genai==1.2"],
+        ["pytest>=8.3", "langchain-openai>=0.2", "llama-index-llms-gemini", "LiteLLM>=1.0"],
+    ))
+    assert caught == [
+        "anthropic", "google-genai", "langchain-openai", "litellm", "llama-index-llms-gemini",
+        "openai",
+    ], caught
+    assert _declared_llm_sdks(spec(
+        ["httpx>=0.27", "openapi-core>=0.19", "openapi-spec-validator", "langchainish"], ["pytest"],
+    )) == []
+
+
+def test_no_llm_module_imports_a_vendor_sdk_or_an_http_client_of_its_own():
+    """The modules half: nothing under `spielplan/llm/` imports a provider SDK, a wrapper, or an
+    HTTP client - httpx included, which the fetcher itself is built on and which is exactly the
+    import a "simpler" adapter would add to post once without the fetcher's pacing, breaker and
+    retry budget. [§9; M5.5 plan B6]
+
+    Both halves of the reading are asserted. The walk has to reach the three adapters and the
+    client, or a moved package would pass it by being empty; and each adapter has to import
+    `acquire.fetch`, which is the positive form of the rule - the door every provider call goes
+    through is the fetcher, and a module that stopped importing it has found another one.
+    """
+    modules = sorted(LLM_PACKAGE.rglob("*.py"))
+    names = {path.name for path in modules}
+    assert {"client.py", "anthropic.py", "openai.py", "gemini.py"} <= names, (
+        f"the walk read {sorted(names)} under {LLM_PACKAGE}; it is looking in the wrong place"
+    )
+    offenders = [
+        hit
+        for path in modules
+        for hit in _imports_around_the_fetcher(_src(path), path.relative_to(REPO).as_posix())
+    ]
+    assert not offenders, (
+        "a module under spielplan/llm/ imports an LLM SDK or an HTTP client of its own; section 9 "
+        "puts every provider call through acquire.fetch as one POST:\n  " + "\n  ".join(offenders)
+    )
+    through_the_fetcher = {
+        path.name for path in modules
+        if any(
+            isinstance(node, ast.ImportFrom) and node.module == "spielplan.acquire"
+            and any(alias.name == "fetch" for alias in node.names)
+            for node in ast.walk(ast.parse(_src(path)))
+        )
+    }
+    assert {"client.py", "anthropic.py", "openai.py", "gemini.py"} <= through_the_fetcher, (
+        f"only {sorted(through_the_fetcher)} import acquire.fetch; an adapter that stopped has found "
+        "another way to the provider"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "caught"),
+    [
+        # Every spelling of the SDK import, including the two that split the path across `from`
+        # and `import`, and the wrapper families by their integration packages.
+        ("import openai", True),
+        ("import anthropic as vendor", True),
+        ("from openai import AsyncOpenAI", True),
+        ("from google import genai", True),
+        ("import google.generativeai as genai", True),
+        ("from google.cloud import aiplatform", True),
+        ("from langchain_openai import ChatOpenAI", True),
+        ("import litellm", True),
+        # A client of its own, which is the route around the fetcher that imports no SDK at all.
+        ("import httpx", True),
+        ("from httpx import AsyncClient", True),
+        ("from requests import Session", True),
+        ("import aiohttp", True),
+        ("from urllib import request", True),
+        ("import urllib.request", True),
+        ("from http import client", True),
+        # And the imports this package really makes, which must stay silent: its own adapters by
+        # absolute and by relative path, the fetcher, and the quoting `gemini.py` does.
+        ("from spielplan.llm import anthropic, gemini, openai", False),
+        ("from . import openai", False),
+        ("from spielplan.acquire import fetch", False),
+        ("from urllib.parse import quote", False),
+        ("from http import HTTPStatus", False),
+    ],
+)
+def test_the_llm_import_guard_sees_every_spelling_of_an_sdk_or_a_client(source, caught):
+    assert bool(_imports_around_the_fetcher(source + "\n", "probe.py")) is caught, source
 
 
 # --- CLAUDE.md: `api/` decides only HTTP shapes; app.py is the only thing that mounts it ---
@@ -2289,8 +2563,30 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # every parallel merge has to re-derive, buys no rule this block does not already hold: each sweep
 # below reads EVERY script the glob finds, so a new script is held to all of them the moment it
 # exists. The five assertions now require only that the glob finds something. [decision 460]
+#
+# `ops/m55_exit_criterion.py` was read against every rule here before it landed, and came back
+# empty. No printed literal outside cp850:
+# every literal it holds bar its docstrings is ASCII, and what it did not author goes through
+# `console()` on the way out - decision 348's park sentence with its section sign, the over-cap
+# reason, the retry prompts as the double received them with the model's own quotes inside, the
+# app's warnings it summarises and the httpx line it quotes - and where a failure has to show where
+# a key landed it prints `[redacted]` in the key's place, the double's own log's rule. No `check()`
+# predicate settled before the run: its fourteen verdicts are conjunctions over what the double
+# recorded and what the run read back out of `llm_call`, `dna_tag`, `dna_reject`, `raw_document`,
+# the board and the queue, each bound once. A computed terminal verdict. No component read at all,
+# because the milestone ships no surface. Nothing that can fail between its CREATE DATABASE and the
+# block whose finally drops it - its log captures are built before the CREATE for exactly that
+# reason - an `except Exception` around the measurement that reports rather than propagates, and
+# both arms on every numbered heading it prints. It has no `rate()` seeding path for the last rule
+# to exempt: it seeds through `registry.save_connector`, the importer's `load_vocabulary`,
+# `dna.packs.store_pack` and `pipeline.drain`, which is `ops/m45_exit_criterion.py`'s exemption for
+# the same reason - what it measures IS stage 6 walked by the driver, so a harness that wrote the
+# rows it reads back would be measuring itself. And like M5.2's it has NO THIRD COLUMN:
+# `ops/fake_llm.py` is mounted in-process as the transport of the real Fetcher, so every check
+# measures in any lane with a Postgres and the exit codes are 0, 1 and the 2 it refuses a missing
+# database or double with. [M5.5, decision 435]
 
-EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
+EXIT_SCRIPTS =tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
 
 

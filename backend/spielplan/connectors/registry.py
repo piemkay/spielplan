@@ -12,14 +12,21 @@ Two rules follow, and both are load-bearing:
      people stop trusting the admin UI.
   2. **A secret needs SECRETS_KEY.** Seeding an API key without one would either drop it on
      the floor or store it in the clear; the app refuses instead (§2), loudly, at boot.
+
+Every connector §6.6 draws a card for is one `ConnectorSpec` in `CONNECTORS`, read and written
+through `load_connector` / `save_connector` and tested through `test_connector` (M5.5 plan A1-A4,
+decision 433). Jellyfin's row is `load_jellyfin` and `save_jellyfin` themselves; the section at
+the end of this module argues why.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from secrets import token_urlsafe
 from typing import Any
 
@@ -138,6 +145,16 @@ def env_seeds(cfg: Settings | None = None) -> dict[str, tuple[dict[str, Any], di
             {"client_id": cfg.trakt_client_id},
             {"client_secret": cfg.trakt_client_secret} if cfg.trakt_client_secret else {},
         )
+    # §2's "Jellyfin, LLM, TMDB, OMDb, Trakt": the LLM half is each provider's key, sealed like
+    # every credential above (M5.5 plan A3). The model is the admin card's to choose, and the
+    # `llm` settings row is never seeded -- its cap is the one figure decision 325 refuses to ship,
+    # and an env file supplying it would be that default arriving by another door.
+    if cfg.gemini_api_key:
+        seeds["gemini"] = ({}, {"api_key": cfg.gemini_api_key})
+    if cfg.anthropic_api_key:
+        seeds["anthropic"] = ({}, {"api_key": cfg.anthropic_api_key})
+    if cfg.openai_api_key:
+        seeds["openai"] = ({}, {"api_key": cfg.openai_api_key})
     return seeds
 
 
@@ -620,14 +637,286 @@ async def delta_since(conn: asyncpg.Connection, cfg: JellyfinConfig) -> datetime
     return gained or datetime.now(UTC)
 
 
+# --- §6.6's connectors, as one table (M5.5 plan A1, A2, A4) ----------------------------------
+#
+# §6.6 draws a card per connector -- Jellyfin, the LLM providers, TMDB, OMDb, Trakt -- each with
+# settings, a secret and a test button, and §2 stores every one of them in `connector_config`.
+# Until M5.5 this module could read and write exactly one. What follows names all of them and
+# gives any of them one read and one write over the storage `core.secrets` already had, so a card
+# M5.7 adds is a row here rather than a loader and a route of its own.
+#
+# JELLYFIN'S ROW IS ITS OWN TWO FUNCTIONS, BY IDENTITY (plan A2). The generic merge below knows
+# nothing of §14.3's origin rule, of the watermark's origin (decision 366), of the library pick
+# that survives a move (decision 364) or of the mint a save has to ask for (decisions 416, 418),
+# and each of those is in the bodies above because a review found it missing. So the row points at
+# `load_jellyfin` and `save_jellyfin` rather than wrapping them, `JellyfinConfig` stays the type
+# their callers read, and every caller keeps calling them by name: becoming a row changes nothing
+# a caller of Jellyfin can observe.
+
+
+@dataclass(frozen=True)
+class ConnectorState:
+    """Any connector but Jellyfin, as stored: the plaintext half and the opened sealed half.
+
+    Two dicts rather than a class per connector, because a provider card, a source card and the
+    `llm` settings row differ only in the names they hold, and those names are declared once, by
+    their `ConnectorSpec`. Jellyfin keeps `JellyfinConfig`: its callers read fields, and it is the
+    one connector whose merge has rules of its own.
+    """
+
+    name: str
+    config: dict[str, Any] = field(default_factory=dict)
+    # `JellyfinConfig`'s rule and its reason: a provider key bills the household and a TMDB key is
+    # an account's, and a default repr copies either into any traceback or `%r` log line that
+    # happens to hold the state (§14.3). The name and the settings stay visible, because they are
+    # what makes such a line worth having.
+    secrets: dict[str, Any] = field(default_factory=dict, repr=False)
+    # `JellyfinConfig.secrets_unreadable`, drawing the same line: a connector nobody has set up,
+    # against one whose credentials exist and will not open under this SECRETS_KEY -- and only the
+    # second tells the admin to restore an env file (§2, §3.3, M4.7 dd03).
+    secrets_unreadable: bool = False
+
+
+@dataclass(frozen=True)
+class ConnectorSpec:
+    """One of §6.6's connectors: how it is read, written and tested, and what it stores.
+
+    `load(conn, *, for_update=False)` and `save(conn, **fields)` are the connector's read and its
+    partial merge. `config_fields` and `secret_fields` are the names a save may carry, split by the
+    half of the row §2 stores them in. `test` is the card's test button, or None where this build
+    has none (decision 433). `seeded` says `env_seeds` offers the connector a first-boot seed, and
+    `test_connector_registry.py` holds the flag to what `env_seeds` returns rather than trusting it.
+    """
+
+    name: str
+    load: Callable[..., Awaitable[Any]]
+    save: Callable[..., Awaitable[Any]]
+    config_fields: tuple[str, ...]
+    secret_fields: tuple[str, ...]
+    test: Callable[[asyncpg.Connection], Awaitable[dict[str, Any]]] | None
+    seeded: bool
+
+
+async def _load_state(
+    name: str, conn: asyncpg.Connection, *, for_update: bool = False
+) -> ConnectorState:
+    """The generic read, which degrades rather than raising when the sealed half will not open.
+
+    `load_jellyfin` argues both halves and this is its answer for every other connector. The lock
+    is the row, for the read-modify-write `_save_state` does under it. An unreadable DEK returns the
+    whole plaintext half with `secrets_unreadable` set, never an exception: §3.1 makes a
+    half-configured install legal, and a save rebuilt from an empty read would erase the admin's
+    settings along with the credential that actually failed.
+    """
+    if for_update:
+        await conn.execute("SELECT name FROM connector_config WHERE name = $1 FOR UPDATE", name)
+    try:
+        config, secret = await secrets.get_connector_secrets(conn, name)
+    except secrets.SecretsUnreadable as exc:
+        # ERROR and on every read, for `load_jellyfin`'s reasons: §6.6 names logs as the operator's
+        # data, this is not transient, and de-duplicating it would need process state the worker
+        # container does not share with the backend.
+        log.error("connector %s secrets are unreadable: %s", name, exc)
+        stored = await conn.fetchval(
+            "SELECT config FROM connector_config WHERE name = $1", name
+        ) or {}
+        return ConnectorState(name=name, config=dict(stored), secrets_unreadable=True)
+    return ConnectorState(name=name, config=dict(config), secrets=dict(secret))
+
+
+async def _save_state(name: str, conn: asyncpg.Connection, **fields: Any) -> ConnectorState:
+    """Merge a partial update into any connector but Jellyfin.
+
+    Partial for `save_jellyfin`'s reason: a card shows a stored secret as a mask and posts it empty,
+    and a whole-row write would blank the key every time the admin changed the model. So a config
+    value of None, and a secret of None or "", keep what is stored. A name the spec does not declare
+    is refused before anything is written, because a misspelt `apikey` would otherwise be stored in
+    the plaintext half beside the model while the provider went on refusing the key the admin
+    believes they saved.
+    """
+    spec = CONNECTORS[name]
+    declared = spec.config_fields + spec.secret_fields
+    unknown = sorted(set(fields) - set(declared))
+    if unknown:
+        raise ValueError(
+            f"connector {name} has no field {', '.join(unknown)}; "
+            f"it declares {', '.join(declared) or 'none'}"
+        )
+    typed = {key: fields[key] for key in spec.secret_fields if fields.get(key) not in (None, "")}
+    if typed:
+        # §2's refusal, before anything is written: a typed credential with no custody has nowhere
+        # to be sealed, and `seed_from_env` argues why this is `settings()` and no argument.
+        settings().require_secrets_key()
+    async with conn.transaction():
+        # The row before the lock, for `save_jellyfin`'s reason: `for_update` locks nothing when no
+        # row exists, and the first save is exactly the one with none, so two first saves would each
+        # merge onto an empty read. [review cycle 1: m52-rev1-token-02]
+        await conn.execute(
+            "INSERT INTO connector_config (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name
+        )
+        current = await _load_state(name, conn, for_update=True)
+        config = dict(current.config)
+        config.update({key: fields[key] for key in spec.config_fields if fields.get(key) is not None})
+        if not typed:
+            # Nothing new to seal, so the sealed columns are left exactly as they are. On an install
+            # whose DEK will not open that is what keeps a ciphertext which is unreadable only until
+            # the right .env returns (§2, `save_jellyfin`'s last branch, M4.7 dd03); anywhere else it
+            # is the stored secret carried forward without being re-sealed.
+            await secrets.put_connector_config(conn, name, config)
+            return replace(current, config=config)
+        # A typed credential is the gesture that may retire a DEK row nothing can open, argued at
+        # `save_jellyfin`'s last write (§14.3, §2, M4.7 dd03). What could not be read cannot be
+        # carried, so an unreadable row's other secrets are gone once this seals over them.
+        sealed = {**({} if current.secrets_unreadable else current.secrets), **typed}
+        await secrets.put_connector_secrets(conn, name, config, sealed, retire_unreadable=True)
+        return ConnectorState(name=name, config=config, secrets=sealed)
+
+
+async def _probe_provider(name: str, conn: asyncpg.Connection) -> dict[str, Any]:
+    """A provider card's test button: the provider's free models-list read (decision 433).
+
+    The two answers known without a request are given without one -- no key typed yet, and a key
+    this SECRETS_KEY cannot open, in the rail's own sentence. Otherwise the call is
+    `spielplan.llm`'s, imported here the way `make_client` imports the Jellyfin client: the adapters
+    are that package's and may read this module, and this module is on the path of every route that
+    reads a connector while the adapters are wanted by one button. The request goes through the
+    shared fetcher with the key in a header, which is `client.probe`'s to hold (§9).
+    """
+    state = await load_connector(conn, name)
+    if state.secrets_unreadable:
+        return {"ok": False, "error": SECRETS_UNREADABLE_REASON}
+    key = str(state.secrets.get("api_key") or "")
+    if not key:
+        return {"ok": False, "error": f"no API key is configured for {name}"}
+    from spielplan.llm import client
+
+    async with client.open_fetcher(conn) as fetcher:
+        return await client.probe(fetcher, name, key=key, model=state.config.get("model") or None)
+
+
+def _stored(
+    name: str,
+    *,
+    config_fields: tuple[str, ...] = (),
+    secret_fields: tuple[str, ...] = (),
+    test: Callable[[asyncpg.Connection], Awaitable[dict[str, Any]]] | None = None,
+    seeded: bool,
+) -> ConnectorSpec:
+    """A connector the generic read and merge serve, bound to its own row by name."""
+    return ConnectorSpec(
+        name=name, load=partial(_load_state, name), save=partial(_save_state, name),
+        config_fields=config_fields, secret_fields=secret_fields, test=test, seeded=seeded,
+    )
+
+
+# A provider's settings are its model and decision 343's admin price override (USD per 1M tokens,
+# input and output); its one secret is the key, which travels in a header and nowhere else (§9).
+_PROVIDER_FIELDS = ("model", "price_input", "price_output")
+
+CONNECTORS: dict[str, ConnectorSpec] = {
+    spec.name: spec
+    for spec in (
+        # No test here: `api/admin.test_jellyfin` stores §7.1's probed verdict as it tests, and it
+        # stays that card's route (decision 433).
+        ConnectorSpec(
+            name=JELLYFIN, load=load_jellyfin, save=save_jellyfin,
+            config_fields=(
+                "url", "library_ids", "server_version", "server_supported", "delta_watermark",
+            ),
+            secret_fields=("api_key", "user_tokens", "webhook_token"),
+            test=None, seeded=True,
+        ),
+        # The three keyed sources, whose adapters keep reading through `sources/credentials.py`
+        # (decision 434); their test buttons are M5.7's source cards (decision 433). Trakt's client
+        # id is config and not a secret, which is `env_seeds`' own split above.
+        _stored("tmdb", secret_fields=("api_key",), seeded=True),
+        _stored("omdb", secret_fields=("api_key",), seeded=True),
+        _stored("trakt", config_fields=("client_id",), secret_fields=("client_secret",), seeded=True),
+        _stored("gemini", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
+                test=partial(_probe_provider, "gemini"), seeded=True),
+        _stored("anthropic", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
+                test=partial(_probe_provider, "anthropic"), seeded=True),
+        _stored("openai", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
+                test=partial(_probe_provider, "openai"), seeded=True),
+        # §6.6's LLM settings, which belong to no one provider: the per-task assignment for the one
+        # task M5 calls, parallel mode and its providers, the pass count (decision 324) and the
+        # monthly cap (decision 325). Nothing here is secret, and nothing is seeded, because the
+        # cap is the default decision 325 refuses to ship.
+        _stored(
+            "llm",
+            config_fields=(
+                "cap_usd", "extraction_provider", "parallel", "parallel_providers", "passes",
+            ),
+            seeded=False,
+        ),
+    )
+}
+
+
+def spec_for(name: str) -> ConnectorSpec:
+    """The registered connector called `name`, or a refusal that names every one there is."""
+    try:
+        return CONNECTORS[name]
+    except KeyError:
+        raise LookupError(
+            f"no connector named {name!r}; the registered ones are {', '.join(sorted(CONNECTORS))}"
+        ) from None
+
+
+async def load_connector(
+    conn: asyncpg.Connection, name: str, *, for_update: bool = False
+) -> JellyfinConfig | ConnectorState:
+    """Any connector's stored state: `load_jellyfin(conn, for_update=...)` for Jellyfin, since that
+    is its row's `load`, and the degrading generic read for every other."""
+    return await spec_for(name).load(conn, for_update=for_update)
+
+
+async def save_connector(
+    conn: asyncpg.Connection, name: str, **fields: Any
+) -> JellyfinConfig | ConnectorState:
+    """Any connector's partial merge: `save_jellyfin(conn, **fields)` for Jellyfin, since that is
+    its row's `save`, and the generic merge for every other.
+
+    One argument is refused on the way to Jellyfin, and it is the mint. Decision 416 gives
+    `mint_webhook_token` to `api/admin.put_jellyfin` alone and decision 418 lets only a save that
+    asks make the one appearance decision 332 allows, so a generic write that forwarded it would
+    hand that gesture to whatever body a future card posts. Every other argument reaches
+    `save_jellyfin` untouched, and its own signature refuses what it does not take.
+    """
+    spec = spec_for(name)
+    if spec.name == JELLYFIN and "mint_webhook_token" in fields:
+        raise ValueError(
+            "the jellyfin webhook token is minted only by the admin's own save "
+            "(api/admin.put_jellyfin, decision 416), never through save_connector"
+        )
+    return await spec.save(conn, **fields)
+
+
+async def test_connector(conn: asyncpg.Connection, name: str) -> dict[str, Any]:
+    """The one dispatch behind every card's test button (plan A4: "One dispatch table, not a route
+    per provider"). A connector with no test in this build is refused by name rather than answered
+    with a guessed probe, and the API maps the refusal to 404 (decision 433)."""
+    spec = spec_for(name)
+    if spec.test is None:
+        raise LookupError(f"connector {name} has no test in this build")
+    return await spec.test(conn)
+
+
 __all__ = [
+    "CONNECTORS",
     "JELLYFIN",
     "SECRETS_UNREADABLE_REASON",
+    "ConnectorSpec",
+    "ConnectorState",
     "JellyfinConfig",
     "delta_since",
     "env_seeds",
     "make_client",
+    "load_connector",
     "load_jellyfin",
+    "save_connector",
     "save_jellyfin",
     "seed_from_env",
+    "spec_for",
+    "test_connector",
 ]

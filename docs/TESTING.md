@@ -269,7 +269,7 @@ A dated reading (2026-09-24), not a maintained figure (decision 460): run
   M5.2    3/3   covered
   M5.3    6/6   covered
   M5.4    8/8   covered
-  M5.5    0/2   covered
+  M5.5    5/5   covered
   M5.6    0/2   covered
   M5.7    0/2   covered
   M5    0/1   covered
@@ -370,6 +370,61 @@ records that M5.3's plan assigns the same adjudication ledger a second reader. I
 is `0027_dna_extraction.sql`, the number `docs/milestones/ROADMAP-M5.md`'s ledger allocates to it;
 0025 and 0026 belong to the two lanes building beside it, and 0019 stays permanently unused.
 
+**M5.5 opened once the wave M5.2, M5.3 and M5.4 built in had landed, and it is the second milestone
+whose rows were appended to a map another milestone holds.** `current_milestone` is still `"M5.1"`,
+so M5.5's five rows are owed rather than armed, as M5.4's are, and the `M5.5    5/5` above is the red
+list it opened with, closed by eighty-four ids at build and held, since review cycle 1 registered
+its own, by 124 ids and, since review cycle 2 registered fifteen more,
+by 139 ids in fourteen pytest files and no e2e spec. Two of the five were
+already here. The two-attempt validator and the spend meter were re-pointed from "M5" to M5.5 as
+M5.1 opened, milestone key and nothing else, and this milestone left their `what`, `why` and `spec`
+as it found them: what moved is the `tests` key. The spend meter's `spec` goes on citing proposals
+107 and 109 on purpose. Whether those two are adopted or struck is question 330 in
+`docs/milestones/ROADMAP-M5.md`, M5.6's and M5.7's to take, and respelling the citation as a
+decision nobody has taken is what `_laundered_decision_citations` refuses. The other three were
+written before the code they describe and opened with no `tests` key, which is M5.4's opening
+again: one for the dependency spec and the imports that keep every vendor SDK out of the LLM layer
+(§9), one for the provider key that reaches no URL, no raw-store row and no log line, and one for
+decision 337's rule that run agreement is a weight and never a filter.
+
+**Five rows the map already had were amended in place rather than duplicated,** named so an auditor
+can check each rather than take the count: `platform-connector-config-env-seed-only`, M0's env-seed
+row, which gained the generic connector table's tests and the two guards that read the three
+provider keys once their prefix tuple was widened past the four M0 families;
+`platform-exit-criteria-are-closed-by-a-committed-measurement`, M4.16's release-record row, whose
+`why` counts twenty build-order criteria since M5.5's row was written and still nine never run -
+M5.5's instrument was run from this lane, so `docs/RELEASE.md` records its row RUN, OUTPUT NOT
+COMMITTED rather than UNMEASURED (decision 435); `platform-app-fixture-is-isolated-from-the-operators-env`,
+M4.8's row, which review cycle 1 gave the two tests holding every neutralising exit script to
+leaving no provider key in its environment and review cycle 2 widened to those scripts by name and
+to every spelling of a key's name; `jellyfin-acquisition-eval-an-acquired-title-is-minted-placed-and-badged`,
+M5.1's acquisition row, which review cycle 1 gave `ops/m51_exit_criterion.py`'s check 1 run with
+stages 2-8 declared no-ops; and `platform-the-suite-says-whether-the-integration-layer-ran`, M4.8's
+ledger row, whose marked-rows clause review cycle 2 widened from `current_milestone`'s block to
+every block written ahead of it - the guard over this banner could not see the two rows before it,
+and read M5.5's block for the first time when it was widened (M55-C2-DOC-02). A review cycle's
+amendments are amendments like any other.
+
+Decisions **324, 325, 337, 338** and **343** - the five the roadmap files against it, taken under
+their own numbers - and **430-435** record the calls it needed, eleven taken in one sitting as the
+milestone opened; its review cycle 1 took **436**, every paid attempt metered from before it is sent
+and settled to what the provider reported, and **437**, the Anthropic price rows re-read from the
+published page; and its review cycle 2 took **438**, the walk-length bound recorded and owed rather
+than enforced, and **439**, a refusal of the household's account, of its model or by the breaker
+before anything was billed parked rather than failed, which spends its block to the end, where this
+sentence went on calling 438 and 439 spare after 438 was taken. Four bind its code directly: 325
+makes the cap a calendar-month SUM over `llm_call` with no shipped default and the retry budgeted
+inside it, so `refuse_uncapped_spend` kept its name and became the cap check; 337 ports the corpus's
+`merge_passes` and counts runs rather than providers; 431 makes a second contract violation a
+permanent failure, so "retried exactly once" holds per title and not per walk; and 432 wires stage 6
+alone, so stages 5, 7 and 8 keep their no-op declarations and every walk-to-ready test stands stage 6
+down as a declared no-op - which moved assertions in `test_acquire_pipeline.py` as well as its
+fixtures, each listed with its reason in decision 432's Cost, where this sentence used to say "in test
+bodies only" (review cycle 1, NBR-04). Its one migration is `0028_llm_spend.sql`, the number
+`docs/milestones/ROADMAP-M5.md`'s ledger allocates to it, and 0019 stays permanently unused. It ships
+no UI, so no placeholder in `e2e/specs/05-milestones.spec.js` moves and the browser gate is expected
+to print what it printed before it.
+
 **M5.1 is the milestone this block was last re-pasted for, and its `6/6` closed the red list it
 opened with — six rows written before a line of its code existed.** Those six, `current_milestone`
 and `MILESTONES`' seven new names land in ONE commit: a milestone present in one and absent from
@@ -377,7 +432,7 @@ the other fails `covered != set(MILESTONES)` for every lane at once, and six oth
 on this one. Every one of the six opened with NO `tests` key, which is M4.10's, M4.11's and M4.16's
 opening rather than M4.9's and M4.15's — THE RED LIST WAS THE TEST PLAN, and it closed by those
 tests being written, never by a waiver, never by renaming a registered test and never by lowering
-`current_milestone`. The names now reach **121 ids across nine pytest files and no e2e spec**, and
+`current_milestone`. The names now reach **122 ids across ten pytest files and no e2e spec**, and
 the series is published rather than left as a total to take on trust (decision 184): **46 ids** in
 `test_acquire_fetch.py` for the polite per-host fetcher, **40 ids** in `test_acquire_pipeline.py`
 for the ten-stage driver, **18 ids** in `test_acquire_rawstore.py` for the raw store, **10 ids** in
@@ -386,8 +441,10 @@ that drives them, **3 ids** in `test_acquire_schema.py` for the half of
 the two-rows-one-file rule only a database can refuse, for the lease's sort key and for the
 coordinates this package cites into a test file and a migration, **1 id** in `test_acquisition_board.py` for
 decision 345's board, **1 id** in `test_devstub_contract.py` for the harness's copy of that same
-rule, and **1 id** in `test_api_gating.py` for the `/events` namespace. That last id is the
-one name in the series this milestone did not write:
+rule, **1 id** in `test_m51_exit_criterion.py`, added by M5.5's review cycle 1, for this milestone's
+own exit script run through its check 1 with stages 2-8 declared no-ops as its criterion states them,
+and **1 id** in `test_api_gating.py` for the `/events` namespace. That last id is the
+one name in the series older than this milestone:
 `test_the_spa_fallback_does_not_answer_for_the_api_namespace` predates M5.1 and was EXTENDED
 rather than duplicated, which is what decision 332 rules, so it now closes M4.6's
 `map-taste-admin-wizard-ends-at-the-bundle-import` and M5.1's `/events` row at once. It is the
@@ -604,9 +661,9 @@ three tables out of the movie-data archive. They are numbered 347-349 and not 34
 `docs/milestones/ROADMAP-M5.md` files 346 against M5.3, whose own plan is bound to record it
 under that number: a number allocated to a milestone that has not opened is a hole like any
 other, and spending it here would leave two normative rules under one heading. The range is
-deliberately full of holes, and M5.3 took 326, 334, 335 and 346 out of them as it opened and M5.4
-341, leaving **324-325** spare, **327-330** spare, **333** spare, **337-339** spare and
-**342-344** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
+deliberately full of holes, and M5.3 took 326, 334, 335 and 346 out of them as it opened, M5.4
+341 and M5.5 324, 325, 337, 338 and 343, leaving **327-330** spare, **333** spare, **339** spare,
+**342** spare and **344** spare, each argued in `docs/milestones/ROADMAP-M5.md` and taken by the
 milestone that owns the step it blocks, because a number is taken by an owner rather than
 reserved by a planner. Its one migration is
 `0024_acquisition.sql`, the number the roadmap's ledger allocates to it; 0019 stays permanently unused

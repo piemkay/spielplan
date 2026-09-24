@@ -24,7 +24,7 @@ x-app-env: &app-env
   TZ: ${TZ:-Europe/Berlin}
   DATA_DIR: /data
   # §2: "env vars may *seed* connector config on first boot for automated installs." `Settings`
-  # declares all six, `.env.example` documents all six, `app.py` calls `seed_from_env` at every
+  # declares all nine, `.env.example` documents all nine, `app.py` calls `seed_from_env` at every
   # boot and a coverage row certifies the behaviour — and not one of them ever reached a
   # container, because this anchor named six variables and these were not among them, no service
   # declares `env_file`, and `.dockerignore` keeps `.env` out of the image so the settings file
@@ -39,6 +39,10 @@ x-app-env: &app-env
   OMDB_API_KEY: ${OMDB_API_KEY:-}
   TRAKT_CLIENT_ID: ${TRAKT_CLIENT_ID:-}
   TRAKT_CLIENT_SECRET: ${TRAKT_CLIENT_SECRET:-}
+  # §2's LLM half: one key per provider §9 ports, and no model or cap (M5.5 plan A3, decision 325).
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
 
 # The worker's five: it writes the nightly dump, stages an import and owns the model cache.
 x-worker-volumes: &worker-volumes

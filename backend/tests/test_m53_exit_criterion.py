@@ -102,6 +102,14 @@ async def test_every_statement_the_exit_script_sends_prepares_against_the_schema
 _TIER_WRITE = "INSERT INTO dna_tag"
 _TIER_LOADER = "load_tags"
 
+# The other module allowed to hold that statement. Decision 432 gives the post-seed write to stage 6
+# rather than stage 8 -- its runs are merged and written through `llm/consensus.store_title`
+# (decision 337) -- so this is the second writer the docstring below already counts as "M5.4's stage
+# 8 after it", arriving where the merge lives. It is admitted by path, and the reading this guard
+# makes of the importer keeps its meaning only while no importer module can reach it, which the
+# guard now asks as well. [M5.5, decisions 337 and 432]
+_STAGE_WRITER = "backend/spielplan/llm/consensus.py"
+
 
 def _function_source(path: Path, name: str) -> str:
     """One function's own lines, comments and all.
@@ -160,9 +168,20 @@ def test_the_negative_control_does_not_say_a_re_import_puts_the_extracted_tier_b
         path.relative_to(REPO).as_posix() for path in package.rglob("*.py")
         if _TIER_WRITE in path.read_text(encoding="utf-8")
     )
-    assert writers == ["backend/spielplan/importer/dna.py"], (
+    assert writers == ["backend/spielplan/importer/dna.py", _STAGE_WRITER], (
         f"{writers} write the extracted tier; this guard reads the branch ONE loader is called "
-        "from, and a second writer would make that reading say less than it appears to"
+        "from, and a writer beyond the seed import and stage 6's merge would make that reading say "
+        "less than it appears to"
+    )
+    reaching = sorted(
+        path.relative_to(REPO).as_posix() for path in (package / "importer").rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if (isinstance(node, ast.ImportFrom) and (node.module or "").startswith("spielplan.llm"))
+        or (isinstance(node, ast.Import) and any(a.name.startswith("spielplan.llm") for a in node.names))
+    )
+    assert not reaching, (
+        f"{reaching} import the LLM layer, whose merge writes the extracted tier; an importer that "
+        "reached it could put the tier back through the second writer, which decision 162 forbids"
     )
 
     bundle = ast.parse((package / "importer" / "bundle.py").read_text(encoding="utf-8"))

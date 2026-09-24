@@ -789,8 +789,12 @@ def _neutralise_connector_env() -> None:
 
     `backend/tests/conftest.py` records the incident this repeats: a household that followed its
     own README runs this script with their real Jellyfin and TMDB configured, and their encrypted
-    credentials would be written into a throwaway database under a throwaway key. Derived from
-    `Settings` rather than listed, so a seventh connector variable cannot be forgotten here.
+    credentials would be written into a throwaway database under a throwaway key. Derived from the
+    connectors `registry.CONNECTORS` seeds, so a connector added there is neutralised here without
+    anyone remembering this list. It used to say "derived from `Settings`" over four M0-era
+    prefixes, and the three provider keys M5.5 seeds (§2, M5.5 plan A3) passed straight through it
+    into the `registry.seed_from_env` call `build_install` makes. [M5.5 review cycle 1, KEYS-C1-03,
+    M55-DOC-07]
 
     It matters more in this script than in any other. `acquire/hosts.policy_for` takes a
     `jellyfin_host` and exempts it from the throttle and the robots check, and a run that inherited
@@ -810,9 +814,15 @@ def _neutralise_connector_env() -> None:
     this reason, and its own docstring records the second site that got one half only; this was
     the third. [M5.3 review cycle 1, M53-EXIT-04]
     """
-    for name in core_config.Settings.model_fields:
-        if name.startswith(("jellyfin_", "tmdb_", "omdb_", "trakt_")):
-            os.environ.pop(name.upper(), None)
+    seeded = tuple(f"{name}_" for name, spec in registry.CONNECTORS.items() if spec.seeded)
+    # Matched case-insensitively, as `Settings` matches it: pydantic-settings reads the environment
+    # with `case_sensitive` False, and a POSIX environment keeps `openai_api_key` apart from
+    # `OPENAI_API_KEY`, so popping the upper-case spelling alone left a lower-case key for the seed.
+    # [M5.5 review cycle 2, M55-KEYS-C2-04]
+    wanted = {name.upper() for name in core_config.Settings.model_fields if name.startswith(seeded)}
+    for variable in list(os.environ):
+        if variable.upper() in wanted:
+            os.environ.pop(variable, None)
     neutral = Path(os.environ["DATA_DIR"]) / "no-dot-env"
     neutral.mkdir(parents=True, exist_ok=True)
     os.chdir(neutral)
