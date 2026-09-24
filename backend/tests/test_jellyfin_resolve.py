@@ -108,8 +108,60 @@ async def test_an_unresolvable_item_is_reported_and_creates_nothing(db):
     report = resolve.ResolveReport()
     assert await resolve.upsert_item(db, item(Name="Christmas 2019", ProductionYear=2019),
                                      report) is None
-    assert report.unmatched == ["Christmas 2019"]
+    assert [entry.name for entry in report.unmatched] == ["Christmas 2019"]
     assert await db.fetchval("SELECT count(*) FROM title") == 0
+
+
+# --- the refusal report, widened for the half that consumes it (M5.2, decision 370) --------
+
+
+async def test_a_refused_item_is_reported_with_the_ids_its_consumer_keys_on(db):
+    """A name cannot be acquired from, and decision 323 is what makes that sharp: stage 1 mints
+    only on a provider id, so a report of names alone hands §7.2's acquisition half a list it has
+    to re-read Jellyfin to use -- for two facts this sweep already held.
+
+    Asserted against the consumer's own spelling rather than against a field list, because that
+    is what the widening is for: `acquire/pipeline.key_for_item` reads `Id` first and falls back
+    to the imdb/tmdb/tvdb ids out of `ProviderIds`, and an entry those two reads cannot be keyed
+    from is a widening that bought nothing. The normalisation is asserted the same way -- fed
+    straight back as `ProviderIds` it must resolve to the identity the item itself would give,
+    which is what makes storing the lowercased form lossless rather than merely tidier."""
+    report = resolve.ResolveReport()
+    refused = item(Id="jf-99", Name="Christmas 2019", ProductionYear=2019,
+                   ProviderIds={"Tmdb": "424242", "Imdb": ""})
+
+    assert await resolve.upsert_item(db, refused, report) is None
+
+    (entry,) = report.unmatched
+    assert (entry.jellyfin_id, entry.name) == ("jf-99", "Christmas 2019")
+    assert entry.provider_ids == {"tmdb": "424242"}, "lowercased, and an empty id is not an id"
+    assert resolve.identity({"ProviderIds": entry.provider_ids}) == {
+        "imdb_id": None, "tmdb_id": 424242, "tvdb_id": None
+    }
+
+
+def test_the_refusal_report_keeps_the_wire_shape_the_admin_card_renders():
+    """Decision 370 widens the field in memory and deliberately not on the wire.
+
+    §6.6's connectors card renders `resolve.unmatched` as a COUNT and renders `unmatched_names`
+    nowhere at all -- the component carries a comment recording that `.length` on the count was
+    `undefined` once already, so this payload is a shape a surface has been wrong about once and
+    the names are still waiting for the one that shows them. M5.2 ships no surface, which makes
+    any movement here a regression rather than a change. The truncation is asserted at its
+    boundary because twenty is what the card was built to take and a real library refuses far
+    more than that."""
+    report = resolve.ResolveReport()
+    report.unmatched = [
+        resolve.UnmatchedItem(jellyfin_id=f"jf-{n}", name=f"Item {n}", provider_ids={})
+        for n in range(21)
+    ]
+
+    wire = report.as_dict()
+
+    assert set(wire) == {"matched", "matched_titles", "unmatched", "unmatched_names",
+                         "filled", "relinked"}
+    assert wire["unmatched"] == 21
+    assert wire["unmatched_names"] == [f"Item {n}" for n in range(20)]
 
 
 # --- fill, never clobber -------------------------------------------------------------------
@@ -169,6 +221,50 @@ async def test_ownership_is_re_derived_not_trusted_stale(db):
     row = await db.fetchrow("SELECT is_owned, owned_checked_at FROM title WHERE id = 1")
     assert row["is_owned"] is True
     assert row["owned_checked_at"] is not None
+
+
+async def test_a_title_the_sweep_un_owned_is_owned_again_when_it_comes_back(db):
+    """§7.2's "flips back when re-added", from the state the falsifier actually leaves.
+
+    The test above starts from a title no sweep has ever owned, so `owned_checked_at` is NULL and
+    the flip rides that disjunct of the churn guard. A re-add never looks like that. What
+    `sync/seen._falsify_ownership` writes is `is_owned = false, owned_checked_at = now()` -- a
+    FRESH stamp, because "the falsification is itself a re-derivation and has to be dated like
+    one" -- so a film the household moved between libraries, or restored from a backup, meets the
+    guard with both of its timestamp tests already disarmed and `NOT is_owned` as the only term
+    left. That term is the whole of "flips back", and nothing in the suite touched it: the guard
+    above is argued entirely in dead row versions and hourly refresh and never mentions the
+    false -> true transition, so tightening it to the two timestamp tests reads as tidying and
+    makes ownership a one-way door -- the title out of §6.2's pool and off the owned Home shelves
+    until the hour is up, while every test stayed green. Only `ops/m52_exit_criterion.py`'s
+    check 7 saw it, and the owner runs that by hand.
+
+    `fills` is empty here, which is what an ordinary re-add looks like: the identity columns were
+    filled when the title first arrived, so the guard is exactly its three ownership terms.
+    [M5.2 review cycle 1: M52-REV1-OWN-01]
+    """
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277", jellyfin_id="jf-1")
+    # `_falsify_ownership`'s own SET clause, spelled here rather than reached through a sweep:
+    # what this test is about is the row state a completed sweep leaves behind, and seeding it
+    # directly is what keeps the precondition visible to the next reader of the guard.
+    await db.execute(
+        "UPDATE title SET is_owned = false, owned_checked_at = now() WHERE id = 1"
+    )
+    seeded = await db.fetchrow("SELECT is_owned, owned_checked_at FROM title WHERE id = 1")
+    assert (seeded["is_owned"], seeded["owned_checked_at"] is None) == (False, False), (
+        "the state under test is a fresh falsification, not a title no sweep has ever owned"
+    )
+
+    await resolve.upsert_items(db, [item(ProviderIds={"Imdb": "tt0113277"})])
+
+    row = await db.fetchrow("SELECT is_owned, owned_checked_at FROM title WHERE id = 1")
+    assert row["is_owned"] is True, (
+        "a title the sweep un-owned must be owned again by the sweep that sees it return, "
+        "inside the hour and not after it"
+    )
+    assert row["owned_checked_at"] > seeded["owned_checked_at"], (
+        "the re-derivation has to be dated, or the next sweep cannot tell it from a stale flag"
+    )
 
 
 async def test_a_rebuilt_library_relinks_and_says_so(db):
@@ -251,7 +347,7 @@ async def test_a_name_matching_two_titles_is_refused_not_guessed(db):
     report = await resolve.upsert_items(
         db, [item(Type="Series", Name="The Bureau", ProductionYear=2015)]
     )
-    assert report.unmatched == ["The Bureau"]
+    assert [entry.name for entry in report.unmatched] == ["The Bureau"]
     assert report.matched == 0
 
 
@@ -264,7 +360,7 @@ async def test_an_item_with_no_production_year_never_matches_on_name_alone(db):
 
     assert await resolve.resolve_title_id(db, item(Name="Tampopo", ProductionYear=None)) is None
     report = await resolve.upsert_items(db, [item(Name="Tampopo", ProductionYear=None)])
-    assert report.unmatched == ["Tampopo"]
+    assert [entry.name for entry in report.unmatched] == ["Tampopo"]
     assert await db.fetchval("SELECT is_owned FROM title WHERE id = 22") is False
 
 

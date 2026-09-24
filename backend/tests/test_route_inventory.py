@@ -64,14 +64,48 @@ WEBSOCKET = "WEBSOCKET"
 # inventory, and named here rather than filtered silently: it is the app shell, it is anonymous on
 # purpose, and an inventory that contained it would assert a different set depending on whether
 # the front end had been built. `test_the_inventory_is_the_apps_own_route_table` holds the
-# exclusion to this one path, so a *real* route registered outside `/api/` fails rather than
-# disappearing through the same door.
+# exclusion to this one path, so a *real* route registered outside the namespaces below fails
+# rather than disappearing through the same door.
 SPA_FALLBACK = "/{path}"
+
+# The namespaces this file is the route table OF, and why there are two of them since M5.1. `/api`
+# was the whole of the app's server-side surface until decision 332 made `/events` a second one:
+# §7.2's webhook, §7.3's playback events and §11 all put routes under it, and `app.py`'s
+# `SpaFallback.matches` declines both in ONE rule over the path's head segment rather than a clause
+# each. A route under `/events` is therefore exactly as much an app route as a route under `/api` -
+# the same application serves it, the same strangers reach it, and the two rules below are the only
+# things that ask anything of it. A tuple because `str.startswith` takes one, which keeps the
+# membership test the same expression in both of the places below that need it.
+#
+# A NAMESPACE AND NOT A BLANKET, which is the whole of the difference this constant makes. The
+# cheaper edit when §7.2's route mounted was to leave the reads below reading `/api/` and widen only
+# the exemption in `test_the_inventory_is_the_apps_own_route_table`: one line, green suite, and
+# `/events/jellyfin` invisible to BOTH rules - rule 1 would never probe it and rule 2 would never
+# ask for its test. That is not an exemption, it is a hole, and decision 367's entire argument for
+# leaving the webhook out of ANONYMOUS is that rule 1 passes it HONESTLY, which says nothing about
+# anything unless rule 1 really does sweep it. Widening the namespace instead keeps the exemption
+# below at exactly one path: a route registered outside both still fails. [M5.2; decisions 332, 367]
+NAMESPACES = ("/api/", "/events/")
 
 # What a stranger is served on purpose. Enumerated from the code and then measured against the
 # running app below in both directions, because an allow-list is the one construct in this file
 # that can rot quietly: a route that gains `ActiveUser` leaves its entry behind as a permanent
 # exemption for a gate that is already there.
+#
+# NOT IN THIS SET: §7.2's `POST /events/jellyfin`, and the reason is that second direction rather
+# than anything about the webhook. A token in a header is not a session cookie, which reads like
+# the definition of an entry here and is what M5.1 wrote into `api/events.py` that this route
+# "will need one". But this set is also measured by
+# `test_every_route_on_the_anonymous_allow_list_is_still_served_to_a_stranger`, which asserts that
+# every entry answers something OTHER than 401 - and a token-authed route answers a stranger 401
+# by construction. MEASURED, not reasoned, because the one claim this file must not get wrong is a
+# claim about itself: the entry was added, the file run, and that test failed with "POST
+# /events/jellyfin is on the anonymous allow-list and refuses a stranger", the observed status
+# being 401. Then the entry was taken out again. So an entry would be false in exactly the
+# direction the second test exists to hold, and admitting it would mean carving an exception into
+# the test written to prevent exceptions. Left out, rule 1 sweeps the webhook like any other route
+# and gets the 401 it genuinely answers, which is an honest pass and costs this set nothing.
+# [M5.2; decision 367]
 ANONYMOUS = frozenset(
     {
         # §14 / ops-02: the image's HEALTHCHECK, CI's wait loop and `e2e/run.mjs` all poll this
@@ -207,11 +241,11 @@ def _leaf_routes(routes):
 
 
 def http_routes(application) -> set[tuple[str, str]]:
-    """Every `(METHOD, path)` under `/api/` the app serves, from the app's own schema."""
+    """Every `(METHOD, path)` in one of the app's `NAMESPACES` it serves, from its own schema."""
     return {
         (method.upper(), path)
         for path, operations in application.openapi()["paths"].items()
-        if path.startswith("/api/")
+        if path.startswith(NAMESPACES)
         for method in operations
         if method.upper() in METHODS
     }
@@ -229,8 +263,8 @@ def inventory(application) -> set[tuple[str, str]]:
     return http_routes(application) | websocket_routes(application)
 
 
-def outside_api(application) -> set[str]:
-    return {path for path in application.openapi()["paths"] if not path.startswith("/api/")}
+def outside_the_namespaces(application) -> set[str]:
+    return {path for path in application.openapi()["paths"] if not path.startswith(NAMESPACES)}
 
 
 def concrete(path: str) -> str:
@@ -338,7 +372,20 @@ def test_the_inventory_is_the_apps_own_route_table():
         "the WebSocket is the one route openapi() cannot see, and it is the one the blind-vote "
         "property depends on"
     )
-    for probe in (("POST", "/api/rate/verdict"), ("GET", "/api/rank/queue")):
+    # AND §7.2's WEBHOOK, which is the one route in this table an argument depends on being IN
+    # it. Decision 367 leaves it out of ANONYMOUS because rule 1 sweeps it and gets the 401 it
+    # genuinely answers, and that honest pass says nothing about anything unless the route is in
+    # the swept set. NAMESPACES argues that in prose and names the two-line edit that defeats it --
+    # the constant reverted to `/api/` and the exemption below widened by one path -- after which
+    # both rules go quiet and, measured, every other assertion in this file still passes: the
+    # inventory floor, the WebSocket, the two probes above, ANONYMOUS, UNTESTED, the leak
+    # self-test. This is the line that fails when that edit is taken, and the reason the coverage
+    # row's sweep id is worth registering. [M5.2 review cycle 2: M52-C2-INV-01]
+    for probe in (
+        ("POST", "/api/rate/verdict"),
+        ("GET", "/api/rank/queue"),
+        ("POST", "/events/jellyfin"),
+    ):
         assert probe in found, f"{probe} is served and the inventory missed it"
 
     stale = ANONYMOUS - found
@@ -348,9 +395,13 @@ def test_the_inventory_is_the_apps_own_route_table():
         f"UNTESTED names routes the app does not serve: {sorted(UNTESTED - paths)}"
     )
 
-    assert outside_api(application) <= {SPA_FALLBACK}, (
-        "a route is served outside the /api namespace and the inventory is skipping it: "
-        f"{sorted(outside_api(application) - {SPA_FALLBACK})}"
+    # Read over both NAMESPACES since §7.2's webhook mounted, and the subtraction is still to the
+    # one path: what this clause forbids is a route the inventory cannot see, and the app shell is
+    # the only one of those the app is allowed to have. The widening is in the constant, where the
+    # argument for covering `/events` rather than excusing it is written out. [M5.2; decision 332]
+    assert outside_the_namespaces(application) <= {SPA_FALLBACK}, (
+        "a route is served outside the /api and /events namespaces and the inventory is skipping "
+        f"it: {sorted(outside_the_namespaces(application) - {SPA_FALLBACK})}"
     )
 
 

@@ -6,7 +6,7 @@ own head: a CHECK constraint that is never tried is a comment with punctuation.
 
 Two of `0024_acquisition.sql`'s load-bearing claims are absences, which is the kind of decision a
 later reader repairs on sight. `acquisition_task` carries **no foreign key to `title`** because
-§8 stage 1 is what mints the title (decision 322, and `connectors/resolve.py:182-188`'s refusal
+§8 stage 1 is what mints the title (decision 322, and `connectors/resolve.py:216-222`'s refusal
 to invent one), and `raw_document.content_sha256` carries **no UNIQUE** because two fetches that
 return identical bytes share one file and must still leave two rows of history. Neither absence
 can be asserted by reading the DDL, so each is asserted here in the direction that catches its
@@ -208,7 +208,7 @@ async def test_deleting_a_title_keeps_its_task_and_takes_its_board_row(db):
     this file's to restate. `acquisition_task` is the queue and has no foreign key at all,
     because it is keyed on the Jellyfin item or the provider id and has to be able to hold work
     for a title that does not exist yet -- §8 stage 1's job is to mint that title, and
-    `connectors/resolve.py:182-188` says the boundary in as many words: "An unresolved item is
+    `connectors/resolve.py:216-222` says the boundary in as many words: "An unresolved item is
     *reported*, never invented ... Acquiring genuinely new titles is §8's pipeline."
 
     So the assertion is the surviving row. A later reader who adds the foreign key that looks
@@ -318,7 +318,7 @@ def test_this_package_cites_a_test_by_name_and_a_column_comment_by_its_own_line(
     off-convention" - so a citation that resolves to the wrong thing is a false statement in an
     argument and not a typo. Two of them shipped in this milestone, and both are the same species.
 
-    A TEST IS CITED BY NAME. `acquire/__init__.py` pointed at `test_layering_guards.py:553` for the
+    A TEST IS CITED BY NAME. `acquire/__init__.py` pointed at `test_layering_guards.py:564` for the
     guard that stops this package importing `spielplan.api`. That was the right line at HEAD, and
     M5.1's own edits to that file - the `_COUNT_WORDS` import and the eleven-line ALLOWED_RESIDUE
     paragraph - pushed the guard to 574, where 553 is the middle of the SQL-residue helper, a

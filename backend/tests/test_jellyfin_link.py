@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 
 from spielplan.connectors import registry
@@ -70,8 +71,13 @@ async def test_the_connector_starts_unconfigured_and_says_so(admin):
     # And M4.11 adds §7.1's probed pair, whose unconfigured reading is the one that matters: an
     # empty version with `server_supported: null` is "nobody has probed", which `played_write_refusal`
     # must not treat as a refusal. A stored `false` is the other thing entirely. [M4.11 finding 16]
+    #
+    # And M5.2 adds §7.2's token as a third boolean, for `has_api_key`'s reason (decision 332,
+    # §14.3): an install that has minted none holds `False` here, and the value itself appears in
+    # exactly one response in this app, which is not this one.
     assert body == {"url": "", "has_api_key": False, "configured": False,
                     "library_ids": [], "linked_users": 0, "secrets_unreadable": False,
+                    "has_webhook_token": False,
                     "server_version": "", "server_supported": None}
 
 
@@ -110,12 +116,335 @@ async def test_the_test_button_reports_the_server_and_the_version_pin(admin):
 
 async def test_routes_that_need_jellyfin_refuse_cleanly_when_it_is_unconfigured(admin):
     client, _module = admin
-    for path in ("/api/admin/connectors/jellyfin/test", "/api/admin/connectors/jellyfin/users"):
+    for path in (
+        "/api/admin/connectors/jellyfin/test",
+        "/api/admin/connectors/jellyfin/users",
+        # The third read of the same kind, added with §6.6's library pick: "there is no server to
+        # ask" is 409 here as it is above, and not the `ok: false` the route answers for a server
+        # that refused -- an unconfigured connector is not a connector that failed (decision 364).
+        "/api/admin/connectors/jellyfin/libraries",
+    ):
         response = await (
             client.post(path) if path.endswith("test") else client.get(path)
         )
         assert response.status_code == 409
         assert "not configured" in response.json()["detail"]
+
+
+# --- §6.6 + decision 364: the library pick gets a list, a writer and a reader ------------------
+
+
+async def test_the_libraries_the_pick_picks_from_are_listed_from_the_server(admin):
+    """§6.6's card has named a "library pick" since M1 and nothing could enumerate what to pick.
+
+    Not decoration: decision 364 makes `library_ids` the boundary §7.2's intake paths are scoped
+    by, and the double's third library is the household's own camcorder footage. An admin who
+    cannot see that library listed cannot say that acquisition should leave it alone.
+
+    Read off the fake's own table rather than re-typed, because the shapes a Jellyfin server sends
+    belong to the double (`ops/fake_jellyfin.py`) and a test that authors them has turned the
+    refuser into a mock -- including the envelope, which is `{"Items": [...]}` here where `/Users`
+    is a bare list.
+    """
+    client, module = admin
+    await _configure(client, module)
+
+    body = (await client.get("/api/admin/connectors/jellyfin/libraries")).json()
+    assert body["ok"] is True
+    listed = [(lib["id"], lib["name"]) for lib in body["libraries"]]
+    assert listed == [(lib["Id"], lib["Name"]) for lib in module.LIBRARIES]
+    assert ("jf-lib-home", "Home Videos") in listed, (
+        "the library nobody would acquire from is what makes a pick mean anything"
+    )
+    # The app's own spelling, as the user-mapping read next door also answers in: nothing of
+    # Jellyfin's `BaseItemDto` reaches the browser through this route.
+    assert all(set(lib) == {"id", "name"} for lib in body["libraries"]), body
+
+
+async def test_a_server_that_will_not_list_its_libraries_is_reported_rather_than_raised(
+    admin, monkeypatch
+):
+    """The read an admin makes while repairing a connector must not fail along with it.
+
+    The failure this refuses is not a 500 but a plausible empty list. Decision 364 reads an EMPTY
+    pick as "the whole server", so a card handed `[]` because Jellyfin refused the key would be
+    showing the admin the shape of a deliberate choice nobody made -- and the admin would save it.
+    The test button one screen up reports the same way for the same reason.
+
+    The second half is the one that reached the card as the wrong answer. A refusal only became
+    `ok: false` by way of `JellyfinError`, and `_request` does not raise for a 200 it cannot read:
+    a forward-auth portal's sign-in page collapsed to an empty envelope and was reported as a
+    server with no libraries, while a body that parsed as a bare list left the route as an
+    `AttributeError` -- a 500, which is worse than the 502 this route exists to avoid.
+    [review cycle 1: m52-rev-lib-04]
+    """
+    client, _module = admin
+    saved = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "api_key": "not-the-admin-key"},
+    )
+    assert saved.status_code == 200, saved.text
+
+    response = await client.get("/api/admin/connectors/jellyfin/libraries")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["ok"], body["status"], body["libraries"]) == (False, 401, [])
+    assert body["error"], "a reported failure with nothing to report is a blank card"
+
+    for label, answer in {
+        "a portal's sign-in page": httpx.Response(200, text="<html>Sign in</html>"),
+        "a bare list": httpx.Response(200, json=[{"Id": "jf-lib-films", "Name": "Films"}]),
+    }.items():
+        monkeypatch.setattr(
+            registry, "make_client",
+            lambda cfg, a=answer: JellyfinClient(
+                cfg.url, cfg.api_key, transport=httpx.MockTransport(lambda _request: a)
+            ),
+        )
+        answered = await client.get("/api/admin/connectors/jellyfin/libraries")
+        assert answered.status_code == 200, f"{label} -> {answered.status_code} {answered.text}"
+        reported = answered.json()
+        assert (reported["ok"], reported["libraries"]) == (False, []), label
+        assert reported["error"], label
+
+
+async def test_the_library_pick_is_stored_by_the_save_and_reported_by_the_card(admin):
+    """`library_ids` has been stored, merged and served since M1 with no writer and no reader.
+
+    Decision 364 gives it both in one milestone, and this is the writer. Without it the row
+    `spec_coverage.toml` registers -- "the same item after the library is picked enqueues once" --
+    is reachable only by calling `save_jellyfin` from Python, which is not a gesture §6.6 offers
+    anybody, and §7.2 would ship a boundary no household could ever draw.
+    """
+    client, module = admin
+    await _configure(client, module)
+
+    saved = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "api_key": "", "library_ids": ["jf-lib-shows"]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["library_ids"] == ["jf-lib-shows"]
+
+    card = (await client.get("/api/admin/connectors/jellyfin")).json()
+    assert card["library_ids"] == ["jf-lib-shows"]
+    assert card["has_api_key"] is True, "picking a library blanked the key the form only masked"
+
+
+async def test_a_partial_save_keeps_the_stored_pick_and_an_explicit_empty_list_widens_it(admin):
+    """Decision 364's two answers, which one "empty means keep it" field cannot both give.
+
+    Absent is the partial save the masked-key form already makes on every URL correction. `[]` is
+    an admin deselecting the last library, which decision 364 reads as "the whole server" -- the
+    state of every install in existence, since nothing has ever written this field. Collapsed into
+    one answer the second gesture becomes unperformable: a household that picked one library once
+    would have §7.2 acquire from that library alone for ever, with the UI offering no way back.
+    """
+    client, module = admin
+    await _configure(client, module)
+    await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "library_ids": ["jf-lib-films", "jf-lib-shows"]},
+    )
+
+    kept = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test/", "api_key": ""},
+    )
+    assert kept.json()["library_ids"] == ["jf-lib-films", "jf-lib-shows"], (
+        "a save that never mentioned the pick blanked it, and blanking it means the whole server"
+    )
+
+    widened = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "library_ids": []},
+    )
+    assert widened.json()["library_ids"] == []
+    assert (await client.get("/api/admin/connectors/jellyfin")).json()["library_ids"] == []
+
+
+async def test_a_library_id_this_column_cannot_hold_is_refused_at_the_edge_and_not_by_postgres(
+    admin,
+):
+    """Decision 364 made the pick the acquisition boundary, and this is the first route that ever
+    wrote it. The bounds were argued in the model's own comment -- "the only caller that would not
+    stop at the number of folders a server actually has is a crafted body ... the place to answer
+    for one is the edge, as a 422" -- and then only two thirds of that sentence was written.
+
+    A NUL is the third. `library_ids` is stored as jsonb on the connector row, `db/pool.py`
+    registers `json.dumps` as that codec, and `\u0000` is a character Postgres holds nowhere in a
+    jsonb string: the write raised, `app.py`'s `asyncpg.PostgresError` handler answered
+    500 `{"detail": "database error"}`, and the admin's save was lost to a value the schema could
+    have named. `_no_control_characters` had already answered the identical byte for account names
+    (sec-04, as-11); this field is the one it did not cover. [review cycle 2: m52-c2-libid-01,
+    m52-c2-lib-03]
+
+    The two length bounds are asserted beside it because they had no test either: they are the
+    same clause of the same comment, and a `max_length` nothing exercises is a number rather than
+    a bound.
+    """
+    client, module = admin
+    await _configure(client, module)
+
+    for label, pick in {
+        "a control character": ["a\x00b"],
+        "an id longer than any GUID": ["x" * 65],
+        "an empty id": [""],
+        "more ids than a household has libraries": [f"jf-lib-{n}" for n in range(65)],
+    }.items():
+        refused = await client.put(
+            "/api/admin/connectors/jellyfin",
+            json={"url": "http://jellyfin.test", "library_ids": pick},
+        )
+        assert refused.status_code == 422, f"{label}: {refused.status_code} {refused.text}"
+
+    assert (await client.get("/api/admin/connectors/jellyfin")).json()["library_ids"] == [], (
+        "a refused save leaves the stored boundary exactly where the admin left it"
+    )
+
+
+async def test_the_pick_is_stored_once_in_the_servers_spelling_and_never_blank_or_nil(admin):
+    """Three values the edge stored verbatim and a real server reads as something else entirely.
+
+    A pick of `[" "]` reaches `ParentId` as whitespace, which ASP.NET binds to a null `Guid?` --
+    so the read covers the WHOLE SERVER, and the boundary the admin drew is silently widened to
+    every library they deselected, which is decision 364's harm exactly. The all-zero GUID names
+    no folder and is answered 400 on every scoped read. And one library spelled three ways
+    (dashed, braced, upper case -- all of which Jellyfin accepts) was three scopes and three reads
+    of the same folder per key, and three ids a comparison against `/Library/MediaFolders`'s own
+    undashed spelling could never match. A GUID is stored as the server spells it, once; a blank
+    or nil id is a 422. [review cycle 3: M52-C3-LIB-04]
+    """
+    client, module = admin
+    await _configure(client, module)
+    dashed = "6213b704-a0d9-5429-3110-f4d561b0f614"
+
+    saved = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test",
+              "library_ids": [dashed, "{" + dashed.upper() + "}", dashed.replace("-", ""),
+                              "jf-lib-films"]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["library_ids"] == ["6213b704a0d954293110f4d561b0f614", "jf-lib-films"]
+
+    for label, pick in {
+        "a blank id": [" "],
+        "the nil GUID": ["00000000-0000-0000-0000-000000000000"],
+    }.items():
+        refused = await client.put(
+            "/api/admin/connectors/jellyfin",
+            json={"url": "http://jellyfin.test", "library_ids": pick},
+        )
+        assert refused.status_code == 422, f"{label}: {refused.status_code} {refused.text}"
+
+
+# --- §7.2 + decision 332: the webhook token, shown once ---------------------------------------
+
+
+async def test_a_save_the_connectors_page_sends_mints_no_token_nobody_would_see(admin, db):
+    """Decision 418. The only client of this route that ships is §6.6's connectors page, and its
+    `save()` sends `{url, api_key}` and discards the answer -- so when every PUT minted, the first
+    Save any admin pressed sealed a token, showed it to nobody, and left no route that could ever
+    show or replace it: `has_webhook_token` read true, the reveal read null for ever, and every
+    real `ItemAdded` was 401 for the life of the install. The exact body the page sends mints
+    nothing now, and the card goes on saying that no token exists.
+    [M5.2 review cycle 4: M52-C4-TOKEN-01]
+    """
+    client, module = admin
+
+    saved = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "api_key": module.API_KEY},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["webhook_token"] is None
+    assert (await registry.load_jellyfin(db)).webhook_token == "", "a token nobody was shown"
+    assert (await client.get("/api/admin/connectors/jellyfin")).json()["has_webhook_token"] is False
+
+
+async def test_a_url_no_request_can_be_sent_to_is_saved_rather_than_answered_500(admin, db):
+    """The save commits before the version probe, and the probe met `httpx.InvalidURL` -- which is
+    not an `httpx.HTTPError` -- for a port with a letter in it, so the PUT answered 500 over a save
+    that had already happened. The probe is best-effort (§3.1 makes a half-configured install
+    legal), so a URL no request can be sent to is stored with no verdict and answered 200.
+    [M5.2 review cycle 4: M52-C4-TOKEN-01]
+    """
+    client, module = admin
+
+    typo = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin:8O96", "api_key": module.API_KEY},
+    )
+
+    assert typo.status_code == 200, typo.text
+    assert typo.json()["server_supported"] is None, "nothing could be probed, so no verdict"
+
+
+async def test_the_first_save_shows_the_webhook_token_once_and_no_later_save_rotates_it(
+    admin, db
+):
+    """Decision 332: the token is "generated at first save and shown once" on §6.6's card.
+
+    Three facts in one test because they are one gesture. The save that leaves the connector
+    configured is the save that mints -- an address with no key is not a connector yet (§3.1 makes
+    that half-configured state legal). The value appears in that response and in no other. And no
+    later save changes it: an operator who has pasted the token into the Webhook plugin's header
+    field must not have it rotated under them by an unrelated edit to the URL, because §7.2's
+    intake would then answer the household's own server 401 with nothing on any surface saying so.
+
+    "First save" is the first save that ASKS (decision 418): a client that can render the reveal
+    sends `mint_webhook_token`, and the test above holds the body that does not.
+    """
+    client, module = admin
+
+    address_only = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "mint_webhook_token": True},
+    )
+    assert address_only.json()["webhook_token"] is None, address_only.text
+
+    first = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "api_key": module.API_KEY, "mint_webhook_token": True},
+    )
+    token = first.json()["webhook_token"]
+    assert isinstance(token, str) and len(token) >= 32, first.text
+    assert (await registry.load_jellyfin(db)).webhook_token == token, (
+        "the response showed a token the connector row does not hold"
+    )
+
+    again = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test/", "api_key": ""},
+    )
+    assert again.json()["webhook_token"] is None, "shown once means once"
+    assert (await registry.load_jellyfin(db)).webhook_token == token, (
+        "an unrelated save rotated the token the operator had already pasted into the plugin"
+    )
+
+
+async def test_the_webhook_token_never_comes_back_out_of_the_card(admin):
+    """§14.3's rule about the API key, applied to the credential §7.2 adds beside it.
+
+    Whoever holds this token can file acquisition work in the household's name, so the card says
+    that one exists and never what it is: the GET is read by every admin session on every visit,
+    long after the single appearance decision 332 allows the value itself.
+    """
+    client, module = admin
+    before = (await client.get("/api/admin/connectors/jellyfin")).json()
+    assert before["has_webhook_token"] is False
+
+    saved = await client.put(
+        "/api/admin/connectors/jellyfin",
+        json={"url": "http://jellyfin.test", "api_key": module.API_KEY, "mint_webhook_token": True},
+    )
+    token = saved.json()["webhook_token"]
+    assert token
+
+    card = (await client.get("/api/admin/connectors/jellyfin")).json()
+    assert card["has_webhook_token"] is True
+    assert token not in str(card)
 
 
 # --- §3.3: the mapping ----------------------------------------------------------------------

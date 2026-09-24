@@ -437,6 +437,17 @@ _SQL_HEAD = re.compile(
 # that milestone, and that is the measurement rather than a decision not to measure.
 # [M5.1, plan step F5; decisions 332 and 345]
 #
+# AND M5.2 MOUNTS THE FIRST ROUTE INTO ONE OF THEM, which falsifies the reason recorded above
+# without moving a figure. `api/events.py` is no longer "§7.2's namespace, mounted with no routes
+# yet": it serves `POST /events/jellyfin`. It still measures ZERO, and the reason is now the
+# stronger one this dict exists to record rather than an artefact of an empty file -- every
+# statement the handler needs lives in `spielplan/acquire/intake.py`, where the rules about what
+# §7.2 does with a delivery belong (plan A4, decision 365), and that module's own docstring says
+# NO SQL, EVER. So its absence from this dict is an assertion M5.2 leans on, and the first query
+# added to that handler fails as `(1, 0)`. Written down here because the reader of this dict is
+# not the reader of that module, and "mounted with no routes yet" is exactly the sentence under
+# which somebody raises the entry deliberately. [M5.2; plan A4, decision 365]
+#
 # Sixty statements in twelve modules. The total is re-stated by hand below so this paragraph
 # can be falsified; `test_the_recorded_residue_totals_what_this_file_claims` is what falsifies it.
 ALLOWED_RESIDUE = {
@@ -864,8 +875,12 @@ _SESSION_ONLY = ("current_user", "current_user_ws")
 
 _METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
-# Every route that answers a caller with no session, with what makes that the right answer. Eight,
-# and each one is a door, a probe or the first boot -- nothing here reads a person's data.
+# Every route that answers a caller with no session, with what makes that the right answer. Nine,
+# and eight of them are a door, a probe or the first boot -- nothing in those reads a person's
+# data. The ninth is the only entry that is authenticated rather than open, and it is here for the
+# reason the WebSocket paragraph above already gives: this file's verdict is read off the
+# dependant, and a credential checked inside the handler body leaves nothing there to read.
+# [decision 367; M5.2]
 ANONYMOUS = {
     ("POST", "/api/auth/login"): "the password door itself; a session is what it issues",
     ("POST", "/api/auth/passkey/login/options"): "the WebAuthn challenge the door needs first",
@@ -885,6 +900,19 @@ ANONYMOUS = {
     # Anonymously it returns `required` and a note and nothing else -- sec-14 cut the rest, because
     # the full payload fingerprints the install to anyone who can reach the origin.
     ("GET", "/api/setup/state"): "whether this box still owes a wizard, cut to that one bit",
+    # Section 7.2's intake webhook, and the one entry here that refuses a caller who brings
+    # nothing. The credential is a connector secret in a header rather than a session because the
+    # caller is the Jellyfin plugin, a server process with nowhere to keep a cookie (decision
+    # 332). It reads no household data -- it records the delivery and enqueues an acquisition
+    # task -- but `webhook_token_matches` runs in the handler body, so `_verdict` sees an empty
+    # dependant and `unguarded` is the honest classification rather than a concession.
+    #
+    # Decision 367 keeps this route OUT of `test_route_inventory.py`'s list of the same name, and
+    # the two are not in tension: that list is measured in both directions and its second rule
+    # asks every entry to answer a stranger something other than 401, which a token-authed route
+    # cannot do. This list is measured in one -- an unguarded route must be named with a reason --
+    # and being named here is what makes the exhaustiveness rule above true of the app that ships.
+    ("POST", "/events/jellyfin"): "token-authed for a server plugin that cannot hold a cookie",
 }
 
 # Behind a session but deliberately NOT behind `active_user`: decision 179's ways out of section

@@ -2253,6 +2253,28 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # wave resolves the number to what `ls ops/m*_exit_criterion.py` reports, having first read its
 # own script against every rule below rather than bumping a constant to buy a green run.
 #
+# `ops/m52_exit_criterion.py` is the TENTH, and 9 became 10 in the five places below only after
+# the same reading. No literal outside cp850 -- it prints `acquire/intake.py`'s refusal reasons,
+# the importer's findings and the double's own 409 text, and every one of those goes through
+# `console()` because none of them is its own. No `check()` predicate settled before the run:
+# the eleven verdicts are conjunctions over counts, key sets and intake states the run read back
+# out of the database, and each one is bound once so the return arm above can settle it. A
+# computed terminal verdict. No component read at all, which is a fact about the milestone
+# rather than about the script -- M5.2 ships no surface, so `05-milestones.spec.js` keeps every
+# placeholder it has. Nothing that can fail between its CREATE DATABASE and the block whose
+# finally drops it, an `except Exception` around the measurement that reports rather than
+# propagates, and both arms on every numbered heading it prints. No `rate()` seeding path for
+# the last rule to exempt: it seeds through `bundle_import.import_bundle` and through §6.6's own
+# PUT and §7.3's own link route, and every refusal on that path raises `PreconditionFailed` with
+# the sentence the rule is really about.
+#
+# It is the first of the ten with NO third column, and that is worth a line beside M5.1's. Every
+# claim §7.2 makes is an HTTP fact, so the app is driven over `ASGITransport` and Jellyfin is
+# `ops/fake_jellyfin.py` mounted in-process: there is no container to inspect and no port to
+# probe, so no check can be one a lane could not measure, and the exit codes are 0, 1 and the 2
+# it refuses the fixture with. A script whose checks all measure needs no way to say that one
+# did not. [M5.2, decision 371]
+#
 # M5.3 IS THE FIRST WAVE WITH SIBLINGS, and the paragraph above is what it did: the number is
 # `ls ops/m*_exit_criterion.py` in THIS lane's tree, which holds M5.3's script and not the two
 # its siblings are writing in parallel. So the assertion is right on the branch and wrong on the
@@ -2260,6 +2282,12 @@ def test_the_scaffold_guard_leaves_a_probe_router_the_test_built_itself_alone(tm
 # shape decision 184 asks for, and a lane that had left it at nine to avoid them would have
 # published a figure nobody re-derived. Every rule below was read against
 # `ops/m53_exit_criterion.py` before the number moved. [M5.3, decision 378]
+#
+# THE HAND-MERGE LANDED ON 11. M5.2 and M5.3 each moved the number from 9 to 10 in their own tree,
+# so git saw one identical edit on both sides and took it once, silently - the shape the paragraph
+# above predicted. `ls ops/m*_exit_criterion.py` on the merged tree says eleven, and the five
+# assertions below say 11 because each of the two new scripts had already been read against every
+# rule here in its own lane. [M5.2 merge]
 
 EXIT_SCRIPTS = tuple(sorted((REPO / "ops").glob("m*_exit_criterion.py")))
 COVERAGE_REPORT = REPO / "backend" / "tests" / "test_spec_coverage.py"
@@ -2366,7 +2394,7 @@ def test_no_console_output_leaves_the_oem_code_page():
     gets a traceback where the measurement should have been -- which is how a run of
     `test_spec_coverage.py` under `PYTHONIOENCODING=cp850` lost its own milestone ledger.
     """
-    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
     offenders = _non_cp850_console_strings()
     assert not offenders, (
         "a string a milestone script prints cannot be encoded on a Windows console:\n  "
@@ -2635,7 +2663,7 @@ def test_no_milestone_exit_check_has_a_constant_predicate():
     The number behind the first was genuinely 0 on v20260828, so nothing was concealed on the
     day it was written; what was lost was the ability to notice the day it stops being 0.
     """
-    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -2883,7 +2911,7 @@ def test_the_m3_script_returns_a_verdict_rather_than_a_constant():
     check, stays in the paragraph that says so. Its two siblings already ended in a computed
     verdict; they are held to the same rule here so that it stays true of all three.
     """
-    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
     offenders = [
         problem
         for path in EXIT_SCRIPTS
@@ -3163,7 +3191,7 @@ def test_no_exit_measure_decides_on_a_component_it_read_with_the_comments_in():
     been commented out -- the same shape as the compose guard that passed on a file of pure
     comments, which is why the rule is over the scripts rather than over the one measure.
     """
-    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -3796,7 +3824,7 @@ def test_the_seeding_scripts_name_the_precondition_a_refused_write_broke():
     escape would exit non-zero too, but with a stack trace where the name of the failed
     precondition should be -- and the precondition is what the exit code is for.
     """
-    assert len(EXIT_SCRIPTS) == 10, EXIT_SCRIPTS
+    assert len(EXIT_SCRIPTS) == 11, EXIT_SCRIPTS
     offenders = [
         line
         for path in EXIT_SCRIPTS
@@ -4580,10 +4608,22 @@ CREDENTIAL_PACKAGES = tuple(
 
 # §14.3: Jellyfin "API keys are unscoped and admin-equivalent (no read-only variant exists), so the
 # stored connector secret can administer the whole media server"; §7.3's per-user access tokens are
-# one named person's credentials. These are the three names that custody is spelled as in those
+# one named person's credentials. These are the four names that custody is spelled as in those
 # packages. `base_url` and `url` stay printable on purpose: the server a line is about is what makes
 # the line useful, and hiding it would buy nothing (§7.1 ships it to the browser as a deep link).
-SECRET_FIELD_NAMES = frozenset({"api_key", "token", "user_tokens"})
+#
+# THE FOURTH IS §7.2's INTAKE TOKEN, and it is the one credential in this set that this app MINTS
+# rather than one it was handed: `registry.JellyfinConfig.webhook_token` is sealed beside the
+# api_key, shown to an admin exactly once (decision 332) because there is no rotation route, and
+# whoever holds it can file acquisition work in the household's name. M5.2 declared it
+# `field(repr=False)` and pinned the one site that exists with
+# `test_connector_registry.py::test_the_webhook_token_does_not_survive_a_repr` -- and then did not
+# add the name here, so the SOURCE sweep, whose whole job is the NEXT dataclass added to these
+# packages, could not see a fourth credential at all. `stmt.target.id not in SECRET_FIELD_NAMES`
+# matches exactly and not by substring, so a fourth credential needs a fourth name; the guard
+# meanwhile read green through `api_key`, which is how `LinkedUser.token` sat outside it once
+# before. [M5.2 review cycle 2: m52-c2-secretnames-01]
+SECRET_FIELD_NAMES = frozenset({"api_key", "token", "user_tokens", "webhook_token"})
 
 
 def _dataclass_decorated(node: ast.ClassDef) -> bool:
@@ -4727,6 +4767,12 @@ def test_the_connector_repr_guard_sees_a_repr_enabled_field_on_a_real_dataclass(
         ("a field call without repr",
          "@dataclass\nclass C:\n    user_tokens: dict = field(default_factory=dict)\n", 1),
         ("repr spelled True", "@dataclass\nclass C:\n    token: str = field(repr=True)\n", 1),
+        # §7.2's intake token, the fourth credential these packages carry and the one the
+        # sweep was blind to: `registry.JellyfinConfig.webhook_token` is declared
+        # `field(repr=False)`, so nothing in the tree failed -- and nothing would have failed
+        # for the next dataclass to carry it either, which is the sweep's whole job.
+        # [M5.2 review cycle 2: m52-c2-secretnames-01]
+        ("the intake token", "@dataclass\nclass C:\n    webhook_token: str = ''\n", 1),
         # Declared across three lines, which is how `registry.py` writes it and why this reads the
         # tree rather than the line.
         ("a declaration that wraps",
@@ -10924,7 +10970,13 @@ def test_the_proposal_ledger_counts_itself():
         ("the count moved and the range did not", (286, 287, None), False, True, True),
         ("a document states neither", (0, 0, None), True, True, True),
         ("both are current and neither states a sitting", (286, 303, None), False, False, True),
-        ("every figure derived", (286, 303, (14, "2026-09-01", "2026-09-23")), False, False, False),
+        # The derived triple, which moves with the register: M5.2's first two review cycles took
+        # five decisions on a day of their own, so the sittings this file holds were thirteen and
+        # the last of them 2026-09-19; its third review cycle took seven more on 2026-09-23, so
+        # they were fourteen; its fourth took three on 2026-09-24, so they are fifteen now.
+        # [M5.2 review cycles 1-2: decisions 404-407, which were 393-396, and 416, which was 392;
+        # review cycle 3: 410-415 and 417; review cycle 4: 408, 409 and 418]
+        ("every figure derived", (286, 303, (15, "2026-09-01", "2026-09-24")), False, False, False),
         # Review cycle 4: the sentence as README published it. Two derived figures and a third
         # that matched no available reading -- not the 24 blocks, not the 12 dates, not the 11
         # dates carrying a decision -- inside the same clause, which is what lent it their
@@ -10949,6 +11001,51 @@ def test_the_ledger_count_guard_reads_all_three_halves(
     assert bool(wrong) is expect_count, name
     assert bool(stale) is expect_range, name
     assert bool(sittings) is expect_sittings, name
+
+
+# README's second sittings figure, one sentence after the one `_SITTINGS` reads: "The register
+# holds fifteen sittings in all; the first, on 2026-08-29, is seven answers indexed there rather
+# than numbered". `_publication_claims` reads the FIRST sittings clause and nothing past it, so
+# when M5.2's review cycles restated the first figure the second stayed where it was, and the two
+# adjacent sentences disagreed by one with every guard green. This one counts every dated block's
+# date, the 2026-08-29 sitting included, which is what "in all" means beside the first figure's
+# "carrying a numbered decision". [decision 184; M5.2 review cycle 3: M52-C3-PAPER-04]
+_SITTINGS_IN_ALL = re.compile(r"(?P<count>[A-Za-z]+) sittings in\s+all\b")
+
+
+def _sittings_in_all_drift(block: str, dates: int) -> list[str]:
+    """Every "<N> sittings in all" in `block` that does not state `dates`."""
+    return [
+        f"'{' '.join(claim.group(0).split())}' over a register whose dated blocks fall on {dates} "
+        "distinct dates"
+        for claim in _SITTINGS_IN_ALL.finditer(block)
+        if claim.group("count").lower() not in _COUNT_WORDS
+        or _COUNT_WORDS.index(claim.group("count").lower()) != dates
+    ]
+
+
+def test_the_sittings_the_register_holds_in_all_are_counted_too():
+    """The half of README's sittings sentence the ledger guard never read, and its falsifier.
+
+    Stated beside the derived figure, it borrowed that figure's credibility -- the shape
+    `_SITTINGS`' own comment describes one clause over -- and it went stale the way that comment
+    says such a figure does: M5.2's review cycles moved "twelve dated sittings" to "thirteen" and
+    left "thirteen sittings in all", which was then fourteen. [M5.2 review cycle 3: M52-C3-PAPER-04]
+    """
+    block, line = _publication_block(README)
+    dates = len(set(_SITTING_BLOCK.findall(_src(REGISTER))))
+    assert _SITTINGS_IN_ALL.search(block), (
+        f"README.md:{line} no longer says how many sittings the register holds in all, so this "
+        "guard holds nothing. Restate it from the dated blocks, or take the guard out with it."
+    )
+    drift = _sittings_in_all_drift(block, dates)
+    assert not drift, (
+        f"README.md:{line} publishes a sittings total the register does not have:\n  "
+        + "\n  ".join(drift)
+    )
+    assert _sittings_in_all_drift(f"holds {_COUNT_WORDS[dates - 1]} sittings in all", dates), (
+        "the guard read a total one short of the register's as agreeing with it"
+    )
 
 
 # --- M4.16 spec-15: a comment that names a file names one that is there ------------------------
@@ -13620,20 +13717,37 @@ def test_the_citation_guard_sees_a_subject_that_moved():
         # adding the paragraph that says `_acquisition_drain`'s due-count asks for the work this
         # drain would take; review cycle 3 moved it 14 more, giving that job the board half of the
         # reaper it had taken the queue half of and the paragraph arguing why the two travel
-        # together. 1240 - the number the record published until that cycle - became the stale
-        # half. M5.3's review cycle 1 moved it 29 further: the drain's budget paragraph took
-        # decision 347's owed measurement, which is prose rather than code and is why the subject
-        # keeps sliding down this file. 1254 is now the stale half. The pair keeps meaning what it
-        # says rather than being retyped.
-        # [M51-REV-07; M5.1 review cycle 2, M51-C2-PAID-02; cycle 3, M51-C3-CRASH-03;
-        #  M5.3 review cycle 1, M53-C1-NET-03]
-        ("backend/spielplan/worker.py:1283", "backend/spielplan/worker.py:1254"),
-        # M5.4 moved the second pair 13 lines: `dna_reject` and `dna_pack` had to be classified
-        # in this file's EXCLUDED set before the schema could carry them, and the set went in
-        # above the paragraph the record cites. 1378 - the number published until this milestone
-        # - becomes the stale half, which is the same movement the first pair records four times
-        # over. [decisions 341, 382; M5.4]
-        ("backend/tests/test_backup.py:1391", "backend/tests/test_backup.py:1378"),
+        # together. 1240 - the number the record published until this cycle - becomes the stale
+        # half. The pair keeps meaning what it says rather than being retyped.
+        #
+        # M5.2 moved it 139 further, and for the same structural reason rather than by
+        # coincidence: §7.2's two intake drivers and the registry rows that fire them go in above
+        # `Job("nightly-backup")` because a driver must be defined before the tuple that names it,
+        # so every milestone that gives this loop a job moves the last row in it. 1254 - the
+        # number the record published until this milestone - becomes the stale half.
+        # [M5.2; plan C4, decision 368] Review cycle 3 moved it 4 more, correcting the intake
+        # sweep's budget paragraph that promised the minute poll a bound its timeout breaks, so
+        # 1393 is the stale half now. [M5.2 review cycle 3: M52-C3-PAPER-08]
+        # M5.3's review cycle 1 moved it 29 further on its own branch (decision 347's owed
+        # measurement, prose in the drain's budget paragraph), and the merge of M5.2 with M5.3
+        # added both movements, so 1397 - M5.2's last-published number - is the stale half now.
+        # [M5.3 review cycle 1, M53-C1-NET-03; M5.2 merge]
+        ("backend/spielplan/worker.py:1426", "backend/spielplan/worker.py:1397"),
+        # M5.2 moved the second subject 8 lines, classifying `jellyfin_intake` beside the
+        # acquisition spine's three tables in that file's EXCLUDED sets (decision 363), so
+        # 1378 - the number the record published until this milestone - is now the stale
+        # half of a pair that keeps meaning what it says. The pair fed 1262 until review cycle 2,
+        # which is a line this file has handed the guard since M4.16 rather than a number the
+        # record ever published. Either of them fires - `_cites` has no tolerance and
+        # `sync/resolve.py` is on exactly one line of `test_backup.py` - so what the
+        # last-published number buys is not a stronger assertion but a pair that says what the
+        # paragraph above it says, which is the whole of what a re-derived citation is for.
+        # [M5.2; review cycle 2: m52-c2-citepair-01]
+        # M5.4 moved the same subject 13 lines on its own branch, classifying `dna_reject` and
+        # `dna_pack` in the EXCLUDED sets, and the merge added both classifications, so 1391 - the
+        # number main published until this merge - is the stale half. [decisions 341, 382; M5.4;
+        # M5.2 merge]
+        ("backend/tests/test_backup.py:1399", "backend/tests/test_backup.py:1391"),
         ("account/+page.svelte:332", "account/+page.svelte:330"),
         ("(`:94`, `:102`", "(`:93`, `:101`"),
     ):
@@ -13996,6 +14110,71 @@ def test_the_published_figure_guard_sees_a_figure_the_instrument_has_outgrown():
     assert _published_figure_problems(
         "probe.md", "Measured by `ops/m51_exit_criterion.py`, eleven numbered\nchecks."
     ), "a figure wrapped across a line break was not read at all"
+
+
+# A test id an exit script's docstring hands a criterion clause to. The docstring wraps long ids
+# at 108 columns with a trailing underscore, so the reader joins those before it matches.
+_HANDED_OFF = re.compile(r"backend/tests/test_\w+\.py::(test_\w+)")
+
+
+def _clauses_the_script_hands_off(path: Path) -> list[str]:
+    """The tests an exit script's own docstring says measure a clause none of its checks does."""
+    doc = ast.get_docstring(ast.parse(_src(path))) or ""
+    return _HANDED_OFF.findall(re.sub(r"_\n\s*", "_", doc))
+
+
+def test_what_m52s_records_say_of_its_instrument_is_what_the_instrument_does():
+    """Decision 184 over the two sentences an owner reads before signing M5.2's row.
+
+    Section 12's M5.2 cell carries a clause the plan's pass table does not -- a re-stamped owned
+    title exits at stage 1 without minting or paid work (decision 411) -- and then credited the
+    whole criterion to `ops/m52_exit_criterion.py`'s eleven numbered checks. The script says in its
+    own docstring that none of the eleven measures that clause and names the test that does, and
+    `docs/RELEASE.md`'s copy, the page with the verdict blank, had dropped the clause without a
+    word: an owner signing from an 11/11 run signed a sentence one clause of which the named
+    instrument never looked at. So every test the script hands a clause to is named in the cell
+    and in the record's copy. The second half is decision 371's cost, which gave "docker, a real
+    install and the fake on :8097" as why only the owner can run the script, over a script that says
+    NOTHING HERE NEEDS DOCKER, A PORT OR A BROWSER and refuses to run without the corpus bundle.
+    [decisions 184, 371 and 411; M5.2 review cycle 3: M52-C3-PAPER-03, M52-C3-PAPER-07]
+    """
+    script = REPO / "ops" / "m52_exit_criterion.py"
+    handed = _clauses_the_script_hands_off(script)
+    assert handed, (
+        "ops/m52_exit_criterion.py no longer hands any clause to a test, so this guard reads "
+        "nothing. If every clause is now one of its checks, the guard comes out with the hand-off."
+    )
+    row = next(
+        (line for line in _src(_normative_file()).splitlines() if line.startswith("| **M5.2** |")),
+        "",
+    )
+    copy = re.search(r"^### M5\.2 .*?(?=^### )", _src(RELEASE_RECORD), re.M | re.S)
+    assert row and copy, "section 12 or docs/RELEASE.md no longer carries M5.2's row"
+    unnamed = [f"section 12's M5.2 cell does not name {name}" for name in handed if name not in row]
+    unnamed += [
+        f"docs/RELEASE.md's M5.2 section does not name {name}"
+        for name in handed if name not in copy.group(0)
+    ]
+    assert not unnamed, (
+        "ops/m52_exit_criterion.py hands a clause of section 12's criterion to a test, and a record "
+        "the owner signs from still credits it to the script or drops it:\n  " + "\n  ".join(unnamed)
+    )
+
+    doc = ast.get_docstring(ast.parse(_src(script))) or ""
+    entry = re.search(r"^### 371\. .*?(?=^##)", _src(REGISTER), re.M | re.S)
+    assert entry, "the register no longer heads decision 371"
+    assert "NOTHING HERE NEEDS DOCKER" in doc, (
+        "ops/m52_exit_criterion.py no longer says it needs no docker; re-read decision 371's cost"
+    )
+    stated = " ".join(entry.group(0).split())
+    assert not re.search(r"\bneeds docker\b|:8097", stated), (
+        "decision 371 gives docker or the e2e fake's port as why the owner runs the script, which "
+        "needs neither"
+    )
+    assert "corpus bundle" in stated, (
+        "decision 371 does not name the corpus bundle, which is what the script refuses to run "
+        "without and why it is the owner's to run"
+    )
 
 
 # --- M5.1 review cycle 4: an exit script cites the application by name, never by line ----------

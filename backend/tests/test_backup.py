@@ -133,6 +133,14 @@ GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
 # [decisions 322, 340, 345; M5.1]
 ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
 
+# 0025_jellyfin_intake's one table, and it is `title_jellyfin_item`'s case rather than a
+# new one: the rows are ONE Jellyfin server's item ids and the events that server sent about
+# them, keyed on ids that mean nothing on another install and re-derived by the next sweep
+# (§7.1, §7.2). Carrying them would hand a restored household a webhook history it never
+# received, pointing at items it does not have. The archive is the corpus; this is this box's
+# view of what its own library was told to acquire. [decision 363; M5.2]
+JELLYFIN_INTAKE = {"jellyfin_intake"}
+
 # 0027_dna_extraction's two tables, and they are ACQUISITION_SPINE's argument rather than a new
 # one -- with an asymmetry worth stating, because it looks like an oversight and is not: the DNA
 # this install extracts DOES travel (`dna_tag`, `dna_evidence`, `dna_projected` are in TABLES), and
@@ -147,7 +155,7 @@ ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
 DNA_EXTRACTION = {"dna_reject", "dna_pack"}
 
 EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
-            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | DNA_EXTRACTION)
+            | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | JELLYFIN_INTAKE | DNA_EXTRACTION)
 
 
 # --- the postgres client binaries -------------------------------------------------------------

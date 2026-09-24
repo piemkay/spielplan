@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 
 import asyncpg
 import pytest
@@ -416,3 +417,306 @@ async def test_the_port_is_part_of_the_origin(db, secrets_key):
     await registry.save_jellyfin(db, url="http://jellyfin.local:8096", api_key="k")
     moved = await registry.save_jellyfin(db, url="http://jellyfin.local:9096")
     assert moved.api_key == ""
+
+
+# --- §7.2: the webhook's token, and the instant the delta poll reads from -------------------
+
+
+async def test_the_webhook_token_is_minted_at_the_first_save_and_never_rotated(db, secrets_key):
+    """§7.2's `POST /events/jellyfin` is "token-authed", and decision 332 makes that token a
+    connector secret this app generates and displays exactly once.
+
+    Never rotated is the half with a cost attached: the operator has pasted the value into the
+    Jellyfin Webhook plugin's own header field, and §6.6 cannot show it to them a second time, so
+    a save that minted a fresh one would kill the intake path on the day somebody fixed a typo in
+    the URL — and nothing in the app would say so until a household noticed that nothing had been
+    acquired for a fortnight. Sealed rather than stored beside the URL, because whoever holds it
+    can file acquisition work in this household's name (§14.3).
+
+    AND MINTED BY A SAVE AN ADMIN PERFORMED, never by one nobody is watching (decision 416).
+    `put_jellyfin` is the only response in this app that ever carries the value, so a background
+    save that minted one sealed it into the database and showed it to nobody -- after which that
+    route's one-time reveal answered `null` for ever while §6.6's card said a token existed.
+    """
+    typed = await registry.save_jellyfin(
+        db, url="http://jf", api_key="k", mint_webhook_token=True
+    )
+    assert len(typed.webhook_token) >= 32
+    assert (await registry.load_jellyfin(db)).webhook_token == typed.webhook_token
+
+    edited = await registry.save_jellyfin(db, url="http://jf/library", mint_webhook_token=True)
+    assert edited.webhook_token == typed.webhook_token, "a URL edit must not rotate it"
+    probed = await registry.save_jellyfin(db, server_version="10.10.3", server_supported=True)
+    assert probed.webhook_token == typed.webhook_token, "nor may the sweep's own probe save"
+
+    row = await db.fetchrow(
+        "SELECT config, secrets_encrypted FROM connector_config WHERE name = 'jellyfin'"
+    )
+    assert typed.webhook_token not in str(row["config"]), "it belongs in the sealed half"
+    assert typed.webhook_token.encode() not in bytes(row["secrets_encrypted"])
+
+
+async def test_a_save_no_admin_performed_does_not_mint_the_token_no_admin_would_see(
+    db, secrets_key
+):
+    """Decision 416, and the state it is about is every install that existed before this
+    milestone: `webhook_token` is new here, so an upgraded connector loads configured and empty,
+    and the FIRST save to reach the merge is a background one -- `poll_delta`'s watermark write
+    on the worker's first tick, the sweep's version probe, §7.3's link route. Each of them
+    minted, sealed and returned the value into a caller that dropped it.
+
+    The cost is not one lost gesture. Decision 332 gives the token one appearance and there is no
+    rotation route anywhere in this app, so `POST /events/jellyfin` would answer 401 to every real
+    delivery for ever while the card reported `has_webhook_token: true`. So the mint is the admin
+    save's to ask for: a background save may not create one, and may not destroy one either.
+    [review cycle 1: m52-rev-delta-01, m52-rev1-token-01]
+    """
+    seeded = await registry.save_jellyfin(db, url="http://jf", api_key="k")
+    assert seeded.configured and seeded.webhook_token == "", "the state an upgrade arrives in"
+
+    for background in (
+        await registry.save_jellyfin(db, delta_watermark=datetime(2026, 3, 4, tzinfo=UTC)),
+        await registry.save_jellyfin(db, server_version="10.10.3", server_supported=True),
+        await registry.save_jellyfin(db, user_tokens={"1": "utok"}),
+    ):
+        assert background.webhook_token == "", "a save nobody is watching may not mint one"
+    assert (await registry.load_jellyfin(db)).webhook_token == ""
+
+    minted = await registry.save_jellyfin(db, url="http://jf", mint_webhook_token=True)
+    assert minted.webhook_token, "the admin's own save is what mints it"
+    kept = await registry.save_jellyfin(db, delta_watermark=datetime(2026, 3, 5, tzinfo=UTC))
+    assert kept.webhook_token == minted.webhook_token, "and a background save carries it forward"
+
+
+async def test_two_first_saves_at_once_are_told_the_same_token(db, pg_url, secrets_key):
+    """Decision 332 shows the token once, so a save that mints one an admin never receives has
+    spent the only appearance it gets -- and there is no rotation route anywhere in this app.
+
+    `load_jellyfin(for_update=True)` says in its own docstring that it "locks nothing when the row
+    does not exist yet", and the FIRST save is exactly the save that mints: both transactions read
+    no row, both minted, and the loser's admin was shown a value that was never stored. Measured
+    both ways as this landed, against the same two connections: without the row taken first, two
+    tokens are minted and one of them is the stored one; with it, both saves are told the same
+    value the database holds. [review cycle 1: m52-rev1-token-02]
+    """
+    one, two = await _second_connection(pg_url), await _second_connection(pg_url)
+    try:
+        first, second = await asyncio.gather(
+            registry.save_jellyfin(
+                one, url="http://jf", api_key="k-one", mint_webhook_token=True
+            ),
+            registry.save_jellyfin(
+                two, url="http://jf", api_key="k-two", mint_webhook_token=True
+            ),
+        )
+    finally:
+        await one.close()
+        await two.close()
+
+    stored = await registry.load_jellyfin(db)
+    assert stored.webhook_token, "one of them minted"
+    assert {first.webhook_token, second.webhook_token} == {stored.webhook_token}, (
+        "an admin may not be shown a token the next save overwrote"
+    )
+
+
+async def test_the_webhook_token_survives_the_move_that_drops_the_credentials(db, secrets_key):
+    """The asymmetry §14.3 actually draws, which is about DIRECTION and not about the connector.
+
+    The API key and the per-user tokens are dropped on an origin change because this app would
+    otherwise send them, in a header, to whatever host was just typed in. The webhook token never
+    leaves this install — it is what a caller has to present to reach `POST /events/jellyfin` —
+    so a new Jellyfin address puts it nowhere it was not already, while dropping it would silently
+    end the intake path with nothing to show the admin and no way to re-read a value that is
+    displayed once (decision 332).
+
+    The assertion that matters is the one after the reload: the sealed blob is written whole, so a
+    move leaving no api_key and no user_tokens would otherwise fall through to the write that puts
+    NULL over the ciphertext, and the token would be gone from the disk while the object returned
+    by the same call still carried it.
+    """
+    first = await registry.save_jellyfin(
+        db, url="http://jellyfin.local:8096", api_key="k", user_tokens={"1": "tok"},
+        mint_webhook_token=True,
+    )
+    moved = await registry.save_jellyfin(db, url="http://elsewhere.example:8096")
+
+    assert (moved.api_key, moved.user_tokens) == ("", {})
+    assert moved.webhook_token == first.webhook_token
+    assert (await registry.load_jellyfin(db)).webhook_token == first.webhook_token
+
+
+async def test_the_library_pick_survives_the_move_that_drops_the_credentials(db, secrets_key):
+    """The one server-bound value in this merge with no `moved` branch, pinned so that it is a
+    decision rather than an omission.
+
+    §14.3 drops what this app would SEND to whatever host was just typed in, and the version pair
+    and the watermark are facts this app DERIVED from the old server. The pick is neither: it is
+    the admin's own recorded intent and it travels nowhere. `moved` fires on http->https, on a new
+    port and on hostname->IP -- the same install at a corrected address, whose library ids are
+    GUIDs minted in its own database and still match -- so dropping it would widen the boundary
+    from the libraries the admin picked to the whole server on the commonest of the three
+    gestures, which is the harm the custody branch already refuses in those words: the household
+    billed for the library they deselected. A genuinely different install answers for none of the
+    stored ids, and its adds are recorded `library not picked` until the admin re-picks from the
+    list `GET /connectors/jellyfin/libraries` now serves. [review cycle 1: m52-rev-lib-01]
+    """
+    await registry.save_jellyfin(
+        db, url="http://jellyfin.local:8096", api_key="k", library_ids=["jf-lib-films"]
+    )
+    moved = await registry.save_jellyfin(db, url="https://jellyfin.local:8920")
+
+    assert (moved.api_key, moved.server_version, moved.delta_watermark) == ("", "", None)
+    assert moved.library_ids == ["jf-lib-films"], "a corrected address is not a new pick"
+    assert (await registry.load_jellyfin(db)).library_ids == ["jf-lib-films"]
+
+
+async def test_an_install_that_has_minted_no_token_matches_nothing_a_caller_can_send(
+    db, secrets_key
+):
+    """The empty case, which is a real state and not a hypothetical: `seed_from_env` writes the
+    secret directly rather than through `save_jellyfin`, so an automated install arrives with a
+    configured connector and no token at all, and every install configured before this milestone
+    is in the same state until its next save.
+
+    A plain equality would then admit a caller that also sends nothing, which is every caller.
+    The rule lives on the config rather than in the route because `api/` decides HTTP shapes and
+    this is the §7.2 clause itself.
+    """
+    await registry.seed_from_env(db, _settings(jellyfin_url="http://jf", jellyfin_api_key="k"))
+    seeded = await registry.load_jellyfin(db)
+    assert seeded.configured and seeded.webhook_token == ""
+    assert seeded.webhook_token_matches("") is False
+    assert seeded.webhook_token_matches(None) is False
+
+    minted = await registry.save_jellyfin(db, url="http://jf", mint_webhook_token=True)
+    assert minted.webhook_token_matches(minted.webhook_token) is True
+    assert minted.webhook_token_matches(minted.webhook_token + "x") is False
+    assert minted.webhook_token_matches("") is False
+    # Over BYTES, and these are the inputs that made that necessary: Starlette decodes a header
+    # as latin-1, so one byte >= 0x80 arrives here as a non-ASCII `str`, and `hmac.compare_digest`
+    # raises `TypeError` on those. Nothing in `app.py` catches it, so the app's one
+    # stranger-reachable route answered an unauthenticated caller 500 with a traceback -- the one
+    # answer decision 365 forbids, from before the token check had even finished.
+    # [review cycle 1: m52-rev-events-01]
+    assert minted.webhook_token_matches("\xff") is False
+    assert minted.webhook_token_matches(minted.webhook_token + "\u00e9") is False
+
+
+async def test_the_webhook_token_does_not_survive_a_repr(db, secrets_key):
+    """`test_no_connector_credential_survives_a_repr` above is this rule for the two credentials
+    §14.3 names by name, and `test_static_contracts.py`'s static sweep matches on the field names
+    `api_key`, `token` and `user_tokens` — so the third credential this connector now holds is
+    covered by neither until it is named here."""
+    cfg = await registry.save_jellyfin(
+        db, url="http://jellyfin.local:8096", api_key="k", mint_webhook_token=True
+    )
+    assert cfg.webhook_token, "there is something to print"
+    assert cfg.webhook_token not in repr(cfg)
+    assert "jellyfin.local" in repr(cfg), "the URL is what makes such a line worth printing"
+
+
+async def test_the_delta_poll_starts_at_this_installs_own_creation_instant(db, secrets_key):
+    """decision 366, and the whole of it is "never epoch". The poll reads every row the server
+    saved after the floor (decision 409), so an epoch floor selects the household's entire corpus
+    on the very first poll and files an acquisition task for every title it already owns.
+    `min(applied_at) FROM schema_migration` is the one instant this schema already records that
+    means "when this database came into existence".
+
+    The watermark is connector state and not a household fact, so it needs no DDL — and it lives
+    in the plaintext config half beside `library_ids`, because it is not a secret and a value
+    that vanished with a SECRETS_KEY failure would re-read the corpus on the next poll.
+
+    Decision 412 moves the floor from `min(applied_at)` to 0025's own `applied_at` -- the instant
+    this install gained §7.2's fallback. On a fresh install the two are one migration run apart;
+    on an UPGRADE, which is every install that exists, `min(applied_at)` is when 0001 ran, and a
+    first poll from there filed every title added since the install as a new add. Both are held:
+    the floor is 0025's, and it is not the install's when the install is older.
+    [review cycle 3: M52-C3-STATE-02]
+    """
+    gained = await db.fetchval(
+        "SELECT applied_at FROM schema_migration WHERE version = '0025_jellyfin_intake'"
+    )
+    fresh = await registry.save_jellyfin(db, url="http://jf", api_key="k")
+    assert fresh.delta_watermark is None, "nothing has polled yet"
+    assert await registry.delta_since(db, fresh) == gained
+    assert gained.year > 2000, "an epoch floor is what this test exists to refuse"
+
+    await db.execute(
+        "UPDATE schema_migration SET applied_at = applied_at - interval '180 days'"
+        " WHERE version < '0025'"
+    )
+    assert await registry.delta_since(db, fresh) == gained, (
+        "an upgraded install's first poll read from the day it was installed"
+    )
+
+    polled = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
+    stored = await registry.save_jellyfin(db, delta_watermark=polled)
+    assert stored.delta_watermark == polled
+    reloaded = await registry.load_jellyfin(db)
+    assert reloaded.delta_watermark == polled, "jsonb holds no timestamp; it round-trips as text"
+    assert await registry.delta_since(db, reloaded) == polled
+    assert "2026-03-04" in str(
+        await db.fetchval("SELECT config FROM connector_config WHERE name = 'jellyfin'")
+    ), "the watermark is config, not a secret"
+
+
+async def test_a_url_edit_keeps_the_watermark_and_a_move_drops_it(db, secrets_key):
+    """A watermark belongs to the clock that stamped it, which is the argument the probed version
+    already makes one field over (§7.1). Carrying one to a different server is worse than losing
+    it: a new install whose library was imported before the old watermark would have every one of
+    its adds skipped, silently and for ever, while dropping it costs one re-read -- and what
+    absorbs that re-read is decision 411, which files a re-offer of a title the bundle supplied
+    and the app already placed below every genuine add and closes it at stage 1. This docstring
+    used to credit the queue's `(kind, key)` identity, which absorbs nothing of a re-imported
+    library carrying new ids. The floor the re-read starts from is decision 412's.
+    [review cycle 3: M52-C3-STATE-02, M52-C3-STATE-06]"""
+    polled = datetime(2026, 3, 4, tzinfo=UTC)
+    await registry.save_jellyfin(
+        db, url="http://jellyfin.local:8096", api_key="k", delta_watermark=polled
+    )
+    same = await registry.save_jellyfin(db, url="http://jellyfin.local:8096/")
+    assert same.delta_watermark == polled, "a trailing slash is not a different server"
+
+    moved = await registry.save_jellyfin(db, url="http://elsewhere.example:8096")
+    assert moved.delta_watermark is None
+    assert await registry.delta_since(db, moved) == await db.fetchval(
+        "SELECT applied_at FROM schema_migration WHERE version = '0025_jellyfin_intake'"
+    )
+
+
+async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermark(
+    db, secrets_key, monkeypatch
+):
+    """M4.7's dd03 state, read again one milestone later. `load_jellyfin` degrades to a config
+    carrying the stored URL when the sealed half will not open — and it used to carry the URL
+    ALONE, while `save_jellyfin` rebuilds the stored config from what it was handed. So the next
+    save of a corrected address erased every other key in the plaintext column, and correcting the
+    address is the one gesture this state invites.
+
+    That was invisible while `library_ids` had no reader. Decision 364 makes it the acquisition
+    boundary, so the erasure silently widens it from the libraries the admin picked to the whole
+    server — the household billed for the library they deselected — and decision 366's watermark
+    went with it, which re-reads the corpus. What failed is the credential column; taking the
+    connector's plaintext settings down with it is a second failure the first does not justify.
+    """
+    from spielplan.core.config import settings
+
+    polled = datetime(2026, 3, 4, tzinfo=UTC)
+    await registry.save_jellyfin(
+        db, url="http://jellyfin.local:8096", api_key="k",
+        library_ids=["jf-lib-films"], delta_watermark=polled,
+    )
+
+    # The .env came back wrong, or did not come back at all.
+    monkeypatch.setenv("SECRETS_KEY", "a-different-secrets-key-not-a-real-one")
+    settings.cache_clear()
+    degraded = await registry.load_jellyfin(db)
+    assert (degraded.secrets_unreadable, degraded.api_key) == (True, "")
+    assert degraded.library_ids == ["jf-lib-films"], "the pick is plaintext config, not a secret"
+    assert degraded.delta_watermark == polled
+
+    await registry.save_jellyfin(db, url="http://jellyfin.local:8096/")
+    kept = await registry.load_jellyfin(db)
+    assert kept.library_ids == ["jf-lib-films"], "a URL correction must not widen the boundary"
+    assert kept.delta_watermark == polled

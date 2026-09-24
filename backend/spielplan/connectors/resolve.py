@@ -41,10 +41,37 @@ KIND_OF_TYPE = {"movie": "movie", "series": "series"}
 FILLABLE = ("imdb_id", "tmdb_id", "tvdb_id")
 
 
+@dataclass(frozen=True)
+class UnmatchedItem:
+    """One item this resolver refused, in the shape the acquisition half has to act on.
+
+    The list was `list[str]` of names, and `resolve_title_id`'s own comment below still calls it
+    "what §7.2's acquisition half consumes at M5". A name cannot be acquired from, and decision
+    323 sharpens that: stage 1 mints only on a provider id, so a report of names hands the
+    acquisition half a list it must re-read the server to use -- for two facts this sweep already
+    had in its hand. Decision 370 widens the entry here and leaves `as_dict`'s wire shape alone.
+
+    Three fields rather than the whole item, because these three are what the consumer's own key
+    spelling reads: `acquire/pipeline.key_for_item` takes `Id` first and falls back to the
+    imdb/tmdb/tvdb ids out of `ProviderIds`, and `name` is what §6.6's card renders. A sweep that
+    refuses nine thousand items would otherwise hold nine thousand whole items for its length in
+    order to use three keys of each.
+
+    `provider_ids` is this module's normalised form (`provider_ids()`: keys lowercased, empty
+    values dropped) and not Jellyfin's raw mapping, because `identity()` lowercases again and the
+    normalisation is idempotent -- a consumer that hands this straight back as `ProviderIds`
+    therefore resolves to the identity the item itself would have given.
+    """
+
+    jellyfin_id: str | None
+    name: str
+    provider_ids: dict[str, str]
+
+
 @dataclass
 class ResolveReport:
     matched: int = 0
-    unmatched: list[str] = field(default_factory=list)
+    unmatched: list[UnmatchedItem] = field(default_factory=list)
     filled: dict[str, int] = field(default_factory=dict)
     relinked: int = 0
     # Resolution is user-independent, so §7.3's sweep reads the library once with the admin key
@@ -72,7 +99,14 @@ class ResolveReport:
             # itself is not rendered -- a count is what an operator can read.
             "matched_titles": len(self.matched_title_ids),
             "unmatched": len(self.unmatched),
-            "unmatched_names": self.unmatched[:20],
+            # Widened in memory and deliberately not here (decision 370): M5.2 ships no surface to
+            # render the ids beside these names. §6.6's connectors card renders the COUNT above and
+            # renders THIS FIELD NOWHERE -- `unmatched_names` has no reader in the app at all, which
+            # the card's own comment beside `resolve.unmatched` records from the other side. So
+            # twenty is the bound this app publishes rather than one a card chose, and it stays here
+            # so that the surface which does render them inherits a wire shape already bounded.
+            # [review cycle 2: m52-rev2-unm-01]
+            "unmatched_names": [entry.name for entry in self.unmatched[:20]],
             "filled": self.filled,
             "relinked": self.relinked,
         }
@@ -195,7 +229,12 @@ async def upsert_item(conn: asyncpg.Connection, item: dict, report: ResolveRepor
     """
     title_id = await resolve_title_id(conn, item)
     if title_id is None:
-        report.unmatched.append(str(item.get("Name") or item.get("Id") or "?"))
+        # `name` keeps the spelling it had exactly, because it is still what `as_dict` sends.
+        report.unmatched.append(UnmatchedItem(
+            jellyfin_id=str(item.get("Id") or "") or None,
+            name=str(item.get("Name") or item.get("Id") or "?"),
+            provider_ids=provider_ids(item),
+        ))
         return None
 
     ids = identity(item)
@@ -351,13 +390,14 @@ async def upsert_items(conn: asyncpg.Connection, items: list[dict]) -> ResolveRe
     if report.unmatched:
         log.info(
             "%d Jellyfin item(s) did not resolve to a title: %s",
-            len(report.unmatched), ", ".join(report.unmatched[:5]),
+            len(report.unmatched), ", ".join(entry.name for entry in report.unmatched[:5]),
         )
     return report
 
 
 __all__ = [
     "ResolveReport",
+    "UnmatchedItem",
     "identity",
     "kind_of",
     "provider_ids",

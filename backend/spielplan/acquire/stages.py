@@ -263,6 +263,35 @@ AMBIGUOUS_IDENTITY = (
     "revive this task from the acquisition board (decision 360)"
 )
 
+# An item that resolves to a title the bundle supplied and the app has already PLACED, which is
+# M5.2-plan §9's risk made into an exit: "A library re-scan can re-stamp items the household has
+# had for years ... the job must then find the title already owned and exit at stage 1 rather
+# than re-acquiring. Assert that, or a re-scan bills the household for its whole library."
+# Nothing exited. A resolved title advanced and `pipeline.run_task` resumed it from its board
+# row, so a re-stamped owned title walked stages 2 to 10 -- stubs today, which stamped §8's "new
+# - model placement, no crowd data" badge over warm corpus titles and wrote `ready` over the
+# `(2, parked)` row `placement/reconcile._park_thin` leaves for a thin title, a row `_PARK`'s
+# `ON CONFLICT DO NOTHING` can never put back; and the day M5.3 and M5.5 give those stages bodies,
+# eight-source enrichment and the paid extract for every title a re-scan touched.
+#
+# A BUNDLE TITLE ALREADY PLACED IS THE TEST, and not "owned", which is decision 411's reading of
+# the plan's word. `is_owned` is the full sweep's column and moves on the sweep's schedule, so it
+# cannot say whether §8 has anything left to do. Two columns can: `origin = 'bundle'` says the
+# curated corpus already did this title's acquisition, and a placement says stages 2 to 9 have
+# nothing left to produce. Each half keeps a walk M5.1 built on purpose. A bundle title still
+# `unplaced` -- a Jellyfin add the nightly reconciliation has not reached -- walks to stage 9 and
+# waits there exactly as `NOT_PLACED` argues. A title THIS PIPELINE minted resumes from its own
+# board row, because that row is unfinished work of the pipeline's: a reclaim after a worker died
+# between the mint and `_remember_title`, and the loser of a copy race resolving onto the winner's
+# row, both finish that way. A thin title's `(2, parked)` inbox row is left for the `title:` task
+# whose job it is. A skip with no board row, because the title's row belongs to whichever walk
+# holds it and this task established no title of its own. [M5.2 review cycle 3: m52-c3-own-01]
+ALREADY_PLACED = (
+    "this item resolves to title {}, which the corpus bundle supplied and the app has already "
+    "placed, so there is nothing for the pipeline to acquire: a Jellyfin re-scan re-stamps items "
+    "the household has had for years, and this was one of them (decision 411)"
+)
+
 # Two tasks for one film reached stage 1 at once, and the one that lost the claim waited. Decision
 # 336's `parked`, with a deadline of now: the thing that may change is the other walk committing,
 # which it will, and nothing was attempted so nothing is charged. `pipeline.TITLE_IN_FLIGHT` is
@@ -525,7 +554,7 @@ async def identify(ctx: StageContext) -> Outcome:
     THE MINT IS THE ONE WRITE THIS PIPELINE CANNOT TAKE BACK, so it happens only on a provider id
     (decision 323). A name-and-year mint is the silent wrong match the resolver already refuses,
     measured on this corpus at 2,438 titles sharing `(kind, lower(name))` and 573 groups still
-    colliding with the year applied (`connectors/resolve.py:155-160`).
+    colliding with the year applied (`connectors/resolve.py:189-194`).
 
     A PROVIDER ID IS NECESSARY AND IT IS NOT SUFFICIENT, which decision 360 is the fourth reading
     of after `UNSUPPORTED_KIND`, `MALFORMED_PROVIDER_ID` and `UNCANONICAL_ITEM_ID`. The measurement
@@ -585,7 +614,7 @@ def _mint_claims(item: dict[str, Any]) -> list[str]:
 
     AND THE FOURTH BRANCH IS CLAIMED TOO, because the rule in the paragraph above was stated and
     then applied to three of the resolver's four matching arms. `resolve.resolve_title_id` also
-    matches on kind + year + name (`connectors/resolve.py:161-179`), and that arm is precisely
+    matches on kind + year + name (`connectors/resolve.py:195-213`), and that arm is precisely
     what merges two walks whose PROVIDER ids are disjoint: a household shipping "Movies" and
     "Movies 4K" where one copy's NFO carries only an imdb id and the other only a tmdb id, or a
     series scraped by Sonarr in one library (tvdb) and by the TMDb plugin in another. Their claim
@@ -699,6 +728,13 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
                     "refused_by": type(exc).__name__},
         )
     if found is not None:
+        if await _nothing_left_to_acquire(ctx.conn, int(found)):
+            # `ALREADY_PLACED` argues the exit. No `title_id` on the outcome, so the driver
+            # establishes no title for this walk and writes no board row over the one that exists.
+            return park(
+                ALREADY_PLACED.format(int(found)),
+                detail={"name": str(item.get("Name") or ""), "title_id": int(found)},
+            )
         return advance({"identified": "resolved to an existing title"}, title_id=int(found))
 
     kind = resolve.kind_of(item)
@@ -752,19 +788,53 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
     return advance({"identified": "minted", "provider_ids": _present(mintable)}, title_id=minted)
 
 
+async def _nothing_left_to_acquire(conn: asyncpg.Connection, title_id: int) -> bool:
+    """Decision 411's test: a title the bundle supplied that already carries a placement.
+    `ALREADY_PLACED` argues both halves; `title_placement_has_basis` ties `placement <>
+    'unplaced'` to a basis bundle, so it is the one column that already says a coordinate
+    exists."""
+    return bool(await conn.fetchval(
+        "SELECT origin = 'bundle' AND placement <> 'unplaced' FROM title WHERE id = $1",
+        int(title_id),
+    ))
+
+
+async def re_offered_title(conn: asyncpg.Connection, item: dict[str, Any]) -> int | None:
+    """The title an item resolves to, when stage 1 would exit on it; None otherwise.
+
+    Published for §7.2's two feeders, which file such an item below every genuine add (decision
+    411): a task that exits at stage 1 still takes one of the drain's `DRAIN_LIMIT` slots, and a
+    re-scan's re-stamps filed at the default priority queued ahead of a film the household had
+    really just added. The SAME resolver and the same test as `_resolve_or_mint`, so the feeders
+    and the stage cannot disagree about which item is a re-offer.
+
+    A value the resolver's columns refuse is not a re-offer, for `_resolve_or_mint`'s reason: that
+    item is stage 1's to park with the database's sentence, and filing it at the default priority
+    is what gets it there. Called OUTSIDE any transaction by both feeders, because the refusal is
+    a Postgres error and one inside a transaction would abort the enqueue it was deciding.
+    """
+    try:
+        found = await resolve.resolve_title_id(conn, item)
+    except (asyncpg.DataError, ValueError):
+        return None
+    if found is None or not await _nothing_left_to_acquire(conn, int(found)):
+        return None
+    return int(found)
+
+
 async def _indistinguishable_titles(
     conn: asyncpg.Connection, item: dict[str, Any], *, kind: str
 ) -> int:
     """How many titles this mint could not be told apart from, counted to a ceiling of two.
 
     WHY A REFUSAL IS NEEDED AT ALL, since `resolve_title_id` has already answered None.
-    `connectors/resolve.py:161-179` takes `LIMIT 2` and returns a match only for exactly one
+    `connectors/resolve.py:195-213` takes `LIMIT 2` and returns a match only for exactly one
     candidate - deliberately, because "an arbitrary match is strictly worse than no match" for a
     LOOKUP, where a refusal is merely reported. Stage 1 is not a lookup: it reads the same None as
     "there is no such title" and WRITES. Measured on the corpus this resolves against, 2,438 titles
     share `(kind, lower(name))` and 573 groups still collide with the year applied
-    (`connectors/resolve.py:155-160`), and `pipeline.enqueue_item`'s documented input is
-    `ResolveReport.unmatched` - which `resolve.py:198` appends to on exactly that refusal - so the
+    (`connectors/resolve.py:189-194`), and `pipeline.enqueue_item`'s documented input is
+    `ResolveReport.unmatched` - which `resolve.py:233` appends to on exactly that refusal - so the
     items reaching this stage are enriched for ambiguity by construction. Two library copies of one
     film with disjoint provider ids then mint TWO rows: the winner's mint makes the arm MORE
     ambiguous rather than less, so the loser of `_MINT_LOCK` comes back and mints beside it. A lock
@@ -976,7 +1046,7 @@ async def _mint(
 
     `is_owned` and `owned_checked_at` are DERIVED FROM THE ITEM and not asserted. §7.2 says the
     flag is "re-derived from Jellyfin, never trusted stale", and seeing the item in the library IS
-    the derivation - `connectors/resolve.py:212-215` says exactly that about the same two columns.
+    the derivation - `connectors/resolve.py:250-253` says exactly that about the same two columns.
     The derivation is `Id`: an item that carries one is an item Jellyfin showed us, and an item
     that carries none is not.
 
@@ -985,10 +1055,10 @@ async def _mint(
     Jellyfin has never shown us", and `test_acquire_pipeline.py` pins that path with an item that
     has no `Id` at all - which mints `jellyfin_id = NULL`. `sync/seen._falsify_ownership` is the
     ONE statement in the codebase that can un-own a title and it is scoped
-    `WHERE is_owned AND jellyfin_id IS NOT NULL` (`seen.py:1145`), so such a row is invisible to
+    `WHERE is_owned AND jellyfin_id IS NOT NULL` (`seen.py:1168-1169`), so such a row is invisible to
     every nightly sweep for ever: under decision 162 the household's spine would permanently claim
     ownership of a film it does not have, and Home's "New in the library" shelf, §6.2's candidate
-    pool and Tonight's pool all read that flag. `resolve.py:145-149` names this exact harm as the
+    pool and Tonight's pool all read that flag. `resolve.py:179-183` names this exact harm as the
     thing its own refusals exist to avoid.
 
     Nothing is lost by deriving it: stage 10 already parks a title that is not badgeable with "no

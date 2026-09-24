@@ -11,6 +11,8 @@ admin key on that route on purpose: it is the only way this restraint can fail a
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -41,6 +43,51 @@ async def test_the_api_key_travels_as_x_emby_token(client):
     with pytest.raises(JellyfinError) as exc:
         await wrong.users()
     assert exc.value.status == 401
+
+
+async def test_the_key_travels_where_a_jellyfin_12_server_reads_it(client, monkeypatch):
+    """§7.1 pins Jellyfin >= 10.9 with no ceiling, and `version_supported("12.1")` says yes -- but
+    12.0 turned `EnableLegacyAuthorization` off by default and migrates upgraded installs to off,
+    and with it off the server reads `X-Emby-Token` not at all
+    (`AuthorizationContext.cs`: `if (EnableLegacyAuthorization && string.IsNullOrEmpty(token))
+    { token = headers["X-Emby-Token"]; }`). The token it always reads is `Token=` inside the
+    `MediaBrowser` Authorization header, on every release from 10.9 on. This client sent the key
+    only in `X-Emby-Token`, and the double read it only there, so every read below was a 401 on
+    the current release while the whole suite agreed with itself.
+
+    The double now reports 12.1 and extracts the token as that server does. Every authenticated
+    read an intake path, the full sweep or §7.3 makes is asked, and the admin key is still refused
+    on the Played write -- that refusal is the double's, on purpose, and a 12.x server does not
+    lose it. A key carrying characters the header's own grammar uses still arrives whole, because
+    the server URL-decodes the value (`GetParts`). [M5.2 review cycle 4: M52-C4-AUTH-01,
+    M52-C4-TTA-03]
+    """
+    module, jf = client
+    monkeypatch.setattr(module, "SERVER_VERSION", "12.1.0")
+    assert (await jf.check())["supported"] is True
+
+    async with httpx.AsyncClient(transport=jf.transport, base_url="http://jellyfin.test") as raw:
+        legacy_only = await raw.get("/Users", headers={"X-Emby-Token": module.API_KEY})
+    assert legacy_only.status_code == 401, "a 12.x server reads no X-Emby-Token by default"
+
+    assert len(await jf.users()) == 2
+    assert len(await jf.libraries()) == len(module.LIBRARIES)
+    assert await jf.library_folders()
+    assert len(await jf.all_items(None)) == 7
+    assert await jf.item_in_libraries("jf-1", ["jf-lib-films"]) is not None
+    assert len(await jf.items_created_since(_watermark("2018-01-01T00:00:00"))) == 7
+    assert await jf.episodes("jf-6")
+    assert await jf.sessions() == []
+    user_id, token = await jf.authenticate_by_name("patrick", module.PASSWORD)
+    await jf.set_played("jf-1", user_id, True, token)
+    assert "jf-1" in module.state.played[user_id]
+    with pytest.raises(JellyfinError) as refused:
+        await jf.set_played("jf-1", user_id, True, module.API_KEY)
+    assert refused.value.status == 403, "the double still refuses the admin key on the write"
+
+    monkeypatch.setattr(module, "API_KEY", 'an odd+key/with,"quotes"=')
+    odd = JellyfinClient("http://jellyfin.test", module.API_KEY, transport=jf.transport)
+    assert len(await odd.users()) == 2
 
 
 async def test_the_public_info_route_needs_no_key(client):
@@ -555,3 +602,632 @@ async def test_the_field_set_is_actually_requested(client):
     first = items[0]
     assert "ProviderIds" in first, "ProviderIds is the identity payload (§7.1)"
     assert "UserData" in first, "UserData carries the Played flag the seen sync reads (§7.3)"
+
+
+# --- §7.2: the delta read, the libraries, and one item's membership -----------------------
+
+
+def _watermark(text: str) -> datetime:
+    """An instant to read from, spelled the way `connector_config` stores one (decision 366)."""
+    return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+async def test_the_delta_read_returns_what_the_server_saved_after_the_watermark(client):
+    """§7.2's second intake path, the fifteen-minute delta poll, over what the server SAVED since
+    the watermark (decision 409).
+
+    The fake's seven items arrived across five years on purpose, so this is a filter rather than a
+    tautology — a corpus saved at one instant passes identically against a server that drops the
+    parameter on the floor. Tampopo and the Christmas footage are in the recent set though their
+    FILES are older than the watermark, because it is the server's save that marks an arrival.
+    """
+    _module, jf = client
+    recent = await jf.items_created_since(_watermark("2022-01-01T00:00:00"))
+    assert {item["Name"] for item in recent} == {
+        "Severance", "The Bear", "Tampopo", "Christmas 2019"
+    }
+    whole = await jf.items_created_since(_watermark("2018-01-01T00:00:00"))
+    assert len(whole) == 7
+    assert await jf.items_created_since(_watermark("2030-01-01T00:00:00")) == []
+
+
+async def test_the_delta_read_keeps_what_the_server_saved_whatever_the_files_own_date(client):
+    """`DateCreated` is not the instant an item entered the library, and this read threw real adds
+    away on the belief that it was.
+
+    Jellyfin stamps it from the FILE: `UseFileCreationTimeForDateAdded = true;` is the default
+    (MediaBrowser.Model/Configuration/MetadataConfiguration.cs, v10.10.7), and
+    `ResolverHelper.SetDateCreated` then writes `var dateCreated = info.CreationTimeUtc;` -- on Linux
+    under .NET 8 the older of mtime and ctime -- while an NFO's `<dateadded>` overrides it. What
+    marks the arrival is `DateLastSaved`, stamped `DateTime.UtcNow` when the scan saves the row, and
+    that is what `MinDateLastSaved` selects on. So the server answered with a film copied in with
+    its mtime kept, and this walk re-applied `DateCreated > since`, dropped it uncounted and let the
+    watermark advance past it for good. The double spelled the two stamps as one instant and could
+    not show it; it now carries both.
+
+    Against the double first: Tampopo's file is from 2016 and the household's Christmas footage
+    from 2019, and both arrived in 2024. Then against a scripted server, because a row the server
+    answered with and that carries no `DateCreated` at all is an add too -- the server's own filter
+    is the whole of the evidence. [M5.2 review cycle 4: M52-C4-REST-02, M52-C4-TTA-02]
+    """
+    _module, jf = client
+    arrived = await jf.items_created_since(_watermark("2024-01-01T00:00:00"))
+    assert {item["Id"] for item in arrived} == {"jf-8", "jf-x"}
+    assert all(item["DateCreated"] < "2024" for item in arrived), "their files predate the mark"
+
+    asked: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params.get("MinDateLastSaved", ""))
+        return httpx.Response(200, json={"Items": [
+            {"Id": "copied", "Type": "Movie", "DateCreated": "2019-01-01T00:00:00.0000000Z"},
+            {"Id": "added", "Type": "Movie", "DateCreated": "2024-01-01T00:00:00.0000000Z"},
+            {"Id": "undated", "Type": "Movie"},
+        ], "TotalRecordCount": 3})
+
+    scripted = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(handle))
+    kept = await scripted.items_created_since(_watermark("2022-01-01T00:00:00"))
+    assert [item["Id"] for item in kept] == ["copied", "added", "undated"]
+    assert asked and asked[0].startswith("2022-01-01"), "the server narrows it, and only it"
+
+
+async def test_the_delta_read_is_scoped_to_the_libraries_the_admin_picked(client):
+    """decision 364: `library_ids` becomes the acquisition boundary and gets its first reader.
+    An EMPTY pick is the whole server — the state of every install in existence, since nothing
+    has ever written the field — and a non-empty one is a filter the server applies by
+    `ParentId`, never a claim the event makes about itself.
+
+    "Christmas 2019" is the household's own footage in a third library, so "the library nobody
+    picked" is a choice here rather than the only alternative.
+    """
+    _module, jf = client
+    since = _watermark("2018-01-01T00:00:00")
+    picked = await jf.items_created_since(since, library_ids=["jf-lib-films"])
+    films = {item["Id"] for item in picked}
+    assert films == {"jf-1", "jf-2", "jf-3", "jf-8"}
+    two = await jf.items_created_since(since, library_ids=["jf-lib-films", "jf-lib-shows"])
+    both = {item["Id"] for item in two}
+    assert both == films | {"jf-6", "jf-7"}
+    assert "jf-x" not in both
+    unscoped = await jf.items_created_since(since, library_ids=[])
+    assert len(unscoped) == 7
+
+
+async def test_the_delta_read_never_returns_an_episode(client):
+    """`ITEM_TYPES` is unchanged and still excludes `Episode` (decision 369), and the fake now
+    serves episodes to any read that asks for them — fourteen rows, twelve of them one season of
+    one series. So the exclusion is exercised rather than assumed: a delta read that returned
+    them would file the twelve jobs §7.2 forbids before the debounce ever saw the burst."""
+    module, jf = client
+    got = await jf.items_created_since(_watermark("2018-01-01T00:00:00"))
+    assert {item["Type"] for item in got} == {"Movie", "Series"}
+    assert module.ITEM_TYPES_ASKED == ["movie", "series"], "narrowed in the query, not after it"
+    assert len(module.ALL_EPISODES) >= 12, "the double has a season to leak"
+
+
+async def test_a_short_delta_page_raises_rather_than_advancing_the_watermark_past_it():
+    """`all_items` raises on this shape because a short read un-owns the remainder (§7.2's third
+    bullet). This walk raises on it because a short read here is SILENT: the watermark advances
+    only on a completed read (decision 366), so the next poll asks about the instants after the
+    page that was dropped and those adds are never looked for again.
+
+    The bounds are beside `all_items`'s rather than shared with it — that walk is the ownership
+    pass's input and `_falsify_ownership` depends on its exact refusals.
+    """
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"Items": [
+            {"Id": "a", "Type": "Movie", "DateCreated": "2024-01-01T00:00:00.0000000Z"},
+            {"Id": "b", "Type": "Movie", "DateCreated": "2024-01-02T00:00:00.0000000Z"},
+        ], "TotalRecordCount": 9})
+
+    jf = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(handle))
+    with pytest.raises(JellyfinError, match="must not advance"):
+        await jf.items_created_since(_watermark("2022-01-01T00:00:00"), page=4)
+
+
+async def test_a_delta_page_that_is_not_an_envelope_raises_rather_than_reading_nothing():
+    """Decision 366's "advances ONLY on a completed read", asked of the read that did not happen
+    at all rather than of the one that raised.
+
+    `_request` answers None for an empty body and for a body it cannot parse -- a forward-auth
+    portal, a proxy's maintenance page, a base URL pointing at the wrong vhost -- and the trailing
+    `or {}` this page used to end with turned each of those into an empty envelope. On the FIRST
+    page there is no `TotalRecordCount` yet, so `claimed` is 0, the short-page bound is inert, and
+    the walk returned `[]` as a COMPLETED read. `poll_delta` then wrote the watermark forward over
+    instants nothing had looked at, and every title created before them is invisible to this path
+    for the life of the install -- the "add nobody ever looks for again" the walk's own docstring
+    refuses. A quiet household answers `{"Items": [], "TotalRecordCount": 0}`, which is what the
+    `Items` key tells apart. [review cycle 1: m52-rev-lib-03]
+    """
+    bodies = {
+        "a portal's sign-in page": httpx.Response(200, text="<html>Sign in</html>"),
+        "no body at all": httpx.Response(200, content=b""),
+        "an object that is not an envelope": httpx.Response(200, json={}),
+        "a bare list": httpx.Response(200, json=[{"Id": "jf-1", "Type": "Movie"}]),
+    }
+    for label, response in bodies.items():
+        jf = JellyfinClient(
+            "http://jellyfin.test", "k",
+            transport=httpx.MockTransport(lambda _request, r=response: r),
+        )
+        with pytest.raises(JellyfinError, match="no envelope") as exc:
+            await jf.items_created_since(_watermark("2022-01-01T00:00:00"))
+        assert "no envelope" in str(exc.value), label
+
+    honest = JellyfinClient(
+        "http://jellyfin.test", "k",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"Items": [], "TotalRecordCount": 0})
+        ),
+    )
+    assert await honest.items_created_since(_watermark("2022-01-01T00:00:00")) == [], (
+        "a household that added nothing is not a failed read"
+    )
+
+
+async def test_a_full_delta_page_of_re_saved_old_items_is_progress_and_not_a_wedged_walk():
+    """`MinDateLastSaved` selects a SUPERSET -- an item whose artwork was refreshed or whose
+    metadata was corrected is re-saved without being re-created -- and a full page of such rows
+    is a page the walk moved through, not the fault the no-progress bound was written for. Read
+    as that fault, the walk raises "the server is ignoring StartIndex" at a household whose server
+    is behaving perfectly; the watermark then never advances again (decision 366) and §7.2's
+    fallback is dead until somebody greps the worker log.
+
+    The rows are KEPT now, every one of them: the server's save is the delta (decision 409), and a
+    re-saved title the bundle supplied and the app placed exits at stage 1 below every genuine add
+    (decision 411). What still has to hold is the request count -- two full pages, then the short
+    one -- because every other delta test hands this walk a page SHORTER than `page`, so the bound
+    is not reached at all. [review cycle 1: m52-rev-delta-03; M5.2 review cycle 4: M52-C4-REST-02]
+    """
+    pages: list[list[dict]] = [
+        [{"Id": "old-1", "Type": "Movie", "DateCreated": "2019-01-01T00:00:00.0000000Z"},
+         {"Id": "old-2", "Type": "Movie", "DateCreated": "2019-01-02T00:00:00.0000000Z"}],
+        [{"Id": "old-3", "Type": "Movie", "DateCreated": "2019-01-03T00:00:00.0000000Z"},
+         {"Id": "old-4", "Type": "Movie", "DateCreated": "2019-01-04T00:00:00.0000000Z"}],
+        [{"Id": "added", "Type": "Movie", "DateCreated": "2024-01-01T00:00:00.0000000Z"}],
+    ]
+    asked: list[int] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("StartIndex", 0))
+        asked.append(start)
+        rows = [row for page in pages for row in page][start : start + 2]
+        return httpx.Response(200, json={"Items": rows, "TotalRecordCount": 5})
+
+    jf = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(handle))
+    kept = await jf.items_created_since(_watermark("2022-01-01T00:00:00"), page=2)
+
+    assert [item["Id"] for item in kept] == ["old-1", "old-2", "old-3", "old-4", "added"]
+    assert asked == [0, 2, 4], "the walk paged past both full pages instead of refusing them"
+
+
+async def test_a_full_delta_page_that_repeats_one_already_read_raises_instead_of_truncating():
+    """The delta walk carries all three of `all_items`'s bounds (plan C1) and only one of them was
+    held by a test that can fail on it.
+
+    This is the twin of `test_a_full_page_that_repeats_one_already_read_raises_instead_of_
+    truncating`, against the same server: one that ignores `StartIndex`, or a proxy caching page
+    one, while reporting an honest `TotalRecordCount`. The sibling above asserts that a full page
+    of legitimately re-saved old items stays SILENT, so deleting this raise satisfies it perfectly
+    -- which is how a bound the plan mandates shipped with no test that can fail on it.
+
+    What it costs is not a wrong answer but a poll that reads 200 pages where 2 would do, every
+    fifteen minutes, inside the five-minute budget decision 368 sized on an abandoned poll costing
+    nothing -- and then a delta path that raises at the cap and never advances its watermark
+    (decision 366). The request count is asserted because "stop at the evidence" is half the
+    claim. [review cycle 2: m52-rev2-delta-01]
+    """
+    jf, asked = _paging_client(total=10, honour_start=False, abort_after=50)
+
+    with pytest.raises(JellyfinError, match="ignoring StartIndex"):
+        await jf.items_created_since(_watermark("2018-01-01T00:00:00"), page=4)
+
+    assert asked == [0, 4], "one repeated page is the whole evidence; do not keep asking"
+
+
+async def test_the_delta_walk_raises_at_the_hard_page_cap():
+    """And the third of the three bounds, which nothing in the suite reached either.
+
+    Driven against a server that HONOURS `StartIndex`, counts nothing and simply never runs out,
+    because that is the only shape the cap is the last guard against: the repeated-page server
+    above raises at the second request, so a fake that repeats itself would certify the wrong
+    instrument. It raises rather than truncating for the reason this walk's own docstring gives --
+    a short read here is SILENT, since the watermark advances only on a completed read and the
+    next poll asks about the instants after the page that was dropped.
+    [review cycle 2: m52-rev2-delta-01]
+    """
+    jf, asked = _paging_client(
+        total=0, honour_start=True, library=None, abort_after=MAX_PAGES + 5
+    )
+
+    with pytest.raises(JellyfinError, match="did not end after"):
+        await jf.items_created_since(_watermark("2018-01-01T00:00:00"), page=2)
+
+    assert len(asked) == MAX_PAGES
+
+
+async def test_a_delta_walk_whose_count_moved_between_pages_raises_rather_than_skipping_a_row():
+    """The walk sends no `SortBy`, so 10.10 pages with no ORDER BY at all (`GetOrderByText`
+    answers `string.Empty` for an empty order) and 10.11 by the non-unique `SortName`, as
+    LIMIT/OFFSET over a live table. A row deleted AHEAD of the offset between two pages -- a
+    Radarr upgrade replacing a file, a scan removing one -- moves every later row one place left,
+    so the row at the page boundary is never served; and the server's count drops by the same one,
+    so the short-page bound was satisfied and the walk returned 999 rows of the 1000 present, with
+    the watermark then written past the one it skipped.
+
+    A count that moved is a walk that did not finish, and it raises: the next poll reads again
+    from the same watermark. [M5.2 review cycle 4: M52-C4-REST-03]
+    """
+    library = [{"Id": f"{n:032x}", "Type": "Movie"} for n in range(1000)]
+    served: list[int] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("StartIndex", 0))
+        limit = int(request.url.params.get("Limit", 500))
+        served.append(start)
+        if len(served) == 2:
+            del library[10]
+        return httpx.Response(200, json={
+            "Items": library[start : start + limit], "TotalRecordCount": len(library)
+        })
+
+    jf = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(handle))
+    with pytest.raises(JellyfinError, match="counted 1000 rows and then 999"):
+        await jf.items_created_since(_watermark("2018-01-01T00:00:00"))
+    assert served == [0, 500]
+
+
+async def test_the_libraries_are_listed_behind_the_admin_key(client):
+    """§6.6's library pick needs something to pick from, and decision 364 makes that pick the
+    acquisition boundary. Jellyfin answers `/Library/MediaFolders` inside an envelope while
+    `/Users` is a bare list, so a client that reads the two the same way is wrong about one of
+    them — and the fake authenticates this read exactly as the real server does."""
+    module, jf = client
+    libraries = await jf.libraries()
+    assert len(libraries) == len(module.LIBRARIES)
+    assert {lib["Id"] for lib in libraries} >= {"jf-lib-films", "jf-lib-shows"}
+
+    wrong = JellyfinClient("http://jellyfin.test", "not-the-key", transport=jf.transport)
+    with pytest.raises(JellyfinError) as exc:
+        await wrong.libraries()
+    assert exc.value.status == 401
+
+
+async def test_an_item_answers_only_under_a_library_that_holds_it(client):
+    """decision 364's membership test, asked of the server rather than of the payload: the
+    Webhook plugin's template is operator-authored (decision 365), so an event carries whatever
+    was left in it and never a library it can be trusted about.
+
+    The same row is what §8 stage 1 mints from — it needs `ProviderIds` (decision 323) and the
+    published template names none of the plugin's `Provider_<key>` fields — which is why the
+    identity read is the one membership is decided over. [M5.2 review cycle 4: M52-C4-WH-02]
+
+    AND THE DOUBLE NOW ANSWERS `ids` THE WAY THE SERVER DOES, which is what lets this test fail.
+    `ItemsController.GetItems` resolves a `ParentId` and then sets `query.Parent = null;` before
+    `folder.GetItems(query)`, and `Folder.GetItems` sends a query with `ItemIds` straight to
+    `LibraryManager.GetItemsResult`, whose only library scoping is `if (query.Recursive &&
+    !query.ParentId.IsEmpty())` -- so `ids=jf-1&ParentId=<Shows>` answers Heat on every release
+    from 10.9.11 to 12.1. The read asked that and trusted it; against the double, which scoped by
+    `ParentId` anyway, the `jf-lib-shows` assertion below held for three cycles and was false on every
+    real server. The household's footage sits at `/media/films-home`, beside the films at
+    `/media/films`, so a bare prefix test would file it under Films as well.
+    [M5.2 review cycle 4: M52-C4-IDS-01, M52-C4-WH-01; decision 408]
+    """
+    _module, jf = client
+    held = await jf.item_in_libraries("jf-1", ["jf-lib-films"])
+    assert held is not None and held["Id"] == "jf-1"
+    assert held.get("ProviderIds"), "the membership read is also the identity read"
+    assert await jf.item_in_libraries("jf-1", ["jf-lib-shows"]) is None
+    assert await jf.item_in_libraries("jf-1", ["jf-lib-shows", "jf-lib-films"]) is not None
+    assert await jf.item_in_libraries("jf-1", []) is not None, "an empty pick is the server"
+    assert await jf.item_in_libraries("jf-never-existed", []) is None
+    assert await jf.item_in_libraries("jf-x", ["jf-lib-films"]) is None, (
+        "/media/films-home is not inside /media/films"
+    )
+    assert await jf.item_in_libraries("jf-x", ["jf-lib-home"]) is not None
+
+
+async def test_the_membership_read_matches_one_guid_in_every_spelling_the_server_accepts(client):
+    """Jellyfin writes every `Id` as 32 lowercase hex digits and parses a GUID in `ids` in any of
+    its spellings; the Webhook plugin renders `{{ItemId}}` dashed. So the server FOUND the item
+    and this read threw it away, because it compared the row's `Id` with the id it was asked
+    about as two strings -- and the sweep filed every real add `skipped`, "the server no longer
+    holds this item", with no task. The double now binds `ids` by GUID value, as the server does,
+    which is what lets this test fail at all: its fixture ids are not GUIDs, and the two sides of
+    a string comparison of `jf-1` always agree. [review cycle 3: M52-C3-EVENTS-01, M52-C3-LIB-01]
+    """
+    module, jf = client
+    guid = "6213b704a0d954293110f4d561b0f614"
+    module.ITEMS.append({"Id": guid, "Name": "A Film Jellyfin Spells In Hex", "Type": "Movie",
+                         "ProductionYear": 2024, "RunTimeTicks": 1,
+                         "ProviderIds": {"Tmdb": "5100001"}})
+    module.LIBRARY_MEMBERS["jf-lib-films"] += (guid,)
+
+    for spelling in ("6213b704-a0d9-5429-3110-f4d561b0f614",
+                     "6213B704-A0D9-5429-3110-F4D561B0F614",
+                     "{6213b704-a0d9-5429-3110-f4d561b0f614}", guid.upper(), guid):
+        held = await jf.item_in_libraries(spelling, ["jf-lib-films"])
+        assert held is not None and held["Id"] == guid, spelling
+        assert await jf.item_in_libraries(spelling, []) is not None, spelling
+        assert await jf.item_in_libraries(spelling, ["jf-lib-shows"]) is None, spelling
+
+
+async def test_the_membership_read_sends_no_parent_id_a_stale_pick_could_break(client):
+    """A picked library the server no longer has answers 400 (`GetParentItem` throws "Invalid
+    parent id"), and when this read sent `ParentId` once per picked library it raised on the first
+    stale one before asking the next -- review cycle 3's fix was to ask every scope first. The read
+    sends no `ParentId` at all now, because the server never applied it beside `ids` (decision 408),
+    so a stale id in the pick cannot make it fail: it asks one question about the id, reads where
+    the libraries are, and places the row's `Path`. A stale id is decision 410's to name, once per
+    sweep, off `/Library/MediaFolders`. [review cycle 3: M52-C3-LIB-02; M5.2 review cycle 4:
+    M52-C4-IDS-01]
+    """
+    module, jf = client
+    asked: list[httpx.URL] = []
+
+    class Recording(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            asked.append(request.url)
+            return await jf.transport.handle_async_request(request)
+
+    recording = JellyfinClient("http://jellyfin.test", module.API_KEY, transport=Recording())
+    held = await recording.item_in_libraries("jf-1", ["jf-lib-gone", "jf-lib-films"])
+    assert held is not None and held["Id"] == "jf-1"
+    assert await recording.item_in_libraries("jf-x", ["jf-lib-gone", "jf-lib-films"]) is None, (
+        "the footage is in a library the server lists and nobody picked"
+    )
+    assert asked and not [url for url in asked if "ParentId" in url.params]
+    assert {url.path for url in asked} == {"/Items", "/Library/VirtualFolders"}
+
+
+async def test_the_membership_read_answers_for_an_episode_id(client):
+    """`item_in_libraries` sends no `IncludeItemTypes`, on purpose, and until the sweep learned to
+    read the row's own `Type` that clause had no observable behaviour at all: on the honest path
+    `sweep_pending` only ever asks about a `resolved_key`, which is a series or a movie.
+
+    It has one now, and it runs the other way from the argument in that docstring. The sweep
+    refuses a row this app does not acquire (decision 369), and it can only refuse a row the
+    server was willing to describe -- narrowed to Movie,Series this read would answer None for an
+    episode id and the sweep would file the household's own add as a library the admin did not
+    pick. `ITEM_TYPES` is unchanged in every read this app makes of its own accord.
+    [review cycle 1: M52-C1-MEMBER-03]
+    """
+    _module, jf = client
+    episode = await jf.item_in_libraries("jf-7-e3", [])
+
+    assert episode is not None and episode["Id"] == "jf-7-e3"
+    assert episode["Type"] == "Episode", "the server's own answer is what decision 369 is read off"
+    assert episode.get("SeriesId") == "jf-7"
+    assert await jf.item_in_libraries("jf-7-e3", ["jf-lib-shows"]) is not None, (
+        "an episode is inside the library that holds its series"
+    )
+    assert await jf.item_in_libraries("jf-7-e3", ["jf-lib-films"]) is None
+
+
+async def test_a_membership_read_that_fails_raises_instead_of_answering_no():
+    """"This id is in no library the admin picked" and "nobody could ask" are the same silence
+    and opposite facts. Decision 364 leaves the intake row pending for the next sweep on the
+    second, so answering None here would record the household's own add as one they deselected
+    — the same polarity decision 362 refuses in the ownership direction."""
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "library scan in progress"})
+
+    jf = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(handle))
+    with pytest.raises(JellyfinError) as exc:
+        await jf.item_in_libraries("jf-1", ["jf-lib-films"])
+    assert exc.value.status == 503
+
+    # And "fails" is not only what `_request` raises on. It answers None for an empty body and for
+    # a body it cannot parse -- a forward-auth portal, a proxy's maintenance page -- and the
+    # trailing `or {}` this read used to end with turned those into the authoritative negative
+    # this docstring refuses, TERMINALLY: the sweep writes `skipped` and never looks at the row
+    # again, while the report says `deferred: 0` and names no outage at all.
+    # [review cycle 1: m52-rev-lib-02]
+    for label, response in {
+        "a portal's sign-in page": httpx.Response(200, text="<html>Sign in</html>"),
+        "no body at all": httpx.Response(200, content=b""),
+        "a bare list": httpx.Response(200, json=[]),
+    }.items():
+        portal = JellyfinClient(
+            "http://jellyfin.test", "k",
+            transport=httpx.MockTransport(lambda _request, r=response: r),
+        )
+        with pytest.raises(JellyfinError, match="no envelope") as raised:
+            await portal.item_in_libraries("jf-1", ["jf-lib-films"])
+        assert "no envelope" in str(raised.value), label
+
+
+async def test_a_row_no_listed_library_can_place_is_a_failed_read_and_never_an_absence(client):
+    """Decision 364's polarity, held against the one new way decision 408's read can come up
+    empty-handed. The row's `Path` is placed against `/Library/VirtualFolders`, and on an honest
+    server every file a library scanned sits under that library's locations -- so a row under none
+    of them, or carrying no `Path`, is not "outside the pick" but a read that could not decide.
+    It happens for real when the server's `PathSubstitutions` rewrite the `Path` a row is served
+    with (`DtoService.GetMappedPath`) while `Locations` stay as configured. Answered None, every
+    such add would be filed terminally as a library nobody picked; raised, it waits, named.
+
+    And an answer to `/Library/VirtualFolders` that is not a list of libraries each carrying a list
+    of paths is a failed read too, for `_item_rows`' reason: a map with half its libraries missing
+    would decide membership against the half that is there. [decision 408]
+    """
+    module, jf = client
+    module.ITEMS.append({"Id": "jf-moved", "Name": "Somewhere Else", "Type": "Movie",
+                         "ProductionYear": 2024, "RunTimeTicks": 1,
+                         "Path": "/mnt/substituted/Somewhere Else (2024)/Somewhere Else.mkv"})
+    module.ITEMS.append({"Id": "jf-pathless", "Name": "No Path", "Type": "Movie",
+                         "ProductionYear": 2024, "RunTimeTicks": 1})
+
+    with pytest.raises(JellyfinError, match="inside none of the libraries"):
+        await jf.item_in_libraries("jf-moved", ["jf-lib-films"])
+    with pytest.raises(JellyfinError, match="no Path"):
+        await jf.item_in_libraries("jf-pathless", ["jf-lib-films"])
+    assert await jf.item_in_libraries("jf-moved", []) is not None, "an empty pick asks no path"
+
+    for answer in ({"Items": []}, [{"ItemId": "jf-lib-films"}],
+                   [{"ItemId": "jf-lib-films", "Locations": "/media/films"}], ["jf-lib-films"]):
+        broken = JellyfinClient(
+            "http://jellyfin.test", module.API_KEY,
+            transport=httpx.MockTransport(
+                lambda request, a=answer: httpx.Response(200, json=a)
+                if request.url.path == "/Library/VirtualFolders"
+                else httpx.Response(200, json={"Items": [
+                    {"Id": "jf-1", "Type": "Movie", "Path": "/media/films/Heat/Heat.mkv"}
+                ]})
+            ),
+        )
+        with pytest.raises(JellyfinError, match="not libraries"):
+            await broken.item_in_libraries("jf-1", ["jf-lib-films"])
+
+
+async def test_a_redirect_is_a_failed_read_that_names_where_it_pointed():
+    """httpx follows no redirect by default, so a forward-auth portal's 302 or a proxy's
+    http->https 301 reached the JSON parse and became None: the intake paths recorded "answered no
+    envelope" with no status, and `check()` read `users()` as an empty list and answered success --
+    the admin's test button said the connection worked while neither intake path filed anything.
+    Jellyfin itself answers 302 to a path that leaves out its configured BaseUrl
+    (`BaseUrlRedirectionMiddleware`: `httpContext.Response.Redirect(target)`). A redirect is a
+    failed read carrying its status and its `Location`, which is the lever an operator needs.
+    [M5.2 review cycle 4: M52-C4-REDIRECT-01]
+    """
+    def portal(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302, headers={"location": "https://auth.example/login?rd=x"}, text="<html>sign in</html>"
+        )
+
+    jf = JellyfinClient("http://jellyfin.test", "k", transport=httpx.MockTransport(portal))
+    for label, read in (
+        ("the test button", jf.check),
+        ("the membership read", lambda: jf.item_in_libraries("jf-1", [])),
+        ("the delta read", lambda: jf.items_created_since(_watermark("2022-01-01T00:00:00"))),
+    ):
+        with pytest.raises(JellyfinError) as exc:
+            await read()
+        assert exc.value.status == 302, label
+        assert "https://auth.example/login" in str(exc.value), label
+
+
+async def test_a_url_no_request_can_be_built_from_is_a_jellyfin_error_and_not_an_escape():
+    """`httpx.InvalidURL` is not an `httpx.HTTPError` -- it subclasses `Exception` directly -- so a
+    saved URL with a letter where its port should be (`http://jellyfin:8O96`) raised straight out
+    of `_request` past every caller's `except JellyfinError`: the admin PUT's version probe answered
+    500 after the save it followed had committed. [M5.2 review cycle 4: M52-C4-TOKEN-01]
+    """
+    jf = JellyfinClient("http://jellyfin:8O96", "k")
+    with pytest.raises(JellyfinError, match="Invalid port"):
+        await jf.server_info()
+
+
+async def test_an_envelope_whose_items_are_not_objects_is_a_failed_read_at_every_read_that_pages():
+    """Review cycle 1 made a body that is not an ENVELOPE a failed read at these three reads. The
+    guard stopped one level short of the fault it was written for: `{"Items": "maintenance"}` and
+    `{"Items": ["jf-1"]}` pass an `isinstance(payload, dict)` test, and the very next line calls
+    `.get` on a `str`.
+
+    What that cost is each read's own worst answer. `libraries` did not raise at all -- it handed
+    the admin card the CHARACTERS of the string, which `api/admin.jellyfin_libraries` then read
+    `.get` on, outside its `except JellyfinError`, for the 500 that route's docstring exists to
+    refuse. The other two raised `AttributeError`, which is not a `JellyfinError`: it escapes
+    `sweep_pending`'s handler entirely, so decision 364's "a membership read that FAILS leaves the
+    row pending" became a sweep that raised out of the job with the ripe set swept oldest-first --
+    the permanent wedge, one exception type away from the one review cycle 1 closed.
+
+    A row that is not an object is refused rather than dropped, because dropping it makes a page
+    of strings a SHORT page, and a short page is how this walk knows the library ended.
+    [review cycle 2: m52-c2-lib-02]
+    """
+    bodies = {
+        "Items is a string": {"Items": "maintenance", "TotalRecordCount": 11},
+        "Items is a list of strings": {"Items": ["jf-1", "jf-2"], "TotalRecordCount": 2},
+        "one row among the items is not an object": {
+            "Items": ["jf-2", {"Id": "jf-1", "Type": "Movie"}], "TotalRecordCount": 2
+        },
+    }
+    for label, answer in bodies.items():
+        jf = JellyfinClient(
+            "http://jellyfin.test", "k",
+            transport=httpx.MockTransport(
+                lambda _request, a=answer: httpx.Response(200, json=a)
+            ),
+        )
+        with pytest.raises(JellyfinError, match="not items") as folders:
+            await jf.libraries()
+        assert "MediaFolders" in str(folders.value), label
+        with pytest.raises(JellyfinError, match="not items") as member:
+            await jf.item_in_libraries("jf-1", ["jf-lib-films"])
+        assert "jf-1" in str(member.value), label
+        with pytest.raises(JellyfinError, match="not items"):
+            await jf.items_created_since(_watermark("2022-01-01T00:00:00"))
+
+
+async def test_an_envelope_with_no_list_of_items_is_a_failed_read_and_never_an_empty_answer():
+    """The same guard, one level further up. `list(payload.get("Items") or [])` turned a 200 of
+    `{}`, `{"error": ...}` or `{"Items": null}` into an authoritative EMPTY answer: the membership
+    read then said the item was nowhere, and the sweep filed it `skipped` -- terminally, while a
+    gateway in maintenance mode was the only thing that had spoken. `libraries` reported the same
+    bodies as `ok: true` with no libraries, the "deliberate choice nobody made" its own docstring
+    refuses. `{"Items": null}` also passed the delta page's `"Items" in payload` check and ended the
+    walk as a completed empty read, so the watermark moved past it. And a truthy `Items` that
+    cannot be iterated -- `5`, `true` -- raised `TypeError`, which is not a `JellyfinError` and
+    escaped the sweep, the poll and the admin route's handler alike: the class review cycle 2 said
+    it had closed. A row whose `Id` is not a string is not an answer about any id either.
+    [review cycle 3: M52-C3-LIB-06]
+    """
+    bodies = {
+        "an empty object": {},
+        "an error object": {"error": "maintenance"},
+        "Items null": {"Items": None, "TotalRecordCount": 0},
+        "Items zero": {"Items": 0},
+        "Items a number": {"Items": 5},
+        "Items true": {"Items": True},
+    }
+    for answer in bodies.values():
+        jf = JellyfinClient(
+            "http://jellyfin.test", "k",
+            transport=httpx.MockTransport(
+                lambda _request, a=answer: httpx.Response(200, json=a)
+            ),
+        )
+        with pytest.raises(JellyfinError):
+            await jf.libraries()
+        with pytest.raises(JellyfinError):
+            await jf.item_in_libraries("jf-1", ["jf-lib-films"])
+        with pytest.raises(JellyfinError):
+            await jf.items_created_since(_watermark("2022-01-01T00:00:00"))
+
+    for row in ({"Type": "Movie"}, {"Id": {"jf": 1}, "Type": "Movie"}):
+        jf = JellyfinClient(
+            "http://jellyfin.test", "k",
+            transport=httpx.MockTransport(
+                lambda _request, r=row: httpx.Response(200, json={"Items": [r]})
+            ),
+        )
+        with pytest.raises(JellyfinError):
+            await jf.item_in_libraries("jf-1", [])
+
+
+async def test_an_answer_nested_past_the_decoders_depth_is_a_failed_read_and_never_an_escape():
+    """The same guard one layer further down, under the envelope rather than inside it. `_request`
+    reads a body it cannot parse -- a portal's sign-in page, a proxy's maintenance page -- as no
+    body, and it caught only `ValueError` to do so. The decoder's own depth limit is not one:
+    `json.loads` over an answer nested a hundred thousand deep raises `RecursionError`, a
+    `RuntimeError`, which is not a `JellyfinError` either. It escaped `sweep_pending`'s handler at
+    the oldest ripe key, which is the first key every later sweep reads again, and the delta poll's
+    and the admin route's alike -- the permanent wedge review cycle 2 closed for `AttributeError`
+    and cycle 3 for `TypeError`, reached through the one exception type the parse itself can raise.
+    An answer no parser can read is an answer about nothing, so each read raises the failed read
+    its callers already handle rather than an error none of them catches.
+    [M5.2 review cycle 3, green pass]
+    """
+    deep = b'{"Items": ' + b"[" * 100_000 + b"]" * 100_000 + b', "TotalRecordCount": 1}'
+    jf = JellyfinClient(
+        "http://jellyfin.test", "k",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=deep)),
+    )
+    with pytest.raises(JellyfinError):
+        await jf.libraries()
+    with pytest.raises(JellyfinError):
+        await jf.item_in_libraries("jf-1", ["jf-lib-films"])
+    with pytest.raises(JellyfinError):
+        await jf.item_in_libraries("jf-1", [])
+    with pytest.raises(JellyfinError):
+        await jf.items_created_since(_watermark("2022-01-01T00:00:00"))

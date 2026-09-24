@@ -53,7 +53,7 @@ by asserting that `connectors/resolve.resolve_title_id` does NOT find the inject
 is what makes the mint that follows a mint rather than a lookup -- and the resolver's last
 branch is a name-and-year match. Against the fixture's handful of uniquely-named titles that
 assertion is free; against the 19,000 the corpus ships, where 2,438 share `(kind, lower(name))`
-and 573 groups still collide with the year applied (`connectors/resolve.py:155-160`), it is the
+and 573 groups still collide with the year applied (`connectors/resolve.py:189-194`), it is the
 only population on which decision 323's refusal to mint on a name means anything. Checks 3 and 4
 need a real basis for the same kind of reason: a minted title carries no DNA row at all, and
 whether the Cold Tower produces a coordinate for it is a question about the tower the corpus

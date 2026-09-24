@@ -103,7 +103,15 @@ def test_only_the_elapsed_jobs_are_due():
     assert at_90s == minutely
 
     at_1000s = {job.name for job in worker.due(now=1000.0, last_run=last)}
-    assert at_1000s == minutely | {"jellyfin-seen-sync"}
+    # §7.2's two intake paths joined at M5.2, and neither is a fifth minute-interval row:
+    # `jellyfin-intake-sweep` runs every 300 s, which is why it is absent from `at_90s` above and
+    # present here, and `jellyfin-delta-poll` carries §7.2's own fifteen minutes. Decision 368
+    # argues the 300 s rather than 60 against the four arithmetic sentences in `worker.py` that
+    # are sized on the `every=60` count, and this pair of assertions is where that choice is
+    # visible: one set says the sweep is not minutely, the other says it is not hourly either.
+    assert at_1000s == minutely | {
+        "jellyfin-seen-sync", "jellyfin-delta-poll", "jellyfin-intake-sweep"
+    }
 
 
 def test_every_sentence_that_counts_the_minutely_jobs_counts_the_registry():
@@ -641,8 +649,9 @@ def _imports(tree: ast.AST, source: Path) -> dict[str, tuple[str, str | None]]:
 
 # Parsed once per file, because the walk below re-enters `worker.py` for every job in the registry
 # and crosses into a dozen more: measured at M4.16, twenty files for the fourteen live jobs that
-# registry then held, in 0.04 s. M5.1's `acquisition-drain` makes fifteen; the figure is left as
-# the measurement it was rather than grown by arithmetic nobody ran.
+# registry then held, in 0.04 s. M5.1's `acquisition-drain` makes fifteen and M5.2's two §7.2
+# intake rows make seventeen; the figure is left as the measurement it was rather than grown by
+# arithmetic nobody ran.
 _PARSED: dict[Path, tuple[dict, dict]] = {}
 
 
@@ -1048,12 +1057,13 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
 # The census test above substitutes `worker.JOBS` for four fabricated rows - which is the whole of
 # what makes it honest, and what its docstring means by "a number somebody typed cannot survive" -
 # and then spelled the real registry's size in the message four lines below, where no edit to
-# `JOBS` could ever turn it red. M5.2's first worker job makes that word wrong with the suite
-# green. `test_backup.py:2118-2128` records this exact class costing three readings of one number
-# in one module, and decision 309's standard is the one that applies: a line that is true and
-# describes the wrong thing is still the defect. Asked of assertion messages alone, so the dated
-# measurement at the head of this file stays - it names the milestone that took the count and the
-# day it was measured, which is the form that keeps being true. [M5.1 review cycle 1, M51-REV-REG-04]
+# `JOBS` could ever turn it red. M5.2's two §7.2 intake rows are that edit, and they arrive with
+# this guard in place rather than with the word. `test_backup.py:2118-2128` records this exact
+# class costing three readings of one number in one module, and decision 309's standard is the
+# one that applies: a line that is true and describes the wrong thing is still the defect. Asked
+# of assertion messages alone, so the dated measurement at the head of this file stays - it names
+# the milestone that took the count and the day it was measured, which is the form that keeps
+# being true. [M5.1 review cycle 1, M51-REV-REG-04]
 _WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
           "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
           "eighteen", "nineteen")

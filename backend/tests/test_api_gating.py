@@ -55,7 +55,11 @@ MEMBER_PASSWORD = "a-member-password"
 # `GET /api/admin/acquisition/{title_id}` (`api/acquisition.py`, decision 345). Both arrive here
 # by taking `AdminUser` and nowhere else: the two sweeps below walk the dependency graph, so a
 # router that is admin-gated is swept whether or not anyone remembered to list it.
-ADMIN_ROUTE_COUNT = 25
+# 25 until M5.2 gave §6.6's library pick something to pick from - `GET /api/admin/connectors/
+# jellyfin/libraries` (`api/admin.py`, decision 364). It is a read of the media server behind the
+# same `AdminUser` as the two beside it, and re-stating the number here is the whole of what this
+# equality asks of the milestone that added it.
+ADMIN_ROUTE_COUNT = 26
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -210,11 +214,17 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
     332 the fallback declined only `api`, which left that namespace with both halves of the
     failure above at once: a GET to an unrouted `/events/...` path served the app shell on a
     built container, and a POST to one was the same partial match this test exists for and
-    answered 405. Three of the four probes above are repeated against it, in the same order and
-    with the same expectations; the fourth has no analogue until M5.2 mounts a real route for a
-    wrong verb to be refused by. That the answers match is the third clause of the coverage
-    row: the decline is ONE rule over the path's head segment rather than a clause each, so
-    `/api` and `/events` can only diverge if that rule has stopped being one. [decision 332]
+    answered 405. ALL FOUR probes above are repeated against it now, in the same order and with
+    the same expectations: M5.2 mounts §7.2's `POST /events/jellyfin`, so the fourth finally has a
+    real route for a wrong verb to be refused by and `GET /events/jellyfin` is 405 for exactly the
+    reason `POST /api/auth/me` is. The two unrouted probes moved to `/events/playback` in the same
+    edit and kept their assertions and their messages verbatim - they are about what an UNROUTED
+    path in the namespace answers, and `/events/jellyfin` stopped being one. §7.3 names
+    `/events/playback` and decision 290 files it at M7, so it is the `/events` path that will still
+    be unrouted several milestones from now, which is what an unrouted probe needs to be about.
+    That the answers match is the third clause of the coverage row: the decline is ONE rule over
+    the path's head segment rather than a clause each, so `/api` and `/events` can only diverge if
+    that rule has stopped being one. [decision 332; §7.2, §7.3]
     """
     build = tmp_path / "static"
     (build / "_app").mkdir(parents=True)
@@ -251,7 +261,7 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
             # run at all: with no static build the fallback is not mounted, so the 404 a no-DB
             # suite asserts is the 404 of a route that does not exist, while the container
             # answered 405. [decision 332; §7.2, §7.3, §11]
-            unrouted = await client.get("/events/jellyfin")
+            unrouted = await client.get("/events/playback")
             assert unrouted.status_code == 404, (
                 "an unrouted /events path must be 404 in the app that ships, not the shell: "
                 f"{unrouted.status_code}"
@@ -260,11 +270,31 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
                 "the /events namespace was answered with the app shell - a webhook sender that "
                 "gets HTML where it expected JSON fails in a much less obvious place"
             )
-            posted = await client.post("/events/jellyfin", json={})
+            posted = await client.post("/events/playback", json={})
             assert posted.status_code == 404, (
                 "a POST to an unrouted /events path must read as 404 and never as 405: the "
                 "fallback is registered methods=['GET'], so a namespace it does not decline is "
                 f"a partial match and Starlette answers 405: {posted.status_code}"
+            )
+
+            # THE FOURTH PROBE, WHICH HAD NO ANALOGUE UNTIL NOW, and it is what finishes decision
+            # 332's third clause rather than adding a fourth. The other three ask what an UNROUTED
+            # path in the namespace answers, and every one of them is satisfied by a namespace
+            # nothing is mounted in - which is to say they were all still true on the day `/events`
+            # was declined and empty. This one can only be asked of a namespace with a route in it:
+            # §7.2's webhook is a POST, so a GET to it is a method mismatch, and 405 here is the
+            # decline having stayed narrow enough to let the router see a real route underneath it.
+            # A GET rather than the POST because it is refused by the router before any dependency
+            # runs, which is what keeps this test's no-lifespan build honest: the POST reaches the
+            # handler and asks for a database that was deliberately never opened.
+            #
+            # Read beside the three above, the pair of namespaces now answers identically in all
+            # four positions, and THAT is the third clause: two namespaces that agree everywhere
+            # can only start disagreeing if the one rule has stopped being one. [decision 332; §7.2]
+            events_wrong_verb = await client.get("/events/jellyfin")
+            assert events_wrong_verb.status_code == 405, (
+                "the decline must not swallow a real route: POST /events/jellyfin exists, so a "
+                "GET to it is a method mismatch and 405 is the honest answer"
             )
 
             # A LEADING DOUBLE SLASH IS THE SAME REQUEST TO THE SAME NAMESPACE, and the head

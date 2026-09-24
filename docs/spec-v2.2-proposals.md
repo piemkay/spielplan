@@ -7,14 +7,17 @@ surface by surface, with an adversarial pass over every claimed divergence.*
 **Status: a decision record, amended in place (decision 288).** There is no v2.2 file and
 there will not be one - `spielplan-spec_v2.1.md` stays the one normative document and is
 amended in place, recording each wave as a dated point release in its own Status block. This
-file holds 356 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
+file holds 381 numbered entries in two registers. **Proposals 1-161** are dated reasoning from
 the 2026-08-29 prototype review: citable as provenance and nothing more, so a requirement that
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
-numbered owner decisions** - 195 of them, spanning 162-425, the latest being M5.1's 321-361, M5.4's
-341 and 382-403, and M5.3's 326, 334, 335, 346 and 372-378, the 420, 421 and 422 its second review
-cycle took and the 423, 424 and 425 its first took as 392-394 and the merge renumbered - and each
-is normative from the day it is taken until the amendment it mandates lands in `spielplan-spec_v2.1.md`; the first
-wave was folded into that file on 2026-09-03 and this one on 2026-09-17. The decision numbering
+numbered owner decisions** - 220 of them, spanning 162-425, the latest being M5.1's 321-361; M5.2's
+362-371, the 404-407 its first two review cycles took and the 408-418 its third and fourth took, 416
+being the first cycle's token decision renumbered out of a sibling lane's range; M5.4's 341 and
+382-403; and M5.3's 326, 334, 335, 346 and 372-378, the 420, 421 and 422 its second review cycle
+took and the 423, 424 and 425 its first took as 392-394 and the merge renumbered - and each is
+normative from the day it is taken until the amendment it mandates lands in
+`spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03, this
+one on 2026-09-17 and M5.2's on 2026-09-23. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
 decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
@@ -7797,6 +7800,911 @@ registered test changed shape rather than subject:
 file and reading the tampered bytes back, which required the store to be unable to tell - so the
 proof moved to the write block's only route to the disk. [M5.1 review cycle 4 second pass,
 M51-C4-RAW-03, M51-C4-RAW-04]
+
+## Decisions taken (owner, 2026-09-18, as M5.2 opened)
+
+Ten, taken as M5.2 opened, under the same standing instruction the four blocks above record - the
+plan's recommended option, taken rather than asked, and where `docs/milestones/M5.2-plan.md` marks
+none, the one its own exit criterion implies. M5.2 is §7.2's trigger: the token-authed
+`POST /events/jellyfin` webhook with its ten-minute debounce, the fifteen-minute
+`DateCreated > last_sync` delta poll behind it, and one acquisition task per newly added title
+enqueued into the queue M5.1 built. Seven of the ten settle something §7.2 leaves open - the
+debounce's key, its window and where the pending set survives a restart; what an add outside §6.6's
+library pick does; what the handler requires of an operator-authored payload; where the watermark
+lives and what it is on a fresh install; how a token-authed route is admitted to the route
+inventory; where the two new worker jobs are registered; and what the exit criterion is as something
+to run. Three are refusals rather than features: the delta path writes no ownership, an Episode
+never enters the app as itself, and the unmatched report widens in memory without moving its wire
+shape.
+
+**Why these are 362-371 and not 327 and 333.** `docs/milestones/ROADMAP-M5.md` files both of those
+numbers against M5.2, and this block answers both questions - 362 is its 327 and 363 is its 333 -
+but a number is spent by the owner rather than reserved by a planner, and this wave has three lanes
+writing this register at once. The instruction that opened them gives M5.2 the ten numbers from 362
+and each sibling a contiguous range above them, for the reason the M5.1 blocks above restate from
+228-233: a number written twice is two normative rules under one heading, and `_register_entries`
+keeps the later one in silence. 327 and 333 therefore stay unspent beside 324-326, 328-330, 334-335,
+337-339, 341-344, 346 and 350-359, and a reader following the roadmap's numbering to either question
+is sent here by the entry that answers it.
+
+### 362. Ownership falsification stays with the full sweep alone; the delta poll writes no ownership at all
+
+**What the spec says.** This is `ROADMAP-M5.md:445`'s blocking question 327 - "Which path owns
+`is_owned = false`?" - taken, under M5.2's own number for the reason the block above gives. §7.2's
+third bullet makes both intake paths responsible for removals: "mark removed titles
+`is_owned = false` ... re-derived from Jellyfin, never trusted stale" (`spec:346`).
+M4.11 built the half that discharges it - `sync/seen._falsify_ownership` (`sync/seen.py:1117-1139`)
+and `connectors/resolve.prune_missing_items` (`resolve.py:311-335`), each gated twice and named in
+§12's M4.11 criterion.
+
+**Why it changes.** A `DateCreated >` delta poll is an ADD DETECTOR BY CONSTRUCTION and can never
+observe an absence, so the bullet cannot be honoured by the path §7.2 puts it on.
+`prune_missing_items` records the reason in its own docstring: "a Jellyfin outage, or a page-set
+truncated at the client's page cap, is indistinguishable here from a library that genuinely shrank".
+`all_items` raises rather than truncating for exactly that reason, and `_falsify_ownership` calls
+itself "the most destructive statement in the module - a bug here un-owns the household's whole
+library and empties Tonight's pool". A delta read is a partial read by definition, so a second
+falsifier fed by one would be strictly weaker than the falsifier M4.11 exists to have built. The
+alternative - giving the delta path a complete read so that it could falsify - makes it not a delta
+poll.
+
+**The decision.** The full sweep alone. `_falsify_ownership` and `prune_missing_items` stay the only
+writers of `is_owned = false`, both gated as M4.11 built them, and neither of M5.2's two paths
+writes the ownership column at all. §7.2's third bullet is amended in place to say so by the
+milestone that holds the spec file; until that amendment lands this decision is the normative
+reading of the bullet, which is what decision 177 makes a numbered decision for.
+
+**Cost.** Phase D1 of the plan is a no-op in code: nothing new calls `_falsify_ownership`, and the
+inherited coverage row's last clause - a title absent from the mirror flips `is_owned = false` and
+flips back when re-added - is written as a test of the EXISTING sweep and of `resolve.upsert_item`'s
+`is_owned = true` write rather than as new behaviour. M4.11's row
+`jellyfin-sync-ownership-is-falsified-when-the-library-drops-a-title` is amended to assert the rule
+from the new path's side, and check 11 of `ops/m52_exit_criterion.py` measures it directly: after
+every other check, no ownership write from the delta path at all. What is given up is the reading
+under which a household could learn about a removal within fifteen minutes; what is bought is that a
+Jellyfin that answers half a library never empties Tonight.
+
+### 363. The 10-minute debounce is a durable intake table with a fixed window keyed on the resolved title
+
+**What the spec says.** This is `ROADMAP-M5.md:711`'s question 333 - fixed window per resolved
+title, sliding window or per-scan quiet period, and where the pending set survives a worker
+restart - taken, under M5.2's own number for the reason the block above gives. §7.2 says "Debounce
+10 min" and "series acquire per-show, not per-episode", and settles neither the key, nor whether
+the window is fixed or sliding, nor where the pending set lives. §5.3 files every job as durable,
+so a burst lost to a restart is a defect rather than bad luck.
+
+**Why it changes.** Only one of those two sentences is falsifiable as written, and the plan's §2.3
+says so. The milestone's coverage rows and exit-criterion checks 8, 9 and 10 need a record of events
+that are deliberately NOT enqueued - an add in an unpicked library "recorded with that reason", a
+payload with no `ItemId` "accepted and recorded", a wrong token with "nothing recorded as pending" -
+and M5.1's `acquisition_task` can hold none of them: it has no key for a payload that carries no
+item id, and a row in it IS an enqueue. The alternative the plan offers in its §5, a task deferred
+to `now() + 10 min` and re-enqueued by key, is therefore refused by the exit criterion rather than by
+taste. A sliding window is refused on its own ground: a long library scan would postpone acquisition
+indefinitely, while a fixed window acquires while the scan is still running.
+
+**The decision.** A new table, `jellyfin_intake`, in migration `0025_jellyfin_intake.sql`: one row
+per delivered event, written synchronously by the handler and swept by a worker job. The key is the
+RESOLVED title - an `Episode`'s `SeriesId`, the item id otherwise (decision 369) - so a season's
+worth of episodes collapses to one key. The window is FIXED and per key:
+`not_before = received_at + 10 minutes` is written at insert as a pure function of that row's own
+arrival, and a key is ripe when `min(not_before)` over its pending rows has passed, so a later event
+for the same key extends nothing. The sweep collapses one key's window into a single
+`acquire.pipeline.enqueue_item` call.
+
+**Cost.** One table and one more worker job (decision 368). `acquire/intake.py` is the pending set's
+module and holds both feeders, and `queue.enqueue`'s `ON CONFLICT (kind, key) DO NOTHING` is the
+second mechanism that makes one task per key true, so neither the queue nor its `defer` semantics
+are touched. The durability clause the coverage row asks for is trivially satisfied because the
+pending set is a table: the test stops and restarts the SWEEP rather than the process. The honest
+cost of the fixed window is that a scan longer than ten minutes acquires its first titles while it
+is still adding, which is the behaviour a sliding window would trade for an unbounded wait.
+
+### 364. An empty library pick means the whole server; a non-empty pick is the acquisition boundary and an add outside it is recorded, not enqueued
+
+**What the spec says.** §7.2's heading is "every Jellyfin add triggers acquisition" and §6.6 gives
+the admin a library pick. `JellyfinConfig.library_ids` (`connectors/registry.py:50`) is stored,
+merged on save, loaded and served to the admin API, and `grep -n "ParentId\|parentId\|MediaFolders"
+backend/spielplan/connectors/jellyfin.py` returns nothing: the pick is a value with no consumer.
+
+**Why it changes.** With no reader the heading means "every add on the server", so a household is
+billed for acquisitions in a library it deselected - the plan's §3 calls that "the difference between
+the coverage row's last clause passing and the household being billed for a library it deselected".
+The empty-pick clause is not in the plan and is added here because without it this milestone ships a
+webhook that enqueues nothing on every install in existence: `library_ids` is `[]` everywhere, `PUT
+/api/admin/connectors/jellyfin` does not accept the field today, and a filter whose allow-list is
+empty refuses everything. Membership is decided by a server read rather than by a field in the
+event, because the Webhook plugin's template is operator-authored (decision 365) and a boundary held
+with data the operator can forget is not a boundary.
+
+**The decision.** `library_ids` becomes the acquisition boundary and gets its first reader. EMPTY
+means every library counts as picked, which is what every install has today and leaves the behaviour
+unchanged. Non-empty is a filter: an `ItemAdded` for an item that is not under one of the picked
+libraries is recorded in `jellyfin_intake` with that reason and enqueues nothing, and the delta poll
+is scoped the same way with `ParentId`. Membership is a real read
+(`GET /Items?ids=<key>&ParentId=<lib>&Recursive=true`, one per picked library), and a membership read
+that FAILS leaves the row pending for the next sweep rather than dropping it - the same polarity as
+decision 362's refusal to conclude anything from a read that did not happen.
+
+**Cost.** `connectors/jellyfin.py` gains `libraries()` over `/Library/MediaFolders` and an id lookup
+scoped by `ParentId`; `api/admin.py` gains `GET /api/admin/connectors/jellyfin/libraries` and accepts
+`library_ids` on the existing PUT, so the pick has a writer and the read has a caller. That is API
+only and no UI, which is what the plan's §8 permits - M5.7 renders the card. One round trip per
+picked library per ripe key, on a path that is about to issue many more. Fills the coverage row
+`jellyfin-acquisition-eval-an-add-outside-the-picked-libraries-is-recorded-not-acquired`.
+
+### 365. The webhook requires two fields, tolerates the rest, answers 202 to a body it cannot act on, and publishes the operator's template
+
+**What the spec says.** §7.2: "`POST /events/jellyfin` (ItemAdded), token-authed". The Jellyfin
+Webhook plugin sends an operator-configured template, so no clause anywhere fixes the payload's
+fields.
+
+**Why it changes.** Anything the handler requires is a field the operator can forget, and the plan's
+A2 states the consequence: "a webhook the app rejects is one the operator never learns about". A 400
+is answered to a server that will not retry and is shown to nobody. The token-first ordering is
+load-bearing for a guard as well as for the secret: `test_route_inventory.py`'s rule 1 sweeps every
+route outside `ANONYMOUS` with an empty body and requires 401, so a handler that answered 202 to
+`json={}` before checking the token would fail it (decision 367).
+
+**The decision.** The token check runs FIRST and answers 401 before any tolerance applies. The
+handler then requires exactly `ItemId` and `ItemType` and treats every other field as advisory. A
+body that is unparseable, or that lacks either required field, is answered 202 and recorded in
+`jellyfin_intake` with that reason - never 400, never 500. A payload naming a `NotificationType`
+other than `ItemAdded` is recorded and not enqueued; an absent `NotificationType` is read as
+`ItemAdded`, because the template is operator-authored and §7.2 names only that event. The template
+text an operator pastes into the plugin ships in the tree at `ops/jellyfin-webhook-template.json`,
+the way `.env.example` publishes config, and that file is the contract.
+
+**Cost.** `api/events.py` holds NO SQL: it is absent from `test_layering_guards.py`'s
+`ALLOWED_RESIDUE`, and a module absent from that dict holds zero by assertion, so the intake write
+lives in `acquire/intake.py` and the handler calls it. A payload the app cannot act on is answered
+202 and the operator learns about it from §6.6's card at M5.7 rather than from an HTTP status, which
+is the trade: tolerance moves the diagnosis from the wire to the board. `ops/fake_jellyfin.py`'s
+emitter must be able to send an event with a missing field on purpose, which is CLAUDE.md's refuser
+rule applied to the new shape.
+
+### 366. The `DateCreated` watermark lives in `connector_config` and starts at the install's own creation time
+
+**What the spec says.** §7.2's second path is a "15-minute `DateCreated > last_sync` delta poll",
+which needs a library-wide "everything created after T". `0006_jellyfin.sql:9-11` declined to carry
+one and said why: `user_title.jf_synced_at` is per-(user, title) seen-state and separates "the app
+has an explicit action Jellyfin has not seen" from "Jellyfin changed after we last agreed".
+
+**Why it changes.** That argument is still right and still not a library-wide watermark, so M5.2 has
+to add one somewhere. `connector_config` already exists for connector state (`0001_system.sql:22-30`)
+and `connectors/registry.py:203-213` already does the sealed read-modify-write under `FOR UPDATE`
+that a watermark needs, so this home costs no DDL. The initialisation is the half that bites: a
+watermark defaulting to epoch enqueues the entire corpus on the first poll, and `min(applied_at) FROM
+schema_migration` is the one instant this schema already records that means "when this install came
+into existence".
+
+**The decision.** One key in the `jellyfin` row of `connector_config`, written through
+`registry.save_jellyfin`'s existing sealed path, in the `config` half beside `library_ids` and
+`server_version` and never in the sealed half - it is not a secret. On a fresh install it is
+initialised to `SELECT min(applied_at) FROM schema_migration`, never to epoch. It ADVANCES ONLY ON A
+COMPLETED READ: a poll whose Jellyfin read raised leaves it exactly where it was. Migration 0025
+therefore carries the intake table alone and no watermark column, and says so in its head comment.
+
+**Cost.** Advance-only-on-a-complete-read is an integration test of its own and check 5 of
+`ops/m52_exit_criterion.py`. The overlap a re-read produces is absorbed twice, by the watermark and
+by `queue.enqueue`'s `(kind, key)` identity, and the coverage row asserts the observable rather than
+either mechanism (plan C5). `0006_jellyfin.sql`'s omission is an argument in an applied, checksummed
+file and is never edited; the new watermark's home is argued in `0025`'s head comment and in
+`registry.py` instead, which is where a reader of either file now finds it.
+
+### 367. `POST /events/jellyfin` is not an `ANONYMOUS` entry; the inventory's outside-`/api` clause is what admits it
+
+**What the record says.** Decision 332's cost paragraph says M5.2 "adds its `ANONYMOUS` entry with
+its reason", and the plan's §2.7 repeats it: `test_route_inventory.py`'s `ANONYMOUS` frozenset
+carries nine entries, each with its reason, and the untested set may only shrink.
+
+**Why it changes.** Read against the running app rather than against the prose, the entry would be
+false. `ANONYMOUS` is "what a stranger is served on purpose" and it is measured in BOTH directions:
+`test_every_route_on_the_anonymous_allow_list_is_still_served_to_a_stranger` asserts that every entry
+answers something other than 401. A token-authed webhook answers 401 to a stranger by construction,
+so the entry would be false in the direction that second test exists to hold, and admitting it would
+need a carve-out inside the very test that exists to prevent carve-outs.
+
+**The decision.** The route is left OUT of `ANONYMOUS`, where rule 1
+(`test_every_route_outside_the_anonymous_allow_list_refuses_a_signed_out_caller`) passes it honestly
+because it genuinely does refuse a signed-out caller - decision 365's token-first ordering is what
+makes that true. What IS widened, with its reason, is
+`test_the_inventory_is_the_apps_own_route_table`'s `assert outside_api(application) <=
+{SPA_FALLBACK}`, which fails the moment a route is served outside `/api`. `UNTESTED`, pinned at
+three, is not touched: the route arrives with a test naming its literal path.
+
+**Cost.** This amends decision 332's cost clause with a measurement rather than contradicting its
+substance - the token, the 401 and the 503 naming `SECRETS_UNREADABLE_REASON` are unchanged.
+`test_api_gating.py::test_the_spa_fallback_does_not_answer_for_the_api_namespace` must be EDITED IN
+PLACE and never renamed: it is registered under two coverage rows, and renaming a registered test
+breaks the build for every lane. Its `GET /events/jellyfin` and `POST /events/jellyfin` 404 probes
+move to a still-unrouted `/events/...` path, and the fourth probe its own docstring promises - "the
+fourth has no analogue until M5.2 mounts a real route for a wrong verb to be refused by" - arrives as
+`GET /events/jellyfin` answering 405.
+
+### 368. M5.2 registers its own two worker jobs, taking plan C4's named exception
+
+**What the record says.** The plan's §8 says this milestone "does not touch `worker.py`'s registry -
+M5.1 owns that file; M5.2 exports callables", and its C4 says that "if M5.1 has already landed, a
+one-line registration is an acceptable exception, but the entry's budget paragraph is M5.1's
+convention to follow". M5.1 has landed, on `main @ 8f508bb`.
+
+**Why it changes.** An unregistered job never runs in production, so the coverage row's "15-minute
+delta poll" and checks 3, 4 and 5 of the exit criterion would be measuring a function no loop calls
+- which is the shape §12's own criterion refuses one level up. The cadence is the other half:
+`test_every_sentence_that_counts_the_minutely_jobs_counts_the_registry` ties
+`len([j for j in JOBS if j.every == 60])` to four measured arithmetic sentences in `worker.py`
+(`JOB_RUN_KEEP_DAYS`, two 55 s budgets, `DURATION_LOG_THRESHOLD`) and to a rows-a-day figure, so a
+minutely registration would drag all of that into a milestone with no business moving it, which
+CLAUDE.md's surgical-diff rule forbids.
+
+**The decision.** Take C4's exception. M5.2 registers two rows in `worker.JOBS`, each with the budget
+paragraph M5.1's `acquisition-drain` entry establishes as the convention: the delta poll at
+`every=900`, which is §7.2's own fifteen minutes, and the intake debounce sweep at `every=300`. The
+sweep is deliberately NOT registered at `every=60`. A five-minute sweep over a ten-minute fixed
+window gives an observed latency between ten and fifteen minutes, which is what §7.2 promises.
+
+**Cost.** `test_worker_schedule.py::test_only_the_elapsed_jobs_are_due` asserts
+`at_1000s == minutely | {'jellyfin-seen-sync'}` and goes red because both new jobs are due at
+t=1000; it is UPDATED and never silenced, which is the registry assertion working rather than
+failing. `test_every_row_of_the_spec_s_jobs_table_has_a_registry_entry` is one-directional - §5.3's
+nine rows each need an entry and extras are allowed, as `acquisition-drain` already is - so §5.3's
+table is NOT edited here. Prose in `test_worker_schedule.py` and `test_worker_registry.py` that
+spells the registry's size goes stale and is caught by
+`test_no_prose_in_either_registry_file_states_a_size_the_registry_does_not_have`; M5.1's comment at
+`test_worker_schedule.py:1050` predicted this exact edit.
+
+### 369. An Episode never enters the app as itself: the webhook resolves `SeriesId` first, and an Episode event with no `SeriesId` is refused
+
+**What the spec says.** §7.2 welds two rules into one clause - "Debounce 10 min; series acquire
+per-show, not per-episode" - and this is the falsifiable one. `ITEM_TYPES = "Movie,Series"`
+(`connectors/jellyfin.py:34`) excludes `Episode`, so an episode's item id never appears in any of
+this client's own reads.
+
+**Why it changes.** The webhook is therefore the only direction an Episode id enters the app, and
+what it does with one decides whether the clause can fail a test at all. A fallback that keyed the
+task on the episode id when `SeriesId` was absent would silently produce exactly the twelve jobs the
+clause forbids, and would produce them in the case hardest to notice: a library scan of one season.
+The idiom for the resolution already exists - `sync/playback.py` reads `SeriesId`, and
+`ops/fake_jellyfin.py:58-60` documents that "a session on one plays an Episode, with its own Id, a
+SeriesId for the folder" - so the new part is doing it from a webhook payload rather than from a
+session.
+
+**The decision.** The `SeriesId` is resolved before anything else touches the event: the intake row's
+`resolved_key` IS the `SeriesId` for an `Episode`, every later read uses that key, and no acquisition
+task is ever keyed on an episode. An `ItemAdded` whose `ItemType` is `Episode` and whose payload
+carries no `SeriesId` is recorded with that reason and enqueues nothing - never guessed at, never
+enqueued per-episode. The delta read keeps `ITEM_TYPES = "Movie,Series"` unchanged and `all_items`'s
+three bounds are not relaxed, because decision 362's falsifier depends on that walk raising rather
+than truncating.
+
+**Cost.** A household loses the acquisition of a show whose operator template omits `SeriesId` from
+the Episode event, and learns about it from the recorded reason rather than from twelve jobs.
+`ops/fake_jellyfin.py`'s `/Items` learns to serve `Episode` rows from its existing `EPISODES` map
+when `IncludeItemTypes` asks for them, so the exclusion is exercised rather than assumed, and its
+emitter can fire a burst of twelve episodes of one series. The Episode-to-Series resolution and the
+debounce's collapse arithmetic are asserted at the backend layer as pure functions over a list of
+payloads, which is where a rule about keys belongs.
+
+### 370. The unmatched report widens in memory and keeps its wire shape
+
+**What the record says.** `ResolveReport.unmatched` is `list[str]` of names, `upsert_item` appends
+`str(item.get("Name") or item.get("Id") or "?")` (`resolve.py:197`), and the comment at
+`resolve.py:147-149` says this list is what "§7.2's acquisition half consumes at M5". `as_dict`
+(`resolve.py:66-77`) sends `len(unmatched)` plus `unmatched_names[:20]`, which is what §6.6's admin
+card renders and truncates.
+
+**Why it changes.** A name cannot be acquired from. The consumer needs the item's `ProviderIds`, and
+decision 323 makes that sharper still: stage 1 mints only on a provider id, so a report carrying
+names alone hands the acquisition path a list it must re-read the server to use. The plan's D3
+weighs the two repairs and takes widening - "Widening is cheaper and honest" - against a second round
+trip for a fact the sweep already had in its hand.
+
+**The decision.** Widen the in-memory field so each unmatched entry carries the item's `Id` and
+`ProviderIds` alongside its name, and leave the wire shape exactly as it is: `as_dict` keeps
+`unmatched` as a count and `unmatched_names` as the first twenty names. No frontend change, no
+admin-card churn, and no e2e movement in a milestone that ships no surface.
+
+**Cost.** `connectors/resolve.py` and its callers in `sync/seen.py` move together, and the M1 row
+`jellyfin-acquisition-eval-title-upsert-fill-never-clobber` is amended to name the widened field and
+gains the test that asserts it. Nothing in M5.2 consumes the widened field - M5.3 does - so it is
+asserted directly rather than through a caller, which is the honest way to register a seam built one
+milestone before its reader.
+
+### 371. M5.2's exit criterion is its own script, eleven numbered checks, refusing to run on the fixture
+
+**What the record says.** The plan's §7 offers `ops/m52_exit_criterion.py` or a second section inside
+`ops/m5_exit_criterion.py`, and decision 331 reserves the latter for §12's umbrella `M5` row. `ops/`
+already holds a numbered script per milestone that has written one.
+
+**Why it changes.** The exit criterion this plan states is a per-sub-milestone one - eleven checks,
+all of them about §7.2's two paths - and decision 321 gives each of the seven its own §12 row to be
+measured against. `ops/m5_exit_criterion.py` is the umbrella no sub-milestone may write into while
+six lanes are in flight, and a second section inside a file three other lanes would also be editing
+is the worst merge surface in this repository, in `test_spec_coverage.py`'s own words about parallel
+lanes.
+
+**The decision.** Its own script, `ops/m52_exit_criterion.py`, with the plan's eleven numbered checks
+in the plan's own order, refusing to run on the fixture exactly as `ops/m45_exit_criterion.py`,
+`ops/m412_exit_criterion.py` and `ops/m51_exit_criterion.py` do.
+
+**Cost.** M5.2's §12 row names the script and its eleven checks, and
+`test_every_figure_published_about_a_milestone_script_is_the_scripts_own` derives that count from the
+script's own `CHECKS` tuple rather than from the sentence - so the row is red until the script exists,
+which is decision 184's polarity and the intended cost of writing the row when the milestone opens.
+The script is written by this milestone and RUN BY THE OWNER, never by a build agent: it needs
+the corpus bundle, which it refuses to run without and which lives on the owner's workstation,
+and a Postgres to install it into. It needs no docker and no port - the app and the fake Jellyfin
+are both mounted in-process - which is what `docs/RELEASE.md` records beside the verdict line.
+Its output is ASCII only, because a cp1252 console crashes on anything else.
+
+## Decisions taken (owner, 2026-09-19, M5.2 review cycle 1)
+
+Three, taken in M5.2's first review cycle under the same standing instruction as the block above:
+when the webhook token is minted, which clock the delta watermark is kept in, and the order the
+published template emits its fields in. Review cycle 2 took two more the same day, and they are
+under a heading of their own below rather than appended here.
+
+**Why the first of them is 416 and not 392.** It was written as `### 392.`, the first number
+past this lane's 362-371 that the register showed free - and the register cannot show a sibling
+lane's numbers, because the three lanes of this wave write it in three trees. 392 is the last of
+the numbers the instruction opening this wave gives M5.4, so the day the lanes merge the register
+would head `### 392.` twice, `_register_entries` would keep whichever came later, and every
+citation of the token rule in `api/admin.py`, `connectors/registry.py`, three tests and the
+coverage map would resolve against the other one with every reader green - the harm the block
+above names, from a direction its own guard could not see. Review cycle 3 renumbered it to 416,
+inside the range the owner gave this lane for new numbers, moved every citation with it, and made
+`_register_entries` refuse a number headed twice so that the next collision fails the merge
+instead of passing it. 392 is M5.4's and stays unspent here. The other four were written as 393 to
+396 on the belief that they collided with nothing, because the sibling ranges were 382-392, 397-409
+and 420-429; M5.4 had taken 393-396 as well, and M5.3 393 and 394. **They were renumbered to
+404-407 before this lane merged**, numbers M5.4's allocation left unspent, with every citation moved.
+[M5.2 review cycle 3: M52-C3-PAPER-01, M52-C3-STATE-08]
+
+### 416. §7.2's webhook token is minted by the save an admin performed, never by a background one
+
+**What the record says.** Decision 332: the token is "generated at first save and displayed once in
+§6.6's Jellyfin card". M5.2 implemented that as a property of the STATE - `registry.save_jellyfin`
+mints whenever the merge leaves the connector configured and holding no token - and
+`api/admin.put_jellyfin` tells the minting save from the hundred that carry it forward by reading
+what was stored a moment earlier and comparing.
+
+**Why it changes.** `webhook_token` is new in M5.2, so every install that had Jellyfin configured
+before it - an upgrade, or one seeded from `JELLYFIN_URL`/`JELLYFIN_API_KEY` - loads configured and
+EMPTY. On those installs the first save to reach the merge is not the admin's. `jellyfin-delta-poll`
+is a new job name with no `job_run` row, so `due()` fires it on the worker's first tick after boot
+and `poll_delta` ends in a `save_jellyfin`; the sweep's version probe and §7.3's link route reach the
+same arm. Each of them minted, sealed and returned the value into a caller that dropped it. After
+that the PUT's one-time reveal answers `null` for ever, `GET /api/admin/connectors/jellyfin` reports
+`has_webhook_token: true`, and there is no rotate or reveal route anywhere in the tree - so
+`POST /events/jellyfin` refuses every real delivery for the life of the install, and §7.2's trigger
+half is silently replaced by the path §7.2 itself calls the fallback. Measured in review: a seeded
+connector, one `poll_delta`, and the stored token is non-empty while every later Save reveals
+nothing. The state is also what M5.2's own test `test_an_install_that_has_minted_no_token_matches_
+nothing_a_caller_can_send` documents, without asking who makes that install's next save.
+
+**The decision.** `save_jellyfin` takes `mint_webhook_token: bool = False` and mints only when it is
+true; `api/admin.put_jellyfin` is the only caller that passes it, because it is the only response in
+this app that can show the value. A background save carries the stored token forward untouched and
+may not create one - and on an install that holds none, `has_webhook_token: false` keeps telling the
+admin that pressing Save is what mints it. Decision 332 is not amended: this is what makes its
+second clause literally true. The same merge now takes the connector row before it reads it
+(`INSERT ... ON CONFLICT (name) DO NOTHING` ahead of `load_jellyfin(for_update=True)`), because the
+FOR UPDATE that serialises the mint locks nothing when the row does not exist yet, which is exactly
+the first save - two at once minted two tokens and showed one admin a value the other overwrote.
+
+**Cost.** Three registry call sites in `test_connector_registry.py` pass the flag, and that file
+gains the two tests this rests on: a background save mints nothing, and two simultaneous first saves
+are told the same value. Route-driven fixtures and `ops/m52_exit_criterion.py` go through the PUT
+and are unchanged. An upgraded install still has to press Save once to get a token - a gesture with
+no UI prompt until M5.7 renders the webhook card, which is one save against a token that can never
+be recovered. [M5.2 review cycle 1: m52-rev-delta-01, m52-rev1-token-01, m52-rev1-token-02]
+
+### 404. The delta watermark stays in this app's clock domain, and the skew it cannot close is recorded rather than closed
+
+**What the record says.** Decision 366 puts the watermark in `connector_config`, written from
+Postgres `now()` by `poll_delta`. `intake.poll_delta`'s docstring then bounded the exposure: "only an
+app clock ahead by more than a poll's own duration can step over an add."
+
+**Why it changes.** That bound is false. Both halves of the predicate are evaluated in the SERVER's
+clock domain - `MinDateLastSaved` server-side and `DateCreated > since` client-side - while the
+watermark is written in the app's, so taking `started` before the read buys a margin only in a
+domain the predicate never uses. Measured in review: an app clock one second ahead loses an add
+under a read that took thirty. The window lost after each poll is the skew itself, and every add
+made inside it is invisible to this path for ever, because `DateCreated` does not change when an
+item is later re-saved.
+
+**The decision.** The behaviour stands and the claim is corrected. Advancing to
+`max(since, newest DateCreated read)` would put the watermark in the server's domain, but it never
+advances on a household that added nothing - the poll reads no new row, so there is no new maximum -
+which pins `MinDateLastSaved` at an ever-older instant and grows the superset every poll re-pages,
+against the same connector's argument that "a household of eleven thousand titles must not have its
+whole library paged every fifteen minutes". The seed instant is this install's own creation
+(decision 366) and is app-clock too, so the first poll is cross-domain whatever the rest does. So the
+docstring names the skew as the bound, this decision records the residual exposure, and §7.2's own
+answer stands: this path is the FALLBACK and the webhook is the trigger.
+
+**Cost.** A household running Jellyfin on a second box with a drifting clock loses the adds made in
+the first Δ after each poll when the webhook is absent, silently, with the job recording `ok`. Under
+compose both ends are the same machine and Δ is ~0. Nothing is asserted about a skew because there
+is nothing to assert: the fix would be a different design, and the honest artifact is this entry.
+[M5.2 review cycle 1: m52-rev-delta-02]
+
+### 405. The webhook template emits the fields the handler acts on LAST, because an unescaped title can forge one as easily as break the parse
+
+**What the record says.** Decision 365 publishes `ops/jellyfin-webhook-template.json` as the
+contract and argues 202-rather-than-400 out of one sentence in its note: "Handlebars interpolates
+into this text without escaping it, so a title containing a double quote renders a body no JSON
+parser will read." `api/events.py` restates it, and
+`test_a_body_that_is_not_json_is_accepted_and_recorded_rather_than_refused` is the class it tested.
+
+**Why it changes.** That sentence is true of one class of title and false of another. A name that
+closes its own string and opens a second key -- `x", "ItemId": "jf-9` -- renders a LEGAL object,
+and `json.loads` keeps the LAST of two duplicate keys. With `NotificationType`, `ItemId` and
+`ItemType` emitted before the free-text `Name`, and `SeriesId` before `SeriesName`, the forged
+duplicate was the one the handler read. Measured in review against the real route: an add filed
+under another item's id, a season filed under another show, and an `ItemAdded` that suppressed
+itself by forging its own `NotificationType` -- each answered 202, each recorded, each under the
+forged value rather than the one the plugin sent. A title is attacker-influenced content for
+anything a household acquired from the internet, so this is not only an operator typing a quote.
+
+**The decision.** The note is corrected to name both outcomes, and the body is reordered so that
+the four fields the app acts on -- `NotificationType`, `ItemId`, `ItemType`, `SeriesId` -- are
+emitted after `Name`, `SeriesName` and `Year`. Last-wins then works for the template instead of
+against it: the plugin's own value always overrides a forged duplicate and the forgery is inert.
+Decision 365's tolerance is untouched -- 202 to a body this app cannot act on, never 400 and never
+500 -- because the unparseable class is real too and escaping is not something this end of the
+webhook can do.
+
+**Cost.** A reordered JSON body and a rewritten note; no code, no schema, no surface, so no e2e
+movement. The order is load-bearing now and reading order is the obvious tidy-up, which is why
+`test_a_title_that_forges_a_field_cannot_move_the_delivery_to_another_item` renders the published
+file with one field poisoned rather than asserting its field list as a set. Recorded honestly: all
+of this rests on the premise this repository asserts in three places and models in `_render`, that
+the Webhook plugin interpolates `{{Name}}` unescaped. If HandlebarsDotNet's text encoder is in fact
+active in that plugin, the reorder is hardening rather than a fix and the original sentence is
+wrong in the other direction -- either way the sentence the file publishes as its own justification
+needed correcting. An operator who writes their own template is still on their own, which is what
+publishing one is for. [M5.2 review cycle 1: m52-rev-template-03]
+
+## Decisions taken (owner, 2026-09-19, M5.2 review cycle 2)
+
+Two, taken in M5.2's second review cycle on the same day as its first: what the webhook's 503
+tells a caller with no credential, and where decision 369's clause is held. They were first
+appended under the first cycle's heading, which then opened on no count at all over five
+decisions; review cycle 3 gave them this one. [M5.2 review cycle 3: M52-C3-PAPER-05]
+
+### 406. The webhook's 503 names its reason to an anonymous caller, and that one bit is accepted
+
+**What the record says.** Decision 332 gives the M4.7 dd03 shape as "503 naming
+`SECRETS_UNREADABLE_REASON`", and decision 365 orders this route 503 before 401 so that a
+correctly-configured operator under a rotated `SECRETS_KEY` is not told their token is wrong.
+`api/events.py` argues the STATUS CODE at length and never the AUDIENCE, and until this milestone
+that string appeared on admin-gated routes only -- `test_route_inventory.py` records `/api/config`
+as "deliberately free of any user or connector detail" for exactly the caller who now receives it.
+
+**Why it is asked.** Review measured the route with the key rotated: a caller with no header at
+all, a wrong token and the right token all receive
+`503 {"detail": "connector secrets unreadable (SECRETS_KEY): ..."}`, so a stranger who knows the
+install's `PUBLIC_URL` can tell a healthy install from one whose `SECRETS_KEY` no longer opens,
+with no credential and behind no rate limit. The same run established what is NOT disclosed: the
+token appears in no log line, no 503 body carries the stored token, the server URL or the api key,
+and an id the server holds is indistinguishable in status, body shape and latency from one it does
+not, because this handler decides nothing. An UNCONFIGURED install answers that caller 401, not
+503, since `load_jellyfin` reads a missing row as not-unreadable -- so the leaked fact is one bit
+and it is not "is Jellyfin configured".
+
+**The decision.** No change. The named reason stays, because decision 332 mandates it in as many
+words, `test_an_unreadable_secrets_key_answers_with_the_reason_and_never_500s` asserts it, and the
+fact disclosed -- this install's connector secrets are sealed against the key it has -- buys a
+caller who has it nothing at all. The ORDER is not touched either: 503 before 401 is what stops a
+correctly-configured operator being sent to regenerate a secret that is fine. Recorded rather than
+silently kept, because the audience line `/api/config` draws was crossed without this milestone
+noticing it existed, and the next reviewer should find an answer rather than the question. If it
+is ever taken back, the surgical form is to keep `SECRETS_UNREADABLE_REASON` in the `log.warning`
+and shorten the HTTP detail to "this delivery cannot be authenticated", amending that one test.
+
+**Cost.** None: no code, no schema, no surface, no e2e movement, and the disclosure is unchanged.
+[M5.2 review cycle 2: M52-C2-EVENTS-02]
+
+### 407. Decision 369's clause is held at the enqueue and not only in the query
+
+**What the record says.** Decision 369 concludes that "the webhook is THEREFORE the only direction
+an Episode id enters the app" from the premise that `ITEM_TYPES = "Movie,Series"` excludes
+`Episode` from every read this client makes of its own accord, and the one obligation it puts on
+the delta read is "keeps `ITEM_TYPES = "Movie,Series"` unchanged". Its absolute clause is stated
+separately and without qualification: "no acquisition task is ever keyed on an episode".
+
+**Why it is asked.** The premise is a claim about a remote server. `poll_delta` passed whatever
+came back straight to `pipeline.enqueue_item`, which takes `Id` first and never asks what the item
+is, while the sibling enqueue in `sweep_pending` refuses a row whose `resolve.kind_of` is None with
+`NOT_A_TITLE` -- so the app's only two task-filing sites disagreed about whether the server's word
+is enough. Measured in review against the double with one query parameter stripped -- the fault a
+path-keyed caching proxy or a rewriting gateway produces, and the same class `_created_walk`'s three
+paging bounds already refuse to trust a server about -- the poll filed 21 tasks, 14 of them keyed on
+episode ids and 12 of those one season. Stage 1 parks each with "unsupported item type", so nothing
+is minted and nothing is billed; what remains is a burned `(kind, key)` per episode that
+`ON CONFLICT DO NOTHING` will never reopen, and the household's real adds waiting behind them in a
+sequential drain. This is the one consumer of a server item list in the tree that turns an
+unfiltered row into a durable write: `all_items` feeds `resolve.upsert_item`, which refuses a kind
+it does not hold and reports it as unmatched.
+
+**The decision.** `ITEM_TYPES` is unchanged, `all_items`' three bounds are unchanged, and
+`item_in_libraries` still sends no `IncludeItemTypes` (decision 369, M52-C1-MEMBER-03). What is
+added is one `resolve.kind_of` test in `poll_delta`'s loop, before `key_for_item` can mint a key,
+counted as `DeltaReport.not_a_title` for `undated`'s reason -- a poll that silently discards most
+of what it read looks exactly like a quiet household. The narrowing stays in the query, where
+decision 369 put it; this is the answer being checked as well as asked, which is what the same walk
+already does with §7.2's own `DateCreated` predicate.
+
+**Cost.** One branch, one counter, one key on a report wire shape no surface reads; no schema, no
+route, no frontend, no e2e movement. On an honest server the counter is 0 for ever, which is the
+honest description of a guard for a server that is not.
+[M5.2 review cycle 2: m52-c2-delta-episode-filter]
+
+## Decisions taken (owner, 2026-09-23, M5.2 review cycle 3)
+
+Seven, taken in M5.2's third review cycle under the owner's standing instruction for this
+milestone: take each finding's recommended option and record it, and where a finding offered
+options without marking one, take the one the plan's own exit criterion implies and say so in the
+entry. Numbers 410-419 are this lane's by allocation, because the two sibling lanes hold 382-392,
+397-409 and 420-429 and this register cannot see them. The same cycle spent 416 on no new question:
+it is the first cycle's token decision, renumbered out of 392 and explained where it stands.
+
+The cycle also landed one spec amendment that needed no new number, because the decision mandating
+it had been taken on 2026-09-18 and only its amendment was outstanding: decision 362's rewrite of
+§7.2's third bullet, so that the full sweep alone marks a removed title `is_owned = false` and
+neither intake path writes the column. Decision 362 handed it to "the milestone that holds the spec
+file" while M5.1's fold of v2.1.1 handed it to M5.2, which was already editing that file for its
+§12 row under decision 331 - so each record pointed at the other and the normative sentence went on
+saying the opposite of the code. It is the dated point release v2.1.2. Three records were corrected
+in place rather than renumbered, each a sentence that said something other than what its own body
+or its own instrument does: decision 364's heading called the pick an "ownership" boundary over a
+body, a §12 row and a code path that make it an acquisition boundary and a full sweep that never
+reads it; decision 371's cost gave docker and a port as the reason the owner runs the exit script,
+which needs neither and refuses to run without the corpus bundle; and the two blocks above lost
+their count and their cycle. [M5.2 review cycle 3: M52-C3-PAPER-02, M52-C3-PAPER-05,
+M52-C3-PAPER-06, M52-C3-PAPER-07]
+
+### 410. A picked library the server no longer lists is a fault in the pick, not a boundary
+
+**What the record says.** Decision 364 makes a non-empty pick the acquisition boundary and says a
+membership read that FAILS leaves the row pending. `registry.save_jellyfin` keeps the pick across an
+origin move on purpose, and argued that a different install's adds would then be "recorded `library
+not picked` until the admin re-picks".
+
+**Why it changes.** That argument rested on `ops/fake_jellyfin.py` answering an unknown `ParentId`
+with an empty page. Jellyfin 10.9 and 10.10 answer it 400 (`LibraryManager.GetParentItem` throws
+`ArgumentException("Invalid parent id")`, which the exception middleware maps to 400), so on a real
+server a deleted-and-recreated library in the pick made `item_in_libraries` raise on the first
+picked scope before asking the next, the sweep filed that 400 as a fact about each key, every add
+stayed pending and was re-read every sweep, and `items_created_since` raised on every poll with a
+frozen watermark -- including for adds in libraries that still exist. Nothing named the pick.
+
+**The decision.** The pick is checked against `/Library/MediaFolders` once per sweep and once per
+poll. An add a live picked library holds is filed. One none of them holds stays pending while the
+pick names a library the server does not list, because it may be in that library under a new id,
+and the sweep's `blocked` names the stale id. The poll reads and files the live scopes, then raises
+naming the stale id before its watermark write, so the watermark holds. A pick none of whose
+libraries survive reads nothing at all: the app never narrows the pick to the survivors and never
+widens it to the whole server by itself. `item_in_libraries` asks every scope before it raises, and
+the admin PUT refuses a blank or nil id and stores a GUID once in the server's spelling. The double
+answers an unknown `ParentId` 400, as the server does.
+
+**Cost.** One `/Library/MediaFolders` read per sweep with ripe keys and a non-empty pick, and one
+per poll. Adds outside the live libraries wait until the admin saves the pick again -- the price of
+"a read that failed decides nothing" applied to a pick rather than a key; nothing is lost.
+[M5.2 review cycle 3: M52-C3-LIB-02, M52-C3-SWEEP-04, M52-C3-LIB-04]
+
+### 411. An item that resolves to a title the bundle supplied and the app already placed exits at stage 1, filed below every genuine add
+
+**What the plan says.** M5.2-plan §9: "A library re-scan can re-stamp items the household has had for
+years ... the job must then find the title already owned and exit at stage 1 rather than
+re-acquiring. Assert that, or a re-scan bills the household for its whole library."
+
+**Why it changes.** Nothing exited. Stage 1 resolved, advanced, and `pipeline.run_task` resumed the
+title from its board row, so a re-stamped owned title walked stages 2 to 10: stubs today, which
+stamped §8's "new - model placement, no crowd data" badge over warm corpus titles and wrote `ready`
+over the `(2, parked)` row `_park_thin` leaves for a thin title, which `_PARK` can never re-create;
+and once M5.3 and M5.5 give those stages bodies, enrichment and the paid extract per title. The lane
+had rewritten §12's row to "walks to completion" instead of asserting the exit, and the one test
+guarding it accepted `ready`. Separately, a task that exits still takes one of `DRAIN_LIMIT` slots,
+and both feeders filed at the default priority, so a re-scan's re-stamps queued in FIFO ahead of a
+film the household had just added.
+
+**The decision.** The finding offered two repairs: feeders that do not enqueue a title that
+resolves, or a stage-1 exit. The plan's exit criterion implies the second -- check 1 counts one task
+for the burst's series, which on a real corpus resolves -- so that is taken. Stage 1 closes a task
+whose item resolves to a title with `origin = 'bundle'` and a placement: a skip naming the title,
+with no board row written. "Owned" is made precise as "bundle and placed" because `is_owned` is the
+full sweep's column and moves on its schedule, while those two columns say the corpus already did
+this title's acquisition and stages 2 to 9 have nothing to produce. A bundle title still `unplaced`
+walks to stage 9 and waits there, and a title the pipeline minted resumes from its own board row,
+because M5.1's crash reclaim and copy race both finish that way. Both feeders file such an item at
+`intake.RE_OFFER_PRIORITY`, below every genuine add, using the same predicate
+(`stages.re_offered_title`). §12's row is restored to the plan's wording.
+
+**Cost.** One resolve per item per feeder and one board-free skip per re-stamp. A thin title's inbox
+row is left for the `title:` task whose job it is. [M5.2 review cycle 3: m52-c3-own-01,
+m52-c3-own-02, M52-C3-STATE-06]
+
+### 412. The delta watermark's floor is the instant this install gained §7.2's fallback
+
+**What the record says.** Decision 366: the watermark "is initialised to `SELECT min(applied_at)
+FROM schema_migration`, never to epoch".
+
+**Why it changes.** That sentence describes a fresh install, and every install that exists meets
+M5.2 as an upgrade, where `min(applied_at)` is when 0001 ran. The first poll then filed a task for
+every title the household had added since installing the app -- each already resolved by M4.11's
+sweep -- and every genuine add waited behind them. The owner's risk line asked for exactly this to be
+measured.
+
+**The decision.** Take the finding's recommendation: the floor is 0025's own `applied_at`, the
+instant the fallback arrived. On a fresh install it is one migration run from `min(applied_at)`;
+on an upgrade it is the upgrade. What was added before it is the full sweep's unmatched report's to
+hand on (decision 370). Decision 366 is amended in this one clause; "never epoch" and "advances only
+on a completed read" stand. A stored watermark later than the poll's own start -- a stepped clock --
+is read as never polled, from this floor.
+
+**Cost.** Titles added between install and upgrade that M4.11 never matched reach acquisition
+through the unmatched report rather than through this poll. `ops/m52_exit_criterion.py`'s check 3
+compares against 0025's `applied_at`. [M5.2 review cycle 3: M52-C3-STATE-02, M52-C3-STATE-07]
+
+### 413. The full sweep's library pass runs whether or not a member is linked
+
+**What the record says.** Decision 362 leaves ownership falsification with the full sweep alone.
+`sync_all` returned at `skipped_no_link` before its library pass whenever no member was linked, and
+review cycle 2 recorded that gap and filed the repair under "the amendment decision 362 hands §7.2's
+third bullet".
+
+**Why it changes.** That amendment only says the full sweep alone falsifies; no spec sentence can
+reorder a function, so the deferral pointed at nothing. §3.3 makes the link optional, the library
+pass needs only the admin key, and M5.2's intake jobs gate on `make_client` alone -- so an install
+with the connector saved and nobody linked filed tasks whose minted titles are owned from the item's
+`Id`, and nothing could ever falsify them or flip an unowned title back.
+
+**The decision.** The library pass -- `upsert_items`, `prune_missing_items`, `_falsify_ownership` --
+runs whether or not a member is linked, reached through the one caller it always had and behind
+both of its gates. Only the per-member loop needs a member, and the report still says
+`skipped_no_link` when none was swept. No second caller, no relaxed gate.
+
+**Cost.** A no-link install makes the same admin-key library read a linked one makes, every fifteen
+minutes. [M5.2 review cycle 3: m52-c3-own-04]
+
+### 414. `ParentId` is trusted where `IncludeItemTypes` is not
+
+**What the record says.** Decision 407 checks the server's own `Type` on each delta row because a
+proxy or gateway that drops one query parameter is a fault this app defends against.
+
+**Why it is asked.** The same fault aimed at `ParentId` widens both the membership read and the
+delta walk to the whole server, and a non-empty pick is then ignored on both paths with nothing
+recording that the asymmetry was accepted.
+
+**The decision.** Recorded as accepted, which the finding offered first. A row carries its own
+`Type`, so checking a type filter's answer costs a field already in hand; nothing on a row cheaply
+names the library that holds it, and verifying membership independently (an `Ancestors` read per
+id) is a second round trip per key for a fault no real Jellyfin produces. The sentence sits where
+decision 407 is argued, in `poll_delta` and `item_in_libraries`.
+
+**Cost.** Behind a path-keyed cache or a query-rewriting gateway, a deselected library's adds are
+filed. [M5.2 review cycle 3: M52-C3-396-PARENTID-03]
+
+### 415. Jellyfin ids are compared and keyed in the server's own spelling, and an id that is not a GUID is bounded rather than refused
+
+**What the record says.** Decisions 363 and 369 make the key the payload's item id or `SeriesId`,
+and decision 364's membership read compared the row's `Id` with it as a string.
+
+**Why it changes.** The Webhook plugin renders `{{ItemId}}` and `{{SeriesId}}` from a raw `Guid`,
+dashed; `/Items` writes every `Id` undashed (`JsonGuidConverter`, format "N"); the server's binder
+parses either. So the server found every real add and this app threw the row away, filing it
+terminally as "the server no longer holds this item" -- or "library not picked" -- with no task. The
+double's `jf-N` ids were spelled alike on both sides, so neither the suite nor the exit criterion
+could see it. Separately, the server silently DROPS an `ids` value that is not a GUID, and an
+emptied `ids` filters nothing, so a junk key was a whole-server read with no `Limit`, which on a
+large library timed out and headed every sweep.
+
+**The decision.** `connectors/jellyfin.canonical_id` spells a GUID as 32 lowercase hex digits and
+leaves anything else as it arrived; `read_event` keys on it and `item_in_libraries` compares both
+sides through it, so the debounce group, the `ids=` sent and the task key are the server's
+spelling, which the delta poll files under too. The finding recommended refusing a non-GUID id; the
+plan's exit criterion implies the opposite, because all eleven checks run against a double whose
+ids are not GUIDs, so the id is not refused and the membership read is bounded instead
+(`MEMBERSHIP_LIMIT`), which makes such an id one row that does not match it. The double renders a
+GUID dashed on the way out and binds `ids` by GUID value, as the plugin and the server do.
+
+**Cost.** A non-GUID id from a real install is filed as gone from the server after one bounded read
+rather than refused at the door. [M5.2 review cycle 3: M52-C3-EVENTS-01, M52-C3-SWEEP-01,
+M52-C3-LIB-01, M52-C3-369-GUID-01, M52-C3-STATE-04, M52-C3-EVENTS-04, M52-C3-SWEEP-05,
+M52-C3-LIB-05]
+
+### 417. The template writes the two names with three braces, and calls no helper the plugin Jellyfin 10.10 runs does not have
+
+**What the record says.** Decision 365 publishes `ops/jellyfin-webhook-template.json` as the
+contract. Decision 405 reordered it on the premise "that the Webhook plugin interpolates `{{Name}}`
+unescaped", and recorded that if HandlebarsDotNet's encoder is active "the reorder is hardening
+rather than a fix and the original sentence is wrong in the other direction".
+
+**Why it changes.** It is active, and the plugin escapes before it. Read from
+jellyfin-plugin-webhook's source at master and at every tag Jellyfin 10.9 and 10.10 install (v14 to
+v17): `DataObjectHelpers` fills `Name`, `SeriesName` and `ItemType` through `Escape()`, which turns
+each `"` into `\"`, and `BaseOption` compiles the template with Handlebars.Net 2.1.6's default
+configuration, whose encoder is `HtmlEncoderLegacy`: inside every `{{Field}}` it rewrites `"`, `&`,
+`<` and `>` as named entities and every UTF-16 code unit above 159 as a numbered one, and passes an
+apostrophe, the backtick, `=`, a backslash and every control character through. So under the
+published `{{Name}}` a title carrying a quote rendered `\&quot;`, an escape no JSON parser accepts,
+and was recorded as an unreadable payload with no task; an ampersand, or any accented or non-Latin
+letter, reached the record as an HTML entity; and a title shaped like a second key could forge
+nothing. Decision 405's
+class never occurred through the plugin while the one that did went unguarded, because the suite's
+`_render` substituted values raw. The finding recommended the plugin's `json_encode` helper. That
+first shipped in plugin 18 (2025-10-20, "Jellyfin 10.11 support"), and on plugin 17 and older
+Handlebars.Net's `MissingHelperDescriptor` throws "Template references a helper that cannot be
+resolved" for a helper called with an argument - so the template would render nothing for every
+add on this app's supported floor (`MIN_SERVER_VERSION = (10, 9)`; the double is 10.10.3). It also
+throws on an undefined value (`ArgumentNullException.ThrowIfNull`), and `SeriesName` is undefined on
+every film.
+
+**Corrected in place: the encoder.** This paragraph first named the library's other encoder,
+`HtmlEncoder`, which encodes the apostrophe, the backtick and `=` and nothing outside ASCII. 2.1.6
+ships both, and its `HandlebarsConfiguration` constructor sets
+`TextEncoder = new HtmlEncoderLegacy();`; the plugin compiles through the static `Handlebars`,
+whose configuration is that default, and replaces nothing. `_render` modelled the wrong one, so the
+suite asserted an apostrophe the plugin never encodes and let an accented title through that the
+plugin encodes. No delivery differed, because every field this decision keeps at two braces is
+ASCII, and the decision stands unchanged on either encoder. [M5.2 review cycle 4: M52-C4-WH-02]
+
+**The decision.** Not the recommendation, for that reason; the plan's exit criterion implies the
+same, since every one of its checks runs against a 10.10 double. `Name` and `SeriesName` are
+written with three braces, Handlebars' own unencoded form, present on every plugin version, which
+puts `Escape()`'s output into the JSON as it is: a legal JSON string for any title without a
+backslash or a control character in it, and one no title can close early, because every quote in
+it arrives escaped. Every other field keeps two braces, since an id, an enum name, a type name and a
+year carry nothing the encoder rewrites. Decision 405's order stands and is re-argued rather than
+withdrawn: three braces make the plugin's escaping the only thing that keeps a quote inside its
+string, that escaping is the plugin's detail rather than this app's, and the order is what keeps a
+forged duplicate inert if a plugin build ever drops it. The note says all of this, and
+`test_jellyfin_webhook.py`'s `_render` now renders as the plugin does - escape, encode, raw for
+three braces - and refuses any other Handlebars it has not modelled against plugin 17.
+
+**Cost.** A title carrying a backslash or a control character still arrives as a body no parser
+reads, is answered 202 and recorded with its reason (decision 365), and enqueues nothing from the
+webhook; a new film or show among them reaches acquisition at the delta poll's next run instead.
+No template can close that on plugin 17 - it needs `json_encode` and a plugin 18 floor, or a
+handler that reads a broken body, and neither is this finding's. An operator who pasted the old
+template keeps its behaviour until they paste again. Nothing here was run against a live plugin:
+the behaviour is read from source at tagged releases and modelled in `_render`, and the exit
+criterion cannot see it, because the double posts a dict and never renders a template.
+[M5.2 review cycle 3: M52-C3-EVENTS-05]
+
+## Decisions taken (owner, 2026-09-24, M5.2 review cycle 4)
+
+Three, taken in M5.2's fourth review cycle under the owner's standing instruction for this
+milestone: take each finding's recommended option and record it, and where a finding offered
+options without marking one, take the one the plan's own exit criterion implies and say so in the
+entry. They are 408, 409 and 418, the first three of the four numbers this lane was left for new
+calls, in that order. This cycle was opened to hunt one class of defect -- a place where the test
+double agrees with the app and a real Jellyfin server does not -- and each of the three is that
+class: every fact about Jellyfin below was read from its own source at tagged releases, not from
+the double and not from memory. [M5.2 review cycle 4]
+
+### 408. Membership in the library pick is read off the item's own `Path`, because the server drops `ParentId` beside `ids`
+
+**What the record says.** Decision 364 makes a non-empty pick the acquisition boundary and names
+its mechanism: "Membership is a real read (`GET /Items?ids=<key>&ParentId=<lib>&Recursive=true`,
+one per picked library)". Decision 414 accepted that a proxy dropping `ParentId` would widen that
+read, "for a fault no real Jellyfin produces".
+
+**Why it changes.** Every Jellyfin release from 10.9.11 to 12.1 produces it, on exactly that read.
+`ItemsController.GetItems` resolves the folder (`GetParentItem`, whose 400 for an unknown id is why
+decision 410 exists) and then sets `query.Parent = null;`, whose setter empties `ParentId`, before
+`folder.GetItems(query)`; `Folder.GetItems` hands any query with `ItemIds` straight to
+`LibraryManager.GetItemsResult`, whose only library scoping is `if (query.Recursive &&
+!query.ParentId.IsEmpty())`. Read at v10.9.11, v10.10.7, v10.11.0 and v12.1, identically. So every
+live picked library answered for every id, and an add in a library the admin deselected was filed
+under the first one -- while `ops/fake_jellyfin.py` applied `ParentId` beside `ids` and every test,
+the coverage row and exit check 8 agreed with the app. The delta walk is unaffected: it names no
+`ids`, and there the server does scope by `ParentId`. The `Ancestors` read decision 414 named as the
+alternative does not work as written either: with no `userId`, `LibraryController.GetAncestors`
+walks physical parents only and never reaches the library (`TranslateParentItem` runs only for a
+user).
+
+**The decision.** The membership read asks the id alone (`GET /Items?ids=<key>&Recursive=true`,
+still bounded by decision 415's `Limit`) and places the row's `Path` -- already in `FIELDS` --
+against the `Locations` of the libraries `GET /Library/VirtualFolders` lists, matched on its
+`ItemId` (the library's id in the server's "N" spelling). That is the server's own rule for which
+library a folder belongs to: `TranslateParentItem` asks which library's `PhysicalLocations`
+contain it. A path inside a picked library is filed; one inside only unpicked libraries is recorded
+`library not picked`; one inside no listed library, or a row with no `Path`, is a read that could
+not decide and leaves the row pending (decision 364's polarity). A location must be followed by a
+separator, so `/media/films-home` is not inside `/media/films`, and the comparison is exact, as the
+server's `Contains` is. The sweep reads `/Library/VirtualFolders` once, beside decision 410's
+`/Library/MediaFolders`. Decision 364's outcome stands and its mechanism clause is amended here;
+decision 414 is narrowed to the delta walk, where its premise holds. The double answers `ids`
+without scoping by `ParentId` (still 400ing an unknown one), serves each item's `Path` under its
+library's locations, and serves `/Library/VirtualFolders`.
+
+**Cost.** One more read per sweep with ripe keys and a non-empty pick, and one read per key rather
+than one per picked library. An install whose `ServerConfiguration.PathSubstitutions` rewrites the
+`Path` a row is served with (`DtoService.GetMappedPath`) while `Locations` stay as configured has
+its webhook adds wait, pending and named, under a non-empty pick; the delta poll still files them.
+[M5.2 review cycle 4: M52-C4-IDS-01, M52-C4-WH-01]
+
+### 409. §7.2's delta poll reads what the server saved since the last poll, and `DateCreated` is not its predicate
+
+**What the spec says.** §7.2: "15-minute delta poll on `DateCreated > last_sync`". The plan's §9:
+"Jellyfin's `DateCreated` is the server's, not the file's."
+
+**Why it changes.** The plan's premise is false and the predicate rests on it. By default Jellyfin
+stamps `DateCreated` from the FILE -- `UseFileCreationTimeForDateAdded = true;`
+(`MetadataConfiguration.cs`), and `ResolverHelper.SetDateCreated` writes `info.CreationTimeUtc`,
+which .NET 8 on Linux reads as the older of mtime and ctime -- and an NFO's `<dateadded>` overrides
+it. What marks an item's arrival is `DateLastSaved`, set to `DateTime.UtcNow` when the scan first
+saves the row, and that is what `MinDateLastSaved` selects on. The poll sent `MinDateLastSaved` and
+then re-applied `DateCreated > since` to what came back, so a film copied in with its mtime kept, an
+archive unpacked with its dates, camera footage, or any add first saved by the default twelve-hourly
+scan was answered by the server and thrown away uncounted, with the watermark advanced past it for
+good -- `DateCreated` never changes, so no later poll recovered it. The double answered the filter
+from `DateCreated` and spelled the two stamps as one instant. Separately, the server stamps
+`DateLastSaved` before the row it saves is visible (10.10 awaits image work between the two; 10.11
+still commits later), so a row stamped just before a poll began and committed after its read was
+excluded by every later poll's `>=`. `BaseItemDto` carries no `DateLastSaved` on any release, so
+the client cannot re-check the server's filter the way decision 407 re-checks `Type`.
+
+**The decision.** The server's save window is the whole delta: the client files every row
+`MinDateLastSaved` returns, with no `DateCreated` re-filter, and the `undated` count that existed to
+report rows the re-filter could not date goes with it. `UNIQUE (kind, key)` absorbs what was filed
+before, and a re-saved title the bundle supplied and the app placed exits at stage 1 below every
+genuine add (decision 411), which is the re-stamp cost plan §9 already priced. The watermark is
+written `WATERMARK_OVERLAP` -- five minutes -- behind the instant the read began, so a late-committed
+row is re-read and the margin's re-read is absorbed by the queue; that also bounds decision 404's
+app-ahead skew to the same margin, which amends 404's cost clause and nothing else of it. The walk
+additionally raises when the server's count moves between two of its pages, because with no
+`SortBy` a row deleted ahead of the offset shifts another past it while the smaller count satisfies
+the short-page bound. §7.2's fallback bullet and the third bullet's reason are amended in place
+(v2.1.2, fourth review cycle), and §12's M5.2 row with them. Decision 366's "advances only on a
+completed read" stands, and so does decision 412's floor.
+
+**Cost.** Every row the server re-saves -- a metadata or artwork refresh -- is re-offered once:
+absorbed by the queue when it was filed before, closed at stage 1 below every genuine add when it
+is a placed bundle title, and filed as the add it is otherwise, which for an item added before the
+fallback's floor is the full sweep's unmatched report reaching acquisition by this path instead
+(decision 370). A server or proxy that ignores `MinDateLastSaved` now has its whole library offered
+once rather than filtered by a stamp that was never the arrival. Each poll re-reads its last five
+minutes. [M5.2 review cycle 4: M52-C4-REST-02, M52-C4-TTA-02, M52-C4-REST-03, M52-C4-REST-04]
+
+### 418. §7.2's webhook token is minted only by a save that asks for it
+
+**What the record says.** Decision 416: "`save_jellyfin` takes `mint_webhook_token: bool = False`
+and mints only when it is true; `api/admin.put_jellyfin` is the only caller that passes it, because
+it is the only response in this app that can show the value", and "an upgraded install still has
+to press Save once to get a token".
+
+**Why it changes.** The route passed it on every PUT, and the only client of that route that ships
+-- §6.6's connectors page, whose `save()` sends `{url, api_key}` -- discards the response. So the
+first Save any admin pressed, on every fresh install and every upgraded one, minted a token, sealed
+it and showed it to nobody; the PUT's reveal then read `null` for ever, the card said a token
+existed, no route or CLI reveals or rotates it, and every real `ItemAdded` was answered 401 by a
+plugin that does not retry (jellyfin-plugin-webhook's `GenericClient` logs a failed send and moves
+on). Decision 416's premise -- that this response can show the value -- is false for the UI that
+ships until M5.7. A second route reached the same state: the save commits before the version probe,
+and `httpx.InvalidURL`, which is not an `httpx.HTTPError`, escaped the probe as a 500 over a URL
+with a letter in its port.
+
+**The decision.** The finding offered an explicit field on the PUT or a dedicated mint route without
+marking one; the exit criterion's `configure` reads the token off the one PUT that configures the
+connector, which a field keeps, so the field is taken: `JellyfinSettings.mint_webhook_token`,
+default false, passed through to `save_jellyfin`. The shipped page never sends it, so its Save mints
+nothing and `has_webhook_token: false` stays true; M5.7's card sends it when it renders the reveal.
+`save_jellyfin`'s own rule is unchanged -- it mints only when none is held, and never rotates -- so
+decision 416's two-first-saves guarantee stands, and the rotate-on-request the finding attached to
+the route is not taken here: rotation would show one of two simultaneous askers a value the other
+replaced, and M5.7 owns the card that would offer it. `JellyfinClient._request` wraps
+`httpx.InvalidURL` in `JellyfinError`, so the probe fails as the best-effort read it is argued to be.
+
+**Cost.** Until M5.7 an operator obtains a token only by sending the field themselves; an explicit
+request whose response is lost is unrecoverable, as the token always was. A stored URL whose port
+will not parse still makes a later corrective PUT fail inside `registry._origin`, which predates
+this milestone and is not this decision's. [M5.2 review cycle 4: M52-C4-TOKEN-01]
 
 ---
 

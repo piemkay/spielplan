@@ -16,8 +16,11 @@ Two rules follow, and both are load-bearing:
 
 from __future__ import annotations
 
+import hmac
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from secrets import token_urlsafe
 from typing import Any
 
 import asyncpg
@@ -52,6 +55,13 @@ class JellyfinConfig:
     # because JSON object keys are strings and round-tripping them as ints invites a silent
     # type mismatch between "3" and 3.
     user_tokens: dict[str, str] = field(default_factory=dict, repr=False)
+    # §7.2's `POST /events/jellyfin` is "token-authed", and the token is this app's own rather
+    # than anything Jellyfin issues: the operator pastes it into the Webhook plugin's header
+    # field and the plugin presents it on every `ItemAdded` (decision 332). Sealed beside the two
+    # credentials above and out of the repr for their reason -- whoever holds it can file
+    # acquisition work in this household's name -- although it travels in the opposite direction,
+    # which is the whole of `save_jellyfin`'s argument about what an origin change destroys.
+    webhook_token: str = field(default="", repr=False)
     # §7.1's pin, probed and stored rather than computed and thrown away. It lives in the config
     # half — it is not a secret and needs no migration — and it is what gates the Played write
     # (`JellyfinClient.played_write_refusal`), because an advisory pin let a 10.8 install 404
@@ -59,6 +69,16 @@ class JellyfinConfig:
     # which has to stay distinguishable from "probed, and refused".
     server_version: str = ""
     server_supported: bool | None = None
+    # §7.2's fifteen-minute delta poll, as the one instant it reads from (decision 366) -- the
+    # `MinDateLastSaved` it sends, since decision 409 made the server's save the whole delta. The
+    # config half and never the sealed one: it is not a secret, and a value that vanished with a
+    # SECRETS_KEY failure would re-read the corpus on the next poll.
+    # Deliberately not named after `user_title.jf_synced_at`, which `0006_jellyfin.sql:9-11`
+    # argues at length is a different thing per (user, title) -- "the app has an explicit action
+    # Jellyfin has not seen" rather than "everything this server created after T". `None` is
+    # "never polled", which `delta_since` turns into the instant this install gained the poll
+    # (decision 412) and never into epoch.
+    delta_watermark: datetime | None = None
     # Not "unconfigured": the row exists and its credentials are real, they just cannot be
     # opened with this SECRETS_KEY. Distinguishing the two is the whole point — the first is a
     # household that has not set up Jellyfin, the second is a household whose admin has to
@@ -71,6 +91,28 @@ class JellyfinConfig:
 
     def token_for(self, app_user_id: int) -> str | None:
         return self.user_tokens.get(str(app_user_id))
+
+    def webhook_token_matches(self, presented: str | None) -> bool:
+        """§7.2's token check, as a rule in the domain package rather than in the route.
+
+        An empty stored token matches nothing, which is the half a route cannot be trusted to
+        remember. An install that has never minted one -- seeded from env, or configured before
+        this milestone existed -- holds `""`, and a plain equality against a caller that also
+        sends nothing would hand the intake path to anyone who found the URL. `compare_digest`
+        because this is a bearer credential compared on every delivery (§14.3).
+
+        OVER BYTES, which `core/auth.constant_time_equals` already spells this way and which this
+        rule needs for a second reason: what arrives here is whatever a STRANGER sent. Starlette
+        decodes a header as latin-1, so one byte >= 0x80 makes the left operand a non-ASCII `str`
+        -- and `compare_digest` raises `TypeError` on those, which nothing in `app.py` catches.
+        That answered 500 with a traceback to an unauthenticated caller on the one route §7.2
+        opens to the world, breaking decision 365's "never 500" before the token check had even
+        finished. Every latin-1 string encodes, so no header can raise here, and a token that is
+        not ASCII simply fails to match. [review cycle 1: m52-rev-events-01]
+        """
+        return bool(self.webhook_token) and hmac.compare_digest(
+            (presented or "").encode("utf-8"), self.webhook_token.encode("utf-8")
+        )
 
 
 def env_seeds(cfg: Settings | None = None) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
@@ -168,6 +210,32 @@ def _origin(url: str) -> tuple[str, str, int | None]:
     return (parsed.scheme, parsed.hostname or "", parsed.port)
 
 
+def _instant(raw: Any) -> datetime | None:
+    """A stored ISO instant as an aware datetime, or None -- decision 366's watermark, read back.
+
+    jsonb holds no timestamp type, so the value round-trips as text and this is where it stops
+    being text: §7.2's poll compares it with the instant it began, and a string compare agrees with
+    an instant compare only while both sides spell the precision identically. A value that will
+    not parse -- hand-edited jsonb, or a dump from something that wrote its own -- reads as "never
+    polled" rather than as an instant: that re-reads the library once, which the queue's
+    `(kind, key)` identity absorbs, where a guessed floor could skip the household's adds for ever.
+    """
+    if not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def _new_webhook_token() -> str:
+    """One token for §7.2's webhook (decision 332). `token_urlsafe` is the stdlib `secrets`, not
+    `core.secrets` imported below -- 256 bits, and URL-safe because an operator pastes this value
+    by hand into the Webhook plugin's header field and must not have to quote any of it."""
+    return token_urlsafe(32)
+
+
 def make_client(cfg: JellyfinConfig):
     """Build the Jellyfin client for a stored configuration, or None if there is none.
 
@@ -221,10 +289,27 @@ async def load_jellyfin(conn: asyncpg.Connection, *, for_update: bool = False) -
         # scale a line per tap is the right volume; `app.py`'s boot probe is what makes the first
         # one arrive before anybody taps anything.
         log.error("jellyfin connector secrets are unreadable: %s", exc)
-        stored_url = await conn.fetchval(
-            "SELECT config ->> 'url' FROM connector_config WHERE name = $1", JELLYFIN
+        # The whole config half, and not the URL alone. What failed is the sealed column; the
+        # plaintext one opened perfectly, and `save_jellyfin` rebuilds `stored_config` from the
+        # config it was handed -- so every key this read dropped was ERASED by the next save of a
+        # corrected URL, which is the one save this state invites. That was invisible while
+        # `library_ids` had no reader. Decision 364 makes it the acquisition boundary, so the
+        # erasure silently widens it from the libraries the admin picked to the whole server, and
+        # decision 366's watermark would go with it and re-read the corpus. A custody failure is a
+        # fact about the credentials (§2, M4.7 dd03); taking the connector's plaintext settings
+        # down with them is a second failure that the first one does not justify.
+        stored = await conn.fetchval(
+            "SELECT config FROM connector_config WHERE name = $1", JELLYFIN
+        ) or {}
+        stored_supported = stored.get("server_supported")
+        return JellyfinConfig(
+            url=str(stored.get("url") or ""),
+            library_ids=list(stored.get("library_ids") or []),
+            server_version=str(stored.get("server_version") or ""),
+            server_supported=None if stored_supported is None else bool(stored_supported),
+            delta_watermark=_instant(stored.get("delta_watermark")),
+            secrets_unreadable=True,
         )
-        return JellyfinConfig(url=str(stored_url or ""), secrets_unreadable=True)
     tokens = secret.get("user_tokens") or {}
     supported = config.get("server_supported")
     return JellyfinConfig(
@@ -232,8 +317,10 @@ async def load_jellyfin(conn: asyncpg.Connection, *, for_update: bool = False) -
         api_key=str(secret.get("api_key") or ""),
         library_ids=list(config.get("library_ids") or []),
         user_tokens={str(k): str(v) for k, v in tokens.items() if v},
+        webhook_token=str(secret.get("webhook_token") or ""),
         server_version=str(config.get("server_version") or ""),
         server_supported=None if supported is None else bool(supported),
+        delta_watermark=_instant(config.get("delta_watermark")),
     )
 
 
@@ -246,6 +333,9 @@ async def save_jellyfin(
     user_tokens: dict[str, str] | None = None,
     server_version: str | None = None,
     server_supported: bool | None = None,
+    delta_watermark: datetime | None = None,
+    watermark_origin: str | None = None,
+    mint_webhook_token: bool = False,
 ) -> JellyfinConfig:
     """Merge a partial update into the stored connector.
 
@@ -262,8 +352,45 @@ async def save_jellyfin(
     `server_version` and `server_supported` move as a pair — a version with no verdict, or a
     verdict with no version, is a refusal that cannot name itself (§7.1) — and a `None` version
     means "this save is not a probe", which carries the stored pair forward untouched.
+
+    `delta_watermark` is §7.2's delta poll writing down where it got to (decision 366), so it is
+    the poll's to pass and nobody else's: every other caller leaves it `None` and carries the
+    stored instant forward. The webhook token is the opposite — no caller passes a VALUE, because
+    this function is the only thing that ever mints one (decision 332).
+
+    `watermark_origin` is the server that watermark was read FROM, and it is what keeps the move
+    branch below true under a race. The poll's save names no URL, so `moved` was computed against
+    whatever was stored at that instant -- and an admin who moved the connector while a poll was
+    paging had the move's drop overwritten by an instant belonging to the OLD server's read, from
+    which the new server's first poll then started, stepping over everything it held from before.
+    A watermark whose origin is not the stored one is not written. [M5.2 review cycle 3:
+    M52-C3-STATE-05; decision 366]
+
+    `mint_webhook_token` is that mint's permission, and only `api/admin.put_jellyfin` holds it
+    (decision 416). Decision 332 gives the token one appearance, on the save that made it, so a
+    save nobody is watching may not be the one that makes it: the merge is reached by the delta
+    poll's watermark write, by the sweep's version probe and by §7.3's link route, and on every
+    install that arrives here already configured -- an upgrade, or `seed_from_env` -- the FIRST of
+    those is a background job. It minted, sealed and returned the value into a worker that dropped
+    it, after which the PUT's one-time reveal is `null` for ever while §6.6's card says a token
+    exists. Gated on the gesture instead, a background save carries the stored token forward
+    untouched and `has_webhook_token: false` keeps telling the admin to ask for one -- which the PUT
+    does only when its body says so, not on every Save (decision 418).
+    [review cycle 1: m52-rev-delta-01, m52-rev1-token-01]
     """
     async with conn.transaction():
+        # The lock below locks a row, and `load_jellyfin` says so: "it locks nothing when the row
+        # does not exist yet". That is exactly the save decision 332 mints on -- the first one --
+        # so two simultaneous first saves each read no row, each minted their own token, and one
+        # admin was shown a value the other's commit had already overwritten, with no rotation
+        # path anywhere in the app to recover it. Taking the row first costs nothing: this call
+        # writes one before it returns in any case (`put_connector_secrets` upserts), and a save
+        # that raises rolls this back with the rest of the transaction.
+        # [review cycle 1: m52-rev1-token-02; decision 332]
+        await conn.execute(
+            "INSERT INTO connector_config (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+            JELLYFIN,
+        )
         current = await load_jellyfin(conn, for_update=True)
         next_url = (url if url is not None else current.url).rstrip("/")
 
@@ -312,10 +439,36 @@ async def save_jellyfin(
         # `ensure_dek`'s to make, because it belongs to the DEK rather than to one connector's stored
         # bytes. [M4.7 dd03]
         lost = current.secrets_unreadable
+        # The poll's watermark, refused when the read it describes was of another server than the
+        # one this row now names -- see `watermark_origin` above.
+        if watermark_origin is not None and (
+            _origin(watermark_origin.rstrip("/")) != _origin(next_url)
+        ):
+            delta_watermark = None
 
         merged = JellyfinConfig(
             url=next_url,
             api_key=api_key if api_key else ("" if moved or lost else current.api_key),
+            # THE ONE SERVER-BOUND VALUE HERE WITH NO `moved` BRANCH, and the omission is the
+            # argument rather than the oversight the four fields below could make it look like.
+            # §14.3 drops what this app would SEND to whatever host was just typed in, and the
+            # version pair and the watermark are facts this app DERIVED from the old server. The
+            # pick is neither: it is the admin's own recorded intent, it travels nowhere, and
+            # `moved` fires on http->https, on a new port and on hostname->IP -- the same install
+            # at a corrected address, whose library ids are GUIDs minted in its own database and
+            # still match. Dropping it there would widen the boundary from the libraries the
+            # admin picked to the whole server on the commonest gesture of the three, which is
+            # the harm the custody branch above already refuses in these words: the household
+            # billed for the library they deselected. What survival costs instead is bounded and
+            # repairable -- a genuinely different install lists none of the stored ids, so its
+            # adds stay pending, and both feeders name the stale ids, until the admin re-picks
+            # from the list `GET /connectors/jellyfin/libraries` serves (decision 410; this said
+            # "recorded `library not picked`", which is what the double did and no Jellyfin
+            # does, since the server 400s a `ParentId` it cannot find [M5.2 review cycle 3:
+            # M52-C3-LIB-02]) -- and it is the same answer M4.11 gave for every other Jellyfin id
+            # this schema holds: `title.jellyfin_id` and the copy map are re-derived from a real
+            # read (`prune_missing_items`), never erased on a URL edit.
+            # [review cycle 1: m52-rev-lib-01; decision 364, §14.3]
             library_ids=library_ids if library_ids is not None else current.library_ids,
             user_tokens=(
                 user_tokens
@@ -334,13 +487,61 @@ async def save_jellyfin(
                 server_supported if server_version is not None
                 else (None if moved else current.server_supported)
             ),
+            # A watermark belongs to the clock that stamped it. `DateLastSaved` is the SERVER's
+            # instant for when it saved an item (decision 409), so carrying one across a move is the
+            # same category error as carrying the version verdict, with a worse failure mode: a
+            # new server whose library was imported before the old watermark would have every one
+            # of its adds skipped, silently and for ever. Dropped on a move, the next poll falls
+            # back to the floor `delta_since` names and re-reads the new server from there -- and
+            # this comment used to say the queue's `(kind, key)` identity absorbs that re-read. It
+            # absorbs nothing of it on a genuinely different install: the key is `jellyfin:<Id>`
+            # and a re-imported library carries new ids. What absorbs it is decision 411: an item
+            # that resolves to a title the bundle supplied and the app already placed is filed
+            # below every genuine add and closed at stage 1 without walking, and a title the new
+            # server holds that the app has never placed is filed as the add it is. That fails
+            # loudly and cheaply, in queue rows, rather than quietly and permanently.
+            # [M5.2 review cycle 3: M52-C3-STATE-06]
+            delta_watermark=(
+                delta_watermark if delta_watermark is not None
+                else (None if moved else current.delta_watermark)
+            ),
+            # The one credential here that an origin change does NOT destroy, and the asymmetry is
+            # the argument rather than an oversight. §14.3's rule above is about credentials this
+            # app SENDS: the admin key and the §7.3 tokens would travel, in a header, to whatever
+            # host was just typed in. The webhook token never leaves this install -- it is what a
+            # caller must present to `POST /events/jellyfin` -- so nothing about a new Jellyfin
+            # address puts it anywhere it was not already. Dropping it would cost what §6.6 cannot
+            # give back: the value is displayed once at generation (decision 332), so an admin
+            # correcting a port would silently kill the intake path with no surface that says so
+            # and no way to re-read the token they had already pasted into the plugin. What
+            # survival costs instead is bounded and visible -- the old server can still POST, and
+            # every event it sends is filtered by the library pick and by §8's own gates.
+            # `lost` is a different fact: nothing could be read, so there is nothing to carry.
+            webhook_token="" if lost else current.webhook_token,
         )
+        if mint_webhook_token and merged.configured and not merged.webhook_token:
+            # Generated at the first save that leaves this connector configured, and never
+            # rotated by a later one (decision 332): an operator who has pasted it into the
+            # Webhook plugin must not have it changed under them by an unrelated edit to the URL.
+            # `mint_webhook_token` is the gesture this milestone's own review added (decision
+            # 416): the docstring above argues why the state is not enough to mint on.
+            merged = replace(merged, webhook_token=_new_webhook_token())
         # A URL on its own is not a secret, and saving one must not demand SECRETS_KEY — the admin
         # types the address first and pastes the key second.
         secret: dict[str, Any] | None = None
-        if merged.api_key or merged.user_tokens:
+        # `or merged.webhook_token` is what makes the survival above real rather than stated. The
+        # sealed blob is written whole, so a move that leaves no api_key and no user_tokens would
+        # otherwise fall through to the `secret=None` write below and put NULL over the ciphertext
+        # -- destroying the webhook token on exactly the save this merge just argued must keep it,
+        # while the comment two screens up still said it survived. What is re-sealed there is a
+        # blob holding the token and nothing else: §14.3's credentials are already "" by then.
+        if merged.api_key or merged.user_tokens or merged.webhook_token:
             settings().require_secrets_key()
-            secret = {"api_key": merged.api_key, "user_tokens": merged.user_tokens}
+            secret = {
+                "api_key": merged.api_key,
+                "user_tokens": merged.user_tokens,
+                "webhook_token": merged.webhook_token,
+            }
         stored_config: dict[str, Any] = {"url": merged.url, "library_ids": merged.library_ids}
         if merged.server_version:
             stored_config["server_version"] = merged.server_version
@@ -348,6 +549,12 @@ async def save_jellyfin(
             # Absent rather than JSON null: "nobody has probed" is the absence of a verdict, and
             # an explicit null would have to be told from a stored `false` by every reader.
             stored_config["server_supported"] = merged.server_supported
+        if merged.delta_watermark is not None:
+            # Absent rather than null, for the reason one line up: "never polled" is the absence
+            # of an instant, and `delta_since` is where that absence becomes a floor.
+            stored_config["delta_watermark"] = (
+                merged.delta_watermark.astimezone(UTC).isoformat()
+            )
         if lost and not moved and secret is None:
             # Correcting the URL on an install whose DEK will not open. There is no new secret to
             # seal and the stored one could not be read, so writing NULL over it would destroy a
@@ -372,10 +579,52 @@ async def save_jellyfin(
         return merged
 
 
+# The migration whose `applied_at` is the instant this install gained §7.2's fallback, spelled the
+# way `db/migrate.py` keys `schema_migration`: the file's stem (decision 412).
+_FALLBACK_MIGRATION = "0025_jellyfin_intake"
+
+
+async def delta_since(conn: asyncpg.Connection, cfg: JellyfinConfig) -> datetime:
+    """The instant §7.2's delta poll reads from: the stored watermark, or -- the first time --
+    the instant this install gained the poll at all (decisions 366 and 412).
+
+    Never epoch, and that is where this function started. The poll reads every row the server
+    SAVED after this instant (decision 409), so an epoch floor selects the household's entire
+    corpus on the very first poll and files an acquisition task for every title it already owns.
+
+    AND NOT THE INSTALL'S OWN CREATION INSTANT EITHER, which is what decision 366 wrote and what
+    this function returned until review cycle 3 measured the install it did not describe. Every
+    install that exists meets M5.2 as an UPGRADE, and there `min(applied_at)` is when 0001 ran --
+    months before this milestone -- so the first poll filed a task for every title the household
+    had added since installing the app, each already resolved by M4.11's sweep, and every genuine
+    add waited behind them. The floor is 0025's own `applied_at`: on a fresh install one migration
+    run from `min(applied_at)`, on an upgrade the upgrade itself. What the household added before
+    it is the full sweep's unmatched report's to hand on (decision 370), and stage 1 closes any
+    re-offer of a title already placed without walking it (decision 411) -- this docstring used
+    to name that exit before it existed. [M5.2 review cycle 3: M52-C3-STATE-02]
+
+    Read here rather than carried on the config because it is a fact about the DATABASE and not
+    about the connector: a caller with a config has not necessarily got a fresh row, and
+    `load_jellyfin` is on the path of six routes that have no use for this query at all.
+    """
+    if cfg.delta_watermark is not None:
+        return cfg.delta_watermark
+    gained = await conn.fetchval(
+        "SELECT coalesce((SELECT applied_at FROM schema_migration WHERE version = $1),"
+        "                (SELECT min(applied_at) FROM schema_migration))",
+        _FALLBACK_MIGRATION,
+    )
+    # A database with no applied migration has no `connector_config` table to have got here
+    # through, and one without 0025 has no intake table either, so neither arm can be empty in
+    # practice; if both ever were, now is the only floor that still cannot enqueue a corpus.
+    return gained or datetime.now(UTC)
+
+
 __all__ = [
     "JELLYFIN",
     "SECRETS_UNREADABLE_REASON",
     "JellyfinConfig",
+    "delta_since",
     "env_seeds",
     "make_client",
     "load_jellyfin",

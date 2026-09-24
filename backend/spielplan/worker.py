@@ -774,6 +774,82 @@ async def _acquisition_drain() -> dict[str, object] | None:
         return detail
 
 
+async def _jellyfin_delta_poll() -> dict[str, object] | None:
+    """§7.2's fallback intake, the fifteen-minute delta poll (decision 409), driven.
+
+    `intake.poll_delta` is the whole body - the watermark, the scoped read, the enqueues and the
+    watermark again. What this frame decides is the one question a domain function cannot: whether
+    there is a server this process is allowed to ask at all.
+
+    A CONNECTOR THIS HOUSEHOLD HAS NOT SET UP IS NOT A FAILURE, and `make_client` is one predicate
+    over the two states that produce it. Nothing configured is §3.1's legal half-configured boot;
+    configured-but-unreadable is a SECRETS_KEY that no longer opens the row, which `load_jellyfin`
+    degrades to a config whose `configured` is False and whose `secrets_unreadable` is True. One
+    check for two states is right HERE because the answer is the same - there is no server to ask
+    - while which of the two it is stays said where it can be acted on: `_report_secret_custody`
+    at boot, and §6.6's connector card. A job that raised instead would put a traceback in the log
+    every `RETRY_AFTER` on an install whose owner has simply not connected Jellyfin yet, and §6.6
+    names that log as the operator's data.
+
+    A FAILED READ IS ALLOWED OUT OF HERE, unlike both sibling Jellyfin jobs above. Theirs is
+    per-user work where a partial sweep is still worth recording, so they note the outage and
+    return a report; this poll is one read and one watermark, and `poll_delta` refuses to advance
+    the watermark on a read that did not complete. So a raised poll IS the account of a poll that
+    found nothing: `_tick` records it with its reason and re-arms it at `RETRY_AFTER`, and nothing
+    is lost, because the next poll asks about the same instants. Swallowed, a Jellyfin outage
+    would look exactly like a healthy quiet household - the shape M4.11 finding 3 records one
+    connector over, and the reason §7.2 calls this path the fallback rather than the trigger.
+
+    THE CONFIG IS READ EVERY POLL AND NEVER HELD. `poll_delta` writes the watermark back through
+    `registry.save_jellyfin`, so a `cfg` cached across calls would re-poll from the same floor for
+    ever; the same read is what picks up a library pick the admin changed between ticks, which is
+    the boundary decision 364 makes this path obey.
+    """
+    from spielplan.acquire import intake
+    from spielplan.connectors import registry
+
+    async with pool.acquire() as conn:
+        cfg = await registry.load_jellyfin(conn)
+        client = registry.make_client(cfg)
+        if client is None:
+            return None
+        return (await intake.poll_delta(conn, client, cfg)).as_dict()
+
+
+async def _jellyfin_intake_sweep() -> dict[str, object] | None:
+    """§7.2's "Debounce 10 min", driven: the ripe half of `jellyfin_intake` becomes tasks.
+
+    The webhook's synchronous work is one row and no decision (plan A4, decision 365), so this is
+    where an `ItemAdded` becomes work - and where the ten minutes actually end, since the window
+    is a `not_before` written at insert and nothing in the request path ever reads it back. §5.3
+    files every job as durable and that is the whole reason the pending set is a table: a burst of
+    a season delivered at minute four survives a `docker compose up` at minute five, which a dict
+    in this process would not.
+
+    A JELLYFIN OUTAGE DOES NOT RAISE OUT OF HERE, and the asymmetry with the poll above is the
+    shape of the two jobs rather than an inconsistency. That one has a single read whose failure
+    is the whole poll; this one decides key by key, so `sweep_pending` catches `JellyfinError`
+    itself, leaves the undecided keys `pending` and reports the reason in `blocked` - which keeps
+    the keys it HAD decided decided, and keeps "the server could not be asked" out of the column
+    that says "the admin did not want this library" (decision 364).
+
+    NONE FOR A SWEEP WITH NOTHING RIPE, the way `_acquisition_drain` above returns none for a tick
+    that leased nothing. `job_run` still records that this job ran; what `detail` is for is the
+    sweep that did something, and a household with the Webhook plugin absent would otherwise write
+    288 identical empty reports a day into the table §6.6's card reads.
+    """
+    from spielplan.acquire import intake
+    from spielplan.connectors import registry
+
+    async with pool.acquire() as conn:
+        cfg = await registry.load_jellyfin(conn)
+        client = registry.make_client(cfg)
+        if client is None:
+            return None
+        report = await intake.sweep_pending(conn, client, cfg)
+        return report.as_dict() if report.ripe else None
+
+
 # --- §5.3's ninth row: the bundle import, off the request path --------------------------------
 #
 # The name this loop claims work under, and the name `api/artifacts.py` enqueues it under. The
@@ -1216,6 +1292,73 @@ JOBS: tuple[Job, ...] = (
         timeout=600),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,
         timeout=55),
+    # §7.2's two intake paths, beside the connector's other two rows rather than at the end, and
+    # absent from §5.3's table for the reason `acquisition-drain` above is absent from it: that
+    # table lists what the pipeline COSTS - the Cold Tower's forward pass and the DNA projection -
+    # and §7.2 is where the thing that feeds it is written down. M5.2's plan files this as an
+    # exception it may take now that M5.1 has landed, on the condition that the entry follows
+    # that row's budget convention (plan C4, decision 368). Below is that convention, followed.
+    #
+    # ONE OBSERVABLE, TWO FEEDERS. The webhook writes an intake row and decides nothing (plan A4,
+    # decision 365), so `jellyfin-intake-sweep` is where an `ItemAdded` becomes work;
+    # `jellyfin-delta-poll` is the same work for a household whose Webhook plugin is absent. Both
+    # file into the queue `acquisition-drain` leases from, and neither writes an ownership column
+    # at all: decision 362 leaves `is_owned = false` with the full sweep above, because a
+    # `DateCreated >` read is an add detector by construction and cannot tell a library that
+    # shrank from a page-set that was truncated.
+    #
+    # WHAT AN ADD ACTUALLY WAITS FOR is three intervals and not one. A fixed ten-minute window
+    # closes (`intake.DEBOUNCE_SECONDS`), a sweep at 300 s finds the key ripe inside five more,
+    # and `acquisition-drain` at 1800 s leases it - so 10 to 15 minutes to a filed task, which is
+    # exactly what §7.2's "Debounce 10 min" promises a household, and about a drain interval past
+    # that to a title. `acquisition-drain`'s own comment already reads "this queue's feeder is the
+    # 15-minute Jellyfin sweep"; these two rows are what makes that sentence literally true.
+    #
+    # AND THE SWEEP IS 300 s AND NOT 60. A minutely row would move
+    # `len([j for j in JOBS if j.every == 60])`, and four measured sentences in this file are
+    # sized on that count - `JOB_RUN_KEEP_DAYS`, the two 55 s budgets and `DURATION_LOG_THRESHOLD`
+    # - with a rows-a-day figure that is the count times 1,440. `test_worker_schedule.py` holds
+    # all four against the registry, so a minutely row here rewrites four arithmetic sentences
+    # this milestone was not asked to touch, to buy four minutes off a fifteen-minute promise.
+    #
+    # THE POLL'S BUDGET, against the rule at the head of this table. 300 s is a third of its own
+    # 900 s interval, and the fraction is chosen against the OTHER 900 s row rather than against
+    # this one alone: `jellyfin-seen-sync` holds 600 s for a full library read, both are due in
+    # the same tick, and this loop runs them one after another.
+    #
+    # WHY A THIRD IS AFFORDABLE HERE AND TWO THIRDS ARE NEEDED THERE: an abandonment costs
+    # different things. `poll_delta` advances the watermark only on a read that completed, so an
+    # attempt cancelled at this budget re-asks the identical question fifteen minutes later and
+    # the queue's `UNIQUE (kind, key)` absorbs whatever it did enqueue before it was cut. The
+    # sweep above cannot be cut and repeated for free - `seen._falsify_ownership` calls itself the
+    # most destructive statement in its module and its gate is a library read that COMPLETED.
+    #
+    # The worst case this pays for is not a quiet fifteen minutes. The poll reads what the server
+    # SAVED (decision 409), so a re-scan or a metadata refresh re-saves titles the household has had
+    # for years and the "delta" is the whole library: the same read `jellyfin-seen-sync` makes
+    # anyway, plus one `ON CONFLICT DO NOTHING` insert a title. A re-scan that outruns this budget is a poll
+    # abandoned, logged and repeated, and never an add nobody looks for again.
+    Job("jellyfin-delta-poll", "M5.2", "15 min", "seconds of one filtered read",
+        _jellyfin_delta_poll, every=900, timeout=300),
+    # THE SWEEP'S BUDGET. 120 s is 40% of its own 300 s interval, inside the rule at the head of
+    # this table, and the same ceiling `acquisition-drain` takes, which is the job it feeds: the
+    # two halves of one add's journey are bounded alike. It is NOT a bound under §7.3's minute.
+    # This loop runs due jobs one after another, so either row may hold it for its whole two
+    # minutes, and that is time the playback poll does not get -- the drain's own paragraph says
+    # as much of its share, and this one used to promise the opposite over the same `timeout=120`.
+    # [M5.2 review cycle 3: M52-C3-PAPER-08] The work is one server read per RIPE KEY - a burst of
+    # twelve episodes of one series is ONE key, which is the whole of decision 363 - plus an insert
+    # each, and a read that fails hands the remaining keys back to `pending` instead of deciding
+    # them.
+    #
+    # AN ABANDONMENT HERE IS FREE FOR THE POLL'S REASON, and more plainly: every row the attempt
+    # had not decided is still `pending`, its window has already closed, and the next sweep five
+    # minutes later reads the same set. So the number is sized to protect the loop rather than to
+    # finish any particular burst - a household whose first library scan arrives as ten thousand
+    # webhook events spends several sweeps on it, which is ten thousand adds reaching the queue a
+    # few minutes later than one add would. [§7.2; plan C4, decisions 363, 364, 368]
+    Job("jellyfin-intake-sweep", "M5.2", "webhook + 10 min debounce", "ms + one read per title",
+        _jellyfin_intake_sweep, every=300, timeout=120),
     Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
     # §5.3's ninth row, which this table carried with no `run` and a pointer at the module that
     # ran it inside `POST /api/admin/bundle/import` instead. M4.14 moved the work here and the

@@ -480,7 +480,7 @@ async def test_an_item_with_no_provider_id_parks_at_stage_one_and_mints_nothing(
     is the wrong match the resolver already refuses".
 
     Measured on the corpus this resolves against: 2,438 titles share `(kind, lower(name))` and 573
-    groups still collide with the year applied (`connectors/resolve.py:155-160`), so a
+    groups still collide with the year applied (`connectors/resolve.py:189-194`), so a
     name-and-year mint is a silent wrong write into a spine decision 162 makes permanent.
 
     NO BOARD ROW, and that is the point rather than an omission. `acquisition_job`'s primary key is
@@ -1762,7 +1762,7 @@ async def test_a_mint_for_an_item_jellyfin_never_showed_us_claims_no_ownership(d
     §8.4's flywheel can enqueue work for something Jellyfin has never shown us", and an item with
     no `Id` mints `jellyfin_id = NULL`. `sync/seen._falsify_ownership` is the ONE statement in the
     codebase that can un-own a title and it is scoped `WHERE is_owned AND jellyfin_id IS NOT NULL`
-    (`seen.py:1145`), so no sweep can ever see that row: under decision 162 the household's spine
+    (`seen.py:1168-1169`), so no sweep can ever see that row: under decision 162 the household's spine
     would permanently claim a film it does not have, on the flag Home's shelf, §6.2's candidate
     pool and Tonight's pool all filter.
 
@@ -2558,10 +2558,10 @@ async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_min
     parks `FILM_IN_FLIGHT` with a deadline of now, comes back on the next tick, and mints beside
     the row it was waiting for.
 
-    `connectors/resolve.py:155-160` measures the trigger on the corpus this resolves against -
+    `connectors/resolve.py:189-194` measures the trigger on the corpus this resolves against -
     2,438 titles share `(kind, lower(name))` and 573 groups still collide with the year applied -
     and `pipeline.enqueue_item`'s documented input is `ResolveReport.unmatched`, which
-    `resolve.py:198` appends to on exactly that refusal. The queue's input is enriched for this
+    `resolve.py:233` appends to on exactly that refusal. The queue's input is enriched for this
     state by construction.
 
     THE CONTROL IS THE ARM WITH ONE COLLIDER, and it is what says this is a refusal to guess
@@ -2625,7 +2625,7 @@ async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_min
 async def test_an_original_title_the_resolver_never_probes_does_not_mint_a_second_row(db):
     """The resolver's fourth arm is DIRECTIONAL, and `_mint` writes the column it never probes.
 
-    `resolve.py:161-179` binds the ITEM's `Name` and compares it against the candidate's `name`,
+    `resolve.py:195-213` binds the ITEM's `Name` and compares it against the candidate's `name`,
     `original_name` and aliases; the item's `OriginalTitle` is never a probe. `_mint` writes
     `original_name` from exactly that field (`stages.py`'s INSERT), so the arm answers in one
     direction and not the other - and which direction a household gets is decided by which of its

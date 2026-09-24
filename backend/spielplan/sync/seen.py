@@ -1004,9 +1004,15 @@ async def sync_all(
     # client, which is what lets the one write refuse by name instead of spending a 404 per tap.
     client = client or make_client(cfg)
     users = await linked_users(conn, cfg)
-    if not users:
-        report.skipped_no_link = True
-        return report
+    # NOT A RETURN, which it was, and which put §7.2's ownership pass behind a precondition §3.3
+    # makes optional. The library read below uses the admin key and no member at all, so an
+    # install that has saved the connector and linked nobody still owes the household
+    # `upsert_items`, `prune_missing_items` and `_falsify_ownership` -- and M5.2's intake jobs gate
+    # on `make_client` alone, so that install files acquisition tasks whose minted titles are owned
+    # from the item's own `Id` while nothing could ever falsify them. The pass now runs for it,
+    # gated exactly as it is for everyone; only the per-member loop needs a member, and the report
+    # still says that none was swept. [decision 413; M5.2 review cycle 3: m52-c3-own-04]
+    report.skipped_no_link = not users
 
     # §5.3's 15-minute job and §6.6's "sync now" must not sweep the same household against two
     # different library snapshots — the second sweep's adoptions would be decided from a page-set
@@ -1135,6 +1141,30 @@ async def _falsify_ownership(
 
     `jellyfin_id IS NOT NULL` keeps the statement to titles Jellyfin ever carried: the importer's
     own `is_owned` for a title this server never had is not this sweep's to contradict.
+
+    AND §7.2'S OTHER TWO INTAKE PATHS ARE NOT CALLERS, AND MAY NOT BECOME ONE (decision 362).
+    The bullet this statement discharges makes both of M5.2's paths responsible for removals as
+    well, and neither can discharge it. A read filtered on `DateCreated > last_sync` is an ADD
+    DETECTOR BY CONSTRUCTION: it observes an arrival and can never observe an absence, so the set
+    it returns is a partial library by definition -- the truncated page above, with the truncation
+    designed in rather than suffered. Fed one, this statement would un-own everything the window
+    did not happen to contain, and a falsifier gated on a delta read is strictly weaker than the
+    two gates this one already has. The webhook is weaker still: one `ItemAdded` says nothing
+    whatever about what the library no longer holds. So neither path writes the ownership column
+    at all, and the completed sweep stays the only path that can falsify it.
+
+    AND "THE COMPLETED SWEEP" IS A SWEEP THAT RAN, which M4.11 did not write down and review cycle
+    2 wrote down and deferred. `sync_all` returned at `skipped_no_link` whenever no active
+    `app_user` carried a `jellyfin_user_id`, and §3.3 makes that link OPTIONAL -- so an install
+    between Save and its first mapping, or one that unlinked its last member, never reached this
+    statement, while M5.2's intake jobs, gated on `make_client` alone, filed tasks whose minted
+    titles stage 1 owns from the item's own `Id`. The deferral handed the repair to "the amendment
+    decision 362 hands §7.2's third bullet", which says only that the full sweep alone falsifies
+    and nothing about the gate in front of it -- a spec sentence cannot reorder a function -- and
+    it set that repair against "a second caller", which the repair never needed. Decision 413 is
+    the repair: the library pass runs whether or not a member is linked, reaching this statement
+    through the one caller it always had, behind both of its gates. [review cycle 2:
+    m52-rev2-own-01; review cycle 3: m52-c3-own-04]
     """
     if not resolved.matched_title_ids:
         log.warning("not falsifying ownership: this sweep resolved no titles at all")

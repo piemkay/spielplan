@@ -322,6 +322,23 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # spine's three tables. Its one migration is 0024_acquisition.sql.
 # See docs/milestones/M5.1-plan.md and ROADMAP-M5.md.
 #
+# M5.2 is second because it is the first lane that can only exist once M5.1's seams do:
+# both of section 7.2's intake paths end in one enqueue, and until the durable (kind,key)
+# queue and the empty `/events` router were in the tree a trigger milestone would have had
+# to invent a second job mechanism to fire into. It holds nothing structural - M5.1 keeps
+# `current_milestone`, and M5.2 appends its rows without raising the scalar, because a
+# scalar raised in a lane that does not hold it reddens every other lane at once. What it
+# builds is what section 7.2 promises and the tree has never had: the token-authed webhook,
+# a durable ten-minute fixed-window debounce keyed on the resolved title, the 15-minute
+# `DateCreated > last_sync` delta poll behind it, and section 6.6's library pick given its
+# first reader. Decisions 362-371 record the calls it needed - 362 keeps ownership
+# falsification with the full sweep alone, because a `DateCreated >` read is an add
+# detector that can never observe a removal, and 363 settles the debounce section 7.2
+# leaves open - while 404-407 and 416 are its first two review cycles', 410-415 and 417
+# its third's and 408, 409 and 418 its fourth's, the numbers split because three lanes
+# wrote the register at once; its one migration is 0025_jellyfin_intake.sql.
+# See docs/milestones/M5.2-plan.md.
+#
 # M5.4 opened second, in one wave with M5.2 and M5.3, and it adds no name to the list: M5.1 landed all seven
 # positionally in one commit, so what this entry owes a reader is why "M5.4" sits where it already
 # does and what is now behind it. It sits BEFORE "M5.5" because stage 7 is the trust boundary that
@@ -1036,7 +1053,18 @@ def _register_entries() -> dict[int, str]:
     entries: dict[int, str] = {}
     for index, head in enumerate(heads):
         end = heads[index + 1].start() if index + 1 < len(heads) else len(body)
-        entries[int(head.group(1))] = body[head.start():end]
+        number = int(head.group(1))
+        # A number headed twice is two normative rules under one heading, and keying by number
+        # kept the later one in silence -- every citation of it then resolving against a rule it
+        # never meant, with every reader green. Refused here, where every reader passes.
+        # [M5.2 review cycle 3: M52-C3-PAPER-01, M52-C3-STATE-08]
+        assert number not in entries, (
+            f"the register heads `### {number}.` twice: "
+            f"{entries.get(number, '').splitlines()[0][:90]!r} and "
+            f"{body[head.start():end].splitlines()[0][:90]!r}. Renumber the later one into its "
+            "own milestone's range and say so in its block; do not let one hide the other."
+        )
+        entries[number] = body[head.start():end]
     return entries
 
 
@@ -3082,7 +3110,7 @@ _PUBLISHED_RANGE = re.compile(r"\b(\d+)-(\d+)\b")
 _RANGE_RUNS_TO = re.compile(r"the milestone's range runs to (\d+)")
 
 
-def _current_milestone_blocks() -> list[tuple[str, str, list[int]]]:
+def _current_milestone_blocks(milestone: str = CURRENT) -> list[tuple[str, str, list[int]]]:
     """Every `## Decisions taken` block the register heads for `current_milestone`.
 
     One tuple per block: the header, the preamble above its first decision, and the numbers under
@@ -3091,13 +3119,14 @@ def _current_milestone_blocks() -> list[tuple[str, str, list[int]]]:
     and neither is repaired here: 2026-09-09 opens "Seven" over twelve decisions and M4.11's opens
     "Three" over four, both with no sentence disclosing the rest. Another milestone's record is
     not this one's to rewrite, and a guard that went red on it would be reporting history rather
-    than the diff in front of it.
+    than the diff in front of it. `milestone` names a lane building beside it, for the one guard
+    below that reads those too.
     """
     body = REGISTER.read_text(encoding="utf-8")
     heads = list(_REGISTER_BLOCK.finditer(body))
     # `M4` must not match the header that says `M4.15`, so the milestone name is read with a
     # boundary of its own: `\b` counts the dot as one and would match the longer name inside it.
-    scoped = re.compile(re.escape(CURRENT) + r"(?![\d.])")
+    scoped = re.compile(re.escape(milestone) + r"(?![\d.])")
     out = []
     for i, head in enumerate(heads):
         if not scoped.search(head.group(0)):
@@ -3202,6 +3231,31 @@ def test_the_register_block_opens_with_the_number_of_decisions_it_holds():
         "the register publishes a decision count its own block has overtaken. Restate the count, "
         "and disclose the later sittings inside the sentence the way the 2026-09-10 block does "
         "for its eleventh:\n  " + "\n  ".join(drift)
+    )
+
+
+def test_a_milestone_building_beside_the_current_one_counts_its_blocks_too():
+    """The rule above, for the blocks a parallel wave writes while `current_milestone` stays put.
+
+    Scoped to `current_milestone` because the block in flight is the one that milestone writes --
+    and in this wave it is not: M5.1 holds the scalar, M5.2, M5.3 and M5.4 build beside it, and
+    none of them may raise it. So a lane's own blocks were read by nothing. M5.2's first review
+    cycle opened `### 392.` with no count at all over five decisions, two of them taken by its
+    SECOND cycle under the first cycle's heading, and both register guards were green only because
+    they looked at M5.1. Every milestone after the current one is still being written; the ones
+    before it are history this rule leaves alone for the reason `_current_milestone_blocks` gives.
+    [M5.2 review cycle 3: M52-C3-PAPER-05]
+    """
+    drift = []
+    for milestone in MILESTONES[MILESTONES.index(CURRENT) + 1:]:
+        for header, preamble, numbers in _current_milestone_blocks(milestone):
+            first = preamble.split()[0].strip(",.") if preamble.split() else ""
+            if _spelled(first) != len(numbers):
+                drift.append(f"{header}: opens {first!r}, holds {len(numbers)} decisions")
+    assert not drift, (
+        "a block written beside the current milestone does not open with the count it holds. Open "
+        "it the way every dated block does, and give a later cycle a heading of its own rather "
+        "than appending under an earlier one's:\n  " + "\n  ".join(drift)
     )
 
 
@@ -3319,6 +3373,34 @@ def test_the_allocation_reader_reads_the_owner_cell_and_not_the_question():
     assert 321 not in read
     assert read[332] == frozenset({"M5.1", "M5.2"})
     assert read[346] == frozenset({"M5.3"})
+
+
+def test_a_number_headed_twice_is_refused_rather_than_kept_in_silence(tmp_path, monkeypatch):
+    """The collision the roadmap guard above cannot see, made loud at the one place it lands.
+
+    That guard holds a number against `ROADMAP-M5.md`, which allocates M5's QUESTIONS. This wave's
+    three lanes write this register at once against ranges the owner handed out in an instruction,
+    and nothing in the tree records those: M5.2's first review cycle headed `### 392.` inside
+    M5.4's range and every guard stayed green, measured over a synthetic merge -- the heading
+    count rises by one, `_is_a_decision` admits 392 without opening a file, and the citations of
+    it in `api/admin.py`, `connectors/registry.py` and three tests resolved against the sibling's
+    rule. A lane cannot see its siblings, so the only instant the collision exists in one tree is
+    the merge; `_register_entries` is what every reader of the register passes through, so that is
+    where the second heading is refused. [M5.2 review cycle 3: M52-C3-PAPER-01, M52-C3-STATE-08]
+    """
+    merged = tmp_path / "spec-v2.2-proposals.md"
+    merged.write_text(
+        "## Decisions taken (owner, 2026-09-19, M5.2 review cycle 1)\n\n"
+        "### 392. The webhook token is minted by the save an admin performed\n\nwhy\n\n"
+        "## Decisions taken (owner, 2026-09-19, as M5.4 opened)\n\n"
+        "### 392. A sibling lane's rule\n\nwhy\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "REGISTER", merged)
+    with pytest.raises(AssertionError, match=r"### 392\..*twice"):
+        _register_entries.__wrapped__()
+    monkeypatch.undo()
+    assert _register_entries(), "the live register heads no numbered entry at all"
 
 
 # --- M5.3 review cycle 1: a number left unspent is a hole, and a hole has to be named ------------

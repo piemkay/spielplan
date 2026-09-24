@@ -3,7 +3,9 @@ Spec v2.1 §6.6 (Connectors, Users, System), §3.1, §3.3, §7.
 
 §6.6's Connectors card: "Jellyfin (URL, API key, library pick, user-mapping table, test
 button, sync now, webhook status)". M1 ships all of it but the library pick and the webhook —
-§7.2's webhook belongs to the acquisition trigger, which is M5.
+§7.2's webhook belongs to the acquisition trigger, which is M5. M5.2 adds the API half of both
+and none of their UI: the pick gains a writer and a list to pick from (decision 364), and the
+webhook token gains the single appearance decision 332 allows it. M5.7 renders them.
 
 §6.6's Users card is "the household's whole user management, and the **only** place accounts
 are made (decision 166)". The routes under `/api/admin/users` below are that card's row editor:
@@ -36,7 +38,7 @@ from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from spielplan.api.deps import DB, AdminUser, write_txn
 from spielplan.connectors import registry
-from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError
+from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, canonical_id
 from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
 from spielplan.core import auth, secrets, webauthn
 from spielplan.core.config import settings
@@ -46,22 +48,6 @@ from spielplan.sync import playback, seen
 log = logging.getLogger("spielplan.api.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-class JellyfinSettings(BaseModel):
-    # Empty means "keep the stored one" for both fields: the form shows the key as a mask and
-    # a partial save must never blank the half it did not send.
-    url: str = Field(default="", max_length=512)
-    api_key: str = ""
-
-
-class LinkRequest(BaseModel):
-    jellyfin_user_id: str = Field(min_length=1, max_length=64)
-    # §7.3's least-privilege write path costs "one-time password entry per linked user".
-    # Optional: a link without a token still drives the P(seen) prior and attribution, it just
-    # cannot write Played state until someone completes it.
-    jellyfin_username: str | None = None
-    jellyfin_password: str | None = None
 
 
 def _no_control_characters(value: str) -> str:
@@ -74,6 +60,81 @@ def _no_control_characters(value: str) -> str:
     if any(unicodedata.category(ch) == "Cc" for ch in value):
         raise ValueError("must not contain control characters")
     return value
+
+
+# Jellyfin's own ids are 32-character GUIDs and a household install has a handful of libraries,
+# so both bounds sit far above anything §6.6's pick can produce. They exist because decision 364
+# makes this value the acquisition boundary: it is stored as jsonb on the connector row and read
+# on every intake event, and the only caller that would not stop at the number of folders a server
+# actually has is a crafted body. The place to answer for one is the edge, as a 422 -- the same
+# argument `_no_control_characters` makes above, which is why that validator is now applied here
+# rather than only cited: a crafted body's NUL is a character jsonb holds nowhere, so the save
+# reached `db/pool.py`'s `json.dumps` codec, raised, and answered 500 `database error` over a
+# pick this line could have named. Three bounds and only two of them enforced is the shape that
+# comment had for a whole milestone. [review cycle 2: m52-c2-libid-01, m52-c2-lib-03]
+#
+# AND THREE VALUES A REAL SERVER READS AS SOMETHING ELSE WERE STORED VERBATIM. Whitespace reaches
+# `ParentId` as a blank that ASP.NET binds to a null `Guid?` -- a read of the WHOLE SERVER, the
+# boundary silently widened to every library the admin deselected, which is decision 364's harm
+# exactly -- so it is stripped, and a blank is then the empty id refused above. The nil GUID names
+# no folder and is answered 400 on every scoped read. And one library spelled dashed, braced or in
+# upper case (Jellyfin accepts all three) was a separate scope per spelling and an id no
+# comparison against `/Library/MediaFolders`'s own undashed spelling could match, so a GUID is
+# stored as the server spells it and the list keeps each library once. An id that is not a GUID
+# is not refused, for decision 415's reason: the test double's are not, and a library deleted
+# after the pick cannot be refused at save time anyway -- that one is decision 410's.
+# [review cycle 3: M52-C3-LIB-04]
+
+
+def _a_folder_jellyfin_could_name(value: str) -> str:
+    canonical = canonical_id(value)
+    if canonical == "0" * 32:
+        raise ValueError("the nil GUID names no library")
+    return canonical
+
+
+def _each_library_once(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(ids))
+
+
+LibraryId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    AfterValidator(_no_control_characters),
+    AfterValidator(_a_folder_jellyfin_could_name),
+]
+
+
+class JellyfinSettings(BaseModel):
+    # Empty means "keep the stored one" for both fields: the form shows the key as a mask and
+    # a partial save must never blank the half it did not send.
+    url: str = Field(default="", max_length=512)
+    api_key: str = ""
+    # §6.6's "library pick", which decision 364 turns from a stored value nothing ever read into
+    # the boundary §7.2's intake paths are scoped by. Nullable rather than empty-by-default, alone
+    # among the fields here, because absent and empty are different answers and both have to be
+    # sayable: absent is the partial save above ("keep the stored pick"), while an explicit `[]` is
+    # an admin deselecting the last library, which decision 364 reads as "the whole server".
+    # Collapsing the two the way `url` and `api_key` collapse theirs would make the second gesture
+    # unperformable -- a pick could be narrowed for ever and never widened again.
+    library_ids: Annotated[
+        list[LibraryId], Field(max_length=64), AfterValidator(_each_library_once)
+    ] | None = None
+    # §7.2's webhook token is minted only when the caller ASKS, because the only client of this
+    # route that ships -- §6.6's connectors page -- throws the response away, and decision 332
+    # gives the value one appearance: minted on its Save, the token was sealed, shown to nobody and
+    # unrecoverable, and every real delivery was 401 for the life of the install. The page never
+    # sends this; a client that renders the reveal does (decision 418).
+    mint_webhook_token: bool = False
+
+
+class LinkRequest(BaseModel):
+    jellyfin_user_id: str = Field(min_length=1, max_length=64)
+    # §7.3's least-privilege write path costs "one-time password entry per linked user".
+    # Optional: a link without a token still drives the P(seen) prior and attribution, it just
+    # cannot write Played state until someone completes it.
+    jellyfin_username: str | None = None
+    jellyfin_password: str | None = None
 
 
 # Trimmed at the edge because the unique index is on `lower(name)` with no trim
@@ -170,6 +231,13 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "library_ids": cfg.library_ids,
         "linked_users": len(cfg.user_tokens),
         "secrets_unreadable": cfg.secrets_unreadable,
+        # §7.2's webhook token, reported exactly the way `has_api_key` reports the API key and for
+        # the same reason one paragraph up in this module's docstring: whoever holds this value can
+        # file acquisition work in the household's name (§14.3), so a GET that returned it would
+        # turn every admin session into a copy of it. Decision 332 gives the value one appearance,
+        # on the save that mints it, and the card's job here is only to say that the operator has
+        # something to paste into the Webhook plugin -- or that nobody has minted one yet.
+        "has_webhook_token": bool(cfg.webhook_token),
         # §7.1's pin as this install last measured it, so the card can say that Played writes are
         # refused without the admin pressing Test first — the state a 10.8 server is in every day,
         # not only in the minute after a probe. `null` is "nobody has probed", which must stay
@@ -182,13 +250,54 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
 @router.put("/connectors/jellyfin")
 async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[str, object]:
     """§6.6's Save. It also probes, because a save is the one moment the credentials are known to
-    be fresh and §7.1's verdict is what gates every later Played write (`_store_probed_version`)."""
-    cfg = await save_jellyfin(conn, url=body.url or None, api_key=body.api_key or None)
+    be fresh and §7.1's verdict is what gates every later Played write (`_store_probed_version`).
+
+    It is also the one response in this app that ever carries §7.2's webhook token, and the only
+    caller that may ask for one to be minted (decision 416). Decision 332 gives the value one
+    appearance, so the gesture that mints it has to be one somebody is watching: every other
+    caller of `save_jellyfin` is a background job, and a token minted there is sealed into the
+    database and shown to nobody, for ever. And a Save is not such a gesture either, because the
+    page that sends it drops the answer -- so this route asks only when the body does
+    (`mint_webhook_token`, decision 418), and the merge decides whether there was anything to mint.
+    [M5.2 review cycle 4: M52-C4-TOKEN-01]
+
+    `save_jellyfin` mints deep inside the merge it serialises, so the only way to tell the save
+    that minted one from the hundred that carry it forward is to read what was stored a moment
+    earlier and compare. That read is deliberately outside the merge's lock: holding the row
+    across `_store_probed_version` would serialise every save of this connector behind a network
+    call to the media server. The worst a race can now do is show two simultaneous first saves
+    the same freshly minted value -- one admin being told one token twice rather than a
+    disclosure to anybody else -- which is true because the merge takes the connector row before
+    it reads it, and was not while the first save had no row to lock.
+    """
+    before = await load_jellyfin(conn)
+    cfg = await save_jellyfin(
+        conn,
+        url=body.url or None,
+        api_key=body.api_key or None,
+        library_ids=body.library_ids,
+        mint_webhook_token=body.mint_webhook_token,
+    )
     cfg = await _store_probed_version(conn, cfg)
     return {
         "url": cfg.url,
         "has_api_key": bool(cfg.api_key),
         "configured": cfg.configured,
+        # Echoed because M5.2 is the milestone in which this field starts meaning something, and
+        # the merge's two answers are indistinguishable from the caller's side otherwise: `None`
+        # keeps the stored pick and `[]` widens the boundary to the whole server (decision 364).
+        # A save whose whole content was the second of those would come back looking like a save
+        # that had been ignored.
+        "library_ids": cfg.library_ids,
+        # `null` on every save but the minting one, rather than an absent key. §6.6's card shows a
+        # one-time reveal, and a client that had to tell "this save minted a token" from "this
+        # response does not mention tokens" would get it wrong in the direction that leaves the
+        # value on screen for ever. The GET above reports only whether one exists (§14.3).
+        "webhook_token": (
+            cfg.webhook_token
+            if cfg.webhook_token and cfg.webhook_token != before.webhook_token
+            else None
+        ),
         "server_version": cfg.server_version,
         "server_supported": cfg.server_supported,
     }
@@ -225,6 +334,42 @@ async def jellyfin_users(_: AdminUser, conn: DB) -> list[dict[str, object]]:
     except JellyfinError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Jellyfin: {exc}") from exc
     return [{"id": u.id, "name": u.name, "is_admin": u.is_admin} for u in users]
+
+
+@router.get("/connectors/jellyfin/libraries")
+async def jellyfin_libraries(_: AdminUser, conn: DB) -> dict[str, object]:
+    """§6.6's "library pick", given something to pick from (decision 364).
+
+    The read exists because the pick does: decision 364 makes `library_ids` the boundary §7.2's
+    intake paths are scoped by, and a pick over folders nobody can see listed is a pick nobody can
+    make -- a connector method with no caller is the same defect as a stored field with no reader,
+    which is the one this milestone is repairing.
+
+    An envelope rather than the bare list `/connectors/jellyfin/users` answers with, because here
+    the empty list is a meaningful answer in its own right: decision 364 reads an empty pick as
+    "the whole server", so a card handed `[]` because Jellyfin was unreachable would be showing the
+    admin the shape of a deliberate choice. `ok: false` with the server's own words says which of
+    the two it is. Reported rather than raised, the way the test button above reports -- this is a
+    read an admin makes while repairing a connector, and a 502 takes the card down along with the
+    server it is trying to describe.
+    """
+    client = await _client(conn)
+    try:
+        folders = await client.libraries()
+    except JellyfinError as exc:
+        return {"ok": False, "error": str(exc), "status": exc.status, "libraries": []}
+    return {
+        "ok": True,
+        # The app's own spelling, as `/connectors/jellyfin/users` above also does rather than
+        # handing Jellyfin's `BaseItemDto` keys to the browser. A folder with no id is dropped
+        # instead of listed: the pick is stored as ids, so such a row could be tapped and never
+        # saved.
+        "libraries": [
+            {"id": str(folder["Id"]), "name": str(folder.get("Name") or "")}
+            for folder in folders
+            if folder.get("Id")
+        ],
+    }
 
 
 @router.get("/users")
@@ -673,6 +818,14 @@ JOB_NAMES: tuple[str, ...] = (
     "acquisition-drain",
     "jellyfin-seen-sync",
     "jellyfin-sessions-poll",
+    # M5.2 registered §7.2's two intake paths, and they are the drain's entry above read from the
+    # other end: the drain answers "is the thing that walks a new title running", and these two
+    # answer "is anything telling it there IS one". A stopped sweep and a stopped poll look, from
+    # Tonight, exactly like a household that has added nothing - and until M5.7 renders the
+    # connector card's webhook status, the newest `job_run` row for these two names is the only
+    # place an operator can see that §7.2's intake is alive at all. [M5.2; decisions 363, 368]
+    "jellyfin-delta-poll",
+    "jellyfin-intake-sweep",
     # M4.14 gave §5.3's ninth row a `run`, so the import is a job this loop fires and the card
     # answers for it like any other. Its own PHASE, and the report the Data tab renders while it
     # waits, stay on `GET /api/admin/bundle/state` - decision 182 put job HEALTH here and the

@@ -263,7 +263,7 @@ Two things happen on the way that are easy to miss:
 > M4.15   11/11  covered
 > M4.16   17/17  covered
 > M5.1    6/6   covered
-  M5.2    0/1   covered
+  M5.2    3/3   covered
   M5.3    6/6   covered
   M5.4    8/8   covered
   M5.5    0/2   covered
@@ -636,21 +636,22 @@ subject IS this map, so a row naming a test that did not exist yet would have be
 describing work it had not done, inside the one milestone written to stop records doing exactly
 that. THE RED LIST WAS THE TEST PLAN, and it closed by those tests being written — never by a
 waiver, never by renaming a registered test, never by lowering `current_milestone`. The names
-reach **156 ids in four pytest files and one e2e spec**, and the count includes the three
+reach **158 ids in four pytest files and one e2e spec**, and the count includes the three
 vitest ids decision 226 admits as supporting evidence beside a Playwright or backend test and
 never instead of one — they sit in the frontend's suite rather than in the five files the figure
 names, so an auditor reconciling the two subtracts them first. The series is published rather than
 left as a total to take on trust (decision 184): 20 ids in `test_layering_guards.py` for the
 two layering rules (two of them M5.1's review cycle 2, holding the routing note above
 `ANONYMOUS` to the tree it describes), 42 ids in `test_release_gate.py` for the release
-workflow, the executed-coverage gate and the harness's own fixture, 66 ids in `test_static_contracts.py` for
+workflow, the executed-coverage gate and the harness's own fixture, 67 ids in `test_static_contracts.py` for
 the documents this milestone rewrote (three of them M5.1's review cycle 3, holding this file's own
-prose to the registries it sizes, and two M5.4's review cycle 1, holding the release record's
-NOT BUILT rows to the coverage map and its opening paragraph to the table beneath it), 24 ids in
-`test_spec_coverage.py` for the rules the
+prose to the registries it sizes, one M5.2's review cycle 3, holding README's sittings total, and
+two M5.4's review cycle 1, holding the release record's NOT BUILT rows to the coverage map and its
+opening paragraph to the table beneath it), 25 ids in `test_spec_coverage.py` for the rules the
 instrument gained (four of them M5.1's review cycle 4, holding the register's numbering and
-the normative file's own decision citations, and one M5.3's review cycle 1, holding the register to
-naming every number it leaves unspent below the last one it heads), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
+the normative file's own decision citations, one M5.2's review cycle 3, refusing a number the
+register heads twice, and one M5.3's review cycle 1, holding the register to naming every number
+it leaves unspent below the last one it heads), and 1 id in `19-phone-shell.spec.js` beside 3 ids in
 `data-sources.test.js` for the /account attribution block. It decomposed by instrument rather than
 by review cycle because no review cycle had run when it was first written, and it is restated here
 from the map rather than grown: review cycle 1 added twenty-three ids across the three instrument files
@@ -1524,7 +1525,7 @@ operator to a directory the app no longer reads.
 were written before the code and `current_milestone` was raised in the same change, with no `tests`
 key on any of them — M4.10's opening repeated because it worked: the
 list that run printed, those seventeen ids, *was* the test plan (`docs/milestones/M4.11-plan.md`).
-All seventeen now name tests that exist — 103 ids in twelve pytest files and two e2e specs — and
+All seventeen now name tests that exist — 109 ids in thirteen pytest files and two e2e specs — and
 seven rows this table already had were amended in the same change rather than duplicated: the three
 §7.3 M1 rows, the §7.1 upsert row, the banner-path row, §3.3's link row and M2's push-subscription
 row each gained the assertions this milestone's household makes possible, which is the point of

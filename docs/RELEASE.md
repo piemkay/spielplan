@@ -7,15 +7,15 @@ and where the output lives; and what nobody has ever measured at all.
 
 It exists because "the suite is green" had been standing in for §12's exit criteria, and those are
 different statements. A green suite answers *is the map covered*. §12 asks *does this build ship*.
-Counted on this branch rather than inherited. §12 carries **eighteen** rows. **Eight of them have
-never been run at all**, and the eight are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
-under `ops/` at all and never have; M5.1's and M5.3's instruments were each written in the same
-change set as the surface they measure and neither has ever been run, because the lanes that built
-them could start no server and no container; and M5.4's checks are the suite's, which runs them
-against the fixture and not against the real install and real bundle its criterion names. Three
-describe milestones that do not exist yet (M5, M6, M7). The remaining seven have been measured by one
-of the ten scripts under `ops/`, and **not one of those ten had a committed output** until M4.16
-wrote the first. M4.5's own eighteen checks
+Counted on this branch rather than inherited. §12 carries **nineteen** rows. **Nine of them have
+never been run at all**, and the nine are not one kind: M0, M2, M4.6, M4.7 and M4.10 have no script
+under `ops/` at all and never have; M5.1's, M5.2's and M5.3's instruments were each written in the
+same change set as the surface they measure and none has ever been run, because none of those lanes
+could reach a real corpus bundle - and M5.1's could start neither a container nor a port; and M5.4's
+checks are the suite's, which runs them against the fixture and not against the real install and
+real bundle its criterion names. Three describe milestones that do not exist yet (M5, M6, M7). The
+remaining seven have been measured by one of the eleven scripts under `ops/`, and **not one of those
+eleven had a committed output** until M4.16 wrote the first. M4.5's own eighteen checks
 meanwhile contained one whose predicate was the literal `True`. So the second question had no evidence behind it, only a habit of assuming
 the first implied it.
 
@@ -67,6 +67,7 @@ is here because it is the one criterion this milestone actually ran.
 | M4.12 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M4.14 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
 | M5.1 | UNMEASURED | none | yes | `________` |
+| M5.2 | UNMEASURED | none | yes | `________` |
 | M5.3 | UNMEASURED | none | yes | `________` |
 | M5.4 | UNMEASURED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
@@ -318,11 +319,52 @@ and no container by construction, which is why the instrument was written to deg
 assume: checks 9 (`/data/raw` absent from the backend image) and 11 (`POST /events/nothing` answering
 404 through the app that ships) print "NOT MEASURED HERE" and the run exits 3 - neither a pass nor a
 failure - rather than counting an unasked question as an answer. This row therefore joins M0, M2,
-M4.6, M4.7, M4.10 and M5.4 in the column this file exists for, and it is the first of the two of the
-eight that an owner can close by running something rather than by first writing it; M5.3's block
-below is the second, and it is the same sequence one milestone on. Five of the others have no script
+M4.6, M4.7, M4.10 and M5.4 in the column this file exists for, and it is the first of the three of
+the nine that an owner can close by running something rather than by first writing it; M5.2's and
+M5.3's blocks below are the others, and they are the same sequence one milestone on. Five of the others have no script
 under `ops/` at all, and M5.4's criterion names none because its checks are expressible against the
 suite.
+
+### M5.2 — the trigger: the webhook, the debounce and the delta poll
+
+**Criterion (§12, abbreviated):** twelve `ItemAdded` events for twelve episodes of one series
+inside the ten-minute window yield one acquisition task for the show and none for any episode,
+and still one when the sweep is restarted at minute five; with the webhook plugin absent the
+delta poll enqueues the same set exactly once, enqueues nothing on the following poll and leaves
+the watermark untouched after a read that failed; a re-stamped title the household already owns
+exits at stage 1 without minting a second title, without rewriting its board row and without any
+paid work, filed below every genuine add; a title absent from the current mirror flips
+`is_owned = false` through the full sweep and back when re-added, with no ownership write from
+the delta path at all; an `ItemAdded` in a library the admin did not pick is recorded with that
+reason and enqueues nothing; a wrong token is 401 with nothing recorded as pending; a payload
+missing a required field is 202, recorded, and no 500 in the log. The cell names the instrument:
+"Measured against the fake Jellyfin by `ops/m52_exit_criterion.py`, eleven numbered checks,
+which refuses to run on the fixture — every clause but the re-stamped title's, which none of the
+plan's eleven checks poses and
+`backend/tests/test_jellyfin_intake.py::test_a_re_scan_of_a_title_the_household_owns_mints_nothing_and_bills_nothing`
+measures in CI instead". **So an 11/11 run does not sign the re-stamp clause.** That one is held by
+the suite, and this copy dropped it without a word until M5.2's third review cycle restored it
+(M52-C3-PAPER-03): the verdict below is the script's eleven checks and that test together.
+
+**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes. **Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone
+writes its own §12 row when it opens rather than having one pre-written for it. **The status moved
+from NOT BUILT to UNMEASURED inside the same change set**, and the two words are not the same
+claim: `ops/m52_exit_criterion.py` is now in this tree, 1,531 lines and eleven numbered checks, and
+it has never been run. M5.1's row made exactly that move one milestone ago. Decision 371 gave this
+milestone an instrument of its own rather than a second section inside the umbrella script decision
+331 reserves for §12's M5 row.
+
+**It needs no container and no port, which is the one way it differs from M5.1's.** Every claim
+§7.2 makes is an HTTP fact, so the application is driven over `httpx.ASGITransport` and the
+household's Jellyfin is the fake mounted in the same process — so no check here can be one a lane
+could not measure, and there is no "NOT MEASURED HERE" column and no exit code 3 to report one.
+What it does need is the corpus bundle, and it refuses to run without one: checks 6, 7 and 11 are
+about the single clause that keeps the ownership falsifier to the titles Jellyfin named, and on a
+fixture whose library is its own corpus there is nothing outside the library for that clause to
+protect. That bundle lives on the owner's workstation, which is why this row is the owner's to
+close and never the building lane's.
 
 ### M5.3 — the sources and the derive: crawl once, re-parse forever, corrections last
 
@@ -370,9 +412,9 @@ injected so that Rotten Tomatoes' and Metacritic's real rate — seven tenths of
 one at a time — is honoured without the run taking a quarter of an hour. The harness is made
 tolerant; the policy is not made faster.
 
-This row therefore joins M0, M2, M4.6, M4.7, M4.10, M5.1 and M5.4 in the column this file exists
-for, and it is one of the two of the eight that an owner can close by running something rather than
-by first writing it.
+This row therefore joins M0, M2, M4.6, M4.7, M4.10, M5.1, M5.2 and M5.4 in the column this file
+exists for, and it is one of the three of the nine that an owner can close by running something
+rather than by first writing it.
 
 ### M5.4 — the DNA half: the pack, the trust boundary, the projection
 
@@ -557,7 +599,7 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 42 test result(s) read from 1 JUnit and 0 Playwright report(s)
   coverage gate: 42 row-and-test pair(s) confirmed executed
   coverage gate: 47 named vitest id(s) not visible here (decision 226: no row rests on one alone)
-  coverage gate: 312 row(s) name evidence that did not run, in 2261 line(s): ...
+  coverage gate: 312 row(s) name evidence that did not run, in __LINES__ line(s): ...
 ```
 
 **Four of those five figures are re-derived rather than remembered**, which is why this block is
@@ -603,8 +645,9 @@ lanes merged, which is where the figure above comes from. The line
 figure is NOT decomposed in this paragraph any more: the decomposition was a second copy of a
 measurement, it went stale in the same cycle that moved the figure, and that is what the sentence
 below strikes decision 313's own copy for. [M5.1, green pass; M5.1 review cycle 1, green pass;
-M5.1 review cycle 4, green pass; M5.1 review cycle 4 second pass, green pass; M5.4 review
-cycle 1, green pass] The fifth, pytest's
+M5.1 review cycle 4, green pass; M5.1 review cycle 4 second pass, green pass; M5.2 review
+cycle 3, re-run; M5.2 review cycle 4, re-run; M5.4 review cycle 1, green pass; the M5.2 merge,
+re-run] The fifth, pytest's
 own `N passed` line, counts parameterised CASES; no static rule can take it without evaluating every
 `parametrize` list, so it stays what it is — a dated console reading, with nothing below claiming
 anything about it. It is NAMED here rather than restated: this paragraph carried a second copy of
@@ -727,7 +770,7 @@ its own" is still owed.
 `worker.py` still finds only the two volume mounts."
 
 **Measured:** the waiver was discharged at M4.5 and the job shipped at M4.7.
-`backend/spielplan/worker.py:1283` registers `Job("nightly-backup", "M0", "nightly", "minutes",
+`backend/spielplan/worker.py:1426` registers `Job("nightly-backup", "M0", "nightly", "minutes",
 _nightly_backup, every=86400, ...)`, and `backend/spielplan/backup/nightly.py:43` reads `KEEP = 14`
 under the comment `# §2: "rotation 14".`. That waiver is gone from
 `backend/tests/spec_coverage.toml`. **Exactly one standing waiver remains there**, and it is not
@@ -995,7 +1038,7 @@ docstring in `db/library.py` because `0004_dna.sql` is applied and checksummed; 
 `frontend/static/tmdb-logo.svg`, decision 298's owed asset, which is a comment about an ABSENCE
 rather than a citation to follow and is deleted together with section 7.1 the day the owner drops
 the file in; (3) `sync/resolve.py`, named at `backend/spielplan/backup/movie_data.py:32` and
-`backend/tests/test_backup.py:1391` — a genuine uncorrected citation, since the module is
+`backend/tests/test_backup.py:1399` — a genuine uncorrected citation, since the module is
 `connectors/resolve.py`.
 
 **Escalated, not edited.** The owner's call is whether (3) is repaired and (2) amended in decision

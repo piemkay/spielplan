@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import Cookie, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, FastAPI, HTTPException, Query, Request, Response
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
@@ -1114,6 +1114,34 @@ def jellyfin_users() -> list[dict[str, Any]]:
     return []
 
 
+@app.get("/api/admin/connectors/jellyfin/libraries")
+def jellyfin_libraries() -> dict[str, Any]:
+    """§6.6's library pick, given something to pick from. Invented, like every folder here.
+
+    `ok: true` and three folders, and NOT the `ok: false` its sibling `/connectors/jellyfin/test`
+    two screens up answers with the same envelope. That refusal is right there because the test
+    button's whole job is to report whether this install can reach a server, and this harness
+    cannot; but the pick's job is to be picked from, and a route that always reported the outage
+    would leave §6.6's picker with no branch to develop against at all while the branch it did
+    render is one tap away on the button beside it.
+
+    Three rather than two because decision 364 makes this value the acquisition boundary: an empty
+    pick means the whole server and a non-empty one is a filter, so a picker developed against a
+    list whose every entry an admin would obviously tick teaches nothing about the gesture that
+    matters. The third is the household's own footage, which is exactly the folder a pick exists
+    to leave out. The ids are the fake server's spellings (`ops/fake_jellyfin.py`), so a screen
+    developed here and then driven against the e2e stack is picking from the same names.
+    """
+    return {
+        "ok": True,
+        "libraries": [
+            {"id": "jf-lib-films", "name": "Films"},
+            {"id": "jf-lib-shows", "name": "Shows"},
+            {"id": "jf-lib-home", "name": "Home Videos"},
+        ],
+    }
+
+
 @app.post("/api/admin/connectors/jellyfin/sync")
 def jellyfin_sync() -> dict[str, Any]:
     # Every key `sync.seen.SyncReport.as_dict` emits, in its order. The admin card now renders the
@@ -1135,6 +1163,50 @@ def jellyfin_sync() -> dict[str, Any]:
 def jellyfin_poll() -> dict[str, Any]:
     return {"armed": 0, "already_armed": 0, "watching": 0, "unresolved": [], "undecided": [],
             "skipped_no_link": True}
+
+
+# --- §7.2's intake webhook, the one route here no browser calls ---------------------------
+#
+# It is here because `test_devstub_contract.py` asks the harness for every path the app serves,
+# and M5.1's precedent for a clientless route was to answer it rather than to exempt it: an
+# exemption is a claim about the front end, and the two `GET /api/admin/acquisition` routes are
+# in this file today for exactly that reason. The caller this one is written for is an operator
+# with `curl` and `ops/jellyfin-webhook-template.json`, checking that the body their Webhook
+# plugin will render is a body the app reads - which is a thing worth doing before pointing a
+# library scan at a real install.
+
+
+@app.post("/events/jellyfin", status_code=202)
+async def jellyfin_webhook(request: Request) -> dict[str, Any]:
+    """§7.2's `ItemAdded` delivery: accepted and echoed, and nothing is debounced or enqueued.
+
+    202 because the app answers 202 (decision 365), and the status is part of the shape
+    `test_the_harness_answers_with_the_status_code_the_app_declares` compares - a harness that
+    answered 200 here would be teaching a sender that the work had already happened.
+
+    THE ONE PLACE THIS HARNESS IS DELIBERATELY WEAKER THAN THE APP: it checks no token. The app's
+    credential is a `connector_config` secret minted on the first save and shown once (decision
+    332), and this process has no secrets at all - `/api/admin/secrets` answers `has_secrets:
+    false` one screen up. The alternatives were both worse than saying so: a stub that refused
+    every delivery would be useless to the operator above, and one that invented a token would be
+    publishing a credential in a file anyone can read. The 401 lives where it can be asserted, in
+    `backend/tests/test_jellyfin_webhook.py`, and CLAUDE.md's rule decides the disagreement -
+    `backend/spielplan/api/` is the app and this is a harness.
+
+    `recorded: null` rather than an id, for the reason the acquisition rows above give: there is
+    no `jellyfin_intake` table in a harness that has no database, and inventing a row id would be
+    the one lie a caller could act on. The reason names what really happened to the delivery.
+    """
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    item = payload.get("ItemId") if isinstance(payload, dict) else None
+    return {
+        "recorded": None,
+        "state": "skipped",
+        "reason": f"the dev harness records nothing; it read ItemId={item!r}",
+    }
 
 
 @app.get("/api/admin/users")

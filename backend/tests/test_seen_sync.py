@@ -16,8 +16,12 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
+import re
+from collections import Counter
+from pathlib import Path
 
 import asyncpg
 import httpx
@@ -1565,6 +1569,35 @@ async def test_a_title_removed_from_jellyfin_is_no_longer_owned(db, world):
     assert await db.fetchval("SELECT is_owned FROM title WHERE id = 1") is True
 
 
+async def test_a_title_gone_from_the_library_is_un_owned_with_nobody_linked(db, world):
+    """Decision 413. §3.3 makes the Jellyfin link optional, and `sync_all` returned at
+    `skipped_no_link` BEFORE the library pass -- a pass that reads with the admin key and needs no
+    member at all. So on an install that had saved the connector and linked nobody, a film the
+    household deleted stayed owned, in §6.2's pool, Tonight's pool and the owned shelves, and a
+    title the spine marked unowned was never flipped back on. M5.2 turned that live: both intake
+    jobs gate on `make_client` alone and stage 1 mints `is_owned` from the item's own `Id`, so
+    that install manufactured exactly the rows nothing could ever falsify. The docstring beside
+    the gate filed the repair under a spec amendment that says nothing about the gate. The pass
+    now runs first, gated exactly as before; only the per-member half needs a member.
+    [review cycle 3: m52-c3-own-04]
+    """
+    await db.execute("UPDATE app_user SET jellyfin_user_id = NULL, jellyfin_link_state = NULL")
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, jellyfin_id, is_owned, owned_checked_at) "
+        "VALUES (4, 'movie', 'Chungking Express', 1994, 'jf-gone', true, now() - interval '2 days')"
+    )
+    await _store_connector(db, world)
+
+    report = await seen.sync_all(db, world["client"])
+
+    assert report.skipped_no_link is True, "no member was swept, and the report still says so"
+    assert report.unowned == 1, report.as_dict()
+    assert await db.fetchval("SELECT is_owned FROM title WHERE id = 4") is False
+    assert await db.fetchval("SELECT is_owned FROM title WHERE id = 1") is True, (
+        "the flip back on is the same pass, and it needs no member either"
+    )
+
+
 async def test_a_tap_on_a_title_the_library_dropped_is_refused_rather_than_sent(db, world):
     """The other end of the same prune, one tap later.
 
@@ -1596,6 +1629,402 @@ async def test_a_tap_on_a_title_the_library_dropped_is_refused_rather_than_sent(
     assert result == {"state": "unseen", "synced": False, "reason": "not on Jellyfin"}
     assert module.state.write_log == [], "and no round trip was spent on the dead item id"
     assert (await _state(db, patrick, 4))["state"] == "unseen", "§3.3: the tap is kept either way"
+
+
+# --- M5.2: the ownership half stays where M4.11 built it (decision 362) ------------------------
+
+
+PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
+# The optional quotes are not defensive spelling. `importer/load.py:511` builds its SET list as
+# `f'"{c}" = EXCLUDED."{c}"'` over a column list that includes `is_owned`, so the quoted identifier
+# is the form this package's own generated SQL emits -- and generating the SET list from a column
+# list is how both of its UPDATEs are written (`resolve.py:248`, `load.py:511`). A guard that read
+# only the bare spelling would miss a delta path re-deriving ownership in the house idiom.
+#
+# AND THE ROW-ASSIGNMENT FORM, which the first alternative cannot see at all: in
+# `SET (is_owned, owned_checked_at) = (false, now())` the column name is followed by a comma
+# and the `=` belongs to the tuple. That is not an exotic spelling -- it is
+# `_falsify_ownership`'s own two-column write (`seen.py:1180`) with one comma moved, so it is
+# the shape a delta-side falsifier would most plausibly arrive in. Read as a SECOND
+# ALTERNATIVE rather than by loosening the first, because `is_owned` inside a parenthesised
+# list is a write only when that list is the target of a SET: an INSERT column list names it
+# the same way, and `stages._mint`'s INSERT is the statement the docstring below spends a
+# paragraph explaining this guard does not report. [review cycle 2: m52-rev2-own-02]
+_OWNERSHIP_WRITE = re.compile(
+    r'(?:"?\bis_owned\b"?\s*=|\bset\s*\([^)]*\bis_owned\b[^)]*\)\s*=)', re.IGNORECASE
+)
+# The copy map's DELETE, in the spellings `test_landmine_guards.TITLE_DELETE` already accepts for
+# the sibling table: the optional `ONLY`, an optional schema qualifier, optional quotes. That guard
+# names `title_jellyfin_item` as a DERIVED table it must not flag, so this is the only guard that
+# covers it, and there is no argument for it reading fewer spellings of one statement than the
+# guard one file over reads of the other.
+_COPY_MAP_DELETE = re.compile(
+    r"delete\s+from\s+(?:only\s+)?(?:\w+\s*\.\s*)?\"?title_jellyfin_item\"?(?![\w\"])",
+    re.IGNORECASE,
+)
+
+
+def _statements_matching(source: str, pattern: re.Pattern[str]) -> Counter[str]:
+    """How many executable SQL literals matching `pattern` each function in one module holds.
+
+    An ast walk over string literals and not a grep, because the clause "mark removed titles
+    `is_owned = false`" is quoted in this package's prose repeatedly -- in `_falsify_ownership`'s
+    own docstring, in `ResolveReport`'s field comment, in `acquire/stages._mint`'s argument for
+    deriving the flag -- and a grep would either report all of it or have to be taught to tell an
+    argument from a statement. A docstring is the one string a module never executes, so it is the
+    one this skips; a comment is not a string at all and the parser never offers it.
+
+    Deliberately not `test_landmine_guards._sql_literals`, which is the same idea one file over:
+    that helper returns the literals and discards where they were, and where they were is most of
+    the answer here. An f-string's spans are left unjoined for the same reason --
+    `UPDATE title SET is_owned = {flag}` has to be reported, and it is reported by its first span.
+
+    COUNTED AND NOT COLLECTED, which is the rest of it. A set of locations says that a named
+    function may hold such a statement and nothing at all about how many it holds, so a second
+    falsifier added as a branch INSIDE `connectors/resolve.upsert_item` -- which is what an author
+    obeying "do not re-implement falsification" literally would write -- returns a set identical
+    to the shipped one. The cost is that the count is a measurement of spans and not of
+    statements: an f-string spelling the column in two spans counts twice by the rule above. That
+    is the right way round for a tripwire, because it goes red asking to be looked at rather than
+    quiet. [review cycle 2: m52-rev2-own-03]
+    """
+    tree = ast.parse(source)
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    functions = [
+        (node.lineno, node.end_lineno, node.name)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    found: Counter[str] = Counter()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in docstrings or not pattern.search(node.value):
+            continue
+        # The innermost enclosing def, which is the one a reader would blame. Chosen by the latest
+        # start line rather than by walk order: `ast.walk` is breadth-first and says nothing at all
+        # about nesting.
+        enclosing = [span for span in functions if span[0] <= node.lineno <= span[1]]
+        found[max(enclosing)[2] if enclosing else "<module level>"] += 1
+    return found
+
+
+def _package_statements(pattern: re.Pattern[str]) -> Counter[tuple[str, str]]:
+    totals: Counter[tuple[str, str]] = Counter()
+    for path in sorted(PACKAGE.rglob("*.py")):
+        module = path.relative_to(PACKAGE).as_posix()
+        counted = _statements_matching(path.read_text(encoding="utf-8"), pattern)
+        for name, held in counted.items():
+            totals[(module, name)] += held
+    return totals
+
+
+def test_no_second_path_learns_to_write_the_ownership_column():
+    """Decision 362: neither of §7.2's two trigger paths writes `is_owned`, ever.
+
+    §7.2's third bullet made both responsible for removals as well until v2.1.2, and neither can
+    discharge it: a read filtered on `DateCreated > last_sync` is an add detector by construction
+    and never observes an absence, and one `ItemAdded` says nothing about what the library no
+    longer holds. So the rule is asserted from the NEW path's side, which is the only side that
+    can regress. `test_a_sweep_that_could_not_read_the_library_un_owns_nothing` above already
+    holds the shipped falsifier's three gates behaviourally, and a second falsifier bolted onto a
+    delta poll or a webhook would pass every test in this file. This paragraph used to conclude
+    that no behavioural test could hold it, and exit check 11 is one: its CI twin runs both
+    feeders over an owned household and diffs the ownership columns
+    (`test_jellyfin_intake.py::test_neither_feeder_writes_the_ownership_column_...`). This guard
+    reads STATEMENTS, and a new caller of the shipped writers writes none, which is why
+    `test_no_second_caller_reaches_the_shipped_ownership_writers` reads callers beside it.
+    [review cycle 3: m52-c3-own-03]
+
+    Two STATEMENTS OF THIS SPELLING, both M4.11's, both named, AND COUNTED -- because the count
+    is the half a set of locations cannot hold. The violation that survives a location set is a
+    second falsifier added as a BRANCH INSIDE `resolve.upsert_item`, which is what an author told
+    "do not re-implement falsification" writes when they obey it literally, and which a set of
+    locations reports as unchanged. [review cycle 2: m52-rev2-own-03] That is a narrower claim than "the
+    only code that writes the column", which a walk over string literals cannot make and which
+    this set must not be read as making. `resolve.upsert_item`'s `is_owned = true` is the
+    re-derivation §7.2 asks for and is also the whole of "flips back when re-added" -- the flip
+    back on is the ordinary sweep resolving the item again, not a path of its own.
+    `seen._falsify_ownership`'s `is_owned = false` is what `acquire/stages._mint` calls "the ONE
+    statement in the codebase that can un-own a title". The copy map's single DELETE is held
+    beside them because `prune_missing_items` refuses on the same evidence for the same reason,
+    and §7.3's "unseen clears every copy" breaks the moment a delta read may prune it.
+
+    TWO FURTHER PATHS WRITE THE COLUMN AND NO LITERAL WALK CAN REACH EITHER, so a reader who takes
+    this set for the whole answer will mis-reason about both. `acquire/stages._mint:923-939` names
+    `is_owned` in an INSERT column list with the bound value `jellyfin_id is not None`, and
+    `test_acquire_pipeline.py` pins an item with no `Id`, so it writes the flag false on a tested
+    input -- but a mint creates the row it writes, and a statement that cannot reach a title that
+    already exists cannot un-own one, which is the harm decision 362 is about.
+    `importer/load._upsert_titles:511-518` builds `"is_owned" = EXCLUDED."is_owned"` at runtime out
+    of an interpolated column name, and that one CAN un-own an existing title: §10's re-import
+    defaults the column to false for a bundle that omits it (`load.py:134-137`). It is argued
+    there and the next sweep re-derives the flag, so it is not a falsifier in decision 362's
+    sense -- but it is a third writer, and a column name that does not exist until the statement
+    is built is invisible to a parser by construction.
+
+    KNOWN LIMITS, named rather than chased: a column reached by interpolation, by `+`
+    concatenation or by `%`/`.format()`, and a column named only in an INSERT list. Resolving the
+    first three would make this an interpreter rather than a walker. What it does read is every
+    spelling this package actually emits -- the plain literal, the literal held in a constant, the
+    f-string whose column is spelled out, and the quoted identifier its generated SQL emits -- plus
+    the one it does not emit and is one comma away from: PostgreSQL's row assignment,
+    `SET (is_owned, owned_checked_at) = (false, now())`, in which the column name is never followed
+    by `=` at all. `test_the_ownership_guard_tells_a_statement_from_the_argument_about_one` pins
+    each of them. [review cycle 1: M52-REV1-OWN-02; review cycle 2: m52-rev2-own-02]
+    """
+    assert _package_statements(_OWNERSHIP_WRITE) == {
+        ("connectors/resolve.py", "upsert_item"): 1,
+        ("sync/seen.py", "_falsify_ownership"): 1,
+    }, (
+        "decision 362: an `is_owned =` statement has appeared outside the completed sweep, or a "
+        "second one inside a function this guard already names. Neither of section 7.2's two "
+        "trigger paths may write the ownership column at all"
+    )
+    assert _package_statements(_COPY_MAP_DELETE) == {
+        ("connectors/resolve.py", "prune_missing_items"): 1,
+    }, "decision 362: the copy map is pruned against a completed library read and nothing else"
+
+
+def test_the_ownership_guard_tells_a_statement_from_the_argument_about_one():
+    """A guard that cannot report a violation is a green line rather than a proof.
+
+    Fed both halves of the edit decision 362 exists to prevent: a delta poll falsifying ownership
+    against the window it happened to read, and the same function with the statement taken out and
+    the prose left in. The second half is not a formality -- this package argues about
+    `is_owned = false` in prose far more often than it writes it, so a reader that could not tell
+    the two apart would have to be either permanently red or permanently useless.
+    """
+    poll = (
+        "async def poll_new_items(conn):\n"
+        '    """§7.2: mark removed titles is_owned = false, re-derived from Jellyfin."""\n'
+        '    await conn.execute("UPDATE title SET is_owned = false WHERE id <> ALL($1::int[])")\n'
+    )
+    argument_only = poll.rsplit("    await", 1)[0]
+
+    assert _statements_matching(poll, _OWNERSHIP_WRITE) == {"poll_new_items": 1}
+    assert _statements_matching(argument_only, _OWNERSHIP_WRITE) == {}
+
+    # The same statement in the spelling this package's own generated SQL emits. It is not a
+    # hypothetical house style: `importer/load.py:511` builds `"is_owned" = EXCLUDED."is_owned"`
+    # by quoting every column it was handed, and the statement it feeds is an
+    # `ON CONFLICT DO UPDATE SET` that can put an owned title back to false (`load.py:134-137`).
+    # A guard for the un-owning statement that read only the bare spelling would not see a delta
+    # path re-derive ownership in the idiom this package already writes -- and building the SET
+    # list from a column list is how both `resolve.py:248` and `load.py:511` write an UPDATE.
+    quoted = (
+        "async def poll_new_items(conn):\n"
+        "    await conn.execute('UPDATE title SET \"is_owned\" = false WHERE id = $1')\n"
+    )
+    assert _statements_matching(quoted, _OWNERSHIP_WRITE) == {"poll_new_items": 1}
+
+    # AND A SECOND STATEMENT INSIDE A FUNCTION THIS GUARD ALREADY NAMES, which is the shape a set
+    # of locations cannot report at all. An author told not to re-implement falsification, obeying
+    # that literally by adding the delta path's falsifier as a branch inside `resolve.upsert_item`
+    # rather than as a function of its own, leaves the location set byte-identical to the shipped
+    # one -- so the guard has to count the statements a named function holds and not only say that
+    # it may hold one. [review cycle 2: m52-rev2-own-03]
+    twice = (
+        "async def upsert_item(conn):\n"
+        "    await conn.execute('UPDATE title SET is_owned = true WHERE id = $1')\n"
+        "    await conn.execute('UPDATE title SET is_owned = false WHERE id <> ALL($2::int[])')\n"
+    )
+    assert _statements_matching(twice, _OWNERSHIP_WRITE) == {"upsert_item": 2}
+
+    # AND POSTGRESQL'S ROW-ASSIGNMENT FORM, in both column orders, because `_falsify_ownership`'s
+    # own statement is one comma away from it: `seen.py:1180` writes
+    # `SET is_owned = false, owned_checked_at = now()`, and `SET (is_owned, owned_checked_at) =
+    # (false, now())` is the tidy spelling of that same two-column write. The column name is not
+    # followed by `=` in it at all, so a guard reading only `is_owned =` would let a delta-side
+    # falsifier in through the spelling the statement it guards is closest to.
+    # [review cycle 2: m52-rev2-own-02]
+    for statement in (
+        "UPDATE title SET (is_owned, owned_checked_at) = (false, now()) WHERE id = ANY($1::int[])",
+        "UPDATE title SET (owned_checked_at, is_owned) = (now(), false) WHERE id = ANY($1::int[])",
+    ):
+        source = f"async def poll_new_items(conn):\n    await conn.execute('{statement}')\n"
+        assert _statements_matching(source, _OWNERSHIP_WRITE) == {"poll_new_items": 1}, statement
+
+    # The copy map's half, in the spellings `test_landmine_guards.TITLE_DELETE` already pins for
+    # the sibling table: the optional `ONLY`, an optional schema qualifier, optional quotes. That
+    # guard names `title_jellyfin_item` as a table it must NOT flag, so this is the only guard
+    # covering the copy map, and it has no reason to read fewer spellings of one statement than
+    # the guard one file over reads of the other.
+    for statement in (
+        "DELETE FROM public.title_jellyfin_item WHERE title_id = $1",
+        'DELETE FROM "title_jellyfin_item" WHERE title_id = $1',
+        "DELETE FROM ONLY title_jellyfin_item WHERE title_id = $1",
+    ):
+        source = f"async def prune(conn):\n    await conn.execute('{statement}')\n"
+        assert _statements_matching(source, _COPY_MAP_DELETE) == {"prune": 1}, statement
+
+
+# The four functions that write the ownership column or the copy map when called: the two
+# statements the guard above counts, and the two that reach them. Plan §9 on the most destructive
+# of them: "Do not add a second caller ... and do not let the delta path near it."
+_OWNERSHIP_WRITERS = frozenset({
+    "upsert_item", "upsert_items", "prune_missing_items", "_falsify_ownership",
+})
+
+
+def _writer_references(source: str) -> Counter[tuple[str, str]]:
+    """Every place one module names one of `_OWNERSHIP_WRITERS`, by (enclosing def, writer).
+
+    A NAME AND NOT ONLY A CALL, so that the writer handed on as a value -- to `functools.partial`,
+    to a list of steps, under an alias at import -- is reported where it is named, which is the
+    only place a walker can see it. An import is reported at module level under the writer's own
+    name, whatever it is bound to. A `def` is not a reference, and a string is not one either, so
+    `__all__` and the prose that argues about these four are ignored. KNOWN LIMIT: `getattr` with
+    a spelled-out name, and a caller one hop further out (a feeder calling `seen.sync_all`); both
+    are the behavioural twin's to catch, which diffs the columns and does not care how they moved.
+    """
+    tree = ast.parse(source)
+    functions = [
+        (node.lineno, node.end_lineno, node.name)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    found: Counter[tuple[str, str]] = Counter()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            named = node.id
+        elif isinstance(node, ast.Attribute):
+            named = node.attr
+        elif isinstance(node, ast.alias):
+            named = node.name.rpartition(".")[2]
+        else:
+            continue
+        if named not in _OWNERSHIP_WRITERS:
+            continue
+        enclosing = [span for span in functions if span[0] <= node.lineno <= span[1]]
+        found[(max(enclosing)[2] if enclosing else "<module level>", named)] += 1
+    return found
+
+
+def test_no_second_caller_reaches_the_shipped_ownership_writers():
+    """Decision 362 held against the shape the statement guard above cannot see: a new CALLER.
+
+    That guard counts literals spelling `is_owned =`, and an author told "do not re-implement
+    falsification" obeys it by reusing what ships. A delta poll that "kept ownership fresh on add"
+    with `resolve.upsert_items`, then `prune_missing_items` and `seen._falsify_ownership` over what
+    it read writes no literal at all -- and un-owns every title outside its fifteen-minute window
+    and prunes the copy map, which on a quiet household is the whole library, while that guard
+    and every behavioural test in this file stay green. So the five references the four writers
+    ship with are named, and a sixth anywhere in the package is red before anything runs.
+
+    `sync_user` keeps its own because it resolves the library itself when it is driven alone;
+    `sync_all` holds the other three, the library pass decision 413 runs whether or not a member
+    is linked; and `upsert_item` is reached only through `upsert_items`. The second half is this
+    guard's falsifier, fed the finding's own plant and the same writer taken under an alias.
+    [review cycle 3: m52-c3-own-03]
+    """
+    totals: Counter[tuple[str, str, str]] = Counter()
+    for path in sorted(PACKAGE.rglob("*.py")):
+        module = path.relative_to(PACKAGE).as_posix()
+        for (function, writer), held in _writer_references(path.read_text(encoding="utf-8")).items():
+            totals[(module, function, writer)] += held
+
+    assert totals == {
+        ("connectors/resolve.py", "upsert_items", "upsert_item"): 1,
+        ("sync/seen.py", "sync_user", "upsert_items"): 1,
+        ("sync/seen.py", "sync_all", "upsert_items"): 1,
+        ("sync/seen.py", "sync_all", "prune_missing_items"): 1,
+        ("sync/seen.py", "sync_all", "_falsify_ownership"): 1,
+    }, (
+        "decision 362: a writer of the ownership column or the copy map is named somewhere new. "
+        "The completed sweep is the only path that may reach them; neither of section 7.2's two "
+        "trigger paths may call them at all"
+    )
+
+    plant = (
+        "from spielplan.sync.seen import _falsify_ownership as keep_fresh\n"
+        "async def poll_delta(conn, items):\n"
+        '    """Keeps ownership fresh on add: upsert_items, then prune_missing_items."""\n'
+        "    resolved = await resolve.upsert_items(conn, items)\n"
+        "    await resolve.prune_missing_items(conn, resolved)\n"
+        "    await keep_fresh(conn, resolved, None)\n"
+    )
+    assert _writer_references(plant) == {
+        ("<module level>", "_falsify_ownership"): 1,
+        ("poll_delta", "upsert_items"): 1,
+        ("poll_delta", "prune_missing_items"): 1,
+    }
+
+
+SPEC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
+REGISTER = Path(__file__).resolve().parents[2] / "docs" / "spec-v2.2-proposals.md"
+
+
+def test_the_normative_file_gives_the_ownership_column_to_the_full_sweep_alone():
+    """Decision 362 from the side CLAUDE.md sends the next reader to first.
+
+    The guard above holds the code, and the code was never the problem. §7.2's third bullet went on
+    saying "Both paths enqueue an acquisition job (§8) per new title and mark removed titles
+    `is_owned = false`" -- the one normative document asking for the second falsifier
+    `_falsify_ownership` calls the most destructive statement in the module -- while decision 362
+    handed that bullet's amendment to "the milestone that holds the spec file" and the file's own
+    v2.1.1 line handed it to M5.2, so each record pointed at the other. Under "where code and spec
+    disagree, the code is the bug", a reader who met the sentence without the register had a spec
+    clause telling them to add the falsifier. So the bullet naming `is_owned = false` gives it to
+    the full sweep and cites decision 362, and a point release in the Status block names the
+    decision it landed under. [decision 362; M5.2 review cycle 3: M52-C3-PAPER-02]
+    """
+    text = SPEC.read_text(encoding="utf-8")
+    section = re.search(r"^### 7\.2 .*?(?=^### )", text, re.M | re.S)
+    assert section, "the normative file has no section 7.2 heading for this rule to read"
+    bullets = [b for b in re.split(r"\n(?=- )", section.group(0)) if "is_owned = false" in b]
+    assert bullets, "section 7.2 no longer says who marks a removed title `is_owned = false`"
+    for bullet in bullets:
+        assert not re.search(r"\bBoth paths\b[^.]*\bmark removed titles\b", bullet), (
+            "section 7.2 still gives the ownership column to both intake paths, which decision "
+            f"362 refuses:\n  {ascii(bullet.strip()[:300])}"
+        )
+        assert "full sweep" in bullet and re.search(r"\bdecision 362\b", bullet, re.I), (
+            "section 7.2's ownership bullet must give `is_owned = false` to the full sweep and "
+            f"cite the decision that says so:\n  {ascii(bullet.strip()[:300])}"
+        )
+    status = re.search(r"^\*\*Status:\*\*.*?(?=\n[ \t]*\n)", text, re.M | re.S)
+    assert status, "the normative file has no Status block"
+    releases = re.findall(r"^\*\*v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\):\*\*.*$", status.group(0), re.M)
+    assert any(re.search(r"\bdecision 362\b", line) for line in releases), (
+        "section 7.2 was amended under decision 362 and no dated point release in the Status "
+        "block says so (decision 288): the date says which wave, the number what it answered to"
+    )
+
+
+def test_the_library_pick_bounds_acquisition_and_never_ownership():
+    """Decision 364's boundary, held where a misreading of it would do decision 362's harm.
+
+    The pick is read by the webhook's membership check and the delta walk and by nothing on the
+    full sweep's path, so a title in a library the admin deselects stays owned: it has left the
+    household's acquisition scope and is still on the household's server. Decision 364's heading
+    nonetheless called the pick "the ownership boundary", over a body, a §12 row and a code path
+    that all make it the acquisition boundary -- and in this register "ownership" is `is_owned`,
+    which decision 362 two entries up reserves to the full sweep. A later milestone taking the
+    heading at its word would scope the full sweep's library read by the pick, and
+    `_falsify_ownership` would then un-own every title in every deselected library. So the sweep's
+    two modules never read `library_ids`, and the heading names the boundary its body draws.
+    [decisions 362 and 364; M5.2 review cycle 3: M52-C3-PAPER-06]
+    """
+    for module in ("sync/seen.py", "connectors/resolve.py"):
+        assert "library_ids" not in (PACKAGE / module).read_text(encoding="utf-8"), (
+            f"{module} reads the library pick, so the full sweep's ownership is now scoped by a "
+            "boundary decision 364 draws for acquisition alone"
+        )
+    heading = re.search(r"^### 364\. .*$", REGISTER.read_text(encoding="utf-8"), re.M)
+    assert heading, "the register no longer heads decision 364"
+    assert "acquisition boundary" in heading.group(0), (
+        "decision 364's heading names a boundary its own body does not draw:\n  "
+        + ascii(heading.group(0))
+    )
 
 
 # --- M4.11: §5.3, two sweeps of one household cannot overlap -----------------------------------

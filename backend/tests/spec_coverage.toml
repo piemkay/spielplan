@@ -740,9 +740,9 @@ id = "jellyfin-acquisition-eval-title-upsert-fill-never-clobber"
 spec = "§7.1 (with §4.1 rules 6)"
 milestone = "M1"
 kind = "integration"
-what = "A Jellyfin item whose ProviderIds carry imdb/tmdb/tvdb resolves to a `title` row by `title.id` and fills only NULL identity columns: an existing non-null `imdb_id`/`tmdb_id` is never overwritten, `jellyfin_id` is attached, and an item with no ProviderIds at all still upserts without error and without creating a duplicate title. Two owned titles sharing a `tmdb_id` both survive the upsert (no UNIQUE constraint on `tmdb_id`/`trakt_id`/slug)."
+what = "A Jellyfin item whose ProviderIds carry imdb/tmdb/tvdb resolves to a `title` row by `title.id` and fills only NULL identity columns: an existing non-null `imdb_id`/`tmdb_id` is never overwritten, `jellyfin_id` is attached, and an item with no ProviderIds at all still upserts without error and without creating a duplicate title. Two owned titles sharing a `tmdb_id` both survive the upsert (no UNIQUE constraint on `tmdb_id`/`trakt_id`/slug). A refused item is reported with its Jellyfin `Id` and its `ProviderIds` and not only its name, so §7.2's acquisition half can key a task off the report, while the wire shape stays `unmatched` as a count plus `unmatched_names[:20]`."
 why = "`imdb_id` is NULL on 21% of titles so it can never be the join key, and 315 duplicate `tmdb_id` values exist legitimately (mostly movie/series pairs) — hence fill-never-clobber and §4.1 rule 6's ban on those UNIQUE constraints."
-tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_kinds", "backend/tests/test_jellyfin_resolve.py::test_a_tmdb_match_is_qualified_by_kind", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_provider_ids_falls_back_to_name_and_year", "backend/tests/test_jellyfin_resolve.py::test_a_null_identity_column_is_filled", "backend/tests/test_jellyfin_resolve.py::test_an_existing_identity_column_is_never_overwritten", "backend/tests/test_jellyfin_resolve.py::test_two_titles_sharing_a_tmdb_id_both_survive_the_upsert", "backend/tests/test_jellyfin_resolve.py::test_an_unresolvable_item_is_reported_and_creates_nothing", "backend/tests/test_jellyfin_resolve.py::test_reimporting_the_same_library_is_idempotent", "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale", "backend/tests/test_seen_sync.py::test_an_unresolvable_jellyfin_item_is_reported_not_invented", "backend/tests/test_jellyfin_resolve.py::test_an_unchanged_row_is_not_rewritten", "backend/tests/test_jellyfin_resolve.py::test_a_changed_row_is_still_rewritten", "backend/tests/test_jellyfin_client.py::test_items_are_requested_recursively", "backend/tests/test_jellyfin_client.py::test_items_are_narrowed_to_movies_and_series", "backend/tests/test_jellyfin_client.py::test_the_field_set_is_actually_requested", "backend/tests/test_jellyfin_resolve.py::test_a_name_matching_two_titles_is_refused_not_guessed", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_production_year_never_matches_on_name_alone", "backend/tests/test_jellyfin_resolve.py::test_two_copies_of_one_title_are_one_decision_not_two_relinks"]
+tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_kinds", "backend/tests/test_jellyfin_resolve.py::test_a_tmdb_match_is_qualified_by_kind", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_provider_ids_falls_back_to_name_and_year", "backend/tests/test_jellyfin_resolve.py::test_a_null_identity_column_is_filled", "backend/tests/test_jellyfin_resolve.py::test_an_existing_identity_column_is_never_overwritten", "backend/tests/test_jellyfin_resolve.py::test_two_titles_sharing_a_tmdb_id_both_survive_the_upsert", "backend/tests/test_jellyfin_resolve.py::test_an_unresolvable_item_is_reported_and_creates_nothing", "backend/tests/test_jellyfin_resolve.py::test_reimporting_the_same_library_is_idempotent", "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale", "backend/tests/test_seen_sync.py::test_an_unresolvable_jellyfin_item_is_reported_not_invented", "backend/tests/test_jellyfin_resolve.py::test_an_unchanged_row_is_not_rewritten", "backend/tests/test_jellyfin_resolve.py::test_a_changed_row_is_still_rewritten", "backend/tests/test_jellyfin_client.py::test_items_are_requested_recursively", "backend/tests/test_jellyfin_client.py::test_items_are_narrowed_to_movies_and_series", "backend/tests/test_jellyfin_client.py::test_the_field_set_is_actually_requested", "backend/tests/test_jellyfin_resolve.py::test_a_name_matching_two_titles_is_refused_not_guessed", "backend/tests/test_jellyfin_resolve.py::test_an_item_with_no_production_year_never_matches_on_name_alone", "backend/tests/test_jellyfin_resolve.py::test_two_copies_of_one_title_are_one_decision_not_two_relinks", "backend/tests/test_jellyfin_resolve.py::test_a_refused_item_is_reported_with_the_ids_its_consumer_keys_on", "backend/tests/test_jellyfin_resolve.py::test_the_refusal_report_keeps_the_wire_shape_the_admin_card_renders"]
 # The last three are M4.11's, and the first two close a hole in "never clobber" this row could
 # not see: the name-and-year fallback matched on name alone when a year was missing, and picked
 # one row arbitrarily when two titles shared a name -- both of which attach a `jellyfin_id` to
@@ -750,6 +750,16 @@ tests = ["backend/tests/test_jellyfin_resolve.py::test_imdb_id_resolves_across_k
 # The churn test is the steady state: two copies of one title rewrite no `title` row and report
 # `relinked = 0`, which is what keeps `test_a_changed_row_is_still_rewritten` meaningful now
 # that the pointer left `upsert_item`'s guard. [M4.11]
+#
+# The report clause is M5.2's, under decision 370. `resolve.py:181-183` already said this
+# list is what "§7.2's acquisition half consumes at M5", and a name cannot be acquired
+# from - decision 323 mints only on a provider id, so the report has to carry one. Widened
+# in memory only: `as_dict` keeps the count and the first twenty names, because that is
+# what §6.6's card renders. The last two ids are that clause read from both sides: the
+# first asks what a refusal carries, the second holds `as_dict` to the count and the twenty
+# names, so widening the memory half a second time still cannot widen the wire. This row is
+# at or before `current_milestone`, so it names real tests at all times and the two M5.2 ids
+# are appended rather than substituted. [M5.2]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-playback-arms-prompt-never-writes"
@@ -3268,9 +3278,393 @@ id = "jellyfin-acquisition-eval-new-title-trigger-one-job-per-title"
 spec = "§7.2"
 milestone = "M5.2"
 kind = "integration"
-what = "Both trigger paths enqueue exactly one acquisition job per newly added title: a burst of `ItemAdded` webhook events for many episodes of one series inside the 10-minute debounce window yields one job for the show, not one per episode; and with the webhook plugin absent the 15-minute `DateCreated > last_sync` delta poll enqueues the same set once and does not re-enqueue titles from a previous poll. A title present in the DB but absent from the current Jellyfin mirror flips `is_owned = false`, and flips back when re-added."
+what = "Both trigger paths enqueue exactly one acquisition job per newly added title: a burst of `ItemAdded` webhook events for many episodes of one series inside the 10-minute debounce window yields one job for the show, not one per episode; and with the webhook plugin absent the 15-minute delta poll over what the server saved since the last one enqueues the same set once and does not re-enqueue titles from a previous poll - including an add whose file, and so whose `DateCreated`, is older than that poll. A title present in the DB but absent from the current Jellyfin mirror flips `is_owned = false`, and flips back when re-added. A delta poll that re-enqueues a title the household already owns - the poll reads what the server saved, so a library re-scan re-saves titles it has had for years - exits at stage 1 without minting a second title, without rewriting its board row and without any paid work, and is filed below every genuine add. Both feeders key a title in the server's own spelling of its GUID, so an add the Webhook plugin spells dashed is one task under the id `/Items` answers with; no single server row, and no id the server fails on, can stop either feeder or freeze the watermark; and a watermark stepped into the future is read as never polled, from the instant the install gained the poll. The delta walk carries all three of `all_items`' bounds and raises on each rather than truncating, and raises too when the server's count moves between two of its pages; the watermark advances only after the enqueues a completed read produced, is written far enough behind that read to re-read a row the server stamped before it and committed after it, and a server that answers the delta read without honouring `IncludeItemTypes` files no task keyed on an episode."
 why = "Owner requirement: every Jellyfin add triggers acquisition. Library scans add seasons in bursts; the corpus connector is full-mirror only, so the delta path is new code, and `is_owned` is re-derived because a stale flag is wrong the moment the library changes."
-tests = []
+tests = [
+    "backend/tests/test_jellyfin_intake.py::test_a_burst_of_twelve_episodes_yields_one_acquisition_task_for_the_show",
+    "backend/tests/test_jellyfin_intake.py::test_an_event_after_the_window_closed_opens_a_second_one_rather_than_extending_the_first",
+    "backend/tests/test_jellyfin_intake.py::test_the_delta_poll_enqueues_the_set_once_and_the_next_poll_enqueues_nothing",
+    "backend/tests/test_jellyfin_intake.py::test_the_two_paths_file_one_task_for_one_title",
+    "backend/tests/test_jellyfin_intake.py::test_a_re_scan_of_a_title_the_household_owns_mints_nothing_and_bills_nothing",
+    "backend/tests/test_acquire_intake_jobs.py::test_the_two_intake_rows_are_registered_at_section_7_2s_own_cadences",
+    "backend/tests/test_acquire_intake_jobs.py::test_what_an_add_waits_for_is_the_window_plus_one_sweep_and_not_an_hour",
+    "backend/tests/test_acquire_intake_jobs.py::test_the_delta_poll_job_files_the_library_it_has_not_seen_and_then_stops",
+    "backend/tests/test_acquire_intake_jobs.py::test_the_intake_sweep_job_leaves_an_open_window_alone_and_collapses_a_closed_one",
+    "backend/tests/test_seen_sync.py::test_a_title_removed_from_jellyfin_is_no_longer_owned",
+    "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale",
+    "backend/tests/test_jellyfin_resolve.py::test_a_title_the_sweep_un_owned_is_owned_again_when_it_comes_back",
+    "backend/tests/test_jellyfin_intake.py::test_an_episode_whose_type_is_spelled_in_another_case_is_still_keyed_on_the_show",
+    "backend/tests/test_jellyfin_intake.py::test_a_template_that_calls_an_episode_a_movie_files_no_task_for_the_episode",
+    "backend/tests/test_jellyfin_intake.py::test_the_watermark_names_the_instant_the_read_began_and_not_the_one_it_ended",
+    "backend/tests/test_jellyfin_client.py::test_a_delta_page_that_is_not_an_envelope_raises_rather_than_reading_nothing",
+    "backend/tests/test_jellyfin_client.py::test_a_full_delta_page_of_re_saved_old_items_is_progress_and_not_a_wedged_walk",
+    "backend/tests/test_jellyfin_client.py::test_a_full_delta_page_that_repeats_one_already_read_raises_instead_of_truncating",
+    "backend/tests/test_jellyfin_client.py::test_the_delta_walk_raises_at_the_hard_page_cap",
+    "backend/tests/test_jellyfin_intake.py::test_a_poll_cut_part_way_through_its_enqueues_leaves_the_watermark_where_it_was",
+    "backend/tests/test_jellyfin_intake.py::test_a_server_that_ignores_the_type_filter_files_no_task_for_an_episode",
+    "backend/tests/test_jellyfin_client.py::test_the_delta_read_returns_what_the_server_saved_after_the_watermark",
+    "backend/tests/test_jellyfin_client.py::test_the_delta_read_keeps_what_the_server_saved_whatever_the_files_own_date",
+    "backend/tests/test_jellyfin_client.py::test_the_delta_read_never_returns_an_episode",
+    "backend/tests/test_jellyfin_client.py::test_a_short_delta_page_raises_rather_than_advancing_the_watermark_past_it",
+    "backend/tests/test_connector_registry.py::test_the_delta_poll_starts_at_this_installs_own_creation_instant",
+    "backend/tests/test_jellyfin_intake.py::test_a_first_poll_on_a_fresh_install_enqueues_nothing_it_already_has",
+    "backend/tests/test_jellyfin_intake.py::test_a_poll_whose_read_failed_leaves_the_watermark_where_it_was",
+    "backend/tests/test_jellyfin_intake.py::test_an_add_spelled_the_way_the_webhook_plugin_spells_it_becomes_one_task",
+    "backend/tests/test_jellyfin_intake.py::test_a_guid_is_keyed_in_the_servers_own_spelling_however_the_plugin_spelled_it",
+    "backend/tests/test_jellyfin_client.py::test_the_membership_read_matches_one_guid_in_every_spelling_the_server_accepts",
+    "backend/tests/test_jellyfin_intake.py::test_an_id_the_server_cannot_parse_costs_one_bounded_read_and_is_decided",
+    "backend/tests/test_jellyfin_intake.py::test_one_id_the_server_fails_on_does_not_stop_the_sweep_while_the_server_answers",
+    "backend/tests/test_jellyfin_intake.py::test_a_server_row_carrying_a_nul_neither_wedges_the_sweep_nor_loses_the_add",
+    "backend/tests/test_jellyfin_intake.py::test_a_server_row_carrying_a_nul_neither_freezes_the_watermark_nor_loses_the_add",
+    "backend/tests/test_jellyfin_intake.py::test_a_server_row_no_index_can_hold_is_counted_and_the_poll_goes_on",
+    "backend/tests/test_jellyfin_intake.py::test_a_re_offered_title_already_placed_waits_behind_a_genuine_add",
+    "backend/tests/test_jellyfin_intake.py::test_a_first_poll_after_an_upgrade_reads_from_the_upgrade_and_not_the_install",
+    "backend/tests/test_jellyfin_intake.py::test_a_watermark_in_the_future_is_read_as_never_polled",
+    "backend/tests/test_jellyfin_intake.py::test_a_row_written_while_the_clock_ran_ahead_is_ripe_once_the_clock_is_corrected",
+    "backend/tests/test_jellyfin_intake.py::test_a_poll_racing_an_origin_move_does_not_write_the_old_servers_watermark",
+    "backend/tests/test_jellyfin_intake.py::test_the_poll_files_an_add_whose_file_is_older_than_the_last_poll",
+    "backend/tests/test_jellyfin_intake.py::test_a_row_saved_just_before_a_poll_and_visible_only_after_its_read_is_not_lost",
+    "backend/tests/test_jellyfin_client.py::test_a_delta_walk_whose_count_moved_between_pages_raises_rather_than_skipping_a_row",
+    "backend/tests/test_jellyfin_client.py::test_the_key_travels_where_a_jellyfin_12_server_reads_it",
+    "backend/tests/test_jellyfin_client.py::test_a_redirect_is_a_failed_read_that_names_where_it_pointed",
+    "backend/tests/test_acquire_intake_jobs.py::test_no_budget_paragraph_promises_the_minute_poll_a_bound_its_own_timeout_breaks",
+    "backend/tests/test_seen_sync.py::test_a_title_gone_from_the_library_is_un_owned_with_nobody_linked",
+    # The records of this row's instrument, held against the instrument: section 12's cell and
+    # `docs/RELEASE.md`'s copy name the test the script hands the re-stamp clause to, and decision
+    # 371 gives the corpus bundle - not docker or a port the script never opens - as why the
+    # owner runs it. [M5.2 review cycle 3: M52-C3-PAPER-03, M52-C3-PAPER-07]
+    "backend/tests/test_static_contracts.py::test_what_m52s_records_say_of_its_instrument_is_what_the_instrument_does",
+]
+# Review cycle 1 appended the five above, and each is a way "one job per title" was false while
+# every id already in this row passed. Decision 369 was enforced on the payload's own `ItemType`
+# alone, which is operator-authored: spelled in another case the Episode arm was skipped, and a
+# template naming `Movie` over a season filed a task per EPISODE - while the row the membership
+# read had already returned said `Episode` in the server's own words. On the delta side the
+# watermark advanced past instants nothing had read: a 200 carrying a portal's page collapsed to
+# an empty envelope and read as a quiet household, and `started` taken before the read was argued
+# in prose and asserted nowhere. The full-page test guards the invariant `_created_walk`'s comment
+# calls "the whole of this loop" - every other delta test hands it a SHORT page, so the bound was
+# unreachable from the suite. [M5.2 review cycle 1: M52-C1-EPISODE-01, m52-rev-lib-03,
+# m52-rev-delta-03, m52-rev-delta-04]
+#
+# The ownership pair gained a third id, for the clause between them that neither of them could
+# fail: "flips back when re-added". `sync/seen._falsify_ownership` leaves `is_owned = false`
+# with a FRESH `owned_checked_at`, so the state a re-add actually meets disarms both timestamp
+# terms of `resolve.upsert_item`'s churn guard and `NOT is_owned` is the only term left that can
+# re-own the title -- while the test registered for the clause starts from a title no sweep has
+# ever owned and rides `owned_checked_at IS NULL` instead. Dropped, that term leaves every other
+# id in this row green and makes ownership a one-way door until the hour is up, seen only by
+# `ops/m52_exit_criterion.py`'s check 7, which the owner runs by hand and CI never runs at all.
+# [M5.2 review cycle 1: M52-REV1-OWN-01]
+#
+# REVIEW CYCLE 2 ADDED FOUR, AND THREE OF THEM ARE GUARDS THIS MILESTONE SHIPPED AND COULD NOT
+# FAIL ON. The delta walk copies all three of `all_items`' bounds (plan C1) and only the count
+# bound was reachable: the cycle-1 full-page test asserts the progress bound stays SILENT, so
+# deleting that raise satisfied it, and no delta test ever reached `MAX_PAGES` at all - a walk
+# that reads two hundred pages where two would do, every fifteen minutes, inside the budget
+# decision 368 sized on an abandoned poll costing nothing. The watermark's POSITION was argued
+# in a comment and asserted nowhere: cycle 1 pinned the instant it names, while moving the save
+# above the enqueue loop passed the whole suite and loses every add a cancelled poll had not
+# reached. The fourth is decision 369 held at the second feeder: `ITEM_TYPES` narrows the query
+# and nothing re-checked the answer, so a proxy that drops one query parameter filed one task per
+# EPISODE - fourteen of them, twelve one season - each burning a `(kind, key)` the queue will not
+# reopen. The sibling enqueue in `sweep_pending` already asks `resolve.kind_of` of the server's
+# own row; this is the same question at the other one. [M5.2 review cycle 2: m52-rev2-delta-01,
+# m52-rev2-delta-03, m52-c2-delta-episode-filter]
+#
+# REVIEW CYCLE 2 REGISTERED SEVEN MORE, AND NOT ONE OF THEM IS A NEW TEST: each was written by
+# this milestone, passes today, and was named by no row at all -- which rule 2 cannot hold,
+# because it asks only whether a NAMED test still exists. Unnamed, every one of them can be
+# renamed or deleted by whichever milestone next refactors this client with the build staying
+# green, which is the ratchet failure this file exists to prevent. The sharpest is the
+# server-side half of §7.2's predicate: `MinDateLastSaved` is asserted in exactly one place in
+# the tree, and a read that stopped sending it would page the whole library every fifteen
+# minutes inside a budget decision 368 sized on a delta. The predicate's other half -- the
+# Python-side `created > since` that turns that superset back into a delta -- is already held
+# by the re-saved-page id above, which is why this one is what the ratchet was actually
+# missing. Beside it are the two ids that make decision 366's floor falsifiable
+# -- `min(applied_at)` where it is computed and a fresh install enqueueing nothing where it is
+# observed -- and the one holding exit-criterion check 5, which nothing a branch gate runs would
+# otherwise ask: `ops/m52_exit_criterion.py` needs a real install and the owner's hand, so a
+# watermark advanced by a read that RAISED is asserted in CI here or nowhere.
+# [M5.2 review cycle 2: m52-rev2-delta-04]
+#
+# REVIEW CYCLE 3 APPENDED FIFTEEN, AND THE FIRST THREE ARE THE MILESTONE'S HEADLINE PATH. The
+# Webhook plugin renders a GUID dashed and `/Items` answers it undashed; the membership read
+# compared the two as strings, so on every real server each `ItemAdded` was filed terminally as
+# "the server no longer holds this item" with no task, while the double's `jf-N` ids were spelled
+# alike on both sides and every id in this row stayed green. The double now holds GUID ids for
+# these tests and spells them the plugin's way on the way out (decision 415). The next five are
+# the cycle-3 bar -- no id, spelling or server row may wedge a feeder: a non-GUID id the server
+# drops became a whole-server read, one id the server failed on stopped every sweep, and a NUL in
+# an overview or an `Id` past the btree limit raised out of the INSERT on both paths. The re-scan
+# id above was the plan's own risk asserted against the wrong outcome -- `ready` at stage 10 --
+# and now drains every re-stamp to stage 1 with the board untouched (decision 411), beside the
+# test that files those re-offers below a genuine add. The rest are the watermark's edges: an
+# upgraded install's floor (decision 412), a clock stepped back, a poll racing an origin move, and
+# the one budget sentence that promised the minute poll a bound its own timeout breaks. The last
+# is this row's own ownership clause on an install that linked nobody: `sync_all` returned before
+# its admin-key library pass, so nothing flipped `is_owned` either way there while M5.2's intake
+# jobs, gated on `make_client` alone, filed tasks whose minted titles are owned (decision 413).
+# [M5.2 review cycle 3: M52-C3-EVENTS-01, M52-C3-SWEEP-01/02/03/05, M52-C3-STATE-01/02/05/07,
+# M52-C3-LIB-01/05, m52-c3-own-01/02/04, M52-C3-EVENTS-04, M52-C3-PAPER-08]
+
+# The inherited gate above keeps its three clauses as M5.1 re-pointed them and gains a fourth,
+# named by the plan's own risks section: Jellyfin's `DateCreated` is the SERVER's, not the
+# file's, so a library re-scan re-stamps titles the household has had for years. The queue's
+# (kind, key) identity absorbs the duplicate enqueue, but the JOB must then find the title
+# already owned and exit at stage 1 rather than re-acquiring - unasserted, a re-scan bills
+# the household for its whole library, which is the one failure in this row nothing else
+# would catch. [M5.2; decisions 323 and 366]
+#
+# The four `test_acquire_intake_jobs.py` rows are the two clauses seen from the loop rather
+# than from the functions, and this row's own numbers are why they are named here: "the
+# 15-minute delta poll" and "the 10-minute debounce" are figures the registry holds and
+# `intake.py` does not. Every test in `test_jellyfin_intake.py` passes against a build where
+# neither path is registered at all, or where the debounce table is swept once an hour - a
+# fixed ten-minute window nobody looks at is a seventy-minute debounce, and nothing in the
+# domain package can see it. [M5.2; plan C4, decision 368]
+#
+# The row above is this milestone's inherited gate and its `what` is already the test plan
+# (decision 321 re-pointed it from "M5"). The two below are M5.2's own, and each names a
+# failure the inherited row cannot see: an add the household made in a library it deselected,
+# and the shapes a real Jellyfin sends at a route whose payload nobody controls.
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-an-add-outside-the-picked-libraries-is-recorded-not-acquired"
+spec = "§7.2 + §6.6 Connectors (\"library pick\")"
+milestone = "M5.2"
+kind = "integration"
+what = "An ItemAdded for an item in a library the admin did not pick is recorded with that reason and enqueues nothing; the same item after the library is picked enqueues once. Membership is the server's row `Path` placed against the picked libraries' locations, never a `ParentId` sent beside `ids`, which every Jellyfin drops; a row no listed library holds is a failed read. The delta poll is scoped the same way. The route that writes the pick refuses at the edge, as a 422, every value this column cannot hold - a control character, an id longer than any GUID, an empty id, more ids than a household has libraries - rather than letting Postgres answer 500 for it; and a membership read answered with an envelope whose rows are not objects, or with no list of items at all, or with an answer nested deeper than any parser reads, is a failed read that leaves the row pending. A membership read the server as a whole could not answer - no answer at all, or a 401, 408 or 429 - stops the sweep at that key and leaves every key behind it pending and unasked; a 403, which Jellyfin never sends this app's key, is that one key's. A picked library the server no longer lists is a fault in the pick and not a boundary: an add a live picked library holds is still filed, the rest stay pending with the stale id named, the delta poll files the live libraries and holds its watermark, and a pick none of whose libraries survive reads nothing rather than the whole server; the edge stores a GUID once in the server's own spelling and refuses a blank or nil id."
+why = "§6.6 gives the admin a library pick and nothing has ever read it: JellyfinConfig.library_ids is stored, merged on save and served to the admin API, and grep finds no ParentId, parentId or MediaFolders anywhere in the connector. Without a reader, §7.2's heading means 'every add on the server' and a deselected library is billed for anyway."
+tests = [
+    "backend/tests/test_jellyfin_intake.py::test_an_add_in_a_library_the_admin_did_not_pick_is_recorded_and_enqueues_nothing",
+    "backend/tests/test_jellyfin_intake.py::test_the_delta_poll_is_scoped_to_the_libraries_the_admin_picked",
+    "backend/tests/test_jellyfin_client.py::test_the_delta_read_is_scoped_to_the_libraries_the_admin_picked",
+    "backend/tests/test_jellyfin_link.py::test_the_libraries_the_pick_picks_from_are_listed_from_the_server",
+    "backend/tests/test_jellyfin_link.py::test_the_library_pick_is_stored_by_the_save_and_reported_by_the_card",
+    "backend/tests/test_jellyfin_link.py::test_a_partial_save_keeps_the_stored_pick_and_an_explicit_empty_list_widens_it",
+    "backend/tests/test_jellyfin_intake.py::test_one_key_the_server_will_not_answer_for_does_not_wedge_the_keys_behind_it",
+    "backend/tests/test_jellyfin_client.py::test_the_membership_read_answers_for_an_episode_id",
+    "backend/tests/test_connector_registry.py::test_the_library_pick_survives_the_move_that_drops_the_credentials",
+    "backend/tests/test_jellyfin_link.py::test_a_library_id_this_column_cannot_hold_is_refused_at_the_edge_and_not_by_postgres",
+    "backend/tests/test_jellyfin_client.py::test_an_envelope_whose_items_are_not_objects_is_a_failed_read_at_every_read_that_pages",
+    "backend/tests/test_connector_registry.py::test_a_url_edit_keeps_the_watermark_and_a_move_drops_it",
+    "backend/tests/test_connector_registry.py::test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermark",
+    "backend/tests/test_jellyfin_intake.py::test_a_picked_library_the_server_no_longer_lists_holds_back_only_what_it_might_hold",
+    "backend/tests/test_jellyfin_intake.py::test_a_poll_whose_pick_names_a_library_the_server_lost_files_the_rest_and_holds_on",
+    "backend/tests/test_jellyfin_client.py::test_the_membership_read_sends_no_parent_id_a_stale_pick_could_break",
+    "backend/tests/test_jellyfin_client.py::test_an_envelope_with_no_list_of_items_is_a_failed_read_and_never_an_empty_answer",
+    "backend/tests/test_jellyfin_link.py::test_the_pick_is_stored_once_in_the_servers_spelling_and_never_blank_or_nil",
+    "backend/tests/test_jellyfin_intake.py::test_a_refusal_about_the_server_stops_the_sweep_though_the_server_answers",
+    "backend/tests/test_jellyfin_intake.py::test_an_outage_stops_the_sweep_at_the_first_key_and_asks_about_no_other",
+    "backend/tests/test_jellyfin_client.py::test_an_answer_nested_past_the_decoders_depth_is_a_failed_read_and_never_an_escape",
+    "backend/tests/test_jellyfin_client.py::test_an_item_answers_only_under_a_library_that_holds_it",
+    "backend/tests/test_jellyfin_client.py::test_a_row_no_listed_library_can_place_is_a_failed_read_and_never_an_absence",
+    "backend/tests/test_jellyfin_intake.py::test_a_403_on_one_key_is_that_keys_and_the_sweep_goes_on",
+]
+# Decision 364's last sentence - a membership read that FAILS leaves the row pending - had one
+# test, and it used a transport where nothing answers at all. A 4xx the one id in `ids=` provoked
+# raises the same `JellyfinError`, so it stopped the whole sweep; the ripe set is swept
+# oldest-first, so that key was first on every later sweep too and one unanswerable id wedged the
+# household's entire webhook intake with the job still recording `ok`. The client test beside it
+# is what makes the `IncludeItemTypes` this read deliberately omits falsifiable: narrowed, it
+# would answer None for an episode id and the sweep would record the household's own add as a
+# library the admin did not pick. The registry test pins the one value in that merge with no
+# `moved` branch: the pick is the admin's own intent rather than a credential this app would send
+# or a fact it derived, and `moved` fires on the same install at a corrected address, so dropping
+# it would widen the boundary to the whole server on the commonest of those gestures -- the
+# household billed for the library they deselected, which is the harm the custody branch beside it
+# already refuses. [M5.2 review cycle 1: M52-INTAKE-02, M52-C1-MEMBER-03, m52-rev-lib-01]
+# Decision 364: an EMPTY pick means the whole server, which is the state of every install in
+# existence, so this row is about the non-empty case and the empty one is what keeps the
+# milestone from shipping a webhook that enqueues nothing anywhere. [M5.2]
+# The three admin-route tests are the other half of "the same item AFTER the library is picked":
+# the clause names a gesture, and until M5.2 there was no list to pick from and no route that
+# wrote the pick, so the only way to reach the picked state was to call `save_jellyfin` from
+# Python. A boundary that can only be drawn by a test is not a boundary §6.6 offers a household.
+# The empty-list half is registered here too, because it is the same route proving that decision
+# 364's two answers stay distinguishable over HTTP. [decision 364; M5.2]
+#
+# Review cycle 2 added the two ids below, and both are about a value this boundary is drawn with
+# rather than about the boundary's rule. The route that writes the pick argued its own bounds in
+# a comment - "the place to answer for one is the edge, as a 422" - and then enforced two of the
+# three: a NUL in a picked library id travelled untouched into the connector row's jsonb, where
+# it is a character Postgres holds nowhere, so the save answered 500 `database error` and was
+# lost. Nothing asserted the length bounds either, which makes a `max_length` a number rather
+# than a bound. The client id is the membership read's own answer: review cycle 1 made a body
+# that is not an ENVELOPE a failed read, and an envelope whose `Items` are not objects reached
+# `.get` on a `str` one line later -- an `AttributeError`, which is not a `JellyfinError`, so it
+# escaped the sweep's handling and wedged it exactly as the id decision 364 leaves pending does
+# not. [M5.2 review cycle 2: m52-c2-libid-01, m52-c2-lib-03, m52-c2-lib-02]
+#
+# Review cycle 2 registered the two registry ids below, and they are the `moved` branch of the
+# same merge the pick's own move test above pins, read at its other two values. `save_jellyfin`
+# rebuilds the plaintext half out of what it was handed, so one branch decides what a corrected
+# address does to the boundary the admin drew: the pick has no `moved` branch and the watermark
+# has one, and both answers are right for opposite reasons. Neither was named by any row, so a
+# refactor of that merge could drop either test while this map still reported the boundary as
+# covered -- and the custody id is the only assertion anywhere that a SECRETS_KEY failure
+# followed by a URL correction leaves `library_ids` standing, which is decision 364's boundary
+# silently widening to the whole server on the commonest gesture a broken install invites.
+# [M5.2 review cycle 2: m52-rev2-delta-04]
+#
+# REVIEW CYCLE 3 ADDED FIVE, BECAUSE THE DOUBLE ANSWERED A STALE PICK THE WAY NO SERVER DOES.
+# `ops/fake_jellyfin.py` returned an empty page for a `ParentId` naming no folder and called it
+# "the honest answer"; Jellyfin 10.9 and 10.10 answer 400 (`GetParentItem` throws "Invalid
+# parent id"). So on a real server a library deleted and re-created while picked made the
+# membership read raise on the first scope before asking the next, every add stayed pending, and
+# the delta poll raised on every run with a frozen watermark -- while every id in this row passed.
+# The double now 400s it, and decision 410 reads the stale id off `/Library/MediaFolders` once
+# per sweep and per poll. The envelope id is the same guard one level up: `{}` or `{"Items":
+# null}` was an authoritative empty answer, and a numeric `Items` a `TypeError` past every
+# handler. The admin id is the edge: a blank pick reached `ParentId` as whitespace, which ASP.NET
+# binds to a null `Guid?` -- the whole server. [M5.2 review cycle 3: M52-C3-LIB-02, M52-C3-LIB-04,
+# M52-C3-LIB-06, M52-C3-SWEEP-04]
+#
+# THE LAST TWO ARE THE STOP THE 400 TEST ABOVE WAS CARVED OUT OF, WHICH NOTHING ASSERTED. Review
+# cycle 1 made a refusal about one key a `continue` and kept the outage a whole-sweep stop, and
+# `_SERVER_WIDE` names the four statuses that are about the server though they arrive on one
+# key's read. The only outage test had ONE ripe key, which files the same report whether the
+# loop stops or carries on, and since decision 410 its non-empty pick fails at
+# `/Library/MediaFolders` before any key is asked about at all -- so `_SERVER_WIDE` emptied, or
+# `_about_the_key` made to answer True, left every test green: a revoked admin key re-read per
+# ripe key on every sweep, and an outage spending the client's timeout on each key in turn until
+# the job's budget ran out. Two and three ripe keys, and the request log asserted, make the stop
+# something a test can fail. [M5.2 review cycle 3: M52-C3-SWEEP-06]
+#
+# THE LAST ID IS THE ENVELOPE GUARD ONE LAYER DOWN, FOUND AFTER THE CYCLE'S FIXES LANDED. `_request`
+# read an unparseable answer as no answer by catching `ValueError`, and `json.loads` over a body
+# nested past its depth limit raises `RecursionError` instead -- not a `JellyfinError`, so it left
+# the sweep at its oldest ripe key on every run, and the poll and the admin route with it. It is
+# now the failed read an HTML page in the same place already was. [M5.2 review cycle 3, green pass]
+
+[[requirement]]
+id = "jellyfin-acquisition-eval-the-webhook-survives-what-a-real-server-sends"
+spec = "§7.2 (\"POST /events/jellyfin (ItemAdded), token-authed\")"
+milestone = "M5.2"
+kind = "integration"
+what = "A wrong, absent or unspellable token is refused without enqueueing, and the token an operator pastes is the one an admin was shown - no save nobody is watching mints it, and neither does a Save that did not ask for one; an unreadable secrets key degrades with the reason rather than 500ing; a payload missing the fields the handler relies on, or carrying a body this schema cannot hold, is accepted and recorded rather than rejected or 500ed; a body whose free text forges a duplicate of a field the handler acts on is filed under the value the plugin actually sent and not under the forged one; a title the published template carries - one with a double quote, an apostrophe, an ampersand or a letter outside ASCII in it - keeps its add and reaches the record as the library spells it, rendered through the encoder the plugin's Handlebars.Net actually defaults to, and the template calls no helper the plugin Jellyfin 10.10 runs cannot resolve and names the item types the plugin ticks on a new destination that this app does not acquire, as boxes to untick; and a worker restart inside the 10-minute window still yields one job for the burst - as does a worker cut between the enqueue and the record of it, which leaves the rows pending rather than marked enqueued beside a task that was never filed, and as do two sweeps running at once, of which only one decides the rows. A body larger than any template, a sender that leaves mid-body and one whose body never finishes are each recorded with that reason and answered 202 rather than 500 or a traceback, none of them holds a pooled connection while its body arrives, and a value a delivery carried reaches the log escaped and never as a line of its own."
+why = "The Webhook plugin sends an operator-configured template and fills it with a title it has quote-escaped and, inside two braces, HTML-encoded rather than written as JSON, so no clause fixes the fields, a title can break the parse, and a helper the plugin lacks throws away the whole delivery; and a webhook the app rejects is one the operator never learns about. The pending set has to be durable because §5.3 files every job as durable and a restart inside the window would otherwise drop the whole scan."
+tests = [
+    "backend/tests/test_jellyfin_intake.py::test_the_burst_survives_a_sweep_that_stops_and_starts_inside_the_window",
+    "backend/tests/test_jellyfin_intake.py::test_a_payload_missing_a_field_the_handler_acts_on_is_recorded_and_not_refused",
+    "backend/tests/test_jellyfin_intake.py::test_a_body_that_is_not_an_object_is_read_as_a_refusal_rather_than_raising",
+    "backend/tests/test_jellyfin_intake.py::test_a_template_for_another_event_is_recorded_and_not_acted_on",
+    "backend/tests/test_jellyfin_webhook.py::test_a_wrong_token_is_refused_and_records_nothing",
+    "backend/tests/test_jellyfin_webhook.py::test_a_delivery_with_no_token_header_at_all_is_refused_and_records_nothing",
+    "backend/tests/test_jellyfin_webhook.py::test_an_unreadable_secrets_key_answers_with_the_reason_and_never_500s",
+    "backend/tests/test_jellyfin_webhook.py::test_a_body_that_is_not_json_is_accepted_and_recorded_rather_than_refused",
+    "backend/tests/test_jellyfin_webhook.py::test_the_published_template_renders_a_body_this_route_acts_on",
+    "backend/tests/test_route_inventory.py::test_every_route_outside_the_anonymous_allow_list_refuses_a_signed_out_caller",
+    "backend/tests/test_jellyfin_webhook.py::test_a_token_header_that_is_not_ascii_is_refused_and_records_nothing",
+    "backend/tests/test_jellyfin_webhook.py::test_a_body_this_schema_cannot_hold_is_recorded_rather_than_answered_with_a_500",
+    "backend/tests/test_jellyfin_intake.py::test_an_item_id_too_long_to_ask_the_server_about_is_recorded_and_never_asked",
+    "backend/tests/test_connector_registry.py::test_a_save_no_admin_performed_does_not_mint_the_token_no_admin_would_see",
+    "backend/tests/test_connector_registry.py::test_two_first_saves_at_once_are_told_the_same_token",
+    "backend/tests/test_jellyfin_intake.py::test_a_poll_does_not_mint_the_webhook_token_no_admin_would_ever_see",
+    "backend/tests/test_jellyfin_link.py::test_a_save_the_connectors_page_sends_mints_no_token_nobody_would_see",
+    "backend/tests/test_jellyfin_link.py::test_a_url_no_request_can_be_sent_to_is_saved_rather_than_answered_500",
+    "backend/tests/test_jellyfin_webhook.py::test_a_title_that_forges_a_field_cannot_move_the_delivery_to_another_item",
+    "backend/tests/test_jellyfin_intake.py::test_a_sweep_cut_between_the_enqueue_and_the_record_of_it_loses_no_add",
+    "backend/tests/test_jellyfin_intake.py::test_two_sweeps_at_once_file_one_task_and_only_one_of_them_decides_the_rows",
+    "backend/tests/test_jellyfin_webhook.py::test_a_body_larger_than_any_template_is_recorded_as_too_large_and_not_stored",
+    "backend/tests/test_jellyfin_webhook.py::test_a_sender_that_leaves_mid_body_is_recorded_and_writes_no_traceback",
+    "backend/tests/test_jellyfin_webhook.py::test_a_body_that_trickles_holds_no_pooled_connection_and_is_cut_at_its_deadline",
+    "backend/tests/test_jellyfin_intake.py::test_a_value_a_delivery_carried_is_logged_escaped_and_never_as_a_line_of_its_own",
+    "backend/tests/test_jellyfin_webhook.py::test_a_title_the_plugin_writes_into_the_json_keeps_its_add_and_its_name",
+    "backend/tests/test_jellyfin_webhook.py::test_a_two_brace_field_is_encoded_the_way_the_plugins_handlebars_encodes_it",
+    "backend/tests/test_jellyfin_webhook.py::test_the_published_template_names_the_item_types_to_untick_and_not_only_those_to_tick",
+]
+# THE CLAUSE WIDENED IN REVIEW CYCLE 1, TWICE, BECAUSE BOTH HALVES OF IT WERE TRUE ONLY OF WHAT
+# THE SUITE HAPPENED TO SEND. "A wrong token is 401" held for tokens spelled in ASCII: a header
+# carrying one byte >= 0x80 arrives latin-1-decoded, `hmac.compare_digest` raises `TypeError` on
+# a non-ASCII `str`, nothing in `app.py` catches it, and the app's one stranger-reachable route
+# answered 500 with a traceback. "Recorded rather than rejected" held for bodies that would not
+# parse: four that `json.loads` ACCEPTS and this schema will not take answered 202 and then
+# raised out of the INSERT, recording nothing - which is the pair decision 365 forbids together.
+#
+# The three mint ids are decision 416, and the failure they pin is not about a delivery at all:
+# the token was minted by whichever save reached the merge first, which on every install
+# configured before this milestone is a background job that drops the value. Decision 332 gives
+# it ONE appearance and this app has no rotation route, so the intake path was unauthenticatable
+# for ever while §6.6's card reported that a token existed. The concurrency test is the same
+# clause one layer down - the first save is the save that mints, and the row it locks did not
+# exist. [M5.2 review cycle 1: m52-rev-events-01, m52-rev-events-02, M52-INTAKE-01,
+# M52-INTAKE-02, m52-rev-delta-01, m52-rev1-token-01, m52-rev1-token-02]
+# Decisions 363 and 365: the pending set is a table, so the restart clause is tested by
+# stopping and restarting the SWEEP rather than the process, and the token check runs before
+# the tolerance so that the route refuses a signed-out caller the way decision 367 needs it
+# to. [M5.2]
+#
+# THE LAST ID IS THE ONE THAT MAKES THAT SENTENCE FALSIFIABLE, and it was the clause resting on
+# nothing. The four `test_jellyfin_webhook.py` token tests ask this route what it answers; none of
+# them can say that the route is SWEPT - and decision 367's whole argument for keeping the webhook
+# out of `ANONYMOUS` is that rule 1 covers it honestly rather than excusing it. That is a property
+# of the route table, not of the handler: until M5.2 the inventory read `/api/` alone, so the
+# webhook was outside every rule it has, and a token check deleted tomorrow would have left all
+# four of those tests to be deleted with it and nothing else complaining. The sweep drives every
+# non-allow-listed route with no cookie and no token header and requires 401, which is the absent-
+# token half of this row's first clause asked of the whole app at once. [M5.2; decision 367]
+#
+# THE FORGERY ID IS DECISION 405, and it is the half of decision 365's quoting argument that
+# was published as impossible: the template's note said an unescaped title renders "a body no
+# JSON parser will read", and the milestone tested exactly that. A name that closes its own
+# string and opens a second key renders a body that PARSES, and `json.loads` keeps the last of
+# two duplicate keys - so with the acted-on fields emitted first, a title could file the add
+# under another item's id, file a season under another show, or suppress itself by forging its
+# own `NotificationType`, and every id above stayed green. Titles are attacker-influenced for
+# anything acquired from the internet. The template now emits those four fields last and this
+# test is what holds the order. [M5.2 review cycle 1: m52-rev-template-03; decision 405]
+#
+# REVIEW CYCLE 3 FOUND THAT BOTH HALVES OF THAT ARGUMENT MODELLED A RENDERER THE PLUGIN IS NOT,
+# and added the last id. The plugin backslash-escapes each quote in `Name` and `SeriesName` and
+# HTML-encodes every two-brace field, so through the real plugin a title could forge nothing -
+# and under the published `{{Name}}` a title with a quote in it rendered `\&quot;`, was recorded
+# as an unreadable payload and never enqueued, while "Law & Order" reached the record as an
+# entity. The template writes the two names with three braces now; `_render` renders as the
+# plugin does, and the forgery id renders twice - as the plugin does, and as a plugin that
+# stopped escaping would, which is the one renderer under which decision 405's order still
+# decides anything. The finding's `json_encode` was refused: it first shipped in plugin 18, and on
+# the plugin Jellyfin 10.9 and 10.10 run an unknown helper throws and nothing is delivered.
+# [M5.2 review cycle 3: M52-C3-EVENTS-05; decision 417]
+#
+# REVIEW CYCLE 2 ADDED THE TWO SWEEP IDS, BECAUSE THE DURABILITY CLAUSE WAS TESTED ONLY WHERE
+# THE SWEEP HAD NOTHING TO DO. The restart test above stops and starts the sweep at minute five,
+# inside the window, so it asserts a sweep that decides nothing; `sweep_pending`'s own docstring
+# meanwhile argues three things about a sweep interrupted while it is deciding, and a build with
+# the enqueue and the record of it reordered out of their transaction passed every one of these
+# ids. Cut there, twelve rows read `enqueued` beside a task that was never filed, the next sweep
+# finds nothing ripe, and the household's whole season is an add nobody ever looks for again --
+# the inverse of this milestone's thesis, reachable from a 120-second budget. The second id is
+# the two-sweeps case `queue.lease` calls the ordinary state of a rolling restart: without the
+# `state = 'pending'` in `_DECIDE` the table and the queue still agree and only the REPORTS lie,
+# which nothing single-threaded can see. [M5.2 review cycle 2: M52-C2-INTAKE-02]
+#
+# REVIEW CYCLE 3 ADDED FOUR, AND EACH IS A TOKEN HOLDER'S BODY THE ROUTE COULD NOT SURVIVE. It
+# read `await request.body()` with no bound, no deadline and a pooled connection already checked
+# out: 45 MB of JSON zeros died in the jsonb cast as a 500 with nothing recorded, a sender that
+# left mid-body raised `ClientDisconnect` past every handler into a uvicorn traceback, and ten
+# sockets sending headers and then nothing took the pool to idle 0 for every phone in the house.
+# The fourth is the log: `ItemType` carrying a newline wrote a forged line of its own.
+# [M5.2 review cycle 3: M52-C3-EVENTS-02, M52-C3-EVENTS-03, M52-C3-EVENTS-06, M52-C3-SWEEP-07]
+#
+# REVIEW CYCLE 4 ADDED THE LAST ID, AND IT IS THE NOTE AND NOT THE ROUTE. The plugin ticks all
+# seven of its Item Type boxes on a destination it has just added, and the note named only the
+# three to keep, so every season of a new show and every track of an album arrived as a delivery
+# that cost a row, a server read inside the sweep's budget and a skipped row reading as a fault.
+# The boxes to keep are derived from `resolve.kind_of` and decision 369's Episode arm, so the note
+# reddens if the app ever acquires a type it tells the operator to untick. [M5.2 review cycle 4:
+# M52-C4-WH-03; decision 365]
+#
+# AND THE ID BEFORE IT IS THE RENDERER'S OWN, BECAUSE EVERY TEMPLATE ID ON THIS ROW STANDS ON
+# `_render` AND `_render` MODELLED THE WRONG ENCODER. Handlebars.Net 2.1.6 ships `HtmlEncoder` and
+# `HtmlEncoderLegacy` and defaults to the second, which leaves an apostrophe, a backtick and `=`
+# alone and writes every UTF-16 code unit above 159 as `&#N;`; the suite modelled the first. No
+# delivery differed, since every two-brace field of the template is ASCII, and the title id,
+# which carried no name outside ASCII, now carries two. The expected strings are the library's
+# source worked by hand, not the renderer's own table read back. [M5.2 review cycle 4:
+# M52-C4-WH-02; decision 417]
 
 [[requirement]]
 # Re-pointed from "M5" to M5.3 under decision 321, and this is M5.3's gate row: the one
@@ -4982,9 +5376,9 @@ id = "platform-the-suite-says-whether-the-integration-layer-ran"
 spec = "§12 (a green suite is the evidence a milestone closes on)"
 milestone = "M4.8"
 kind = "backend"
-what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside `current_milestone` whose source carries one of that milestone's review cycles as provenance is one of the rows it names. An id total published over three layers discloses how many of it are vitest ids, a milestone's id total goes on being re-derived after that milestone closes - against the map of the block the sentence sits in rather than the current one - and a decision number the ledger publishes as still available is one the register has not already argued; and the milestone whose block is being written states its amended-rows count in the form that guard reads, in the singular as well as the plural, because a claim the guard cannot see satisfies it for free."
+what = "Every pytest run prints one ASCII line, at default verbosity and at -q, naming whether the integration layer is armed, against which host and database, and where the URL came from; `--no-db` disarms it and the db/app/pg_url tests skip rather than creating a database. Both the header hook and the session-start hook emit it. The ledger that publishes the flag to operators says what an unarmed run actually prints, measured against pytest rather than asserted, and the milestone counts in its `Current state` block are the counts this gate prints rather than a number pasted by hand. A count of rows a milestone amended in place names those rows, so it can be reconciled against this map rather than taken on trust, and every row outside `current_milestone` whose source carries one of that milestone's review cycles as provenance is one of the rows it names. An id total published over three layers discloses how many of it are vitest ids, a milestone's id total goes on being re-derived after that milestone closes - against the map of the block the sentence sits in rather than the current one - and a decision number the ledger publishes as still available is one the register has not already argued; and the milestone whose block is being written states its amended-rows count in the form that guard reads, in the singular as well as the plural, because a claim the guard cannot see satisfies it for free; and every register block written for a milestone building beside the current one opens with the count it holds, a later review cycle under a heading of its own."
 why = "conftest auto-loads an untracked .env.test, so `pytest backend/tests` silently becomes an integration run that creates and drops databases and shells out to docker on whatever host that file names. The inverse is equally silent: 544 passed / 680 skipped reads exactly like 1,222 passed / 2 skipped. pytest hides the report header under -q, the verbosity CLAUDE.md and ci.yml both use. Review cycle 3: the disarm clause had nothing behind it. The arming line reads the option and pg_url reads the URL, two independent readings that meet only in pytest_configure's two lines, and the three tests here held the string and the two hooks. With the hook renamed away and pytest_addoption untouched -- so `--no-db` still parses -- the run prints UNARMED and creates <base>_p<pid>, runs the integration layer and shells out to `docker exec` from test_backup.py, and every registered test stayed green. Review cycle 3 found two claims about this instrument that nothing measured. The paragraph arguing why the line has to exist said `-q` prints skips as dots: it prints them as `s` and counts them in the summary, so the sentence told the maintainer CLAUDE.md sends to that file that a skipped run is typographically indistinguishable from a green one and there is nothing to look for -- while the argument that IS true, that nobody weighs the count, needed no false clause to make it. And the guard added in cycle 2 to hold the ledger's published counts to the ones this gate prints was the one test this milestone left registered on no row, so rule 2 -- the project's only mechanical protection against a guard disappearing -- could not see it deleted or renamed, and decision 184's refusal to invent a number in that ledger would have gone back to resting on nothing. Review cycle 4 found the third clause of this sentence -- where the URL came from -- held only at the rendering: all three arming-line tests handed the source in as a string literal, and _URL_SOURCE's derivation is read nowhere else in the tree, so the tidy-up conftest.py:21-26 spends six lines anticipating (compute the source once, when the URL is settled) left arming_line's body byte-identical, every test green, and every run on the household machine printing `(source: env)` over a URL nobody exported -- which is the half of the line an operator acts on, since `env` asserts a deliberate export and the untracked file is what silently turns `pytest backend/tests` into an integration run. M5.1 review cycle 1 found the amended-rows guard reading nothing at all for this milestone: it matches a bolded PLURAL banner (`N rows the map already had were amended in place`), M5.1 amended one row, and `One rows ... were amended` is the only sentence that form admits - so the milestone wrote the truth in prose and all five clauses skipped it, including the one clause nothing else in the tree covers, that an id has not been renamed out from under the ledger. M5.2 through M5.7 are each sized to amend about one row, so the blind spot was six claims wide. The pattern is widened to the singular rather than the prose bent to the plural, and the milestone currently being written is held to the form, which is the half a conditional guard cannot hold by itself."
-tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes", "backend/tests/test_spec_coverage.py::test_every_published_decision_range_ends_where_the_register_does", "backend/tests/test_spec_coverage.py::test_the_register_block_opens_with_the_number_of_decisions_it_holds", "backend/tests/test_static_contracts.py::test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent", "backend/tests/test_static_contracts.py::test_the_range_guard_reads_both_claims_the_ledger_can_make", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes", "backend/tests/test_spec_coverage.py::test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard", "backend/tests/test_spec_coverage.py::test_the_amended_rows_guard_reads_the_banner_a_one_row_milestone_writes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended", "backend/tests/test_spec_coverage.py::test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing"]
+tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the_database_and_where_the_url_came_from", "backend/tests/test_harness_fixtures.py::test_the_unarmed_line_says_why_it_is_unarmed", "backend/tests/test_harness_fixtures.py::test_the_arming_line_learns_the_source_before_the_loader_erases_it", "backend/tests/test_harness_fixtures.py::test_both_report_hooks_emit_the_arming_line", "backend/tests/test_harness_fixtures.py::test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed", "backend/tests/test_harness_fixtures.py::test_the_ledger_describes_the_skip_pytest_actually_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_publishes_the_counts_the_gate_prints", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_the_map_actually_holds", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_decomposition_sums_to_the_count_it_publishes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_does_not_claim_a_skip_this_milestone_did_not_take", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_the_rows_it_says_it_amended", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_says_the_vitest_ids_are_inside_the_figure_it_publishes", "backend/tests/test_spec_coverage.py::test_every_published_decision_range_ends_where_the_register_does", "backend/tests/test_spec_coverage.py::test_the_register_block_opens_with_the_number_of_decisions_it_holds", "backend/tests/test_static_contracts.py::test_the_testing_ledger_hands_out_no_decision_number_the_register_has_spent", "backend/tests/test_static_contracts.py::test_the_range_guard_reads_both_claims_the_ledger_can_make", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_counts_the_ids_of_every_milestone_it_publishes", "backend/tests/test_spec_coverage.py::test_the_amended_rows_claim_of_the_current_milestone_is_read_by_its_guard", "backend/tests/test_spec_coverage.py::test_the_amended_rows_guard_reads_the_banner_a_one_row_milestone_writes", "backend/tests/test_spec_coverage.py::test_the_testing_ledger_names_every_row_this_milestone_marked_as_amended", "backend/tests/test_spec_coverage.py::test_the_amendment_mark_reader_tells_a_review_cycle_from_a_re_pointing", "backend/tests/test_spec_coverage.py::test_a_milestone_building_beside_the_current_one_counts_its_blocks_too"]
 # The ledger guard is registered here rather than given an eleventh row, and the row it lands on
 # is the one about the suite reporting truthfully on itself: `docs/TESTING.md` is where a green
 # run is published, so a count no run produced is the same defect as a silent skip, one document
@@ -5036,6 +5430,10 @@ tests = ["backend/tests/test_harness_fixtures.py::test_the_arming_line_names_the
 # row's two reasons exactly: the defect is a published figure a later run overtook, and a twelfth
 # M4.15 row would flip that milestone's published block to 12/12 and redden the sibling guard
 # above until the block was re-pasted. [M4.15 review cycle 1: M415-C1-COV-01, m415-c1-e2e-05]
+# The last id is the block-count guard for the milestones building BESIDE the current one, which
+# a parallel wave has and the guard above cannot read: M5.2's first review cycle opened on no
+# count over five decisions, two of them its second cycle's, while M5.1 held the scalar and no
+# lane could raise it. [M5.2 review cycle 3: M52-C3-PAPER-05]
 
 [[requirement]]
 id = "platform-orphaned-per-process-test-databases-are-reaped"
@@ -6116,13 +6514,19 @@ id = "jellyfin-sync-ownership-is-falsified-when-the-library-drops-a-title"
 spec = "§7.2 (\"mark removed titles is_owned = false\")"
 milestone = "M4.11"
 kind = "integration"
-what = "A title removed from Jellyfin becomes `is_owned = false` with a fresh `owned_checked_at` on the next completed sweep and leaves Tonight's pool and the owned Home shelves; a later seen/unseen tap on it is refused as \"not on Jellyfin\" rather than spending a round trip on the dead item id; a sweep that could not read the library un-owns nothing."
+what = "A title removed from Jellyfin becomes `is_owned = false` with a fresh `owned_checked_at` on the next completed sweep and leaves Tonight's pool and the owned Home shelves; a later seen/unseen tap on it is refused as \"not on Jellyfin\" rather than spending a round trip on the dead item id; a sweep that could not read the library un-owns nothing, and the delta poll never writes ownership at all - the completed sweep stays the only path that can falsify it, §7.2's own bullet says so under decision 362, and the full sweep never reads the library pick decision 364 draws for acquisition alone."
 why = "§7.2: 'mark removed titles `is_owned = false` ... re-derived from Jellyfin, never trusted stale'. Nothing wrote false, so a deleted film stayed in the candidate pool with a dead deep link."
 tests = [
     "backend/tests/test_seen_sync.py::test_a_sweep_that_could_not_read_the_library_un_owns_nothing",
     "backend/tests/test_seen_sync.py::test_a_title_removed_from_jellyfin_is_no_longer_owned",
     "backend/tests/test_seen_sync.py::test_a_tap_on_a_title_the_library_dropped_is_refused_rather_than_sent",
     "backend/tests/test_jellyfin_resolve.py::test_ownership_is_re_derived_not_trusted_stale",
+    "backend/tests/test_seen_sync.py::test_no_second_path_learns_to_write_the_ownership_column",
+    "backend/tests/test_seen_sync.py::test_the_ownership_guard_tells_a_statement_from_the_argument_about_one",
+    "backend/tests/test_jellyfin_intake.py::test_neither_feeder_writes_the_ownership_column_and_the_full_sweep_visibly_does",
+    "backend/tests/test_seen_sync.py::test_no_second_caller_reaches_the_shipped_ownership_writers",
+    "backend/tests/test_seen_sync.py::test_the_normative_file_gives_the_ownership_column_to_the_full_sweep_alone",
+    "backend/tests/test_seen_sync.py::test_the_library_pick_bounds_acquisition_and_never_ownership",
 ]
 # The refusal is named FIRST on purpose. This is the most destructive statement the milestone
 # adds -- a bug here un-owns the whole library, empties Tonight's pool and blanks the owned Home
@@ -6134,6 +6538,36 @@ tests = [
 # refusal and could not reach it, since the refusal is gated on a null `title.jellyfin_id` and
 # nothing clears that pointer. §6.7's rail prints the reason verbatim, so the household read the
 # raw HTTP line instead. [review cycle 1: M411-REV-03]
+#
+# The last clause is M5.2's and decision 362 is what puts it here rather than in a row of
+# its own: §7.2 makes BOTH intake paths responsible for removals, and a `DateCreated >`
+# delta poll is an add detector by construction that can never observe an absence. So the
+# rule is asserted from the new path's side too - no ownership write from the delta path
+# at all - and the four test ids above stay exactly as M4.11 left them, the refusal named
+# first. The first two ids that measure the new clause are static: the guard walks the
+# package for the write itself, and its own falsifier is named beside it -- a guard that
+# cannot fail is the same absence one level up. [M5.2; decision 362]
+#
+# THIS PARAGRAPH USED TO SAY THOSE TWO HAD TO BE STATIC BECAUSE "AN ABSENCE HAS NO RUN THAT
+# OBSERVES IT", and `ops/m52_exit_criterion.py`'s check 11 is exactly such a run: it diffs
+# `(is_owned, owned_checked_at)` across the polls and deliveries and proves in the same run
+# that the differ can see the full sweep's write. Only the owner runs that script, so CI held
+# the clause with the literal walk alone, which is blind to a new CALLER of the writers that
+# already ship and never reads `owned_checked_at`: a poll that "kept ownership fresh on add"
+# with `upsert_items`, `prune_missing_items` and `_falsify_ownership` over its fifteen-minute
+# window un-owned everything outside it and pruned the copy map with every id in this row
+# green, and so did a bare `owned_checked_at = now()`. The two ids after the static pair close
+# that from both sides: check 11's twin runs both feeders over an owned household and shows its
+# own differ seeing the full sweep, and the caller guard names the five references the four
+# writers ship with, so a sixth is red before anything runs. [M5.2 review cycle 3: m52-c3-own-03]
+#
+# The last two ids hold the same rule in the two records a reader meets before the code. §7.2's
+# third bullet still gave the column to "Both paths" three review cycles in, because decision 362
+# left its amendment to "the milestone that holds the spec file" and the file's own v2.1.1 line
+# left it to M5.2 - so by CLAUDE.md's rule the spec asked for the falsifier this row forbids. And
+# decision 364's heading called the library pick an "ownership" boundary; a later milestone that
+# took it at its word would scope the full sweep by the pick, and `_falsify_ownership` would
+# un-own every deselected library. [M5.2 review cycle 3: M52-C3-PAPER-02, M52-C3-PAPER-06]
 
 [[requirement]]
 id = "jellyfin-sync-the-sweep-is-bounded-and-cannot-wedge-the-worker"
@@ -8689,6 +9123,16 @@ why = "Nothing enumerated the routes: `test_api_gating.py` sweeps the ones that 
 # fallback, which is anonymous by design and is named in `CONFIGURED_SURFACES` with its reason.
 # ZERO unguarded: the nine the plan's draft found are closed, the last of them by M4.12 giving
 # the Tonight channel `active_user_ws` instead of a hand-rolled cookie read.
+# Re-measured at M5.2 on 2026-09-18: ninety-five rows under pytest - 83 guarded, 3 session-only
+# and 9 anonymous - and ninety-six with a static build configured. Four more than M4.16 counted,
+# and three of the four are ordinary `AdminUser` routes: M5.1's two acquisition-board GETs and
+# M5.2's `GET /api/admin/connectors/jellyfin/libraries`. The fourth is §7.2's
+# `POST /events/jellyfin`, the ninth anonymous entry and the first of them that is authenticated
+# rather than open - its token is checked in the handler body, so the dependant `_verdict` reads
+# is empty and `unguarded` is the honest verdict rather than a concession. Decision 367 keeps it
+# OUT of `test_route_inventory.py`'s list of the same name for the opposite reason: that one asks
+# every entry to answer a stranger something other than 401, which this route cannot do. STILL
+# ZERO unnamed, which is the figure above stated exactly. [decision 367; M5.2]
 # NOT the same claim as M4.10's `platform-every-http-route-is-named-by-a-test`, and a reader who
 # reads them as one will delete the wrong guard. That row asks whether a route is NAMED by some
 # test - an inventory question about the suite. This one asks whether a route RESOLVES a session
@@ -8708,7 +9152,7 @@ tests = [
     # it, but inside the staleness check - which iterates ANONYMOUS, and no key of that dict is a
     # key of ANONYMOUS, so the clause was a predicate that could not be false while the assertion
     # that fires would have rejected the configured app. The exemption moved to the assertion that
-    # can see it, in the position `test_route_inventory.py:351` already uses for the same route.
+    # can see it, in the position `test_route_inventory.py:402` already uses for the same route.
     # [M4.16 cycle 1, M416-REV-ARCH13-02]
     # Review cycle 4, and the sentence at issue is this `what`'s "or in `CONFIGURED_SURFACES`
     # for the one surface only a static build registers". `_unnamed` subtracts that dict in BOTH
@@ -9260,7 +9704,7 @@ id = "platform-the-proposal-ledger-counts-itself"
 spec = "README.md; docs/spec-v2.2-proposals.md header"
 milestone = "M4.16"
 kind = "static"
-what = "The number of `### N.` entries in docs/spec-v2.2-proposals.md equals the count README publishes and the count the file's own header publishes, the decision range each states ends at the highest decision the register holds, any sittings clause either publishes states the number of distinct dated sittings that actually carry a numbered owner decision and the first and last of those dates, and no `### N.` entry spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it, and every number below the highest entry that the file does not head is named as unspent by its header or by the sitting that left it."
+what = "The number of `### N.` entries in docs/spec-v2.2-proposals.md equals the count README publishes and the count the file's own header publishes, the decision range each states ends at the highest decision the register holds, any sittings clause either publishes states the number of distinct dated sittings that actually carry a numbered owner decision and the first and last of those dates, and no `### N.` entry spends a number docs/milestones/ROADMAP-M5.md files against a milestone that is not the one whose sitting holds it; every number below the highest entry that the file does not head is named as unspent by its header or by the sitting that left it; no number is headed twice, and README's count of the sittings the register holds in all is the number of distinct dates its dated blocks fall on."
 why = "README and the header both said \"161 ... all seven owner decisions were taken on 2026-08-29\" over a file holding 270 entries and nine sittings, while README itself cited decisions 162 and 163 fifty lines further down. A count nobody re-derives is a measurement nobody made."
 # 286 entries as this milestone opens, the last of them 303. Both figures move again if a review
 # cycle takes a decision, which is the point: the guard re-derives rather than pasting.
@@ -9295,6 +9739,16 @@ tests = [
     # allocation. [M5.1 review cycle 4, M51-C4-REG-01]
     "backend/tests/test_spec_coverage.py::test_the_register_spends_no_number_another_milestone_is_bound_to",
     "backend/tests/test_spec_coverage.py::test_the_allocation_reader_reads_the_owner_cell_and_not_the_question",
+    # M5.2 review cycle 3 adds two. The roadmap guard above cannot see a lane's range, because the
+    # owner hands those out in an instruction and `ROADMAP-M5.md` allocates questions: M5.2's first
+    # review cycle headed `### 392.` inside M5.4's range, and a synthetic merge stayed green with
+    # the lane's token citations resolving against the sibling's rule. The collision exists in one
+    # tree only at the merge, so the reader every guard passes through refuses a number headed
+    # twice. The second is README's "sittings in all", the one figure in its sentence that nothing
+    # read, left a sitting short when the first figure was restated. [M5.2 review cycle 3:
+    # M52-C3-PAPER-01, M52-C3-STATE-08, M52-C3-PAPER-04]
+    "backend/tests/test_spec_coverage.py::test_a_number_headed_twice_is_refused_rather_than_kept_in_silence",
+    "backend/tests/test_static_contracts.py::test_the_sittings_the_register_holds_in_all_are_counted_too",
     # Review cycle 1 of M5.3 adds the other half of the same clause. The guard above holds a
     # number the ROADMAP files elsewhere; nothing held a number the register neither heads nor
     # mentions, which is the state 346 was in when M5.1 spent it. M5.3 left 379-381 - the rest
@@ -9487,7 +9941,7 @@ spec = "§12 exit criteria; docs/TESTING.md (\"A second workflow decides whether
 milestone = "M4.16"
 kind = "static"
 what = "`docs/RELEASE.md` carries one row per §12 milestone plus M4.5 AND one for the release workflow itself - the criterion as written, what was measured, the committed output file, blocking or not, and the owner's verdict - every such row either names an output file that exists in the tree or is recorded as unmeasured, and a row recorded as unmeasured carries an UNFILLED verdict that no run in this repository can fill; the record publishes the standing-waiver count and ids the coverage map actually holds, and carries the owed device checks by reference rather than by a copied list; every claim this map escalates as recorded in that file is named in it; the never-run count the map publishes is the one the record measured; and a row the record calls NOT BUILT names a milestone the map registers no test against, while the record's own opening paragraph counts the rows its table records."
-why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: eight of the eighteen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
+why = "\"The suite is green\" was documented as a stronger statement than §12's exit criterion. It is not stronger, it is different: nine of the nineteen criteria have never been run, M4.5's eighteen contained a check that could not fail, and no run record was committed anywhere."
 # The unfilled half is decision 297's and decision 298's, in the idiom of
 # `test_the_owed_device_checks_are_recorded_and_still_unsigned`: M2's criterion has never been
 # measured and the TMDB logo is an owed asset, and neither may be quietly signed. The guard goes

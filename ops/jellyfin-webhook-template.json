@@ -1,0 +1,67 @@
+{{!--
+  Spielplan: the Jellyfin Webhook plugin template for §7.2's `POST /events/jellyfin`.
+  Published the way `.env.example` publishes config, and for the same reason: this file is the
+  contract (decision 365). The app cannot see the plugin's configuration, so the shape it
+  tolerates has to be written somewhere an operator can paste rather than only in its tests.
+
+  WHERE IT GOES. Jellyfin -> Dashboard -> Plugins -> Webhook -> Add Generic Destination.
+    Webhook Url            <PUBLIC_URL>/events/jellyfin
+    Notification Type      Item Added        (this template is for that one event)
+    Item Type              tick Movies, Episodes, Series; UNTICK Season, Albums, Songs, Videos
+    Template               everything below this comment
+    Add Request Header     X-Spielplan-Token : <the token the Jellyfin card showed you once>
+
+  THE PLUGIN TICKS ALL SEVEN ITEM TYPES ON A DESTINATION IT HAS JUST ADDED, so the four this app
+  does not acquire stay ticked until you untick them. Left ticked, nothing breaks - each of their
+  adds is answered 202 and recorded like any other - but every season of a new show and every
+  track of an album is then a delivery of its own, and each one costs a row, a read of your server
+  inside the sweep's time budget and a skipped row whose reason reads as a fault when there is
+  none. A large music import can hold a film's add behind it until the delta poll files the film.
+
+  THE APP REQUIRES TWO FIELDS AND TREATS THE REST AS ADVISORY: `ItemId` and `ItemType`, which
+  are the whole of what the debounce can act on. A delivery missing either is still accepted
+  (202) and recorded with that reason rather than refused, because a webhook the app rejects is
+  one you never learn about - but it enqueues nothing, so a template that drops them is a
+  webhook that silently does nothing at all.
+
+  `SeriesId` IS WHAT MAKES A SEASON ONE JOB. An Episode is never acquired as itself: the app
+  resolves it through its series and files one job for the show (§7.2, "series acquire
+  per-show, not per-episode"; decision 369). An Episode delivery with no `SeriesId` is recorded
+  and enqueues nothing - it is never guessed at - so dropping that line turns a twelve-episode
+  scan into twelve refusals.
+
+  `NotificationType` lets one URL carry several of the plugin's templates: anything other than
+  `ItemAdded` is recorded and not acted on. It may be omitted, and is then read as `ItemAdded`.
+  `Name`, `SeriesName` and `Year` are for the operator reading §6.6's card, never for matching.
+
+  WHY THE TWO NAMES HAVE THREE BRACES. The plugin puts nothing between a title and this JSON
+  that makes the title JSON. It backslash-escapes each double quote in `Name` and `SeriesName`
+  before Handlebars runs, and a two-brace `{{Name}}` is then HTML-encoded - so a title with a
+  quote in it rendered `\&quot;`, which no JSON parser reads, and "Law & Order" arrived as
+  `Law &amp; Order`. Three braces write the escaped title as it is, which is a legal JSON string
+  for any title without a backslash or a control character in it (decision 417). Nothing on the
+  plugin Jellyfin 10.9 and 10.10 run can write those two as JSON: `json_encode` first shipped in
+  plugin 18, for 10.11, and on an older plugin a helper it does not know throws and nothing at
+  all is delivered - so do not add one unless every server you point here runs plugin 18 or
+  later. A title it cannot carry still arrives, is answered 202 and recorded with its reason
+  rather than refused into a plugin that does not retry (decision 365), and the delta poll files
+  a new film or show at its next run all the same.
+
+  WHY THE FIELDS ARE QUOTED, AND WHY THEY ARE IN THIS ORDER. The four fields the app acts on -
+  `NotificationType`, `ItemId`, `ItemType`, `SeriesId` - are emitted LAST, after every free-text
+  one. A name that closed its own string and opened a second `"ItemId"` would be a legal object,
+  and a parser keeps the LAST of two duplicate keys; the plugin's quote escaping is what stops a
+  title doing that today, and it is the plugin's detail rather than this app's, so the order is
+  what keeps a forged duplicate inert if a plugin build ever stops escaping (decision 405). Keep
+  that order if you edit this file, and keep every value quoted: it also stops a numeric field
+  from becoming a syntax error of its own.
+--}}
+{
+  "Name": "{{{Name}}}",
+  "SeriesName": "{{{SeriesName}}}",
+  "Year": "{{Year}}",
+  "NotificationType": "{{NotificationType}}",
+  "ItemId": "{{ItemId}}",
+  "ItemType": "{{ItemType}}",
+  "SeriesId": "{{SeriesId}}"
+}
