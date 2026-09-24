@@ -21,7 +21,9 @@ version, and a ledger that arrives shorter has to end shorter. **For the rows th
 authored**, which is a qualifier decision 326 adds to two of the four: §6.6 gives the household
 an editor over `credit_correction` and `dna_adjudication`, so from M5.6 those two tables hold
 rows no bundle can supply and no re-import may take. `origin` is what tells them apart and the
-two DELETEs below name it; the other two ledgers have no editor and stay whole-table replacements.
+two DELETEs below name it. The axes gain an editor too (decision 342), and because `dna_axis` holds
+one row per facet `load_axes` reads `origin` to leave a household-authored facet in place rather
+than to scope a DELETE; the seed list has no editor and stays a whole-table replacement.
 The one thing none of them may do is treat an absent, unreadable or EMPTY file as an instruction
 to delete — omission is not destructive, which is the guard `parse_corrections` has always kept,
 `load_adjudications` keeps under decision 247, `load_seed_list` under decision 260 and
@@ -482,6 +484,27 @@ async def load_axes(
             )
             continue
 
+        # Decision 342, which is decision 423's rule on the third ledger: the household's curated
+        # row takes effect. §6.6's axis editor writes `dna_axis` with `origin = 'household'`, and
+        # the upsert below would rewrite its poles and the DELETE after it clear its terms while
+        # the row went on saying `household` -- an axis typed in the app replaced under its own
+        # label by the next re-import, which is decision 171's wipe on the one ledger decision 326
+        # could not scope with a DELETE, because `dna_axis` holds one row per facet. So the facet
+        # is left as the household wrote it and the report says so; the household's withdrawal
+        # is what lets the bundle's file load on the next import.
+        stored_by = await conn.fetchval(
+            "SELECT origin FROM dna_axis WHERE version = $1 AND facet = $2", version, facet
+        )
+        if stored_by == "household":
+            report.warn(
+                "axes",
+                f"{path.name}: facet {facet!r} keeps the axis the household authored in the app; "
+                "this bundle's axis for it is not loaded (decisions 342 and 423 - the household's "
+                "curated row takes effect and survives every re-import)",
+                facet=facet,
+            )
+            continue
+
         await conn.execute(
             "INSERT INTO dna_axis (version, facet, left_pole, right_pole) VALUES ($1,$2,$3,$4) "
             "ON CONFLICT (version, facet) DO UPDATE SET left_pole = EXCLUDED.left_pole, "
@@ -498,12 +521,13 @@ async def load_axes(
         #
         # Per facet and not per version: this loop has already ACCEPTED this file (the pole
         # header parsed and the stem is a facet the vocabulary knows), and the facets it skipped
-        # above are not this file's to clear. THREE paths reach this block or decline before it:
-        # the two that decline a file outright `continue` above, and the third - accepted, and
+        # above are not this file's to clear. FOUR paths reach this block or decline before it:
+        # the two that decline a file outright `continue` above; the third - accepted, and
         # parsing to no weight at all - is decision 264's guard, which returns the file to the
-        # declining side. Stated as three because it was stated as two, and the one the count
-        # left out is the one that writes.
-        # [M4.14 cycle 1, M414-REV-247-02, decision 261; cycle 2, decision 264]
+        # declining side; and the fourth, a facet whose stored axis the household authored, is
+        # decision 342's. Stated as a count because it was once stated as two, and the one the
+        # count left out is the one that writes.
+        # [M4.14 cycle 1, M414-REV-247-02, decision 261; cycle 2, decision 264; decision 342]
         await conn.execute(
             "DELETE FROM dna_axis_weight WHERE version = $1 AND facet = $2", version, facet
         )

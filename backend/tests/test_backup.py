@@ -110,7 +110,15 @@ BUNDLE_DERIVED = {"artifact_bundle", "title_placement", "title_prior"}
 # trusted stale (§7.1, §7.2), so carrying them into another install would point that household's
 # titles at items that do not exist there. The archive is the corpus; this is this box's view of
 # its own library. [M4.11]
-APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "job_run", "title_jellyfin_item"}
+#
+# `flywheel_batch` (0029_flywheel.sql) is `flywheel_item`'s own batch and joins it for its
+# reason: what this box's admin chose to spend, on this box's provider keys, against this box's
+# monthly cap. It is decision 349's argument for the acquisition spine one table over - this box's
+# own decisions, meaningless on another install - so it is excluded from the movie-data archive:
+# carried elsewhere it would name batches that household never launched, over queue rows the
+# archive does not carry either. [decisions 349 and 443; M5.6]
+APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "flywheel_batch", "job_run",
+             "title_jellyfin_item"}
 
 # Decision 291: the MovieLens genome slice stops being imported, upholding
 # `media-graph-spec_v1.1.md:175` ("validation artifact only, never shipped or imported into the

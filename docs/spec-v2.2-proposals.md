@@ -12,7 +12,7 @@ the 2026-08-29 prototype review: citable as provenance and nothing more, so a re
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
 numbered owner decisions**, and each is normative from the day it is taken until the amendment it
 mandates lands in `spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03,
-this one on 2026-09-17 and M5.2's on 2026-09-23. The decision numbering
+this one on 2026-09-17, M5.2's on 2026-09-23 and M5.6's on 2026-09-24. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
 decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
@@ -11133,6 +11133,543 @@ tests keep their ids and lose the clauses only those tests held.
 dated or historical, and a reader who needs a live count runs the command that produces it. A
 future milestone may be tempted to reintroduce a counting guard to catch a typo; this entry is the
 argument against it.
+
+---
+
+## Decisions taken (owner, 2026-09-24, as M5.6 opened)
+
+Taken as M5.6 opened, under the owner's standing instruction to take each plan's recommended option
+and record it here rather than ask. Five are questions `docs/milestones/ROADMAP-M5.md` files against
+M5.6 - 328, 329, 330, 342 and 344 - and each is taken under the number the roadmap gives it, on the
+rule the blocks above followed for 326, 336, 341 and 345 and M5.5's for 324, 325, 337, 338 and 343:
+a number a planner allocated to a step is taken by the milestone that owns the step, and one question
+spent under two numbers is two normative rules for one rule (228-233). The roadmap files 330 against
+M5.6 and M5.7 both; the owner gave it to M5.6 whole, the proposal 107 clause M5.7 builds against
+included, and M5.7 heads no entry for it. The rest are spent from the bottom of this lane's own
+block, 440-449, and 448 and 449 stay unspent. M5.7, the lane building §6.6's Connectors and System
+cards in parallel, takes 339 and 450-459, and no entry here spends one of them. Where the plan marks
+a recommendation the entry takes
+it; where it poses a question and marks none - 342, 344 and every one of 440-447 - the entry says so
+in its own text and takes the option the plan's exit criterion implies.
+
+M5.6 does not hold `current_milestone`. M5.1 does and keeps it, so M5.6's rows are appended without
+raising the scalar. Unlike M5.5's block this one applies the spec text its decisions mandate,
+because decision 330 exists only to be folded: 328, 329 and 330 are written into §4.1, §6.6 and §8.4
+as point release v2.1.3, together with decision 326's owed "and every re-import" in the §6.6 Data
+sentence 330 rewrites anyway, and 447 gives §12 its M5.6 row. The other §6.6 sentences the M5.5
+block records as owed - 324's and 325's defaults, 337's caption population, 338's narrowing - stay
+owed, and 330's clause for proposal 107 is worded so that it contradicts none of them. The one
+migration is `0029_flywheel.sql`.
+
+### 328. `unnamed_residual` is struck from §8.4 and from flywheel_item's CHECK
+
+**What the record says.** §8.4 lists four feeds, the third "titles whose 'unnamed taste' residual
+share is high". `flywheel_item`'s kind CHECK freezes all four, `unnamed_residual` among them, in an
+applied and checksummed migration (`0004_dna.sql:159-160`). The roadmap's question 328 asks whether
+the phrase is defined or the feed struck, and plan §3 recommends striking and lists it first.
+
+**Why it changes.** Nothing in this repository defines the phrase. It occurs once in the normative
+file, in §8.4 itself; "residual" in §5.2 is the per-title Ledger residual, a different quantity; and
+the vendored `ARCHITECTURE-extracts.md` carries §3 and Appendix C only (decision 294), neither of
+which has a metric for nameable variance. Vendoring would need a corpus document this repository
+cannot read, and a definition invented here is what CLAUDE.md's rule refuses - a requirement
+resting on nothing the owner agreed to. The exit criterion needs no third feed.
+
+**The decision.** Strike it. §8.4 loses the clause, and `0029_flywheel.sql` narrows the kind CHECK
+to `('empty_predicate', 'uncovered_frontier', 'thin_facet')` with a DROP/ADD CONSTRAINT pair that
+keeps the constraint's name. No definition is invented and none is vendored. Narrowing is safe on
+every install because nothing has ever written `flywheel_item`: the table has had no INSERT
+anywhere in the tree since 0004 created it (plan §2.2).
+
+**Cost.** At M5 one kind has a producer, `thin_facet` (decision 440), and M6 supplies the other two.
+Proposal 104's "all four §8.4 feeds" becomes three under decision 330. The migration exists
+regardless, for the batch (decision 443). If the corpus's definition is ever vendored the kind comes
+back under a decision of its own and a migration of its own, which is what an owner-agreed feed
+should cost.
+
+### 329. A thin-facet title is one whose extracted tier leaves a declared facet unnamed, which is a different test from features.is_thin
+
+**What the record says.** §8.4's fourth feed is "thin-facet titles" and nothing states the test.
+§14 risk 2 names the measurement - "measure facet coverage of post-2025 titles" - and §8 stage 5
+names the gap it predicts, new releases thinner on sound and visual. Decision 390 shipped the
+measurement as `dna.coverage.facet_coverage` (`dna/coverage.py:70`): distinct extracted-tier terms
+per declared facet, every facet a key and the zeros included, with no threshold, which it left to
+this number. §4.1's genome paragraph says the genome is "one of the blocks §8's thinness test
+ignores", and §8 has no thinness test; the block test that sentence means is
+`placement/features.py`'s per-block `BuiltVector.is_thin`, which asks whether a feature block was
+dropped and says nothing about the vocabulary. Plan §3 recommends "extracted-tier facet coverage
+below N of the eleven v1 facets, N stated".
+
+**Why it changes.** The recommendation asks for N and gives no value, so the exit criterion decides
+it, and presence is the only threshold that is not a guess. A count cut - two terms a facet, three -
+is the corpus's `/3` proxy that decision 390 refused to port, and any N short of all of them is a
+figure nobody measured. Presence names exactly the gap §14 risk 2 and stage 5 predict. The volume
+stays bounded because only a title whose walk finishes stage 8 is observed (decision 440), never the
+library.
+
+**The decision.** A title is `thin_facet` when at least one facet `dna_facet` declares for the
+active vocabulary has zero distinct extracted-tier terms, as `facet_coverage` measures it. In the
+plan's words that is coverage below N of the declared facets with N stated as all of them - eleven
+on vocabulary v1 - and the code holds no numeric threshold: a zero in the mapping is the whole test.
+The kind keeps its name, `thin_facet`, which is what tells it apart from `is_thin`. No weight is
+read, so §4.1 rule 2 is untouched. The same amendment repoints §4.1's "the blocks §8's thinness test
+ignores" at `placement/features.py`'s per-block `is_thin`, because that sentence is about the block
+test and the genome is in `UNENRICHABLE_BLOCKS`.
+
+**Cost.** The row's reason names the unnamed facets, so the queue says what a batch would buy. An
+install with no active vocabulary observes nothing - `facet_coverage`'s empty mapping, and §3.1's
+legal bundle-less state. Presence is strict, so a walked title short of any one facet is queued; the
+bound is that only walked titles are observed, each has at most one open row (0029's partial unique
+index), and Launch is held against the cap (decision 441).
+
+### 330. Proposals 104, 107, 109 and 135 are adopted by number, with named adjustments, and folded into §6.6 and §8.4
+
+**What the record says.** Two coverage rows cite bare proposals:
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` rests on "§8 stage 6 + §9 (with
+decision-doc proposals 107, 109)" and `jellyfin-acquisition-eval-flywheel-enqueues-naming-failures`
+on "§8.4 (with decision-doc proposals 135, 104)". Decision 295's rule fails such a row the moment
+`current_milestone` reaches it, the rule reads the whole list, and renaming `proposals` to
+`decisions` is the repair `_laundered_decision_citations` exists to catch. The roadmap files
+question 330 against M5.6 and M5.7, and the owner gave it to M5.6 in full. Proposal 104 is the
+flywheel's batch controls; proposal 107 the spend cap the prototype only displays; proposal 109 the
+parked job's retry, retry from stage N and abandon, with a link to the raw store; proposal 135 the
+immediate, visible enqueue.
+
+**Why it changes.** The two rows cannot go green otherwise, and striking 135 would leave the gate
+row's `what` - "at the moment it happens ... not after a nightly job" - resting on nothing. Each
+proposal is also older than a decision that now constrains its wording, so none can be pasted as
+written.
+
+**The decision.** All four are adopted, each folded into the section it amends with its adjustments
+named:
+
+- **Proposal 104** goes into §6.6 Data's extraction-queue clause: rows are selectable, the selection
+  shows a running total against the remaining monthly cap, providers and pass count are chosen per
+  batch, and Launch is disabled with its reason. Adjusted: "all four §8.4 feeds" becomes the feeds
+  §8.4 names after decision 328 - three, two of them produced only from M6 - and "the total" is the
+  batch's reservation of both attempts, per decisions 325 and 441.
+- **Proposal 107** goes into §6.6 Connectors' spend guard: the cap is editable in place and takes
+  effect immediately, enabling a provider shows its per-title estimate first, at the cap paid stages
+  park with a reason beginning "over spend cap" and the meter says so, and the caption carries §9's
+  thinking-token note. Adjusted: decision 325 applies - a calendar month, no shipped default, and
+  "at the cap" includes a month with no room left for a title's two-attempt reservation - and
+  decisions 336 and 348 apply, so a paid stage parks and never fails, and with no cap set it parks
+  under decision 348's sentence.
+- **Proposal 109** goes into §6.6 Data's board clause. Adjusted: decision 345 turns "a link to the
+  title's raw store" into its `raw_document` rows, never the bytes; decision 424 means a retry
+  resumes at the stage it names and nothing before it runs, so a retry from stage 3 re-reads the raw
+  store and one from stage 4 makes no request; and decision 336 means a plain retry is offered on
+  `failed` alone (decision 444). A stage-6 retry that would breach the cap is refused with the
+  reason shown.
+- **Proposal 135** goes into §8.4: the enqueue is immediate and visible, never a nightly digest.
+  Adjusted: the Map is M6's, so the M5 case is the thin-facet row written when stage 8 finishes
+  (decision 440), and "queued just now" is the row's own `created_at`.
+
+Recorded as spec point release v2.1.3 (2026-09-24). §6.6 Data's sentence also takes decision 326's
+owed text, "and every re-import", in the same edit, since this decision rewrites that sentence
+anyway. The two coverage rows are repaired to cite the sections:
+`jellyfin-acquisition-eval-flywheel-enqueues-naming-failures` now cites "§8.4 + §6.6 Data", and
+`jellyfin-acquisition-eval-spend-cap-meters-billed-tokens` cites "§8 stage 6 + §9 + §6.6 Connectors
+spend guard + §6.6 Data".
+
+**Cost.** Four clauses in the normative file and two `spec` strings. M5.7 builds the proposal 107
+surface against the folded text. The proposals keep their numbers here as provenance, and the
+requirements now rest on §6.6 and §8.4, which is what rule 5 asks of a row.
+
+### 342. The third ledger editor ships at M5.6, over an empty set
+
+**What the record says.** §6.4 makes the per-facet axis TSVs "Editable in the §6.6 ledger editor"
+and says in the same paragraph that "No such file has been authored yet and the corpus bundle ships
+none" (decision 173). The coverage row `map-taste-admin-three-ledger-editors-corrections-last`
+asserts that "Three separate editors write three separate artifacts", and the plan's exit check 10
+is "three editors | three artifacts". The roadmap's question 342 asks whether the third editor is in
+M5 at all, and plan D3 poses both branches and marks no recommendation.
+
+**Why it changes.** The owner's standing instruction for a question with no marked recommendation
+is the option the exit criterion implies, and the criterion names three editors and three
+artifacts. An editor over an empty set is honest if it says so: the Map §6.4 describes is M6's, but
+§6.2 step 5's split already reads the axis today and degrades to nothing without one.
+
+**The decision.** The editor ships, on the plan's exit criterion.
+
+- It writes `dna_axis` and `dna_axis_weight` for the active vocabulary as household-authored rows.
+  `0029_flywheel.sql` adds `dna_axis.origin` under decision 326's rule - `text NOT NULL DEFAULT
+  'bundle' CHECK (origin IN ('bundle', 'household'))` - on the axis and not on its terms, which
+  belong to exactly one axis row through the foreign key.
+- It validates facet, terms and weights exactly as `importer/dna.load_axes` does, including at least
+  one weight row (decision 264), so nothing the editor saves is a file the loader would refuse.
+- It exports `<facet>.tsv` in §6.4's format: the two poles alone on the header line, then one
+  term-TAB-weight row per line.
+- The UI says that no axis file has been authored and the bundle ships none (decision 173), and that
+  a saved axis turns on §6.2 step 5's split surfacing now and the Map at M6.
+- `importer/dna.load_axes` leaves in place, with a warning on the import report, any facet whose
+  stored axis is household-authored. That is decision 423's rule applied to the third ledger: the
+  household's curated row takes effect.
+
+**Cost.** One column in 0029 and one guarded skip in `importer/dna.py`. The Data page's existing
+"author the axis artifact" section stays, because it describes the bundle's gap and the editor does
+not close it. A household axis and a later bundle axis for one facet resolve to the household's
+until the household withdraws its own, which is the precedence decision 423 already gives the other
+two ledgers.
+
+### 344. A naming failure whose term is outside vocabulary v1 is not enqueued
+
+**What the record says.** §8.4's feeds are naming failures "that future LLM spend should fix", and
+decision 163 makes a vocabulary change a migration rather than an import, so no batch adds a term.
+The roadmap's question 344 asks what the flywheel does with a failure whose term vocabulary v1 does
+not carry at all - a case the remaining kinds cannot represent. Plan §5 lists an `absent_term` kind
+only as conditional and marks no recommendation, and plan §2.8 records that `themes.robots`, §8.4's
+own example, is a real v1 term, so "breadth" means coverage of existing terms across titles.
+
+**Why it changes.** M6's compositional search will produce the case the first time a query names
+something v1 does not carry, and the writer it calls is this milestone's (plan B4). A row whose only
+control is Spend would invite spend that cannot help: extraction is bound to the frozen vocabulary,
+so no batch can name a title under a term the vocabulary lacks.
+
+**The decision.** Nothing is enqueued: there is no `absent_term` kind and no CHECK widening.
+`flywheel.store.enqueue_empty_predicate` and `enqueue_uncovered_frontier` return None and write
+nothing when any term is outside the active vocabulary, and each writer's docstring states that
+contract. The M6 caller reports the case in its own parse line. The plan marks no recommendation and
+the exit criterion is silent; this is the option that spends nothing.
+
+**Cost.** No schema change. M6's compositional search owns the member-facing wording, and a
+household that wants a term the vocabulary lacks is asking for a new vocabulary version, which is
+decision 163's question and not the flywheel's.
+
+### 440. The driver makes the thin-facet observation when stage 8 advances, and stage 8 stays M5.4's declared no-op
+
+**What the record says.** Plan B2: the thin-facet write happens "at the moment the condition is
+observed - at the end of a title's stage 8 - not in a nightly sweep", and the gate row asserts it
+is "readable from the admin queue immediately, not after a nightly job". Stage 8 is
+`implemented=False`, owner M5.4 (`acquire/pipeline.py:213`), under decisions 387 and 432, and
+`test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker` refuses it a
+body - the guard decision 348's Cost paragraph relies on to catch a stage that bills with the gate
+waved through.
+
+**Why it changes.** The write needs a place, and the stage it names cannot hold one. A nightly sweep
+over the extracted tier passes every naive test and fails the row (plan §9).
+
+**The decision.** `pipeline.Stage` gains a boolean, `observes_coverage`, set on stage 8's row only,
+in the idiom `fetches` and `reask_from` already use: a fact about the row that the driver reads,
+rather than a stage number it tests. It tells `run_task` to call `flywheel.thin.observe_title` after
+that stage advances and before the next board write, inside the walk that holds the title lock and
+in autocommit, so the row is readable the moment the call returns.
+
+- `observe_title` first closes this title's `running` thin-facet rows as `done`, which is how a
+  launched batch's rows end (decision 443).
+- If a declared facet is unnamed (decision 329), it appends one `queued` row, or refreshes the open
+  one.
+- If none is unnamed, it closes the title's open rows as `done`.
+- One open row per title is enforced by a partial unique index in 0029. A write failure propagates
+  and is never swallowed: a feed that silently misses a title is the queue nobody can diagnose.
+
+The plan names no site; this is the one its exit criterion implies, since "at the moment stage 8
+finishes" cannot be kept by a job. **Stated honestly:** on a real install no title reaches stage 8
+until M5.4's owed stage-5 wiring lands, because stage 6 parks on a missing pack (decision 432). The
+feed is therefore exercised through the real driver in the suite, and it goes live the day stage 5
+is wired.
+
+**Cost.** `acquire/pipeline.py` gains one field and one call. The §12 paragraph and
+`docs/RELEASE.md` say that the first exit clause cannot run on a real install yet. The stub-marker
+test goes on holding stage 8 as a no-op; the observation is the driver's, which is where a stage
+that may not have a body can still have a consequence.
+
+### 441. The batch total is the per-title estimate times the titles, and Launch is held against the reservation of both attempts
+
+**What the record says.** Plan C2: the selection shows "a running total against the remaining cap,
+computed from M5.5's per-title estimate x pass count x provider count"; C3: Launch is "disabled, not
+a warning after the fact"; C6: estimates recompute when the pass count changes. M5.5 exports
+`pricing.estimate_title` (`llm/pricing.py:322`) over `pricing.SPEC_INPUT_TOKENS`, the plan maker
+`spend.extraction_plan` and the meter. Decision 325 budgets attempt 2 inside the cap, and
+`spend.ATTEMPTS` is that 2. The plan leaves open whether the total compared is one attempt or both.
+
+**Why it changes.** The gate reserves both attempts, so a total compared over one attempt enables a
+batch the gate then parks half of - a Launch button that says yes over a pipeline that says no,
+which is the warning after the fact C3 refuses.
+
+**The decision.** The figures:
+
+- per_title = `pricing.estimate_title(tokens_in=pricing.SPEC_INPUT_TOKENS, ...)` over the prices of
+  the batch's providers and its passes, the prices read from `spend.extraction_plan` called with the
+  batch's plan (decision 442);
+- total = per_title x the sum of `est_titles` over the selected rows;
+- reserved = total x `spend.ATTEMPTS`.
+
+Launch is disabled, and the launch route refuses with the same sentence inside its transaction
+whatever the client sent, in four cases: reserved exceeds the meter's remaining room (the cap less
+the month's spend, unsettled ceilings included); no cap is configured (`spend.NO_CAP_REASON`); the
+plan cannot be made (the plan's own refusal); or any price is unknown (decision 343). Reserved
+exactly equal to the remaining room is allowed. Nothing is stored in `flywheel_item.est_cost_usd` at
+enqueue, because a stored figure is stale the moment the pass count changes (plan C6);
+`flywheel_batch` records its figures at launch. Money is `Decimal` end to end and a string on the
+wire. The plan marks no recommendation on the reservation; the stricter comparison is the one its
+exit criterion's "disabled rather than warning after the fact" implies.
+
+**Cost.** A quote route the surface asks on every selection change. The client's disabled state is
+advisory and the server is the gate, so a stale page cannot launch past the cap. The estimate is of
+the mean prompt, as decision 325's reservation is, so the overshoot bound 325 records applies to a
+batch unchanged.
+
+### 442. A launched batch carries its providers and passes, and the gate, stage 6 and the retry pre-check all read that one plan
+
+**What the record says.** Proposal 104, adopted under decision 330, chooses providers and pass count
+per batch. M5.5's plan maker reads them from the stored `llm` settings and nothing else (decision
+324): `spend.extraction_plan` takes no plan, `spend.cap_check` and `spend.retry_refusal` price the
+stored one, and `llm/extract.extract_title` runs it.
+
+**Why it changes.** Without a carried plan a three-provider, two-pass batch would be gated on the
+stored one-by-one reservation and bill six runs, and the admin's pass choice would silently not
+reach stage 6 - a quote that priced one plan over a stage that ran another.
+
+**The decision.** The task payload key `plan` holds `{"providers": [...], "passes": n}`, and one
+reader, `acquire/stages.task_plan`, spells the key. `spend.extraction_plan`, `spend.cap_check`,
+`spend.retry_refusal` and `extract.extract_title` take an optional `batch` mapping, merged over the
+stored `llm` settings. The merge covers only `extraction_provider`, `parallel`,
+`parallel_providers` and `passes` - never `cap_usd`, a key or a model - so a batch chooses among what
+the household has configured and can neither raise its own cap nor reach a provider nobody keyed. A
+malformed batch is a `PLAN` refusal naming the batch. With no plan in the payload the stored
+settings apply unchanged, which is decision 324's install exactly. The plan marks no option; this is
+the one its exit criterion implies, since the Launch total and the stage that bills have to be one
+computation over one plan.
+
+**Cost.** M5.5's four functions gain a keyword parameter defaulting to None, and every existing
+caller is unchanged. A board retry of a flywheel-launched task keeps its batch plan, because the plan
+lives in the task's payload and the retry revives the task rather than writing a new one (decision
+444).
+
+### 443. What Launch does, in one transaction
+
+**What the record says.** Plan C5: "A launched batch targets exactly the selected rows and no
+others", which is "the reason the batch needs an identity". Plan §5 prefers a `flywheel_batch`
+table and a `flywheel_item.batch_id` column to a batch id inside `detail` jsonb. `flywheel_item`'s
+status CHECK admits `approved`, which no step of §8.4's flow needs.
+
+**Why it changes.** "Exactly the selected rows" is a statement about a write that can race: a row
+closed by an observation between the quote and the click, a row of another kind, an id the client
+invented. And a launched row has to set something in motion, or Launch is a status change.
+
+**The decision.** Launch runs in one transaction:
+
+1. Insert a `flywheel_batch` row - providers, passes, `est_titles`, `est_cost_usd`, `reserved_usd`,
+   `launched_at` - with the figures decision 441 computes inside the same transaction.
+2. `UPDATE flywheel_item SET status = 'running', batch_id = ... WHERE id = ANY(selected) AND status =
+   'queued' AND kind = 'thin_facet'`. Unless every selected id matched, roll back and answer 409,
+   with nothing written.
+3. Make each row's title due through `acquire.actions.make_due` at the stage named `dna pack`,
+   clamped to the board's stage and never moved forward, with the payload `{plan, flywheel_batch}`.
+   A title in flight refuses the whole launch.
+
+Rows stay `running` until the title's next stage-8 observation closes them `done` (decision 440).
+Rows of the two kinds whose producer is M6's are shown and selectable, but a launch naming one is
+refused with a sentence naming M6, because no M5 stage can act on a query or a frontier. `approved`
+stays unused. The plan states a preference and no option beyond it; this is the preference, and the
+shape its exit criterion's "exactly the selected rows" implies.
+
+**Cost.** `0029_flywheel.sql` adds `flywheel_batch`, `flywheel_item.batch_id` and
+`flywheel_item.title_id`, and `flywheel_batch` joins `test_backup.py`'s `APP_STATE` beside
+`flywheel_item`, for its reason: it is this box's spend decisions on this box's keys, not corpus. A
+launch today makes titles due at a stage 5 that is still a no-op, so on a real install they park at
+stage 6 on a missing pack until stage 5 is wired (decision 440) - and park, rather than bill.
+
+### 444. The board's actions, per decision 336: what each state admits and what each action writes
+
+**What the record says.** §8: "Failure at any stage parks the job with a reason, retryable from
+admin". Decision 336: `parked` is waiting on something that may change and never auto-fails;
+`failed` is a stage that raised and will raise again, and "is the only state offering a plain
+retry"; proposal 109's three actions were left to decision 330. Decision 424 says a retry resumes
+at the stage it names. `placement/reconcile.py`'s `_park_thin` writes board rows at stage 2 with no
+queue task at all - the pipeline's inbox, per decision 336.
+
+**Why it changes.** Proposal 109 is adopted (decision 330) and names three actions without saying
+which states admit them or what each writes. The plan's exit check 9 is literally "retry from stage
+4 | resumes at 4; no re-fetch; no duplicated derived row", and plan A4 requires `parked` and
+`failed` to render differently.
+
+**The decision.** Which actions each state admits:
+
+| state | actions |
+|---|---|
+| parked | retry from stage N, abandon |
+| failed | retry, retry from stage N, abandon (decision 336: a plain retry is failed's alone) |
+| abandoned | retry from stage N |
+| ready | retry from stage N |
+| queued, running | none (in flight) |
+
+N lies between 1 and the board's stage. A retry takes the transaction-level title lock -
+`pipeline._TITLE_LOCK`, imported and never re-spelled - and refuses 409 when a walk holds it or any
+of the title's tasks is leased. It then writes, in one transaction:
+
+- the board as `queued`, with a composed reason and `retry_after` cleared, so a job parked at stage 4
+  re-enters at 4 and asks nothing (decisions 421 and 424);
+- the title's failed, skipped and pending tasks revived - `pending`, attempts 0, due now, the
+  failed-for-good mark removed;
+- a `title:<id>` task created or revived when the title has none, which is the case for
+  `_park_thin`'s inbox rows.
+
+When the first implemented stage at or after N is the paid one - read from `pipeline.STAGES`' flags,
+never a literal 6 - `spend.retry_refusal` runs first, with the task's batch plan (decision 442), and
+a refusal returns its reason as a 409 and changes nothing. Abandon closes the title's open tasks as
+skipped and writes a new board status, `abandoned`, which 0029 adds to `acquisition_job`'s CHECK; a
+thin-but-placed title abandoned from the board is therefore never shown as failed. The plan marks no
+option; this is decision 336's rule applied to proposal 109's three actions.
+
+**Cost.** A new domain module, `acquire/actions.py`, three POST routes, and `abandoned` in the status
+CHECK. The board envelope carries `stages` - the ten names out of `pipeline.STAGES` - and a per-job
+`actions` list, so the surface renders what the server admits rather than deriving it. Abandon is a
+board state and not a delete: the title, its derived rows and its raw documents stay, and a retry
+from stage N brings it back.
+
+### 445. The ledger editors write household rows, never touch the bundle's, and apply what they write at once
+
+**What the record says.** Decision 326 gave both curated ledgers an `origin` column and left the
+editors' writes and the TSV export to M5.6. Decision 423 made the household's row the one that takes
+effect and left open, in its Cost paragraph, what an editor writes when the household edits a title
+the bundle already corrects - "edit in place, supersede, or a second row". Proposal 105 argues for
+"Three separate editors with separate semantics", each showing "its rows, its provenance, and the
+derive that will re-apply it". §8 stage 7: failures drop, never repaired.
+
+**Why it changes.** An editor that rewrote a bundle row would have its fix wiped by the next
+models-only import, whose DELETE is scoped to `origin = 'bundle'` (decision 326); one that wrote a
+household row and waited for the next derive would show a fix that is not yet true, on a bundle
+title that is never re-derived at all.
+
+**The decision.** The editors write only rows with `origin = 'household'`. A bundle row is read-only
+in the app: editing a title the bundle already corrects writes a second, household row, which takes
+effect by decision 423's ordering. The household may withdraw only its own rows.
+
+- A title-scoped verdict or correction is applied to its title at once, through `derive/ledgers`'
+  appliers, in the same transaction.
+- A blanket verdict is applied at once to every title that carries the term at the active version.
+  Bundle titles are never re-derived, so a fix typed today is true today, and it survives every
+  later re-derive and re-import (decision 326).
+- Withdrawing a correction re-applies, and the applier reclaims the credit it minted.
+- Withdrawing a verdict stops it applying and restores nothing it dropped (§8 stage 7).
+- Verdicts are written in the corpus's own spelling (DROP / REPOINT / DROP_EVIDENCE), so the export
+  folds back unchanged.
+- Export is household rows only, in the importer's column set (`ADJUDICATION_COLUMNS`,
+  `CORRECTIONS_COLUMNS`), and round-trips through the importer's own parsers.
+- Three modules write three tables and share no write function.
+
+Proposal 105's clause is adopted here, as the provenance for §6.6 Data's editor sentence in v2.1.3:
+three separate editors, each showing its rows, its provenance and the derive that will re-apply it.
+Its "applied at ingest" for DNA verdicts is not carried, because this app applies them in the derive
+(§8 stage 3) and in stage 7's rename. The plan marks no option; this is the one decisions 326 and 423
+leave standing and the one its exit check 11 implies.
+
+**Cost.** A new `spielplan/curated/` package and `api/curated.py`. A household row can stand beside a
+bundle row naming the same title and term, and the editor lists both with their provenance so the
+operator can see which takes effect. Withdrawal restores nothing a verdict dropped; re-deriving the
+title is what restores it, and that is a board retry from stage 3 (decision 444).
+
+### 446. The reject review is two orderings and no filter, held by a guard over its own files
+
+**What the record says.** §6.6 Data promises "review of DNA rejects and low-evidence tags", and §4.1
+rule 2 makes the three weights weights and never filters. Decision 341 records every drop in
+`dna_reject`, which carries no confidence, and defines "low-evidence" as an ordering, ascending
+confidence and `n_sources`. Decision 401 records that the package-wide weight guard is a comparison
+scan blind to two shapes - `IS [NOT] NULL` on a weight, and a truthiness test in Python - and owes
+them against M5.6. `test_dna_reject.py`'s `LOW_EVIDENCE_REVIEW` documents the query M5.6 is meant to
+run.
+
+**Why it changes.** Plan D4 says the reject list is "ordered ascending by confidence", and the table
+it names has no confidence to order by. And a filter control in Svelte is the same cut one layer up
+(plan §9), which no guard over SQL and Python can see.
+
+**The decision.** The review shows two lists:
+
+- `dna_reject` rows newest first, bounded by a LIMIT on recency and never on a weight;
+- a title's low-evidence tags: its extracted `dna_tag` rows ordered by confidence ASC NULLS LAST,
+  then `n_sources` ASC, then term, with no predicate and no LIMIT on any weight - the query
+  `test_dna_reject.py` documents.
+
+The only action is "write a ledger row", which opens the adjudication editor prefilled; nothing
+accepts a tag. A static guard over M5.6's own review files - the domain module, the route module,
+the Svelte component and its state module - refuses every shape, decision 401's two included: `IS
+[NOT] NULL` on a weight, and a truthiness test or a JS `.filter` over one. The package-wide landmine
+guard is not widened: its one legitimate `salience IS NULL`, in `importer/validate.py`, would need an
+allow-list, so decision 401's package-wide debt stays recorded rather than closed. Plan D4's
+"ordered ascending by confidence" applies to the low-evidence half. The plan marks no option on the
+split; this is the reading decision 341's schema forces.
+
+**Cost.** The rejects row's `what` is worded for the two halves. A guard scoped to four files does not
+see a fifth that reads the same tables, and decision 401's package-wide debt is where that limit is
+already recorded.
+
+### 447. M5.6 writes its §12 row and no exit script
+
+**What the record says.** Decision 331 says each sub-milestone writes its own §12 row when it opens.
+Decisions 371, 378 and 435 gave M5.2, M5.3 and M5.5 an exit script each, from their own decisions and
+their plans' pass tables; M5.4 wrote none, because its checks are the suite's. `docs/RELEASE.md`
+carries a block for every §12 row.
+
+**Why it changes.** M5.6's criterion is a surface - a board, a queue, three editors and a review -
+measured by integration tests against Postgres and by the owner's browser gate on the phone, and its
+first clause cannot run on a real install until stage 5 is wired (decision 440). A script would
+re-run what the suite runs and could not reach that clause either.
+
+**The decision.** §12 gains an M5.6 row and the paragraph under it (decision 331), and
+`docs/RELEASE.md` records it UNMEASURED, with no output file and a blank verdict. No `ops/` script is
+written. The plan marks no option; this is decision 331's rule, M5.4's precedent, and the owner's
+explicit bound on cost, which excludes bookkeeping.
+
+**Cost.** The exit-script guards read nothing new. The row is UNMEASURED rather than NOT BUILT from
+the change set that opens it, because that change set carries the milestone's migration, and M5.4's
+first review cycle found that NOT BUILT beside shipped code is a false record. What would measure it
+is a real install walking a title past stage 8, which waits on stage 5.
+
+## Decisions taken (owner, 2026-09-24, M5.6 review cycle 1)
+
+One, taken as M5.6's first adversarial review closed, under the same standing instruction: take the
+recommended remedy and record it here rather than ask. 448 is the next number of this lane's own
+block, 440-449, and 449 stays unspent. The cycle's other backend findings are readings of decisions
+already taken, repaired in the code their decisions name. Decision 444's retry writes the board
+`queued`, so the reaper's board arm now closes a `queued` board beside a task it has closed for
+good, as it closes the two crash markers before it (M56-BOARD-QUEUED-WEDGE); and an action locks
+the title's task rows instead of reading them, so no lease can land between the check decision 444
+names and the action's write (M56-BOARD-LEASE-RACE). Decision 445's "Withdrawing a correction
+re-applies" restores no credit a `composer` row replaced, which on a bundle title is gone for good,
+and the correction editor now says so before the save and again before the withdrawal
+(m56-curated-01). `current_milestone` stays `"M5.1"`. This block mandates no DDL and no spec text.
+
+### 448. Abandon takes a launched title back out of its batch, and a launch refuses a title that failed for good
+
+**What the record says.** Decision 443: "Rows stay `running` until the title's next stage-8
+observation closes them `done` (decision 440)", and a launch makes each title due through
+`make_due`, whose revive brings back every failed task and removes the failed-for-good mark.
+Decision 442's Cost: "A board retry of a flywheel-launched task keeps its batch plan". Decision 431:
+after a permanent failure "the admin retry is the only way back". Decision 444: abandon closes the
+title's open tasks as skipped.
+
+**Why it changes.** M5.6's first review found a launch that could strand a title and one that could
+bill it twice. A launched title whose walk stops before stage 8 kept its row `running` and its batch
+plan through every retry and every abandon. The gate parks such a walk over the cap, which
+`flywheel/batch.py` expects when two launches share one month's room, and a batch provider un-keyed
+since parks it too. No relaunch could then re-plan the title, every paid retry priced the plan the
+household could not revise, and the month rolling over billed that plan (M56-MONEY-01). And a queued
+row whose title had failed stage 6 for good was revived by any launch that selected it, mark and
+all, buying attempt 1 and the named retry again from a provider that had already refused the
+contract twice (M56-MONEY-02).
+
+**The decision.** Two amendments to decision 443:
+
+- Abandon takes the title out of its batch. In the abandon's transaction the title's `running`
+  thin-facet rows are set `queued` with `batch_id` cleared (`flywheel/store.release_title`), and the
+  `plan` and `flywheel_batch` payload keys leave every task of the title. The board's reason says the
+  row is queued again. A relaunch then carries its own plan, and a retry from a stage walks under the
+  stored settings. A launch that meets a running row names this lever in its refusal. Otherwise rows
+  stay `running` until the next stage-8 observation, as decision 443 says. The review also offered
+  letting a launch take back a running row whose walk has stopped; this option is taken because it
+  also clears the plan off the tasks of a title that is never relaunched, so no later retry prices a
+  plan the household has taken back.
+- A launch refuses, with nothing written, a selection naming a title that has a task closed for
+  good, in `stages._FAILED_FOR_GOOD`'s two readings: the mark `pipeline._record_stop` writes, or a
+  task closed with attempts left. The refusal names the title, the task and the board's retry. The
+  retry removes the mark, and the title can be launched again.
+
+**Cost.** Decision 442's Cost clause holds for a retry and not across an abandon: a household that
+abandons a launched title and retries it from a stage walks it under the stored settings, not the
+batch's. The failed-for-good refusal is asked at launch only. The quote counts titles and names
+none, so Launch is not disabled for it in advance.
 
 ---
 

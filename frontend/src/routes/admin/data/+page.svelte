@@ -3,13 +3,20 @@
    * Admin → Data. Spec v2.1 §6.6: "artifact-bundle import wizard (validate → report →
    * hot-swap; §10), acquisition pipeline monitor, extraction queue, review of DNA rejects".
    * §3.1 scopes this page to M0 — it is the same importer the first-boot wizard runs.
-   * The acquisition board and the flywheel arrive with M5 and say so.
+   * Below the importer, in §6.6's order and each in its own component: the acquisition board,
+   * the extraction flywheel's queue and Launch, the review of DNA rejects and low-evidence tags,
+   * and the three ledger editors (M5.6; decisions 330, 441-446). Each fetches its own reads
+   * outside the bundle block, so one that fails says so in its own card and never blanks this page.
    */
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import { bootstrap } from '$lib/session.svelte.js';
   import AdminTabs from '$lib/components/AdminTabs.svelte';
   import BundleImport from '$lib/components/BundleImport.svelte';
+  import AcquisitionBoard from '$lib/components/AcquisitionBoard.svelte';
+  import FlywheelQueue from '$lib/components/FlywheelQueue.svelte';
+  import DnaRejects from '$lib/components/DnaRejects.svelte';
+  import LedgerEditor from '$lib/components/LedgerEditor.svelte';
 
   let bundleState = $state(null);
   let error = $state('');
@@ -231,6 +238,29 @@
 {:else}
   <p class="data">loading…</p>
 {/if}
+
+<!-- §6.6 Data's other four, in the section's own order, and deliberately outside the bundle block
+     above: each is a read of its own, so a board that fails to load says so in its card while the
+     importer still works, and none of them waits on `/admin/bundle/state`. [M5.6 plan E1] -->
+<section aria-label="Acquisition board">
+  <AcquisitionBoard />
+</section>
+
+<section aria-label="Extraction flywheel">
+  <FlywheelQueue />
+</section>
+
+<section aria-label="DNA review">
+  <DnaRejects />
+</section>
+
+<!-- Three mounts of one component and three artifacts, never one merged editor (decision 445). -->
+<section aria-label="Ledger editors">
+  <h2>Ledger editors</h2>
+  <LedgerEditor ledger="adjudications" />
+  <LedgerEditor ledger="corrections" />
+  <LedgerEditor ledger="axes" />
+</section>
 
 <style>
   h1 {

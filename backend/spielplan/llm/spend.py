@@ -126,6 +126,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import Decimal
@@ -140,8 +141,6 @@ from spielplan.llm import anthropic, client, contract, pricing
 from spielplan.llm.pricing import ModelPrice
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     import asyncpg
 
 log = logging.getLogger("spielplan.llm.spend")
@@ -501,6 +500,60 @@ def _providers_of(config: Mapping[str, Any]) -> tuple[str, ...] | Refusal:
     return tuple(dict.fromkeys(chosen))
 
 
+_BATCH_ADVICE = "Launch it again from the extraction queue in Admin, and this title resumes here"
+
+
+def _batched(config: Mapping[str, Any], batch: Any) -> Mapping[str, Any] | Refusal:
+    """The stored settings with a launched batch's plan merged over them, or why the plan cannot be.
+
+    DECISION 442 IN ONE PLACE. A batch is `{"providers": [...], "passes": n}` as the launch wrote it
+    into the task's payload, and it becomes the decision 324 settings `_plan` already reads - one
+    provider as `extraction_provider` with parallel off, several as `parallel_providers` with it on -
+    so the gate, stage 6 and the retry pre-check price and run one plan by one reading, and the
+    reservation the Launch total was held against is the one the stage bills against (decision 441).
+    Everything else a batch carries is not read: the merge writes `extraction_provider`, `parallel`,
+    `parallel_providers` and `passes`, and never `cap_usd`, a key or a model, so a batch picks among
+    what the household configured and can neither lift its own ceiling nor reach a provider nobody
+    keyed.
+
+    A BATCH THAT DOES NOT READ IS REFUSED, AS THE BATCH'S FAULT. The stored settings are never run in
+    its place: that is a quote priced over one plan and a stage that ran another, the state decision
+    442 was taken to end. The sentence names the flywheel batch and not "the llm connector's"
+    settings, because those are fine, and an operator sent to them would find nothing to correct.
+    None means no batch, which is decision 324's install exactly.
+    """
+    if batch is None:
+        return config
+    if not isinstance(batch, Mapping):
+        return _refused(
+            f"the flywheel batch this title was launched in is a {type(batch).__name__} and not a"
+            f" plan of providers and passes (decision 442). {_BATCH_ADVICE}",
+            setting="batch",
+        )
+    providers, passes = batch.get("providers"), batch.get("passes")
+    if (not isinstance(providers, list) or not providers
+            or not all(isinstance(name, str) and name in client.PROVIDERS for name in providers)):
+        return _refused(
+            f"the flywheel batch this title was launched in names providers {providers!r}; a batch"
+            f" names one or more of {', '.join(client.PROVIDERS)} (decision 442). {_BATCH_ADVICE}",
+            setting="batch.providers", value=providers,
+        )
+    if isinstance(passes, bool) or not isinstance(passes, int) or passes < 1:
+        return _refused(
+            f"the flywheel batch this title was launched in runs {passes!r} pass(es); a batch runs a"
+            f" whole number of at least 1 (decision 442). {_BATCH_ADVICE}",
+            setting="batch.passes", value=passes,
+        )
+    chosen = list(dict.fromkeys(providers))
+    merged = dict(config)
+    merged["passes"] = passes
+    if len(chosen) == 1:
+        merged.update(parallel=False, extraction_provider=chosen[0])
+    else:
+        merged.update(parallel=True, parallel_providers=chosen)
+    return merged
+
+
 async def _plan(conn: asyncpg.Connection, config: Mapping[str, Any], *, on: date) -> Plan | Refusal:
     passes = _passes_of(config)
     if isinstance(passes, Refusal):
@@ -565,7 +618,9 @@ async def _plan(conn: asyncpg.Connection, config: Mapping[str, Any], *, on: date
     return Plan(providers=tuple(planned), passes=passes)
 
 
-async def extraction_plan(conn: asyncpg.Connection, *, now: datetime | None = None) -> Plan | Refusal:
+async def extraction_plan(
+    conn: asyncpg.Connection, *, now: datetime | None = None, batch: Mapping[str, Any] | None = None
+) -> Plan | Refusal:
     """Who stage 6 calls, with which model and key and at what price -- or why it cannot.
 
     Decision 324's settings from the `llm` row: one provider, `extraction_provider`, while
@@ -575,9 +630,14 @@ async def extraction_plan(conn: asyncpg.Connection, *, now: datetime | None = No
     day, since a dated price turns over on a local midnight like the month does. Every refusal is a
     `PLAN` naming the one thing to fix: no assignment, a setting that does not read, a provider
     this build cannot call, a key that is missing or unreadable, a model that refuses the adapter's
-    mechanism, a model nobody priced.
+    mechanism, a model nobody priced. `batch` is a launched flywheel batch's providers and passes,
+    merged over those settings by `_batched` (decision 442), and a batch that does not read is one
+    more such refusal.
     """
-    return await _plan(conn, await _settings(conn), on=_clock(now).today)
+    config = _batched(await _settings(conn), batch)
+    if isinstance(config, Refusal):
+        return config
+    return await _plan(conn, config, on=_clock(now).today)
 
 
 async def reservation(conn: asyncpg.Connection, plan: Plan, *, title_id: int) -> Decimal | None:
@@ -680,7 +740,11 @@ def _over(clock: _Clock, used: Decimal, limit: Decimal, need: Decimal | None, pl
 
 
 async def cap_check(
-    conn: asyncpg.Connection, *, title_id: int, now: datetime | None = None
+    conn: asyncpg.Connection,
+    *,
+    title_id: int,
+    now: datetime | None = None,
+    batch: Mapping[str, Any] | None = None,
 ) -> Refusal | None:
     """None when stage 6 may call its providers for this title now; otherwise why not.
 
@@ -689,7 +753,10 @@ async def cap_check(
       1. NO CAP -> `NO_CAP`, before anything else is read: with no cap in force there is nothing
          for "past the spend cap" to mean, and decision 348's sentence says so whatever else is
          missing.
-      2. A PLAN THAT CANNOT BE MADE -> `PLAN` (decisions 324 and 343).
+      2. A PLAN THAT CANNOT BE MADE -> `PLAN` (decisions 324 and 343), a launched batch's plan
+         included (decision 442): `batch` is the task's, and the reservation below is of exactly
+         the providers and passes stage 6 will run for it. The cap is read off the stored row
+         before the batch is merged, and the merge could not reach it anyway.
       3. THE MONTH AT OR ABOVE THE CAP -> `OVER_CAP`, without estimating anything.
       4. NO STORED PACK -> None: nothing can be called, and stage 6 parks on that itself.
       5. THE MONTH PLUS THIS TITLE'S RESERVATION ABOVE THE CAP -> `OVER_CAP` (decision 325:
@@ -704,6 +771,9 @@ async def cap_check(
     limit = _cap_of(config)
     if limit is None:
         return Refusal(NO_CAP, NO_CAP_REASON, {"cap_usd": None})
+    config = _batched(config, batch)
+    if isinstance(config, Refusal):
+        return config
     plan = await _plan(conn, config, on=clock.today)
     if isinstance(plan, Refusal):
         return plan
@@ -721,19 +791,23 @@ async def cap_check(
 
 
 async def retry_refusal(
-    conn: asyncpg.Connection, *, title_id: int, now: datetime | None = None
+    conn: asyncpg.Connection,
+    *,
+    title_id: int,
+    now: datetime | None = None,
+    batch: Mapping[str, Any] | None = None,
 ) -> str | None:
     """The reason an admin retry of this title's parked stage 6 must be refused, or None.
 
     §8's clause and the coverage row's: a manual retry that would breach the cap "is refused with
     that reason rather than queued". It is `cap_check`'s arithmetic and `cap_check`'s sentence, so
-    the retry and the board can never give one state two answers. NO RETRY ROUTE EXISTS YET:
-    decision 330's revive is M5.6's, and it calls this before it makes the task due. Nothing is
-    lost in the meantime, because this is advice and not the guarantee -- a task made due by any
-    other means, a raw UPDATE included, walks back into the driver's gate, which asks
-    `cap_check` again before stage 6 can call anyone.
+    the retry and the board can never give one state two answers. `acquire/actions.retry_from` is
+    the caller (decision 444), before it makes the task due, and passes the batch plan the revived
+    task carries, so the advice prices the plan that will walk (decision 442). It is advice and not
+    the guarantee -- a task made due by any other means, a raw UPDATE included, walks back into the
+    driver's gate, which asks `cap_check` again before stage 6 can call anyone.
     """
-    refusal = await cap_check(conn, title_id=title_id, now=now)
+    refusal = await cap_check(conn, title_id=title_id, now=now, batch=batch)
     return None if refusal is None else refusal.reason
 
 

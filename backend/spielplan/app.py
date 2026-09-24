@@ -35,7 +35,9 @@ from spielplan.api import acquisition as acquisition_api
 from spielplan.api import admin as admin_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
+from spielplan.api import curated as curated_api
 from spielplan.api import events as events_api
+from spielplan.api import flywheel as flywheel_api
 from spielplan.api import home as home_api
 from spielplan.api import library as library_api
 from spielplan.api import llm as llm_api
@@ -338,6 +340,12 @@ def create_app() -> FastAPI:
     app.include_router(push_api.router)
     app.include_router(admin_api.router)
     app.include_router(acquisition_api.router)
+    # §6.6 Data's extraction queue and its ledger editors and reject review (M5.6). Neither shares a
+    # path with `admin` or `llm` - `/api/admin/flywheel`, `/api/admin/curated/...` and
+    # `/api/admin/dna/...` are prefixes no other router declares - so their place in this list
+    # shadows nothing and is shadowed by nothing; they sit beside the board they share a page with.
+    app.include_router(flywheel_api.router)
+    app.include_router(curated_api.router)
     # After `admin`, and the order is the rule: the connector test dispatch's path matches
     # `/api/admin/connectors/jellyfin/test` too, and the router registered first answers a path
     # both match. Jellyfin's button has to reach `api/admin.test_jellyfin`, which stores §7.1's

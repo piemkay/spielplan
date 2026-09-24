@@ -664,7 +664,12 @@ describe('the Data tab', () => {
     try {
       expect(box().getAttribute('data-phase')).toBe(IDLE);
       expect(target.querySelector('.report'), 'and no stored report is resurrected').toBe(null);
-      expect(vi.mocked(get), 'state and sources, and no poll').toHaveBeenCalledTimes(2);
+      // Counted on the page's own two routes: M5.6's four cards below the importer each read
+      // their own, and a poll is a second read of the state route, which is what this holds.
+      const bundleReads = vi
+        .mocked(get)
+        .mock.calls.filter(([path]) => path === '/admin/bundle/state' || path === '/admin/data/sources');
+      expect(bundleReads, 'state and sources, and no poll').toHaveLength(2);
     } finally {
       unmount(app);
     }

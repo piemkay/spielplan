@@ -97,6 +97,7 @@ import asyncpg
 
 from spielplan.acquire import fetch, queue, stages
 from spielplan.connectors import registry, resolve
+from spielplan.flywheel import thin
 from spielplan.llm import spend
 
 log = logging.getLogger("spielplan.acquire.pipeline")
@@ -170,6 +171,15 @@ class Stage:
     value, so the clock is what tells the two events apart. A field for `fetches`' reason: a
     driver testing `stage.number == 4` would be a second spelling of this tuple.
     [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
+
+    `observes_coverage` IS WHERE §8.4's THIN-FACET FEED IS WRITTEN, and only stage 8 carries it
+    (decision 440). §8.4 says a thin-facet title's row "is written the moment its walk finishes
+    stage 8", and the stage that sentence names may not have a body: stage 8 is M5.4's declared
+    no-op, and the stub-marker test decision 348's gate relies on refuses it one. So the fact lives
+    on the row and the driver acts on it - `run_task` calls `flywheel.thin.observe_title` once the
+    stage has advanced and before the next board write, inside the walk that holds the title - in
+    `fetches`' idiom and for its reason: `if stage.number == 8` would be a third spelling of this
+    tuple, and a job could not keep "the moment" at all.
     """
 
     number: int
@@ -180,6 +190,7 @@ class Stage:
     owner: str = "M5.1"
     fetches: bool = False
     reask_from: int | None = None
+    observes_coverage: bool = False
 
 
 # §8's ten, verbatim and in order (`docs/spielplan-spec_v2.1.md` §8's own block). The names carry
@@ -210,7 +221,9 @@ STAGES: tuple[Stage, ...] = (
     # `refuse_uncapped_spend`.
     Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True, owner="M5.5", fetches=True),
     Stage(7, "verify", stages.verify, implemented=False, owner="M5.4"),
-    Stage(8, "project", stages.project, implemented=False, owner="M5.4"),
+    # Still M5.4's declared no-op; its finish is where the driver observes the title's facets
+    # (decision 440, `Stage.observes_coverage`).
+    Stage(8, "project", stages.project, implemented=False, owner="M5.4", observes_coverage=True),
     Stage(9, "place", stages.place),
     Stage(10, "ready", stages.ready),
 )
@@ -221,6 +234,10 @@ READY = "ready"
 RUNNING = "running"
 PARKED = "parked"
 FAILED = "failed"
+# Written by the admin board's actions and a flywheel launch (`acquire/actions.make_due`, decisions
+# 443 and 444) and by nothing in this module; spelled here, and read there, because that module
+# imports this one and `close_abandoned_boards` has to name it.
+QUEUED = "queued"
 
 NO_SPEND_CAP = (
     "no spend cap is configured, and §8 says a paid stage never auto-retries past one. Configure "
@@ -312,7 +329,13 @@ async def refuse_uncapped_spend(stage: Stage, ctx: stages.StageContext) -> stage
     """
     if not stage.paid or not stage.implemented:
         return None
-    refusal = await spend.cap_check(ctx.conn, title_id=ctx.title_id)
+    # THE TASK'S BATCH PLAN, WHEN IT CARRIES ONE, and read through `stages.task_plan` - the reader
+    # stage 6 hands the same plan to the LLM layer through - so the reservation asked here is of the
+    # runs that stage will pay for (decision 442). The keyword is passed only when there is a plan:
+    # with none, the stored settings apply unchanged (decision 324) and the call is M5.5's exactly.
+    batch = stages.task_plan(ctx.task)
+    asked = {"title_id": ctx.title_id} if batch is None else {"title_id": ctx.title_id, "batch": batch}
+    refusal = await spend.cap_check(ctx.conn, **asked)
     if refusal is None:
         return None
     if refusal.kind == spend.NO_CAP:
@@ -911,6 +934,13 @@ async def run_task(
                 log.warning("acquisition task %d lost title %d mid-walk at stage %d",
                             task.id, ctx.title_id, stage.number)
                 return report
+            # §8.4's thin-facet feed, written the moment the stage that carries the flag finishes
+            # (decision 440): after the title is known to still exist, before the board says the walk
+            # moved on, and committed when the call returns, so the admin queue reads the row with no
+            # tick in between. NOT GUARDED: a failed write propagates, and `drain` records the walk's
+            # failure, because a feed that silently skipped a title is the one nobody could diagnose.
+            if stage.observes_coverage:
+                await thin.observe_title(conn, ctx.title_id)
             if index < len(STAGES):
                 await write_board(
                     conn, ctx.title_id, stage=STAGES[index].number, status=RUNNING, detail=detail
@@ -1282,14 +1312,25 @@ async def _walk_batch(
 # The NOT EXISTS is the guard a title with two tasks needs: a `jellyfin:` task from the sweep and a
 # `title:` task from §8.4's flywheel are two claims on one title (`enqueue_title`), and a board row
 # whose other task is still pending or leased is a job that really is in flight.
+#
+# AND `queued` IS THE THIRD MARKER, which M5.6 wrote without its arm. `actions.make_due` writes the
+# board `queued` at the stage a retry or a launch resumes at, and the board keeps it until the
+# resumed walk advances past that stage - so a walk that dies inside it on every attempt left the
+# board reading "retried from the admin board" beside a task the reaper had closed for good, in a
+# state decision 444 gives no action: no retry, no abandon, and no drain would ever lease it. Every
+# revivable task is pending once `make_due` has run, so a terminal task beside `queued` is the same
+# write that did not land; the NOT EXISTS leaves a job that is really still waiting alone. The
+# sentence keeps what it was queued with, for the park's reason above. [M5.6 review cycle 1,
+# M56-BOARD-QUEUED-WEDGE]
 _CLOSE_ABANDONED = """
 UPDATE acquisition_job j
    SET status = $2,
        reason = CASE WHEN coalesce(j.reason, '') = '' THEN $3
+                     WHEN j.status = $8 THEN $3 || ' It had been queued with: ' || j.reason
                      ELSE $3 || ' It had parked with: ' || j.reason END,
        retry_after = NULL,
        updated_at = now()
- WHERE (j.status = $1 OR (j.status = $7 AND j.retry_after IS NOT NULL))
+ WHERE (j.status IN ($1, $8) OR (j.status = $7 AND j.retry_after IS NOT NULL))
    AND EXISTS (
            SELECT 1 FROM acquisition_task t
             WHERE t.payload ->> 'title_id' = j.title_id::text
@@ -1329,7 +1370,7 @@ async def close_abandoned_boards(conn: asyncpg.Connection) -> int:
     """
     closed = await conn.fetch(
         _CLOSE_ABANDONED, RUNNING, FAILED, queue.ABANDONED,
-        queue.FAILED, queue.PENDING, queue.LEASED, PARKED,
+        queue.FAILED, queue.PENDING, queue.LEASED, PARKED, QUEUED,
     )
     if closed:
         log.warning(

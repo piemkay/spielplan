@@ -83,7 +83,11 @@ export default defineConfig({
       // one-tap path §6's preamble is written around. 15-tonight-group needs two browser
       // contexts, so it stays on desktop. It named a third file until decision 165 retired
       // the TV client, which is the whole of why results are a phone surface too.
-      testMatch: /(shell|library|responsive|13-rank|14-tonight)\.spec\.js/,
+      //
+      // 20-admin-data joins them because M5.6's plan puts its surface there by name: the board's
+      // stage names and verbatim reasons, the review's ordering, Launch disabled with its reason
+      // and the 48 px selection controls a batch of spend is chosen with. Its tests only read.
+      testMatch: /(shell|library|responsive|13-rank|14-tonight|20-admin-data)\.spec\.js/,
     },
   ],
 });

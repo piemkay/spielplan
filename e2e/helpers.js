@@ -56,6 +56,19 @@ export async function login(page, admin = ADMIN) {
   await page.goto('/login');
   await page.locator('input[type=text]').first().fill(admin.name);
   await page.locator('input[type=password]').fill(admin.password);
+  // Not before /login has the layout it keeps. SvelteKit calls a route's loader twice - once to
+  // preload, once to load (`client.js`'s `load_route`, then `load_node`) - and Vite's preload helper
+  // awaits a CSS dependency on the first call only, so the form mounts on its JS alone. On the phone
+  // project that stylesheet then comes over a fresh WebKit connection, which pays libcurl's 200 ms
+  // IPv6 fallback (the stack publishes on 127.0.0.1 and `localhost` tries ::1 first), and until it
+  // lands the button sits unstyled, 81 px wide, 155 px above where it ends up. A click aimed at that
+  // box and delivered after the move lands in NAME and submits nothing: no POST in the trace, and
+  // `home-greeting` never comes (4 of 70 phone sign-ins measured). A stylesheet's `sheet` is null
+  // until it has loaded, so this waits on the condition itself; Playwright's `stable` check samples
+  // two frames and cannot see a stylesheet that is still on the wire. [M5.6 browser gate]
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('link[rel="stylesheet"]')].every((link) => link.sheet !== null)
+  );
   // `exact`, because M1 put "Sign in with a passkey" on the same page (§3.2 keeps password
   // login always available alongside it) and a substring match now resolves to two buttons.
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();

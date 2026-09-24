@@ -3268,7 +3268,172 @@ milestone = "M5.6"
 kind = "integration"
 what = "Three separate editors write three separate artifacts — adjudications_v1.tsv (DNA verdicts), corrections_v1.tsv (credit facts), the per-facet axis TSVs — with no merged write path; re-deriving a title that carries a curated credit correction re-applies corrections_v1.tsv last, so the derived rows still carry the correction after the derive completes."
 why = "A derive that regenerates rows without re-applying the curated ledgers silently reverts fixes — the §14.5 scar where 787 rows reverted twice."
-tests = []
+tests = [
+    "backend/tests/test_curated_editors.py::test_each_editor_writes_only_its_own_table_and_only_as_the_household",
+    "backend/tests/test_curated_editors.py::test_three_modules_write_three_tables_and_share_no_write_function",
+    "backend/tests/test_curated_editors.py::test_the_verdict_export_folds_back_through_the_importers_reader_and_loader",
+    "backend/tests/test_curated_editors.py::test_the_correction_export_folds_back_through_parse_corrections",
+    "backend/tests/test_curated_editors.py::test_the_axis_export_is_the_file_load_axes_reads",
+    "backend/tests/test_curated_editors.py::test_a_household_correction_survives_a_models_only_re_import_and_still_takes_effect",
+    "backend/tests/test_curated_editors.py::test_a_title_correction_is_true_at_once_and_withdrawing_it_takes_its_credit_back",
+    "backend/tests/test_curated_editors.py::test_a_global_drop_is_true_at_once_on_every_title_that_carries_the_term",
+    "backend/tests/test_curated_editors.py::test_a_household_axis_survives_a_bundle_that_ships_the_same_facet",
+    "backend/tests/test_curated_editors.py::test_a_bundle_row_is_read_only_in_every_editor",
+    "backend/tests/test_curated_editors.py::test_the_verdict_editor_refuses_what_the_applier_could_not_apply",
+    "backend/tests/test_curated_editors.py::test_the_correction_editor_refuses_an_opinion_and_a_title_nobody_holds",
+    "backend/tests/test_curated_editors.py::test_the_axis_editor_refuses_every_file_load_axes_would_refuse",
+    # The route layer (decision 445): each ledger's four routes over HTTP with the export read back
+    # by the importer's own readers from the bytes the route serves, and no handler that reaches two
+    # editors - proposal 105's "never one merged screen" read out of `api/curated.py` itself.
+    "backend/tests/test_curated_api.py::test_the_verdict_editor_lists_writes_exports_and_withdraws_over_http",
+    "backend/tests/test_curated_api.py::test_the_correction_editor_lists_writes_exports_and_withdraws_over_http",
+    "backend/tests/test_curated_api.py::test_the_axis_editor_lists_writes_exports_and_withdraws_over_http",
+    "backend/tests/test_curated_api.py::test_a_verdict_the_applier_could_not_apply_is_a_409_with_the_editors_sentence",
+    "backend/tests/test_curated_api.py::test_each_editor_route_calls_exactly_one_editor_and_nothing_shared_calls_any",
+    # M5.6 review cycle 1 (m56-curated-01): a `composer` correction replaces the title's music credits
+    # and its withdrawal brings none back - on a bundle title, which has no raw store, for good - so
+    # the editor says so before the save and at the second tap of Withdraw, and the server is held to
+    # what the warning claims.
+    "backend/tests/test_curated_editors.py::test_withdrawing_a_composer_correction_on_a_bundle_title_brings_no_credit_back",
+    "frontend/src/lib/ledgerEditors.test.js::warns before a composer correction is saved and again before one is withdrawn",
+    # M5.6 review cycle 1, beside the server tests and never instead of them (decision 226): a save
+    # replaces a facet's whole axis, so Add offers only a facet with none and a household axis is
+    # edited prefilled whole (m56-curated-02); DROP_EVIDENCE and REPOINT warn before the save as DROP
+    # does, withdrawing none of the three undoing what it did (m56-curated-03); and a verdict form
+    # the operator dismissed is not reopened by the hand-off's module state on the next visit
+    # (M56-DATA-06).
+    "frontend/src/lib/ledgerEditors.test.js::adds an axis only where there is none and edits a household axis prefilled whole",
+    "frontend/src/lib/ledgerEditors.test.js::warns before a DROP_EVIDENCE and a REPOINT as it does before a DROP",
+    "frontend/src/lib/ledgerEditors.test.js::does not reopen a dismissed hand-off when the editor mounts again, but opens a new one",
+]
+
+[[requirement]]
+# The rows M5.6's plan adds land with no `tests` key, which is M4.10's, M4.11's and M4.16's
+# opening: the red list is the test plan. The board's actions are decision 444's, the launch's
+# arithmetic and transaction decisions 441-443's, and the review's two orderings decision 446's.
+id = "map-taste-admin-the-board-reads-the-pipeline-in-its-own-words"
+spec = "§6.6 Data (\"acquisition pipeline monitor (per-title stage board from acquisition_job)\") + §8"
+milestone = "M5.6"
+kind = "e2e"
+what = "The board names §8's ten stages verbatim and in order, shows a parked job's reason without truncating or rephrasing it, distinguishes a job parked because something may change from one that failed, and offers the admin actions on the states that admit them; a job parked at the reviews gate is retried from the board and resumes at that stage rather than at stage 1."
+why = "acquisition_job.reason is commented 'shown verbatim on the admin board' and nothing reads it. `parked` already means something non-failing in the shipped tree - the placement sweep parks thin-but-successfully-placed titles at stage 2 and its own docstring says the title is ready and it is the job that is parked - so a board that renders both states alike tells an operator a healthy title is broken."
+# The server half (decision 444): the ten names read back out of the spec file and out of the
+# envelope, the reason verbatim, each state's admitted actions, a retry from stage 4 resuming at 4
+# with no request, no client built and no derived row duplicated - window open or closed - and the
+# refusals. This row is `e2e` and rule 4 wants a browser id beside these; the surface's spec joins.
+tests = [
+    "backend/tests/test_acquire_pipeline.py::test_the_ten_stage_names_are_read_back_out_of_the_spec_file",
+    "backend/tests/test_acquisition_board.py::test_the_board_lists_a_parked_job_with_its_reason_verbatim",
+    "backend/tests/test_acquire_actions.py::test_a_job_parked_at_the_reviews_gate_retried_from_four_resumes_there_and_asks_nothing",
+    "backend/tests/test_acquire_actions.py::test_each_board_state_admits_what_decision_444_gives_it",
+    "backend/tests/test_acquire_actions.py::test_a_plain_retry_is_refused_on_a_parked_job_and_walks_a_failed_one_again",
+    "backend/tests/test_acquire_actions.py::test_a_revived_task_loses_its_failed_for_good_mark_and_frees_the_titles_other_keys",
+    "backend/tests/test_acquire_actions.py::test_the_inbox_row_with_no_task_gets_exactly_one_title_task",
+    "backend/tests/test_acquire_actions.py::test_an_abandoned_job_leases_nothing_until_it_is_retried_from_a_stage",
+    "backend/tests/test_acquire_actions.py::test_every_action_is_refused_while_the_title_is_in_flight",
+    "backend/tests/test_acquire_actions.py::test_a_stage_past_the_one_the_job_reached_is_refused",
+    "backend/tests/test_acquire_actions.py::test_the_paid_stage_pre_check_prices_the_plan_the_revived_task_carries",
+    "backend/tests/test_acquire_actions.py::test_the_board_names_the_ten_stages_and_the_actions_each_job_admits",
+    "backend/tests/test_acquire_actions.py::test_the_three_actions_answer_with_the_job_or_refuse_with_the_sentence",
+    "backend/tests/test_acquire_actions.py::test_the_three_actions_refuse_a_member_and_a_stranger",
+    # The surface (plan section 6, "e2e (phone project)"): the legend compared with section 8's own
+    # words and with the route's `stages`, every reason byte for byte against the envelope the page
+    # rendered, a failed job beside a parked one with only its admitted buttons; the static guards
+    # that no reason is clamped or sliced and that no frontend file retypes the ten names; and,
+    # beside them and never instead (decision 226), the mounted board refusing a plain retry verbatim.
+    "e2e/specs/20-admin-data.spec.js::the board names the ten stages of section 8 in order and shows each reason verbatim",
+    "e2e/specs/20-admin-data.spec.js::a parked job and a failed job render differently and offer only the actions their state admits",
+    "backend/tests/test_data_surface_guards.py::test_the_board_and_the_queue_show_every_reason_whole",
+    "backend/tests/test_data_surface_guards.py::test_no_frontend_file_retypes_the_stage_names",
+    "frontend/src/lib/acquisitionBoard.test.js::draws the legend and each reason verbatim, and only the buttons each job admits",
+    # M5.6 review cycle 1: a lease landing between an action's check and its write takes nothing,
+    # because the action holds the title's task rows (M56-BOARD-LEASE-RACE); and a retried walk that
+    # dies in the stage it resumed at is closed `failed` by the reaper and admits a retry, where the
+    # board's `queued` once admitted nothing for ever (M56-BOARD-QUEUED-WEDGE).
+    "backend/tests/test_acquire_actions.py::test_a_lease_that_lands_after_the_actions_check_takes_nothing_from_it",
+    "backend/tests/test_acquire_actions.py::test_a_retried_walk_that_dies_in_the_stage_it_resumed_at_is_closed_failed_and_retryable",
+]
+
+[[requirement]]
+id = "map-taste-admin-a-launch-is-refused-before-it-breaches-the-cap"
+spec = "§8.4 (\"picks a batch and providers, sees the cost estimate, launches\") + §6.6 spend guard"
+milestone = "M5.6"
+kind = "integration"
+what = "Selecting flywheel rows shows a running total against the remaining monthly cap that recomputes with the provider and pass count; Launch is disabled with its reason when the total would breach the cap, rather than warning after the fact; and a launched batch marks exactly the selected rows and no others."
+why = "§12's exit criterion runs at roughly a dollar a month, so the cap is not there for the unattended path - it is there for this button, where one click can select 19,071 rows at up to $4,920. An estimate shown after the spend has started is not a guard."
+# Decisions 441-443: the batch arithmetic as pure functions (plan §7 checks 3 and 4 - five rows
+# are five per-title estimates, two passes double it, the reservation is both attempts); the
+# launch through Postgres, marking exactly the selection and making exactly those titles due with
+# the batch plan, every refusal - over the cap, no cap, an unpriced model, a keyless provider, a
+# closed row, an unknown id, an M6 row, a title in flight - writing nothing in any of four tables,
+# and exactly the room left launching; and the quote and the launch over the routes the surface asks.
+tests = [
+    "backend/tests/test_flywheel_batch.py::test_five_titles_at_one_pass_total_exactly_five_per_title_estimates",
+    "backend/tests/test_flywheel_batch.py::test_a_second_pass_doubles_every_figure",
+    "backend/tests/test_flywheel_batch.py::test_two_providers_sum_their_own_estimates",
+    "backend/tests/test_flywheel_batch.py::test_one_unknown_price_makes_the_whole_batch_unknown",
+    "backend/tests/test_flywheel_batch.py::test_the_reservation_is_both_attempts_and_every_figure_is_exact",
+    "backend/tests/test_flywheel_batch.py::test_a_reservation_over_the_room_left_is_refused_naming_its_arithmetic_the_cap_and_the_month",
+    "backend/tests/test_flywheel_batch.py::test_the_refusals_come_in_the_gates_order_and_each_is_its_own_sentence",
+    "backend/tests/test_flywheel_launch.py::test_a_launch_marks_exactly_the_selected_rows_and_makes_exactly_their_titles_due",
+    "backend/tests/test_flywheel_launch.py::test_the_batch_row_records_the_figures_the_launch_was_held_against",
+    "backend/tests/test_flywheel_launch.py::test_each_money_refusal_is_its_own_sentence_and_writes_nothing",
+    "backend/tests/test_flywheel_launch.py::test_the_over_cap_sentence_names_the_reservation_the_cap_and_what_is_left",
+    "backend/tests/test_flywheel_launch.py::test_a_reservation_exactly_equal_to_the_room_left_launches",
+    "backend/tests/test_flywheel_launch.py::test_a_row_already_launched_refuses_the_whole_launch",
+    "backend/tests/test_flywheel_launch.py::test_an_id_the_queue_does_not_hold_refuses_the_whole_launch",
+    "backend/tests/test_flywheel_launch.py::test_a_row_whose_producer_is_m6s_refuses_the_whole_launch_naming_m6",
+    "backend/tests/test_flywheel_launch.py::test_a_title_in_flight_refuses_the_whole_launch_and_undoes_the_titles_already_made_due",
+    "backend/tests/test_flywheel_api.py::test_the_quote_doubles_when_the_passes_go_from_one_to_two",
+    "backend/tests/test_flywheel_api.py::test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap",
+    "backend/tests/test_flywheel_api.py::test_launch_answers_200_with_the_batch_and_409_with_the_domains_sentence",
+    "backend/tests/test_flywheel_api.py::test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with",
+    # The surface: two queued rows selected against the real quote route, Launch dark with the
+    # no-cap sentence as visible text, and the row checkboxes and Launch at 48 px on the phone; beside
+    # it (decision 226), a quote for a selection no longer on screen never arming the button.
+    "e2e/specs/20-admin-data.spec.js::Launch is disabled with its reason and the selection controls meet the touch floor",
+    "frontend/src/lib/flywheel.test.js::never arms Launch with a quote for a selection that is no longer on screen",
+    # M5.6 review cycle 1 (decision 448): abandoning a launched title the gate parked over the cap
+    # queues its row again out of the batch and strips the plan, and a relaunch at one provider and
+    # one pass walks the paid stage on that plan (M56-MONEY-01); a title that failed stage 6 for good
+    # refuses the launch, naming the board's retry, until the retry clears it (M56-MONEY-02).
+    "backend/tests/test_llm_batch_plan.py::test_abandoning_a_launched_title_takes_it_out_of_its_batch_so_a_relaunch_can_replan_it",
+    "backend/tests/test_flywheel_launch.py::test_a_title_that_failed_stage_six_for_good_is_not_launched_until_the_board_retries_it",
+    # M5.6 review cycle 1 (M56-DATA-02): with no quote for the selection in hand the card states the
+    # cap from the queue read's own meter, and "no cap" only where the cap is null - never over a cap
+    # of five dollars. The e2e test above also measures the pass picker at 48 px (M56-DATA-04).
+    "frontend/src/lib/flywheel.test.js::states the cap from the queue read while no quote for the selection is in hand",
+]
+
+[[requirement]]
+id = "map-taste-admin-rejects-are-ordered-never-filtered"
+spec = "§6.6 Data (\"review of DNA rejects and low-evidence tags\") + §4.1 rule 2 + §8 stage 7"
+milestone = "M5.6"
+kind = "e2e"
+what = "The reject review lists dropped tags with their term, quote, salience and the rule each violated, and lists a title's low-evidence tags ordered ascending by confidence, with no control anywhere that filters on confidence, salience or n_sources; the only action it offers is writing a ledger row, never accepting a rejected tag."
+why = "§8 stage 7 drops and never repairs, so a review screen that could accept a tag would undo the trust boundary. §4.1 rule 2 makes the three weights weights and never filters, which a static guard already enforces over SQL and Python, so 'low-evidence' has to be an ordering. (dna_reject carries no confidence by decision 341, so the ascending-confidence ordering is the low-evidence half's; decision 446.)"
+# The domain half (decision 446): the two reads, over rows seeded to tempt a cut - a NULL
+# confidence and a 0.01 beside the rest, and every refusal reason. This row is `e2e` and rule 4
+# wants a browser id beside these; the route's and the surface's tests join them.
+tests = [
+    "backend/tests/test_dna_review.py::test_rejects_come_newest_first_and_are_bounded_on_recency",
+    "backend/tests/test_dna_review.py::test_every_rule_a_reject_can_carry_is_listed_with_what_the_reviewer_reads",
+    "backend/tests/test_dna_review.py::test_a_reject_naming_a_title_this_install_does_not_hold_is_still_listed",
+    "backend/tests/test_dna_review.py::test_low_evidence_is_ascending_confidence_with_nulls_last_then_n_sources",
+    "backend/tests/test_dna_review.py::test_nothing_is_filtered_out_of_the_low_evidence_list",
+    "backend/tests/test_dna_review.py::test_an_install_with_no_vocabulary_has_no_low_evidence_tags",
+    # The route's half: both orderings handed on as read, a NULL and a 0.01 confidence both present.
+    "backend/tests/test_curated_api.py::test_the_review_hands_on_both_orderings_and_filters_nothing",
+    # The surface's half: the screen keeps the route's ascending order with no control named for a
+    # weight and a ledger row the only action; decision 446's guard over the review's four files,
+    # SQL, Python, state module and markup; and, beside them, the mounted review drawing every row.
+    "e2e/specs/20-admin-data.spec.js::the reject review orders a title's tags by confidence ascending and offers no control on a weight",
+    "backend/tests/test_data_surface_guards.py::test_the_review_cuts_on_no_weight_in_any_layer",
+    # The weakest-first list cut at a length (a slice, an index, FETCH FIRST), written into the
+    # real files: the top-N cut that names no weight (M56-DATA-05).
+    "backend/tests/test_data_surface_guards.py::test_the_review_guard_sees_a_length_cut_written_into_the_real_files",
+    "frontend/src/lib/dnaReview.test.js::draws every tag in server order, offers no weight control, and hands a row on",
+]
 
 [[requirement]]
 id = "map-taste-admin-spend-cap-parks-paid-stage"
@@ -4107,17 +4272,16 @@ tests = [
 ]
 
 [[requirement]]
-# Re-pointed from "M5" to M5.5 under decision 321, milestone key only - and the `spec`
-# string is LEFT AS IT STANDS, citing proposals 107, 109. Decision 295's rule is scoped to
-# `_at_or_before(current_milestone)`, M5.5 sorts after M5.1, and re-pointing is therefore
-# exactly what keeps this row out of that rule's scope until decision 330 adopts or
-# strikes 104, 107, 109 and 135 by number. Do NOT rewrite `proposals` as `decisions`:
-# `_laundered_decision_citations` exists to catch that one-word repair, which is the
-# cheapest way to discharge a rule without gaining an authority. Do NOT add the "rests
-# only on unsettled proposal" escape either - that records a debt this milestone has no
-# standing to take.
+# Re-pointed from "M5" to M5.5 under decision 321, milestone key only. Its `spec` string cited
+# "decision-doc proposals 107, 109" until M5.6 took decision 330, which adopts both by number
+# and folds 107 into §6.6 Connectors' spend guard and 109 into §6.6 Data's board clause as spec
+# v2.1.3; the string now cites those two sections. That is the repair decision 295's rule asks
+# for, and not the one-word `proposals` -> `decisions` rename `_laundered_decision_citations`
+# exists to catch. The row's last clause - a manual retry of a parked stage-6 job that would
+# breach the cap is refused with that reason - is M5.6's route (decision 444), and M5.6's
+# integration test for it joins `tests` in the change set that lands the route.
 id = "jellyfin-acquisition-eval-spend-cap-meters-billed-tokens"
-spec = "§8 stage 6 + §9 (with decision-doc proposals 107, 109)"
+spec = "§8 stage 6 + §9 + §6.6 Connectors spend guard + §6.6 Data"
 milestone = "M5.5"
 kind = "integration"
 what = "The spend meter charges billed output tokens including a provider's reasoning/thinking tokens, not the visible JSON alone; once the running month is at the configured cap, stage 6 parks with the reason `over spend cap` without issuing any paid call, and a manual retry of a parked stage-6 job that would breach the cap is refused with that reason rather than queued."
@@ -4227,6 +4391,10 @@ tests = [
     # reading rather than a provider's word (DBL-C2-04).
     "backend/tests/test_llm_stage.py::test_exit_check_seven_fails_when_a_fetcher_is_built_for_the_title_it_parks",
     "backend/tests/test_fake_llm.py::test_an_openai_server_error_is_answered_in_the_shape_its_error_page_publishes",
+    # M5.6 (decision 444): the row's last clause through the board's own action. A retry from 6, and
+    # from 5 - whose first stage that RUNS is 6 - with the month at the cap is refused with
+    # `spend.retry_refusal`'s sentence and neither table moves; a retry from 2 is queued.
+    "backend/tests/test_acquire_actions.py::test_a_paid_stage_retry_over_the_cap_is_refused_with_the_meters_reason",
 ]
 
 [[requirement]]
@@ -4677,22 +4845,48 @@ tests = [
 ]
 
 [[requirement]]
-# Re-pointed from "M5" to M5.6 under decision 321, milestone key only - and the `spec`
-# string is LEFT AS IT STANDS, citing proposals 135, 104. Decision 295's rule is scoped to
-# `_at_or_before(current_milestone)`, M5.6 sorts after M5.1, and re-pointing is therefore
-# exactly what keeps this row out of that rule's scope until decision 330 adopts or
-# strikes 104, 107, 109 and 135 by number. Do NOT rewrite `proposals` as `decisions`:
-# `_laundered_decision_citations` exists to catch that one-word repair, which is the
-# cheapest way to discharge a rule without gaining an authority. Do NOT add the "rests
-# only on unsettled proposal" escape either - that records a debt this milestone has no
-# standing to take.
+# Re-pointed from "M5" to M5.6 under decision 321, milestone key only. Its `spec` string cited
+# "decision-doc proposals 135, 104" until decision 330 adopted both by number and folded 135
+# into §8.4 (the enqueue is immediate and visible, never a nightly digest) and 104 into §6.6
+# Data (the queue's approve/spend controls) as spec v2.1.3; the string now cites those two
+# sections, rather than renaming `proposals` to `decisions`, the repair
+# `_laundered_decision_citations` exists to catch. Decision 328 struck §8.4's third feed, so
+# the `what`'s three examples are the three kinds 0029_flywheel.sql leaves in the CHECK, and at
+# M5 only the thin-facet one has a producer (decisions 329, 440); the M6 writers refuse a term
+# outside the vocabulary rather than enqueue it (decision 344).
 id = "jellyfin-acquisition-eval-flywheel-enqueues-naming-failures"
-spec = "§8.4 (with decision-doc proposals 135, 104)"
+spec = "§8.4 + §6.6 Data"
 milestone = "M5.6"
 kind = "integration"
 what = "A naming failure — a bound-vocabulary query returning zero owned titles, a frontier with no vocabulary coverage, a thin-facet title — appends a flywheel row carrying its reason at the moment it happens and is readable from the admin queue immediately, not after a nightly job; the batch an admin launches from that queue targets exactly the selected rows and no others."
 why = "DNA breadth is the measured binding constraint (zero owned titles carry `themes.robots`); §8.4 and proposal 135 make the queue a live instrument with per-batch approve/launch controls."
-tests = []
+# The feed half, through the real driver (decision 440): a thin-facet title is in `store.queue` -
+# the admin queue's read - the moment `run_task` returns from a walk past stage 8, with no drain,
+# job or sweep between; nothing is written before stage 8 finishes, for a title naming every facet
+# or with no vocabulary; one open row per title however often it is walked, 0029's index refusing a
+# second; a launched row closes at the next observation; stage 8 keeps its stub. The M6 feeds'
+# writers name §6.4's reason, refuse a term outside the vocabulary (decision 344) and are called by
+# no M5 code. The launch half ("targets exactly the selected rows") is the launch's exactness test,
+# and "readable from the admin queue immediately" is asserted a second time through the route the
+# queue is read from, on the app's own pool, the moment the walk returns.
+tests = [
+    "backend/tests/test_flywheel_feed.py::test_a_thin_title_is_in_the_admin_queue_the_moment_its_walk_finishes_stage_eight",
+    "backend/tests/test_flywheel_feed.py::test_a_walk_that_stops_before_stage_eight_finishes_writes_nothing",
+    "backend/tests/test_flywheel_feed.py::test_a_title_naming_every_facet_or_an_install_with_no_vocabulary_is_not_queued",
+    "backend/tests/test_flywheel_feed.py::test_a_second_walk_refreshes_the_titles_one_open_row_and_never_adds_one",
+    "backend/tests/test_flywheel_feed.py::test_a_running_row_closes_done_at_the_next_finish_and_a_still_thin_title_is_queued_again",
+    "backend/tests/test_flywheel_feed.py::test_stage_eight_keeps_its_stub_and_is_the_only_stage_that_observes",
+    "backend/tests/test_flywheel_feed.py::test_stage_eights_body_is_still_the_stub_marker",
+    "backend/tests/test_flywheel_feed.py::test_an_empty_predicate_is_queued_with_its_reason_as_the_spec_writes_it",
+    "backend/tests/test_flywheel_feed.py::test_a_naming_failure_the_vocabulary_cannot_name_is_not_enqueued",
+    "backend/tests/test_flywheel_feed.py::test_no_app_code_calls_either_writer_whose_producer_is_m6",
+    "backend/tests/test_flywheel_schema.py::test_a_title_holds_one_open_thin_facet_row_however_often_it_is_observed",
+    "backend/tests/test_flywheel_launch.py::test_a_launch_marks_exactly_the_selected_rows_and_makes_exactly_their_titles_due",
+    "backend/tests/test_flywheel_api.py::test_the_thin_facet_row_is_readable_from_the_route_the_moment_the_walk_returns",
+    # M5.6 review cycle 1 (M56-DATA-01): section 8.4's "'queued just now' marker read off the row's
+    # own creation time" on the card itself, per row, beside the route test above (decision 226).
+    "frontend/src/lib/flywheel.test.js::marks a row queued just now and an older row with its age, off each rows own time",
+]
 
 [[requirement]]
 id = "jellyfin-acquisition-eval-llm-validator-two-attempt"

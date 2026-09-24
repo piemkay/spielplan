@@ -12,7 +12,9 @@ and M4.10 have no script under `ops/` at all and never have; M5.1's, M5.2's and 
 were each written in the same change set as the surface they measure and none has ever been run,
 because none of those lanes could reach a real corpus bundle - and M5.1's could start neither a
 container nor a port; and M5.4's checks are the suite's, which runs them against the fixture and not
-against the real install and real bundle its criterion names. Three describe milestones that do not
+against the real install and real bundle its criterion names; and M5.6's criterion is a surface
+the suite and the owner's browser gate measure, whose first clause no install can reach until
+stage 5 is wired. Three describe milestones that do not
 exist yet (M5, M6, M7). The rest have been measured by one of the scripts under `ops/`, and **not one
 of those scripts had a committed output** until M4.16 wrote the first. The newest measured one is
 M5.5's, written in the same change set as the surface it measures and, unlike M5.1's, M5.2's and
@@ -74,6 +76,7 @@ is here because it is the one criterion this milestone actually ran.
 | M5.3 | UNMEASURED | none | yes | `________` |
 | M5.4 | UNMEASURED | none | yes | `________` |
 | M5.5 | RUN, OUTPUT NOT COMMITTED | none | yes | `________` |
+| M5.6 | UNMEASURED | none | yes | `________` |
 | M5 | NOT BUILT | none | no | `________` |
 | M6 | NOT BUILT | none | no | `________` |
 | M7 | NOT BUILT | none | no | `________` |
@@ -541,6 +544,35 @@ plan, which fit unless each runs past about 210 s - and a plan that outruns it p
 call metered and inside the cap, for a title then closed under `queue.ABANDONED`'s stopped-worker
 sentence. None of the fourteen checks reaches it. The budget's stage-6 measurement is owed by the
 milestone that wires stage 5, which is the first that makes this path reachable.
+
+### M5.6 — Admin · Data: the board, the flywheel, the ledger editors, the rejects
+
+**Criterion (§12, abbreviated):** a title whose extracted tier leaves a declared facet unnamed gets
+a `thin_facet` flywheel row carrying its reason the moment its walk finishes stage 8, readable from
+the admin queue at once, one open row per title; selecting rows shows a running total against the
+remaining cap that doubles when the pass count goes from 1 to 2; with the cap below the batch's
+reservation Launch is disabled with a reason naming the cap and a direct launch is refused with
+nothing written, while a launch inside the cap marks exactly the selected rows; the board names §8's
+ten stages verbatim and in order and shows each reason byte-identical to `acquisition_job.reason`;
+a retry from stage 4 of a job parked at the reviews gate re-enters at 4 and makes no request, and a
+paid-stage retry over the cap is refused with the meter's reason; three separate editors write three
+separate artifacts, a household correction survives a models-only re-import, and every export
+round-trips through the importer's parsers; the reject review orders and never filters; and the
+selection controls are at least 48 px on the phone. The cell names the instrument: "Measured by the
+registered integration tests and the owner's browser gate, with no `ops/` script (decision 447)".
+
+**Status:** UNMEASURED. **Output file:** none. **Blocking:** yes. **Owner verdict:** `________`
+
+The row was written as the milestone opened, under decision 331's rule that each sub-milestone writes
+its own §12 row when it opens. **It opened UNMEASURED rather than NOT BUILT**, because the change set
+that opens it carries its migration, `0029_flywheel.sql`, and M5.4's first review cycle found that
+NOT BUILT beside shipped code is a false record. Like M5.4's, this criterion names no `ops/` script
+(decision 447): it is a surface, and every clause but the first is expressible against the suite and
+the browser gate. **The first clause cannot run on a real install.** No title reaches stage 8 until
+M5.4's owed stage-5 wiring lands, because stage 6 parks on a missing pack (decision 432), so the
+thin-facet feed is exercised through the real driver in the suite with the stages before it stood
+down, and it goes live the day stage 5 is wired (decision 440). A launch on a real install today
+therefore makes titles due at a stage 5 that is a no-op, and they park at stage 6 rather than bill.
 
 ### M5 — acquisition pipeline, admin connector UI, LLM layer, extraction flywheel
 

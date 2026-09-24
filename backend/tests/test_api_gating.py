@@ -64,7 +64,12 @@ MEMBER_PASSWORD = "a-member-password"
 # no write, which is M5.7's. The dispatch's pattern also matches Jellyfin's own test path, and the
 # two are counted apart because they are two routes: the walk sees both, and Jellyfin's is the one
 # that answers, because `app.py` mounts the dispatch after `admin`.
-ADMIN_ROUTE_COUNT = 28
+# 28 until M5.6 gave §6.6 Data its controls: the board's three actions (`api/acquisition.py`,
+# decision 444), the extraction queue's read, quote and launch (`api/flywheel.py`, decisions
+# 441-443), and the three ledger editors' four routes each with the review's two reads
+# (`api/curated.py`, decisions 445 and 446). Each arrives here by taking `AdminUser`, and
+# re-stating the number is the whole of what this equality asks of the milestone that added them.
+ADMIN_ROUTE_COUNT = 48
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

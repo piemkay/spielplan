@@ -33,7 +33,8 @@ import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '
  * signed in on the same device - has already run. Playwright groups by PROJECT first, though:
  * every desktop test runs before the phone project starts, so the DESKTOP run of this file
  * completes and then five phone specs follow it - 02-shell, 03-library, 06-responsive, 13-rank
- * and 14-tonight.
+ * and 14-tonight - and 20-admin-data (M5.6) follows this file's own PHONE run too. That one reads
+ * the Data page and writes nothing: it never presses Retry, Abandon, Launch or Save.
  *
  * What crosses that boundary is narrow, and is named here rather than covered by the sentence
  * above. Cookies live in per-test contexts and the offline flag with them; decision 117's switch

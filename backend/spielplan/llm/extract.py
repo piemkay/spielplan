@@ -155,7 +155,7 @@ from spielplan.dna import packs, verify
 from spielplan.llm import client, consensus, contract, pricing, spend
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     import asyncpg
 
@@ -248,6 +248,7 @@ async def extract_title(
     task_key: str | None,
     run_id: int | None = None,
     open_fetcher: Callable[[], Awaitable[fetch.Fetcher]] | None = None,
+    batch: Mapping[str, Any] | None = None,
 ) -> Extraction:
     """Extract, verify and write one title's DNA through every provider decision 324 plans.
 
@@ -267,8 +268,12 @@ async def extract_title(
     `spend.cap_check` before the driver reaches this stage and parks the title when the month
     cannot hold both attempts of every run (decision 325), so a second reading here would be a
     second answer to one question, taken a moment later.
+
+    `batch` is the plan a flywheel launch put on the task - its providers and passes - and it is
+    handed to the plan maker exactly as the gate handed it to `cap_check`, so the runs made here
+    are the runs the gate reserved for (decision 442). None is the stored settings (decision 324).
     """
-    plan = await spend.extraction_plan(conn)
+    plan = await spend.extraction_plan(conn, batch=batch)
     if isinstance(plan, spend.Refusal):
         return Extraction(PLAN, plan.reason, dict(plan.detail))
 

@@ -871,8 +871,12 @@ async def test_the_harness_acquisition_payloads_carry_the_keys_the_routes_return
         assert set(listed.json()) == _literal_keys(ACQUISITION_ROUTES, "pipeline_board")
         rows = listed.json()["jobs"]
         assert rows, "the harness answers with no board rows, so the comparison below asks nothing"
+        # Each row is the board row with the actions its state admits (decision 444), composed in
+        # the route as `{**job, "actions": ...}` and read the same way, one literal from each.
         for row in rows:
-            assert set(row) == _literal_keys(ACQUISITION_ROWS, "_job_row"), row
+            assert set(row) == (
+                _literal_keys(ACQUISITION_ROWS, "_job_row") | _literal_keys(ACQUISITION_ROUTES, "_offered")
+            ), row
 
         detail = await client.get(f"/api/admin/acquisition/{rows[0]['title_id']}")
         assert detail.status_code == 200, detail.text

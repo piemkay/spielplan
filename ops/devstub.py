@@ -14,7 +14,9 @@ Run:  python ops/devstub.py            (serves http://127.0.0.1:8080)
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import random
@@ -24,6 +26,7 @@ import uuid
 from collections.abc import Sequence
 from contextlib import closing
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal
@@ -44,15 +47,23 @@ sys.path.insert(0, str(ROOT / "backend"))
 # so a developer who has a real `.env` and wants the refusals can export it as 0.
 os.environ.setdefault("SPIELPLAN_INSECURE_DEV", "1")
 
+from spielplan.acquire import actions as acquire_actions  # noqa: E402 - decision 444's table
+from spielplan.api import curated as curated_api  # noqa: E402 - each ledger's `applies` sentence
 from spielplan.api import llm as llm_api  # noqa: E402 - the real provider card and batch reason
 from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
 from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
 from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
 from spielplan.connectors import registry  # noqa: E402 - the real connector table
 from spielplan.core.config import settings  # noqa: E402
+from spielplan.curated import adjudications as curated_verdicts  # noqa: E402 - the real refusals
+from spielplan.curated import axes as curated_axes  # noqa: E402
+from spielplan.curated import corrections as curated_corrections  # noqa: E402
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
+from spielplan.dna import review as dna_review  # noqa: E402 - the review's real bound
+from spielplan.flywheel import batch as flywheel_batch  # noqa: E402 - decision 441's arithmetic
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
 from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
+from spielplan.importer import dna as importer_dna  # noqa: E402 - the ledgers' real columns
 from spielplan.importer.dna import app_facet  # noqa: E402 - the real facet rule, not a copy
 from spielplan.importer.report import ImportReport  # noqa: E402 - `_real_report`'s return type
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
@@ -1349,8 +1360,9 @@ def admin_system() -> dict[str, Any]:
     }
 
 
-# §6.6's Acquisition board, read side. M5.1 ships two GETs and no control: proposal 109's retry /
-# retry-from-stage / abandon are adopted or struck by number under decision 330, M5.6's.
+# §6.6's Acquisition board. M5.1 shipped two GETs and no control; M5.6 adds proposal 109's retry /
+# retry-from-stage / abandon, adopted by number under decision 330, with decision 444's table of
+# what each state admits - read here from `acquire/actions.admitted`, never restated.
 #
 # Fixture-shaped and nothing more. The harness runs no worker, no queue and no fetcher, so these
 # rows are invented the way the System card above is - but in the three shapes the page has to
@@ -1379,16 +1391,28 @@ _ACQUISITION: list[dict[str, Any]] = [
 ]
 
 
+def _jobs() -> list[dict[str, Any]]:
+    """The board as this harness's actions have left it: the fixture above until one is taken."""
+    return STATE.setdefault("acquisition", [dict(job) for job in _ACQUISITION])
+
+
+def _offered(job: dict[str, Any]) -> dict[str, Any]:
+    return {**job, "actions": acquire_actions.admitted(job["status"])}
+
+
 @app.get("/api/admin/acquisition")
 def admin_acquisition() -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
-    return {"jobs": [{**job, "updated_at": now} for job in _ACQUISITION]}
+    return {
+        "stages": acquire_actions.stage_legend(),
+        "jobs": [_offered({**job, "updated_at": now}) for job in _jobs()],
+    }
 
 
 @app.get("/api/admin/acquisition/{title_id}")
 def admin_acquisition_job(title_id: int) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
-    found = next((job for job in _ACQUISITION if job["title_id"] == title_id), None)
+    found = next((job for job in _jobs() if job["title_id"] == title_id), None)
     if found is None:
         # The app answers 404 on a title the pipeline has never touched, and so does this: an
         # empty envelope would present "no such job" and "a job doing nothing" as one state.
@@ -1409,6 +1433,52 @@ def admin_acquisition_job(title_id: int) -> dict[str, Any]:
              "content_type": "application/json", "fetched_at": now, "ok": True, "error": None},
         ],
     }
+
+
+# The three board actions (decision 444), as far as a harness with no queue can carry them: each is
+# refused on a state decision 444 does not let it act on, and otherwise moves the fixture row the way
+# the app's action moves the board - queued at the stage it resumes from, or abandoned - with the
+# app's own sentence. The paid-stage cap check and the task revive are the app's and not modelled.
+class RetryFrom(BaseModel):
+    stage: int
+
+
+def _board_action(title_id: int, action: str, stage: int | None = None) -> dict[str, Any]:
+    job = next((job for job in _jobs() if job["title_id"] == title_id), None)
+    if job is None:
+        raise HTTPException(status_code=404, detail=acquire_actions.NO_JOB)
+    if action not in acquire_actions.admitted(job["status"]):
+        raise HTTPException(status_code=409, detail=f"this job is {job['status']}, which does not admit"
+                                                    f" {action} here (decision 444)")
+    if action == acquire_actions.ABANDON:
+        job.update(status=acquire_actions.ABANDONED, reason=acquire_actions.ABANDONED_REASON + ".")
+    else:
+        stage = job["stage"] if stage is None else stage
+        if not 1 <= stage <= job["stage"]:
+            raise HTTPException(status_code=409, detail=f"a retry resumes at a stage from 1 to"
+                                                        f" {job['stage']} (decision 444)")
+        named = acquire_actions.stage_legend()[stage - 1]["name"]
+        sentence = acquire_actions.RETRIED_FAILED if action == acquire_actions.RETRY else (
+            acquire_actions.RETRIED)
+        job.update(stage=stage, status=acquire_actions.QUEUED, retry_after=None,
+                   reason=sentence.format(number=stage, name=named))
+    now = datetime.now(UTC).isoformat()
+    return {"job": _offered({**job, "updated_at": now, "detail": {"identify": {"source": "jellyfin"}}})}
+
+
+@app.post("/api/admin/acquisition/{title_id}/retry")
+def admin_acquisition_retry(title_id: int) -> dict[str, Any]:
+    return _board_action(title_id, acquire_actions.RETRY)
+
+
+@app.post("/api/admin/acquisition/{title_id}/retry-from")
+def admin_acquisition_retry_from(title_id: int, body: RetryFrom) -> dict[str, Any]:
+    return _board_action(title_id, acquire_actions.RETRY_FROM, body.stage)
+
+
+@app.post("/api/admin/acquisition/{title_id}/abandon")
+def admin_acquisition_abandon(title_id: int) -> dict[str, Any]:
+    return _board_action(title_id, acquire_actions.ABANDON)
 
 
 # §6.6's LLM settings read and the one connector test dispatch (M5.5, decision 433): two routes and
@@ -1459,6 +1529,382 @@ def connector_test(name: str) -> dict[str, Any]:
     if spec.test is None:
         raise HTTPException(status_code=404, detail=f"connector {name} has no test in this build")
     return {"ok": False, "error": f"no API key is configured for {name}"}
+
+
+# §6.6 Data's extraction queue (M5.6; decisions 441-443): the queue read, the quote and Launch.
+#
+# ITS OWN FIXTURE INSTALL, NOT `/api/admin/llm`'s FRESH ONE, and the difference is deliberate. A
+# harness with no provider keyed and no cap set can only ever answer Launch with the no-cap sentence,
+# so the one control plan C2 says this card exists for - the running total against the cap, and a
+# Launch that enables inside it and disables past it - could never be built against it. So this card
+# reads as a household with Gemini and Anthropic keyed and a $5.00 cap of which $1.25 is spent, while
+# `/api/admin/llm` above keeps the fresh install for M5.7's cards. The figures are not the harness's:
+# `flywheel/batch.assess` prices each provider's default model off the real table and composes the
+# real sentences, so the quote here is the route's arithmetic over a fixture meter. Launch changes
+# only this process's rows; there is no queue behind it to make a title due.
+_FLYWHEEL_KEYED = ("gemini", "anthropic")
+_FLYWHEEL_CAP = Decimal("5.00")
+_FLYWHEEL_SPENT = Decimal("1.25")
+
+
+def _flywheel_items() -> list[dict[str, Any]]:
+    """`flywheel/store.queue`'s rows, invented in the shapes the card renders apart: two thin-facet
+    titles the M5 feed wrote (decision 440), and one empty predicate whose producer is M6's search,
+    shown and selectable although a launch naming it is refused (decision 443)."""
+    now = datetime.now(UTC).isoformat()
+    first = fx.TITLES[0]
+    return STATE.setdefault("flywheel", [
+        {"id": 3, "kind": "thin_facet", "status": "queued", "est_titles": 1, "batch_id": None,
+         "created_at": now, "title_id": 1_000_000_703, "title": {"name": "Suspiria", "year": 2018},
+         "board": {"stage": 10, "status": "ready", "reason": None},
+         "reason": ("2 of the 3 facets vocabulary v1 declares carry no extracted-tier term for this"
+                    " title: sound, place. An extraction batch asks its sources again for these,"
+                    " under terms the vocabulary already has"),
+         "detail": {"title_id": 1_000_000_703, "version": "v1", "unnamed": ["sound", "place"],
+                    "coverage": {"mood": 2, "sound": 0, "place": 0}}},
+        {"id": 2, "kind": "thin_facet", "status": "queued", "est_titles": 1, "batch_id": None,
+         "created_at": now, "title_id": first[0], "title": {"name": first[2], "year": first[4]},
+         "board": {"stage": 9, "status": "parked", "reason": "no bundle is active to place it in"},
+         "reason": ("1 of the 3 facets vocabulary v1 declares carry no extracted-tier term for this"
+                    " title: sound. An extraction batch asks its sources again for these, under"
+                    " terms the vocabulary already has"),
+         "detail": {"title_id": first[0], "version": "v1", "unnamed": ["sound"],
+                    "coverage": {"mood": 3, "sound": 0, "place": 1}}},
+        {"id": 1, "kind": "empty_predicate", "status": "queued", "est_titles": None, "batch_id": None,
+         "created_at": now, "title_id": None, "title": None, "board": None,
+         "reason": "no owned title carries robots + gladiatorial",
+         "detail": {"query": "Gladiator but with robots", "terms": ["themes.gladiatorial",
+                                                                    "themes.robots"],
+                    "predicate": "has(robots) AND has(gladiatorial)", "version": "v1"}},
+    ])
+
+
+def _flywheel_meter() -> dict[str, Any]:
+    start, end = llm_spend.period(datetime.now(UTC))
+    return {"spent_usd": _FLYWHEEL_SPENT, "unsettled_usd": Decimal("0"), "cap_usd": _FLYWHEEL_CAP,
+            "remaining_usd": _FLYWHEEL_CAP - _FLYWHEEL_SPENT, "period_start": start,
+            "period_end": end, "tz": settings().tz}
+
+
+def _money_strings(figures: dict[str, Any]) -> dict[str, Any]:
+    return {key: str(value) if isinstance(value, Decimal) else value for key, value in figures.items()}
+
+
+def _flywheel_quote(titles: int, providers: list[str], passes: int) -> dict[str, Any]:
+    chosen = list(dict.fromkeys(providers))
+    unkeyed = [name for name in chosen if name not in _FLYWHEEL_KEYED]
+    refused = None
+    if not chosen:
+        refused = "the flywheel batch names no provider; a batch names one or more of gemini, anthropic"
+    elif unkeyed:
+        refused = (f"no API key is configured for {unkeyed[0]}, which extraction is assigned to. Add it"
+                   " in Admin, and this title resumes here")
+    prices = None if refused else [
+        llm_pricing.price_for(name, llm_pricing.DEFAULT_MODELS[name]) for name in chosen
+    ]
+    return flywheel_batch.assess(titles=titles, providers=chosen, passes=passes, prices=prices,
+                                 refused=refused, meter=_flywheel_meter())
+
+
+class FlywheelLaunch(BaseModel):
+    item_ids: list[int]
+    providers: list[str]
+    passes: int
+
+
+@app.get("/api/admin/flywheel")
+def admin_flywheel() -> dict[str, Any]:
+    reading = _flywheel_meter()
+    return {
+        "items": _flywheel_items(),
+        "providers": [
+            {"name": name, "configured": name in _FLYWHEEL_KEYED,
+             "reason": None if name in _FLYWHEEL_KEYED else (
+                 f"no API key is configured for {name}, which extraction is assigned to. Add it in"
+                 " Admin, and this title resumes here")}
+            for name in llm_client.PROVIDERS
+        ],
+        "defaults": {"providers": ["gemini"], "passes": 1, "reason": None},
+        "meter": {**_money_strings(reading), "period_start": reading["period_start"].isoformat(),
+                  "period_end": reading["period_end"].isoformat()},
+        "input_tokens_assumed": llm_pricing.SPEC_INPUT_TOKENS,
+    }
+
+
+@app.get("/api/admin/flywheel/quote")
+def admin_flywheel_quote(
+    titles: int = Query(..., ge=0), providers: str = Query(...), passes: int = Query(..., ge=1)
+) -> dict[str, Any]:
+    chosen = [name.strip() for name in providers.split(",") if name.strip()]
+    return _money_strings(_flywheel_quote(titles, chosen, passes))
+
+
+@app.post("/api/admin/flywheel/launch")
+def admin_flywheel_launch(body: FlywheelLaunch) -> dict[str, Any]:
+    ids = list(dict.fromkeys(body.item_ids))
+    rows = {row["id"]: row for row in _flywheel_items()}
+    if not ids:
+        raise HTTPException(status_code=409, detail=flywheel_batch.NOTHING_SELECTED)
+    for item in ids:
+        row = rows.get(item)
+        if row is None:
+            raise HTTPException(status_code=409, detail=f"row(s) {item} are not in the extraction queue,"
+                                                        " so nothing was launched (decision 443)")
+        if row["kind"] != "thin_facet":
+            raise HTTPException(status_code=409, detail=f"row {item} comes from the {row['kind']} feed,"
+                                                        " whose producer is M6's (decision 443)")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=409, detail=f"row {item} is {row['status']} and not queued,"
+                                                        " so nothing was launched (decision 443)")
+    quoted = _flywheel_quote(sum(rows[item]["est_titles"] for item in ids), body.providers, body.passes)
+    if not quoted["launchable"]:
+        raise HTTPException(status_code=409, detail=quoted["reason"])
+    batch_id = STATE["next_flywheel_batch"] = STATE.get("next_flywheel_batch", 0) + 1
+    now = datetime.now(UTC).isoformat()
+    items = []
+    for item in ids:
+        row = rows[item]
+        stage = min(acquire_actions.PACK_STAGE, row["board"]["stage"])
+        row.update(status="running", batch_id=batch_id)
+        row["board"] = {"stage": stage, "status": acquire_actions.QUEUED, "reason": (
+            flywheel_batch.LAUNCHED.format(batch=batch_id, number=stage,
+                                           name=acquire_actions.stage_legend()[stage - 1]["name"],
+                                           providers=" + ".join(quoted["providers"]),
+                                           passes=body.passes))}
+        items.append({"id": item, "title_id": row["title_id"], "stage": stage})
+    return {
+        "batch": _money_strings({
+            "id": batch_id, "created_at": now, "launched_at": now, "providers": quoted["providers"],
+            "passes": body.passes, "est_titles": quoted["titles"],
+            "per_title_usd": quoted["per_title_usd"], "est_cost_usd": quoted["total_usd"],
+            "reserved_usd": quoted["reserved_usd"],
+        }),
+        "items": items,
+    }
+
+
+# §6.6 Data's three ledger editors and the reject review (M5.6; decisions 342, 445 and 446). Three
+# lists in this process, one per ledger, seeded with a bundle row or two in each shape the editor has
+# to render apart from a household row; the refusals that are the app's constants - a bundle row is
+# read-only - are the app's sentences. A household write is stored and echoed and applies nothing,
+# because there is no derive here to apply it to. The axes are the fixture bundle's, which ships
+# three for the test suite where the corpus bundle ships none (decision 173).
+_FACETS = list(dict.fromkeys(facet for _term, facet, _gloss in fx.VOCAB))
+
+
+def _ledger(name: str) -> list[dict[str, Any]]:
+    now = datetime.now(UTC).isoformat()
+    seeded = {
+        "adjudications": [
+            {"id": 1, "scope": "title", "title_id": 2, "name": "Prisoners", "term": "mood.dread",
+             "action": "DROP", "target": None, "quote": None, "source": None,
+             "note": "about the novel, not the film", "origin": "bundle", "decided_at": now},
+            {"id": 2, "scope": "global", "title_id": None, "name": None, "term": "mood.it_s_cosy",
+             "action": "REPOINT", "target": "mood.cosy", "quote": None, "source": None,
+             "note": "a retired id", "origin": "bundle", "decided_at": now},
+        ],
+        "corrections": [
+            {"id": 1, "title_id": 8, "name": fx.TITLES[7][2], "kind": "composer",
+             "value": "Kunihiko Murai", "evidence": "the end credits", "note": None,
+             "origin": "bundle", "created_at": now},
+        ],
+        "axes": [
+            {"facet": facet, "left_pole": left, "right_pole": right, "origin": "bundle",
+             "weights": [{"term": term, "weight": weight} for term, weight in sorted(terms.items())]}
+            for facet, (left, right, terms) in fx.AXES.items()
+        ],
+    }
+    return STATE.setdefault(f"ledger:{name}", seeded[name])
+
+
+def _next_ledger_id(name: str) -> int:
+    return max((row["id"] for row in _ledger(name)), default=0) + 1
+
+
+def _tsv(name: str, header: Sequence[str], rows: list[list[Any]]) -> Response:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter="\t", lineterminator="\n")
+    writer.writerow(header)
+    writer.writerows([["" if value is None else str(value) for value in row] for row in rows])
+    return Response(content=buffer.getvalue().encode("utf-8"),
+                    media_type="text/tab-separated-values; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+def _withdraw(name: str, row_id: int, read_only: str, noun: str) -> Response:
+    rows = _ledger(name)
+    row = next((row for row in rows if row["id"] == row_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"there is no {noun} {row_id}")
+    if row["origin"] != "household":
+        raise HTTPException(status_code=409, detail=read_only)
+    rows.remove(row)
+    return Response(status_code=204)
+
+
+class LedgerVerdict(BaseModel):
+    scope: str
+    term: str
+    action: str
+    title_id: int | None = None
+    target: str | None = None
+    quote: str | None = None
+    source: str | None = None
+    note: str | None = None
+
+
+class LedgerCorrection(BaseModel):
+    title_id: int
+    kind: str
+    value: str
+    evidence: str
+    note: str | None = None
+
+
+class LedgerAxisWeight(BaseModel):
+    term: str
+    weight: float
+
+
+class LedgerAxis(BaseModel):
+    facet: str
+    left_pole: str
+    right_pole: str
+    weights: list[LedgerAxisWeight]
+
+
+@app.get("/api/admin/curated/adjudications")
+def curated_verdict_rows() -> dict[str, Any]:
+    rows = sorted(_ledger("adjudications"), key=lambda row: row["origin"] != "household")
+    return {"rows": rows, "applies": curated_api.APPLIES_VERDICTS}
+
+
+@app.post("/api/admin/curated/adjudications", status_code=201)
+def curated_verdict_author(body: LedgerVerdict) -> dict[str, Any]:
+    row = {"id": _next_ledger_id("adjudications"), **body.model_dump(), "name": None,
+           "origin": "household", "decided_at": datetime.now(UTC).isoformat()}
+    _ledger("adjudications").append(row)
+    return {"row": row, "applied": {}}
+
+
+@app.get("/api/admin/curated/adjudications/export")
+def curated_verdict_export() -> Response:
+    household = [row for row in _ledger("adjudications") if row["origin"] == "household"]
+    return _tsv("adjudications_v1.tsv", importer_dna.ADJUDICATION_COLUMNS,
+                [[row[column] for column in importer_dna.ADJUDICATION_COLUMNS] for row in household])
+
+
+@app.delete("/api/admin/curated/adjudications/{row_id}", status_code=204)
+def curated_verdict_withdraw(row_id: int) -> Response:
+    return _withdraw("adjudications", row_id, curated_verdicts.READ_ONLY, "verdict")
+
+
+@app.get("/api/admin/curated/corrections")
+def curated_correction_rows() -> dict[str, Any]:
+    rows = sorted(_ledger("corrections"), key=lambda row: row["origin"] != "household")
+    return {"rows": rows, "applies": curated_api.APPLIES_CORRECTIONS}
+
+
+@app.post("/api/admin/curated/corrections", status_code=201)
+def curated_correction_author(body: LedgerCorrection) -> dict[str, Any]:
+    row = {"id": _next_ledger_id("corrections"), **body.model_dump(), "name": None,
+           "origin": "household", "created_at": datetime.now(UTC).isoformat()}
+    _ledger("corrections").append(row)
+    return {"row": row, "applied": {}}
+
+
+@app.get("/api/admin/curated/corrections/export")
+def curated_correction_export() -> Response:
+    household = [row for row in _ledger("corrections") if row["origin"] == "household"]
+    return _tsv(curated_corrections.EXPORT_NAME, importer_dna.CORRECTIONS_COLUMNS,
+                [[row[column] for column in importer_dna.CORRECTIONS_COLUMNS] for row in household])
+
+
+@app.delete("/api/admin/curated/corrections/{row_id}", status_code=204)
+def curated_correction_withdraw(row_id: int) -> Response:
+    return _withdraw("corrections", row_id, curated_corrections.READ_ONLY, "correction")
+
+
+def _axis(facet: str) -> dict[str, Any]:
+    found = next((axis for axis in _ledger("axes") if axis["facet"] == facet), None)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"there is no axis for facet {facet!r}")
+    if found["origin"] != "household":
+        raise HTTPException(status_code=409, detail=curated_axes.READ_ONLY)
+    return found
+
+
+@app.get("/api/admin/curated/axes")
+def curated_axis_rows() -> dict[str, Any]:
+    return {"version": "v1", "facets": _FACETS, "axes": _ledger("axes"),
+            "applies": curated_api.APPLIES_AXES}
+
+
+@app.post("/api/admin/curated/axes", status_code=201)
+def curated_axis_author(body: LedgerAxis) -> dict[str, Any]:
+    stored = next((axis for axis in _ledger("axes") if axis["facet"] == body.facet), None)
+    if stored is not None and stored["origin"] != "household":
+        raise HTTPException(status_code=409, detail=curated_axes.READ_ONLY)
+    axis = {"facet": body.facet, "left_pole": body.left_pole, "right_pole": body.right_pole,
+            "origin": "household", "weights": sorted((entry.model_dump() for entry in body.weights),
+                                                     key=lambda entry: entry["term"])}
+    if stored is not None:
+        _ledger("axes").remove(stored)
+    _ledger("axes").append(axis)
+    return {"axis": axis}
+
+
+@app.delete("/api/admin/curated/axes/{facet}", status_code=204)
+def curated_axis_withdraw(facet: str) -> Response:
+    _ledger("axes").remove(_axis(facet))
+    return Response(status_code=204)
+
+
+@app.get("/api/admin/curated/axes/{facet}/export")
+def curated_axis_export(facet: str) -> Response:
+    axis = _axis(facet)
+    rows = [[entry["term"], entry["weight"]] for entry in axis["weights"]]
+    return _tsv(f"{facet}.tsv", [axis["left_pole"], axis["right_pole"]], rows)
+
+
+# The review (decision 446): two orderings and no filter. The rejects are invented newest first, one
+# per rule a reader must be able to tell apart; the evidence is the same four tags for any title,
+# weakest first with the unmeasured one last, because that ordering is the whole of the contract.
+@app.get("/api/admin/dna/rejects")
+def dna_rejects() -> dict[str, Any]:
+    now = datetime.now(UTC).isoformat()
+    rows = [
+        (3, 2, "Prisoners", 2013, "mood.dread", "mood", 2, "a sentence the pack does not carry",
+         "quote_unverified"),
+        (2, 2, "Prisoners", 2013, "themes.mecha", "themes", 3, "robots everywhere", "unknown_term"),
+        (1, None, None, None, "mood.cosy", "mood", 4, "a warm blanket of a film", "unknown_title"),
+    ]
+    return {
+        "rejects": [
+            {"id": rid, "title_id": tid, "name": name, "year": year, "term": term, "facet": facet,
+             "salience": salience, "quote": quote, "rule_violated": rule, "provider": "gemini",
+             "at": now}
+            for rid, tid, name, year, term, facet, salience, quote, rule in rows
+        ],
+        "limit": dna_review.REJECT_LIMIT,
+    }
+
+
+@app.get("/api/admin/dna/evidence/{title_id}")
+def dna_evidence(title_id: int) -> dict[str, Any]:
+    tags = [
+        ("pacing.patient", "pacing", 2, 0.01, 1), ("structure.procedural", "structure", 2, 0.4, 2),
+        ("mood.dread", "mood", 3, 0.9, 3), ("mood.cosy", "mood", 1, None, 1),
+    ]
+    return {
+        "title_id": title_id,
+        "version": "v1",
+        "tags": [
+            {"term": term, "facet": facet, "salience": salience, "confidence": confidence,
+             "n_sources": n_sources, "provider": "gemini"}
+            for term, facet, salience, confidence, n_sources in tags
+        ],
+    }
 
 
 # --- M2: shared reading of the fixture catalog -------------------------------

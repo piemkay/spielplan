@@ -379,7 +379,11 @@ def session_answer_line(participant: str, pair: int, answer: str) -> str:
 
 
 def parse_line(predicate: str, survivors: int) -> str:
-    """`parse → predicate has(robots) · 0 survivors → flywheel` (§6.7, §6.4, §8.4)."""
+    """`parse → predicate has(robots) · 0 survivors → flywheel` (§6.7, §6.4, §8.4).
+
+    The ` → flywheel` tail announces `flywheel.store.enqueue_empty_predicate`, the write M6's
+    compositional search will make beside this line when a predicate empties (plan B4).
+    """
     tail = " → flywheel" if survivors == 0 else ""
     return f"parse → predicate {predicate} · {survivors} survivors{tail}"
 

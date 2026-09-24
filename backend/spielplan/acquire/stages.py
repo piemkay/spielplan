@@ -1485,6 +1485,29 @@ FAILED_FOR_GOOD = (
     "extraction again, and resumes by itself once that task is retried"
 )
 
+# The two payload keys a flywheel launch writes onto the tasks it makes due (decision 443): the
+# batch's plan - `{"providers": [...], "passes": n}` - and the `flywheel_batch` row it was launched
+# under. Spelled here and nowhere else, because the plan has three readers that must agree - the
+# driver's gate, this stage's call and the board's retry pre-check (decision 442) - and a reader
+# that spelled the key its own way would price one plan and run another.
+PLAN_KEY = "plan"
+BATCH_KEY = "flywheel_batch"
+
+
+def task_plan(task: queue.Task | None) -> Any:
+    """The batch plan a task carries, or None when it carries none - the one reader of `PLAN_KEY`.
+
+    None, absent and `null` alike, is decision 324's install exactly: the stored `llm` settings
+    apply unchanged. ANYTHING ELSE IS HANDED ON AS IT IS, and `llm/spend` is what judges it: a
+    present plan that is not providers and passes is a `PLAN` refusal naming the batch (decision
+    442), and a reader that returned None for it would run the stored settings in the batch's place
+    - the one outcome that refusal exists to prevent. A None task is a context built without one,
+    which the gate's own tests do.
+    """
+    if task is None:
+        return None
+    return (task.payload or {}).get(PLAN_KEY)
+
 
 async def dna_extract(ctx: StageContext) -> Outcome:
     """§8 stage 6: the LLM structured call(s). **Written by M5.5** (`ROADMAP-M5.md:314-329`).
@@ -1561,9 +1584,11 @@ async def dna_extract(ctx: StageContext) -> Outcome:
                     detail={"failed_for_good_under": closed})
     if ctx.fetcher is None and ctx.open_fetcher is None:
         return fail(NO_EXTRACTION_FETCHER)
+    # The task's batch plan, read by the one reader the gate read it through a moment ago, so the
+    # runs this stage pays for are the runs the gate reserved for (decision 442).
     extraction = await extract.extract_title(
         ctx.conn, title_id=ctx.title_id, fetcher=ctx.fetcher, task_key=ctx.task.key,
-        run_id=ctx.run_id, open_fetcher=ctx.open_fetcher,
+        run_id=ctx.run_id, open_fetcher=ctx.open_fetcher, batch=task_plan(ctx.task),
     )
     status = extraction.status
     if status == extract.WRITTEN:

@@ -2294,6 +2294,9 @@ PHONE_PROJECT_SPECS = {
     "13-rank.spec.js",
     "14-tonight.spec.js",
     "19-phone-shell.spec.js",
+    # M5.6's Admin · Data surface: plan section 6 puts the board, the review's ordering, Launch
+    # disabled with its reason and the 48 px selection controls on the phone project.
+    "20-admin-data.spec.js",
 }
 
 

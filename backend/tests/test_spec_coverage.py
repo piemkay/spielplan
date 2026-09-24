@@ -377,6 +377,25 @@ REGISTER = REPO / "docs" / "spec-v2.2-proposals.md"
 # question 330 and that number is M5.6's and M5.7's to spend. Decisions 324, 325, 337, 338 and 343
 # - the five the roadmap files against it - and 430-435 record the calls it needed, and its one
 # migration is 0028_llm_spend.sql. See docs/milestones/M5.5-plan.md and ROADMAP-M5.md.
+#
+# M5.6 opened once M5.5 had landed, and like M5.4 and M5.5 it adds no name to the list: M5.1
+# landed all seven positionally, so what this entry owes a reader is why "M5.6" sits where it
+# already does. It sits AFTER "M5.5" because both of its money-bearing controls are callers of
+# what M5.5 publishes - the flywheel's Launch prices a batch with `pricing.estimate_title` and
+# holds its reservation against `spend`'s meter, and the board's retry asks `spend.retry_refusal`
+# before it makes a paid stage due - so the milestone that spends against the cap can read as
+# shipped only once the cap does. It sits BEFORE "M5.7" and shares no file with it: M5.7's cards
+# render the cap and the providers M5.6's batch chooses among, two lanes over one set of seams. It
+# does NOT hold `current_milestone`; M5.1 does, and M5.6's rows are appended without raising the
+# scalar. The rows its plan adds land with no `tests` key - the red list is the test plan, closed
+# by writing those tests and never by a waiver, by renaming a registered test, or by lowering the
+# scalar - beside the pair M5.1 re-pointed here, the three ledger editors and the flywheel's
+# enqueue. The second of those stops resting on bare proposals in the change set that opens it,
+# because decision 330 adopts proposals 104, 107, 109 and 135 by number and folds each into §6.6
+# or §8.4 (spec v2.1.3), which the row and M5.5's spend-meter row now cite instead. Decisions 328,
+# 329, 330, 342 and 344 - the five the roadmap files against it - and 440-447 record the calls it
+# needed, and its one migration is 0029_flywheel.sql. See docs/milestones/M5.6-plan.md and
+# ROADMAP-M5.md.
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M4.5", "M4.6", "M4.7", "M4.8", "M4.9", "M4.10",
               "M4.11", "M4.12", "M4.13", "M4.14", "M4.15", "M4.16", "M5.1", "M5.2", "M5.3",
               "M5.4", "M5.5", "M5.6", "M5.7", "M5", "M6", "M7"]

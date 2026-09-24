@@ -8631,6 +8631,14 @@ def _coarse_declarations(path: Path, selector: str) -> dict[str, str]:
 # looks harmless. So the header is widened rather than this entry excused: an axis a component
 # declares inside a coarse block is one this rule holds, whether the control was short on it or
 # not. [M4.16 cycle 1, M416-C1-D3-05; M4.16 cycle 2, M416-C2-ATTR-03]
+#
+# M5.6's Data surface adds the last entries, and they are the controls plan E3 names as the ones
+# that get drawn at 16 px: the flywheel's row and provider checkboxes, whose labels carry the whole
+# target because design.css's block reaches neither a label nor a checkbox; the ledger editors'
+# export downloads, which are bare `<a>`s; and the board's stage picker, a `select` the block
+# raises on height only. `20-admin-data.spec.js` measures the row labels and Launch on the phone;
+# the rest render only where a household row or a provider exists, so this is what holds them.
+# [§6 preamble; M5.6 plan E3]
 COARSE_FLOOR_SITES = (
     (
         "frontend/src/routes/+layout.svelte",
@@ -8718,6 +8726,62 @@ COARSE_FLOOR_SITES = (
         "not short today: `CC BY-SA 4.0` measures about 79 px of an 11 px mono face, and the "
         "component declares the floor anyway. What the entry holds is the declaration, against "
         "the day somebody deletes it as redundant and somebody else shortens the deed text",
+    ),
+    (
+        "frontend/src/lib/components/FlywheelQueue.svelte",
+        ".pick",
+        "min-height",
+        "a queue row's selection is a native checkbox inside a label, drawn at the engine's 13-16 px "
+        "and reached by no rule in design.css, on the card where one tap can select a batch that "
+        "spends money (plan E3)",
+    ),
+    (
+        "frontend/src/lib/components/FlywheelQueue.svelte",
+        ".pick",
+        "min-width",
+        "the same label on the narrow axis, which a lone checkbox is short on by construction",
+    ),
+    (
+        "frontend/src/lib/components/FlywheelQueue.svelte",
+        ".provider",
+        "min-height",
+        "the batch's provider toggles are the same checkbox-in-a-label, and choosing one changes "
+        "what the batch reserves against the cap",
+    ),
+    (
+        "frontend/src/lib/components/FlywheelQueue.svelte",
+        ".provider",
+        "min-width",
+        "the same toggles on the narrow axis; `gemini` is six characters and holds the width "
+        "today by content, which a string is not",
+    ),
+    (
+        "frontend/src/lib/components/LedgerEditor.svelte",
+        ".export",
+        "min-height",
+        "each ledger's export is a bare `<a download>`, which design.css's coarse list does not "
+        "name, beside 48 px buttons a thumb is already aimed at",
+    ),
+    (
+        "frontend/src/lib/components/LedgerEditor.svelte",
+        ".export",
+        "min-width",
+        "the same downloads on the narrow axis, declared rather than left to the link text",
+    ),
+    (
+        "frontend/src/lib/components/AcquisitionBoard.svelte",
+        ".from select",
+        "min-width",
+        "the board's stage picker is a `select`, which design.css raises on height and never on "
+        "width, and it is the control a retry from stage N is aimed with",
+    ),
+    (
+        "frontend/src/lib/components/FlywheelQueue.svelte",
+        ".passes select",
+        "min-width",
+        "the batch's pass picker is a `select` showing one digit, about 41 px wide by content on "
+        "an iPhone 13, and it is the control that doubles what a batch reserves against the cap "
+        "when it goes from 1 to 2 [M5.6 review cycle 1, M56-DATA-04]",
     ),
 )
 
