@@ -599,7 +599,7 @@ python ops/coverage_gate.py --junit <scratch>/real-junit.xml                    
   coverage gate: 42 test result(s) read from 1 JUnit and 0 Playwright report(s)
   coverage gate: 42 row-and-test pair(s) confirmed executed
   coverage gate: 47 named vitest id(s) not visible here (decision 226: no row rests on one alone)
-  coverage gate: 312 row(s) name evidence that did not run, in __LINES__ line(s): ...
+  coverage gate: 312 row(s) name evidence that did not run, in 2272 line(s): ...
 ```
 
 **Four of those five figures are re-derived rather than remembered**, which is why this block is
