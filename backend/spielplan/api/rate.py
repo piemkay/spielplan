@@ -120,9 +120,9 @@ async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> No
     """§10's invariant, on the request path: 409 rather than a fit in a basis nobody serves.
 
     "No process may score or refit with a loaded bundle version different from the active row."
-    This process pins its store and its Backbone at boot (`app.py`), and §10's swap sequence ends
-    in "restart backend and worker" precisely because nothing in a running process can re-pin
-    them - so between the flip and the restart `app.state.backbone` is the OUTGOING basis while
+    This process pins its store and its Backbone (`models/basis.py`) and re-pins them a few
+    seconds after a flip rather than at a restart (decision 497) - so between the flip and the
+    re-pin `app.state.backbone` is the OUTGOING basis while
     every `title_placement` row, every `user_vector` and every `ledger_fit` stamp the flip made
     visible is the incoming one. Left unguarded, the first tap per (user, kind) ran a full MAP fit
     over half-and-half coordinates and stamped it with the NEW version, which `load_cache` then
@@ -132,7 +132,7 @@ async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> No
     There was no 409 to raise; this is where it is minted, and it carries
     `api/artifacts.py::RESTART_REQUIRED` verbatim so the sentence the import screen showed the
     admin is the sentence the refusal shows. 409 and not 503: the conflict is between two
-    versions of the world, the state is recoverable by the restart the message names, and §3.1's
+    versions of the world, the state is recoverable by the re-pin the message waits for, and §3.1's
     genuinely bundle-less install is unaffected because None == None.
 
     Called at the TOP of every route that fits, before `_resume` and before any write. §6.1's

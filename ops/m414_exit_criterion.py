@@ -1030,9 +1030,11 @@ async def check_ten(ctx: Install) -> tuple[bool, str, str]:
     placeholder row written for a queued import claims the one and only seed slot and a failed
     attempt could never be retried.
 
-    `restart_required` is read beside them because §10's swap sequence ends there: this process
-    pinned an empty store at boot and the active row has just moved, so the page owes the
-    operator a restart and must say so.
+    `restart_required` is read beside them, and it now reads the other way. This process pinned an
+    empty store at boot and the active row has just moved, which used to leave the page owing the
+    operator a restart; decision 497 ends the swap at the flip, and the state read that reports
+    it is the read that re-pins, so the measurement is that the bundle is loaded and no restart is
+    asked for. [decision 497; owner instruction of 2026-09-25 after the first household user test]
     """
     if ctx.final_state is None:
         raise PreconditionFailed("the import never reached a terminal phase")
@@ -1046,13 +1048,15 @@ async def check_ten(ctx: Install) -> tuple[bool, str, str]:
         and job.get("ok") is True and report.get("ok") is True
         and (row["version"], row["state"]) == (ctx.version, "active")
         and ctx.final_state.get("active") == ctx.version
-        and ctx.final_state.get("restart_required") is True
+        and ctx.final_state.get("restart_required") is False
+        and (ctx.final_state.get("loaded") or {}).get("version") == ctx.version
     )
     return (
         ok,
         f"phases {ctx.phases}, job ok={job.get('ok')}, report ok={report.get('ok')}, "
         f"artifact_bundle {row['version']}/{row['state']}, "
-        f"restart_required={ctx.final_state.get('restart_required')}",
+        f"restart_required={ctx.final_state.get('restart_required')}, "
+        f"loaded={(ctx.final_state.get('loaded') or {}).get('version')}",
         "" if ok else _first_failure(report),
     )
 

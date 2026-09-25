@@ -28,6 +28,8 @@
   let step = $state(0);
   let error = $state('');
   let busy = $state(false);
+  // Whether an import finished on this screen, whose own line then says whether it is served.
+  let importedHere = $state(false);
 
   // step 0
   let adminName = $state('admin');
@@ -146,9 +148,24 @@
     {:else}
       <p class="why">
         The same importer the Data tab exposes. Validation enforces every schema rule before
-        anything is written.
+        anything is written. The imported bundle is served as soon as the import finishes -
+        nothing needs restarting.
       </p>
-      <BundleImport onImported={() => bootstrap()} />
+      <BundleImport
+        onImported={() => {
+          importedHere = true;
+          return bootstrap();
+        }}
+      />
+      <!-- Decision 497's one remaining restart, for an operator who comes back to this step: a
+           bundle is imported and the backend could not load it by itself. An import watched on
+           this screen says it in its own line, so this one stands down for that. -->
+      {#if session.restartRequired && !importedHere}
+        <p class="err" data-restart-required>
+          A bundle is imported, but the backend could not load it by itself (its log says why).
+          Restart backend and worker: <code>docker compose restart backend worker</code>
+        </p>
+      {/if}
     {/if}
 
     {#if error}<div class="err">{error}</div>{/if}

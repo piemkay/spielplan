@@ -91,9 +91,9 @@ id = "jellyfin-acquisition-eval-bundle-swap-and-active-version-invariant"
 spec = "§10 swap sequence"
 milestone = "M0"
 kind = "integration"
-what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding, and the refusal is performed by production code rather than by the invariant's own unit test: the worker's model jobs raise rather than writing, so the tick advances nothing and records a failed `job_run` whose error names both versions, retried on the next tick, and the scoring and refit entrypoints answer 409 with the restart-required wording."
+what = "Import runs validate → stage to `/data/artifacts/<version>/` → transactional flip of `artifact_bundle.active`; a failure at any step before the flip leaves the previous bundle active and serving with the staged directory not activated, and no partially-flipped state is observable. A process holding a loaded bundle version different from the active row refuses artifact-dependent work rather than proceeding, and the refusal is performed by production code rather than by the invariant's own unit test: the worker's model jobs raise rather than writing, so the tick advances nothing and records a failed `job_run` whose error names both versions, retried on the next tick, and the scoring and refit entrypoints answer 409 with the swap wording (`RESTART_REQUIRED`) for the seconds until the backend loads the active bundle, which it does without a restart (decision 497)."
 why = "§10's invariant: everything expressed in the old Backbone's basis is garbage against a new one, so a half-swapped state must be unreachable and a stale in-process bundle must be fatal, not silent."
-tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs", "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing", "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording", "backend/tests/test_import_integration.py::test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusal", "backend/tests/test_import_integration.py::test_no_import_path_turns_a_postgres_error_into_a_five_hundred"]
+tests = ["backend/tests/test_import_integration.py::test_the_bundle_becomes_the_one_active_row", "backend/tests/test_import_integration.py::test_a_second_bundle_version_swaps_the_models_over_the_seeded_content", "backend/tests/test_import_integration.py::test_reimporting_the_same_bundle_is_refused_while_it_is_active", "backend/tests/test_schema_contracts.py::test_only_one_bundle_can_be_active", "backend/tests/test_artifact_store.py::test_assert_matches_refuses_a_stale_load", "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and serves the bundle without a restart", "backend/tests/test_model_basis.py::test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing", "backend/tests/test_model_basis.py::test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording", "backend/tests/test_import_integration.py::test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusal", "backend/tests/test_import_integration.py::test_no_import_path_turns_a_postgres_error_into_a_five_hundred"]
 # The last sentence is M4.13's, and it was in this row from the start with nothing in the app
 # able to perform it: `assert_matches` is the one enforcement point §10's invariant names, its
 # module docstring said "called by the scoring/refit entrypoints", and a grep over
@@ -8500,7 +8500,7 @@ tests = [
     # [decisions 300, 316; M4.16 cycle 4, REL-C4-01]
     "backend/tests/test_box_claims.py::test_no_record_compares_the_release_runner_against_a_box_nobody_timed_it_on",
     "backend/tests/test_box_claims.py::test_the_runner_speed_guard_reads_the_comparison_and_not_the_measurement",
-    "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and asks for the restart it needs",
+    "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and serves the bundle without a restart",
     # The screen's half of "the import outlives the request that started it", and decision 226's
     # shape: named BESIDE the route's and the worker's tests, never instead of them. The 202
     # carries the VALIDATION report, so the Data tab renders nothing true until it has polled for
@@ -11357,4 +11357,60 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The owner's instruction of 2026-09-25, after the first household user test: the household's
+# wizard ended on "no bundle imported", a 409 on every Rate and Rank fit and `loaded: none` until
+# somebody with a shell restarted two containers - an install that was no longer compose up plus
+# the wizard (§2). Decision 497 makes the backend follow the active row, so §10's sequence ends at
+# the flip for a first import, a models-only re-import and a restage alike, and the restart is
+# the fallback for a load that failed, named where the household reads it. `spec` cites sections
+# alone until decision 497 is recorded, for `_unresolvable_decision_citations`' reason; append
+# "; decision 497" when it lands.
+[[requirement]]
+id = "platform-a-bundle-import-is-served-without-a-restart"
+spec = "§2 (\"`docker compose up` + the setup wizard is the whole install\"); §3.1; §4.3 (\"hot-swapped on bundle import\"); §10 swap sequence"
+milestone = "M5"
+kind = "integration"
+what = "A bundle import is served by the running backend within seconds of its flip, with no restart: on a first import into a bundle-less install, on a models-only re-import that replaces a loaded bundle, and on a restage of a broken install. The backend re-reads the active row (version and activated_at) on a timer and before it answers the Data tab's state, loads the flipped bundle's store, Backbone and constants with the function the boot uses, and replaces all three in one event-loop step; the Data tab, /api/config, /api/health and a Rate tap then all see the bundle. A load that fails keeps the outgoing basis serving, is logged once per active row, is retried on every ask, and is reported as restart_required on the Data tab and on /api/config, where the header and the wizard say a restart is owed and name the command instead of 'no bundle imported'."
+why = "§2 makes compose up plus the wizard the whole install, and §4.3, §5.3 and §6.6 all call the import a hot swap, while §10 ended the sequence in a restart nobody performed: the worker already reads the active bundle per job, and only the backend pinned its basis at boot (decision 497)."
+tests = [
+    "backend/tests/test_bundle_basis.py::test_a_first_import_is_served_without_a_restart",
+    "backend/tests/test_bundle_basis.py::test_the_repin_replaces_store_backbone_and_constants_together",
+    "backend/tests/test_bundle_basis.py::test_a_models_only_reimport_of_a_new_version_is_served_without_a_restart",
+    "backend/tests/test_bundle_basis.py::test_a_restaged_broken_install_is_served_without_a_restart",
+    "backend/tests/test_bundle_basis.py::test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed",
+    "backend/tests/test_bundle_basis.py::test_the_timer_repins_without_any_request",
+    "backend/tests/test_bundle_import_job.py::test_the_state_route_reports_the_phase_until_the_bundle_is_active",
+    "backend/tests/test_devstub_contract.py::test_the_harness_reports_the_import_phase_until_the_bundle_is_active",
+    "e2e/specs/01-first-boot.spec.js::import runs the swap sequence and serves the bundle without a restart",
+    "frontend/src/lib/bundleImport.test.js::says the imported bundle is live when the backend has loaded it, and names no restart",
+    "frontend/src/lib/bundleImport.test.js::names the command only when the server says a restart is owed",
+    "frontend/src/routes/shell-layout.test.js::says a restart is owed rather than that nothing was imported",
+    "frontend/src/routes/setup/setup-page.test.js::names the restart and its command when the backend could not load an imported bundle",
+]
+
+# C10.2 of the same user test: the household's root-owned host directories were found one failing
+# job at a time - the dump on /data/backups, the import's staging twenty seconds into the worker
+# on /data/artifacts after validate had said "ok" - and no failure named the chown. Spec-silent on
+# the probe itself (§2 and §6.6 ask only for backup status and job health), and a bug against the
+# importer's own contract that every refusal an import can raise is reachable at validate.
+[[requirement]]
+id = "platform-data-mounts-writability-is-reported"
+spec = "§2 (the /data bind mounts, Backups); §6.6 System (\"job health\"); §10 step 1"
+milestone = "M5"
+kind = "integration"
+what = "Whether the app can write its /data mounts is asked before any job fails on it, and never by writing into /data/import: the backend probes its three mounts at boot and reports them by name in /api/health's storage field without changing the status code, the worker probes all five at boot and in an hourly storage-check job whose failure names the directories and the chown that fixes them and passes again after the chown with no restart, the System page lifts that row into a Storage fact, and validate refuses an unwritable staging tree as a 'stage' finding with the chown, so the import is refused at the door with no job queued."
+why = "The probe creates and removes one dot-prefixed file, because os.access answers from mode bits and is wrong under ACLs and rootless Docker; /data/import is asked by permission only, because the bundle integrity pass walks it with rglob and fails any file BUNDLE.json does not list."
+tests = [
+    "backend/tests/test_storage_probe.py::test_the_probe_names_an_unwritable_mount_with_the_chown_that_fixes_it",
+    "backend/tests/test_storage_probe.py::test_the_import_mount_is_asked_by_permission_and_never_written_into",
+    "backend/tests/test_storage_probe.py::test_a_mount_that_is_not_there_yet_is_not_a_failure",
+    "backend/tests/test_storage_probe.py::test_the_storage_check_job_fails_with_the_chown_and_passes_after_it",
+    "backend/tests/test_storage_probe.py::test_validate_refuses_an_unwritable_artifacts_root_before_anything_is_queued",
+    "backend/tests/test_storage_probe.py::test_health_names_an_unwritable_backend_mount_and_keeps_its_status",
+    "backend/tests/test_http_seam.py::test_health_answers_200_and_the_body_its_three_consumers_read",
+    "backend/tests/test_worker_registry.py::test_the_job_names_the_card_reads_are_the_registry_s",
+    "frontend/src/routes/admin/system/system-page.test.js::lifts the worker's storage check into a fact of its own, with the chown when it fails",
+    "frontend/src/routes/admin/system/system-page.test.js::says the storage check passed, or that it has not run yet, and never invents either",
 ]

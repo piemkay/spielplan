@@ -23,7 +23,9 @@
     FAILED,
     IDLE,
     IMPORTED,
+    LIVE,
     POLL_READ_TIMEOUT_MS,
+    RESTART,
     RUNNING,
     UNKNOWN,
     UNKNOWN_OUTCOME,
@@ -33,6 +35,7 @@
     phaseForImportError,
     phaseOfJob,
     pollImportJob,
+    servedAfterImport,
     stepsLit
   } from '$lib/bundleImport.svelte.js';
 
@@ -50,6 +53,10 @@
   let phase = $state(IDLE); // idle | validated | running | imported | failed | unknown
   let report = $state(null);
   let error = $state('');
+  // After `IMPORTED`: whether the flipped bundle is served (`LIVE`), owed a restart (`RESTART`) or
+  // not said (`null`), and which version the state payload named. Decision 497.
+  let served = $state(null);
+  let servedVersion = $state('');
   // Whether this screen still exists; see `watch`. A plain `let` and not a rune: nothing renders
   // it, and the only things that read it are the two closures below.
   let gone = false;
@@ -131,6 +138,8 @@
     phase = outcome.phase;
     if (outcome.job?.report) report = outcome.job.report;
     if (outcome.error) error = outcome.error;
+    served = phase === IMPORTED ? servedAfterImport(outcome.state) : null;
+    servedVersion = outcome.state?.active ?? outcome.job?.bundle_version ?? '';
     if (phase === IMPORTED) onImported(outcome);
   }
 
@@ -306,10 +315,18 @@
     </div>
   {/if}
 
-  {#if phase === IMPORTED}
-    <p class="why">
-      Restart backend and worker — no process may score or refit with a loaded bundle version
-      different from the active row.
+  <!-- Decision 497. This line used to tell every operator to restart backend and worker, with no
+       command in it, over a header that still said "no bundle imported"; the backend now loads
+       the flipped bundle on the read that reported the flip, so the ordinary end of an import is
+       the first line, and the command appears only when the server says a restart is owed. -->
+  {#if phase === IMPORTED && served === LIVE}
+    <p class="why" data-served={LIVE}>
+      Bundle {servedVersion} is live. Nothing needs restarting.
+    </p>
+  {:else if phase === IMPORTED && served === RESTART}
+    <p class="err" data-served={RESTART}>
+      Bundle {servedVersion} is imported, but the backend could not load it by itself (its log
+      says why). Restart backend and worker: <code>docker compose restart backend worker</code>
     </p>
   {/if}
 </div>
@@ -377,13 +394,23 @@
   .verdict.bad {
     color: var(--ember-lift);
   }
+  /* `minmax(0, …)` and `overflow-wrap: anywhere`, because a finding's message carries paths such as
+     `/data/artifacts/v20260925` that have no break opportunity, and a plain `1fr` column grows to
+     fit one: the first household's wizard scrolled sideways on a phone, clipping the very path the
+     failure was about. §6's preamble makes the phone the primary form factor. [C10.1 wizard] */
   .finding {
     display: grid;
-    grid-template-columns: 14px 150px 1fr;
+    grid-template-columns: 14px minmax(0, 150px) minmax(0, 1fr);
     gap: 8px;
     align-items: baseline;
     font-size: 12.5px;
     line-height: 1.45;
+  }
+  .finding .msg,
+  .finding .rule,
+  .detail .msg,
+  .err {
+    overflow-wrap: anywhere;
   }
   .finding.fail .g,
   .finding.fail .msg {
@@ -400,7 +427,7 @@
        the eye follows down the report, and a detail key is not a rule. The 22px indent is the
        glyph column above it, so the keys line up under the message they qualify. */
     display: grid;
-    grid-template-columns: 140px 1fr;
+    grid-template-columns: 140px minmax(0, 1fr);
     gap: 8px;
     align-items: baseline;
     font-size: 12px;
@@ -428,5 +455,20 @@
   .err {
     color: var(--ember-lift);
     font-size: 12.5px;
+  }
+  /* On a phone the rule column took 150 of ~330 px and left the message a strip beside it; there
+     the message goes under its rule instead, full width. Last in the sheet, so it wins over the
+     two rules it narrows. */
+  @media (max-width: 480px) {
+    .finding {
+      grid-template-columns: 14px minmax(0, 1fr);
+    }
+    .finding .msg {
+      grid-column: 2;
+    }
+    .detail {
+      grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+      padding-left: 22px;
+    }
   }
 </style>

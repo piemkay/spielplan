@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, library
+from spielplan.models import basis
 from spielplan.scoring import serve
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -304,4 +305,9 @@ async def client_config(request: Request) -> dict[str, Any]:
         "public_url": settings().public_url,
         "bundle": store.summary() if not store.is_empty else None,
         "has_bundle": not store.is_empty,
+        # A bundle IS imported and this process could not load it, which is not §3.1's "no bundle
+        # imported" and must not be rendered as it: the header says a restart is owed instead.
+        # From memory and not from the database (`basis.unloaded`), because this route is the
+        # unauthenticated bootstrap whose failure semantics decision 271 defines. [decision 497]
+        "restart_required": basis.unloaded(request.app.state),
     }

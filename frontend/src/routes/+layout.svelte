@@ -475,6 +475,18 @@
     <header>
       <span class="brand">SPIELPLAN</span>
       <div class="spacer"></div>
+      {#if session.restartRequired}
+        <!-- Decision 497: a bundle IS imported and the backend could not load it by itself, which
+             §3.1's bundle-less badge below would misstate - and which is worth saying while an
+             older bundle is still being served too, because Rate and Rank refuse until it loads. The
+             admin's link goes to the Data tab, whose banner carries the command; a member is
+             told what is happening in their own words and given no door (decision 486). -->
+        {#if canAdmin}
+          <a class="nobundle data" href="/admin/data">bundle imported · restart needed</a>
+        {:else}
+          <span class="nobundle data">waiting for a restart</span>
+        {/if}
+      {/if}
       {#if session.hasBundle === false}
         <!-- `=== false`, not `!`, because null is now "/config did not answer" and this badge is
              the one line of the shell that states a fact about the household rather than
@@ -482,11 +494,15 @@
              read failed, to households that had imported one (decision 271).
              §3.1: a bundle-less app is a legal state, said out loud rather than crashed on.
              Only an admin gets a link out of it: importing is §6.6's Data tab, and offering a
-             member a door they will meet a 403 behind is worse than stating the fact. -->
-        {#if canAdmin}
-          <a class="nobundle data" href="/admin/data">no bundle imported</a>
-        {:else}
-          <span class="nobundle data">no bundle imported</span>
+             member a door they will meet a 403 behind is worse than stating the fact.
+             Not while a restart is owed: a bundle is imported then, and the pill above says so
+             (decision 497). -->
+        {#if !session.restartRequired}
+          {#if canAdmin}
+            <a class="nobundle data" href="/admin/data">no bundle imported</a>
+          {:else}
+            <span class="nobundle data">no bundle imported</span>
+          {/if}
         {/if}
       {/if}
       {#if showModel}

@@ -3,7 +3,12 @@
 Swap sequence, normative:
 
     validate -> stage to /data/artifacts/<version>/ -> recompute the rebuild set against the
-    staged bundle -> transactionally flip artifact_bundle.active -> restart backend + worker
+    staged bundle -> transactionally flip artifact_bundle.active
+
+and the sequence ends at the flip: the backend loads the flipped bundle within seconds and the
+worker reads it on its next job, so the restart §10 used to end with is owed only when that load
+fails (decision 497, `models/basis.py`). That holds for every import this module activates - the
+first one, a models-only re-import of a new version (decision 162), and decision 253's restage.
 
 M0 implements validate / stage / flip and reports the rebuild set rather than computing it:
 the rebuild set is user fold-in vectors, per-label-count blend weights, a full Ledger MAP
@@ -28,6 +33,7 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.core import storage
 from spielplan.importer import dna as dna_loader
 from spielplan.importer import load as content_loader
 from spielplan.importer import reviews as review_loader
@@ -983,6 +989,22 @@ async def refuse_on_install_state(
     if artifacts_root is not None and bundle.version != "unknown":
         _refuse_self_staging(bundle, artifacts_root, report)
 
+    # WHERE THE STAGE WILL WRITE, asked at the decision point rather than discovered by the copy.
+    # The first household's import validated "ok", was queued, and failed twenty seconds into the
+    # worker on `PermissionError: /data/artifacts/v20260925` - a host directory nobody had handed to
+    # the containers' uid - after the operator had committed and with a finding that named the
+    # symptom but not the chown. This function's contract is that every refusal an import can
+    # raise is reachable from `/validate`, and the ownership of the staging tree is a fact about
+    # this install like the others here. `storage.writable` creates and removes one dot-prefixed
+    # file, so nothing that lists bundle versions under the root can see it. [C10.2; §10 step 1]
+    if artifacts_root is not None and (problem := storage.writable(artifacts_root)) is not None:
+        report.fail(
+            "stage",
+            "the artifacts cannot be staged, so this import cannot run: "
+            + str(storage.refusal({"artifacts": problem})),
+            path=str(artifacts_root),
+        )
+
     # `0015_seed.sql` decides the same question the same way — "the oldest bundle is the seed by
     # construction: it is the one that brought content into an empty install" — and its backfill
     # breaks the tie on `version`. Two orderings for one row is how a migration and the code that
@@ -1126,7 +1148,8 @@ async def validate_for_install(
     §10 makes validate the first step and §6.6 makes it the Data tab's decision point, so every
     refusal an import can raise has to be reachable here — otherwise the operator reads "ok" and
     is refused after they have committed. The install-state refusals (seed-once,
-    models-need-content, vocabulary-change, already-active, staging-into-itself) are facts about
+    models-need-content, vocabulary-change, already-active, staging-into-itself, a staging tree
+    this app cannot write) are facts about
     this install that no amount of reading the bundle can discover, and both halves of the
     identity check need the install for the same reason: the installed spine, and the coverage
     the active backbone already has.
@@ -1781,10 +1804,14 @@ async def import_bundle(
                     # read ABOVE the two UPDATEs: after them the same SELECT answers with this
                     # bundle's own version, and the note would say a swap superseded itself.
                     # [decision 189; M4.14 cycle 1, m414-c1-dim-lock-02, decision 263]
+                    # "Without a restart" and no longer "carries the restart it needs": the backend
+                    # follows the active row (decision 497), so the one screen that renders this
+                    # note says what will happen rather than what the operator has to do.
                     report.note(
                         "swap",
                         "artifact_bundle flipped to active — every fitted number is expressed in "
-                        "this basis from now on; this import's note carries the restart it needs"
+                        "this basis from now on, and the backend and the worker load it without a "
+                        "restart"
                         + (f"; it supersedes {already_active}" if already_active else ""),
                         superseded=already_active,
                     )

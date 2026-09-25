@@ -78,15 +78,15 @@
     <div class="bundle-active card">
       <div class="data-lg">{activeLine}</div>
       {#if bundleState.restart_required}
-        <!-- §10: the swap sequence ends in a restart. Until it happens the flip is real in
-             the database and invisible to this process, and saying so is the difference
-             between "it worked" and "did it work?".
-             The command, not the instruction: the importer performs no restart, so this banner
-             is where an operator learns what to type, and it is the same string README's
-             Recovery section gives so the two cannot drift. [M4.7 ops-09, ds10] -->
+        <!-- Decision 497: the backend loads a flipped bundle by itself, and the read that fetched
+             this page is one of the moments it does - so reaching this banner means the load
+             FAILED, not that a swap is waiting for the gesture every import used to end in. It
+             says so, and still gives the command, which is the same string README's Recovery
+             section gives so the two cannot drift. [M4.7 ops-09, ds10; decision 497] -->
         <div class="warn data">
-          loaded in this process: {bundleState.loaded?.version ?? 'none'} — restart backend and worker
-          to load {bundleState.active}: docker compose restart backend worker
+          loaded in this process: {bundleState.loaded?.version ?? 'none'} — the backend could not
+          load {bundleState.active} by itself (its log says why); once that is fixed,
+          restart backend and worker to load it: docker compose restart backend worker
         </div>
       {/if}
       {#if bundleState.broken}

@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 
+from spielplan.core import storage
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
 from spielplan.models import artifacts
@@ -684,6 +685,26 @@ async def _nightly_backup() -> dict[str, object] | None:
     return report.as_dict()
 
 
+async def _storage_check() -> dict[str, object] | None:
+    """Whether this loop can write the five mounts every other job here writes into.
+
+    The first household's install learned it three times over from three jobs - the dump on
+    `/data/backups`, the import's staging on `/data/artifacts`, the heartbeat on `/data/cache` -
+    and each failure named its own path and none named the cause. This job names it once, with the
+    chown that fixes it, on the row §6.6's System card reads first (`api/admin.JOB_NAMES`).
+
+    Raises rather than reporting ok with a list, so `job_run.ok` is false and the card renders the
+    row as the failure it is; `_tick`'s RETRY_AFTER then re-asks every five minutes until an
+    operator's chown makes it pass, with no restart. The probe runs in a thread because it is file
+    I/O on the one loop this worker has. [C10.2; §2, §6.6]
+    """
+    result = await asyncio.to_thread(storage.probe, settings().data_dir, storage.WORKER_MOUNTS)
+    problem = storage.refusal(result)
+    if problem is not None:
+        raise RuntimeError(problem)
+    return {"writable": " ".join(storage.WORKER_MOUNTS)}
+
+
 async def _placement_reconciliation() -> dict[str, object] | None:
     """§5.3: "any owned title lacking a coordinate gets a feature vector built from DB data per
     the feature contract … and runs §8 stages 9-10 only". Trigger: "bundle import + nightly
@@ -932,9 +953,13 @@ async def _claim_bundle_import(conn) -> asyncpg.Record | None:
 # tail closed a COMMITTED import `ok=false` - the outcome decision 253 exists to remove - while
 # `_reap_abandoned_import`, the other exit from the same failure, had been taught the question in
 # cycle 1. [M4.14 cycle 1, m414-c1-dim-lock-01; cycle 3, m414-c3-dimlock-03]
+#
+# No restart in it any more: the backend follows the active row and this loop reads it per job
+# (decision 497), so a flip whose report was lost is served like any other. The instruction it
+# used to end with would have sent the operator to a shell for nothing.
 _COMMITTED_UNREPORTED = (
     "this import committed and {version} is the active bundle - the process was stopped before "
-    "it could report. Nothing needs importing again; restart the backend and the worker."
+    "it could report. Nothing needs importing again, and the backend loads it without a restart."
 )
 
 
@@ -1025,8 +1050,9 @@ async def _reap_abandoned_import(conn) -> None:
         flipped = await _committed_import(conn, version, row["started_at"])
         if flipped:
             # The flip is committed, so the import is what it says it is and only the report of
-            # it was lost. Section 10's restart is what is still owed, and the Data tab reads it
-            # from the same /state payload that carries this row.
+            # it was lost. Nothing is owed after it: the backend loads the flipped bundle on its
+            # own (decision 497), and the Data tab reads that from the same /state payload that
+            # carries this row.
             report.note("import", _COMMITTED_UNREPORTED.format(version=version))
             log.warning("bundle import: job %s committed and was never reported", row["id"])
             await _finish_bundle_import(row["id"], detail, report, ok=True)
@@ -1439,6 +1465,12 @@ JOBS: tuple[Job, ...] = (
     # claim left behind is closed by `_reap_abandoned_import`.
     Job(BUNDLE_IMPORT_JOB, "M0", "admin action", "minutes", _bundle_import,
         every=3600, stage=0, timeout=BUNDLE_IMPORT_TIMEOUT),
+    # Not in §5.3's table, and directly above the dump because the dump is what it protects first:
+    # in one tick it runs before the backup, so a box whose `/data/backups` is root-owned says why
+    # on the row above the failure. Hourly while it passes, and re-asked at RETRY_AFTER while it
+    # fails. Its budget is a minute of a probe measured in milliseconds, inside the head-of-table
+    # rule. See `_storage_check`. [C10.2]
+    Job("storage-check", "M5", "hourly", "ms", _storage_check, every=3600, timeout=60),
     # §2's backup, not §5.3's table — see `_nightly_backup`. Budget from the corpus-scale
     # measurement §10 sizes: ~1.15 GB uncompressed, minutes of `pg_dump` on the reference box.
     Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400,
@@ -1714,6 +1746,19 @@ def _report_basis(store: ArtifactStore) -> None:
         )
     elif store.is_empty:
         log.info("no artifact bundle active - model jobs stay idle (section 3.1: that is legal)")
+
+
+def _report_storage() -> None:
+    """Say at boot, before any job has failed on it, which of the five mounts this loop cannot write.
+
+    The `storage-check` job answers the same question on the System card, but `_seed_schedule`
+    seeds it from its newest successful run, so a restart inside the hour does not re-run it - and
+    `docker compose up` right after a fresh install is the moment the operator is reading this log.
+    A WARNING and never a refusal: §3.1 keeps a half-configured boot legal. [C10.2]
+    """
+    problem = storage.refusal(storage.probe(settings().data_dir, storage.WORKER_MOUNTS))
+    if problem is not None:
+        log.warning("storage: %s", problem)
 
 
 async def _fill_term_labels(conn: asyncpg.Connection, store: ArtifactStore) -> None:
@@ -2111,6 +2156,7 @@ async def main() -> None:
             )
 
         _report_basis(store)
+        _report_storage()
         _report_registry()
 
         stop = asyncio.Event()

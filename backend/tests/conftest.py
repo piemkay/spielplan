@@ -501,6 +501,13 @@ async def app(db, pg_url, tmp_path, monkeypatch):
     neutral.mkdir(exist_ok=True)
     monkeypatch.chdir(neutral)
     settings.cache_clear()
+    # Decision 497's five-second timer, off. The window tests pin `app.state.artifacts` by hand and
+    # then move the active row, and a timer re-pinning underneath them would make each one a race
+    # against the clock. The on-demand re-pin stays - `GET /api/admin/bundle/state` still loads a
+    # flip it reports - and `test_bundle_basis.py` turns the timer on where it is the subject.
+    from spielplan.models import basis
+
+    monkeypatch.setattr(basis, "FOLLOW_SECONDS", None)
 
     from spielplan.app import create_app
 

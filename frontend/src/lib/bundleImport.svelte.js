@@ -22,8 +22,9 @@
  * THE PHASE NAMES ARE THIS SCREEN'S, and `phaseOfJob` is where they meet the server's. `job_run`
  * calls a finished import `active` because that is what happened to the `artifact_bundle` row
  * (`worker.PHASE_ACTIVE`); this screen calls it `imported`, which is what happened to the
- * operator, and still owes them §10's restart. Keeping the component's own vocabulary also keeps
- * `phase === 'imported'` — the restart banner's condition since M0 — meaning what it always did.
+ * operator. Whether it is also SERVED is a second question, `servedAfterImport` below, because
+ * decision 497 ended §10's sequence at the flip and the restart is now owed only when the
+ * backend could not load the bundle by itself.
  */
 
 /** Nothing has been validated yet. */
@@ -32,7 +33,7 @@ export const IDLE = 'idle';
 export const VALIDATED = 'validated';
 /** The 202 landed and a `job_run` row is queued or running in the worker. */
 export const RUNNING = 'running';
-/** The worker finished and flipped the row; §10's restart is still owed. */
+/** The worker finished and flipped the row. See `servedAfterImport` for whether it is loaded. */
 export const IMPORTED = 'imported';
 /** The import was refused, or it ran and failed. A stored report says which. */
 export const FAILED = 'failed';
@@ -232,7 +233,9 @@ export async function pollImportJob(readState, jobId, options = {}) {
       if (job && job.job_id === jobId) {
         mine = job;
         const phase = phaseOfJob(job);
-        if (phase !== RUNNING) return { phase, job, error };
+        // `state` rides along because the read that ends the poll is also the one the backend
+        // re-pinned on (decision 497), so it is the one that can say whether the bundle is served.
+        if (phase !== RUNNING) return { phase, job, error, state };
       }
     } catch (err) {
       error = err?.message ?? String(err);
@@ -240,6 +243,32 @@ export async function pollImportJob(readState, jobId, options = {}) {
     if (now() - started >= deadlineMs) return { phase: UNKNOWN, job: mine, error };
     await sleep(intervalMs);
   }
+}
+
+/** The bundle the import flipped is loaded and serving: nothing is owed. */
+export const LIVE = 'live';
+/** The flip is real and the backend could not load it by itself: §10's restart is owed. */
+export const RESTART = 'restart';
+
+/**
+ * Whether an import this screen watched to `IMPORTED` is served, read off the state payload that
+ * reported it. Decision 497.
+ *
+ * The screen said "Restart backend and worker" after every import since M0, because §10's swap
+ * sequence ended in a restart nobody performed - and the first household's wizard ended on that
+ * sentence with no command in it, over a header saying "no bundle imported". The backend now
+ * loads the flipped bundle on the very read that reports the flip, so the ordinary answer is
+ * `LIVE` and the restart is the exception, named only when the server says it is owed
+ * (`restart_required`, which is `active != loaded` on a store that is not broken).
+ *
+ * `null` when the payload cannot say - no state came back with the outcome, or the store is
+ * broken, whose instruction is the Data tab's restore banner and not a restart.
+ */
+export function servedAfterImport(state) {
+  if (!state) return null;
+  if (state.restart_required === true) return RESTART;
+  if (state.active && state.loaded?.version === state.active) return LIVE;
+  return null;
 }
 
 // One `detail` value's worth of text, and the same excerpt rule the report's own `render()`

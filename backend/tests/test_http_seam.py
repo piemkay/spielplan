@@ -139,7 +139,12 @@ async def test_the_dev_flag_serves_the_docs_again(monkeypatch):
 
 
 async def test_health_answers_200_and_the_body_its_three_consumers_read(app):
-    """The 503 change must not move the body: `e2e/run.mjs` reads `.bundle` out of it."""
+    """The 503 change must not move the body: `e2e/run.mjs` reads `.bundle` out of it.
+
+    `storage` joined it beside the four keys rather than inside `ok` (C10.2): whether this process
+    can write its three mounts, by name, which the test app's DATA_DIR - a writable tmp_path -
+    answers with nothing unwritable.
+    """
     answer = await app().get("/api/health")
 
     assert answer.status_code == 200
@@ -148,6 +153,7 @@ async def test_health_answers_200_and_the_body_its_three_consumers_read(app):
         "role": "backend",
         "bundle": None,           # §3.1: a bundle-less app is a legal, reported state
         "public_url": settings().public_url,
+        "storage": {"ok": True, "unwritable": []},
     }
 
 
@@ -174,7 +180,7 @@ async def test_health_reports_a_broken_install_as_no_loaded_bundle_rather_than_a
     assert body["bundle"] is None, (
         "the unauthenticated probe named a bundle whose directory is gone"
     )
-    assert set(body) == {"ok", "role", "bundle", "public_url"}, (
+    assert set(body) == {"ok", "role", "bundle", "public_url", "storage"}, (
         "the broken state is reported through the field that already means it, not a new one"
     )
 
@@ -196,7 +202,7 @@ async def test_health_answers_503_when_the_database_is_unreachable(app, monkeypa
     assert answer.status_code == 503
     body = answer.json()
     assert body["ok"] is False
-    assert set(body) == {"ok", "role", "bundle", "public_url"}, (
+    assert set(body) == {"ok", "role", "bundle", "public_url", "storage"}, (
         "a failing health check answers the same shape as a passing one"
     )
 
