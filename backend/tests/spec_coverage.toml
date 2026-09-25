@@ -1232,7 +1232,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-mix-alternates-blocks"
-spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\")"
+spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\"); decision 492"
 milestone = "M2"
 kind = "integration"
 what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and, once the person holds fifteen live ratings over the session's kinds (decision 492), flips the served card type between sweep and battle, so a run of duels still returns sweep cards — including across the block boundary; before that Mix serves sweeps with the counter calling sweep and no substitution marked; the counter runs 1..15 and rolls into a new block."
@@ -1270,7 +1270,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-no-prediction-before-tap"
-spec = "§6.1 (\"Prediction reveal strictly after the tap\"; Cosley 2003)"
+spec = "§6.1 (\"Prediction reveal strictly after the tap\"; Cosley 2003); decision 491"
 milestone = "M2"
 kind = "integration"
 what = "The sweep card payload contains no predicted class, ledger score, σ or tier for the title being rated; the predicted class appears only in the response to the verdict write, and its data-voice score beside it only for a viewer whose Show the model is on (decision 491) — a member with the switch off is sent no model number."
@@ -1287,7 +1287,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-battle-pairs-within-band"
-spec = "§6.1 (\"drawn at random from the user's seen titles within verdict bands\") + §0 row 6"
+spec = "§6.1 (\"drawn at random from the user's seen titles within verdict bands\") + §0 row 6; decision 493"
 milestone = "M2"
 kind = "backend"
 what = "The battle pair sampler only ever draws titles the user has marked seen that already carry a verdict, and both members of a pair always share a verdict class; it never draws a pair the person has already compared in any context outside §13's re-ask stream (rank/read.asked_pairs' rule), and over many draws the distribution over the eligible in-class pairs not yet compared is uniform rather than concentrated on any subset; below fifty live ratings a profile battle leaves the disliked band out (decision 493)."
@@ -1313,7 +1313,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-queue-seed-and-reason"
-spec = "§6.1 (Queue) + §6.8"
+spec = "§6.1 (Queue) + §6.8; decision 490"
 milestone = "M2"
 kind = "integration"
 what = "A user's first queue is the imported 100-title decade-stratified seed_list, every title of it ahead of any title outside it, ordered among themselves by descending P(seen) — popularity, the library, age and the household (decision 490); subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\"), a seed card naming its decade and its P(seen) and never a list position."
@@ -1344,7 +1344,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-class-balance"
-spec = "§6.1 (class-balance widget + warning copy) + §5.2"
+spec = "§6.1 (class-balance widget + warning copy) + §5.2; decision 491"
 milestone = "M2"
 kind = "integration"
 what = "The Rate payload carries the running three-class verdict distribution over the user's labels from the first one, and the warning copy — \"Heavy on '{class}'. Spreading your ratings across all three answers matters about five times more than anything else you can do here.\" with a tail for the heavy class that never asks for a different answer (decision 491) — is present once fifteen labels stand and one class exceeds 60% of that distribution, and absent below either line; before fifteen the widget says when the check begins."
@@ -1409,7 +1409,7 @@ tests = [
 
 [[requirement]]
 id = "map-taste-admin-show-model-toggle-scope"
-spec = "§6.7 (decision 117)"
+spec = "§6.7 (decision 117); decision 486"
 milestone = "M2"
 kind = "e2e"
 what = "A single per-user 'show the model' toggle lives in the account dropdown and is off by default: with it off the event rail, every inline numeric annotation and the title card's b(t) · β · gate line are absent from the payload; turning it on reveals them for that user only and leaves another user's session unchanged."
@@ -1533,7 +1533,7 @@ id = "tonight-rank-straddle-equals-eligible"
 # silent on the end-of-scale clamp. §6.3 now carries a sentence for each, so an implementer can
 # be held to them; the citation keeps the numbers as provenance BEHIND the decision that
 # adopted them, which is the form decision 295 prescribes and is not a bare proposal.
-spec = "§6.3 badges and queue; decision 295 (proposals 157 and 76)"
+spec = "§6.3 badges and queue; decision 295 (proposals 157 and 76); decision 496"
 milestone = "M3"
 kind = "backend"
 what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, the reach is restricted to the two ADJACENT tiers and when the posterior reaches both neighbours it names the nearer cut, the threshold constant is read from ledger_hyperparams.json rather than hard-coded, and the badge opens the queue: tapping a straddle or tension chip on the board opens the comparison sheet and lifts nothing."
@@ -1580,7 +1580,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-queue-selection-mix"
-spec = "§6.3 comparison queue"
+spec = "§6.3 comparison queue; decision 494"
 milestone = "M3"
 kind = "backend"
 what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, the held-out 10% feeds neither the selection rule nor any tier-model quality figure, the exploration arm's anchor is the least-compared title on the WHOLE pool, and neither adaptive arm re-serves a pair already asked — in the arm, through `draw`, and through `GET /api/rank/queue`, which is where the set is read and forwarded; a boundary arm with no unasked pair left falls through to exploration and says so."
@@ -2648,7 +2648,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-split-threshold-and-silence-below"
-spec = "§6.2 step 5 (\"Ledger divergence D ≥ the threshold (~14.5% of nights; below that, decide silently)\")"
+spec = "§6.2 step 5 (\"Ledger divergence D ≥ the threshold (~14.5% of nights; below that, decide silently)\"); decision 478"
 milestone = "M4"
 kind = "backend"
 what = "The threshold is inclusive and the silence below it is real: a session whose leading candidates draw no divergent answers surfaces the split at D exactly at the threshold and surfaces nothing a thousandth below it — no split copy, no zeroed facet, no reserved third slot — and the unsurfaced session still yields three finalists ordered by the plain average; whether the split fired is recorded on the session so the rate behind the ~14.5% figure is recoverable. The threshold is 0.40 on the rank-standardised scale, recalibrated on the first household evening's Ledgers."
@@ -11412,7 +11412,7 @@ tests = [
 # in the same wave, and `_unresolvable_decision_citations` would redden the row until it lands.
 [[requirement]]
 id = "library-rate-vocabulary-terms-shown-by-label"
-spec = "§6.8 (\"a one-line why in vocabulary terms\")"
+spec = "§6.8 (\"a one-line why in vocabulary terms\"); decision 486"
 milestone = "M5"
 kind = "integration"
 what = "The vocabulary loader stores each term's shipped label as dna_term.label (era.wwii -> 'World War II'); an install seeded before 0030 has its NULL labels filled from the active bundle's staged vocab TSVs by an UPDATE that is idempotent, overwrites no stored label and inserts no row; and the backend's labels_for and the frontend's termLabel answer a term by its label, or by the id's leaf with underscores as spaces, and never by the id."
@@ -11436,7 +11436,7 @@ tests = [
 # "; decision 497" when it lands.
 [[requirement]]
 id = "platform-a-bundle-import-is-served-without-a-restart"
-spec = "§2 (\"`docker compose up` + the setup wizard is the whole install\"); §3.1; §4.3 (\"hot-swapped on bundle import\"); §10 swap sequence"
+spec = "§2 (\"`docker compose up` + the setup wizard is the whole install\"); §3.1; §4.3 (\"hot-swapped on bundle import\"); §10 swap sequence; decision 497"
 milestone = "M5"
 kind = "integration"
 what = "A bundle import is served by the running backend within seconds of its flip, with no restart: on a first import into a bundle-less install, on a models-only re-import that replaces a loaded bundle, and on a restage of a broken install. The backend re-reads the active row (version and activated_at) on a timer and before it answers the Data tab's state, loads the flipped bundle's store, Backbone and constants with the function the boot uses, and replaces all three in one event-loop step; the Data tab, /api/config, /api/health and a Rate tap then all see the bundle. A load that fails keeps the outgoing basis serving, is logged once per active row, is retried on every ask, and is reported as restart_required on the Data tab and on /api/config, where the header and the wizard say a restart is owed and name the command instead of 'no bundle imported'."
@@ -11489,7 +11489,7 @@ tests = [
 # `_unresolvable_decision_citations` reddens a row citing a decision until its entry lands.
 [[requirement]]
 id = "library-rate-poster-art-resolves-within-its-licences"
-spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §6.1 (\"two posters are the buttons\"); §3.1 first-login lock; §3.2"
+spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §6.1 (\"two posters are the buttons\"); §3.1 first-login lock; §3.2; decision 483"
 milestone = "M5"
 kind = "integration"
 what = "GET /api/art/{title_id}/poster answers from this app's origin behind the session and section 3.1's lock (a stranger 401, a locked account 403, neither reaching a source), holds no pooled connection while it waits on a host, and serves the household's Jellyfin Primary image for a title with a jellyfin_id, else title.poster_path at TMDB w342 (rewritten, never prefixed) only when art/hosts.py passes its host, else the worker's lookup answer; m.media-amazon.com is never asked; bytes are served only when they are a JPEG, PNG or WebP under 2 MB and the final URL is still on the allow-list; every 200 is `private, max-age=15552000` and never immutable, every 404 is cacheable; answers live under /data/cache/art per title and per list of sources, TMDB and TVmaze files 180 days, Jellyfin 7, a stand-in after a Jellyfin error 1 day, a missing image 7 days, a failed host 10 minutes; concurrent misses for one title make one upstream request; with SPIELPLAN_ART_EGRESS off no image host is asked; and PosterCard, RatePoster and every surface built on them (the title card, the finish prompt, Tonight's winner) draw an img with empty alt keyed on the title's id or title_id over the tinted panel, drop it on error, and give it neither the pointer nor the iOS callout."
@@ -11550,7 +11550,7 @@ tests = [
 # carries an id TMDB answers by. The worker asks, never the web process (section 1, decision 340).
 [[requirement]]
 id = "library-rate-posterless-titles-are-looked-up-by-the-worker"
-spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §1 (the worker's acquisition); §8"
+spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §1 (the worker's acquisition); §8; decision 484"
 milestone = "M5"
 kind = "integration"
 what = "A poster view of a title with no servable poster files one art_lookup row and answers a 404 cacheable for one art-lookup interval; the worker's art-lookup job (every 1800 s) asks TMDB through the polite fetcher - /3/movie|tv/{tmdb_id} by title.kind, falling back to /3/find/{imdb_id} and the result list of that kind - and records found (the w342 image.tmdb.org URL), none (asked again after 30 days) or failed (after a day); it files placed titles nobody has viewed yet, warm first, behind the viewed ones; a refused key stops the batch with nothing recorded; no key or SPIELPLAN_ART_EGRESS off asks nothing; title, title_meta and the identity columns are byte-identical afterwards; and the art route then serves the found poster."
@@ -11578,7 +11578,7 @@ tests = [
 # decision is not yet headed in the register. The merge appends them once the entries land.
 [[requirement]]
 id = "library-rate-title-card-never-leads-with-mpst-or-another-titles-synopsis"
-spec = "§4.1 (title_meta, \"one block = one droppable source\") + §6.0 title card + §8 stage 5 (packs)"
+spec = "§4.1 (title_meta, \"one block = one droppable source\") + §6.0 title card + §8 stage 5 (packs); decision 499"
 milestone = "M5"
 kind = "integration"
 what = "The card's overview never comes from an mpst synopsis, and a Wikipedia or MPST plot that another title also carries (same field, spaces trimmed) is absent from both titles' cards and from both titles' extraction packs, the next eligible text taking its place; a shared TMDB overview is kept, the mpst rows stay in title_meta and an unshared mpst retelling still feeds the pack; the scoped resolution a derive runs answers the same; and migration 0037 writes onto a seeded install exactly what the new walk answers, after which the walk changes nothing (decision 499)."
@@ -11593,7 +11593,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-title-card-art-is-stored-only-from-servable-hosts"
-spec = "§6.8 (\"Poster-forward 2:3 cards\") + §4.1 (title_meta)"
+spec = "§6.8 (\"Poster-forward 2:3 cards\") + §4.1 (title_meta); decisions 483, 501"
 milestone = "M5"
 kind = "integration"
 what = "The import and §8 stage 3 resolve title.poster_path and title.backdrop_path only from a URL art/hosts.servable accepts (https, image.tmdb.org or static.tvmaze.com, exact host), walking the same source order over the eligible values: tmdb still wins, TVmaze now wins over OMDb's IMDb-hosted poster, a title with only an IMDb-hosted poster has none, and the import report counts the URLs it skipped; migration 0037 clears the seeded install's IMDb-hosted posters and restores the TVmaze ones (decision 501, on decision 483's hosts)."
@@ -11622,7 +11622,7 @@ tests = [
 
 [[requirement]]
 id = "data-rules-the-alias-kind-is-stored-and-a-lexicon-row-never-projects"
-spec = "§8 stage 8 (\"per-title alias-map projection of its keywords\") + §4.3 (dna_vocab)"
+spec = "§8 stage 8 (\"per-title alias-map projection of its keywords\") + §4.3 (dna_vocab); decision 500"
 milestone = "M5"
 kind = "integration"
 what = "importer/dna._load_aliases stores each alias row's shipped `kind` (NULL where the map has no such column) and reports how many are lexicon; dna/aliases.load_alias_map refuses a lexicon row and projects every other kind and NULL; and migration 0037 writes `lexicon` onto the seeded install's 84 corpus lexicon rows and the four teen presence keywords, never overwriting a stored kind (decision 500, taking decision 383's owed fill)."
@@ -11673,7 +11673,7 @@ tests = [
 
 [[requirement]]
 id = "data-rules-the-personal-half-reads-directions-not-norms"
-spec = "§5.1 (score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩; the per-user β search); §12 M2 exit criterion (\"50–100 verdicts each produce visibly personal rankings\")"
+spec = "§5.1 (score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩; the per-user β search); §12 M2 exit criterion (\"50–100 verdicts each produce visibly personal rankings\"); decision 469"
 milestone = "M5"
 kind = "integration"
 what = "The fold-in fits, cross-validates and serves ⟨v_u, d(t)⟩ where d(t) is e(t)'s unit direction weighted by its gate when the coordinate is the Backbone's alone and by 1 when the Cold Tower contributed to it, through one helper, so rescaling any row's norm moves neither the fit nor a score; on a support-weighted basis a rater's personal top is their taste from across the support range rather than the most popular fifth; and user_vector records the geometry it was fitted in, so a raw-geometry fit is refitted by the next tick without waiting out the pause and the crowd half is rewritten with it."
@@ -11688,7 +11688,7 @@ tests = [
 
 [[requirement]]
 id = "data-rules-the-ledger-reads-the-fold-ins-directions"
-spec = "§5.2 (s = μ + ⟨v, e⟩ + r; the MAP fit takes §5.1's coordinates); §6.3 (the board orders a tier by s)"
+spec = "§5.2 (s = μ + ⟨v, e⟩ + r; the MAP fit takes §5.1's coordinates); §6.3 (the board orders a tier by s); decision 471"
 milestone = "M5"
 kind = "integration"
 what = "standard_embeddings hands the Ledger the same gate-weighted direction the fold-in reads, so one verdict on an off-scale coordinate (a Cold Tower placement of norm 78) neither tops the board nor carries a σ an order above the rest while a title that won its duels comes first; and ledger_fit records its geometry, so load_cache refuses a raw-geometry fit and refreshes_owed hands it to the 60 s tick."
@@ -11701,7 +11701,7 @@ tests = [
 
 [[requirement]]
 id = "data-rules-every-rated-title-has-a-coordinate"
-spec = "§5.3 (placement reconciliation); §6.1 (the seeded first run from seed_list); §12 M2 exit criterion"
+spec = "§5.3 (placement reconciliation); §6.1 (the seeded first run from seed_list); §12 M2 exit criterion; decision 470"
 milestone = "M5"
 kind = "integration"
 what = "The reconciliation sweep's work list is every owned title, every seed-list title and every title a member has a verdict on that lacks a coordinate, placed and stamped the same way; a title with none of the three is left alone, the owned counters do not count the unowned ones, and after the sweep no verdict is dropped from the fold-in for want of a coordinate."
@@ -11744,7 +11744,7 @@ tests = [
 # catalog's year order. The predicate - and so the count line - is unchanged.
 [[requirement]]
 id = "library-search-best-match-first"
-spec = "§6.0 M0 (\"filter/search on title/alias\")"
+spec = "§6.0 M0 (\"filter/search on title/alias\"); decision 472"
 milestone = "M5"
 kind = "integration"
 what = "With a search term, the catalog lists best match first: an exact title, then the phrase starting the title, a word starting the title, the phrase as whole words, a word starting with it anywhere, then any substring; a leading article (the/a/an) is read both ways; a name match outranks an alias match of the same quality; inside a tier an owned title leads, then the crowd's rating count as a percentile within the title's own kind, then year, name and id - a total order, so OFFSET pages neither repeat nor drop a title. Without a term the year order stands. Decision 472."
@@ -11767,7 +11767,7 @@ tests = [
 # widened Home past an iPhone.
 [[requirement]]
 id = "library-genre-facet-is-one-canonical-vocabulary"
-spec = "§6.0 M0 (\"filter/search on title/alias/genre/decade/seen-state\") + §6.3 (\"Filters: genre\")"
+spec = "§6.0 M0 (\"filter/search on title/alias/genre/decade/seen-state\") + §6.3 (\"Filters: genre\"); decision 473"
 milestone = "M5"
 kind = "integration"
 what = "The genre facet offers TMDB's genre names (the movie list without TV Movie, plus Reality, Talk, News and Soap), each once; a genre matches a title any structured source tags with it in any spelling, TMDB's combined TV genres answering both halves; Wikidata's labels are neither offered nor matched; title_genre keeps every per-source row as imported; the catalog route answers a genre outside the vocabulary with a 422; and a long option never widens the page on a phone. Decision 473."
@@ -11785,7 +11785,7 @@ tests = [
 # Decision 474. Tapping Series with Films on ADDED series under the film shelves.
 [[requirement]]
 id = "library-rate-home-kind-switch"
-spec = "§6.0 (kind control) + §4.1 rule 5"
+spec = "§6.0 (kind control) + §4.1 rule 5; decision 474"
 milestone = "M5"
 kind = "e2e"
 what = "Home's kind control is one switch - Films, Series, Both - with exactly one position pressed: Series shows series alone, Both shows two kind regions (Films, then Series), each holding that kind's shelves in the table's order and no row of the other kind. Decision 18's never-neither and both-is-a-selection-not-a-merge hold. Decision 474."
@@ -11801,7 +11801,7 @@ tests = [
 # appeared twice in one render; shelf 1 named Zootopia's most generic pair.
 [[requirement]]
 id = "library-rate-home-shelves-claim-their-titles"
-spec = "§6.0 M2 (the shelf table)"
+spec = "§6.0 M2 (the shelf table); decision 475"
 milestone = "M5"
 kind = "integration"
 what = "Home's shelves are built in a claim order - \"Your top picks\" first, keeping its whole list, then the table's order - and rendered in the table's order; no title appears on two claiming shelves of one kind (\"New in the library\" is exempt and never thinned); a shelf left under the floor of three by the claim is absent and its reason says so. Shelf 1 shows the unseen owned titles sharing the most of the anchor's terms and names a pair every card carries; the anchor is the seen, rated title with the highest tier the board shows, then the live verdict, before the Ledger's s. The sweet spot's 0.70 floor is read against the owned library. Decision 475."
@@ -11822,7 +11822,7 @@ tests = [
 # anything) and "You and Patrick both rate these highly" over "neither of you has seen these".
 [[requirement]]
 id = "library-rate-home-speaks-the-member-register"
-spec = "§6.0 M2 (the shelf table) + §6.8 (\"quiet reasons\") + §6.7"
+spec = "§6.0 M2 (the shelf table) + §6.8 (\"quiet reasons\") + §6.7; decisions 476 and 486"
 milestone = "M5"
 kind = "integration"
 what = "With Show the model off no shelf title, why-line, caption or first-week line carries a model number, a model noun (ledger, fold-in, prior, Cold Tower, labels) or a spec reference, and no section carries why_numbers - the numbers each ordering used travel only with the switch on; terms are named by their vocabulary label; \"Because you put {anchor} in {tier}\" is said only of a title with a tier_edit; the sweet spot reads \"You and {other} would both enjoy these\"; the no-crowd-data sentence says so in words. Decision 476."
@@ -11844,7 +11844,7 @@ tests = [
 # silent presentation, no decision.
 [[requirement]]
 id = "library-rate-home-counts-and-marks-the-households-library"
-spec = "§6.0 (count line, decision 18) + §7.1"
+spec = "§6.0 (count line, decision 18) + §7.1; decision 476"
 milestone = "M5"
 kind = "integration"
 what = "Home's payload names the owned titles per kind and the count line over the shelves states them (\"612 films in your library · 262 series hidden\"); the grid's line counts the catalog it lists; a catalog or search card of an owned title reads \"in library\", and one pill narrows the grid to owned titles; every shelf row states how many titles it holds, and a tier letter on a card is explained once in words and names itself, a guess on an unseen title."
@@ -11866,7 +11866,7 @@ tests = [
 # decision when it lands.
 [[requirement]]
 id = "library-rate-title-card-speaks-the-member-register"
-spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons)"
+spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons); decision 486"
 milestone = "M5"
 kind = "integration"
 what = "With the viewer's Show the model off, the title card's payload carries no model line and no extracted-tag weight (salience, confidence, n_sources); with it on, both come back. Every DNA term travels with its vocabulary label and gloss, the platform caption keeps `display_only` and speaks plainly, and the card renders the kind in words, the trailer as a labelled link, evidence sources by name, a quote cut mid-sentence with an ellipsis at the cut, each projected term with the number of sources behind it (quieter at one, never hidden), one credit row per person and role with only the jobs that are different credits, and the seen toggle's note in plain words under the actions."
@@ -11888,7 +11888,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-title-card-play-names-its-reason"
-spec = "§6.0 (the card's actions, Play on Jellyfin first); §7.1; §6.8 (quiet reasons)"
+spec = "§6.0 (the card's actions, Play on Jellyfin first); §7.1; §6.8 (quiet reasons); decision 486"
 milestone = "M5"
 kind = "integration"
 what = "When Play on Jellyfin is unavailable the card's payload names which of two causes it is - `no_server` when the household has linked no Jellyfin, `not_in_library` when it has and the title has no copy - and the card prints that cause in plain words with no milestone label."
@@ -11901,7 +11901,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-title-card-answers-through-the-rate-session"
-spec = "§6.0 (the title detail card's actions); §6.1 (Liked / Fine / Disliked, Not seen; the reveal strictly after the tap)"
+spec = "§6.0 (the title detail card's actions); §6.1 (Liked / Fine / Disliked, Not seen; the reveal strictly after the tap); decision 487"
 milestone = "M5"
 kind = "integration"
 what = "The title card answers its title with §6.1's four sweep answers through the person's own Rate session: the title is put on the table as a sweep card under a fresh token and answered there, so the answer is a journal row Undo reverses, §6.1's counter moves, the reveal rides on that response, a verdict implies seen, a second verdict supersedes the first, Not seen flips the state and leaves the verdict standing, a device holding the replaced card's token meets the stale-card refusal, and the card shows the standing verdict pressed."
@@ -11918,7 +11918,7 @@ tests = [
 
 [[requirement]]
 id = "platform-unbuilt-surfaces-absent-from-navigation"
-spec = "§6 (surface names, normative); §12 (the build order)"
+spec = "§6 (surface names, normative); §12 (the build order); decision 488"
 milestone = "M5"
 kind = "e2e"
 what = "A surface whose milestone has not shipped is absent from navigation for both roles and from every entry point to it - the tab bar, the account menu, and the title card's Show on map - while its route still answers by address with a placeholder that says it is not built and names no milestone; flipping the surface's `built` flag in SURFACES is all it takes to bring it back, in §6's order."
@@ -12009,7 +12009,7 @@ tests = [
 # until the two decisions are recorded.
 [[requirement]]
 id = "library-rate-member-copy-is-plain-language"
-spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy)"
+spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy); decisions 486 and 491"
 milestone = "M5"
 kind = "integration"
 what = "The battle why-line names the shared answer and the random draw and no section; the reveal carries no model number with Show the model off; the seed card names a starter decade and its P(seen); the rail, the balance widget, the undo chip and the drained state speak in ratings and plain words."
@@ -12032,7 +12032,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-queue-pairs-that-matter"
-spec = "§6.3 comparison queue + §13 stream (a) + §0 row 2"
+spec = "§6.3 comparison queue + §13 stream (a) + §0 row 2; decision 494"
 milestone = "M5"
 kind = "backend"
 what = "Inside §6.3's 70/20/10 mix, the boundary arm draws its anchor among the straddlers in proportion to the height of the boundary each one straddles (the index of the cut's upper tier), never removing a straddler, and pairs it with the least-compared of the five unasked titles nearest it across the cut, ties in `s` broken by the draw rather than by title id; the exploration arm breaks least-compared ties toward the higher tier instead of the wider posterior and still explores a board that is all F and D; the titles of the last three answered non-held-out queue pairs wait while another title can take their place; and the held-out arm reads none of this."
@@ -12055,7 +12055,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-queue-round-and-progress"
-spec = "§6.3 comparison queue + §6.1 blocks of 15 + §6.8 + §13 stream (a)"
+spec = "§6.3 comparison queue + §6.1 blocks of 15 + §6.8 + §13 stream (a); decision 495"
 milestone = "M5"
 kind = "e2e"
 what = "The comparison sheet shows its pair as two posters carrying the titles' ids, counts the answers of a round of fifteen in its header ('3 of 15 this round') on every arm alike, ends the round after the fifteenth answer with Done and Keep going and keeps the pair that answer brought for Keep going, and after each answer names where both titles now sit in the board's own badge words, the same shape on every arm and never 'moved'; a board whose adaptive pairs are all asked is told nothing is left to compare rather than to rate more, and a board too thin to pair keeps that sentence."
@@ -12075,7 +12075,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-tap-opens-the-title-and-move-lifts"
-spec = "§6.3 phones; §6.0 title card; decision 295 (proposals 74 and 75)"
+spec = "§6.3 phones; §6.0 title card; decision 295 (proposals 74 and 75); decision 496"
 milestone = "M5"
 kind = "e2e"
 what = "On the Rank board a tap on a title opens its title card and writes nothing; moving is the title's own Move control, which lifts it under the 'Moving … Cancel' banner; with a title lifted, a tap on any title drops the lifted one into that title's tier naming no neighbour, and a tap on the lifted title puts it down; opening a card puts a lifted title down first, so nothing behind the card can drop it."
@@ -12105,7 +12105,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-copy-in-the-member-register"
-spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209"
+spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209; decision 486"
 milestone = "M5"
 kind = "integration"
 what = "Every sentence the Rank surface shows a member is true and plain: the board's why-line counts what the person has rated and compared (held-out answers included) and says the tiers follow a typical split until they place a title themselves, never 'learned cutpoints, refit nightly', and keeps decision 209's 'still being fitted' in its window; the tension chip says 'your other answers still point to C', not 'the ledger'; the tier-set warning keeps decision 11's two facts without 'cutpoints' or 'refit'; the footnote says how to use the board and claims no write; the title filter claims only titles and the tag filter says 'tag'; the DNA tiers read 'quoted' and 'inferred'; and none of it names a model noun or a spec reference."
@@ -12131,7 +12131,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-member-scores-are-commensurate"
-spec = "§6.2 steps 3-5 (\"their Ledger score for that title\"; \"plain averaging\") + §5.1 + §0 row 3"
+spec = "§6.2 steps 3-5 (\"their Ledger score for that title\"; \"plain averaging\") + §5.1 + §0 row 3; decision 477"
 milestone = "M5"
 kind = "integration"
 what = "Every Tonight read of a seated member's Ledger — the round's prior, a profile-less guest's pool prior, step 5's per-participant prior and D — is that member's rank-standardised score over the frozen pool (normal quantiles of their own ranks at sd 1.0, ties by title id), under a scale marker frozen with the pool at Start; the raw §5.1 scores stay in the snapshot, a room started before the marker keeps reading them raw, an unknown marker is refused, and the round's boundary sweep is restated on that scale (a heavy-tailed pool shaped like the first household evening's runs about ten pairs once standardised and one pair raw)."
@@ -12147,7 +12147,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-an-axisless-split-is-surfaced-by-person"
-spec = "§6.2 step 5 (\"surfaced with the alternative in hand, never silently averaged\")"
+spec = "§6.2 step 5 (\"surfaced with the alternative in hand, never silently averaged\"); decisions 478, 479"
 milestone = "M5"
 kind = "integration"
 what = "With no axis artifact loaded and Ledger divergence D at or past the threshold, the split is surfaced by person: the leader keeps slot 1, each seat none of whose own top three tonight scores is on the slate gets a finalist reserved for its highest-scoring title not already placed (slot 3, then slot 2), still exactly three finalists; the reserved finalist is stored as session_result.reserved_for that seat and never as `reserved` (the axis counterweight), the reveal labels it with the seat's name, and the fixed headline claims one for each person only when every seat has one; below the threshold, or on divergent answers alone, the evening stays silent."
@@ -12165,7 +12165,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-not-tonight-vetoes"
-spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates)"
+spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates); decision 480"
 milestone = "M5"
 kind = "integration"
 what = "Before Start any seated member may set up to three 'not tonight' vetoes from a fixed list mapped to vocabulary terms; a stranger is refused, a key off the list or a fourth veto is a 422, and a room that has started refuses a change; the pool is then built without every title carrying a vetoed term in the quote-verified tier — a presence predicate that names the tier and compares no salience, confidence or weight — while a title carrying it only by projection stays; the lobby and the open-rooms row show the vetoes, and a pool the vetoes empty is refused naming them."
@@ -12183,7 +12183,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-a-room-has-a-join-link"
-spec = "§6.2 step 2 (\"Join channels, all equivalent ... room code / QR in the lobby\")"
+spec = "§6.2 step 2 (\"Join channels, all equivalent ... room code / QR in the lobby\"); decision 481"
 milestone = "M5"
 kind = "e2e"
 what = "Every room has a join link, /tonight?room=CODE: the lobby offers it through the phone's share sheet or, failing that, writes it on the screen; the push invitation carries it; and opening it on a signed-in device seats that member in the room — idempotently, through the same join every other channel uses — and takes the parameter off the address bar."
@@ -12215,7 +12215,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-the-wildcard-is-drawn-near-the-top"
-spec = "§6.2 step 5 (\"one exploratory pick honestly labelled\") + §6.4 (\"ranked by prior + proximity\")"
+spec = "§6.2 step 5 (\"one exploratory pick honestly labelled\") + §6.4 (\"ranked by prior + proximity\"); decision 482"
 milestone = "M5"
 kind = "backend"
 what = "The wildcard is the candidate farthest in DNA terms from the finalists among the best twentieth of the ranking (never fewer than twelve candidates), not the farthest title in the whole pool."
@@ -12227,7 +12227,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-copy-in-the-member-register"
-spec = "§6.8 (\"quiet reasons\"; \"a one-line why in vocabulary terms\") + §6.2 steps 5, 7 and 8"
+spec = "§6.8 (\"quiet reasons\"; \"a one-line why in vocabulary terms\") + §6.2 steps 5, 7 and 8; decision 486"
 milestone = "M5"
 kind = "integration"
 what = "Tonight's member copy carries no model number and no vocabulary id: the reveal's conflict reaches a member with Show the model off without D and without the axis sentence (and with them when it is on), gated where the payload is built; match lines and solo's why-lines name terms by their labels and every match line names its person; the round header says what to expect rather than the cap; and the refusal for an unscored member names no model noun and no false clock."

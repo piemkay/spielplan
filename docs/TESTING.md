@@ -87,11 +87,13 @@ and no line announces that one. (`--no-db` is registered in `backend/tests/conft
 the path argument CLAUDE.md already mandates for a different reason; `pytest --no-db` from the
 repository root reports "unrecognized arguments".)
 
-`e2e/run.mjs` runs in two phases on purpose. §10's swap sequence ends in "restart backend +
-worker", so a bundle imported in phase one is not *loaded* until the services come back. Without
-that restart between the phases, every spec that needs an imported bundle skips — which looks
-like a pass and proves nothing. As of M4.8 the runner refuses to enter phase 2 at all if the
-restarted backend does not report a loaded bundle in 60 attempts — up to six minutes, since each
+`e2e/run.mjs` runs in two phases on purpose. §10's swap sequence used to end in "restart
+backend + worker"; since decision 497 the backend loads the bundle phase one imported by itself,
+and `01-first-boot` asserts exactly that. The restart between the phases stays, because phase 2
+is written against freshly started processes, and the health loop after it is what keeps every
+spec that needs an imported bundle from skipping — which looks like a pass and proves nothing.
+As of M4.8 the runner refuses to enter phase 2 at all if the restarted backend does not report a
+loaded bundle in 60 attempts — up to six minutes, since each
 attempt carries its own 5 s request deadline: skipping is what a run with nothing imported used to
 do instead, and it exits 0.
 
@@ -1565,7 +1567,11 @@ converges 0-1 of 20 at the old threshold and *fewer* rounds at the new one on ev
 pools, so it is recorded as refuted. Those ranges were first published as single figures taken
 from one pool size and two of them did not reproduce, so review cycle 1 re-ran the sweep and
 `test_tonight_round.py::test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way`
-now holds this paragraph and the comment beside `BOUNDARY_Z` to the harness that produced them. **One migration**, `0021_tonight_reserved_slot.sql`, which labels 54d's
+now holds this paragraph and the comment beside `BOUNDARY_Z` to the harness that produced them.
+Decision 477 re-took that sweep in the first household user test's wave, on the rank-standardised
+scale the round now reads, over pools of 120, 300 and 700: at z = 1.0 `converged` fires 0-3 times
+in 20 at the full cap, and at 0.6 it fires 13-19 times with medians of 9-11 pairs. `round.py`'s
+paragraph and that test carry those figures now; the ones above are M4.12's. **One migration**, `0021_tonight_reserved_slot.sql`, which labels 54d's
 counterweight; `0019` stays the permanent gap it has been since M4.10 and `0022` belongs to M4.13,
 built in parallel with this one. **No waiver was added and the milestone was not lowered.** The
 mechanical id sentence moved here from M4.11's paragraph below, which states the same count in a

@@ -12,10 +12,12 @@ the 2026-08-29 prototype review: citable as provenance and nothing more, so a re
 rests only on one of them rests on nothing the owner has agreed to. **Entries 162 onward are
 numbered owner decisions**, and each is normative from the day it is taken until the amendment it
 mandates lands in `spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03,
-this one on 2026-09-17, M5.2's on 2026-09-23, and M5.6's and M5's on 2026-09-24. The decision numbering
+this one on 2026-09-17, M5.2's on 2026-09-23, M5.6's and M5's on 2026-09-24, and the first
+household user test's on 2026-09-25. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
-decomposition still leaves unspent inside those ranges for the sub-milestones that own each step. Seven of the proposals were settled
+decomposition still leaves unspent inside those ranges for the sub-milestones that own each step, and
+489, allocated to the first household user test's wave and never spent. Seven of the proposals were settled
 by the owner on 2026-08-29 and are indexed in the first decisions block below rather than
 numbered separately: six carry a **Decided (owner, 2026-08-29)** line inline, and the seventh
 (54) replaced the question with a redesign, written up as §6.2 — Tonight, rewritten. Proposals
@@ -7335,7 +7337,9 @@ exercised eleven times between M4.5 and M4.16.
 `"M5"`, with the eleven existing `milestone = "M5"` rows re-pointed at the sub-milestone that owns
 each. `"M5"` itself STAYS in the list as the umbrella §12 names, holding the amended criterion
 decision 331 settles; a row may be filed at `"M5"` only if it is measured by
-`ops/m5_exit_criterion.py`.
+`ops/m5_exit_criterion.py`. (Amended in place on 2026-09-25 to cite decision 498: the coverage rows
+the first household user test's wave adds are filed at `"M5"` and closed by the tests they name, and
+this clause binds the rows that claim a clause of §12's M5 criterion.)
 
 **Cost.** The `MILESTONES` edit is positional and not alphabetical: `_at_or_before` asks
 `MILESTONES.index`, so the seven names go between `"M4.16"` and `"M5"` by position, and the
@@ -12285,6 +12289,1782 @@ argues. Stage 7's count is per tick: a title whose stage 6 failed on one tick an
 next reads only the second tick's refusals, which is the walk decision 462 means. The first tick's
 rows stay in `dna_reject` under their own run for the rejects review. `test_acquire_drain.py` walks
 the path through `worker._tick`, and that test is added to the DNA-stages coverage row.
+
+---
+
+## Decisions taken (owner, 2026-09-25, the first household user test)
+
+Taken on 2026-09-25 under the owner's instruction after the first household user test. Two members
+used every surface for an evening on build ed1f690, against bundle v20260925 and the household's
+real Jellyfin, and both said they would not open the app again. The triage of that evening split its
+findings among nine workstreams, each building from one foundation commit on a branch of its own,
+and the corpus curator, who re-exported the bundle. Each recorded the calls its fixes needed, and
+they are transcribed here in number order. `current_milestone` stays `"M5"`, and the coverage rows
+the wave adds are filed there (decision 498).
+
+The numbers 469-502 were handed to the workstreams in blocks. 469 is also the top of M5's own block,
+461-469, which M5's first review cycle left unspent; it is spent here. 489 was never spent and stays
+unspent, for 228-233's reason: a number is taken by the owner, not reserved by a planner. 498 was
+left unspent by the operator workstream, whose fix contradicted no clause, and is spent on the
+filing of this wave's rows. The curator's decision was drafted as 490, which the Rate workstream had
+already spent; a number written twice is two normative rules under one heading, so it is recorded as
+503, the first number above every block, and its heading and its §4.3 amendment say 503. No other
+record cited it by number.
+
+The entries are transcribed as each workstream wrote them, with these changes and no others: entries
+that arrived without a heading are headed with their own titles; two first-person sentences are
+restated impersonally; and the sentences that addressed the merge rather than the reader - 469's and
+470's pointers upstream, 470's badge caveat, 471's hand-off of M3-open-points §2.8, 486's static
+guard, 487's pointer at Rate's search, 501's offer to be folded into 483, and 503's pointers at a
+scoring decision still in draft and at a triage premise 470 overtook - are restated as what the
+merged tree holds.
+
+The spec is amended in the same change, as point release v2.1.5, and every coverage row the wave
+wrote now cites the decision its clause rests on. The earlier decisions this block amends each stand
+as written except for the clause the later entry names: 18's "deselecting ... re-selects the other",
+on Home (474); 117's model-line exemption (486) and its §3.2 "My Taste" chip (488); 178(4)'s
+"immutable" for TVmaze and Jellyfin files (483); 187's fitted-tier headline (476); 190, reversed
+(483); 217's uncalibrated 0.20 (478); and 321's last clause (498), whose entry gains one line citing
+it, as 444's does for 464. Decision 236's question is answered by 503.
+
+### 469. The fold-in's personal half reads each title's direction weighted by its gate; E, ê and the blend stay unscaled
+
+**What the spec says.** §5.1: `score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩`, with β searched per
+(user, kind) by the nightly fit. Decision 236 ruled "No rescaling" and sent the question upstream:
+"is E meant to be unit-scale item factors or support-weighted?" It added that "if it is
+support-weighted the app must rescale AND re-run M2's held-out measurement". Decision 235 kept the
+per-user cross-validation and deferred the column standardisation with D2. §12's M2 exit criterion
+reads: "50–100 verdicts each produce visibly personal rankings".
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+Two members (61 and 59 film verdicts; build ed1f690, bundle v20260925) said they would not use the
+app again, and §12's M2 criterion did not hold.
+
+The corpus's own code answers decision 236's question. E = V·S, from an SVD of zero-imputed
+residuals (exp_cold_tower2.py), is support-weighted by construction. Its median row norm is 0.008
+below 20 ratings and 6.94 above 10,000, and the Cold Tower's ê sits near 30.
+
+Standardised over the reference population, the raw inner product was:
+- 0.01 sd on a typical warm title;
+- 2–13 sd on a popular one;
+- up to 44 sd on a tower placement.
+
+So the personal half ranked by popularity and by provenance. Raiders scored 13.28 on a member's
+scale whose p99 was 1.97, and 9–10 of each member's top-12 unseen owned films were tower placements.
+
+This was re-measured through the app's own `fit_user` and per-user CV over corpus raters. The raters
+are reviews.sqlite user reviews and may sit inside the Backbone's training data, so the absolute
+numbers are optimistic; the comparison between arms is like-for-like. Both arms include the b(t)
+repair. Held-out Spearman at 30/60/100 labels:
+
+| Coordinate the fit reads | 30 | 60 | 100 |
+|---|---|---|---|
+| Raw coordinate | 0.4597 | 0.4711 | 0.4789 |
+| Plain unit direction | 0.4898 | 0.5011 | 0.5233 |
+| Gate-weighted direction | 0.4903 | 0.5012 | 0.5224 |
+
+The gain over the raw coordinate is +0.031 / +0.030 / +0.044, far outside §0's 0.008.
+
+A production Backbone without the evaluation holdout was also simulated, mapping E_full into E's
+basis (R² 0.934 on warm rows). There the gate-weighted direction still leads the raw coordinate by
++0.027 / +0.017 / +0.024.
+
+The plain and gate-weighted directions tie. The gate is kept because it halves the personal spread
+of rows with fewer than 20 ratings (sd 0.85 to 0.48), whose directions are the noisiest, at no
+measured cost.
+
+On the two live members, with the rated titles placed as decision 470 does:
+- the CV picks β 0.6 and 0.7;
+- their owned top-50 lists share 6 titles, against 19 before;
+- one member's owned top reads Suzume, Jojo Rabbit, Lars and the Real Girl, Schindler's List, Your
+  Name, Wolf Children;
+- the other's reads Terminator 2, Die Hard, GoodFellas, Unforgiven, The Terminator, Alien.
+
+**The decision.** The fold-in fits, cross-validates and serves ⟨v_u, d(t)⟩. d(t) is e(t)'s unit
+direction, weighted:
+- by its gate when the coordinate is the Backbone's alone;
+- by 1 when the Cold Tower contributed to it;
+- a zero row contributes zero.
+
+One helper (`scoring/backbone.directions`) is the only reading of the coordinate, so decision 235's
+step-18 invariant holds.
+
+`backbone.coordinate`, `title_placement.e_hat`, `blend_ratios` and §6.0's model line keep the
+unscaled coordinates. Decision 236's contract question stays open for the artifact itself, and the
+measurement goes upstream with it. (Decision 503, in this block, is the corpus's answer: E is
+support-weighted.)
+
+The per-user (λ, β) search, BETA_GRID, BETA_MAX = 0.8 and the noise-floor rule are unchanged.
+
+`user_vector` records the geometry it was fitted in (0031). A fit in another geometry is refitted by
+the next tick without the debounce, and `title_prior` is rewritten with it. §5.1 gains one
+paragraph.
+
+**Cost.**
+- One migration column, shared with decision 471.
+- One rewrite of every `user_score` partition on the first tick after the upgrade.
+- A re-read of Tonight's D threshold (decision 217), because user_score's spread changes.
+  Owned-title sd is now 0.81 and 0.95 for the two live members (max 2.26 and 2.09), against 0.57 and
+  1.08 (max 3.13 and 13.27) before.
+- The λ grid now acts on rows of length ≤ 1. λ 1, the grid's low end, is chosen for both members, so
+  fits pinned at the grid's edge are to be watched.
+
+### 470. Placement reconciliation also places every seed-list title and every title a member has a verdict on
+
+**What the spec says.** §5.3: "Placement reconciliation: any owned title lacking a coordinate gets a
+feature vector built from DB data per the feature contract … and runs §8 stages 9–10 only." §6.1
+seeds the first run from the 100-title `seed_list`. §12's M2 criterion counts owned titles only, and
+nothing requires a rated title to have a coordinate.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+21 of the corpus's 100 seed-list titles are unowned rows masked by the corpus's 20% evaluation
+holdout (every fifth title by rating count). Their crowd support runs from 671 to 126,506 ratings;
+Ocean's Twelve, Hannibal and Lady Bird are among them. They have no coordinate.
+
+As a result, about ten of each member's sixty film verdicts reached neither the fold-in nor the
+Ledger: a sixth of the sitting that §12's criterion counts on.
+
+The admin-only `all_missing` scope would place every uncoordinated title (11,123 on that install),
+which is not a nightly job.
+
+**The decision.** The sweep's work list (`owned_missing`, and `reimport`'s) covers every title
+lacking a coordinate that is:
+- owned;
+- on the seed list; or
+- carrying a verdict from any member. Superseded verdicts count too, because §5.2 reads them.
+
+These titles are placed through the same stages 9–10 and stamped the same way. A title with none of
+the three is left alone.
+
+A placement newer than a member's fold-in makes that fold-in stale on the next tick, so a newly
+placed rated title reaches the fit the same day.
+
+§6.6's owned counters and the "New in the library" shelf keep reading `is_owned`. §5.3's row gains
+the two clauses.
+
+Upstream, the corpus is asked to ship a production Backbone without the evaluation holdout. That is
+the real repair (decision 503); after it, these rows carry Backbone coordinates of their own.
+
+**Cost.**
+- A few dozen tower placements per household (21 on the first).
+- `title_placement` rows and a 'cold_tower' stamp for unowned titles.
+- Until the badge is repaired (C4.12), those titles wear the "new — no crowd data" badge wherever an
+  unowned title is shown. Decision 475 repairs it in the same wave: the badge admits only titles
+  with no crowd rating.
+- It must not land without decision 469. Read raw, the rated titles' ê (norm about 30) are the
+  highest-leverage rows in every fit. Measured: the old reading with them placed puts 9–10 tower
+  placements in each member's owned top-12, and the all-title top-30 at a median crowd support of 5
+  ratings.
+
+### 471. The Personal Ledger reads the same gate-weighted directions as the fold-in
+
+**What the spec says.** §5.2: `s = μ + ⟨v, e⟩ + r`, with generalisation "via the 64-d user vector"
+over §5.1's coordinates. Decision 236: no rescaling while the corpus answers the scale question.
+§6.3: the board orders a tier by s, and σ drives the badges and the comparison queue.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+The Ledger read the raw coordinate, so every unobserved direction of v was multiplied by the row's
+norm. On the live boards:
+- Zootopia (a Cold Tower placement, ‖ê‖ 78, one "liked") sat at #1 of the S tier with s 21.8 and σ
+  36, above The Intouchables, which had won its duels.
+- 147 of one member's unseen owned films were predicted S.
+- A title card printed σ ±26.
+- Because a duel moves a title by tenths while ⟨v, e⟩ separated titles by tens, the board kept
+  showing the opposite of an answer just given.
+
+The off-scale latents came mostly from Backbone support-scaling (The Royal Tenenbaums ‖E‖ 124.9,
+Lost in Translation 127.4, against The Intouchables' 3.2), so a per-source rescale would not help.
+The row's direction does.
+
+Measured over corpus raters (verdict arm; unobserved-title order at 30/60/100 labels):
+- today's bundle: from 0.3405 / 0.3678 / 0.4006 to 0.3948 / 0.4149 / 0.4762;
+- the simulated production Backbone: from 0.3688 / 0.3963 / 0.4324 to 0.4109 / 0.4247 / 0.4801.
+
+On the simulated live boards, σ_prior falls from as high as 44 to at most 1.35. The Intouchables
+leads, and Zootopia falls to 15th.
+
+**The decision.** `ledger/observations.standard_embeddings` hands the fit decision 469's d(t)
+through the same helper, so the Ledger and the fold-in read one coordinate.
+
+`ledger_fit` records its geometry (0031). `load_cache` refuses a fit in another geometry, as it
+refuses another bundle's, and the 60 s refresh tick refits it.
+
+Nothing else changes:
+- the four arms;
+- the constants in `ledger_hyperparams.json` (λ_ridge 3);
+- the cutpoint prior;
+- σ's Laplace diagonal.
+
+§5.2 gains one sentence.
+
+**Cost.**
+- Every board is refitted once after the upgrade.
+- Unobserved titles' s now spreads like the prior (sd about 0.4–0.55). On a board with no tier edits
+  the prior cutpoints put S above s ≈ 2.44, so S and F empty out until a person drags a title there.
+  Liked titles land in A+ or A, and the predicted S and F badges on unseen shelf cards disappear.
+- That exposes M3-open-points §2.8 (the measured tier shape is realised on the standard-logistic
+  scale) rather than causing it. Settling it stays open under M3-open-points §2.8, and this wave's
+  Rank decisions (494-496) do not take it; a board that was S only through off-scale coordinates was
+  not a board the person had written.
+
+### 472. Catalog search lists the best match first
+
+**What the spec says.** §6.0 M0 asks for "a paginated list over `title`, partitioned by kind (§4.1
+rule 5), filter/search on title/alias/genre/decade/seen-state". It names no order, so a search kept
+the catalog's `ORDER BY year DESC, lower(name), id`. Decision 18 lets a surface that "merely lists
+in a kind-independent order — the catalog, sorted by year or title" interleave the two kinds.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test (build ed1f690, bundle v20260925, 874 owned titles).
+
+The search predicate is a literal substring match over the name and every alias. Short queries
+therefore match inside words and inside foreign aliases, and the year order put the newest noise
+first:
+- "up" found Up at position 131 of 362, behind "Godzilla x Kong: Supernova".
+- "heat" found Heat tenth, behind a National Theatre recording and the Moldovan alias of Frozen II.
+- "knives out" found Knives Out third.
+
+The grid pages 60 titles at a time, so reaching Up took two extra taps.
+
+Ordering by match quality alone is not enough:
+- "godfather" would then lead with a 1991 "Godfather" (25 ratings), because the article makes the
+  1972 film only a prefix match.
+- A raw crowd count as the tie-break compares counts on two scales (film median 265, series median
+  0). That is the cross-kind crowd ranking §4.1 rule 5 was measured against: "the bear" put the 1988
+  film above the 2022 series.
+
+**The decision.** With a non-empty search, the catalog is ordered by match quality. The predicate is
+unchanged, and so are the count line and the hidden count.
+
+Name, alias and query are normalised the same way in SQL: lower case, every run of non-alphanumerics
+becomes one space, and the text is padded with a space at each end. The tiers are:
+- 0: the whole text.
+- 1: the phrase starts it.
+- 2: a word starting it begins with the phrase.
+- 3: the phrase as whole words anywhere.
+- 4: a word anywhere begins with it.
+- 5: any substring.
+
+A leading "the", "a" or "an" is read both ways, and the better tier counts. A title's match is its
+name's tier doubled, or its best alias's tier doubled plus one, so a name beats an alias of the same
+quality.
+
+Within one match, ties break in this order:
+1. Owned titles first.
+2. The crowd rating count (`title_prior.item_n`), as a percentile within the title's own kind over
+   the selected kinds.
+3. Year, newest first.
+4. Name, then id.
+
+This is a total order, so OFFSET pages neither repeat nor drop a title (M4.9 finding 11). Without a
+search the year order stands.
+
+Decision 18's permission to interleave extends to this order. Match quality is a property of the
+text, not of a kind. The crowd percentile only breaks ties inside one tier, is read within each
+kind, and is never a score.
+
+The order is built in `db/library.py` and serves both `/api/titles` and `/api/home`'s grid.
+
+Measured read-only on the household install: heat, up, godfather, matrix, shining, alien, knives
+out, dark knight and the bear each lead with the title a person means. A search costs 80-200 ms.
+
+**Cost.** No schema change, no index and no extension. A broad search pays two lateral reads per
+matched row and one per-kind window over the catalog's priors. Normalisation does not fold accents,
+so "amelie" still reaches Amélie only through its alias. `scoring/serve.py`'s ranked read keeps its
+own `q` predicate, because it ranks by score.
+
+### 473. The genre facet is one canonical vocabulary, read across the structured sources
+
+**What the spec says.** §6.0 M0 names genre as a catalog filter, and §6.3 names it as a Rank filter
+("**Filters:** genre, kind …"). Neither names a vocabulary. §4.1 keeps every source's rows ("one
+block = one droppable source") and dedupes at read time. §4.3's feature contract builds the Cold
+Tower's 179-column genre block from `title_genre` as imported.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test.
+
+The facet was a raw `SELECT DISTINCT genre` over six sources with no normalisation, and the
+predicate was an exact string match. On the household install that offered 434 values for films and
+656 for both kinds:
+- "Action" appeared beside "action", and each missed the titles only the other source had tagged.
+- 591 Wikidata free-text labels appeared, 169 of them used once, with every adult label among them.
+- A 37-character option ("horror based on children's characters") made the Genre control wider than
+  an iPhone 13, and Home scrolled sideways.
+
+The structured sources carry only 34 values once case is ignored.
+
+**The decision.** The facet offers TMDB's genre names, each once, over the selected kinds:
+- The movie list without "TV Movie": Action, Adventure, Animation, Comedy, Crime, Documentary,
+  Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Science Fiction, Thriller, War,
+  Western.
+- The four the TV list adds: Reality, Talk, News, Soap.
+
+A genre matches a title that any structured source (tmdb, omdb, trakt, tvmaze, jellyfin) tags with
+it, in any case or spelling. One mapping table in `db/genres.py` does this:
+- TMDB's combined TV genres answer both halves: "Action & Adventure" is Action and Adventure,
+  "Sci-Fi & Fantasy" is Science Fiction and Fantasy, and "War & Politics" is War.
+- "sci-fi" and "science-fiction" are Science Fiction.
+- "anime" and "donghua" are Animation.
+- "kids" and "children" are Family.
+- "musical" is Music, "suspense" is Thriller, "reality-tv" is Reality and "talk-show" is Talk.
+
+Labels the table does not name are not facet values. These include biography, sport(s), film-noir,
+superhero, supernatural, espionage, legal, medical, game-show, holiday, short and adult. Their
+titles stay in the catalog.
+
+Wikidata's labels are never read by the facet or by its predicate. `title_genre` keeps every
+per-source row as imported, so the Cold Tower's genre block is untouched.
+
+One predicate serves the catalog, Rank's board and the ranked read in `scoring/serve.py`.
+`/api/titles` answers a genre outside the vocabulary with a 422 rather than an empty grid; Rank's
+board returns no titles for it. Home also bounds its dropdowns in CSS so that no future option can
+widen the page.
+
+**Cost.** The mapping is owner-visible and opinionated in places (anime to Animation, suspense to
+Thriller). It drops labels some households use, such as sport and biography. `lower(genre) =
+ANY(...)` cannot use `title_genre`'s genre index, so the EXISTS probes the primary key per title. A
+client still holding a raw label from before gets a 422.
+
+### 474. Home's kind control is one switch: Films, Series, Both
+
+**What the spec says.** Decision 18 (owner, 2026-08-29) says: "Kind becomes two independent toggles,
+Films and Series, either or both active, never neither". Its amendment text adds "deselecting the
+last active one re-selects the other". It also gives this reading of §4.1 rule 5: "a surface that
+ranks — Rank, Tonight, the Home shelves — renders two headed sections and never one interleaved
+ranking … a surface that merely lists … may interleave freely". Proposal 32 labels the control
+"Films / Series". The order of the two headed sections is not specified.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test.
+
+With Films on, a member tapped Series to see series. They got the film shelves with a Series row
+slotted under each one. The toggles add kinds, and Home rendered shelf by shelf: a Films row, then a
+Series row. A member reads a control labelled Series as a switch.
+
+The code had also drifted from decision 18's text. A tap on the last active toggle was refused
+instead of re-selecting the other kind, and e2e asserted the refusal.
+
+**The decision.** On Home the kind control is one switch with three positions, Films, Series and
+Both, with exactly one pressed. Films or Series selects that kind alone; Both selects both.
+
+Every position selects at least one kind, so decision 18's "never neither" holds by construction.
+Its "deselecting … re-selects the other" sentence is superseded on Home, where nothing can be
+deselected.
+
+Both is a selection, not a merge. A ranking surface still renders one kind-headed section per kind.
+With Both selected, Home renders two kind regions, Films then Series. Each carries the §6.0 shelves
+in the table's order, built from the kind-grouped `sections` the payload already carries.
+
+With one position selected, the count line still names what the other kind holds, and a person
+filter on Both is still a complete filmography. Switching still closes any open title card, as
+proposal 32 requires.
+
+The server's canonical kind order and the `kind` query set are unchanged. Rate and Tonight keep
+their own kind controls.
+
+**Cost.** Three buttons instead of two. The e2e helpers, and the coverage rows and tests that spoke
+of "toggles", are restated. Reaching Both from Films is still one tap.
+
+### 475. Home's shelves claim their titles in an order, and shelf 1 ranks by likeness to its anchor
+
+**What the spec says.**
+- §6.0 M2 fixes six shelves and their why-lines, and says "a shelf that cannot say why it exists
+  doesn't ship". It neither forbids nor requires a title to repeat across shelves.
+- Row 1 gives only "Because you put *{anchor}* in {tier}" / "shares {term} + {term} with it".
+- Proposal 24 (provenance only) adds that membership is two shared DNA terms and ordering is by
+  ledger score. The code chose the anchor by the highest Ledger `s`, and the pair by how many titles
+  it covered.
+- Row 4's sweet spot pins its 0.70 cutoff in code (`SWEET_SPOT_MIN_CDF`), and the code measured it
+  against every scored title.
+- §8 stage 10 names the "new" badge by the absence of crowd data "until ratings accrue".
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test.
+- Every score-ordered shelf drew from the top of one `user_score` list. Raiders of the Lost Ark,
+  American History X and Dunkirk each appeared twice in one render, and Home read as narrow and
+  impersonal.
+- Shelf 1 named its anchor's most generic pair. Zootopia's became "thought-provoking + social
+  commentary", led by American History X and Schindler's List, while the household owned Coco,
+  Inside Out, Monsters, Inc. and Toy Story unseen.
+- The anchor was the title with the highest `s`. A Cold Tower coordinate had put Zootopia at 21.8,
+  against 9.7 for the next title.
+- The sweet-spot cutoff was measured against 9.5k scored titles, mostly unowned, so the owned
+  library's mean percentile sat at 0.42-0.46.
+- "New in the library" admitted crowd-rated titles that the bundle's evaluation holdout serves from
+  the Cold Tower. 161 of its 180 film candidates had ratings; Raiders had 192,061.
+
+**The decision.**
+
+1. **Claim order.** Home's shelves are built per kind in a claim order and rendered in the table's
+   order.
+   - "Your top picks" (formerly "Top of your ledger") claims first and keeps its whole list, because
+     its why-line promises the person's highest.
+   - The other ranking shelves follow in the table's order. Each leaves out titles that an earlier
+     shelf of the same kind already shows, and fills from its own next candidates up to the cap
+     of 12.
+   - The frontier shelf picks its term using only titles not already claimed.
+   - The minimum of three applies after the claim. A shelf the claim leaves under it is absent, with
+     a reason that names the claim.
+   - "New in the library" is exempt. It neither claims nor is thinned, because it reports an arrival
+     rather than ranking one.
+2. **Shelf 1.**
+   - The anchor is the seen, rated title with the highest tier the board shows (the latest
+     tier_edit, otherwise the fitted tier). Ties go to the latest live verdict, and only then to the
+     Ledger's `s`.
+   - Its members are the unseen owned titles sharing at least two of the anchor's eight best-named
+     tags. They are ordered by how many tags they share, then by the person's score.
+   - The named pair is the one whose top-12 carriers share the most anchor tags in total, with ties
+     going to the best-named pair. Every card therefore carries both named tags, and proposal 24's
+     rule holds.
+3. **Sweet spot.** Its 0.70 cutoff is measured against the owned titles of the kind, which is the
+   library that this shelf and Tonight's pool rank. Its order stays §6.2 step 3's plain average.
+4. **"New".** "New in the library" and the card badge admit only titles with no crowd rating
+   (`item_n` null or 0), whatever `e_source` says. That is §8 stage 10 as written.
+
+Measured read-only on the household install: Patrick's shelf 1 becomes the Mission: Impossible,
+Bourne and Bond films, and Jenny's becomes Avatar, Toy Story, Monsters, Inc. and Shrek.
+
+**Cost.**
+- Thin libraries lose shelves under the minimum more often; the reason names the claim.
+- The first displayed shelf is the one that loses titles to "Your top picks".
+- A title can appear on both a ranking shelf and "New in the library".
+- Among titles with the same tier and the same verdict, the anchor is still chosen by `s`. An
+  inflated Cold Tower `s` can still pick it until the model cluster repairs the Ledger's scale. This
+  decision only stops that inflation from choosing the members.
+- test_home's fixture was re-derived so each shelf has a population of its own.
+
+### 476. Home's shelf table in the member register; "you put" only for a title the person placed
+
+**What the spec says.**
+- §6.0 M2's table fixes six headlines and why-lines verbatim. Among them:
+  - "Top of your ledger" / "clean item prior + your fold-in, blended at your fitted β (§5.1's
+    measured optimum is 0.2)"
+  - "You've never watched anything *{term}*" / "unvisited region of DNA space next to what you like"
+  - "You and {other} both rate these highly" / "the shared sweet spot — doubles as the Tonight
+    prior"
+  - "New in the library" / "placed by the Cold Tower — no crowd data yet"
+- Decision 187 makes shelf 1's "Because you put {anchor} in {tier}" read the latest tier_edit and
+  "fall back to `ls.tier` where none does".
+- Decision 117 gated structured model keys only, so every number built into a why-line or caption
+  reached members.
+- Decision 486 sets the member register: model numbers and model nouns appear only behind Show the
+  model, spec references never appear, and vocabulary terms are shown by their label.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test.
+
+With Show the model off, both members read:
+- "blended at β 0.20" and "cos 0.41"
+- "both of you land above 0.70 on your own ledgers"
+- "placed by the Cold Tower — no crowd data yet"
+- "one exploratory slot in six · costs about a point of top-hit rate"
+- "Shelves need a ledger"
+- raw tag ids such as "register.plays_it_straight"
+
+One member was told he had put Mission: Impossible in S when he had tiered nothing; no tier_edit row
+existed for anyone. The other was told that she and Patrick "both rate these highly", over a caption
+saying neither had seen them. Home's count line stated the whole catalog above shelves that hold
+only owned titles.
+
+**The decision.** §6.0's table, in the member register:
+
+| Shelf | why-line |
+|---|---|
+| Because you put *{anchor}* in {tier} — only for a title with a tier_edit; otherwise Because you liked *{anchor}* (a live liked verdict) or More like *{anchor}* | "shares {label} + {label} with it" |
+| Your top picks | "the ones we think you'll enjoy most — rewatches included"; for a profile never fitted: "what most people rate highest, until your own ratings take over — rewatches included" |
+| You've never watched anything *{label}* | "close to {label}, which you like" (caption: "a step outside what you usually watch, on purpose") |
+| You and {other} would both enjoy these | "neither of you has seen them — a good pick for a night in together" |
+| Under 110 minutes (series: Episodes under 45 minutes) | "for a school night" |
+| New in the library | "no outside ratings yet, so we placed them by what they're about" |
+
+The rules around the table:
+- Decision 187's fallback headline is withdrawn; its badge ruling stands.
+- The numbers each ordering used (β and its optimum, the evidence k, the cosine, the CDF cutoff)
+  travel in the section's `why_numbers`. The server strips that key with the rest of decision 117's
+  gated keys, and the shelf prints the numbers in the data voice when Show the model is on.
+- Tags are named by their vocabulary label.
+- The "new" badge's sentence reads "Cards marked 'new' have no outside ratings yet — we placed them
+  by what they're about". It appears once per row and once above the catalog grid; decision 278's
+  placement stands.
+- The first-week state reads "Rate a few titles to get your shelves." / "your suggestions get about
+  three times more personal between 5 and 100 ratings — aim for 50–100 in your first sitting or
+  two".
+- Over the shelves, the count line states the household's owned titles ("612 films in your library ·
+  262 series hidden"). The grid keeps the catalog's count.
+- Tier letters on shelf cards name themselves: "tier B, as on your Rank board", or "our guess: tier
+  S if you rated it — you haven't seen it". They are explained once per screen, and a guess is drawn
+  outlined.
+
+**Cost.** §6.0's M2 table is replaced. The §5.1 optimum stops being quoted to members and is one
+switch away. Test pins in test_home, test_acquire_pipeline, ops/m51_exit_criterion.py,
+test_static_contracts and e2e 10-home are restated.
+
+### 477. Tonight reads every member on one scale: rank-standardised over the frozen pool, sd 1.0
+
+**What the spec says.** §6.2 step 4 defines the tonight score as "their Ledger score for that title,
+their stable taste, plus a mood tilt". Steps 3 and 5 take the "plain average" of member scores. The
+`boundary_z` paragraph reads "a §5.1 score whose two halves are standardised to unit variance over
+the reference population" and says 0.6 "lands the median round at ~11 pairs". Decision 214 argued
+that `prior_var = 1.0` "is the variance of the pool it is applied to" by construction. Decision 217
+recorded the owned-pool score sd as 0.50.
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test. The first real evening (session QC-4397, build ed1f690, a 719-title frozen pool) refuted
+both premises:
+- The owned-pool score sd was 1.081 for Patrick and 0.572 for Jenny.
+- The cf half is standardised over roughly 9.5k mostly non-owned titles. It ran to 44.3 on Raiders
+  of the Lost Ark with no verdict behind it: owned cf sd 3.16 against 0.45 elsewhere.
+- Patrick's top four read 13.28 / 9.43 / 6.52 / 5.82. Only two titles straddled a cut at 6.17, one
+  answer moved both clear, and his round reported `converged` at pair one.
+- Step 5's plain average of raw scores was then his Ledger alone: Raiders 8.07, T2 4.00, Aliens
+  3.66. Jenny's six answers could not move the slate; Eternal Sunshine would have needed to reach
+  8.3.
+
+The round was calibrated for a shape, not just an sd: BOUNDARY_Z was swept on Gaussian pools.
+
+**The decision.**
+- At Start, `play.start` freezes a scale marker (`rank_normal_sd1`) with the pool.
+- For a room carrying the marker, every Tonight read of a seated member's Ledger uses that member's
+  rank-based normal score over the frozen pool: Φ⁻¹((r − 0.5)/n) × 1.0, where r is the member's own
+  ascending rank and ties are broken by title id. That covers the round's prior, a profile-less
+  guest's pool prior (step 3's plain average as the evening reads it), step 5's per-participant
+  prior and D's input.
+- The raw §5.1 scores stay in the snapshot as provenance.
+- A room without the marker keeps reading raw scores, so a deploy never moves an evening in flight
+  (the hold-out nonce's reason, decision 223). An unknown marker is refused.
+- Solo's sharpen round standardises over its own per-request pool.
+
+The scale is sd 1.0, chosen from the n_pool≈700 sweep. On the Gaussian harness the median round is
+14.5 pairs at sd 0.5, 12.5 at 0.75 and 11.5 at 1.0, and 1.0 is the variance decision 214's prior
+argument assumes.
+
+BOUNDARY_Z stays 0.6. The calibration paragraph and its pinned sweep are restated on the new scale
+over pools of 120, 300 and 700:
+- z = 1.0 converges 0, 3 and 1 times in 20, at the full cap.
+- z = 0.6 converges 17, 13 and 19 times, with medians of 9, 11 and 10.
+- z = 0.15 converges 20 in 20 at a median of 1.
+
+The waiting line's estimate becomes `TYPICAL_PAIRS = 10` (the film-night median), never the cap.
+
+**The balance between Ledger and tilt is stated, not rescaled.** The Ledger spans the pool at sd
+1.0, the unit the round's `prior_var` and `BETA` are written in. The tilt adjustment keeps its own
+units. Replaying the first evening on the new scale:
+- Patrick's one answer moved titles across the pool by sd 0.063 (range −0.73 to +0.53).
+- Jenny's six answers moved them by sd 0.178 (range −1.01 to +1.31).
+- The round's posterior moved the titles her answers named by up to 2.47.
+
+So stable taste sets the order. The tilt nudges a typical title by under a fifth of a pool standard
+deviation, and the titles most like a person's answers by up to about 1.3. Six answers are enough to
+put Crazy, Stupid, Love. and Eternal Sunshine at the top of Jenny's own order, while neither
+member's units can outvote the other's. Plain averaging is unchanged; it now averages scores that
+mean the same thing for each member.
+
+**Cost.**
+- Rank standardisation discards intensity. A member's runaway favourite counts for the pool's top
+  quantile and no more. That is intended, and it changes every evening's ordering.
+- §0's −0.012 'nothing dominates plain averaging' was measured on corpus scores and is not
+  re-measured on standardised inputs.
+- Small pools now resolve in few pairs, as a real small library would, so integration fixtures that
+  needed long rounds were widened to household size.
+- §5.1's cf tail is upstream and not fixed here. This decision makes Tonight robust to it; Home and
+  solo browsing still see the raw tail.
+
+### 478. D is read on the standardised scale and its threshold is 0.40
+
+**What the spec says.** §6.2 step 5: "Ledger divergence **D ≥ 0.20** (~14.5% of nights; below that,
+decide silently)". Decision 217 said 0.20 is not calibrated: D was thresholded against raw
+user_score assumed at sd 0.50 and fired on 35–57% of top candidates. It said the correction "needs
+one evening of real answers".
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test: that evening has now happened. On raw scores it measured D = 5.07 on Raiders, a title
+both members rank first by their own orders. That shows D was measuring the raw scale, not the
+household. Under decision 477, D reads standardised scores, and 0.20 means nothing on that scale
+either.
+
+**The decision.** D keeps decision 217's formula: mean − min of the seated members' Ledger scores
+for the leading candidate, guests excluded. It now reads each member's rank-standardised score over
+the frozen pool.
+
+`D_THRESHOLD` = 0.40, inclusive, calibrated on the evening's own Ledgers. The simulated nights
+re-standardise random 40–100% sub-pools of the 719-title frozen pool each night, and choose the
+leader by the plain average of tonight scores with per-title mood noise of sd 0.2, 0.4 and 0.8. The
+leader crosses 0.40 on 16.7%, 13.0% and 14.6% of those nights, which is §6.2's ~14.5%. On the real
+evening itself D on the leader is 0.00.
+
+`divergent_answers` still triggers the facet split (decision 217's measurement is unchanged and not
+acted on). It does not trigger the person split of decision 479.
+
+**Cost.** One household is one household. Gaussian households with tastes uncorrelated at the top
+cross 0.40 far more often (7–83% across ρ from −0.3 to 0.8 and pools of 120–700). Real Ledgers share
+the crowd prior at the top and a Gaussian copula does not. The threshold is re-read once more
+evenings exist; `session_result.conflict` records every surfaced split. The spec's 0.20 changes.
+
+### 479. A split with no axis is surfaced by person under its own reservation; the stake guarantee is not adopted
+
+**What the spec says.** §6.2 step 5 says a hard split "is surfaced with the alternative in hand,
+never silently averaged". It also says: "A surfaced split requires the §6.4 axis artifact ... The
+corpus bundle ships no axis artifact, so on release data this branch never fires and every D ≥ 0.20
+evening is decided silently (decision 173)". Decisions 220 and 221 define `session_result.reserved`
+as the axis counterweight, labelled "the other side of the split".
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test. The release-data branch is the only one a household ever meets. "Decided silently" is
+what happened to an evening where the second member's own top titles never reached the ballot and
+she approved one title of four.
+
+**The decision.** When no axis artifact is loaded and D on the leader is at or past the threshold
+(decision 478), the split is surfaced **by person**. The trigger is D alone; the divergent-answers
+trigger does not fire this branch, because decision 217 measured it firing on 84–97% of evenings.
+- The leader keeps slot 1.
+- Seats are visited in the order the leader serves them least, lowest tonight score on it first.
+- A seat none of whose own top three tonight scores is among the finalists gets one. That is a
+  plain-top-three finalist that is theirs if there is one. Otherwise a slot is **reserved for that
+  seat**, holding its highest tonight-scored title not already placed.
+- Reservations take slot 3, then slot 2 (decision 221's shape). There are still exactly three
+  finalists.
+
+The reservation is its own discriminator: `session_result.reserved_for`, a participant id added by
+migration 0033, with a CHECK that no row is reserved both ways. It is never `reserved`, and the
+reveal labels it "{name}'s pick".
+
+The headline is fixed copy, never a model's:
+- "You're pulling different ways tonight — here's one for each of you." when every seat has one of
+  its own top three among the finalists.
+- "You're pulling different ways tonight." when the three slots cannot serve every seat (four or
+  more seats pulling apart).
+
+The explanation is D's bounded line (AUC 0.610).
+
+In the member register (decision 486), a member with Show the model off gets the conflict without
+D's number, with D's line as a plain sentence. For the facet split they also lose the sentence "The
+axis is zeroed, not averaged." The stored row keeps the verbatim copy, and `copy.for_member` applies
+the register where the reveal payload is built.
+
+**The stake guarantee drafted beside this (a construction rule on silent nights) is not adopted.**
+It was re-simulated after decision 477. On silent nights, every member held a ballot title in their
+own top decile in 100% of the real household's simulated nights and at least 96% of Gaussian
+households' (ρ from −0.3 to 0.8, pools of 120–700). On the real evening, replayed, Jenny's own ranks
+for the four ballot titles were 4, 7, 8 and 47 of 719. Where a household genuinely diverges, D fires
+and this decision's reservation serves it.
+
+**Cost.**
+- A new column (0033) and a second reserved label beside 54d's.
+- On the real household's simulated nights the person split fires on about 14.5% of nights. On about
+  half of those, a seat's own pick displaces the group's third-ranked title. That is a small cost in
+  predicted group score in exchange for having the alternative in hand.
+- Stricter stake measures (two of four ballot titles in a member's own top ten) stay unmet for
+  uncorrelated households, and are deliberately not a construction rule (§0 row 3).
+- When axes ship, the facet and person splits do not meet: the person branch fires only with no axis
+  loaded.
+
+### 480. 'Not tonight': up to three vetoes a room, read from the extracted tier only
+
+**What the spec says.** §6.2 step 1's controls are kind, runtime budget and rewatch. The preamble
+deletes the mood-question round. §4.1 rule 2 forbids salience and confidence thresholds. §6.4
+sanctions presence predicates (`NOT has(...)`).
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test. A member who wanted nothing violent was shown American History X, her own Ledger's #6 of
+719 via the cf tail, and had no way to say 'not tonight'. Six answers could reorder titles but never
+exclude one.
+
+**The decision.** In the lobby, before Start, any seated member may set up to three vetoes. That
+includes members who are not hosting, since the member who needed it was not the host. The fixed
+list is authored in `tonight/pool.py` against vocabulary v1:
+- violence: mood.violent, themes.violence, mood.gory
+- sexual violence: themes.sexual_violence
+- horror: mood.terrifying, themes.slasher, themes.body_horror
+- harrowing: sensibility.harrowing, sensibility.emotionally_devastating, mood.devastating,
+  mood.bleak
+
+The room holds one set, replaced on each change, in session.context.vetoes; there is no new column.
+
+At Start the pool excludes every candidate carrying a vetoed term **in the extracted
+(quote-verified) tier**. The read goes through the `dna_tagged` view with the tier discriminator
+named in the predicate. It is a presence predicate, never a salience, confidence or weight
+threshold. The projected tier alone vetoes nothing. On the live install's 760 owned films:
+- Both tiers would remove 295 films under 'violence', including Raiders of the Lost Ark and Aliens
+  by projection alone.
+- Both tiers would remove 297 under 'harrowing', including Eternal Sunshine of the Spotless Mind by
+  projection alone.
+- The extracted tier removes 99 and 154.
+
+The vetoes are frozen with the pool and shown in the lobby and on the open-rooms row ('not tonight:
+violence'). A pool the vetoes empty is refused, naming them ('... or lift the veto on violence'). A
+term absent from the active vocabulary matches nothing. The mood-question round stays deleted: a
+veto is a filter, not a mood estimate, and nothing outlives the evening.
+
+**Cost.**
+- The term mapping is authored content with no measurement behind it.
+- An untagged title (32% of the library) can never be vetoed.
+- A miss in the extracted tier lets a violent film through.
+- A member can veto most of a small library; the refusal says so.
+- The list is keyed to v1 vocabulary ids and must be re-read if the vocabulary changes.
+
+### 481. A room has a join link, and the invitation carries it
+
+**What the spec says.** §6.2 step 2: "Join channels, all equivalent: push ...; room code / QR in the
+lobby; a live in-app lobby banner ...; the open-rooms list". The QR is owed (M4-open-points).
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test. The lobby said "Read the code out, or send the link", but no link existed anywhere. The
+push invitation opened the bare surface.
+
+**The decision.**
+- Every room's join link is `/tonight?room=CODE`, the URL half of what the QR would encode.
+- The lobby's Share control opens the phone's share sheet. Where there is no share sheet, it writes
+  the link on screen and copies it when the clipboard allows.
+- The push invitation's `url` is the same link.
+- Opening the link on a signed-in device joins that room through the same idempotent join every
+  channel uses, so a member already seated gets their seat back.
+- The parameter is removed from the address bar once the link has been followed.
+
+The QR remains owed.
+
+**Cost.** A tap while logged out loses the parameter at the login redirect, because the login page
+returns to Home; the code is still in the invitation's body. The link is only as private as the room
+code, which is not personal data.
+
+### 482. The wildcard is drawn from the best twentieth of the ranking
+
+**What the spec says.** §6.2 step 5: "plus one exploratory pick honestly labelled ('a step outside
+your usual' — one exploratory slot in six)". §6.4 describes explore picks as "near the user's liked
+regions but unvisited ... ranked by prior + proximity". `combine.wildcard_from` maximised DNA
+distance from the finalists over the whole pool.
+
+**Why it changes.** This comes from the owner instruction of 2026-09-25 after the first household
+user test. The evening's wildcard was City of God, the most distant title of 719, at rank 105 (group
+score 0.416). The code implemented only the 'unvisited' half of §6.4 and ignored the prior.
+
+**The decision.** The wildcard is the candidate farthest in DNA terms from the finalists' centroid,
+taken from among the best twentieth of the slate's ranking and never fewer than twelve candidates
+(`WILDCARD_SHARE = 0.05`, `WILDCARD_FLOOR = 12` in `tonight/combine.py`). Replayed on the first
+evening under decision 477, the wildcard is The Truman Show at rank 29. The honest label is
+unchanged.
+
+**Cost.** Both constants are unsourced; there is no measurement behind the prior bound. That is why
+they are recorded as a decision in one place (decision 176's objection) rather than tuned. A
+wildcard nearer the top is less of 'a step outside'. §6.4's −1 pp top-hit cost is not re-measured.
+
+### 483. Posters ship: decision 190 is reversed and decision 178's poster ruling is adopted, as the measurements amend it
+
+**What the spec says.**
+- §6.8: "Poster-forward 2:3 cards." §6.1: "two posters are the buttons". Neither names where the art
+  comes from.
+- Decision 190: "No posters in M4.9. No `/api/art` route, no `<img>`, proposal 13 stays unadopted".
+  It left `PosterCard.svelte`'s tinted panel as "the designed state until one is adopted".
+- Decision 178(4) had adopted proposal 13 with four amendments:
+  - a host filter at import;
+  - the w500 segment rewritten to w342, never prefixed;
+  - same-origin art from `/api/art/{id}/poster` over `/data/cache` with a 180-day re-fetch;
+  - the tinted panel as the designed state.
+- 178(4) reserved decision 175 for that adoption. 175 went to another ruling, and 190 then left the
+  poster ruling unadopted.
+
+**Why it changes.**
+- The first household user test ran on 2026-09-25 against build ed1f690, bundle v20260925 and the
+  household's real Jellyfin. Every choosing surface was a tinted panel: Home, the catalog, the sweep
+  and battle cards, and Tonight. Both members said they would not open the app again.
+- The art decision 190 held back was already on the install. Of 19,085 titles, 9,883 carry an
+  `image.tmdb.org` w500 URL, including all 888 owned and all 823 watchlisted titles. 157 carry an
+  `m.media-amazon.com` URL. `/data/cache` is mounted in both services and held no art.
+- Decision 190 deferred posters for cost, not principle. It asked whichever milestone took this up
+  to re-read three licensing facts: the stored value is a full URL, the IMDb-hosted art may not be
+  proxied, and the cache policy must stay within TMDB's terms. Each is honoured below.
+- Owner instruction of 2026-09-25 after the first household user test.
+
+**The decision.**
+- **The route.** `GET /api/art/{title_id}/poster` answers from this app's own origin. It sits behind
+  the session and §3.1's first-login lock like every other route, so a locked account gets 403.
+  - Its gate is `ActiveUserBrief`: the same `current_user` and `active_user`, on a pooled connection
+    released before the route body runs. The gating sweeps follow it (decisions 179, 225).
+  - No pooled connection is held while an upstream image is awaited.
+- **Sources, in order:**
+  1. The household's Jellyfin Primary image, for a title with a `jellyfin_id` (§8's exemption,
+     through §7.1's client).
+  2. Otherwise `title.poster_path`, when its host is exactly `image.tmdb.org` or `static.tvmaze.com`
+     over https (`art/hosts.py`). TMDB's `/t/p/w500/` segment is rewritten to `/t/p/w342/` and never
+     prefixed.
+  3. Otherwise the poster decision 484's lookup found.
+  4. Otherwise 404, and the card keeps the tinted 2:3 panel as its designed state.
+- **Import-side filter.** Card resolution skips an image URL on any host that allow-list refuses, in
+  the importer and in §8 stage 3 alike, so `title.poster_path` is servable by construction.
+- **What is never served.**
+  - `m.media-amazon.com` art is never fetched, proxied or stored.
+  - A redirect that leaves the allow-list is neither stored nor served.
+  - Only JPEG, PNG or WebP bytes under 2 MB are served, identified by their first bytes and sent
+    with `X-Content-Type-Options: nosniff`.
+- **The cache.** `/data/cache/art/{title_id}` holds the bytes plus a sidecar naming the sources they
+  answered for, and it answers only a request with the same sources.
+  - TMDB and TVmaze files are re-fetched after 180 days, and Jellyfin's after 7.
+  - A TMDB file standing in for a Jellyfin that errored is re-fetched after 1 day.
+  - "No image anywhere" is remembered for 7 days, and "a host did not answer" for 10 minutes.
+  - Concurrent misses for one title make one upstream request.
+  - The cache is droppable.
+- **Browser caching.**
+  - Every 200 is `Cache-Control: private, max-age=15552000`, never `immutable`. The URL names a
+    title, not a file. This amends 178(4)'s "TVmaze and Jellyfin files may be immutable".
+  - Every 404 is cacheable too: a day, half an hour while a lookup is owed, and ten minutes after a
+    failed host.
+- **The cards.** Every surface that draws a title's 2:3 card draws the art. `PosterCard` and
+  `RatePoster` render `<img alt="">` over the tinted panel, keyed on the title's `title_id` or `id`.
+  They drop the image on error, and the image takes neither the pointer nor the iOS callout (§6.1's
+  long press). Every other surface uses one of the two. No `<img src>` in this app points at a
+  third-party host.
+- **The no-egress switch.** `SPIELPLAN_ART_EGRESS` (default on) switches off every internet request
+  for art. `ops/compose.e2e.yml` sets it off, so e2e and CI never fetch an image from the internet.
+  The fake Jellyfin serves real images, so e2e still sees art.
+
+**Cost.**
+- One domain package (`art/`), one route, one dependency pair, one Jellyfin image read, one devstub
+  route and one fake-Jellyfin image route.
+- About 300 MB of `/data/cache` once every servable poster has been viewed at w342.
+- A changed poster takes up to 180 days to reach a phone that cached it, which is the trade decision
+  178 accepted.
+- This is engineering posture on TMDB's terms, not a legal finding. The TMDB logo slot on /account
+  stays the owner's drop-in (decision 298).
+
+### 484. A title with no servable poster is looked up on TMDB by the worker, and the answer is kept beside the title
+
+**What the spec says.**
+- §4.1 and decision 162 seed content once.
+- Decision 372 keeps every card field, `poster_path` included, as §8 stage 3's to write from the raw
+  store, and lets stage 2's adapters write only bytes and identity.
+- §8 stage 2 runs for acquired titles.
+- §1 puts acquisition in the worker ("queue consumer - sync, acquisition, extraction"). Decision 340
+  gives each host one declared policy.
+- Nothing says what a card shows for a seed title the corpus never fetched TMDB for.
+
+**Why it changes.**
+- After decision 483, 9,202 of the install's 19,085 titles still have no servable poster: 9,045 have
+  none at all and 157 are IMDb-hosted only.
+- 2,075 of them are warm and served by Rate every week, among them The Village, S.W.A.T. (2003),
+  Outbreak and Starman. At the 2026-09-25 test they made up 19 of Patrick's 61 verdicts and 11 of
+  Jenny's 66.
+- Every one carries a `tmdb_id` or an `imdb_id`, and the TMDB connector holds a key.
+- A lookup from the web process would run a second token bucket for `api.themoviedb.org` beside the
+  worker's drains, which decision 340 forbids. It would also be acquisition outside the worker.
+- Owner instruction of 2026-09-25 after the first household user test.
+
+**The decision.**
+- **Recording.** A poster view of a title with no servable poster records one row in a new table,
+  `art_lookup` (migration 0034). The web process asks TMDB nothing.
+- **Asking.** The worker's `art-lookup` job runs every 1800 s. It runs one after another with the
+  acquisition drain in the worker's tick, so `api.themoviedb.org` sees one bucket. It asks TMDB
+  through the polite fetcher:
+  - `/3/{movie|tv}/{tmdb_id}`, chosen by `title.kind`;
+  - when that id names nothing of the title's kind, or there is no tmdb_id,
+    `/3/find/{imdb_id}?external_source=imdb_id`, taking the result list that matches `kind`.
+- **Recording the answer:**
+  - `found`, with the `https://image.tmdb.org/t/p/w342/...` URL;
+  - `none`, asked again after 30 days;
+  - `failed`, asked again after a day.
+- **Queuing ahead of views.** The job also queues placed titles nobody has viewed yet, warm first,
+  behind the viewed ones, 300 per run.
+- **Nothing written on the title.** `title`, `title_meta` and the identity columns are never
+  written. Decisions 162 and 372 stand, the has:poster placement feature is unchanged, and the table
+  is droppable. It is excluded from the movie-data archive.
+- **Serving the answer.** The art route serves a found URL as decision 483's third source, fetched
+  and cached like any TMDB file. Until it lands, the card is the tinted panel and its 404 is
+  cacheable for one job interval.
+- **Degrading.** No key, no lookup. A key TMDB refuses stops the batch, and nothing is recorded
+  against the titles. With `SPIELPLAN_ART_EGRESS` off, nothing is asked.
+
+**Cost.**
+- One TMDB API call per posterless title: about 9,200 over the install's life, plus a re-ask of each
+  `none` every 30 days. All of it stays inside `api.themoviedb.org`'s declared 18 rps and never runs
+  alongside a drain. The warm backlog of 2,075 clears in about three and a half hours.
+- One table, one worker job, and one more entry in §6.6 System's job list.
+- A title whose ids point at the wrong TMDB record shows that record's poster. The corpus's own
+  joins carry the same risk, and choosing by `kind` limits the movie/series duplicate case §4.1 rule
+  6 records.
+
+### 485. Art bytes are fetched by the web process through one process-lifetime polite fetcher; TMDB's API stays the worker's
+
+**What the spec says.**
+- §1 draws the backend as "REST + WebSocket, auth, scoring" and the worker as the "queue consumer -
+  sync, acquisition, extraction".
+- §8 (decision 340) says the fetcher declares a User-Agent, honours robots.txt, and "carries
+  per-host rate and concurrency policies as data rather than as constants, so §6.6 can show them".
+- `acquire/fetch.py`'s `Fetcher` is "one instance per drain".
+- `static.tvmaze.com` had no policy row, so it fell to the 1 rps default with robots.txt honoured.
+- Every authenticated route holds one of the web pool's ten connections for its whole request
+  through `deps.db`.
+
+**Why it changes.**
+- Decision 483 needs the poster on first view. Only the process answering the `<img>` can fetch it
+  in time. A worker-only fetch would leave every first view tinted, and the browser's cached 404
+  would then hide the art after it landed.
+- No other process reaches the two image hosts. §8 stage 2 and decision 484 call
+  `api.themoviedb.org`, never the image CDN. So a web-process fetcher is not a second bucket for any
+  host.
+- A fetcher opened per request would pace nothing.
+- Robots honoured in a process-lifetime fetcher would let one unanswered robots.txt refuse every
+  TVmaze poster until a restart.
+- Sixty posters on a cold Home, each holding a pooled connection across an image fetch, would answer
+  every other surface 503.
+- Owner instruction of 2026-09-25 after the first household user test.
+
+**The decision.**
+- **One fetcher.** The backend process holds one `acquire.fetch.Fetcher` for its lifetime, opened
+  and closed with the lifespan. It is used for `image.tmdb.org` and `static.tvmaze.com` only, under
+  their declared policies. The one-instance-per-drain rule is the worker's; this process's unit of
+  pacing is the process.
+- **TVmaze policy.** `static.tvmaze.com` gets a declared row: 2 rps, burst 2, concurrency 2, which
+  is api.tvmaze.com's own rate. Robots is off, with `_API_TERMS` as the documented reasoning, as
+  `image.tmdb.org` already has.
+- **Jellyfin.** The household's Jellyfin is fetched through §7.1's client, bounded by
+  `JELLYFIN_POLICY`'s concurrency.
+- **Everything else stays in the worker:** acquisition, extraction, and decision 484's TMDB lookup.
+- **No persisted counters.** The web process's image-host counters are not persisted to
+  `fetch_host_state`. §6.6 shows both hosts' declared policies, and no surface reads the counters
+  today.
+- **The gate.** The poster route's gate, `ActiveUserBrief`, holds a pooled connection for the
+  session read alone, and each further read takes one through `deps.brief_connection`. Every other
+  route keeps `deps.db` for its whole request.
+
+**Cost.**
+- One process-lifetime HTTP client in the backend, and a breaker for the two image hosts that resets
+  on restart.
+- §6.6 cannot show how many images this process fetched until a surface reads a persisted count.
+- A second gate pair in `api/deps.py` that the gating sweeps must follow. `test_api_gating.py` and
+  `test_layering_guards.py` now do.
+
+### 486. Member surfaces speak the member register: spec and milestone references never, model numbers only behind Show the model, vocabulary terms by their label
+
+**What the spec says.**
+
+- §6.8 sets the copy register as "quiet reasons": every shelf, recommendation, question and conflict
+  "carries a one-line why in vocabulary terms, and model numbers appear in the data voice next to
+  their name (`b(t) 0.52 · β 0.20 · gate 0.93`), never bare".
+- §6.0's M0 title card lists "the model line in the data voice" unconditionally.
+- Decision 117 (owner, 2026-08-29) put §6.7's rail and "every inline numeric annotation" behind one
+  per-user Show the model toggle, default off, in the account menu. It also ruled that "the title
+  card's `b(t) · β · gate` line is **not** gated".
+- §6.0's M2 shelf table and §6.1's pair-selection and learning-curve copy are quoted verbatim,
+  including "(§6.3)", "(§6.2)", "Cold Tower", "fold-in", "prior" and "labels".
+- §3.1 names the bundle-less state "no bundle imported".
+- Decision 187 mandates shelf 1's "Because you put {anchor} in {tier}" even where the tier is only
+  the fitted one.
+- Decision 209 mandates Rank's "still being fitted … shortly" copy and forbids a duration.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test (build ed1f690, bundle v20260925, 874 owned titles, real Jellyfin).
+
+- Two members used every surface with Show the model off (`app_user.show_model = false`).
+- They met section numbers (§6.7, §6.3), a decision number ("decision 170") and milestone labels
+  ("Admin (M1)", "arrives with M6").
+- They also met b(t), β, σ, gate, cos and cdf, the words "Cold Tower", "ledger" and "fold-in", the
+  raw values `tier_edit` and `not_seen`, and raw vocabulary ids such as
+  `register.plays_it_straight`.
+- One member was told she and Patrick "both rate these highly" over a caption saying neither had
+  seen the titles.
+- The other was told he had put Mission: Impossible in S. `tier_edit` held no rows for him.
+- Neither would open the app again.
+
+The spec wrote the model's working vocabulary into member copy because its readers were its
+builders. The transparency that copy protects already has a switch, §6.7, and that switch is where
+the numbers belong.
+
+Decision 117's exemption also rested on a false premise, repeated in `scoring/serve.model_line`:
+that the model line is crowd-level provenance "not about this viewer". In fact β is read from this
+viewer's fit and σ from this viewer's ledger row.
+
+**The decision.**
+
+1. *Two registers.* Member surfaces are every route except `/admin/*` and `/setup`, and every
+   component those routes mount. They speak the member register. Admin surfaces and the setup wizard
+   keep the operator's register, and so does the admin re-authentication banner, which shows only on
+   admin routes.
+2. *No references.* The member register never renders a spec reference (§N, "decision N", "proposal
+   N") or a milestone label (M0-M7), whether or not Show the model is on. References stay in code
+   comments, commit bodies, coverage rows and admin surfaces. A member surface that is not built
+   says it is not built and is "coming in a later update".
+3. *Model numbers and nouns stay behind the switch, gated where the payload is built.*
+   - This covers these numbers: b(t), β, σ/±, gate, s, cdf, cos, D, cutpoints, straddle, support n,
+     salience, confidence and held-out rates.
+   - It covers these model nouns: prior, fold-in, posterior, ledger (meaning the model), Backbone,
+     Cold Tower, bundle and its version, e_source, tier_edit, duel, observation, refit, and "labels"
+     used as a count of verdicts.
+   - These reach a member only while that member's Show the model is on, in the data voice next to
+     their name (§6.8).
+   - The server applies the gate where it builds the payload, so a payload read with the switch off
+     carries no such number. Hiding a number in the client does not meet this rule.
+   - This includes the title card's model line: §6.7's toggle governs §6.0's model line. Decision
+     117 is amended to withdraw its exemption. Its one-toggle, default-off, account-menu ruling
+     stands.
+   - With the switch off, every sentence that carried such a word is replaced by its plain
+     counterpart. None is left bare or blank.
+4. *Terms by label.* A vocabulary term is shown by the human label the corpus vocabulary ships
+   beside each id, stored on `dna_term.label` (`vocab_<facet>_<version>.tsv`; `era.wwii` shows as
+   "World War II"). Where no label was shipped, the term is shown as the id's leaf with underscores
+   as spaces. The gloss is the term's explain line. The raw id appears beside the label only while
+   Show the model is on. Storing the label is naming metadata, not content, so decision 162 is
+   untouched.
+5. *Quoted copy follows the register.* The spec quotes member copy that breaks clauses 2-4 in
+   several places: §6.0's shelf headlines and why-lines; §6.1's pair-selection, learning-curve and
+   reveal copy; §6.2's conflict and wildcard lines; §8 stage 10's badge sentence; and decision 187's
+   fitted-tier headline.
+   - In this wave (v2.1.5), each quoted sentence is replaced in place by its plain counterpart,
+     written by the workstream that owns the surface.
+   - The replacement must be true. It states no duration that a job does not keep: "overnight" is
+     false where the tier-set refit runs every minute. A headline claims nothing its shelf's
+     predicate does not hold: "both rate these highly" is false over titles neither person has seen.
+   - Decision 209's Rank copy ("still being fitted … shortly", no duration) already meets the
+     register and stands unamended.
+6. *§3.1's state name stays the operator's.* "no bundle imported" remains what the admin reads, with
+   its link to §6.6 Data. A member reads the same state as "no movie data yet".
+7. *Member copy tells the truth.* A sentence that describes the app's state must be true of it. A
+   sync note says what happened to Jellyfin. A disabled action names its real reason: for Play on
+   Jellyfin, either Jellyfin is not connected or the title is not in the household's Jellyfin
+   library.
+
+**Cost.**
+
+- Copy edits across roughly thirty member-facing files in this wave, split by surface among the
+  workstreams.
+- The title card's payload drops its model line and tag weights when the switch is off.
+- Migration `0030_dna_term_label.sql` and a boot-time backfill carry the labels (foundation commit).
+- Browser and backend assertions are rewritten along with their tests: e2e 02, 04, 05, 08 and 10,
+  and backend test_home and test_restore_drill.
+- The coverage rows `map-taste-admin-show-model-toggle-scope`,
+  `library-rate-platform-scores-display-only` and
+  `library-rate-title-card-dna-chips-print-their-term-once` are restated.
+- What is given up: a member no longer sees the model line unless they ask for it. §6.0's M0
+  transparency promise becomes one tap away in the account menu instead of always on, and the spec's
+  quoted copy stops being its builders' words.
+
+A static guard over member-facing sources, to hold clause 2 across every workstream's files, is owed
+and not yet written; until it lands, each surface's own tests hold the register for that surface.
+
+### 487. The title card answers its title - Liked / Fine / Disliked / Not seen - through §6.1's own session
+
+**What the spec says.**
+
+- §6.0 gives the title detail card "two actions — Play on Jellyfin (§7.1) and Show on map (§6.4)",
+  and nothing about rating.
+- §6.1 is where a verdict is given: `Liked / Fine / Disliked` and `Not seen` on a sweep card, with
+  the prediction reveal "strictly *after* the tap".
+- Decision 212 refused three inline verdict chips on the finish prompt because they "would put a
+  second observation writer on Home with no rate session, no card token and no §6.1 block counter".
+  It chose the queue-link form instead.
+
+**Why it changes.** This follows the owner instruction of 2026-09-25 after the first household user
+test. Neither member could rate a film they already knew.
+
+- The only route was to tap Mark seen on the card, then wait for that title to come round in Rate
+  behind whatever card was already parked there, because `ensure_card` keeps a drawn card.
+- One member's marked title (Dunkirk) was never reached.
+- The other used Mark seen as a "queue this" gesture, then answered not seen on three of those
+  cards.
+
+A person on a title's card has already chosen the question.
+
+**The decision.** §6.0's title detail card gains the person's own answer to the title: §6.1's four
+sweep answers, `Liked / Fine / Disliked` and `Not seen`, with the standing verdict shown selected.
+
+- The answer is written through the person's own Rate session, not beside it. `POST
+  /api/rate/title/{id}` puts the title on that session's table as a sweep card under a fresh card
+  token. It replaces any parked card, under the session row's lock. It then answers that token with
+  §6.1's own verdict or not-seen write.
+- As a result:
+  - The answer is a journal row that Rate's Undo reverses within its block (decision 35).
+  - It advances §6.1's block counter.
+  - It pushes §7.3's Played state after the commit.
+  - It refits incrementally and narrates §6.7's line.
+  - The prediction reveal is computed before the write and returned only in the response to the tap.
+- The route guards the model basis as its first statement, like every other fitting route.
+- Decision 212's three conditions are met rather than overridden, and its ruling for the finish
+  prompt stands.
+- The queue is bypassed on purpose. It rightly never re-asks a rated title, a title answered not
+  seen this sitting, or a title outside the session's kinds. So a verdict on a rated title
+  supersedes the earlier one (§4.2), and Not seen writes `unseen` and leaves the verdict standing
+  (owner decision 2026-08-29).
+- A device still holding the replaced card's token gets §6.1's stale-card refusal.
+- The card shows the reveal as the phrase alone ("We'd have guessed the same"). Its number belongs
+  to Show the model (decision 486).
+
+**Cost.**
+
+- One route, appended to `api/rate.py`.
+- One small domain module, `rate/direct.py`.
+- One payload field on the title card, `my_verdict`.
+- A row of four controls on the card.
+- `session.stash_card`'s docstring names a second sanctioned caller.
+- A title-card answer replaces the card Rate had parked; that card is drawn again later.
+- A title of the kind a session is filtered away from still advances the shared counter.
+- The Rate surface's own search-and-pin path is not this decision's; it ships with the Rate
+  surface's changes in the same wave (row `library-rate-a-title-you-know-is-pinned-into-the-queue`).
+
+### 488. A surface whose milestone has not shipped is absent from navigation and from every entry point to it
+
+**What the record says.**
+
+- §6: "Surface names (prototype, normative): Home / Rate / Tonight / Rank / Map / Taste (+ Admin)."
+  This fixes names only. No clause places surfaces in navigation or says an unbuilt surface is
+  reachable.
+- `api/auth.py` and `NavRail.svelte` argued an implementation convention: every surface visible from
+  day one, "so the shape of the finished app is legible".
+- §6.0 gives the M0 title card "Show on map (§6.4)".
+- Decision 117's proposed §3.2 chip inventory lists "My Taste".
+- §12 schedules Map and Taste at M6, which has no exit criterion yet.
+- §6.4's Map has nothing to plot on a real install: `dna_axis` is empty (decision 173).
+
+**Why it changes.** The owner instruction of 2026-09-25, after the first household user test, is
+that Map and Taste are hidden from members until M6 ships.
+
+- Both members opened Map and Taste from the tab bar on their phones (screens jenny-118/119 and
+  patrick-171..174).
+- Each landed on a developer placeholder naming M6, shown over predicate syntax and artifact names.
+- "My Taste" in the account chip led to the same page.
+- So two of six primary targets on §6's primary form factor were dead ends.
+
+The members' own notes blame Tonight, not these surfaces, for not coming back. This is the cheaper
+half of the fix, and the owner chose it over building M6 now.
+
+**The decision.**
+
+- `SURFACES` states whether each surface has shipped, as `built`, a literal in the annotated tuple.
+- The navigation payload lists shipped surfaces only, for both roles, and the rail and phone bar
+  render what it lists.
+- The account menu carries no entry to an unbuilt surface, so "My Taste" leaves it. This amends
+  decision 117's §3.2 chip inventory. Where Taste is reached from once it is built is M6's call.
+- §6.0's Show on map is absent from the title card while §6.4 is unbuilt. The payload carries no
+  target, read from the same flag, so the card and the tab bar cannot disagree.
+- The `/map` and `/taste` routes stay. They answer by address with a placeholder in the member
+  register. It says the surface is not built and is coming in a later update, names no milestone
+  (decision 486), and describes the surface plainly. So `05-milestones.spec.js` still fails by
+  design on the day M6 ships.
+- A surface enters navigation and its entry points, in §6's order, on the day its flag flips.
+- The day-one-legibility convention is withdrawn.
+
+**Cost.**
+
+- Two fewer tabs until M6.
+- The placeholders are reachable only by URL.
+- The §6.0 card's second action waits absent rather than disabled.
+- The navigation payload loses entries, which affects three readers: the rail, the chip and
+  `ops/devstub.py`.
+- `02-shell.spec.js`'s six-tab test becomes four tabs plus two absences.
+- One coverage row is restated and one is added.
+- README's claim that the Map "renders its no-axes state" is corrected: the Map is not built.
+- What is given up: the finished app's shape can no longer be read from the tab bar.
+
+### 490. The onboarding list is served most likely seen first, and keeps all 100 titles
+
+**What the spec says.** §6.1 Queue: "P(seen)-ordered (Jellyfin history, popularity, household
+co-seen), seeded first run from the imported 100-title decade-stratified `seed_list`. Blocks of 15;
+each card shows its queue reason ("queued because: 72% likely you have seen it")." It fixes neither
+the order inside the list nor how long the list leads. `rate/queue.py` served the list in the file's
+own position order, ahead of every other unrecorded title until each entry had an answer, and
+printed the 0-based position as the card's reason ("seed list position 0 of 100 · 1970s") with no
+probability.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. On
+v20260925 the list's first 56 positions are all pre-2010 titles. They appear to have been chosen for
+near-uniform crowd splits; that is inferred from the shipped pct_* fields, and no document states
+it. Only 16 of the 100 are in the household's library. The two members answered "not seen" on 10 of
+their 30 first-block answers, on 43% and 65% of the unowned, less-rated seeds, and on none of the
+owned ones. Re-read under P(seen) order, the same answers put 1 not-seen in 28 in the first block.
+§13's instrument stayed under its 50% line (30.7% and 38.3%), so this answers the complaint, not a
+§13 queue bug. The position printed on the card was a file index a member cannot read.
+
+**The decision.** Every stored `seed_list` title still leads every title outside it that is not
+recorded seen, and all 100 are kept: the list is still the first run, and its decade stratification
+is the corpus's property of the list. Inside the list, titles are ordered by descending P(seen).
+That is §6.1's own popularity, library, age and household signals, so owned and widely rated seeds
+come first; file position only breaks ties. Pinned and recorded-seen titles still lead the list. A
+seed card carries its P(seen) and names the list in its why-line: "queued because: a starter title
+from the {decade}s · {N}% likely you have seen it" (without "from the {decade}s" when the entry has
+no year). No position is printed. A corpus-side seed list filtered for content coverage and
+recognisability, which a models-only import reloads (decision 247), is complementary and separate.
+
+**Cost.** Seeds the household is unlikely to know move to the end of the list rather than off it, so
+a household that answers the whole list still meets them; only a corrected list from the corpus
+removes them. The order reads the unfitted P(seen) weights (`SeenWeights`, "a stated prior, not a
+fit"), and §13's not-seen-rate instrument is what should be watched after the change.
+`test_a_fresh_households_first_queue_is_the_imported_seed_list_in_position_order` is renamed
+`test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first`, and coverage row
+`library-rate-queue-seed-and-reason` is restated. §6.1's Queue bullet is amended in place.
+
+### 491. Rate's measured copy, restated for members: the balance warning arms at fifteen ratings and says how to spread, and the model's numbers wait behind Show the model
+
+**What the spec says.** §6.1 carries the running class-balance widget "with its warning copy ("Heavy
+on 'liked'. Spreading across all three classes matters about five times more than anything else you
+can do here." — the measured 5× lever)". The prediction reveal is "strictly after the tap ...,
+phrased "we'd have guessed the same" / "we'd have guessed {class}"". The learning-curve copy is
+"Personal signal roughly triples from 5 to 100 labels. Aim for 50–100 in the first sitting or two."
+The pair-selection copy is "Random pairs. For profiles no selection rule beats random — the clever
+ones pay off where the question is which of these few, not how do you rank everything: the tier
+queue (§6.3) and tonight's round (§6.2)." The onboarding copy says "personal signal roughly triples
+from 5 → 100 labels". §5.2 fixes the 60% figure. No floor is stated for the warning;
+`rate/balance.py` armed it at one label. The reveal printed " · cdf 0.71" beside the class,
+following proposal 42's example, which is provenance only. The proposals doc's "Already covered — do
+not re-open" list names the widget copy, but it sits in the provenance section and is not normative.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. Both
+members were told "Heavy on ..." by their first verdict, since one label is 100% of a distribution,
+and the warning switched on and off six and ten times in a sitting. A perfectly balanced labeller
+trips a 60% rule by chance 100% of the time at one label, 77.8% at three, 13.6% at five, 5.9% at ten
+and 2.6% at fifteen. The sentence said what mattered and not how, so both read it as "change your
+answers". The two warnings they actually saw were 'disliked' and 'fine', and advice written for a
+heavy 'liked' labeller answers those wrongly. Separately, decision 486 keeps section numbers off
+every member surface and the model's numbers and nouns behind Show the model, while Rate's copy
+carried "(§6.3)", "(§6.2)", "labels" as a count, and a cdf.
+
+**The decision.**
+1. The warning arms once the person holds fifteen live labels over the session's kinds, one §6.1
+   block. The widget's counts show from the first label, and until fifteen it says "A balance check
+   starts at 15 ratings." The 60% rule and its strict inequality are unchanged.
+2. The warning reads "Heavy on '{class}'. Spreading your ratings across all three answers matters
+   about five times more than anything else you can do here. {tail} - but never change an honest
+   answer to even things out." The tail is "Rate some titles you didn't enjoy as well" when heavy on
+   'liked', "Rate some titles you enjoyed as well" when heavy on 'disliked', and "When a title was
+   better or worse than fine, say so" when heavy on 'fine'. "About five times more" stays verbatim:
+   it is §5.2's measurement.
+3. The pair-selection copy reads "Random pairs. For building your profile nothing beats random -
+   smarter picking only pays off when the question is which of a few: Sharpen my ranking on Rank,
+   and Tonight's round." The battle card's own why-line is "queued because: you rated both {class} ·
+   random pairs build your profile best"; the full sentence lives in the rail's "why these
+   questions?" card.
+4. The learning-curve and onboarding copy count ratings: "Your suggestions get about three times
+   more personal between 5 and 100 ratings. Aim for 50-100 in your first sitting or two."
+5. With Show the model off, the prediction reveal is the class alone ("we'd have guessed the same" /
+   "we'd have guessed {class}"), and the payload then carries no cdf, s or label count. With it on,
+   " · cdf 0.71" follows in the data voice (§6.8). A suppressed reveal reads "no guess yet - rate a
+   few more first".
+
+**Cost.** A heavy labeller is warned one block later than the code warned. The copy is a measured
+claim and the owner's to word; the tails are advice the measurement supports rather than
+measurements themselves. `test_the_warning_appears_above_sixty_percent_and_is_absent_below` and
+`test_the_warning_copy_is_the_measured_sentence_and_names_the_heavy_class` are rewritten, and
+coverage rows `library-rate-class-balance` and `library-rate-no-prediction-before-tap` are restated.
+The e2e balance test now asserts the floor, because the fixture bundle's eight titles cannot reach
+fifteen ratings. §6.1 is amended in place. This supersedes the proposals doc's "do not re-open" note
+for this copy only.
+
+### 492. Mix begins battling once a block of ratings stands
+
+**What the spec says.** §6.1: "Modes: Mix (default — alternates sweep and battle), Sweep, Battle;
+blocks of 15." Decision 200 derives the alternation from the monotone observation index and keeps
+slot 1 of the first block a sweep, so Mix served a battle from the second card whenever any band
+held two titles.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. Both
+members met their first battle on card 4, from a pool of three titles. That pool held a single
+eligible pair, which one member was served three times in eight cards, and both members switched to
+Sweep before card 10. §5.2 credits comparisons with resolution within the liked class, which a
+three-title pool does not have, and §6.1's "50–100 in the first sitting" counts verdicts anyway.
+
+**The decision.** In Mix, until the person holds fifteen live ratings over the session's kinds, the
+counter calls for a sweep in every slot. The count is the class-balance widget's own total, so the
+widget and the rule read one number. What changes is the counter's call, not the card under it:
+nothing is marked as a substitution, and the payload's `serving` says sweep. From the fifteenth
+rating on, decision 200's alternation holds unchanged, as a pure function of the monotone index.
+When the sweep queue is drained, §6.1's drained state still serves a battle in a sweep slot. Sweep
+and Battle modes are the person's own choice and are unaffected. §6.1's Modes bullet is amended in
+place.
+
+**Cost.** A new member's first block has no duels. §6.1's first-sitting target counts verdicts, and
+comparisons start once there is something to compare. `ensure_card` and `payload` read the
+live-label count once more per tap. The Mix alternation tests move to a fixture holding a block of
+ratings. The e2e test "Mix alternates on the counter" becomes "Mix serves single titles until 15
+ratings stand", because the fixture bundle's eight titles cannot reach fifteen; alternation stays
+covered by `test_mix_serves_single_titles_until_a_block_of_ratings_stands` and
+`test_mix_keeps_alternating_across_the_block_roll`. Coverage row
+`library-rate-mix-alternates-blocks` is restated.
+
+### 493. A first sitting's battles leave the disliked band out
+
+**What the spec says.** §6.1: "Pairs drawn at random from the user's seen titles within verdict
+bands — no clever selection for profiles (measured null ...)". §0 row 6: no pair-selection rule
+beats random for profiles. §5.2: "comparisons add resolution within the liked class".
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test: Mix must
+never pair two disliked titles early. On the v20260925 install, duels 2 to 5 compared two films the
+member had just called disliked, in the first minutes of the first sitting, and both members left
+battles. With uniform-over-pairs weighting and their label counts, one member would have spent 32%
+of their battles on disliked pairs and 10% within liked. The owner's instruction was that Mix never
+pairs two disliked titles early.
+
+**The decision.** While the person holds fewer than fifty live ratings over the session's kinds (the
+low end of §6.1's "50–100 in the first sitting"), a profile battle in Mix or Battle mode draws from
+the fine and liked bands only. From fifty ratings on, every band is drawn uniformly again. §13's
+re-ask stream is exempt, because it re-asks a pair already asked. A correction's repaired pair keeps
+the survivor's own band. §6.1's Battle bullet is amended in place.
+
+**Cost.** This is a selection rule where §0 row 6 measured none paying for profiles. Resolution
+inside the disliked band, which was never measured, is deferred to the second sitting. A person
+whose first fifty ratings are nearly all disliked has fewer pairs in a first sitting, and the
+drained state says so ("there is no new pair to compare yet"). Coverage row
+`library-rate-battle-pairs-within-band` is restated.
+
+### 494. The comparison queue's two adaptive arms favour the top of the board and never repeat a pair; the held-out tenth is untouched
+
+**What the spec says.** §6.3 describes the queue as "boundary-targeted active selection (70%
+posterior-straddling pairs / 20% exploration / 10% uniform-random held out for honest evaluation —
+the adaptive-inflation guard)". It fixes the shares and nothing else. Which straddler is drawn,
+which partner it gets and which pair the exploration arm serves are all unstated (M3-open-points
+§2.2).
+
+§13 says the uniform 10% "is the *only* data used to evaluate the tier model — adaptively-selected
+pairs inflate reliability". §0 row 2 and §5.2 place the measured value of a comparison in
+"within-liked resolution". M3-open-points §3.1 records that the queue re-serves answered pairs;
+M4.10 closed that half for the exploration arm only.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test (build
+ed1f690, bundle v20260925).
+
+While tier_edit is empty the cutpoints are exactly the prior. The B/A cut then sits at s = 0, in the
+middle of the verdict arm's "fine" band. Patrick's 21 straddlers were 15 fine, 1 liked and 5
+disliked; Jenny's 19 were 11, 6 and 2. So the uniform anchor spent the 70% arm on fine-vs-fine
+pairs.
+
+The exploration arm's widest-sigma anchor sat at the off-scale tails: Grease at s = -17 against Miss
+Congeniality at -14, a pair no answer could move out of F.
+
+The boundary arm had no memory. Jenny answered one pair twice in four answers (duels 19 and 22).
+Ready Player One was in four of Patrick's six boundary draws. Ties among the roughly 10
+no-coordinate films on each board fell to the lowest title id every time. Both members stopped at
+ten and eleven answers and said they would not come back.
+
+**The decision.**
+1. The 70/20/10 roll and the held-out arm are unchanged. The held-out arm reads no asked set and no
+   window, and stays uniform over unordered pairs of the whole board.
+2. **Boundary arm anchor.** The anchor is drawn among the straddlers in proportion to the height of
+   the boundary it straddles: the index of the cut's upper tier, 1 for F/D up to K-1 for A+/S. It is
+   a weighted draw without replacement, so an anchor with no unasked partner hands over to the next
+   one and no straddler is ever removed.
+3. **Partner, in both adaptive arms.** Of the five unasked titles nearest the anchor in s (across
+   the cut, for the boundary arm), the partner is the one outside the recent window, then the
+   least-compared, then the draw. A per-draw random tie-breaker replaces title-id order.
+4. **No repeats.** Neither adaptive arm serves again a pair the person has already answered outside
+   the held-out stream. A boundary arm with nothing left falls through to exploration and is
+   labelled exploration. When both adaptive arms are dry, the queue says so.
+5. **Exploration arm.** The least-compared anchor still comes first, then the title outside the
+   recent window, then the higher tier; the higher tier replaces the widest posterior. Nothing is
+   removed from the order, so a board that is all F and D is still explored (M4.10 finding 12:
+   weight the order, never restrict the set).
+6. **Recent window.** The titles of the last three answered, non-held-out queue pairs are held back
+   as anchor and partner while another title can serve.
+7. **What a boundary duel is for.** Cutpoints learn from tier_edit alone (§5.2's tier arm). A duel
+   at a cut moves the two titles across it and never the cut itself. Its value is getting that cut's
+   two tiers right, which is why the weight rises toward the top of the board.
+8. K_NEAREST = 5, RECENT_WINDOW = 3 and the linear height weight are owner policy in rank/queue.py,
+   not §4.3 bundle constants. The reason is the same as for SHARES: the corpus does not re-tune them
+   offline.
+
+**Measured.** Rounds of fifteen pairs were replayed over the two live boards (read-only export, s
+and sigma held fixed, 300 seeds each). Figures are Patrick / Jenny:
+- Repeated pairs per round: 2.4 / 2.6 before, 0 after.
+- Most appearances of one title in a round: 6.3 / 4.9 before, 2.3 / 2.3 after.
+- Pairs touching a title the person rated liked: 18% / 36% before, 31% / 55% after.
+- Pairs of two fine-or-disliked titles: 82% / 64% before, 69% / 45% after.
+
+Patrick's boundary pairs barely move up the board: 5% sit at A/A+ or above, before and after. That
+is because 13 of his 21 straddlers sit at the prior B/A cut, which is M3-open-points §2.8 (the
+prior's shape) and not selection.
+
+**Cost.**
+- The observed boundary share falls below 70% once a board's boundary pairs are exhausted. The
+  fall-through is labelled exploration.
+- The low tiers get fewer comparisons, so D/F order stays coarser, by design.
+- The weighting is not yet measured against §13's agreement figure; that needs the held-out stream
+  to accrue. It should be re-tuned, if at all, after the embedding-scale question (C6.6, decision
+  236) is settled.
+- One more query per queue read (read.recent_titles).
+- The held-out rate is unaffected.
+
+### 495. A "sharpen my ranking" sitting is a round of fifteen, with a visible count, an end, and each answer shown landing
+
+**What the spec says.** §6.3 budgets the queue ("~10–20 comparisons place a new title … ~30–50/week
+maintains it") and says "The model refits (incremental immediately, exact nightly)". It never says
+when a sitting ends or what the person sees after answering.
+
+§6.1 takes Rate in "blocks of 15", and the owner-decided counter reads "7 / 15 this block". §6.8
+says every question carries a one-line why. §13 and M4.10 finding 16 forbid anything on the surface
+that tells the held-out tenth apart.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+The shipped sheet showed "one more comparison sharpens your board" on every pair, with no count and
+no end. It sat over the board it was sharpening. Both sittings ended at 10 and 11 answers, and
+neither person ever saw an answer land.
+
+Once the queue could run dry, it told a person who had worked through their board to "rate a few
+more titles". The no-repeat rule of decision 494 makes that state reachable.
+
+**The decision.**
+1. **The count.** The sheet header reads "k of 15 this round". The count is taken from taps on the
+   client and is identical on every arm. It resets when the sheet closes or the page reloads: a
+   sitting is not a ledger fact.
+2. **The end.** After the fifteenth answer an end card reads "That's 15 comparisons for this round.
+   You can stop here — or keep going for another 15." It offers Done and Keep going. Keep going
+   shows the pair the fifteenth answer already brought.
+3. **Showing the answer land.** After every answer the sheet names where both titles now sit, in the
+   board's own badge words ("Heat: S — just above Drive"). The answer route returns the two titles'
+   public board rows, read from the unfiltered board after the refit. The shape is the same on every
+   arm and never says "moved" or "unchanged". While the sheet is up, the two tiles are marked on the
+   board.
+4. **The why-line.** It is the same on every arm and true of every arm: "Pick the one you enjoyed
+   more — your answers are what put your board in order."
+5. **A worked-through board.** When no adaptive pair is left on a board of two or more titles, the
+   sheet says: "Nothing left to compare right now — you've answered every pair worth asking. Rate a
+   few more titles and new ones turn up." A thinner board keeps proposal 80's sentence.
+6. **Room for the board.** The sheet reserves its own height under the board, so the whole board can
+   be scrolled above it.
+7. Any resolution figure would stay behind the model toggle (decision 117). None is built.
+
+**Cost.**
+- One extra board read per answer on the answer route.
+- A reload starts a new count.
+- Rank still has no undo (M3-open-points §1.2). The round is the block boundary such an undo would
+  use.
+
+### 496. On Rank a tap opens the title; moving is the title's Move control; the badge is a control of its own
+
+**What the spec says.** §6.3, as decision 295 amended it: "**On phones:** tap a title (it lifts),
+tap a tier (it drops) — the same `tier_edit` semantics; drag-and-drop stays for pointer devices.
+**The lift is cancellable and legible:** the "Moving {title} — tap a tier to drop it." banner
+carries an explicit **Cancel**, re-tapping the lifted title also puts it down, every tier row is
+visibly armed while a title is lifted and non-picked titles dim."
+
+§6.3 also says the badge "is the queue's entry point". §6.0 makes the title card the place a title
+opens.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+Both members tapped titles expecting to see the title and found themselves moving them instead. Rank
+never mounted the title card, so no route led from the board to it.
+
+The chip §6.3 calls the queue's entry point was a span inside the tile's single button, so tapping
+the badge lifted the title rather than opening the queue.
+
+**The decision.**
+1. **Tap opens.** A tap on a title opens its title card and writes nothing.
+2. **Move lifts.** Each title carries a **Move** control. Tapping it lifts the title under the
+   unchanged "Moving {title}" banner. Tapping Move again, or Cancel, puts the title down and writes
+   nothing.
+3. **Dropping.** While a title is lifted, a tap on a tier's letter, or on any title in that tier,
+   drops the lifted title into that tier. It names no neighbour, the same body the letter tap posts
+   (M4.10 finding 17). A tap on the lifted title itself puts it down.
+4. **Opening a card puts a lifted title down first**, so nothing behind the card can drop it. The
+   lift banner stays in view (sticky) however deep in the board the title sat.
+5. **The badge is its own control.** The straddle chip, and the tension chip that replaces it while
+   tension holds (proposal 71), opens the comparison queue. It does not seed the queue, so the
+   70/20/10 roll is untouched.
+6. Drag-and-drop for pointer devices is unchanged.
+7. A credit tap on the card opened from Rank closes the card. Home's filmography filter belongs to
+   Home.
+
+**Cost.**
+- Moving takes one more tap than before.
+- Every title carries a 48 px Move control.
+- The e2e lift tests tap Move now. Their names are kept.
+
+### 497. The backend follows the active bundle: §10's swap sequence ends at the flip, and a restart is owed only when the load fails
+
+**What the spec says.**
+- §2: "`docker compose up` + the setup wizard is the whole install."
+- §3.1 ends first boot at the wizard's bundle import.
+- §4.3 loads artifacts "at boot when present" and says they are "hot-swapped on bundle import (§10
+  swap protocol)". §5.3's row ("Bundle import validation + hot swap") and §6.6's Data tab ("validate
+  → report → hot-swap") also call the import a hot swap.
+- §10's swap sequence ends "transactionally flip `artifact_bundle.active` → restart backend + worker
+  (simplest correct option at household scale)". It stands under the invariant that no process may
+  score or refit with a loaded bundle version different from the active row.
+- No clause says who performs the restart.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test.
+
+The build made the restart the operator's job (README: "a restart the importer does not perform").
+- On the v20260925 install, the import committed at 08:30:17 and someone typed the restart at a
+  shell at 08:30:38.
+- Until then the household saw "no bundle imported" in the header, a 409 on every Rate and Rank fit,
+  and `loaded: none` on the Data tab.
+- The wizard ended on "Restart backend and worker" with no command in it.
+
+The worker never needed the restart: `worker._active_store` reads the active bundle for every model
+job. Only the backend pinned its basis at boot. The restarted backend loaded store, Backbone and
+constants in about 0.09 s.
+
+The owner's next step is a models-only re-import of a new bundle onto the live install. Under the
+restart rule that needs a shell again, and it drops Tonight's process-local lobby.
+
+**The decision.**
+1. The backend reads the active row's `(version, activated_at)` every 5 s and before it answers `GET
+   /api/admin/bundle/state`.
+   - When the row has moved since the backend last loaded, it loads that bundle and replaces all
+     three attributes (store, Backbone, §4.3 constants) in one event-loop step. The load runs off
+     the event loop and uses the same function as boot.
+   - This applies to a first import into a bundle-less install, a models-only re-import that
+     replaces a loaded bundle (decision 162), and decision 253's restage. `activated_at` is compared
+     because a restage does not move the version.
+   - The worker needs nothing.
+2. §10's invariant holds without the restart:
+   - The Rate/Rank guard still refuses with a 409 between the flip and the re-pin, which is now a
+     matter of seconds.
+   - Every fit call site reads the store, Backbone and version it stamps with in one expression,
+     with no await in between. The swap also has no await, so no call site can pair one bundle's
+     Backbone with the other's version.
+   - A request that straddles the re-pin can pair outgoing constants with the incoming basis.
+     `refit.load_cache` already refuses that pairing (caller basis against the stamp and the active
+     row, and the constants' digest), and queues the full refit. No request-scoped copy of the basis
+     is needed.
+3. A load that raises keeps the outgoing basis serving. It is logged once per active row and retried
+   on every ask. This is the one state that still owes a restart:
+   - The Data tab reports `restart_required` and names the command.
+   - `/api/config` carries `restart_required` from memory, so the unauthenticated bootstrap gains no
+     database read (decision 271).
+   - The header and the wizard say a restart is owed instead of "no bundle imported".
+   - The swap 409 speaks the member register (decision 486): "Spielplan is switching to newly
+     imported library data. Try again in a few seconds - if this keeps happening, it needs a
+     restart."
+4. The §12 M4.14 exit-criterion instrument changes with it. Check 10 of `ops/m414_exit_criterion.py`
+   now requires `restart_required` false and the imported version loaded.
+
+§10's swap-sequence sentence and §3.1 are amended in place.
+
+**Cost.**
+- One indexed single-row read every 5 s per backend.
+- A tap that straddles a swap may be answered QUEUED rather than refit incrementally, once per swap.
+- Instruments that encoded the restart move with it:
+  - e2e `01-first-boot`'s import test is renamed "…and serves the bundle without a restart". It is
+    registered in two coverage rows.
+  - The devstub drops `/_dev/restart`.
+  - m414 check 10 now reads the other way.
+  - README's "after any bundle import" restart and TESTING's `run.mjs` paragraph narrow to the
+    failed-load case.
+- `e2e/run.mjs` keeps its restart between phases. It is now redundant for loading the bundle, but
+  phase 2 is still written against fresh processes.
+- The test suite's `app` fixture turns the timer off, so tests that pin `app.state` by hand do not
+  race it. Tests of the re-pin drive it explicitly.
+
+### 498. The user-test wave's coverage rows are filed at M5
+
+**What the record says.** Decision 321 keeps `"M5"` in `MILESTONES` as the umbrella §12 names, and
+its last clause reads: "a row may be filed at `"M5"` only if it is measured by
+`ops/m5_exit_criterion.py`". Decision 465 made that script the instrument of §12's M5 criterion, "a
+new Jellyfin add reaches 'ready' unattended".
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. The wave's
+fixes belong to no milestone of their own: `current_milestone` is `"M5"`, and M6 has no exit
+criterion yet. Every workstream filed the rows it added at `"M5"`, so that the coverage gate arms
+them on the day they land. None of those rows is a clause of the M5 criterion, so the script
+measures none of them. No test holds 321's last clause, which is why the build was green while every
+one of those rows contradicted it.
+
+**The decision.** The coverage rows this wave adds are filed at `"M5"` and are closed by the tests
+they name, as any shipped row is. Decision 321's last clause is narrowed to the rows that claim a
+clause of §12's M5 criterion: those are still measured by `ops/m5_exit_criterion.py`, and it binds
+no other row. The rest of decision 321 stands, and `current_milestone` does not move. The spec is
+not amended, because §12 does not say where a coverage row is filed.
+
+**Cost.** `"M5"` now holds rows its exit criterion does not speak for, so the milestone is wider
+than §12's sentence. Only this entry and the line it adds to 321's say so.
+
+### 499. An MPST synopsis is never a title's overview, and a plot another title shares is absent from the card and the pack
+
+**What the spec says.**
+- §6.0 puts "metadata" on the title detail card.
+- §4.1 keeps `title_meta` per source ("one block = one droppable source").
+- `importer/meta.resolve_title_fields` fills `title.overview` from `plot_full`, then `plot_short`,
+  by the corpus's `SOURCE_PRIORITY`. In that order `mpst` sits last, as "a poor default and a good
+  last resort".
+- Decision 335 reads `title.overview` as the plot half of the reviews gate.
+- §8 stage 5's pack takes the longest plot text any source carries (`dna/packs.py`, named change 1).
+- The M4.5 row `library-rate-title-card-text-and-art-resolve-from-title-meta` resolves the card "by
+  the priority order the corpus itself uses".
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. On the
+seeded install (bundle v20260925):
+- For 965 titles the last resort was the only resort; 25 of them are in the 100-title `seed_list`.
+  Their overview was a full retelling, averaging 5,560 characters and reaching 45,643, that gave the
+  ending away. The sweep's recall aid quoted its first 180 characters.
+- 84 MPST synopses and 102 Wikipedia pages are each attached to two or more titles:
+  - Moulin Rouge (1952) carried the 2001 film's plot, and a household verdict has already landed on
+    it.
+  - The Eighth Sense's longest plot was 3,483 characters of 'Oppenheimer (film)'.
+  - Insomnia (1997) and Gods (2014) hold quote-verified tags quoted from another film's text.
+
+**The decision.**
+- `resolve_title_fields` resolves `overview` from every source except `mpst`. The `mpst` rows stay
+  in `title_meta` and keep feeding the pack.
+- Wikipedia and MPST text is matched onto a title by page or by dataset row, not taken from the
+  provider's own record. A `plot_full` or `plot_short` from either source is absent when another
+  title carries the same text in the same field (spaces trimmed). Both titles in a pair lose it, and
+  the next eligible text takes its place.
+- A shared TMDB or trakt text is kept. The 31 measured cases are one novel's synopsis on each of its
+  adaptations, which is true of every one of them.
+- `importer/meta.shared_plot_texts` is the one definition. §8 stage 5's longest-plot pick reads it
+  as well.
+- The order stays the corpus's; only which values are eligible narrows.
+- A title with no eligible text shows no overview, and its sweep card has no recall aid.
+- §8 stage 2 never fetches MPST, so the outcome of decision 335's gate does not change for any
+  acquired title.
+- The seeded install is brought to the rule by migration `0037`, with no re-import. It is SQL
+  measured equal to replaying the walk over the install's `title_meta`: 968 overviews become NULL,
+  and nothing else changes. It also adds the hash index that makes a derive's per-title check cheap.
+
+**Cost.**
+- 965 MPST-only cards and 3 collided-Wikipedia cards lose their text, and their sweep cards lose
+  their recall aid. Giving them TMDB text is corpus-side work.
+- The correct title of a collided pair loses its text too when it has no better source.
+- A derive compares its title against every other title. When a derive creates a new pair, the other
+  title keeps its card until that title is next resolved (decision 375's scope).
+- The M4.5 row's `what` names the exclusion, and §6.0 is amended in place.
+
+### 500. The alias map's `kind` is stored, and four teen presence keywords are extraction lexicon
+
+**What the spec says.**
+- §8 stage 8 is the "per-title alias-map projection of its keywords".
+- Decision 383 added `dna_alias.kind` in `0027` and recorded the loader's fill as owed.
+- `dna/aliases.load_alias_map` refuses a `lexicon` row and reads NULL as "not known to be lexicon".
+- Decision 163: a vocabulary change is a migration, not an import.
+- Decision 162: the vocabulary tier is never re-imported.
+- The corpus maps 'teenage girl', 'teenage boy', 'high school student' and 'teen rebel' onto
+  `characters.teen_protagonist`. Its own vocabulary defines that term as "a teenager is the lead and
+  the film runs on adolescent stakes".
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test:
+- `kind` was NULL on all 4,108 alias rows of the seeded install.
+- So the corpus's 84 `lexicon` aliases projected for every acquired title at stage 8. All of them
+  map onto register terms, which the register protocol keeps to the explicit projection map.
+- Heat carried `characters.teen_protagonist` off one MovieLens tag, for Natalie Portman's supporting
+  role.
+
+**The decision.**
+- `importer/dna._load_aliases` stores `kind` as shipped (NULL where the map has no such column) and
+  reports how many rows are lexicon.
+- Migration `0037` writes `lexicon` onto the seeded install's v1 rows, only where `kind` is NULL.
+  The rows are v20260925's own 84 lexicon aliases, written out because the import deletes its
+  bundle, plus the four presence keywords, which never project a lead-role term.
+- The corpus's `alias_map_v1.tsv` should carry the same four as `lexicon`, so that a re-seeded
+  install gets them from the file.
+- A bundle title's shipped `dna_projected` rows are not re-projected (decision 463), Heat's
+  included.
+
+**Cost.**
+- An install re-seeded from the unchanged v20260925 bundle gets the 84 rows from the file but not
+  the four keywords; those arrive only through a corrected corpus map.
+- Heat's bundle projection stays until a corrected bundle is seeded (decision 502).
+
+### 501. `title.poster_path` holds servable art only
+
+**What the spec says.**
+- Decision 178(4) asked for the poster host to be filtered at import, so that `title.poster_path` is
+  servable by construction.
+- Decision 190 shelved posters.
+- Decision 483 ships posters from the same-origin art route, over the two hosts `art/hosts.servable`
+  accepts (`image.tmdb.org`, `static.tvmaze.com`).
+- `importer/meta` resolves `poster_url` and `backdrop_url` by the corpus's per-field walk with no
+  host check.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. OMDb ranks
+above TVmaze and its poster is always IMDb-hosted (`m.media-amazon.com`). So the seed wrote 157
+posters no licence lets this app serve, and 8 of them displaced a TVmaze poster it may serve.
+
+**The decision.**
+- Card resolution, at §10 import and at §8 stage 3, takes `poster_path` and `backdrop_path` only
+  from a URL `art/hosts.servable` accepts. It walks the same order over the eligible values, and the
+  import report counts the URLs it skipped.
+- `title_meta` keeps OMDb's row (§4.1).
+- Migration `0037` clears the 157 IMDb-hosted `poster_path` values and restores the 8 TVmaze posters
+  exactly, measured equal to the walk. Every seeded backdrop is TMDB's and is unchanged.
+- The test bundle builder ships no servable URL, so e2e and CI never make the art route fetch from
+  the internet.
+
+**Cost.**
+- 149 titles whose only art is IMDb-hosted show the tinted panel.
+- `placement/features.py`'s `has_poster` flips for those 149 titles; the feature contract discards
+  `has:*` keys (decision 178).
+- Decision 483 states the same import-side filter. This entry stays its own because it carries the
+  backdrop column and 0037's repair, and the code cites it.
+
+### 502. The content-correction import mode is not built; corpus-side content fixes reach an install by re-seeding
+
+**What the spec says.**
+- Decision 162: content arrives once, and the importer refuses a second content import.
+- Decision 247: a models-only import reloads the four curated ledgers.
+- Decision 463: stage 8 leaves a bundle title's projected tier alone.
+- The triage of the 2026-09-25 user test (C9.9) drafted a scoped "content correction" import mode.
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test: the
+content-correction mode is deferred, and the test install is re-seeded or models-reimported instead.
+
+**The decision.**
+- No second import mode is built. These defects are fixed in the corpus and reach an install by
+  re-seeding from a corrected bundle; decision 162 is unchanged:
+  - MPST and Wikipedia text on the wrong title in the corpus's `title_meta`;
+  - one human split across imdb-only, tmdb-only and name-only person rows;
+  - projections from presence keywords onto bundle titles;
+  - the corrections ledger's literal 'crew';
+  - quote-verified tags quoted from another film's text.
+- Curated verdicts reach an install through `adjudications_v1.tsv` on a models-only import (decision
+  247), or through the §6.6 editor, which applies them at once (decision 445).
+- The app-side halves ship now: decisions 499, 500 and 501, the read-time credit fold, and the
+  derive's same-title person match.
+
+**Cost.**
+- Until a re-seed, the seeded install keeps the corpus's person splits (folded at read time within a
+  title), its bundle-title projections (Heat's teen_protagonist, Moulin Rouge 1952's mood.romantic)
+  and the wrong-film extracted tags. The tags are listed for the curator: 7 on Gods (2014) and 5 on
+  Insomnia (1997).
+- A re-seed loses household state unless it is exported first, and no export/re-import tool exists.
+
+### 503. The shipped Backbone is the production basis: the corpus's evaluation holdout is folded into E, and `cold_mask` names only rows with no crowd data
+
+**What the spec says.** §4.3: "`backbone.npz` — E, E_full, b_i, μ, plus the per-title support counts
+`item_n` (the §5.1 gate input) — from `cold_tower_artifacts.npz` + the item stats of the slimmed
+`content.npz`." §4.1 carries artifacts over verbatim. Decision 236 sent a question upstream and
+rescaled nothing: is E unit-scale item factors, or support-weighted? `scoring/backbone.py` reads the
+shipped `cold_mask` as "this row carries no coordinate" (M4.13 cycle 1).
+
+**Why it changes.** Owner instruction of 2026-09-25 after the first household user test. The
+v20260925 bundle shipped the corpus's Cold Tower EXPERIMENT basis. Every fifth title by rating count
+was an evaluation holdout written as a zero row: 2,879 of 14,397 rows. The consequences:
+- Raiders of the Lost Ark (192k ratings), The Godfather, Zootopia and Lady Bird were scored on the
+  tower's guess.
+- 161 of the 167 owned `cold_tower` titles were holdout rows.
+- 21 of the 100 seed-list titles had no coordinate, so about a sixth of each member's verdicts never
+  reached the fold-in.
+
+The corpus now folds each holdout column into E's own basis: eᵢ = Uᵀrᵢ, over the same zero-imputed
+residuals, with U derived from the shipped E. Folding in the fitted columns reproduces them to
+4.3e-6, and they ship bit-identical, so the Cold Tower trained against E stays valid. On held-out
+users who are in no fit, the fold-in beats the E_full→E least-squares map:
+- placement only: tuned Spearman +0.0087 [+0.0064, +0.0112]; partial personal +0.0151 [+0.0094,
+  +0.0207];
+- app shape: the partial personal term rises from 0.107 to 0.137.
+
+Through this app's own fit_user, over corpus raters at 30 / 60 / 100 labels, the new basis moves
+held-out Spearman under today's code from 0.441 / 0.457 / 0.471 to 0.464 / 0.478 / 0.494. Both
+members' verdicts are then used in full: 61 of 61 and 59 of 59.
+
+**The decision.** From bundle v20260926 the corpus ships the production Backbone:
+- E's fitted rows are the warm-column SVD rows, verbatim.
+- Every holdout row is its SVD fold-in onto the same user factors.
+- The method, its basis check and its held-out measurement travel under `BUNDLE.json`'s `backbone`
+  key.
+- `cold_mask` marks only rows with no crowd rating; there are none in v20260926.
+- A new array, `e_folded`, names the folded rows. The app need not read it.
+- E stays support-weighted (E = V·S). That is the corpus's answer to decision 236's question. How
+  the app's personal half treats a row's norm is decision 469's: it reads each row's gate-weighted
+  direction.
+
+The app changes no code to accept the bundle. It arrives on a seeded install as a models-only
+re-import (decisions 162 and 247), followed by a full refit with priors.
+
+**Cost.** One models-only re-import and one full refit of `title_prior` and `user_score`. Every
+ranked surface moves, and Tonight's D threshold (decision 217) must be re-read. Formerly held-out
+titles change `e_source` from `cold_tower` to `backbone`, so they lose the 'no crowd data' badge
+(decision 238). Decision 470's widening finds no uncoordinated seed-list title once this bundle is
+imported, and stays for a rated title with no crowd data of its own, such as an acquired one. §4.3
+gains one paragraph.
 
 ---
 

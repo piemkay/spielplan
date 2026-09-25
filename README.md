@@ -310,13 +310,13 @@ the app with, and on the second it reports that custody is intact and exits 0, c
   docker compose run --rm backend spielplan-secrets reset
   ```
 
-§10's swap sequence ends in a restart the importer does not perform. After any bundle import:
+The backend loads an imported bundle by itself within seconds, and the worker on its next job
+(decision 497). A restart is owed only when the Data tab, the wizard or the header says the
+backend could not load it (its log says why); then:
 
 ```bash
 docker compose restart backend worker
 ```
-
-The Data tab's banner names that command until it happens.
 
 ### Verify a backup
 
@@ -370,16 +370,17 @@ process being kept out of the way.
 
 **One thing the corpus does not yet supply is axes, and that disables a surface rather than
 degrading it.** The export's `artifacts/dna_vocab/v1/` ships the eleven facet vocabularies and no
-authored axis definition, so `dna_axis_weight` is empty on a real install: §6.4's Map has nothing
-to plot and renders its no-axes state, and Tonight's split surfacing (§6.2 step 5) is **off** —
-`contested_facet` iterates zero axes, `session_result.conflict` is NULL on every evening a
-household plays, and §14 risk 6's split rate reads a permanent 0 that says nothing. The app says
-so where an operator looks: the import report names both surfaces, and §6.6's Data card lists
-them under the axis count. Authoring the axes is corpus-side work (proposal 140) and is not in
-this repository; M4.12 repaired the combine's split branch anyway, so the day they arrive is not
-also the day four defects in that branch surface on real pools (decision 173). The suite's split
-tests hand-seed their axes and say so, which makes them statements about the rule rather than
-about what a household sees tonight — `docs/TESTING.md` carries the full version.
+authored axis definition, so `dna_axis_weight` is empty on a real install: §6.4's Map is not
+built yet (§12 M6; until it ships it is absent from navigation and from the title card, decision
+488) and will have nothing to plot when it is, and Tonight's **facet** split (§6.2 step 5) is
+**off** — `contested_facet` iterates zero axes, so a split is surfaced by person instead and never
+names a facet (decision 479). The app says so where an operator looks: the import report names
+both surfaces, and §6.6's Data card lists them under the axis count. Axes can be authored in the
+app's §6.6 axis editor (decision 342) or shipped by the corpus (proposal 140); M4.12 repaired the
+combine's split branch anyway, so the day they arrive is not also the day four defects in that
+branch surface on real pools (decision 173). The suite's split tests hand-seed their axes and say
+so, which makes them statements about the rule rather than about what a household sees tonight —
+`docs/TESTING.md` carries the full version.
 
 ### What lives under `data/`
 
@@ -564,9 +565,9 @@ the Library and title detail card render the imported titles. §12's exit criter
 "bundle imports clean; Library list and title card render imported titles" — was met **against
 the fixture** here and **against the real bundle at M4.5**, and the distance between those two is
 the whole of the M4.5 paragraph below. The release verdict for this row and every other §12 row
-is in [`docs/RELEASE.md`](docs/RELEASE.md), which also carries the criteria nobody has run. The
-restart §10 ends with is the operator's — `docker compose restart backend worker`, above under
-Recovery — and the Data tab says so until it happens.
+is in [`docs/RELEASE.md`](docs/RELEASE.md), which also carries the criteria nobody has run. Since
+decision 497 the backend loads a flipped bundle itself; the restart above under Recovery is owed
+only when that load fails, and the Data tab says so.
 
 **M1** is in place: the Jellyfin connector (≥ 10.9 routes, the corpus field set), optional
 one-to-one user linking with per-user access tokens, two-way seen-state sync, the ≥ 90%
@@ -606,9 +607,9 @@ spec defects, defects found and deliberately not fixed, and the debt that looks 
 the round of this-or-that pairs, the guest hand-off on the initiator's phone, the group combine
 with its split surfacing, the blind reveal, the result card, and solo mode. Two things
 have moved under it since: the round is **adaptive in length** rather than a fixed ten votes
-(a median of about eleven pairs, capped at twenty), and nothing about a session renders on a TV
-— the phone is the only surface and the `/tv` route is deleted rather than deferred
-(decision 165, carried out by M4.12). §12's exit criterion — "a real Friday night resolved
+(a median of about ten pairs on a household's film pool since decision 477, capped at twenty), and
+nothing about a session renders on a TV — the phone is the only surface and the `/tv` route is
+deleted rather than deferred (decision 165, carried out by M4.12). §12's exit criterion — "a real Friday night resolved
 by the app" — is another household claim; M4.12 is what rebuilt the flow against the real pool
 rather than the fixture's. Open points:
 [`docs/milestones/M4-open-points.md`](docs/milestones/M4-open-points.md).
