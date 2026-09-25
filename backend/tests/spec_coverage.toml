@@ -11814,6 +11814,8 @@ tests = [
     "backend/tests/test_home.py::test_the_payload_keeps_the_tables_order_though_the_claim_runs_in_another",
     "backend/tests/test_home.py::test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair",
     "backend/tests/test_home.py::test_the_anchor_is_the_highest_tier_before_the_highest_s",
+    "backend/tests/test_home.py::test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change",
+    "backend/tests/test_home.py::test_the_anchor_tie_break_reads_the_persons_verdict_not_the_reask",
     "backend/tests/test_home.py::test_the_sweet_spot_floor_is_read_against_the_owned_library",
     "backend/tests/test_home.py::test_a_kind_that_loses_a_merged_ranking_still_gets_its_own_section",
 ]
@@ -11831,6 +11833,7 @@ why = "Decision 486's register: model numbers behind Show the model, spec refere
 tests = [
     "backend/tests/test_home.py::test_no_shelf_sentence_carries_a_model_word_with_the_switch_off",
     "backend/tests/test_home.py::test_the_anchor_headline_says_what_the_person_did",
+    "backend/tests/test_home.py::test_the_anchor_headline_reads_the_persons_verdict_not_the_reask",
     "backend/tests/test_home.py::test_the_ledger_shelf_names_the_beta_its_own_ranking_used",
     "backend/tests/test_home.py::test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss",
     "backend/tests/test_home.py::test_the_sweet_spot_is_unseen_by_both_and_high_for_both",
@@ -11848,10 +11851,13 @@ id = "library-rate-home-counts-and-marks-the-households-library"
 spec = "§6.0 (count line, decision 18) + §7.1; decision 476"
 milestone = "M5"
 kind = "integration"
-what = "Home's payload names the owned titles per kind and the count line over the shelves states them (\"612 films in your library · 262 series hidden\"); the grid's line counts the catalog it lists; a catalog or search card of an owned title reads \"in library\", and one pill narrows the grid to owned titles; every shelf row states how many titles it holds, and a tier letter on a card is explained once in words and names itself, a guess on an unseen title."
+what = "Home's payload names the owned titles per kind and the count line over the shelves states them (\"612 films in your library · 262 series hidden\"); the grid's line counts the catalog it lists; a catalog or search card of an owned title reads \"in library\", and one pill narrows the grid to owned titles; every shelf row states how many titles it holds, and a tier letter on a card is explained once in words and names itself: \"as on your Rank board\" only for a title on the board at that letter, the person's own tier beside the fit's for a title they moved, and a guess on any title not on the board (decisions 476, 187 and 486 clause 7)."
 why = "A count of something the screen is not showing is the silent-truncation failure decision 18's count line exists to prevent, inverted."
 tests = [
     "backend/tests/test_home.py::test_home_counts_the_library_the_shelves_draw_on",
+    "backend/tests/test_home.py::test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows",
+    "frontend/src/lib/components/ShelfRow.svelte.test.js::says a tier letter on an unseen title is a guess, and one on the Rank board is not",
+    "frontend/src/lib/components/ShelfRow.svelte.test.js::never quotes the Rank board for a title that is not on it, or at another letter there",
     "e2e/specs/03-library.spec.js::films only, and the hidden count names what is missing",
     "e2e/specs/03-library.spec.js::owned titles are marked in the catalog and one pill narrows to them",
     "e2e/specs/10-home.spec.js::every shelf says how many titles it holds",

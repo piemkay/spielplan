@@ -30,14 +30,21 @@
   const numbers = $derived(whyNumbersLine(section.why_numbers));
 
   /**
-   * The tier letter's own sentence. On a title the person has seen it is their tier for it; on one
-   * they have not, it is the model's guess at the tier they would give it - an unseen title is on
-   * no Rank board - and the letter alone said neither, so on the first household "S" on an unseen
-   * card read as a grade someone had given it.
+   * The tier letter's own sentence (decision 476). The letter is the model's fitted tier (decision
+   * 187); the sentence says what that letter is to this person, and only what holds (decision 486
+   * clause 7). "As on your Rank board" is said of a title the server reports ON the board whose
+   * board letter is this one. A title the person moved on Rank to a tier the fit does not share
+   * says both, in Rank's own words for that disagreement. Every other letter is our guess - a title
+   * marked watched but never rated is on no Rank board either, so `seen` alone could not decide it.
    */
   function tierName(item) {
+    if (item.on_board) {
+      return item.board_tier && item.board_tier !== item.tier
+        ? `tier ${item.tier}, where your other answers point — you put it in ${item.board_tier} on your Rank board`
+        : `tier ${item.tier}, as on your Rank board`;
+    }
     return item.seen
-      ? `tier ${item.tier}, as on your Rank board`
+      ? `our guess: tier ${item.tier} if you rated it`
       : `our guess: tier ${item.tier} if you rated it — you haven't seen it`;
   }
 
@@ -184,14 +191,15 @@
                badges deliberately do not appear: Home shows the settled tier only. -->
           <span class="rank data" data-testid="shelf-rank">{item.rank}</span>
           {#if item.tier}
-            <!-- Outlined when it is a guess (decision 187 badges the fitted tier, which exists for
-                 unseen titles too), filled when the person has seen the title; the name says which
-                 for anyone who cannot see the difference, and `ShelfList` says it once in words. -->
+            <!-- Dashed when it is a guess (decision 187 badges the fitted tier, which exists for
+                 unrated titles too), solid when the title is on the person's Rank board; the name
+                 says which for anyone who cannot see the difference, and `ShelfList` says it once
+                 in words. -->
             <span
               class="tierbadge data"
-              class:guess={!item.seen}
+              class:guess={!item.on_board}
               data-testid="shelf-tier"
-              data-guess={!item.seen}
+              data-guess={!item.on_board}
               role="img"
               aria-label={tierName(item)}
               title={tierName(item)}
@@ -317,10 +325,13 @@
     right: 6px;
     color: var(--ink-2);
   }
+  /* The fill stays: a badge drawn over a poster is opaque, or the artwork decides its contrast
+     (design.css `--status`), and a transparent guess vanished on every light poster once real art
+     shipped (decision 483). The guess is told by its dashed edge and dimmer letter instead. */
   .tierbadge.guess {
-    background: transparent;
     border-style: dashed;
     border-color: var(--line-2);
+    color: var(--ink-3);
   }
   .count {
     color: var(--ink-4);

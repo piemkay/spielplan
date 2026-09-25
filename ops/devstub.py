@@ -3393,6 +3393,10 @@ def _home_card(
         "title_id": title_id, "kind": kind, "name": title["name"], "year": title["year"],
         "runtime_min": title["runtime_min"], "poster_path": None, "placement": placement,
         "seen": _seen_state(title_id) == "seen", "rank": rank, "tier": tier_set[index],
+        # `home/shelves._board_letters`: whether the title is on the Rank board, and its letter
+        # there. The harness has no drops, so a rated title's board letter is the fitted one.
+        "on_board": title_id in _verdicts(user_id),
+        "board_tier": tier_set[index] if title_id in _verdicts(user_id) else None,
         "terms": list(terms),
         # OUTSIDE `model`, because `home/shelves.py:399-413` puts them there: decision 117's
         # gate strips `model` wholesale, so §8 stage 10's "no crowd data yet" badge cannot be

@@ -56,7 +56,7 @@ from spielplan.home.why import WhyTerm
 # evidence k, and §5.2 puts every tuned number in `ledger_hyperparams.json`. It was a literal 10
 # twice in this file, beside a gate the cards report from `title_prior`. [M4.13 step 34d]
 from spielplan.ledger.hyperparams import DEFAULTS
-from spielplan.ledger.observations import rescale_level
+from spielplan.ledger.observations import LIVE_LABEL_SQL, rescale_level
 
 # The type the one caller passes, and the bundle's own reading of the cold path. See
 # `fit_yardstick` below: this module prints the fold-in's rho, so this module is where the
@@ -464,6 +464,13 @@ def _card(
     with a tension badge on the surface built to show it; proposal 29 forbids that badge here,
     so Home states the model's reading and says nothing it cannot qualify. The one sentence on
     Home that must read the drop instead is shelf 1's headline, because its verb is "you put".
+
+    The letter's SENTENCE is another matter. Decision 476 has it say "tier B, as on your Rank
+    board", which is true only of a title that is on the board at all (`ls.observed`, as
+    `rank/read.py` reads it) and whose board letter is this one. So `_finish` adds `on_board` and
+    `board_tier` (Rank's letter: the latest drop, rescaled, else the fit) beside the badge, and the
+    card says the Rank sentence only where it holds (decision 486 clause 7). The letter itself
+    stays the model's.
     """
     index = row["tier"]
     tier = tier_set[index] if index is not None and 0 <= index < len(tier_set) else None
@@ -571,7 +578,58 @@ async def _finish(
         # Every shelf gets a vocabulary clause where the vocabulary supports one. Computed by
         # intersection over the cards actually returned, so it cannot be false (§6.8).
         section.shared_terms = await why_mod.common_terms(conn, title_ids=ids, version=ctx.version)
+    board = await _board_letters(
+        conn,
+        user_id=ctx.user_id,
+        title_ids=[int(c["title_id"]) for c in section.items],
+        tier_set=await tier_set_of(conn, user_id=ctx.user_id, kind=section.kind),
+    )
+    for card in section.items:
+        card["on_board"] = int(card["title_id"]) in board
+        card["board_tier"] = board.get(int(card["title_id"]))
     return section, None
+
+
+async def _board_letters(
+    conn: asyncpg.Connection, *, user_id: int, title_ids: Sequence[int], tier_set: Sequence[str]
+) -> dict[int, str | None]:
+    """The letter §6.3's board renders for each of these titles that is on it.
+
+    On the board is `ledger_state.observed` - §6.3's "every rated title", read as `rank/read.py`
+    reads it - so a title §7.2's sync marked watched and nobody rated is absent, fitted tier or
+    not. Where it is, the letter is the one `rank/board.build` renders: the latest `tier_edit`,
+    re-read in the current set through `rescale_level` exactly as `rank/read.items` re-reads it,
+    and the fitted tier where there is no drop. Decision 476's "tier B, as on your Rank board" is
+    a quotation of this value, so the card is handed the value rather than a guess at it.
+    """
+    if not title_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT ls.title_id, ls.tier, te.tier AS assigned, te.n_levels AS assigned_k
+          FROM ledger_state ls
+          LEFT JOIN (
+              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
+                FROM tier_edit
+               WHERE user_id = $1 AND title_id = ANY($2)
+               ORDER BY title_id, created_at DESC, id DESC
+          ) te ON te.title_id = ls.title_id
+         WHERE ls.user_id = $1 AND ls.title_id = ANY($2) AND ls.observed
+        """,
+        user_id,
+        list(title_ids),
+    )
+    letters: dict[int, str | None] = {}
+    for r in rows:
+        if r["assigned"] is not None:
+            level: int | None = rescale_level(
+                int(r["assigned"]), k_from=r["assigned_k"], k_to=len(tier_set)
+            )
+        else:
+            level = None if r["tier"] is None else int(r["tier"])
+        in_set = level is not None and 0 <= level < len(tier_set)
+        letters[int(r["title_id"])] = tier_set[level] if in_set else None
+    return letters
 
 
 # --- shelf 1: because_anchor ------------------------------------------------------------------
@@ -625,13 +683,23 @@ async def because_anchor(
     # Ledger's `s`. An argmax of `s` alone let the scale of one coordinate choose: a title the
     # Cold Tower placed sat at s 21.8 against 9.7 for the next, and anchored the shelf over the
     # household's own top-tier titles (decision 475).
-    anchor = await conn.fetchrow(
-        """
-        SELECT t.id, t.name, ls.tier AS model_tier, COALESCE(te.tier, ls.tier) AS tier,
-               -- NULL whenever the tier comes from the fit rather than from a drop, which is
-               -- exactly when there is no earlier board to map from. [M4.13, dd06]
-               CASE WHEN te.tier IS NULL THEN NULL ELSE te.n_levels END AS assigned_k,
-               te.tier IS NOT NULL AS placed, lv.value AS verdict
+    #
+    # "The tier the board shows" is a drop READ IN THE CURRENT SET, so the candidates come back
+    # whole and are ordered here, after `rescale_level`, rather than by `COALESCE(te.tier,
+    # ls.tier)` in SQL: decision 11 keeps a drop's index across a change in K, and an S drop on a
+    # 7-level board (index 6) renders as T11 of 12 but sorted as 6, below any title fitted at
+    # T7-T10. The comparison has to be made on the scale Rank renders, or the anchor is not the
+    # title in the highest tier the board shows. [decision 475, decision 11]
+    #
+    # "Their live verdict" is `LIVE_LABEL_SQL` - the newest non-re-ask row - and not
+    # `superseded_by IS NULL`: after §13's silent re-ask the only un-superseded row is the
+    # instrument's, and the tie-break and the "you liked" headline would both report the re-ask's
+    # answer as the person's (the reason `rate/direct.live_verdict` gives for the same read).
+    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    candidates = await conn.fetch(
+        f"""
+        SELECT t.id, t.name, ls.tier AS model_tier, ls.s,
+               te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
@@ -641,20 +709,13 @@ async def because_anchor(
                WHERE user_id = $1
                ORDER BY title_id, created_at DESC, id DESC
           ) te ON te.title_id = ls.title_id
-          LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, value
-                FROM verdict
-               WHERE user_id = $1 AND superseded_by IS NULL
-               ORDER BY title_id, created_at DESC, id DESC
-          ) lv ON lv.title_id = ls.title_id
+          LEFT JOIN ({LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
          WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
-         ORDER BY COALESCE(te.tier, ls.tier) DESC, COALESCE(lv.value, -1) DESC, ls.s DESC, t.id
-         LIMIT 1
         """,
         ctx.user_id,
         kind,
     )
-    if anchor is None:
+    if not candidates:
         # Both predicates, named: "seen" and "rated" fail for different reasons and are fixed by
         # different actions, and a reason line that names only one sends a person who has rated
         # nothing off to mark titles watched (§6.8 — the suppressed list exists to be acted on).
@@ -663,27 +724,38 @@ async def because_anchor(
             "no title of this kind is both seen and rated with a fitted tier yet",
         )
 
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    def shown(row: asyncpg.Record) -> int:
+        # RESCALED, not suppressed, and only for the ASSIGNED tier. Decision 11 keeps `tier_edit`
+        # rows across a change in K, so a drop into a level that no longer exists is a state this
+        # shelf is guaranteed to meet — and the answer is the one `rank/read.py` and
+        # `rank/board.py` give, through the same helper, because §6.0 row 1's verb ("you PUT it
+        # there") makes the headline a quotation of what §6.3 renders. Until M4.13 both surfaces
+        # CLAMPED, so both named tier 6 of a grown 12-level set: agreeing, and wrong. Mapping on
+        # one side only would have been worse than either — Home saying "in T6" while Rank showed
+        # T11 is ml01's own measured symptom. Suppressing shelf 1 over a stale level would take
+        # the whole shelf down for the one person who uses drag-and-drop most.
+        # [decision 11, M4.9 finding 16, M4.13 dd06]
+        if row["assigned"] is None:
+            return int(row["model_tier"])
+        return rescale_level(int(row["assigned"]), k_from=row["assigned_k"], k_to=len(tier_set))
+
+    anchor = min(
+        candidates,
+        key=lambda r: (
+            -shown(r),
+            -(r["verdict"] if r["verdict"] is not None else -1),
+            -float(r["s"]),
+            int(r["id"]),
+        ),
+    )
+    # The FIT is checked, and not clamped: a model tier outside the set means the refit and the
+    # cutpoints disagree, which is a bug rather than a state, and no clamp should paper over it.
     model_index = int(anchor["model_tier"])
     if not 0 <= model_index < len(tier_set):
         return None, Suppressed(
             sid, kind, f"anchor tier index {model_index} is outside the tier set"
         )
-    # RESCALED, not suppressed, and only for the ASSIGNED tier. Decision 11 keeps `tier_edit` rows
-    # across a change in K, so a drop into a level that no longer exists is a state this shelf is
-    # guaranteed to meet — and the answer is the one `rank/read.py` and `rank/board.py` give,
-    # through the same helper, because §6.0 row 1's verb ("you PUT it there") makes the headline a
-    # quotation of what §6.3 renders. Until M4.13 both surfaces CLAMPED, so both named tier 6 of a
-    # grown 12-level set: agreeing, and wrong. Mapping on one side only would have been worse than
-    # either — Home saying "in T6" while Rank showed T11 is ml01's own measured symptom, and it is
-    # this line that would have produced it. Suppressing shelf 1 over a stale level would take the
-    # whole shelf down for the one person who uses drag-and-drop most. The FIT is checked above
-    # instead: a model tier outside the set means the refit and the cutpoints disagree, which is a
-    # bug rather than a state, and no clamp should paper over it.
-    # [decision 11, M4.9 finding 16, M4.13 dd06]
-    index = rescale_level(
-        int(anchor["tier"]), k_from=anchor["assigned_k"], k_to=len(tier_set)
-    )
+    index = shown(anchor)
 
     pool = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version)
     shared = await why_mod.anchor_neighbours(
@@ -721,7 +793,7 @@ async def because_anchor(
 
     beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
     tier = tier_set[index]
-    if anchor["placed"]:
+    if anchor["assigned"] is not None:
         title = f"Because you put {anchor['name']} in {tier}"
     elif anchor["verdict"] == 2:
         title = f"Because you liked {anchor['name']}"

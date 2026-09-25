@@ -176,16 +176,37 @@ describe('what a row says about itself', () => {
     unmount(app);
   });
 
-  it('says a tier letter on an unseen title is a guess, and one on a seen title is not', () => {
+  it('says a tier letter on an unseen title is a guess, and one on the Rank board is not', () => {
     const app = render([
       card({ title_id: 1, tier: 'S', seen: false }),
-      card({ title_id: 2, tier: 'B', seen: true })
+      card({ title_id: 2, tier: 'B', seen: true, on_board: true, board_tier: 'B' })
     ]);
     const [guess, placed] = target.querySelectorAll('[data-testid="shelf-tier"]');
-    expect(guess.getAttribute('aria-label')).toContain('our guess: tier S');
+    expect(guess.getAttribute('aria-label')).toBe(
+      "our guess: tier S if you rated it — you haven't seen it"
+    );
     expect(guess.dataset.guess).toBe('true');
     expect(placed.getAttribute('aria-label')).toBe('tier B, as on your Rank board');
     expect(placed.dataset.guess).toBe('false');
+    unmount(app);
+  });
+
+  // Decision 476's "as on your Rank board" is a quotation of Rank, so it is said only where Rank
+  // shows this letter (decision 486 clause 7). A title marked watched and never rated is on no
+  // board; a title moved on Rank shows the person's tier there, not the fit's.
+  it('never quotes the Rank board for a title that is not on it, or at another letter there', () => {
+    const app = render([
+      card({ title_id: 1, tier: 'S', seen: true, on_board: false, board_tier: null }),
+      card({ title_id: 2, tier: 'C', seen: true, on_board: true, board_tier: 'A' })
+    ]);
+    const [unrated, moved] = target.querySelectorAll('[data-testid="shelf-tier"]');
+    expect(unrated.getAttribute('aria-label')).toBe('our guess: tier S if you rated it');
+    expect(unrated.dataset.guess).toBe('true');
+    expect(moved.getAttribute('aria-label')).toBe(
+      'tier C, where your other answers point — you put it in A on your Rank board'
+    );
+    expect(moved.dataset.guess).toBe('false');
+    expect(target.textContent).not.toContain('as on your Rank board');
     unmount(app);
   });
 

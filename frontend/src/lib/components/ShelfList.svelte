@@ -31,8 +31,8 @@
   <div class="shelves" data-testid="shelves" data-shelf-count={payload?.shelves_total ?? 0}>
     {#if lettered}
       <p class="why legend" data-testid="tier-legend">
-        Letters are tiers, as on your Rank board — outlined when it's our guess for a title you
-        haven't seen.
+        Letters are tiers — a dashed outline means it's our guess, for a title you haven't rated
+        yet.
       </p>
     {/if}
     {#if both}

@@ -2167,6 +2167,131 @@ async def test_the_anchor_headline_says_what_the_person_did(world):
     assert placed["title"] == "Because you put Home Film 1000 in A+"
 
 
+async def _reask(db, user_id: int, title_id: int, *, real: int, reask: int) -> None:
+    """The person answers `real`, then §13's silent re-ask answers `reask`, each stamped as
+    `record_verdict` stamps it: every write supersedes the row before it, the re-ask included, so
+    the only un-superseded row left is the instrument's."""
+    async def write(value: int, *, reask_of: int | None) -> int:
+        row = await db.fetchval(
+            "INSERT INTO verdict (user_id, title_id, value, is_reask, reask_of) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            user_id, title_id, value, reask_of is not None, reask_of,
+        )
+        await db.execute(
+            "UPDATE verdict SET superseded_by = $1 "
+            "WHERE user_id = $2 AND title_id = $3 AND id <> $1 AND superseded_by IS NULL",
+            row, user_id, title_id,
+        )
+        return row
+
+    await write(reask, reask_of=await write(real, reask_of=None))
+
+
+async def test_the_anchor_headline_reads_the_persons_verdict_not_the_reask(world):
+    """Decisions 475/476 read "the latest live verdict", and a re-ask is not one: §13's stream
+    measures a judgement and must not be one (`LIVE_LABEL_SQL`). After a re-ask the only
+    un-superseded row is the instrument's, so `superseded_by IS NULL` let a "fine" title whose
+    re-ask came back "liked" be headlined "Because you liked", and the reverse."""
+    await world.db.execute(
+        "UPDATE ledger_state SET observed = false "
+        "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
+        world.patrick,
+    )
+    await _reask(world.db, world.patrick, 1000, real=1, reask=2)
+    fine = world.section(await world.home(), "because_anchor", "movie")
+    assert fine["title"] == "More like Home Film 1000", fine["title"]
+
+    await _reask(world.db, world.patrick, 1000, real=2, reask=1)
+    liked = world.section(await world.home(), "because_anchor", "movie")
+    assert liked["title"] == "Because you liked Home Film 1000", liked["title"]
+
+
+async def test_the_anchor_tie_break_reads_the_persons_verdict_not_the_reask(world):
+    """The same read, in the tie-break: at one tier a live "liked" outranks a "fine" whatever the
+    re-ask said, before the Ledger's `s` is consulted (decision 475)."""
+    await _tag(world.db, 1012, "obsession", "themes", 3)
+    await _tag(world.db, 1012, "morally-grey", "character", 3)
+    # 1000 (s 3.0) and 1012 (s 2.0) share tier A. 1000's own answer is "fine"; its re-ask said
+    # "liked", which would tie it with 1012 on the verdict and hand it the anchor on `s`.
+    await _reask(world.db, world.patrick, 1000, real=1, reask=2)
+    section = world.section(await world.home(), "because_anchor", "movie")
+    assert section["anchor"]["title_id"] == 1012, section["anchor"]
+    assert section["title"] == "Because you liked Home Film 1012"
+
+
+async def test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change(world):
+    """Decision 475 anchors on "the highest tier the board shows", and after a change in K the
+    board shows a drop through `rescale_level` (decision 11). Ordered by the raw index, an S drop
+    on the 7-level board (6) sorted below a title fitted at T9 of 12, although Rank renders the
+    drop at T11 - so the anchor was not the title in the highest tier on the board."""
+    labels = [f"T{i}" for i in range(12)]
+    await _tag(world.db, 1012, "obsession", "themes", 3)
+    await _tag(world.db, 1012, "morally-grey", "character", 3)
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
+        "VALUES ($1, 1012, 6, 'drag_drop', 7)",
+        world.patrick,
+    )
+    await world.db.execute(
+        """
+        INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set)
+        VALUES ($1, 'movie', $2::float8[], $3::text[])
+        ON CONFLICT (user_id, kind) DO UPDATE
+            SET boundaries = EXCLUDED.boundaries, tier_set = EXCLUDED.tier_set
+        """,
+        world.patrick,
+        [float(b) for b in model.initial_cutpoints(len(labels))],
+        labels,
+    )
+    await world.db.execute(
+        "UPDATE ledger_state SET tier = 9 WHERE user_id = $1 AND title_id = 1000", world.patrick
+    )
+    section = world.section(await world.home(), "because_anchor", "movie")
+    assert section["anchor"]["title_id"] == 1012, section["anchor"]
+    assert section["title"] == "Because you put Home Film 1012 in T11", section["title"]
+    rows = {r.title_id: r for r in await read.items(world.db, user_id=world.patrick, kind="movie")}
+    assert rows[1012].assigned_tier == 11, "Rank renders the drop somewhere else"
+
+
+async def test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows(world):
+    """Decision 476's "tier B, as on your Rank board" quotes §6.3's board, and decision 187 keeps
+    the letter on the fitted tier. The card therefore carries what the board shows beside it, so
+    the sentence is said only where it is true (decision 486 clause 7): a title marked watched and
+    never rated is on no board (`ls.observed`, as `rank/read.py` reads it), and a title the person
+    moved renders at their drop, not the fit."""
+    # 1021 is seen with no rating, and `refit_user` still writes it a fitted tier (Dunkirk on the
+    # first household). 1015 is fitted B and dropped into A+ on Rank. 1012 is fitted A, no drop.
+    await world.db.execute(
+        """
+        INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed)
+        VALUES ($1, 1021, 9.0, 0.2, 0.99, 6, 'movie', false)
+        """,
+        world.patrick,
+    )
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 1015, 5, 'drag_drop')",
+        world.patrick,
+    )
+    section = world.section(await world.home(), "top_of_ledger", "movie")
+    cards = {c["title_id"]: c for c in section["items"]}
+    assert (cards[1021]["tier"], cards[1021]["on_board"], cards[1021]["board_tier"]) == (
+        "S", False, None
+    ), "a title nobody rated is not on the Rank board, whatever the fit says"
+    assert (cards[1015]["tier"], cards[1015]["on_board"], cards[1015]["board_tier"]) == (
+        "B", True, "A+"
+    ), "the letter stays the fit's (decision 187) and the board's letter travels beside it"
+    assert (cards[1012]["tier"], cards[1012]["on_board"], cards[1012]["board_tier"]) == (
+        "A", True, "A"
+    )
+    board = {r.title_id: r for r in await read.items(world.db, user_id=world.patrick, kind="movie")}
+    assert 1021 not in board and board[1015].assigned_tier == 5
+    # Every card on every shelf carries the pair, so no card can fall back to `seen`.
+    for shelf in (await world.home())["shelves"]:
+        for sec in shelf["sections"]:
+            for card in sec["items"]:
+                assert "on_board" in card and "board_tier" in card, (shelf["id"], card)
+
+
 async def test_a_cold_placed_title_with_crowd_ratings_is_not_new(world):
     """§8 stage 10 names the badge by the absence of crowd data. The bundle's evaluation holdout
     serves crowd-rated rows from the Cold Tower, so on the first household Raiders of the Lost
