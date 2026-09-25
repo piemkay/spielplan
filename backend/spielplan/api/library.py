@@ -365,4 +365,7 @@ async def client_config(request: Request) -> dict[str, Any]:
         # From memory and not from the database (`basis.unloaded`), because this route is the
         # unauthenticated bootstrap whose failure semantics decision 271 defines. [decision 497]
         "restart_required": basis.unloaded(request.app.state),
+        # The version an app-minted title's poster URL carries (`art/poster.url_epoch`), read at
+        # boot and held in memory like the line above. An opaque digest, not a date.
+        "art_epoch": getattr(request.app.state, "art_epoch", None),
     }

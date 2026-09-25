@@ -68,6 +68,9 @@ export const session = $state({
   /** @type {any} */
   bundle: null,
   publicUrl: '',
+  // The version an app-minted title's poster URL carries (`art.js`); null until `/config` says.
+  /** @type {string | null} */
+  artEpoch: null,
   // Not "the browser says navigator.onLine": this is "the appliance did not answer the one
   // request that decides who is holding the phone". A LAN box that is restarting, a Tailscale
   // route that has dropped and a phone with no signal are the same fact to the shell, and §3.1
@@ -118,6 +121,7 @@ export async function bootstrap() {
       session.restartRequired = config.restart_required === true;
       session.bundle = config.bundle;
       session.publicUrl = config.public_url;
+      session.artEpoch = config.art_epoch ?? null;
     }
     // The sibling read, with decision 271's rule applied to it. `/config`'s three fields are
     // assigned only inside `if (config)` above precisely so a swallowed failure cannot overwrite

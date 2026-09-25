@@ -243,6 +243,8 @@ def config() -> dict[str, Any]:
         # Decision 497's one state the shell renders differently from "no bundle imported": a
         # bundle the backend could not load. Unreachable here - this harness loads nothing.
         "restart_required": False,
+        # `art/poster.url_epoch`: the harness has one database for its whole life.
+        "art_epoch": "devstub",
     }
 
 

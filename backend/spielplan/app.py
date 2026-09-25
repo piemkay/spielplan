@@ -50,7 +50,7 @@ from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
 from spielplan.api.deps import carry_slid_session_cookie
-from spielplan.art.poster import ArtService
+from spielplan.art.poster import ArtService, url_epoch
 from spielplan.connectors import registry
 from spielplan.core import logs, secrets, storage
 from spielplan.core.config import Settings, settings
@@ -219,6 +219,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # the branch from the start; this is the path the runbook actually greps.
         # [M4.7 ops-09, cycle 2 findings 1 and 8; decision 181]
         log.info("applied migrations: %s", ", ".join(applied) or "(none pending)")
+        # Read after the migrations, so a fresh database's birth is the one it now has. Served by
+        # `/api/config`; `art/poster.url_epoch` says why an app-minted poster URL needs it.
+        app.state.art_epoch = await url_epoch(conn)
         # §2: "env vars may *seed* connector config on first boot for automated installs."
         # First boot only — a connector that already has a row is left alone, so the admin UI
         # stays the source of truth the owner asked for.

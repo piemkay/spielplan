@@ -11,9 +11,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { posterSrc, preloadPoster, titleIdOf } from './art.js';
 import { preloadArt } from './rate.svelte.js';
+import { session } from './session.svelte.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  session.artEpoch = null;
 });
 
 describe('posterSrc', () => {
@@ -40,6 +42,18 @@ describe('posterSrc', () => {
       expect(posterSrc(title)).toBeNull();
     }
     expect(titleIdOf({ title_id: '42' })).toBe(42);
+  });
+
+  // A re-seed mints app ids from 1000000000 again for other titles, and the browser keeps a 200
+  // for 180 days without asking: the URL has to change with the database or the old art stays.
+  it("versions an app-minted title's URL by the database, and leaves a corpus id bare", () => {
+    session.artEpoch = 'a1b2c3';
+    expect(posterSrc({ id: 1000000003 })).toBe('/api/art/1000000003/poster?v=a1b2c3');
+    expect(posterSrc({ title_id: 949 })).toBe('/api/art/949/poster');
+    session.artEpoch = 'ffee00';
+    expect(posterSrc({ id: 1000000003 })).toBe('/api/art/1000000003/poster?v=ffee00');
+    session.artEpoch = null;
+    expect(posterSrc({ id: 1000000003 })).toBe('/api/art/1000000003/poster');
   });
 
   it('never names a third-party host', () => {

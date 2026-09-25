@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from collections.abc import Callable
@@ -123,6 +124,25 @@ class Answer:
     @classmethod
     def none(cls, max_age: int) -> Answer:
         return cls(404, max_age)
+
+
+async def url_epoch(conn: asyncpg.Connection) -> str | None:
+    """The version an app-minted title's poster URL carries: a digest of this database's birth.
+
+    Decision 483 lets a browser keep a 200 for 180 days on a URL that names only the title id, and
+    within that window it never asks again, so the ETag is never read. A corpus id names one title
+    in every database seeded from the corpus. An app-minted id does not: a re-seed is a fresh
+    database, `position_id_sequences` restarts `title_id_seq` at `APP_ID_MIN`, and the drain mints
+    1000000000 onward again in whatever order intake and retries reach the Jellyfin items - so a
+    phone kept showing the previous database's poster under another title's name. The URL is
+    therefore versioned by what changes exactly when an id can be handed out again (the first
+    migration's time), and the 200 keeps decision 483's header. A restore keeps the rows, and the
+    digest with them. `art.js` appends it to app-minted ids only; the route ignores it.
+    """
+    born = await conn.fetchval("SELECT min(applied_at) FROM schema_migration")
+    if born is None:
+        return None
+    return hashlib.sha256(born.isoformat().encode("utf-8")).hexdigest()[:12]
 
 
 class _Outcome:
@@ -290,4 +310,4 @@ class ArtService:
         return _Outcome.OK, (response.content, content_type)
 
 
-__all__ = ["Answer", "ArtService", "acceptable", "sniff"]
+__all__ = ["Answer", "ArtService", "acceptable", "sniff", "url_epoch"]

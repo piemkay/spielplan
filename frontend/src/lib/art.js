@@ -13,7 +13,19 @@
  * the shelves, every Tonight payload and the finish prompt send `title_id` - and in the finish
  * prompt `id` is the prompt's own row, not the title's. A helper that read only `id` asked for
  * `/api/art/undefined/poster` on every Tonight card and for the wrong title on the prompt.
+ *
+ * AN APP-MINTED ID CARRIES THE DATABASE'S VERSION. A 200 is kept 180 days on this URL (decision
+ * 483), and a re-seed hands ids from 1000000000 out again to whatever titles the new drain
+ * reaches first - so an id-only URL showed the last database's poster under another title's
+ * name. `/config` sends `art_epoch` (`art/poster.url_epoch` on the server, which changes exactly
+ * when an id can be reused) and it rides as `?v=`, which the route ignores. A corpus id names
+ * one title in every database and keeps its bare URL.
  */
+
+import { session } from '$lib/session.svelte.js';
+
+/** `derive/ids.APP_ID_MIN`: the first id this app mints; below it, the corpus's own ids. */
+const APP_ID_MIN = 1_000_000_000;
 
 /** The title's id from whichever key its payload uses, or null when it names none. */
 export function titleIdOf(title) {
@@ -26,7 +38,9 @@ export function titleIdOf(title) {
 /** The same-origin poster URL for a title, or null when there is no title to ask about. */
 export function posterSrc(title) {
   const id = titleIdOf(title);
-  return id === null ? null : `/api/art/${id}/poster`;
+  if (id === null) return null;
+  const epoch = id >= APP_ID_MIN ? session.artEpoch : null;
+  return epoch ? `/api/art/${id}/poster?v=${encodeURIComponent(epoch)}` : `/api/art/${id}/poster`;
 }
 
 /**

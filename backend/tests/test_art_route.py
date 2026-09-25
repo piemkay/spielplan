@@ -14,7 +14,7 @@ import asyncio
 import httpx
 import pytest
 
-from spielplan.art.poster import ArtService
+from spielplan.art.poster import ArtService, url_epoch
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.db import pool
@@ -198,3 +198,26 @@ async def test_no_pooled_connection_is_held_while_the_host_is_asked(app, db, tmp
 async def test_a_title_id_that_is_not_a_number_is_refused_by_the_route(app, title_id):
     admin = await _admin(app)
     assert (await admin.get(f"/api/art/{title_id}/poster")).status_code == 422
+
+
+async def test_an_app_minted_poster_url_is_versioned_by_the_database_it_names(app, db):
+    """A 200 is kept 180 days on a URL naming the title id (decision 483), and a re-seed is a fresh
+    database that mints app ids from 1000000000 again for other titles, so the browser showed the
+    previous database's poster under a new title. `/config` hands the shell a version that changes
+    exactly when the database does (`art.js` appends it to app-minted ids); a restore keeps it."""
+    config = (await app().get("/api/config")).json()
+    assert config["art_epoch"], config
+    assert config["art_epoch"] == await url_epoch(db)
+    assert config["art_epoch"] == await url_epoch(db), "the version moved without the database"
+
+    # Another database is one born at another moment. Rolled back: the rows are the harness's.
+    tx = db.transaction()
+    await tx.start()
+    try:
+        await db.execute(
+            "UPDATE schema_migration SET applied_at = applied_at - interval '1 day' "
+            "WHERE version = (SELECT min(version) FROM schema_migration)"
+        )
+        assert await url_epoch(db) != config["art_epoch"]
+    finally:
+        await tx.rollback()
