@@ -136,26 +136,21 @@ _REQUIRED = ("title_ids", "E", "b_i", "item_n", "mu")
 # WHAT THIS COSTS, SAID OUT LOUD. Excluding the row makes `support()` report 0 and `coordinate()`
 # report gate 0 with `e_source = 'cold_tower'` for a title the crowd may have rated two hundred
 # thousand times. Internally that is coherent — the gate weights a coordinate, and there is no
-# coordinate to weight — but §8 stage 10's badge reads `e_source == 'cold_tower'` as "no crowd
-# data yet", and after the sweep stamps them these titles wear it: 182 of the reference library's
-# 839 owned titles, on top of the 130 `cs-62-sweep-badges-130-titles-cold` already counts. Decision
-# 238 hands the repair to whichever milestone owns §8 stage 10's badge input, and this is named
-# here rather than pre-empted: a title served at e(t) = 0 and called warm was the worse of the two,
-# and it was invisible.
+# coordinate to weight — and §8 stage 10's badge used to read `e_source == 'cold_tower'` alone as
+# "no crowd data yet", so after the sweep stamped them these titles wore it: 182 of the reference
+# library's 839 owned titles. Decision 238 handed the repair to whichever milestone owned §8 stage
+# 10's badge input; a title served at e(t) = 0 and called warm was the worse of the two, and it was
+# invisible.
 #
-# WHAT THAT MILESTONE IS OWED IS NOT THE `title.placement` CHECK, which this paragraph used to
-# say. cs-62's own 130 are titles that HAVE a Backbone row below WARM_SUPPORT, so their
-# `e_source` is 'blended' and a fourth `title.placement` state would describe them; these 182
-# have no row in the index at all, so their `e_source` is genuinely 'cold_tower', and the badge
-# is decided off `e_source` and never off `placement` --
-# `PosterCard.svelte`'s expression says so in as many words and
+# DECISION 475 IS THAT REPAIR, and it is not the `title.placement` check this paragraph once named
+# (these rows have no index row, so their `e_source` is genuinely 'cold_tower' and widening
+# `placement` moves nothing for them). The badge now admits only a title with no crowd rating -
+# `item_n` null or 0 - whatever `e_source` says: `PosterCard.svelte`'s `isColdPlaced` asks the
+# count first, "New in the library" filters on it, and
 # `test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement` freezes
-# it character for character. So widening `title.placement` moves nothing for these rows, and the
-# open question is a different one: how §8 stage 10 should describe a title the CROWD rated and
-# the corpus did not place. A fourth `ESource` value (and the CHECK on `title_prior.e_source` in
-# `0009_scoring.sql`, not the one on `title.placement` in `0003_content.sql`), or a flag beside
-# it. Recorded as its own line so it is not absorbed into a repair that cannot perform it.
-# [M4.13 cycle 2, M413-C2-DIM5-06]
+# the expression. So a crowd-rated title with no coordinate keeps `e_source = 'cold_tower'` here,
+# which is true of its coordinate, and no longer reads to a member as a title nobody has rated.
+# [M4.13 cycle 2, M413-C2-DIM5-06; decision 475]
 #
 # THE MASK TAKES THE COORDINATE AND NOT THE PRIOR. `cold_mask` is the corpus's evaluation holdout -
 # every fifth title by rating count, 20% of the rows (exp_cold_tower2.py) - so a flagged row's

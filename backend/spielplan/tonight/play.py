@@ -1077,7 +1077,7 @@ async def progress(conn: asyncpg.Connection, session_id: int) -> list[dict[str, 
 
 
 def expected_pairs(answered: int) -> int:
-    """54c's "Jenny 9/~12": an ESTIMATE of a seat's round, never the cap.
+    """§6.2 step 4's "Jenny 11/~12": an ESTIMATE of a seat's round, never the cap (decision 477).
 
     The typical round until the seat has passed it, then one more than it has answered — so the
     line never tells somebody at pair 13 that they are due to stop at 10 — and never past the cap

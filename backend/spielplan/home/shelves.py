@@ -994,12 +994,12 @@ async def partner_for(conn: asyncpg.Connection, *, user_id: int) -> dict[str, An
 async def shared_sweet_spot(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str, partner: dict[str, Any] | None
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 4 — "You and {other} both rate these highly" / "the shared sweet spot — doubles
-    as the Tonight prior".
+    """§6.0 row 4 — "You and {other} would both enjoy these" / "neither of you has seen them — a
+    good pick for a night in together" (the shared sweet spot, ranked as Tonight's pool is).
 
     Ordered by the PLAIN AVERAGE of the two scores, which is the same rule §6.2 step 3 ranks the
     Tonight pool by ("the plain average of member Ledger scores (measured: nothing dominates
-    averaging; dominance rules cost −0.012)"). That is what makes "doubles as the Tonight prior"
+    averaging; dominance rules cost −0.012)"). That is what makes "ranked as Tonight's pool is"
     a shared arithmetic rather than a claim.
 
     THE 0..1 WEIGHT. §5.2 defines it as "the empirical CDF of the user's own fitted `s` values,
@@ -1127,7 +1127,8 @@ async def school_night(
 async def new_in_library(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 6 — "New in the library" / "placed by the Cold Tower — no crowd data yet".
+    """§6.0 row 6 — "New in the library" / "no outside ratings yet, so we placed them by what
+    they're about".
 
     Ordered by recency rather than by score, which is why it is the one shelf that still ships
     for a user with no verdicts (proposal 20 suppresses "every score-ordered shelf").

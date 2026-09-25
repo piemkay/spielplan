@@ -1232,7 +1232,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-mix-alternates-blocks"
-spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\"); decision 492"
+spec = "§6.1 (\"Mix (default — single titles until the person holds 15 live ratings over the session's kinds, then alternates sweep and battle; decision 492), Sweep, Battle; blocks of 15\"); decision 492"
 milestone = "M2"
 kind = "integration"
 what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and, once the person holds fifteen live ratings over the session's kinds (decision 492), flips the served card type between sweep and battle, so a run of duels still returns sweep cards — including across the block boundary; before that Mix serves sweeps with the counter calling sweep and no substitution marked; the counter runs 1..15 and rolls into a new block."
@@ -1357,6 +1357,8 @@ tests = [
     "backend/tests/test_rate_queue.py::test_the_warning_does_not_arm_before_fifteen_labels",
     "backend/tests/test_rate_queue.py::test_the_warning_never_asks_for_a_different_answer",
     "e2e/specs/11-rate.spec.js::the class-balance widget counts from the first rating and holds its warning until 15",
+    "frontend/src/lib/components/RateClassBalance.svelte.test.js::counts ratings from the first one and says when the check begins",
+    "frontend/src/lib/components/RateClassBalance.svelte.test.js::renders the warning as sent, and no threshold caption beside it",
 ]
 
 [[requirement]]
@@ -6410,7 +6412,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-cold-badge-follows-crowd-support-not-placement"
-spec = "§8 stage 10 (\"a 'new — model placement, no crowd data' badge until ratings accrue\")"
+spec = "§8 stage 10 (\"a 'new' badge - 'no outside ratings yet — placed by what it's about' - while it has no crowd rating\"); decisions 475 and 476"
 milestone = "M4.9"
 kind = "integration"
 what = "Home shelf cards carry e_source (and item_n) outside the decision-117 model block, so a title with a Backbone row and crowd support below the warm gate does not wear the no-crowd-data badge with the model toggle on or off; ModelNote branches on no field the shelf card's model block stopped carrying. A title with any crowd rating (item_n > 0) never wears the badge and never sits on \"New in the library\", whatever its e_source says - PosterCard's pinned expression asks the count first."
@@ -11728,7 +11730,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-sweet-spot-floor-reads-the-owned-library"
-spec = "§6.0 row 4 (\"the shared sweet spot — doubles as the Tonight prior\"); §6.2 step 3 (the plain average)"
+spec = "§6.0 row 4 (\"neither of you has seen them — a good pick for a night in together\" (the shared sweet spot, ranked as Tonight's pool is)); §6.2 step 3 (the plain average); decision 475"
 milestone = "M5"
 kind = "integration"
 what = "The sweet-spot shelf's floor is each member's rank within the OWNED library of the kind, so unowned titles scored above everything the household owns change nothing on the shelf."
@@ -12253,7 +12255,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-waiting-says-an-estimate-and-the-ballot-count-is-live"
-spec = "§6.2 step 4 (\"Jenny 9/~12\") + §6.2 step 6 (the blind ballot)"
+spec = "§6.2 step 4 (\"Jenny 11/~12\"; \"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\") + §6.2 step 6 (the blind ballot); decision 477"
 milestone = "M5"
 kind = "integration"
 what = "A seat still answering is told to expect the typical round from the same sweep the boundary is calibrated on, never the cap, and the estimate is a function of its own count alone; a ballot submit that does not complete the reveal pushes the ballot's submitted count — two integers, no title, no approval — which the other devices file under the ballot, and a phone that has voted shows that its vote is in and how many are still out, never the round's counts."
@@ -12285,7 +12287,7 @@ tests = [
 # Decision 486 clause 2, held across every workstream's files at once. The user test found spec and
 # milestone references on member screens that several milestones had written into several files,
 # and each surface's own tests hold only that surface; this is the static guard decision 486's
-# record names as owed. Filed at M5 under decision 498.
+# record names. Filed at M5 under decision 498.
 [[requirement]]
 id = "platform-member-register-renders-no-spec-or-milestone-reference"
 spec = "§6.8 (\"Member register\"); decision 486"

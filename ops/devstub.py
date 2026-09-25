@@ -3621,9 +3621,10 @@ def _never_watched_term(user_id, kind, *, vocabulary):
 
 
 def _shared_sweet_spot(user_id, kind, *, partner, bundle_version, vocabulary):
-    """§6.0 row 4 — "You and {other} both rate these highly" / "the shared sweet spot — doubles
-    as the Tonight prior". Ranked by the PLAIN AVERAGE of the two scores, which is what §6.2
-    step 3 ranks the Tonight pool by; that shared arithmetic is what makes "doubles as" true."""
+    """§6.0 row 4 — "You and {other} would both enjoy these" / "neither of you has seen them — a
+    good pick for a night in together". Ranked by the PLAIN AVERAGE of the two scores, which is
+    what §6.2 step 3 ranks the Tonight pool by; that shared arithmetic is what makes "ranked as
+    Tonight's pool is" true."""
     sid = "shared_sweet_spot"
     if partner is None:
         return None, shelves.Suppressed(sid, kind, "no other member to share a sweet spot with")
@@ -3691,7 +3692,8 @@ def _school_night(user_id, kind, *, vocabulary):
 
 
 def _new_in_library(user_id, kind, *, vocabulary):
-    """§6.0 row 6 — "New in the library" / "placed by the Cold Tower — no crowd data yet".
+    """§6.0 row 6 — "New in the library" / "no outside ratings yet, so we placed them by what
+    they're about".
 
     Ordered by recency rather than by score, which is why it is the one shelf that still ships
     for a user with no verdicts (proposal 20 suppresses every score-ordered shelf)."""

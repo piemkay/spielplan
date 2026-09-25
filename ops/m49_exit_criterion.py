@@ -302,8 +302,12 @@ def no_crowd_data(card: dict) -> bool:
     contract it consumes. Its precedence is the whole of finding 18: `e_source` first, then
     `item_n`, and `placement` only as a last resort -- so a payload that omits the first two
     reaches the stamp `0008_placement.sql` writes on any title with a Backbone row and
-    `item_n < 90`, which is a different question from "has this title any crowd data".
+    `item_n < 90`, which is a different question from "has this title any crowd data". And ahead
+    of all three since decision 475, as `isColdPlaced` asks it: a title with any crowd rating
+    never wears the badge, whatever its `e_source` says.
     """
+    if (card.get("item_n") or 0) > 0:
+        return False
     if card.get("e_source"):
         return card["e_source"] == "cold_tower"
     return card.get("item_n") == 0 or (
