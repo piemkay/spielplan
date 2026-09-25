@@ -349,7 +349,7 @@
           {#each data.dna.projected as p (p.facet + ':' + p.term)}
             <span
               class="chip"
-              class:faint={(p.weight ?? 0) <= 1}
+              class:faint={p.weight != null && p.weight <= 1}
               style:color={facetColour(p.facet)}
               style:border-color={facetColour(p.facet)}
             >

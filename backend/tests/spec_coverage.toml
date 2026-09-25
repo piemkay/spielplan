@@ -11424,10 +11424,11 @@ tests = [
 id = "library-rate-title-card-dna-quotes-and-weights-read-as-what-they-are"
 spec = "§4.1 rule 1 (\"a tag without its quote is unfalsifiable\") + §4.1 rule 2 (weights, never filters) + §6.0 DNA card"
 milestone = "M5"
-kind = "backend"
+kind = "e2e"
 what = "An evidence quote that starts mid-sentence is printed with a leading ellipsis and one that stops short of a sentence's end with a trailing one, changing no character of the stored quote; a projected term with a weight of one is drawn fainter than a term several sources agree on and is never dropped from the card; and the card keys its credit list by person_id + ':' + (role_class ?? job)."
 why = "Heat's mood.gritty rests on 'not this serious, gritty crime epic', a fragment of a review that calls Heat exactly that, and printed bare it read as the reviewer denying it; Heat's characters.teen_protagonist rests on one MovieLens tag and looked as sure as a four-source term (C9.5, C9.6 of the 2026-09-25 user test)."
 tests = [
+    "e2e/specs/04-title-card.spec.js::a quote cut mid-sentence says so and a one-source projection is fainter, never dropped",
     "frontend/src/lib/quote.test.js::marks a span that starts mid-sentence and stops short of its end",
     "frontend/src/lib/quote.test.js::leaves a whole sentence exactly as stored",
     "frontend/src/lib/quote.test.js::changes no character of the stored quote",
