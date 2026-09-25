@@ -576,11 +576,11 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
     section, suppressed = await shelves.new_in_library(db, ctx=ctx, kind="movie")
     assert section is not None, suppressed
     assert section.title == "New in the library"
-    # The why-line is compared by its two claims rather than as one literal: the shipped copy
-    # carries a typographic dash, and every printable line in this package is kept to the
-    # characters a Windows cp1252 console can render (CLAUDE.md).
-    assert section.why.startswith("placed by the Cold Tower")
-    assert "no crowd data yet" in section.why
+    # The why-line is compared by its two claims rather than as one literal, as it was when the
+    # copy carried a typographic dash. Decision 476 restated it in the member register (decision
+    # 486); the two claims - no crowd ratings, placed by content - are the same.
+    assert section.why.startswith("no outside ratings yet")
+    assert "placed them by what they're about" in section.why
     shown = {card["title_id"]: card for card in section.items}
     for row in rows:
         card = shown[row["id"]]

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Any
 
 import asyncpg
@@ -57,6 +58,10 @@ NAMED_TERM_CAP = 2
 # 188]
 TERM_RANK = dna_terms.TERM_WEIGHT
 
+# The label rides beside the term in every read that builds a `WhyTerm`, joined on the term's own
+# version so a superseded vocabulary cannot name it. `max` because those reads group by term.
+LABEL_JOIN = "LEFT JOIN dna_term dl ON dl.version = d.version AND dl.term = d.term"
+
 ROLES = ("member", "anchor_side")
 
 
@@ -75,12 +80,21 @@ class WhyTerm:
     facet: str
     tier: str
     role: str = "member"
+    # The vocabulary's own name for the term (`dna_term.label`), read beside it so a why-line is
+    # written in words and never in ids: "World War II", not `era.wwii` (§6.8, decision 486).
+    label: str | None = None
+
+    @property
+    def name(self) -> str:
+        return dna_terms.label_of(self.term, self.label)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"term": self.term, "facet": self.facet, "tier": self.tier, "role": self.role}
+        return {"term": self.term, "facet": self.facet, "tier": self.tier, "role": self.role,
+                "label": self.name}
 
     def with_role(self, role: str) -> WhyTerm:
-        return WhyTerm(term=self.term, facet=self.facet, tier=self.tier, role=role)
+        return WhyTerm(term=self.term, facet=self.facet, tier=self.tier, role=role,
+                       label=self.label)
 
 
 async def vocabulary_version(conn: asyncpg.Connection) -> str | None:
@@ -113,8 +127,10 @@ async def terms_for(
         SELECT d.term,
                min(d.facet) AS facet,
                CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               max({TERM_RANK}) AS term_rank
+               max({TERM_RANK}) AS term_rank,
+               max(dl.label) AS label
           FROM dna_tagged d
+          {LABEL_JOIN}
          WHERE d.title_id = $1 AND d.version = $2
          GROUP BY d.term
          ORDER BY max({TERM_RANK}) DESC, d.term
@@ -124,7 +140,9 @@ async def terms_for(
         version,
         limit,
     )
-    return [WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"]) for r in rows]
+    return [
+        WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"], label=r["label"]) for r in rows
+    ]
 
 
 async def rank_of(
@@ -272,8 +290,10 @@ async def common_terms(
         SELECT d.term,
                min(d.facet) AS facet,
                CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               max({TERM_RANK}) AS term_rank
+               max({TERM_RANK}) AS term_rank,
+               max(dl.label) AS label
           FROM dna_tagged d
+          {LABEL_JOIN}
          WHERE d.version = $1 AND d.title_id = ANY($2)
          GROUP BY d.term
         HAVING count(DISTINCT d.title_id) = cardinality($2)
@@ -284,7 +304,9 @@ async def common_terms(
         ids,
         limit,
     )
-    return [WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"]) for r in rows]
+    return [
+        WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"], label=r["label"]) for r in rows
+    ]
 
 
 async def unsupported(
@@ -360,6 +382,7 @@ async def frontier_term(
     min_seen: int,
     carrier_floor: int,
     liked_pool: int = 12,
+    exclude: Sequence[int] = (),
 ) -> tuple[WhyTerm, WhyTerm, float, float] | None:
     """§6.4's explore frontier as a shelf: an unvisited term that sits next to a liked one.
 
@@ -376,6 +399,10 @@ async def frontier_term(
       distance in an embedding nobody can read.
     * **liked** is the user's own posterior CDF, per §5.2's "empirical CDF of the user's own
       fitted `s` values, computed per kind", centred at 0.5 so an indifferent term scores 0.
+
+    `exclude` is decision 475's claim: titles a shelf built earlier already shows do not count
+    toward a candidate's carriers, so a term the claim would empty below the floor is never
+    chosen over one that still fills the shelf.
     """
     seen_n = await conn.fetchval(
         """
@@ -389,7 +416,7 @@ async def frontier_term(
         return None
 
     candidates = await conn.fetch(
-        """
+        f"""
         WITH seen_terms AS (
             SELECT DISTINCT d.term
               FROM dna_tagged d
@@ -403,15 +430,17 @@ async def frontier_term(
                    min(d.facet) AS facet,
                    CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted'
                         ELSE 'projected' END AS tier,
-                   count(DISTINCT d.title_id) AS n
+                   count(DISTINCT d.title_id) AS n,
+                   max(dl.label) AS label
               FROM dna_tagged d
+              {LABEL_JOIN}
               JOIN title t ON t.id = d.title_id
               LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1
              WHERE d.version = $3 AND t.kind = $2 AND t.is_owned
-               AND COALESCE(ut.state, 'unseen') = 'unseen'
+               AND COALESCE(ut.state, 'unseen') = 'unseen' AND NOT (t.id = ANY($5))
              GROUP BY d.term
         )
-        SELECT p.term, p.facet, p.tier, p.n FROM pool p
+        SELECT p.term, p.facet, p.tier, p.n, p.label FROM pool p
          WHERE p.term NOT IN (SELECT term FROM seen_terms) AND p.n >= $4
          ORDER BY p.n DESC, p.term
         """,
@@ -419,17 +448,20 @@ async def frontier_term(
         kind,
         version,
         carrier_floor,
+        list(exclude),
     )
     if not candidates:
         return None
 
     liked = await conn.fetch(
-        """
+        f"""
         SELECT d.term,
                min(d.facet) AS facet,
                CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               avg(ls.cdf) - 0.5 AS aff
+               avg(ls.cdf) - 0.5 AS aff,
+               max(dl.label) AS label
           FROM dna_tagged d
+          {LABEL_JOIN}
           JOIN ledger_state ls ON ls.title_id = d.title_id AND ls.user_id = $1
           JOIN user_title ut ON ut.title_id = d.title_id AND ut.user_id = $1 AND ut.state = 'seen'
           JOIN title t ON t.id = d.title_id AND t.kind = $2
@@ -485,13 +517,99 @@ async def frontier_term(
     _neg, _n, _term, row, cos, aff = scored[0]
     c, ln = cand_by_term[row["cand"]], liked_by_term[row["neighbour"]]
     return (
-        WhyTerm(term=c["term"], facet=c["facet"], tier=c["tier"], role="member"),
-        WhyTerm(term=ln["term"], facet=ln["facet"], tier=ln["tier"], role="anchor_side"),
+        WhyTerm(term=c["term"], facet=c["facet"], tier=c["tier"], role="member",
+                label=c["label"]),
+        WhyTerm(term=ln["term"], facet=ln["facet"], tier=ln["tier"], role="anchor_side",
+                label=ln["label"]),
         cos,
         aff,
     )
 
 
 def phrase(terms: Sequence[WhyTerm]) -> str:
-    """`{term} + {term}` — §6.0's own why-line shape for shelf 1."""
-    return " + ".join(t.term for t in terms)
+    """`{term} + {term}` — §6.0's own why-line shape for shelf 1, in the vocabulary's words."""
+    return " + ".join(t.name for t in terms)
+
+
+# --- shelf 1's membership: likeness to the anchor (decision 475) ------------------------------
+
+
+async def anchor_neighbours(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    version: str,
+    anchor_id: int,
+    pool: Sequence[WhyTerm],
+    exclude: Sequence[int] = (),
+    min_shared: int = 2,
+) -> dict[int, frozenset[str]]:
+    """Every unseen owned title of this kind sharing at least `min_shared` of the anchor's pool
+    terms, with the terms it shares.
+
+    The widest-pair rule this replaced chose the two anchor terms covering the most titles, which
+    is the anchor's most generic pair: Zootopia's shelf became "thought-provoking + social
+    commentary" and led with American History X. How many of the anchor's terms a title shares is
+    what "like it" means; the pair named is then one the chosen titles actually carry
+    (`shared_pair`). §4.1 rule 2 still holds - no weight column appears in a predicate.
+    """
+    terms = [t.term for t in pool]
+    if len(terms) < min_shared:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT d.title_id, array_agg(DISTINCT d.term) AS terms
+          FROM dna_tagged d
+          JOIN title t ON t.id = d.title_id
+          LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1
+         WHERE d.version = $3 AND d.term = ANY($4) AND t.kind = $2 AND t.is_owned
+           AND t.id <> $5 AND NOT (t.id = ANY($6))
+           AND COALESCE(ut.state, 'unseen') = 'unseen'
+         GROUP BY d.title_id
+        HAVING count(DISTINCT d.term) >= $7
+        """,
+        user_id,
+        kind,
+        version,
+        terms,
+        anchor_id,
+        list(exclude),
+        min_shared,
+    )
+    return {int(r["title_id"]): frozenset(r["terms"]) for r in rows}
+
+
+def shared_pair(
+    ordered: Sequence[int],
+    shared: dict[int, frozenset[str]],
+    pool: Sequence[WhyTerm],
+    *,
+    cap: int,
+    floor: int,
+) -> tuple[list[int], WhyTerm, WhyTerm] | None:
+    """The pair of anchor terms shelf 1 names, and its cards in likeness order - or None when
+    no pair is carried by `floor` of the candidates.
+
+    `ordered` is the candidates most like the anchor first. Each pair's shelf is the first `cap`
+    of them carrying both its terms, and the pair whose shelf shares the most anchor terms in
+    total wins: a full shelf of close titles beats both a few very close ones and a crowd of
+    loosely related ones, which is where the widest-pair rule used to land. Ties go to the pair
+    the pool names best (§4.1 rule 2's ranking), then to the ids, so one library always gives one
+    shelf. Proposal 24 survives the change: every card carries both named terms by construction.
+    """
+    rank = {t.term: i for i, t in enumerate(pool)}
+    by_term = {t.term: t for t in pool}
+    best: tuple[tuple[int, int, str, str], list[int]] | None = None
+    # Spelled in id order, as `best_pair` spells them, so one pair is one tuple and one why-line.
+    for first, second in combinations(sorted(rank), 2):
+        cards = [i for i in ordered if first in shared[i] and second in shared[i]][:cap]
+        if len(cards) < floor:
+            continue
+        key = (-sum(len(shared[i]) for i in cards), rank[first] + rank[second], first, second)
+        if best is None or key < best[0]:
+            best = (key, cards)
+    if best is None:
+        return None
+    (_, _, first, second), cards = best
+    return cards, by_term[first], by_term[second]

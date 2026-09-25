@@ -180,6 +180,35 @@ describe('the shell when it cannot tell where a person belongs', () => {
     }
   });
 
+  it.each([
+    [true, '/setup'],
+    [false, '/login']
+  ])('mounts no surface for a person the appliance says is signed out (setup required: %s)', async (
+    required,
+    where
+  ) => {
+    // The first household's backend log: every signed-out load of / fired Home's reads - /home,
+    // /titles, /facets, /prompts/finish - and logged four 401s before `guard()` routed away,
+    // because the authed shell rendered the surface for nobody in the meantime. Decision 282's
+    // seam made the 401s harmless; this is the half that stops them leaving at all.
+    // [owner instruction of 2026-09-25; decisions 282 and 286]
+    nav.url = new URL('http://localhost/');
+    wire({
+      '/config': CONFIG,
+      '/setup/state': { required, note: required ? 'first boot' : 'ready' },
+      '/auth/me': REFUSED
+    });
+    const app = await open();
+    try {
+      expect(session.user).toBeNull();
+      expect(target.querySelector('[data-surface]')).toBeNull();
+      expect(target.querySelector('header')).toBeNull();
+      expect([...new Set(nav.gone)]).toEqual([where]);
+    } finally {
+      unmount(app);
+    }
+  });
+
   it('still sends a lapsed member to the sign-in page when both reads answer', async () => {
     // The ordinary case, unchanged: with `/setup/state` in hand there is no ambiguity to state.
     wire({ '/config': CONFIG, '/setup/state': READY, '/auth/me': REFUSED });

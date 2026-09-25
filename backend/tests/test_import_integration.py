@@ -321,7 +321,8 @@ async def test_facet_vocabulary_spans_the_selected_kinds(db, bundle, tmp_path):
     movie_genres = await library.genres(db, ["movie"])
     both_genres = await library.genres(db, ["movie", "series"])
     assert set(movie_genres) < set(both_genres)
-    assert "Sci-Fi" in both_genres and "Sci-Fi" not in movie_genres
+    # The fixture's tmdb "Sci-Fi" answers decision 473's canonical "Science Fiction".
+    assert "Science Fiction" in both_genres and "Science Fiction" not in movie_genres
 
 
 async def test_library_search_matches_titles_and_aliases(db, bundle, tmp_path):

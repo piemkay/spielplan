@@ -27,6 +27,7 @@ Skipped without TEST_DATABASE_URL; see tests/conftest.py.
 from __future__ import annotations
 
 import ast
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -43,8 +44,8 @@ from spielplan.rank import read
 BUNDLE = "test-home-v1"
 VOCAB = "v1"
 
-MOVIES = tuple(range(1000, 1024))
-SERIES = tuple(range(1100, 1124))
+MOVIES = tuple(range(1000, 1050))
+SERIES = tuple(range(1100, 1150))
 BASES = (1000, 1100)
 
 # Per kind, by offset from the base id. Every group exists to make one assertion falsifiable.
@@ -54,16 +55,27 @@ DECOYS = (5, 6, 7)              # carry obsession + period, NOT morally-grey —
 FRONTIER = (8, 9, 10, 11)       # carry `neon`, which no seen title carries; also the cold ones
 LIKED = (12, 13, 14)            # seen, high CDF, carry `cosy` — the frontier's named neighbour
 PENDING = (21, 22, 23)          # seen, no live verdict — the banner's population
+# Decision 475 builds the shelves in a claim order and no title repeats on a second shelf of its
+# kind, so every shelf here has a population of its own: "Your top picks" is the twelve SEEN
+# titles (rewatches included, and nobody else wants them), shelf 1 is MEMBERS, the frontier is
+# FRONTIER, the sweet spot is DECOYS, and "Under 110 minutes" is SHORT - short, unseen, owned and
+# on no earlier shelf. FILLER is owned, unseen and lowest-scored: it is what puts DECOYS above the
+# sweet spot's 0.70 floor in a library whose top twelve are all seen, and it carries no DNA.
+SHORT = (24, 25, 26, 27)
+FILLER = tuple(range(24, 50))
 
 # §6.0 shelf 5: strict `<`, and a NULL runtime is excluded because a shelf that claims a
-# runtime bound must know the runtime. 1005/1105 sit exactly ON the threshold.
+# runtime bound must know the runtime. 1005/1105 and 1028/1128 sit exactly ON the threshold,
+# and 1029/1129 have no runtime - the latter two among the titles no earlier shelf claims.
 RUNTIME = {
     1: 95, 2: 100, 3: 105, 4: 90, 5: 110, 6: None, 7: 130,
     8: 140, 9: 150, 10: 160, 11: 170,
+    24: 80, 25: 85, 26: 95, 27: 100, 28: 110, 29: None,
 }
 SERIES_RUNTIME = {
     1: 30, 2: 35, 3: 40, 4: 25, 5: 45, 6: None, 7: 60,
     8: 50, 9: 55, 10: 50, 11: 55,
+    24: 20, 25: 25, 26: 30, 27: 35, 28: 45, 29: None,
 }
 
 # §5.1's blend weight, seeded away from the measured 0.8 so a why-line printing the constant
@@ -71,15 +83,28 @@ SERIES_RUNTIME = {
 FITTED_BETA = 0.62
 
 
+# The unseen titles' score order: DECOYS first, so they are the unseen titles both people rate
+# highest - the sweet spot's population once the shelves before it have claimed theirs.
+UNSEEN_ORDER = DECOYS + MEMBERS + FRONTIER
+
+
 def score_of(title_id: int) -> float:
-    """EVERY series outscores EVERY film. §4.1 rule 5's landmine, in miniature."""
-    if title_id == 1000:
-        return 0.11
-    if title_id == 1100:
-        return 0.61
-    if title_id < 1100:
-        return 0.40 - 0.01 * (title_id - 1001)
-    return 0.95 - 0.01 * (title_id - 1101)
+    """EVERY series outscores EVERY film. §4.1 rule 5's landmine, in miniature.
+
+    The seen titles (12-23) are the top twelve, so "Your top picks" - which ranks rewatches too -
+    claims only titles no later shelf would show (decision 475).
+    """
+    base = 1000 if title_id < 1100 else 1100
+    offset = title_id - base
+    if offset == ANCHOR:
+        film = 0.11
+    elif offset in UNSEEN_ORDER:
+        film = 0.45 - 0.01 * UNSEEN_ORDER.index(offset)
+    elif offset in FILLER:
+        film = 0.10 - 0.001 * (offset - FILLER[0])
+    else:
+        film = 0.60 - 0.01 * (offset - 12)
+    return film if base == 1000 else film + 1.0
 
 
 def kind_of(title_id: int) -> str:
@@ -398,22 +423,35 @@ async def test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_she
         assert {t["term"] for t in section["why_terms"]} == {"morally-grey", "obsession"}
         assert not set(ids(base, DECOYS)) & {c["title_id"] for c in section["items"]}
         assert section["why"] == "shares morally-grey + obsession with it"
-        assert section["title"] == f"Because you put Home {'Film' if base == 1000 else 'Series'} " \
-                                  f"{base} in A"
+        # Decision 476: "you put" is only for a title the person placed on Rank; this anchor
+        # carries a live liked verdict and no tier edit, so the headline says what they did.
+        assert section["title"] == f"Because you liked Home {'Film' if base == 1000 else 'Series'} " \
+                                  f"{base}"
 
 
 async def test_the_ledger_shelf_names_the_beta_its_own_ranking_used(world):
-    """§6.0 row 2's why-line prints β. Printing the measured constant 0.8 while this profile's
-    fitted β is 0.62 is exactly the decorative why-line §6.0 forbids — the number would have
-    had no part in the ordering the person is looking at."""
+    """§6.0 row 2 names β. Printing the measured constant 0.8 while this profile's fitted β is
+    0.62 is exactly the decorative why-line §6.0 forbids — the number would have had no part in
+    the ordering the person is looking at.
+
+    Decision 476 moves the number out of the sentence and decision 486 puts it behind Show the
+    model: with the switch off the why-line carries no β at all, and with it on `why_numbers`
+    carries the fitted one, never the constant.
+    """
     payload = await world.home()
     for kind in ("movie", "series"):
         section = world.section(payload, "top_of_ledger", kind)
         assert section is not None
-        assert f"β {FITTED_BETA:.2f}" in section["why"], section["why"]
-        assert "0.80" not in section["why"]
-        assert section["why_numbers"]["beta"] == pytest.approx(FITTED_BETA, abs=1e-6)
+        assert "β" not in section["why"] and "0.62" not in section["why"], section["why"]
+        assert "why_numbers" not in section, "a model number reached a member with the switch off"
         assert "rewatches included" in section["why"]   # proposal 25's stated exception
+
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home()
+    for kind in ("movie", "series"):
+        section = world.section(payload, "top_of_ledger", kind)
+        assert section["why_numbers"]["beta"] == pytest.approx(FITTED_BETA, abs=1e-6)
+        assert section["why_numbers"]["beta"] != pytest.approx(0.8, abs=1e-6)
 
 
 async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss(world):
@@ -426,27 +464,31 @@ async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_
     orientation, so every stored number was always right. What was wrong is what a person reads:
     `beta_optimum` travels on every "Top of your ledger" section, and a member fitted at the
     optimum was being measured against a constant that is the complement of it.
+
+    Decision 486 puts the optimum behind Show the model with every other model number, so it is
+    read with the switch on; the caption that carried it to members (and quoted §5.1 to them) is
+    gone, and the unfitted profile's sentence says in words what the number said.
     """
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
     for kind in ("movie", "series"):
         section = world.section(payload, "top_of_ledger", kind)
         assert section is not None
         assert section["why_numbers"]["beta_optimum"] == pytest.approx(0.2, abs=1e-9)
-        # A profile the fold-in HAS fitted is measured against nothing: it is told its own
-        # number and no optimum at all. Pinned because the caption below is what carries the
-        # constant to a reader, and ungating it would put "not there yet" on a fitted board.
         assert section["caption"] is None, section["caption"]
 
-    # The one surface that renders the constant. `ShelfRow.svelte` prints `section.caption`, and
-    # `shelves.top_of_ledger` emits it only for a profile the nightly fold-in has never fitted —
-    # which is every member on the first evening of a household, before the first nightly run.
+    # The first evening of a household, before the first nightly run: never fitted, so ranked by
+    # the crowd alone - and said so without a β or a section number.
     await world.db.execute(
         "DELETE FROM user_vector WHERE user_id = $1 AND purpose = 'foldin'", world.patrick
     )
+    await world.client.post("/api/auth/preferences", json={"show_model": False})
     payload = await world.home()
     for kind in ("movie", "series"):
         section = world.section(payload, "top_of_ledger", kind)
-        assert section["caption"] == "§5.1's measured optimum is β 0.20; this profile is not there yet"
+        assert section["caption"] is None, section["caption"]
+        assert "until your own ratings take over" in section["why"], section["why"]
+        assert "§" not in section["why"] and "β" not in section["why"]
 
 
 async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
@@ -457,6 +499,9 @@ async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
     checks the strict `<` (a title at exactly the threshold is not under it) and the NULL
     exclusion (a shelf claiming a runtime bound must know the runtime).
     """
+    # With the switch on, because the threshold also rides `why_numbers` and decision 486 gates
+    # that block; the title states it either way.
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
     expected = {"movie": ("Under 110 minutes", 110), "series": ("Episodes under 45 minutes", 45)}
     for base in BASES:
@@ -467,13 +512,15 @@ async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
         assert section["title"] == title
         assert section["why"] == "for a school night"
         assert section["why_numbers"]["max_minutes"] == threshold
-        assert [c["title_id"] for c in section["items"]] == sorted(ids(base, MEMBERS))
+        # SHORT, and not MEMBERS, which are as short: shelf 1 claimed them first (decision 475).
+        assert [c["title_id"] for c in section["items"]] == sorted(ids(base, SHORT))
         for card in section["items"]:
             assert card["runtime_min"] is not None
             assert card["runtime_min"] < threshold
         shown = {c["title_id"] for c in section["items"]}
-        assert base + 5 not in shown, "a title at exactly the threshold is not *under* it"
-        assert base + 6 not in shown, "a NULL runtime cannot satisfy a runtime claim"
+        assert not shown & set(ids(base, MEMBERS)), "a title shelf 1 shows is shown again here"
+        assert base + 28 not in shown, "a title at exactly the threshold is not *under* it"
+        assert base + 29 not in shown, "a NULL runtime cannot satisfy a runtime claim"
 
 
 async def test_a_shelf_that_cannot_justify_itself_is_absent_not_empty(world):
@@ -526,7 +573,8 @@ async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_suppor
     for base in BASES:
         section = world.section(payload, "new_in_library", kind_of(base))
         assert section is not None
-        assert section["why"] == "placed by the Cold Tower — no crowd data yet"
+        # Decision 476's words for the same claim.
+        assert section["why"] == "no outside ratings yet, so we placed them by what they're about"
         shown = [c["title_id"] for c in section["items"]]
         # Ordered by recency, newest first — the one shelf that is not score-ordered.
         assert shown == sorted(ids(base, FRONTIER), reverse=True)
@@ -554,7 +602,7 @@ async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
         section = world.section(payload, "never_watched_term", kind_of(base))
         assert section is not None
         assert section["title"] == "You've never watched anything neon"
-        assert "sits beside cosy" in section["why"], section["why"]
+        assert section["why"] == "close to cosy, which you like", section["why"]
         roles = {t["term"]: t["role"] for t in section["why_terms"]}
         assert roles == {"neon": "member", "cosy": "anchor_side"}
         assert sorted(c["title_id"] for c in section["items"]) == sorted(ids(base, FRONTIER))
@@ -583,9 +631,12 @@ async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
     for base in BASES:
         section = world.section(payload, "shared_sweet_spot", kind_of(base))
         assert section is not None
-        assert section["title"] == "You and jenny both rate these highly"
-        assert section["why"] == "the shared sweet spot — doubles as the Tonight prior"
+        # Decision 476: the title says what the shelf predicts, over titles neither has seen.
+        assert section["title"] == "You and jenny would both enjoy these"
+        assert section["why"] == "neither of you has seen them — a good pick for a night in together"
+        assert section["caption"] is None
         shown = [c["title_id"] for c in section["items"]]
+        assert shown == ids(base, DECOYS), "the fixture's sweet spot is DECOYS, in score order"
         assert shown == sorted(shown, key=lambda t: -score_of(t))
         for title_id in shown:
             for user_id in (world.patrick, world.jenny):
@@ -603,37 +654,43 @@ async def test_the_sweet_spot_floor_is_read_against_the_owned_library(world):
     `user_score` holds a row for every coordinated title of the kind - on the first household 9.5k
     films, most of them unowned - and the ranking CTE ranked all of them, so the owned library's
     mean rank was 0.42-0.46 and a catalogue nobody could play decided which owned titles cleared
-    0.70. Forty unowned films scored above everything here would have pushed every owned film
-    below the floor and emptied the shelf; read against the owned library they change nothing.
+    0.70. Forty unowned titles per kind scored above everything owned would have pushed every
+    sweet-spot card below the floor and emptied the shelf; read against the owned library they
+    change nothing. One function for WA's and WB's two copies of this fix, derived against
+    decision 475's world, where the sweet spot is DECOYS in both kinds.
     [owner instruction of 2026-09-25 after the first household user test, C1.7]
     """
     def shelf(payload):
-        return {
-            base: [c["title_id"] for c in world.section(
-                payload, "shared_sweet_spot", kind_of(base)
-            )["items"]]
-            for base in BASES
-        }
+        shown = {}
+        for base in BASES:
+            section = world.section(payload, "shared_sweet_spot", kind_of(base))
+            shown[base] = None if section is None else [c["title_id"] for c in section["items"]]
+        return shown
 
     before = shelf(await world.home())
     assert all(before.values()), before
-    for title_id in range(5000, 5040):
-        await world.db.execute(
-            "INSERT INTO title (id, kind, name, is_owned) VALUES ($1, 'movie', $2, false)",
-            title_id, f"Unowned Film {title_id}",
-        )
-        await world.db.execute(
-            "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
-            "VALUES ($1, $2, 0.9, 0.9, 5000, 0.998, 'backbone')",
-            title_id, BUNDLE,
-        )
-        for user_id in (world.patrick, world.jenny):
+    for base in BASES:
+        kind = kind_of(base)
+        # 1060-1099 and 1160-1199: past each kind's owned ids, so `kind_of` still reads them.
+        for title_id in range(base + 60, base + 100):
             await world.db.execute(
-                "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
-                "VALUES ($1, $2, 'movie', $3, 9.0, 0.0)",
-                user_id, title_id, BUNDLE,
+                "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, $2, $3, 2000, false)",
+                title_id, kind, f"Unowned {title_id}",
             )
-    assert shelf(await world.home()) == before
+            await world.db.execute(
+                "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
+                "VALUES ($1, $2, 0.9, 0.9, 5000, 0.998, 'backbone')",
+                title_id, BUNDLE,
+            )
+            for user_id in (world.patrick, world.jenny):
+                await world.db.execute(
+                    "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
+                    "VALUES ($1, $2, $3, $4, 9.0, 0.0)",
+                    user_id, title_id, kind, BUNDLE,
+                )
+    after = shelf(await world.home())
+    assert all(after.values()), f"unowned titles pushed the owned library under the floor: {after}"
+    assert after == before
 
 
 # --- library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned ----------------
@@ -707,6 +764,14 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
     )
     assert tier_set[model_tier] == "A", "the fixture's anchor is fitted into A"
+    # Decision 475 anchors on the tier the board shows before `s`, so a title dropped to F loses
+    # the anchor to any title still in A. The other rated films are unobserved here to leave 1000
+    # the only candidate: what this test is about is the tier the sentence NAMES.
+    await world.db.execute(
+        "UPDATE ledger_state SET observed = false "
+        "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
+        world.patrick,
+    )
 
     await world.db.execute(
         "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 1000, 0, 'drag_drop')",
@@ -803,7 +868,13 @@ def no_crowd_data(card: dict) -> bool:
     contract it consumes: what is under test here is whether the SERVER sends the two fields that
     expression prefers. The component's own precedence is pinned by
     `test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement`.
+
+    A title with crowd ratings behind it is never "new", whatever `e_source` says: the bundle's
+    evaluation holdout serves crowd-rated rows from the Cold Tower, and §8 stage 10 names the
+    badge by the absence of ratings (the owner instruction of 2026-09-25's user test).
     """
+    if (card.get("item_n") or 0) > 0:
+        return False
     if card.get("e_source"):
         return card["e_source"] == "cold_tower"
     return card.get("item_n") == 0 or (
@@ -1104,8 +1175,19 @@ async def test_the_catalog_grid_may_interleave_the_two_kinds(world):
     So the property under test is the ORDERING, not the rendering. This asserts the grid DOES
     interleave — an implementation that partitioned everything would fail here, and one that
     merged everything would fail the test above. Both cases are distinguished.
+
+    Two orders now, and both are kind-independent. A person filter lists by year. A search lists
+    best match first (decision 472): match quality is a property of the text, so an exact match
+    of either kind leads, and titles that match equally well still interleave.
     """
-    payload = await world.home(q="home")
+    for offset in range(1, 7):
+        for base in BASES:
+            await world.db.execute(
+                "INSERT INTO credit (title_id, person_id, department, job, source) "
+                "VALUES ($1, 900, 'Directing', 'Director', 'tmdb') ON CONFLICT DO NOTHING",
+                base + offset,
+            )
+    payload = await world.home(person_id=900)
     assert payload["mode"] == "grid"
     assert payload["shelves"] == []
     items = payload["catalog"]["items"]
@@ -1117,6 +1199,12 @@ async def test_the_catalog_grid_may_interleave_the_two_kinds(world):
     )
     years = [item["year"] for item in items]
     assert years == sorted(years, reverse=True)
+
+    broad = [item["kind"] for item in (await world.home(q="home"))["catalog"]["items"]]
+    assert set(broad) == {"movie", "series"}
+    assert any(a != b for a, b in zip(broad, broad[1:], strict=False)), (
+        "equally good matches of the two kinds came back partitioned"
+    )
 
 
 # --- §6.0's mode switch -----------------------------------------------------------------------
@@ -1915,3 +2003,215 @@ async def test_the_hidden_count_is_what_the_toggle_would_actually_reveal(db, wor
     # And the promise holds: the count is exactly what the other toggle produces.
     both = await world.home(kinds=("movie", "series"), person_id=person_id)
     assert both["catalog"]["total"] == catalog["total"] + catalog["hidden"]["series"]
+
+
+# --- decision 475: how Home's shelves choose their titles ------------------------------------
+
+
+def _claiming_sections(payload, kind):
+    """Every shipped section of one kind whose shelf takes part in the claim."""
+    return [
+        (shelf["id"], section)
+        for shelf in payload["shelves"]
+        if shelf["id"] in shelves.CLAIMING_SHELVES
+        for section in shelf["sections"]
+        if section["kind"] == kind
+    ]
+
+
+async def test_a_title_appears_on_at_most_one_shelf_per_kind(world):
+    """Decision 475. The first household's Home drew three score-ordered shelves off the top of
+    one list, and three titles each appeared twice in one render. "New in the library" is the
+    stated exemption: it reports an arrival rather than ranking one."""
+    payload = await world.home()
+    for kind in ("movie", "series"):
+        sections = _claiming_sections(payload, kind)
+        assert len(sections) == 5, [s for s, _ in sections]
+        seen: dict[int, str] = {}
+        for shelf_id, section in sections:
+            for card in section["items"]:
+                assert card["title_id"] not in seen, (
+                    f"{card['title_id']} is on {seen.get(card['title_id'])} and on {shelf_id}"
+                )
+                seen[card["title_id"]] = shelf_id
+
+
+async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
+    """Its why-line promises "the ones we think you'll enjoy most", so no shelf may thin it: the
+    shelf that loses a title to it is the one below. Shelf 1's best member is raised into the top
+    twelve here - "Your top picks" shows it and shelf 1 fills from its next member."""
+    await world.db.execute(
+        "UPDATE user_score SET score = 5.0 WHERE title_id = 1001 AND user_id = $1", world.patrick
+    )
+    payload = await world.home()
+    top = world.section(payload, "top_of_ledger", "movie")
+    assert [c["title_id"] for c in top["items"]][0] == 1001
+    assert len(top["items"]) == shelves.SHELF_CAP
+    first = world.section(payload, "because_anchor", "movie")
+    assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004]
+
+
+async def test_the_floor_applies_after_the_claim_and_says_so(world):
+    """Two of shelf 1's four members and one of the three decoys raised into the top twelve leave
+    each of the anchor's pairs two titles, under proposal 28's floor of three: the shelf is
+    absent, and the reason names the claim rather than reading as a library with nothing like the
+    anchor in it. (With the decoys whole, the shelf would rightly fall back to their pair.)"""
+    await world.db.execute(
+        "UPDATE user_score SET score = 5.0 WHERE title_id IN (1001, 1002, 1005) AND user_id = $1",
+        world.patrick,
+    )
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home()
+    assert world.section(payload, "because_anchor", "movie") is None
+    reason = next(
+        s["reason"] for s in payload["suppressed"]
+        if s["shelf"] == "because_anchor" and s["kind"] == "movie"
+    )
+    assert "once the shelves before it took theirs" in reason, reason
+    assert world.section(payload, "because_anchor", "series") is not None
+
+
+async def test_the_payload_keeps_the_tables_order_though_the_claim_runs_in_another(world):
+    payload = await world.home()
+    order = [shelf["id"] for shelf in payload["shelves"]]
+    assert order == [s for s in shelves.SHELF_IDS if s in order]
+    assert order[:2] == ["because_anchor", "top_of_ledger"], order
+    assert shelves.CLAIM_ORDER[0] == "top_of_ledger"
+
+
+async def test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair(world):
+    """Decision 475. The widest-pair rule named Zootopia's most generic pair and showed whatever
+    covered it. Here three titles share FOUR of the anchor's terms and four share two; the widest
+    pair is the two-term one, and the shelf must show the three.
+
+    The terms are DOTTED ids with shipped labels that are not their leaf (`era.wwii` is "World
+    War II"), because this file's vocabulary is otherwise dotless and could never show a raw id
+    in a why-line (decision 486)."""
+    labelled = (
+        ("era.wwii", "era", "World War II"),
+        ("mood.tense", "mood", "on the edge of your seat"),
+        ("themes.loss", "themes", "grief & loss"),
+    )
+    for term, facet, label in labelled:
+        await world.db.execute(
+            "INSERT INTO dna_term (version, term, facet, label) VALUES ($1, $2, $3, $4)",
+            VOCAB, term, facet, label,
+        )
+        await _tag(world.db, 1000, term, facet, 3)
+        for title_id in (1030, 1031, 1032):
+            await _tag(world.db, title_id, term, facet, 2)
+    for title_id in (1030, 1031, 1032):
+        await _tag(world.db, title_id, "obsession", "themes", 2)
+
+    section = world.section(await world.home(), "because_anchor", "movie")
+    assert section is not None
+    assert [c["title_id"] for c in section["items"]] == [1030, 1031, 1032]
+    named = {t["term"] for t in section["why_terms"]}
+    assert named < {"obsession", "era.wwii", "mood.tense", "themes.loss"}, named
+    for term in section["why_terms"]:
+        assert term["label"] in section["why"], (term, section["why"])
+    assert not re.search(r"[a-z]+\.[a-z_]+", section["why"]), (
+        f"a vocabulary id reached a member's why-line: {section['why']!r}"
+    )
+    assert "_" not in section["why"]
+
+
+async def test_the_anchor_is_the_highest_tier_before_the_highest_s(world):
+    """Decision 475. An argmax of the Ledger's `s` let one coordinate's scale choose the anchor
+    (21.8 against 9.7 on the first household). The tier the board shows comes first."""
+    # 1012 carries the anchor's two named terms, sits one tier above it, and has the lower `s`.
+    await _tag(world.db, 1012, "obsession", "themes", 3)
+    await _tag(world.db, 1012, "morally-grey", "character", 3)
+    await world.db.execute(
+        "UPDATE ledger_state SET tier = 5, s = 1.0 WHERE user_id = $1 AND title_id = 1012",
+        world.patrick,
+    )
+    await world.db.execute(
+        "UPDATE ledger_state SET s = 9.0 WHERE user_id = $1 AND title_id = 1000", world.patrick
+    )
+    section = world.section(await world.home(), "because_anchor", "movie")
+    assert section["anchor"]["title_id"] == 1012, section["anchor"]
+    assert section["title"] == "Because you liked Home Film 1012"
+
+
+async def test_the_anchor_headline_says_what_the_person_did(world):
+    """Decision 476, withdrawing decision 187's fallback headline. "you put X in {tier}" was said
+    of titles the person had never placed - on the first household nobody had a single
+    `tier_edit` row, and one member read that he had put Mission: Impossible in S."""
+    await world.db.execute(
+        "UPDATE ledger_state SET observed = false "
+        "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
+        world.patrick,
+    )
+    liked = world.section(await world.home(), "because_anchor", "movie")
+    assert liked["title"] == "Because you liked Home Film 1000"
+
+    await world.db.execute(
+        "UPDATE verdict SET value = 1 WHERE user_id = $1 AND title_id = 1000", world.patrick
+    )
+    neutral = world.section(await world.home(), "because_anchor", "movie")
+    assert neutral["title"] == "More like Home Film 1000"
+
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 1000, 5, 'drag_drop')",
+        world.patrick,
+    )
+    placed = world.section(await world.home(), "because_anchor", "movie")
+    assert placed["title"] == "Because you put Home Film 1000 in A+"
+
+
+async def test_a_cold_placed_title_with_crowd_ratings_is_not_new(world):
+    """§8 stage 10 names the badge by the absence of crowd data. The bundle's evaluation holdout
+    serves crowd-rated rows from the Cold Tower, so on the first household Raiders of the Lost
+    Ark (192,061 ratings) wore "new" and led "New in the library"."""
+    await world.db.execute("UPDATE title_prior SET item_n = 192061 WHERE title_id = 1008")
+    payload = await world.home()
+    fresh = world.section(payload, "new_in_library", "movie")
+    assert 1008 not in {c["title_id"] for c in fresh["items"]}
+    frontier = world.section(payload, "never_watched_term", "movie")
+    card = next(c for c in frontier["items"] if c["title_id"] == 1008)
+    assert card["e_source"] == "cold_tower" and card["item_n"] == 192061
+    assert not no_crowd_data(card), "a title with 192,061 crowd ratings is badged 'new'"
+
+
+# The model's working vocabulary and the spec's references, as decision 486 bars them from a
+# member's screen. Checked over every string a shelf renders as a sentence.
+_MODEL_WORDS = re.compile(
+    r"§|β|σ|\bcos\b|\bcdf\b|\d\.\d\d|\bledger\b|fold-in|\bprior\b|Cold Tower|crowd data|"
+    r"\bdecision \d|\bproposal \d|\bM[0-7]\b|\blabels\b",
+    re.IGNORECASE,
+)
+
+
+async def test_no_shelf_sentence_carries_a_model_word_with_the_switch_off(world):
+    """Decision 476 restates §6.0's table in the member register (decision 486): no β, cosine,
+    CDF floor, "ledger", "fold-in", "prior", "Cold Tower" or section sign in a title, why-line or
+    caption, and no `why_numbers` block at all with Show the model off."""
+    await world.db.execute(
+        "DELETE FROM user_vector WHERE user_id = $1 AND purpose = 'foldin'", world.patrick
+    )
+    for payload in (await world.home(), await world.home(kinds=("series",))):
+        assert payload["shelves"]
+        for shelf in payload["shelves"]:
+            for section in shelf["sections"]:
+                assert "why_numbers" not in section, shelf["id"]
+                for key in ("title", "why", "caption"):
+                    text = section.get(key) or ""
+                    assert not _MODEL_WORDS.search(text), f"{shelf['id']}.{key}: {text!r}"
+
+    await world.db.execute("DELETE FROM verdict WHERE user_id = $1", world.patrick)
+    degraded = (await world.home())["degraded"]
+    assert degraded["state"] == "zero_verdicts"
+    for key in ("headline", "why"):
+        assert not _MODEL_WORDS.search(degraded[key]), degraded[key]
+
+
+async def test_home_counts_the_library_the_shelves_draw_on(world):
+    """Home's count line stated the whole catalog - "13,330 films · 5,747 series hidden" - above
+    shelves holding only owned titles. The payload names what the shelves draw on."""
+    await world.db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned) "
+        "VALUES (1099, 'movie', 'Unowned', 2000, false)"
+    )
+    payload = await world.home(kinds=("movie",))
+    assert payload["library"] == {"movie": len(MOVIES), "series": len(SERIES)}

@@ -795,8 +795,9 @@ async def check_four(ctx: Install) -> tuple[bool | None, str]:
         card is not None
         and badged
         and section.title == "New in the library"
-        and section.why.startswith("placed by the Cold Tower")
-        and "no crowd data yet" in section.why
+        # Decision 476's member-register copy for the same two claims (decision 486).
+        and section.why.startswith("no outside ratings yet")
+        and "placed them by what they're about" in section.why
     )
     detail = (
         f"shelf {console(section.title)} carries {len(section.items)} card(s); "

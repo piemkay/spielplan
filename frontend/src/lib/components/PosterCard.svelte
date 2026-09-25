@@ -8,11 +8,17 @@
    * decision 278). A second spelling of this test is the drift `toPosterTitle`'s comment already
    * records — 111 of 130 badges were false the one time these fields were dropped in transit — so
    * there is one copy of it and both readers call it.
+   *
+   * A title with crowd ratings is never "new", whatever `e_source` says: the bundle's evaluation
+   * holdout serves crowd-rated rows from the Cold Tower, and on the first household install 182 of
+   * 215 badged titles had ratings behind them - Raiders of the Lost Ark, 192,061 of them. §8 stage
+   * 10 names the badge by the absence of crowd data, so the count is asked first. [owner
+   * instruction of 2026-09-25]
    */
   export function isColdPlaced(title) {
-    return title.e_source
+    return !(title.item_n > 0) && (title.e_source
       ? title.e_source === 'cold_tower'
-      : title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower');
+      : title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower'));
   }
 </script>
 
@@ -90,10 +96,16 @@
            in it — puts it above the grid. The tooltip stays for the pointer, which is the one
            device that can ask an individual card; it is no longer the only answer anywhere.
            [review cycle 2: M415-C2-COMP-06] -->
-      <span class="badge data" title="placed by the Cold Tower — no crowd data yet">new</span>
+      <span class="badge data" title="no outside ratings yet — placed by what it's about">new</span>
     {/if}
     {#if title.seen_state === 'seen'}
       <span class="seen data">seen</span>
+    {/if}
+    {#if title.is_owned === true}
+      <!-- On the catalog grid and search, which list the whole catalog: the titles the household
+           can press Play on are marked. Shelf cards never carry `is_owned` (`toPosterTitle`),
+           because every shelf is owned-only and a chip on every card says nothing. -->
+      <span class="owned data" data-testid="owned-chip">in library</span>
     {/if}
   </div>
   <div class="meta">
@@ -158,6 +170,20 @@
     right: 7px;
     background: rgba(13, 13, 15, 0.72);
     color: var(--ink-3);
+  }
+  /* A status the title carries, like `seen`, so not the ember (decision 276). Bottom-left, clear
+     of the two top corners M0's badges hold. No size of its own: it takes the data voice's, and
+     with it design.css's coarse floor, rather than joining the corner overlays' exemption. */
+  .owned {
+    position: absolute;
+    bottom: 7px;
+    left: 7px;
+    padding: 2px 7px;
+    border-radius: var(--r-pill);
+    letter-spacing: 0.06em;
+    background: rgba(13, 13, 15, 0.72);
+    border: 1px solid var(--line-2);
+    color: var(--ink-2);
   }
   .name {
     font-size: 12.5px;

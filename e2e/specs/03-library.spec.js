@@ -3,8 +3,8 @@ import { expect, test } from '@playwright/test';
 import { kindToggle, openTitle, signedIn } from '../helpers.js';
 
 /**
- * §6.0 — the catalog, and §4.1 rule 5 as read by owner decision 18: kind is two independent
- * toggles, either or both active, never neither.
+ * §6.0 — the catalog, and §4.1 rule 5 as read by owner decision 18: either kind or both, never
+ * neither — on Home one switch with three positions, Films, Series and Both (decision 474).
  *
  * Needs an imported bundle. Skips rather than pretending if the app has none.
  */
@@ -18,31 +18,48 @@ test.beforeEach(async ({ page }) => {
 
 test('films only, and the hidden count names what is missing', async ({ page }) => {
   // §6.0: a toggle that hides things has to say how many. Silent truncation reads as missing
-  // data, which is the failure this control was introduced to fix.
+  // data, which is the failure this control was introduced to fix. On the shelves the count is
+  // the household's library, which is all they draw on; in the grid it is the catalog listed.
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.count')).toContainText(
+    /\d+ films? in your library · \d+ series hidden/
+  );
+  await page.getByLabel('Search titles').fill('a');
   await expect(page.locator('.count')).toContainText(/\d+ films? · \d+ series hidden/);
 });
 
 test('both kinds on shows everything and nothing is reported hidden', async ({ page }) => {
-  await kindToggle(page, 'Series').click();
-  await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
-  await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.count')).toContainText(/\d+ titles/);
+  await kindToggle(page, 'Both').click();
+  await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
+  await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'false');
+  await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.count')).toContainText(/\d+ titles? in your library/);
   await expect(page.locator('.count')).not.toContainText('hidden');
 });
 
-test('the last active toggle cannot be turned off', async ({ page }) => {
-  // Never neither: an empty selection would silently mean "everything", which is the
-  // unpartitioned query §4.1 rule 5 exists to prevent.
-  await kindToggle(page, 'Films').click(); // no-op: it is the only one on
-  await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
+test('the kind switch selects one kind or both, never neither', async ({ page }) => {
+  // Decision 474: Series SWITCHES to series. Under decision 18's two toggles it added series
+  // under the films, which is what a member on the first household took for a broken control.
+  // Never neither still holds: every position selects at least one kind, so an empty selection
+  // - the unpartitioned query §4.1 rule 5 exists to prevent - has no tap that reaches it.
+  const pressed = async () =>
+    (
+      await page
+        .getByRole('group', { name: 'Kind' })
+        .getByRole('button', { pressed: true })
+        .allTextContents()
+    ).map((t) => t.trim());
 
-  await kindToggle(page, 'Series').click(); // both on
-  await kindToggle(page, 'Films').click(); // series only
-  await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'false');
-  await kindToggle(page, 'Series').click(); // refused
+  expect(await pressed()).toEqual(['Films']);
+  await kindToggle(page, 'Series').click();
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'true');
+  expect(await pressed()).toEqual(['Series']);
+  await kindToggle(page, 'Series').click(); // the position already held: still Series
+  expect(await pressed()).toEqual(['Series']);
+  await kindToggle(page, 'Both').click();
+  await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
+  expect(await pressed()).toEqual(['Both']);
 });
 
 test('the API refuses an empty kind selection outright', async ({ page }) => {
@@ -55,11 +72,43 @@ test('the facet vocabulary follows the selection', async ({ page }) => {
   const genre = page.getByLabel('Genre');
   const filmGenres = await genre.locator('option').allTextContents();
 
-  await kindToggle(page, 'Series').click();
+  await kindToggle(page, 'Both').click();
   await expect(async () => {
     const bothGenres = await genre.locator('option').allTextContents();
     expect(bothGenres.length).toBeGreaterThan(filmGenres.length);
   }).toPass();
+});
+
+test('the genre control offers one canonical name per genre', async ({ page }) => {
+  // Decision 473: TMDB's genre names, read across every structured source. The fixture's tmdb
+  // "Sci-Fi" is offered as "Science Fiction", and no name is offered twice in two spellings.
+  await kindToggle(page, 'Both').click();
+  const genre = page.getByLabel('Genre');
+  await expect(genre.locator('option', { hasText: 'Science Fiction' })).toHaveCount(1);
+  const names = (await genre.locator('option').allTextContents()).map((t) => t.trim().toLowerCase());
+  expect(names).not.toContain('sci-fi');
+  expect(new Set(names).size).toBe(names.length);
+});
+
+test('an exact title is the first search hit', async ({ page }) => {
+  // Decision 472: best match first. "heat" also matches every "theatre" and a foreign alias of
+  // an unrelated title, and the catalog's year order used to put those first.
+  await page.getByLabel('Search titles').fill('heat');
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
+  await expect(page.locator('.grid .card-wrap').first()).toContainText('Heat');
+});
+
+test('owned titles are marked in the catalog and one pill narrows to them', async ({ page }) => {
+  // The catalog lists the whole bundle and the household owns a fraction of it: the cards that
+  // Play works on say so, and "in my library" shows only those.
+  await page.getByTestId('filter-owned').click();
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
+  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.count')).toContainText('in your library');
+  const cards = page.locator('.grid .card-wrap');
+  await expect(cards.first()).toBeVisible();
+  const n = await cards.count();
+  await expect(page.locator('.grid [data-testid="owned-chip"]')).toHaveCount(n);
 });
 
 test('search matches an alias, not just the title', async ({ page }) => {

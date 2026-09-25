@@ -20,9 +20,26 @@
    */
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
-  import { facetColour, toPosterTitle } from '$lib/home.svelte.js';
+  import { facetColour, toPosterTitle, whyNumbersLine } from '$lib/home.svelte.js';
+  import { termLabel } from '$lib/terms.js';
 
   let { section, shelfId, ranking = true, onSelect } = $props();
+
+  /** The numbers the shelf's ordering used, present only with Show the model on (decision 486:
+   *  the server sends `why_numbers` then and at no other time). */
+  const numbers = $derived(whyNumbersLine(section.why_numbers));
+
+  /**
+   * The tier letter's own sentence. On a title the person has seen it is their tier for it; on one
+   * they have not, it is the model's guess at the tier they would give it - an unseen title is on
+   * no Rank board - and the letter alone said neither, so on the first household "S" on an unseen
+   * card read as a grade someone had given it.
+   */
+  function tierName(item) {
+    return item.seen
+      ? `tier ${item.tier}, as on your Rank board`
+      : `our guess: tier ${item.tier} if you rated it — you haven't seen it`;
+  }
 
   /**
    * Does any card on this row wear §8 stage 10's chip?
@@ -102,15 +119,24 @@
       <!-- §4.1 rule 5 made visible: the kind heading rides on the row, not on the page, so a
            Films row and a Series row of the same shelf are legibly two rankings. -->
       <span class="kindhead data" data-testid="shelf-kind">{section.heading}</span>
+      <!-- The row holds up to twelve and a phone shows under three, with the scrollbar hidden and
+           no chevrons on touch: the count says there is more before the finger has to find out.
+           [owner instruction of 2026-09-25] -->
+      <span class="count data" data-testid="shelf-count">
+        {section.items.length} {section.items.length === 1 ? 'title' : 'titles'}
+      </span>
     </div>
     <!-- §6.0's mandatory one-line why, in vocabulary terms (§6.8's "quiet reasons"). -->
     <p class="why" data-testid="shelf-why">{section.why}</p>
     {#if section.caption}
       <p class="why caption" data-testid="shelf-caption">{section.caption}</p>
     {/if}
+    {#if numbers}
+      <p class="note data" data-model-note data-testid="shelf-numbers">{numbers}</p>
+    {/if}
     {#if anyColdPlaced}
       <p class="why" data-testid="shelf-cold-note">
-        Cards marked "new" are placed by the Cold Tower — no crowd data yet.
+        Cards marked "new" have no outside ratings yet — we placed them by what they're about.
       </p>
     {/if}
     {#if section.shared_terms?.length}
@@ -122,17 +148,18 @@
              extraction mode puts one term on the row twice and an unkeyed duplicate throws
              `each_key_duplicate` in the production build. [M4.9 finding 8]
 
-             The chip prints `{t.term}` alone because §4.3's vocabulary id IS `facet.term` — the
-             shipped term already carries its prefix, and `{t.facet}.{t.term}` printed
-             `narrative_themes.themes.love_romance` on real data. The facet is spent on the
-             colour instead, which is what §6.8 calls identity rather than decoration. -->
+             The chip prints the term's NAME - "love & romance", not `themes.love_romance` - which
+             the payload carries as `label` from the vocabulary the corpus ships (decision 486);
+             `termLabel` falls back to the id's leaf in plain words for a payload without one.
+             The facet is spent on the colour, which is what §6.8 calls identity rather than
+             decoration. -->
         {#each section.shared_terms as t (t.facet + ':' + t.term)}
           <span
             class="term"
             data-testid="shelf-term"
             style:color={facetColour(t.facet)}
             style:border-color={facetColour(t.facet)}
-          >{t.term}{#if t.tier === 'projected'}<span class="tier-note"> ·&nbsp;projected</span>{/if}</span>
+          >{termLabel(t)}{#if t.tier === 'projected'}<span class="tier-note"> ·&nbsp;inferred</span>{/if}</span>
         {/each}
       </div>
     {/if}
@@ -156,7 +183,20 @@
                bottom two — same three overlays, no collision. §6.3's straddle and tension
                badges deliberately do not appear: Home shows the settled tier only. -->
           <span class="rank data" data-testid="shelf-rank">{item.rank}</span>
-          {#if item.tier}<span class="tierbadge data" data-testid="shelf-tier">{item.tier}</span>{/if}
+          {#if item.tier}
+            <!-- Outlined when it is a guess (decision 187 badges the fitted tier, which exists for
+                 unseen titles too), filled when the person has seen the title; the name says which
+                 for anyone who cannot see the difference, and `ShelfList` says it once in words. -->
+            <span
+              class="tierbadge data"
+              class:guess={!item.seen}
+              data-testid="shelf-tier"
+              data-guess={!item.seen}
+              role="img"
+              aria-label={tierName(item)}
+              title={tierName(item)}
+            >{item.tier}</span>
+          {/if}
           <!-- Present only when decision 117's toggle is on; the server strips the block. -->
           <ModelNote model={item.model} compact />
         </div>
@@ -277,6 +317,19 @@
     right: 6px;
     color: var(--ink-2);
   }
+  .tierbadge.guess {
+    background: transparent;
+    border-style: dashed;
+    border-color: var(--line-2);
+  }
+  .count {
+    color: var(--ink-4);
+    letter-spacing: 0.04em;
+  }
+  .note {
+    margin: 4px 0 0;
+    color: var(--ink-4);
+  }
 
   .nudge {
     position: absolute;
@@ -316,14 +369,29 @@
     outline: 2px solid var(--ember);
   }
 
-  /* Touch gets native momentum scroll and an edge fade — no chevrons (proposal 28). */
+  /* Touch gets native momentum scroll and an edge fade — no chevrons (proposal 28). The fade was
+     promised here and never drawn: `.start`/`.end` were toggled on `.rowwrap` with no rule reading
+     them, so on a phone a row of twelve read as three cards and an edge. It reads `atEnd`, which
+     is already measured, and it is `pointer-events: none` so it never takes a tap. Columns are the
+     catalog grid's phone minimum, so three whole cards and a peek of the fourth fit on an iPhone
+     13 instead of two and a clipped third. [owner instruction of 2026-09-25] */
   @media (pointer: coarse) {
     .nudge {
       display: none;
     }
     .row {
-      grid-auto-columns: 116px;
+      grid-auto-columns: 104px;
       gap: 10px;
+    }
+    .rowwrap:not(.end)::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 26px;
+      width: 34px;
+      pointer-events: none;
+      background: linear-gradient(90deg, rgba(13, 13, 15, 0), var(--ground));
     }
   }
 </style>

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
-from spielplan.db import dna_terms, library
+from spielplan.db import dna_terms, genres, library
 from spielplan.models import basis
 from spielplan.scoring import serve
 
@@ -46,6 +46,9 @@ async def list_titles(
     """
     try:
         kinds = library.normalise_kinds(kind)
+        # Decision 473: a genre outside the canonical vocabulary is a wrong question, and an
+        # empty grid would answer it as "you own nothing like that".
+        genre = genres.canonical(genre) if genre else None
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 

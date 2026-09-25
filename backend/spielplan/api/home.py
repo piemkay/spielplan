@@ -112,9 +112,10 @@ async def home(
 
     `mode` is the server's answer to §6.0's own sentence — "Search or an active person-filter
     switches Home into the catalog grid; clearing it returns the shelves". With `q` or
-    `person_id` set the response carries `catalog` (one flat, year-ordered list that MAY
-    interleave the kinds, per decision 18) and no shelves; with neither, it carries the shelves
-    (one kind-headed section each, never one interleaved ranking) and no catalog. The two modes
+    `person_id` set the response carries `catalog` (one flat list, best match first under a
+    search, that MAY interleave the kinds, per decisions 18 and 472) and no shelves; with
+    neither, it carries the shelves (one kind-headed section each, never one interleaved
+    ranking) and no catalog. The two modes
     cannot both be rendered, because only one of them is ever in the payload.
     """
     now_local, tz = _now_local()
@@ -168,7 +169,7 @@ async def home_shelves(
     slim = {
         key: payload[key]
         for key in ("kinds", "shelves", "sections", "shelves_total", "verdict_count",
-                    "degraded", "partner", "bundle", "vocabulary", "suppressed")
+                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library")
         if key in payload
     }
     return rail.redact(slim, show_model=rail.visible_to(user))

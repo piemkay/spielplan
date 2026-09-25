@@ -26,7 +26,17 @@
   import { onMount } from 'svelte';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
-  import { countLabel, gridReason, homeMode, loadHome, modelGate } from '$lib/home.svelte.js';
+  import {
+    KIND_CHOICES,
+    countLabel,
+    gridReason,
+    homeMode,
+    kindChoice,
+    kindsFor,
+    libraryLabel,
+    loadHome,
+    modelGate
+  } from '$lib/home.svelte.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
@@ -34,13 +44,15 @@
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
-  // Owner decision 18: kind is two independent toggles, either or both active, never neither.
-  // A person filter no longer collides with it — turn both on and a filmography is complete.
+  // Decision 474: one switch - Films, Series or Both - never neither (decision 18). A person filter
+  // does not collide with it: on Both, a filmography is complete.
   let kinds = $state(['movie']);
   let q = $state('');
   let genre = $state('');
   let decade = $state('');
   let seen = $state('any');
+  // The catalog lists all of it; this narrows it to what the household can press Play on.
+  let owned = $state(false);
   let personId = $state(null);
   let personName = $state('');
 
@@ -60,8 +72,8 @@
 
   const LIMIT = 60;
 
-  const mode = $derived(homeMode({ q, personId, genre, decade, seen }));
-  const reason = $derived(gridReason({ q, personId, genre, decade, seen }));
+  const mode = $derived(homeMode({ q, personId, genre, decade, seen, owned }));
+  const reason = $derived(gridReason({ q, personId, genre, decade, seen, owned }));
 
   // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
   // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
@@ -77,10 +89,21 @@
     [
       genre ? `genre ${genre}` : null,
       decade ? `${decade}s` : null,
-      seen !== 'any' ? seen : null
+      seen !== 'any' ? seen : null,
+      owned ? 'in your library' : null
     ].filter(Boolean)
   );
-  const count = $derived(countLabel({ total, hidden, kinds, filters: activeFilters }));
+  // Two lines for two screens. The grid counts the catalog it is listing; the shelves count the
+  // household's own library, which is all they draw on. The shelves used to carry the catalog's
+  // line - "13,330 films · 5,747 series hidden" over shelves of owned titles - which counted
+  // something the screen was not showing. Nothing is said before `/api/home` has answered.
+  const count = $derived(
+    mode === 'grid'
+      ? countLabel({ total, hidden, kinds, filters: activeFilters })
+      : home?.library
+        ? libraryLabel({ library: home.library, kinds })
+        : ''
+  );
 
   // §2's TZ and proposal 22's four bands are the server's answer; the local one is only a
   // placeholder for the frame before `/api/home` lands.
@@ -114,6 +137,7 @@
           decade: decade || undefined,
           seen: seen === 'any' ? undefined : seen,
           person_id: personId ?? undefined,
+          owned_only: owned || undefined,
           limit: LIMIT,
           offset: append ? offset : 0
         })}`
@@ -188,12 +212,11 @@
     loadShelves();
   });
 
-  function toggleKind(k) {
-    const on = kinds.includes(k);
-    // Never neither: turning off the last active toggle would silently mean "everything",
-    // which is the unpartitioned query §4.1 rule 5 exists to prevent.
-    if (on && kinds.length === 1) return;
-    kinds = on ? kinds.filter((x) => x !== k) : [...kinds, k];
+  function chooseKinds(choice) {
+    // Every position selects at least one kind, so "neither" - the unpartitioned query §4.1
+    // rule 5 exists to prevent - has no tap that reaches it (decisions 18 and 474).
+    if (kindChoice(kinds) === choice) return;
+    kinds = kindsFor(choice);
     // Proposal 32: "switching it closes any open title card, because the card's tier and
     // ledger weight are per-kind quantities."
     selected = null;
@@ -248,6 +271,11 @@
     if (which === 'seen') seen = 'any';
     load();
   }
+
+  function toggleOwned() {
+    owned = !owned;
+    load();
+  }
 </script>
 
 <!-- §7.3: the queued finish prompt, above everything, because it is about the thing that
@@ -273,23 +301,18 @@
 
   <div class="controls">
     <div class="kinds" role="group" aria-label="Kind">
-      <!-- Two toggles, either or both, never neither. On the shelves this is §4.1 rule 5's
-           partition; on the catalog grid, which merely lists in a kind-independent order, it
-           is only a filter — decision 18 permits the grid to interleave. -->
-      <button
-        class="pill"
-        data-testid="kind-movie"
-        aria-pressed={kinds.includes('movie')}
-        onclick={() => toggleKind('movie')}
-        title={kinds.length === 1 && kinds[0] === 'movie' ? 'at least one kind stays on' : ''}
-      >Films</button>
-      <button
-        class="pill"
-        data-testid="kind-series"
-        aria-pressed={kinds.includes('series')}
-        onclick={() => toggleKind('series')}
-        title={kinds.length === 1 && kinds[0] === 'series' ? 'at least one kind stays on' : ''}
-      >Series</button>
+      <!-- One switch, three positions (decision 474): Series switches to series rather than
+           adding them under the films. On the shelves this is §4.1 rule 5's partition, and Both
+           is two kind regions; on the catalog grid, which merely lists in a kind-independent
+           order, it is only a filter — decision 18 permits the grid to interleave. -->
+      {#each KIND_CHOICES as choice (choice.id)}
+        <button
+          class="pill"
+          data-testid="kind-{choice.id}"
+          aria-pressed={kindChoice(kinds) === choice.id}
+          onclick={() => chooseKinds(choice.id)}
+        >{choice.label}</button>
+      {/each}
     </div>
 
     <input
@@ -303,7 +326,13 @@
   </div>
 
   <div class="filters">
-    <select bind:value={genre} onchange={() => load()} aria-label="Genre" data-testid="filter-genre">
+    <select
+      class="genre"
+      bind:value={genre}
+      onchange={() => load()}
+      aria-label="Genre"
+      data-testid="filter-genre"
+    >
       <option value="">every genre</option>
       {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
     </select>
@@ -316,6 +345,15 @@
       <option value="seen">seen</option>
       <option value="unseen">unseen</option>
     </select>
+    <!-- The catalog is all of the bundle, and the household owns a few hundred of its thousands:
+         this is the one-tap way to the ones Play works on. Off by default, so §6.0 M0's catalog
+         stays the catalog. -->
+    <button
+      class="pill"
+      aria-pressed={owned}
+      onclick={toggleOwned}
+      data-testid="filter-owned"
+    >in my library</button>
     {#if personId}
       <!-- Proposal 30: the chip IS the clear control, and it is the only way back out of a
            filmography — so it is always visible and always removable. -->
@@ -357,7 +395,7 @@
 
 {#if mode === 'grid'}
   <div class="modeline data" data-testid="home-mode" data-mode="grid" data-reason={reason}>
-    {`catalog grid · ${reason === 'person' ? 'filmography' : reason === 'search' ? 'search' : 'filtered'} · clear it to return to your shelves`}
+    {`${reason === 'person' ? 'filmography' : reason === 'search' ? 'search · best match first' : 'filtered'} · clear it to get your shelves back`}
   </div>
 
   {#if loadError}
@@ -384,8 +422,8 @@
              not the fix — §6.4 is where compositional search is specified, and M6 owns it. -->
         <p class="why">Nothing in the library matches.</p>
         <p class="data" data-testid="no-matches-help">
-          search reads the title and its aliases · the kind toggles, genre, decade and seen
-          state narrow it further · clear a chip to widen it
+          search reads the title and its aliases · the kind switch, genre, decade, seen state
+          and "in my library" narrow it further · clear a chip to widen it
         </p>
       {/if}
     </div>
@@ -398,7 +436,7 @@
            no shelf header in it. Carried here on the same terms: once for the screen, not once
            per poster. [§6.8; decision 278; review cycle 2: M415-C2-COMP-06] -->
       <p class="why" data-testid="catalog-cold-note">
-        Cards marked "new" are placed by the Cold Tower — no crowd data yet.
+        Cards marked "new" have no outside ratings yet — we placed them by what they're about.
       </p>
     {/if}
     <div class="grid">
@@ -425,9 +463,9 @@
     <a class="btn-primary" href="/admin/data">Import a bundle</a>
   </div>
 {:else}
-  <div class="modeline data" data-testid="home-mode" data-mode="shelves">
-    {home?.shelves_total ?? 0} shelves · each one says why it exists
-  </div>
+  <!-- The mode marker stays for the tests that read `data-mode`, and says nothing a member has to
+       read: "6 shelves · each one says why it exists" described the design, not the evening. -->
+  <div class="sr-only" data-testid="home-mode" data-mode="shelves">your shelves</div>
   {#if homeError}
     <div class="empty card"><p>{homeError}</p></div>
   {:else}
@@ -504,6 +542,29 @@
     select {
       font-size: 16px;
     }
+  }
+  /* A native select is as wide as its longest option, and 16 px monospace makes a 37-character
+     genre about 380 px against the iPhone 13's ~358: the control overflowed and the whole page
+     scrolled sideways. Decision 473's vocabulary removed the long labels; this keeps any future
+     long option inside the row, which is the phone-first rule the e2e sweep checks. */
+  .filters select {
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+  .filters select.genre {
+    flex: 1 1 12rem;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
   .count {
     letter-spacing: 0.04em;

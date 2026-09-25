@@ -71,10 +71,17 @@ export function loadPendingVerdicts() {
  * to fix. All three clear the same way, and clearing all of them returns the shelves — which
  * is the property `library-rate-home-grid-switch` actually asserts.
  */
-export function gridReason({ q = '', personId = null, genre = '', decade = '', seen = 'any' } = {}) {
+export function gridReason({
+  q = '',
+  personId = null,
+  genre = '',
+  decade = '',
+  seen = 'any',
+  owned = false
+} = {}) {
   if (q && q.trim()) return 'search';
   if (personId !== null && personId !== undefined && personId !== '') return 'person';
-  if (genre || decade || (seen && seen !== 'any')) return 'filter';
+  if (genre || decade || (seen && seen !== 'any') || owned) return 'filter';
   return null;
 }
 
@@ -101,7 +108,7 @@ export function countLabel({ total = 0, hidden = {}, kinds = [], filters = [] } 
   const head =
     kinds.length === 1
       ? `${total.toLocaleString()} ${plural(kinds[0], total)}`
-      : `${total.toLocaleString()} titles`;
+      : `${total.toLocaleString()} ${total === 1 ? 'title' : 'titles'}`;
   const parts = [head];
   for (const [kind, n] of Object.entries(hidden ?? {})) {
     parts.push(`${n.toLocaleString()} ${plural(kind, n)} hidden`);
@@ -112,7 +119,52 @@ export function countLabel({ total = 0, hidden = {}, kinds = [], filters = [] } 
   return parts.join(' · ');
 }
 
+/**
+ * The count line over the SHELVES: what they draw on, which is the household's own library.
+ *
+ * It used to be the catalog's line - "13,330 films · 5,747 series hidden" - printed above shelves
+ * that hold only owned titles, so it counted something the screen was not showing. The grid
+ * keeps `countLabel`; the shelves count `payload.library`, the owned titles per kind, and name
+ * what the unselected kind holds in the same "hidden" clause decision 18 gave the catalog.
+ */
+export function libraryLabel({ library = {}, kinds = [] } = {}) {
+  const shown = kinds.reduce((sum, kind) => sum + (library?.[kind] ?? 0), 0);
+  const head =
+    kinds.length === 1
+      ? `${shown.toLocaleString()} ${plural(kinds[0], shown)} in your library`
+      : `${shown.toLocaleString()} ${shown === 1 ? 'title' : 'titles'} in your library`;
+  const parts = [head];
+  for (const [kind, n] of Object.entries(library ?? {})) {
+    if (!kinds.includes(kind) && n) parts.push(`${n.toLocaleString()} ${plural(kind, n)} hidden`);
+  }
+  return parts.join(' · ');
+}
+
 export { KIND_NOUN };
+
+// --- the kind switch (decision 474) ------------------------------------------------------------
+
+/**
+ * Home's kind control is one switch with three positions - Films, Series, Both - and not decision
+ * 18's two toggles. Tapping "Series" with Films on used to ADD series under the film shelves, and
+ * a member who wanted to switch to series had to find out that a second tap on Films was the way.
+ * Decision 18's invariants all hold: never neither (no position is empty), and Both is a
+ * selection, not a merge - the shelves still arrive one kind-headed section per kind.
+ */
+export const KIND_CHOICES = [
+  { id: 'movie', label: 'Films', kinds: ['movie'] },
+  { id: 'series', label: 'Series', kinds: ['series'] },
+  { id: 'both', label: 'Both', kinds: ['movie', 'series'] }
+];
+
+export function kindChoice(kinds = []) {
+  if (kinds.includes('movie') && kinds.includes('series')) return 'both';
+  return kinds.includes('series') ? 'series' : 'movie';
+}
+
+export function kindsFor(choice) {
+  return [...(KIND_CHOICES.find((c) => c.id === choice)?.kinds ?? ['movie'])];
+}
 
 // --- shelves ------------------------------------------------------------------------------------
 
@@ -153,6 +205,56 @@ export function shelfRows(payload) {
 /** How many kinds this shelf actually shipped — what makes the partition visible in the header. */
 export function kindsOnShelf(shelf) {
   return (shelf?.sections ?? []).filter(sectionShips).map((s) => s.kind);
+}
+
+/**
+ * The shelves grouped by kind: one region per selected kind, Films then Series, each holding
+ * that kind's shelves in the table's order. Decision 474.
+ *
+ * Read from the payload's `sections`, which the server has always built (`sections_by_kind`) and
+ * no client read. With Both on, `shelfRows` alternated a Films row and a Series row per shelf,
+ * which is what made the Series tap look like series stacked under the films. A region is still
+ * a list of kind-scoped sections: nothing here can put two kinds' items in one row.
+ */
+export function kindRegions(payload) {
+  return (payload?.sections ?? [])
+    .map((region) => ({
+      kind: region.kind,
+      heading: region.heading,
+      rows: (region.shelves ?? []).flatMap((shelf) =>
+        (shelf.sections ?? [])
+          .filter((section) => section.kind === region.kind && sectionShips(section))
+          .map((section) => ({ shelf: shelf.id, ranking: !!shelf.ranking, section }))
+      )
+    }))
+    .filter((region) => region.rows.length);
+}
+
+/** The data-voice names of the numbers a shelf's ordering used (decision 486: shown only with
+ *  Show the model on, and the server sends `why_numbers` only then). */
+const WHY_NUMBER_NAMES = {
+  beta: 'β',
+  beta_optimum: 'β optimum',
+  gate_k: 'gate k',
+  label_count: 'labels',
+  cos: 'cos',
+  affinity: 'affinity',
+  min_seen: 'min seen',
+  min_cdf: 'cdf floor',
+  co_seen: 'co-seen',
+  max_minutes: 'max min'
+};
+
+/** `β 0.62 · gate k 10` — §6.8's "model numbers in the data voice next to their name". */
+export function whyNumbersLine(numbers) {
+  if (!numbers || typeof numbers !== 'object') return '';
+  return Object.entries(WHY_NUMBER_NAMES)
+    .filter(([key]) => typeof numbers[key] === 'number')
+    .map(([key, name]) => {
+      const v = numbers[key];
+      return `${name} ${Number.isInteger(v) ? v : v.toFixed(2)}`;
+    })
+    .join(' · ');
 }
 
 /**

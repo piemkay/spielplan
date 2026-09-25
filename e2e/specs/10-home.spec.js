@@ -41,8 +41,9 @@ const SHELF_IDS = [
   'new_in_library'
 ];
 
-/** Decision 117's inventory, verbatim from `home/rail.py`'s `GATED_KEYS`. */
-const GATED_KEYS = ['model', 'rail', 'suppressed', 'log', 'ledger'];
+/** Decision 117's inventory, verbatim from `home/rail.py`'s `GATED_KEYS` - with decision 486's
+ *  `why_numbers`, the β, cosine and floor each shelf's ordering used. */
+const GATED_KEYS = ['model', 'rail', 'suppressed', 'log', 'ledger', 'why_numbers'];
 
 const KINDS = ['movie', 'series'];
 
@@ -342,6 +343,57 @@ test('removing the person chip returns the shelves', async ({ page }) => {
   await expect(page.getByTestId('shelf-card').first()).toBeVisible();
 });
 
+// --- decision 474's switch, and what a row says about itself -------------------------------
+
+test('Series switches to series, and Both shows the two kinds as two regions', async ({ page }) => {
+  // Decision 474. On the first household, tapping Series added series rows under the film
+  // shelves; a member reads a control called Series as a switch.
+  await expect(page.getByTestId('shelves')).toBeVisible();
+  await page.getByTestId('kind-series').click();
+  await expect(page.getByTestId('kind-series')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('kind-movie')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('[data-testid="shelf"][data-kind="movie"]')).toHaveCount(0);
+
+  await page.getByTestId('kind-both').click();
+  await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
+  const home = await homePayload(page.request);
+  const kinds = home.sections.filter((r) => r.shelves.length).map((r) => r.kind);
+  const regions = page.getByTestId('kind-region');
+  await expect(regions).toHaveCount(kinds.length);
+  for (let i = 0; i < kinds.length; i++) {
+    const region = regions.nth(i);
+    await expect(region).toHaveAttribute('data-kind', kinds[i]);
+    // A region is one kind's shelves in the table's order, never the other kind's rows.
+    const other = kinds[i] === 'movie' ? 'series' : 'movie';
+    await expect(region.locator(`[data-testid="shelf"][data-kind="${other}"]`)).toHaveCount(0);
+  }
+});
+
+test('every shelf says how many titles it holds', async ({ page }) => {
+  // A phone shows under three cards of up to twelve, with the scrollbar hidden and no chevrons
+  // on touch: the count is what says there is more.
+  const home = await homePayload(page.request, ['movie']);
+  const first = (home.shelves[0]?.sections ?? [])[0];
+  expect(first, 'no shelf shipped').toBeTruthy();
+  await expect(page.getByTestId('shelf-count').first()).toHaveText(
+    `${first.items.length} titles`
+  );
+});
+
+test('a tier letter on a shelf card is explained once, in words', async ({ page }) => {
+  // Decision 187 badges the model's fitted tier, which exists for titles nobody has seen; the
+  // letter alone read as a grade. The legend is said once for the screen, and only where a letter
+  // is on it.
+  await page.getByTestId('kind-both').click();
+  await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('shelves')).toBeVisible();
+  const letters = await page.getByTestId('shelf-tier').count();
+  await expect(page.getByTestId('tier-legend')).toHaveCount(letters ? 1 : 0);
+  if (letters) {
+    await expect(page.getByTestId('shelf-tier').first()).toHaveAttribute('aria-label', /tier /);
+  }
+});
+
 // --- §6.7 / decision 117's toggle ---------------------------------------------------------
 
 test('with the toggle off the rail and every inline number are absent, not merely hidden', async ({
@@ -397,11 +449,11 @@ test('turning the toggle on reveals the rail, the inline numbers and what did no
   await page.goto('/');
   await expect(page.getByTestId('shelves')).toBeVisible();
   // Both kinds on, so the payload read back below is the one this screen is rendering. Home
-  // opens with Films only (decision 18) and §4.1 rule 5 gives every shelf one section per
-  // selected kind, so asking the route for both while the page asked for one compares twelve
-  // sections against six.
-  await page.getByTestId('kind-series').click();
-  await expect(page.getByTestId('kind-series')).toHaveAttribute('aria-pressed', 'true');
+  // opens with Films only and §4.1 rule 5 gives every shelf one section per selected kind, so
+  // asking the route for both while the page asked for one compares twelve sections against six.
+  // Both is its own position on the switch (decision 474).
+  await page.getByTestId('kind-both').click();
+  await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
 
   // §6.7 calls the rail "the primary M2 debugging instrument"; proposal 118 requires it
   // "reachable in two taps", which is what this button is.
@@ -532,17 +584,24 @@ test('the toggle is off by default, and one user turning it on leaves the other 
 
 // --- §6.8's palette, where a shelf spends it -------------------------------------------------
 
-/** §4.3: a vocabulary id IS `facet.term`, so a chip carries exactly one dot. */
-const VOCAB_ID = /^[a-z_]+\.[a-z0-9_]+$/;
-/** The defect: `{facet}.{term}` printed over a term that already carries its prefix. */
-const DOUBLED = /^[a-z_]+\.[a-z_]+\./;
+/** §4.3's vocabulary id, `facet.term` - which a chip must never print (decision 486). */
+const VOCAB_ID = /[a-z_]+\.[a-z0-9_]+/;
+
+/** The name a chip prints: the shipped label, or the id's leaf in plain words (`lib/terms.js`). */
+function termName(tag) {
+  const label = typeof tag.label === 'string' ? tag.label.trim() : '';
+  if (label) return label;
+  const dot = tag.term.indexOf('.');
+  return (dot === -1 ? tag.term : tag.term.slice(dot + 1)).replaceAll('_', ' ');
+}
 
 test('a shelf term chip prints its term once and wears its facet colour', async ({ page }) => {
   // The same two rules as the title card's chips (§4.3's id and §6.8's "a fixed colour per
   // vocabulary facet (11)"), on the second surface that renders them. `ShelfRow` carried its own
   // copy of both — `{t.facet}.{t.term}` and a key of `t.term` alone — so repairing the card
   // would have left the shelves printing `narrative_themes.themes.love_romance` in grey.
-  // [M4.9 findings 3, 4 and 8]
+  // [M4.9 findings 3, 4 and 8] Since decision 486 the chip prints the term's name rather than
+  // its id, so "prints its term once" is now "prints its name and no id at all".
   //
   // THE SHARED TERMS ARE SUPPLIED, and this is the thing to read before trusting the case.
   // `why.common_terms` is an INTERSECTION over the cards a section actually returned, and
@@ -585,7 +644,13 @@ test('a shelf term chip prints its term once and wears its facet colour', async 
         if (section.kind !== chosen.kind) continue;
         if (!(section.items ?? []).some((i) => i.title_id === chosen.titleId)) continue;
         section.shared_terms = [
-          { term: chosen.tag.term, facet: chosen.tag.facet, tier: 'extracted', role: 'member' }
+          {
+            term: chosen.tag.term,
+            facet: chosen.tag.facet,
+            tier: 'extracted',
+            role: 'member',
+            label: chosen.tag.label
+          }
         ];
       }
     }
@@ -601,9 +666,9 @@ test('a shelf term chip prints its term once and wears its facet colour', async 
     const chip = page.getByTestId('shelf-term').first();
     await expect(chip).toBeVisible();
 
-    // The chip's own label, not the whole element: a projected term appends a "· projected"
-    // note in a nested span, which is a tier annotation rather than part of the id. Subtracted
-    // by node rather than by regex, so the assertion does not quietly also accept a chip that
+    // The chip's own label, not the whole element: an inferred term appends a "· inferred" note
+    // in a nested span, which is a tier annotation rather than part of the name. Subtracted by
+    // node rather than by regex, so the assertion does not quietly also accept a chip that
     // printed the annotation as part of the term.
     const label = (
       await chip.evaluate((el) => {
@@ -611,9 +676,9 @@ test('a shelf term chip prints its term once and wears its facet colour', async 
         return (el.textContent ?? '').replace(note, '');
       })
     ).trim();
-    expect(label, `shelf chip "${label}" is not a vocabulary id printed once`).toMatch(VOCAB_ID);
-    expect(label, `shelf chip "${label}" prints its facet twice`).not.toMatch(DOUBLED);
-    expect(label, 'the chip is not the term the payload named').toBe(chosen.tag.term);
+    // Decision 486: the NAME, never the id - "World War II", not `era.wwii`.
+    expect(label, `shelf chip "${label}" prints a vocabulary id`).not.toMatch(VOCAB_ID);
+    expect(label, 'the chip is not the term the payload named').toBe(termName(chosen.tag));
 
     // §6.8's identity, spent where the facet used to be spelled out. The declared custom
     // property is read rather than the computed colour, because the neutral and a facet colour

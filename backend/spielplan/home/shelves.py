@@ -233,6 +233,10 @@ class Ctx:
     bundle_version: str | None
     version: str | None  # the DNA vocabulary version
     kinds: tuple[str, ...]
+    # Decision 475: the titles of this kind that shelves built earlier in the claim order already
+    # show. A builder leaves them out and fills from its own next candidates; `build_shelves`
+    # hands each builder its own copy, so no builder can widen another's.
+    claimed: frozenset[int] = frozenset()
 
 
 # --- the greeting -------------------------------------------------------------------------------
@@ -540,10 +544,13 @@ async def _finish(
     must suppress a shelf rather than print the wrong why.
     """
     if len(section.items) < SECTION_FLOOR:
+        # Named when the claim is what emptied it (decision 475), so "3 shelves above took the
+        # titles" reads differently from "this household owns nothing like that".
+        after = " once the shelves before it took theirs" if ctx.claimed else ""
         return None, Suppressed(
             shelf_id,
             section.kind,
-            f"{len(section.items)} qualifying titles · the floor is {SECTION_FLOOR}",
+            f"{len(section.items)} qualifying titles{after} · the floor is {SECTION_FLOOR}",
         )
     if not section.why.strip():
         return None, Suppressed(
@@ -575,10 +582,15 @@ async def because_anchor(
 ) -> tuple[Section | None, Suppressed | None]:
     """§6.0 row 1 — "Because you put *{anchor}* in {tier}" / "shares {term} + {term} with it".
 
-    THE INVERSION IS THE POINT. The prototype admits members on "any two shared terms" and then
-    names the anchor's first two, so a card can be shown under a reason it does not satisfy
-    (proposal 24). Here the pair is chosen for the size of its intersection and the shelf IS
-    that intersection, so the why-line is true of every card by construction.
+    LIKENESS, THEN THE PAIR (decision 475). The shelf holds the unseen owned titles sharing the
+    most of the anchor's terms, and names a pair every one of them carries. It used to choose the
+    pair covering the most titles and show that intersection by score, which named the anchor's
+    most generic pair and let the score's extremes decide the rest. The why-line is still true
+    of every card by construction (proposal 24): the pair is read off the cards, not assumed.
+
+    THE HEADLINE SAYS WHAT THE PERSON DID (decision 476). "you put X in S" only where a
+    `tier_edit` exists - a person who has tiered nothing was being told they had put Mission:
+    Impossible in S - and otherwise "you liked X" for a live liked verdict, or "More like X".
     """
     sid = "because_anchor"
     if not ctx.version:
@@ -607,12 +619,19 @@ async def because_anchor(
     # correlated subquery that would re-run per row against an index keyed (user_id, created_at)
     # which cannot answer "this title's latest". `model_tier` travels alongside because the
     # range check below is about the FIT, not about the drop. [M4.9 finding 16, decision 187]
+    #
+    # WHICH TITLE ANCHORS is the person's own assignment first - the tier the board shows (their
+    # drop, or the fit where they dropped nothing), then their live verdict - and only then the
+    # Ledger's `s`. An argmax of `s` alone let the scale of one coordinate choose: a title the
+    # Cold Tower placed sat at s 21.8 against 9.7 for the next, and anchored the shelf over the
+    # household's own top-tier titles (decision 475).
     anchor = await conn.fetchrow(
         """
         SELECT t.id, t.name, ls.tier AS model_tier, COALESCE(te.tier, ls.tier) AS tier,
                -- NULL whenever the tier comes from the fit rather than from a drop, which is
                -- exactly when there is no earlier board to map from. [M4.13, dd06]
-               CASE WHEN te.tier IS NULL THEN NULL ELSE te.n_levels END AS assigned_k
+               CASE WHEN te.tier IS NULL THEN NULL ELSE te.n_levels END AS assigned_k,
+               te.tier IS NOT NULL AS placed, lv.value AS verdict
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
@@ -622,8 +641,14 @@ async def because_anchor(
                WHERE user_id = $1
                ORDER BY title_id, created_at DESC, id DESC
           ) te ON te.title_id = ls.title_id
+          LEFT JOIN (
+              SELECT DISTINCT ON (title_id) title_id, value
+                FROM verdict
+               WHERE user_id = $1 AND superseded_by IS NULL
+               ORDER BY title_id, created_at DESC, id DESC
+          ) lv ON lv.title_id = ls.title_id
          WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
-         ORDER BY ls.s DESC, t.id
+         ORDER BY COALESCE(te.tier, ls.tier) DESC, COALESCE(lv.value, -1) DESC, ls.s DESC, t.id
          LIMIT 1
         """,
         ctx.user_id,
@@ -661,46 +686,54 @@ async def because_anchor(
     )
 
     pool = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version)
-    pair = await why_mod.best_pair(
+    shared = await why_mod.anchor_neighbours(
         conn,
         user_id=ctx.user_id,
         kind=kind,
         version=ctx.version,
         anchor_id=int(anchor["id"]),
         pool=pool,
-        floor=SECTION_FLOOR,
+        exclude=sorted(ctx.claimed),
     )
-    if pair is None:
-        return None, Suppressed(
-            sid, kind,
-            f"no pair of {anchor['name']}'s terms covers {SECTION_FLOOR} unseen owned titles",
-        )
-    t1, t2, _n = pair
-
-    ids = await why_mod.carriers(
-        conn,
-        terms=[t1.term, t2.term],
-        kind=kind,
-        version=ctx.version,
-        user_id=ctx.user_id,
-        exclude=[int(anchor["id"])],
-    )
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
-    rows = await conn.fetch(
+    # Score order first, then a STABLE sort on the shared count, so titles equally like the
+    # anchor keep the order the person's own scores put them in.
+    scored = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.id = ANY($4)
          ORDER BY us.score DESC NULLS LAST, t.year DESC NULLS LAST, t.id
-         LIMIT $5
         """,
-        ctx.user_id, kind, ctx.bundle_version, ids, SHELF_CAP,
+        ctx.user_id, kind, ctx.bundle_version, list(shared),
     )
+    scored = sorted(scored, key=lambda r: -len(shared[int(r["title_id"])]))
+    chosen = why_mod.shared_pair(
+        [int(r["title_id"]) for r in scored], shared, pool, cap=SHELF_CAP, floor=SECTION_FLOOR
+    )
+    if chosen is None:
+        after = " once the shelves before it took theirs" if ctx.claimed else ""
+        return None, Suppressed(
+            sid, kind,
+            f"no pair of {anchor['name']}'s terms is shared by {SECTION_FLOOR} unseen owned "
+            f"titles{after}",
+        )
+    members, t1, t2 = chosen
+    by_id = {int(r["title_id"]): r for r in scored}
+    rows = [by_id[i] for i in members]
+
+    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    tier = tier_set[index]
+    if anchor["placed"]:
+        title = f"Because you put {anchor['name']} in {tier}"
+    elif anchor["verdict"] == 2:
+        title = f"Because you liked {anchor['name']}"
+    else:
+        title = f"More like {anchor['name']}"
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
-        title=f"Because you put {anchor['name']} in {tier_set[index]}",
+        title=title,
         why=f"shares {why_mod.phrase([t1, t2])} with it",
         why_terms=[t1.with_role("member"), t2.with_role("member")],
-        anchor={"title_id": int(anchor["id"]), "name": anchor["name"], "tier": tier_set[index]},
+        anchor={"title_id": int(anchor["id"]), "name": anchor["name"], "tier": tier},
         items=await _cards(conn, rows, ctx=ctx, named_terms=[t1, t2], beta=beta, tier_set=tier_set),
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
@@ -745,15 +778,17 @@ async def top_of_ledger(
         for i, row in enumerate(_as_card_rows(ranked["items"]))
     ]
     why = (
-        # §6.0's why verbatim, with this profile's fitted number in place of the spec's example.
-        f"clean item prior + your fold-in, blended at β {beta:.2f} — your highest, rewatches included"
+        # Decision 476: §6.0's row in the member register. The β the ordering used still travels,
+        # in `why_numbers`, which Show the model reveals (decision 486); the sentence says what a
+        # person can check without it - whose taste ranked this and that rewatches are in it.
+        "the ones we think you'll enjoy most — rewatches included"
         if personalised
-        else f"clean item prior alone — β {beta:.2f}, no fold-in yet — your highest, rewatches included"
+        else "what most people rate highest, until your own ratings take over — rewatches included"
     )
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
-        title="Top of your ledger",
+        title="Your top picks",
         why=why,
         why_numbers={"beta": beta, "beta_fitted": bool(ranked["fitted"]),
                      "beta_optimum": DEFAULT_BETA, "label_count": ranked["label_count"],
@@ -763,10 +798,9 @@ async def top_of_ledger(
                      # re-tuned k would have moved the gate the cards report and left this
                      # why-line naming the old one. [M4.13 step 34d]
                      "gate_k": DEFAULTS.gate_k},
-        caption=(
-            None if personalised
-            else f"§5.1's measured optimum is β {DEFAULT_BETA:.2f}; this profile is not there yet"
-        ),
+        # No caption: the one it carried named §5.1 and a β to a member (decision 486), and the
+        # optimum it quoted rides `why_numbers` beside the fitted β.
+        caption=None,
         items=items,
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
@@ -806,6 +840,7 @@ async def never_watched_term(
         version=ctx.version,
         min_seen=FRONTIER_MIN_SEEN,
         carrier_floor=SECTION_FLOOR,
+        exclude=sorted(ctx.claimed),
     )
     if found is None:
         return None, Suppressed(
@@ -817,7 +852,8 @@ async def never_watched_term(
     candidate, neighbour, cos, aff = found
 
     ids = await why_mod.carriers(
-        conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id
+        conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id,
+        exclude=sorted(ctx.claimed),
     )
     beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
     tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
@@ -832,17 +868,17 @@ async def never_watched_term(
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
-        title=f"You've never watched anything {candidate.term}",
-        why=(
-            f"unvisited region of DNA space next to what you like "
-            f"— sits beside {neighbour.term} · cos {cos:.2f}"
-        ),
+        title=f"You've never watched anything {candidate.name}",
+        # Decision 476: §6.4's frontier, said the way a member can check it. The cosine goes to
+        # `why_numbers` with the rest of the model's reading (decision 486).
+        why=f"close to {neighbour.name}, which you like",
         why_terms=[candidate, neighbour],
         why_numbers={"cos": round(cos, 4), "affinity": round(aff, 4),
                      "min_seen": FRONTIER_MIN_SEEN},
-        # §6.4's measured explore policy, quoted so the cost is not hidden from the person
-        # paying it: "~1 exploratory slot in 6 … cost ≈ −1 pp top-hit rate, honestly labelled".
-        caption="one exploratory slot in six · costs about a point of top-hit rate, honestly labelled",
+        # §6.4's measured explore policy ("~1 exploratory slot in 6 … cost ≈ −1 pp top-hit rate,
+        # honestly labelled") is still what this shelf is, and it still says so - in words: the
+        # label is that it is a step outside the usual, on purpose, rather than a top-hit rate.
+        caption="a step outside what you usually watch, on purpose",
         items=await _cards(
             conn, rows, ctx=ctx, named_terms=[candidate], beta=beta, tier_set=tier_set
         ),
@@ -897,17 +933,15 @@ async def shared_sweet_spot(
     THE 0..1 WEIGHT. §5.2 defines it as "the empirical CDF of the user's own fitted `s` values,
     computed per kind", and `ledger_state.cdf` carries it — but only for titles the person has
     RATED. This shelf ranks titles neither has seen, so the same construction is applied to the
-    serving score inside (user, kind) with `percent_rank()`. Same definition, same partition,
-    over the set the shelf is actually about - the OWNED library, which the ranking CTE used to
-    skip: it ranked all 9.5k scored films, most of them unowned, so the owned library's mean
-    rank was 0.42-0.46 and the floor was read against a catalogue nobody could play.
+    serving score inside (user, kind) with `percent_rank()`, over the OWNED titles of the kind:
+    the library this shelf and Tonight's pool rank. It read every scored title until the first
+    household install, where 9.5k mostly-unowned titles put the owned library's mean at 0.42-0.46
+    and the floor was being read against a long tail nobody could press Play on.
     [owner instruction of 2026-09-25 after the first household user test, C1.7]
 
-    COPY NOTE. §6.0's title reads as "have already rated" over titles neither has seen. §6.5
-    defines the sweet spot as "the region both like — doubles as the couple's watch-now prior"
-    and §6.2's rewatch default excludes titles every participant has seen, so the predictive
-    reading is the only coherent one. The spec's words are kept verbatim and the caption states
-    the honest reading rather than quietly amending a normative table.
+    COPY NOTE. §6.0's title read as "have already rated" over titles neither has seen, and the
+    caption had to contradict it. Decision 476 restates the row: the title says what the shelf
+    predicts, and no number reaches a member with Show the model off (decision 486).
     """
     sid = "shared_sweet_spot"
     if partner is None:
@@ -942,11 +976,13 @@ async def shared_sweet_spot(
                             AND s.user_id = $1 AND s.state = 'seen')
            AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
                             AND s.user_id = $5 AND s.state = 'seen')
+           AND NOT (t.id = ANY($8))
          ORDER BY (a.score + b.score) / 2.0 DESC, t.id
          LIMIT $7
         """,
         ctx.user_id, kind, ctx.bundle_version,
         [ctx.user_id, partner["user_id"]], partner["user_id"], SWEET_SPOT_MIN_CDF, SHELF_CAP,
+        sorted(ctx.claimed),
     )
     items = [
         _card(
@@ -962,15 +998,14 @@ async def shared_sweet_spot(
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
-        title=f"You and {partner['name']} both rate these highly",
-        why="the shared sweet spot — doubles as the Tonight prior",
+        title=f"You and {partner['name']} would both enjoy these",
+        # True of every card: unseen by both, near the top of both lists, and ordered by the plain
+        # average Tonight's pool is ordered by (§6.2 step 3). The floor it clears is a number and
+        # rides `why_numbers` (decision 486).
+        why="neither of you has seen them — a good pick for a night in together",
         why_numbers={"min_cdf": SWEET_SPOT_MIN_CDF, "partner_user_id": partner["user_id"],
                      "co_seen": partner["co_seen"]},
-        caption=(
-            f"neither of you has seen these — both of you land above "
-            f"{SWEET_SPOT_MIN_CDF:.2f} on your own ledgers, ranked by the plain average that "
-            f"seeds Tonight"
-        ),
+        caption=None,
         items=items,
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
@@ -994,11 +1029,11 @@ async def school_night(
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.is_owned AND t.runtime_min IS NOT NULL AND t.runtime_min < $4
-           AND COALESCE(ut.state, 'unseen') = 'unseen'
+           AND COALESCE(ut.state, 'unseen') = 'unseen' AND NOT (t.id = ANY($6))
          ORDER BY us.score DESC NULLS LAST, t.runtime_min, t.id
          LIMIT $5
         """,
-        ctx.user_id, kind, ctx.bundle_version, limit_min, SHELF_CAP,
+        ctx.user_id, kind, ctx.bundle_version, limit_min, SHELF_CAP, sorted(ctx.claimed),
     )
     section = Section(
         kind=kind,
@@ -1029,10 +1064,16 @@ async def new_in_library(
     ratings behind a title, as §4.3 ships it. (Not "§5.1's gate input", which is the same number
     only while every row carries a coordinate: a cold-masked row has crowd support and no n_t,
     and `title_prior.gate` is the column that carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01])
-    The predicate is BOTH `title.placement = 'cold_tower'` (§8 stage 10's badge) and a prior that
-    is not `backbone`/`blended` (§5.1's evidence gate saying the same thing from the model's
-    side). A title with crowd support is
-    warm and must not be here, whichever of the two writers ran last.
+    The predicate is `title.placement = 'cold_tower'` (§8 stage 10's badge), a prior that is not
+    `backbone`/`blended` (§5.1's evidence gate saying the same thing from the model's side), AND
+    no crowd rating at all. The third clause is the one the docstring always promised and the
+    SQL never read: the bundle's evaluation holdout serves 2,879 crowd-rated rows from the Cold
+    Tower, so on the first household install 161 of this shelf's 180 film candidates had crowd
+    ratings behind them - Raiders of the Lost Ark with 192,061 - under a why-line saying there
+    were none. A title with crowd support is warm and must not be here, whichever writer ran last.
+
+    Decision 475 exempts this shelf from the claim: it states a fact about an arrival, and a
+    shelf that hid a new title because another shelf showed it would stop being true.
     """
     sid = "new_in_library"
     tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
@@ -1042,6 +1083,7 @@ async def new_in_library(
          WHERE t.kind = $2 AND t.is_owned AND t.placement = 'cold_tower'
            AND COALESCE(ut.state, 'unseen') = 'unseen'
            AND (tp.e_source IS NULL OR tp.e_source IN ('cold_tower', 'none'))
+           AND COALESCE(tp.item_n, 0) = 0
          ORDER BY t.placement_at DESC NULLS LAST, t.id DESC
          LIMIT $4
         """,
@@ -1051,7 +1093,8 @@ async def new_in_library(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title="New in the library",
-        why="placed by the Cold Tower — no crowd data yet",
+        # Decision 476: the same fact without the model's nouns (decision 486).
+        why="no outside ratings yet, so we placed them by what they're about",
         why_numbers={"gate_k": DEFAULTS.gate_k},     # see `top_of_ledger` - one field, one k
         items=await _cards(conn, rows, ctx=ctx, named_terms=[], beta=beta, tier_set=tier_set),
     )
@@ -1063,6 +1106,15 @@ async def new_in_library(
 # `ranking=True` for the five shelves ordered by a ledger score; `new_in_library` is ordered by
 # recency. All six partition by kind regardless — a Home row reads as a recommendation.
 RANKING_SHELVES: frozenset[str] = frozenset(SHELF_IDS) - {"new_in_library"}
+
+# Decision 475's claim order: "Your top picks" first, then the table's order. The display order
+# stays `SHELF_IDS`; only the order in which shelves take titles changes.
+CLAIM_ORDER: tuple[str, ...] = ("top_of_ledger",) + tuple(
+    s for s in SHELF_IDS if s != "top_of_ledger"
+)
+# Every ranking shelf claims. "New in the library" neither claims nor is thinned: it states a
+# fact about an arrival rather than ranking one, and it is built last in both orders anyway.
+CLAIMING_SHELVES: frozenset[str] = RANKING_SHELVES
 
 
 async def live_verdict_count(conn: asyncpg.Connection, *, user_id: int) -> int:
@@ -1093,44 +1145,67 @@ async def build_shelves(
     """
     if partner is None:
         partner = await partner_for(conn, user_id=ctx.user_id)
-    shelves: list[Shelf] = []
-    dropped: list[Suppressed] = []
+    built: dict[tuple[str, str], Section] = {}
+    notes: dict[tuple[str, str], Suppressed] = {}
+    claimed: dict[str, set[int]] = {kind: set() for kind in ctx.kinds}
 
-    for shelf_id in SHELF_IDS:
+    # Decision 475: BUILT in claim order, RENDERED in the table's. "Your top picks" claims first
+    # and keeps its whole list, because its why-line promises your highest; every later shelf
+    # leaves out what an earlier one of the same kind already shows and fills from its own next
+    # candidates. Without it one household's Home drew three score-ordered shelves off the top of
+    # one list, and Raiders, American History X and Dunkirk each appeared twice in one render.
+    for shelf_id in CLAIM_ORDER:
         ranking = shelf_id in RANKING_SHELVES
-        shelf = Shelf(shelf_id, ranking=ranking)
         for kind in ctx.kinds:
             if zero_verdicts and ranking:
-                dropped.append(
-                    Suppressed(shelf_id, kind, "no verdicts yet — a score-ordered shelf would "
-                                               "rank on a ledger this profile does not have")
+                notes[shelf_id, kind] = Suppressed(
+                    shelf_id, kind, "no verdicts yet — a score-ordered shelf would rank on a "
+                                    "ledger this profile does not have"
                 )
                 continue
+            scoped = (
+                replace(ctx, claimed=frozenset(claimed[kind]))
+                if shelf_id in CLAIMING_SHELVES else ctx
+            )
             # perf-10: measured, not restructured. Every builder is timed at the one place they
             # are all called, so the number is the same arithmetic for all six and no builder
             # can be given a stopwatch someone else forgot. `perf_counter` and not `time`: this
             # is an interval, and a wall clock can move backwards under NTP.
             started = perf_counter()
             if shelf_id == "because_anchor":
-                section, note = await because_anchor(conn, ctx=ctx, kind=kind)
+                section, note = await because_anchor(conn, ctx=scoped, kind=kind)
             elif shelf_id == "top_of_ledger":
-                section, note = await top_of_ledger(conn, ctx=ctx, kind=kind)
+                section, note = await top_of_ledger(conn, ctx=scoped, kind=kind)
             elif shelf_id == "never_watched_term":
-                section, note = await never_watched_term(conn, ctx=ctx, kind=kind)
+                section, note = await never_watched_term(conn, ctx=scoped, kind=kind)
             elif shelf_id == "shared_sweet_spot":
-                section, note = await shared_sweet_spot(conn, ctx=ctx, kind=kind, partner=partner)
+                section, note = await shared_sweet_spot(
+                    conn, ctx=scoped, kind=kind, partner=partner
+                )
             elif shelf_id == "school_night":
-                section, note = await school_night(conn, ctx=ctx, kind=kind)
+                section, note = await school_night(conn, ctx=scoped, kind=kind)
             else:
-                section, note = await new_in_library(conn, ctx=ctx, kind=kind)
+                section, note = await new_in_library(conn, ctx=scoped, kind=kind)
             elapsed = (perf_counter() - started) * 1000.0
             if section is not None:
                 section.ms = elapsed
-                shelf.sections.append(section)
+                built[shelf_id, kind] = section
+                if shelf_id in CLAIMING_SHELVES:
+                    claimed[kind].update(int(c["title_id"]) for c in section.items)
             elif note is not None:
                 # `replace` rather than assignment: `Suppressed` is frozen, because a reason line
                 # that could be edited after the fact is not a record of why a shelf did not ship.
-                dropped.append(replace(note, ms=elapsed))
+                notes[shelf_id, kind] = replace(note, ms=elapsed)
+
+    shelves: list[Shelf] = []
+    dropped: list[Suppressed] = []
+    for shelf_id in SHELF_IDS:
+        shelf = Shelf(shelf_id, ranking=shelf_id in RANKING_SHELVES)
+        for kind in ctx.kinds:
+            if (shelf_id, kind) in built:
+                shelf.sections.append(built[shelf_id, kind])
+            elif (shelf_id, kind) in notes:
+                dropped.append(notes[shelf_id, kind])
         # §6.0: a shelf that cannot justify itself is ABSENT, never present and empty.
         if shelf.sections:
             shelves.append(shelf)
@@ -1204,6 +1279,10 @@ async def build_home(
         "bundle": bundle_version,
         "vocabulary": ctx.version,
         "partner": partner,
+        # What the shelves draw on: the household's OWNED titles, per kind. Home's count line used
+        # to state the whole catalog - "13,330 films · 5,747 series hidden" - above shelves that
+        # hold only owned titles, which is a count of something the screen is not showing.
+        "library": await library.count_by_kind(conn, owned_only=True),
         "shelves": [],
         "sections": [],
         "shelves_total": 0,
@@ -1228,7 +1307,8 @@ async def build_home(
 
     if mode == "grid":
         # Decision 18: a surface that merely LISTS in a kind-independent order may interleave
-        # freely. This is that surface — `library.list_titles`, unchanged, ordered by year.
+        # freely. This is that surface — `library.list_titles`, ordered by year, or best match
+        # first under a search (decision 472), which is a property of the text and not a kind.
         rows, total = await library.list_titles(
             conn, kinds=chosen, user_id=user.id, q=q, person_id=person_id,
             limit=limit, offset=offset,
@@ -1303,16 +1383,19 @@ def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | Non
         return {
             "state": "no_bundle",
             "headline": "No artifact bundle imported.",
-            "why": "the catalog, the shelves and every model number come from a bundle (§4.3)",
+            # No section sign in a member's sentence, even on a state only a fresh install shows
+            # (decision 486); §4.3 is where this fact is specified, and it stays in this comment.
+            "why": "the catalog and the shelves come from a data bundle an admin imports",
             "cta": {"label": "Import a bundle", "route": "/admin/data"},
         }
     if verdicts == 0:
         return {
             "state": "zero_verdicts",
-            "headline": "Shelves need a ledger.",
-            # §6.1's own learning-curve copy, so Home and Rate promise the same thing.
-            "why": "personal signal roughly triples from 5 to 100 labels — 50–100 in the first "
-                   "sitting or two is the target",
+            # Decision 476: the first-week state in the member register. §6.1's learning curve is
+            # still the promise, counted in ratings rather than "labels" (decision 486).
+            "headline": "Rate a few titles to get your shelves.",
+            "why": "your suggestions get about three times more personal between 5 and 100 "
+                   "ratings — aim for 50–100 in your first sitting or two",
             "cta": {"label": "Rate 50 titles", "route": "/rate"},  # decision 203
         }
     return None

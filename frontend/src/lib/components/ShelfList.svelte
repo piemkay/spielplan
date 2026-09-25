@@ -1,40 +1,64 @@
 <script>
   /**
-   * §6.0's six shelves, in the table's order. Spec v2.1 §6.0 (M2), §4.1 rule 5; decision 18;
-   * proposals 20 and 28.
+   * §6.0's six shelves, in the table's order. Spec v2.1 §6.0 (M2), §4.1 rule 5; decisions 18
+   * and 474; proposals 20 and 28.
    *
    * The order is the server's (`SHELF_IDS`, verbatim from §6.0's normative table) and this
    * component preserves it rather than re-sorting: the table is the spec.
    *
-   * With both toggles on, every ranking shelf arrives as two sections and leaves as two rows.
-   * `shelfRows` is the only place that flattening happens, and it maps rather than concatenates
-   * — there is no code path in which a Films array and a Series array meet.
+   * With Both selected, Home is two kind regions - Films, then Series - each carrying the shelves
+   * in table order (decision 474). It used to alternate a Films row and a Series row per shelf,
+   * which read as series stacked under the films. `kindRegions` maps the payload's own
+   * kind-grouped `sections`; there is still no code path in which a Films array and a Series array
+   * meet, because every row is one kind-scoped section.
    */
   import ShelfRow from '$lib/components/ShelfRow.svelte';
-  import { shelfRows } from '$lib/home.svelte.js';
+  import { kindRegions, shelfRows } from '$lib/home.svelte.js';
 
   let { payload, onSelect, loading = false } = $props();
 
   const rows = $derived(shelfRows(payload));
+  const regions = $derived(kindRegions(payload));
+  const both = $derived((payload?.kinds ?? []).length > 1);
+  // The letters' one sentence, said once for the screen rather than on every badge (§6.8's quiet
+  // reasons): each badge also names itself, for a finger that asks one card.
+  const lettered = $derived(rows.some((row) => row.section.items.some((item) => item.tier)));
 </script>
 
 {#if loading && !rows.length}
   <p class="data" data-testid="shelves-loading">building your shelves…</p>
 {:else if rows.length}
   <div class="shelves" data-testid="shelves" data-shelf-count={payload?.shelves_total ?? 0}>
-    {#each rows as row (row.shelf + ':' + row.section.kind)}
-      <ShelfRow section={row.section} shelfId={row.shelf} ranking={row.ranking} {onSelect} />
-    {/each}
+    {#if lettered}
+      <p class="why legend" data-testid="tier-legend">
+        Letters are tiers, as on your Rank board — outlined when it's our guess for a title you
+        haven't seen.
+      </p>
+    {/if}
+    {#if both}
+      {#each regions as region (region.kind)}
+        <section class="region" data-testid="kind-region" data-kind={region.kind}>
+          <h2 class="regionhead">{region.heading}</h2>
+          {#each region.rows as row (row.shelf + ':' + row.section.kind)}
+            <ShelfRow section={row.section} shelfId={row.shelf} ranking={row.ranking} {onSelect} />
+          {/each}
+        </section>
+      {/each}
+    {:else}
+      {#each rows as row (row.shelf + ':' + row.section.kind)}
+        <ShelfRow section={row.section} shelfId={row.shelf} ranking={row.ranking} {onSelect} />
+      {/each}
+    {/if}
   </div>
 {:else}
   <!-- Not an error. §6.0's rule is that a shelf which cannot justify itself is ABSENT, so an
        empty Home is a legible first-week state rather than a failure — proposal 20's copy for
        the two named cases arrives separately, as `degraded`. -->
   <div class="card empty" data-testid="shelves-empty">
-    <h2>No shelf can say why it exists yet.</h2>
+    <h2>No shelves yet.</h2>
     <p class="why">
-      Every shelf carries a one-line why in vocabulary terms, and one that cannot is suppressed
-      rather than shown bare. Rate a few titles and they arrive.
+      Every shelf says why it is there, and one that can't isn't shown. Rate a few titles and they
+      arrive.
     </p>
     <a class="btn-primary" href="/rate">Rate some titles</a>
   </div>
@@ -44,6 +68,19 @@
   .shelves {
     display: flex;
     flex-direction: column;
+  }
+  .legend {
+    margin: 0 0 16px;
+  }
+  .region + .region {
+    margin-top: 10px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+  .regionhead {
+    margin: 0 0 14px;
+    font-size: 18px;
+    font-weight: 600;
   }
   .empty {
     /* The empty state Home renders into the same slot as its own, and it must not
