@@ -626,10 +626,10 @@ async def load_axes(
             f"no authored axis definition in dna_vocab/{version}/ in this bundle; the {stored} "
             f"already stored under {version} are left in place and not re-applied (decision 247)"
             if stored else
-            f"no authored axis definition in dna_vocab/{version}/ - the Map surface has no axes "
-            "to plot and renders its no-axes state, and Tonight's split surfacing (§6.2 step 5) "
-            "is off: session_result.conflict is NULL on every evening and 54c's widest-axis "
-            "tie-break is 0.0 for every pair",
+            f"no authored axis definition in dna_vocab/{version}/ - the Map surface, when it "
+            "ships, has no axes to plot, and Tonight's facet split (§6.2 step 5) is off: a split "
+            "is surfaced by person and never names a facet (decision 479), and 54c's "
+            "widest-axis tie-break is 0.0 for every pair",
             stored=stored,
         )
     if unreadable:

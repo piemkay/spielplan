@@ -559,7 +559,7 @@ async def test_a_bundle_with_no_axis_file_says_which_weights_it_left_standing(
     assert warned[0].detail["stored"] == len(weights)
     assert str(len(weights)) in warned[0].message, warned[0].message
     assert "no axes to plot" not in warned[0].message, warned[0].message
-    assert "conflict is NULL" not in warned[0].message, warned[0].message
+    assert "facet split" not in warned[0].message, warned[0].message
 
     # And the install that HAS those consequences is still told about them, because that is the
     # line an operator has to act on and decision 173 makes it the shipped state.
@@ -568,7 +568,10 @@ async def test_a_bundle_with_no_axis_file_says_which_weights_it_left_standing(
     await dna.load_axes(db, vocab, "v1", bare)
     axis_warn = next(f for f in bare.findings if f.rule == "axes" and f.severity == "warn")
     assert "no axes to plot" in axis_warn.message, axis_warn.message
-    assert "session_result.conflict is NULL" in axis_warn.message
+    # Since decision 479 an axisless split is surfaced by person, so what the install loses is the
+    # facet split and not `session_result.conflict`, which the warning used to call NULL.
+    assert "facet split (§6.2 step 5) is off" in axis_warn.message, axis_warn.message
+    assert "surfaced by person" in axis_warn.message, axis_warn.message
 
 
 # --- the vocabulary layer, from the files the bundle contains (Postgres) ----------------
@@ -1404,9 +1407,10 @@ async def test_a_bundle_with_no_axis_artifact_loads_and_the_report_says_what_is_
 
     The warning named the Map surface and stopped there. §6.2 step 5 is the half a household
     actually meets: with `dna_axis_weight` empty, `tonight/dna.axes_for` returns `{}`,
-    `combine.contested_facet` iterates zero axes and returns None, `session_result.conflict` is
-    always NULL, and 54c's widest-axis tie-break is 0.0 for every pair. §14 risk 6 then watches
-    a split rate that is a permanent 0 and says nothing about the households it is watching.
+    `combine.contested_facet` iterates zero axes and returns None, no split can name a facet, and
+    54c's widest-axis tie-break is 0.0 for every pair. (Until decision 479 `session_result.conflict`
+    was then NULL on every evening; an axisless split is surfaced by person now, so the facet split
+    is what the warning names.)
     """
     _strip_axis_definitions(vocab_dir)
     report = ImportReport()
@@ -1418,7 +1422,7 @@ async def test_a_bundle_with_no_axis_artifact_loads_and_the_report_says_what_is_
     warnings = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
     assert len(warnings) == 1, report.render()
     assert "§6.2 step 5" in warnings[0].message, warnings[0].message
-    assert "conflict" in warnings[0].message, warnings[0].message
+    assert "facet split" in warnings[0].message, warnings[0].message
     assert "Map" in warnings[0].message, "the Map surface's half of the gap is still true"
     # §10 wants counts, and a count of zero is the one the operator needs: the line is not
     # conditional on there being something to count.

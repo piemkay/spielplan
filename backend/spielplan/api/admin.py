@@ -982,10 +982,16 @@ async def job_health(conn) -> dict[str, object]:
 # What the missing axis artifact costs, one sentence per surface. A constant rather than a
 # literal inside the payload because `ops/devstub.py` serves the same card and a harness that
 # paraphrased this would be teaching the page a claim the backend does not make.
+#
+# Both sentences were overtaken in the user-test wave and are restated as what the tree holds:
+# the Map renders no state at all, because it is not built and decision 488 keeps it out of
+# navigation until it is; and a split no axis can name is now surfaced by person (decision 479),
+# so `session_result.conflict` is no longer NULL on every evening. What stays off is the FACET
+# split and 54c's axis tie-break. [WE's C8.6 note of the 2026-09-25 user test]
 AXES_DISABLES = (
-    "§6.4's Map surface has no axes to plot and renders its no-axes state.",
-    "Tonight's split surfacing (§6.2 step 5) is off: session_result.conflict is NULL on every "
-    "evening, and 54c's widest-axis tie-break is 0.0 for every pair.",
+    "§6.4's Map, when it ships (§12 M6; not built yet, decision 488), has no axes to plot.",
+    "Tonight's facet split (§6.2 step 5) is off: a split is surfaced by person and never names a "
+    "facet (decision 479), and 54c's widest-axis tie-break is 0.0 for every pair.",
 )
 
 
