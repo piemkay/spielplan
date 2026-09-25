@@ -63,6 +63,7 @@
   // taps back said `2h 50m`, and a title of unknown runtime — nullable, and the corpus has them
   // — rendered a bare unit with no number. [M4.9 finding 37; review cycle 1: M49-CARD-2]
   import { metaLine } from '$lib/rate.svelte.js';
+  import RatePoster from '$lib/components/RatePoster.svelte';
 
   let code = $state('');
   let sharpening = $state(false);
@@ -513,6 +514,9 @@
            moment ships half of it." -->
       <p class="data beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
       <div class="winner card" data-testid="tonight-winner">
+        <!-- The winner's poster (decision 483). The payload is keyed `title_id`, which
+             RatePoster reads as it reads `id`. After the reveal, so no anchoring rule applies. -->
+        <div class="winner-art"><RatePoster title={tonight.result.winner} showName={false} /></div>
         <h2>{tonight.result.winner?.name}</h2>
         <!-- 54h's per-episode qualifier arrives here for free, and that is worth saying rather
              than re-deriving: `metaLine` reads the card's `kind` and prints `24m/ep` for a
@@ -760,6 +764,7 @@
      letter-spacing is what makes it a beat. [§6.8; decision 276] */
   .beat { letter-spacing: 0.2em; }
   .winner { border-color: var(--ember-edge); }
+  .winner-art { width: 132px; margin-bottom: 10px; }
   /* `.slate` rows are plain list items; `.picks` rows are cards, so they take the card's own
      padding rather than a bare vertical rhythm. Sharing one rule left them with no horizontal
      padding at all, text starting on the border. */

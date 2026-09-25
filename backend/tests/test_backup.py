@@ -171,9 +171,16 @@ DNA_EXTRACTION = {"dna_reject", "dna_pack"}
 # came near. Not corpus. [decisions 325, 349, 382, 430; M5.5]
 LLM_SPEND = {"llm_call"}
 
+# 0034_art_lookup's one table: what TMDB answered when this box's worker asked for a posterless
+# title's art (decision 484). A cache by construction, kept off `title` so decision 162's seed and
+# decision 372's stage-3 writes stay the only authors of the corpus - so it is not corpus either.
+# A restore without it costs one lookup per posterless title on its next view; a restore WITH it
+# would carry answers another install's key obtained. [decisions 483, 484]
+ART_CACHE = {"art_lookup"}
+
 EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
             | GENOME_NOT_IMPORTED | ACQUISITION_SPINE | JELLYFIN_INTAKE | DNA_EXTRACTION
-            | LLM_SPEND)
+            | LLM_SPEND | ART_CACHE)
 
 
 # --- the postgres client binaries -------------------------------------------------------------

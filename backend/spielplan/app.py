@@ -33,6 +33,7 @@ from starlette.types import Scope
 
 from spielplan.api import acquisition as acquisition_api
 from spielplan.api import admin as admin_api
+from spielplan.api import art as art_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
 from spielplan.api import curated as curated_api
@@ -49,6 +50,7 @@ from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
 from spielplan.api.deps import carry_slid_session_cookie
+from spielplan.art.poster import ArtService
 from spielplan.connectors import registry
 from spielplan.core import logs, secrets
 from spielplan.core.config import Settings, settings
@@ -303,9 +305,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if app.state.artifacts.is_empty:
         log.info("no artifact bundle active — serving setup wizard and admin routes (§3.1)")
+    # Decision 483's poster cache and the one fetcher this process holds for the two image hosts
+    # (decision 485), opened last so a boot that fails above leaves nothing to close, and closed
+    # before the pool its reads borrow from.
+    app.state.art = await ArtService(
+        cfg.data_dir / "cache" / "art", egress=cfg.art_egress
+    ).open()
     try:
         yield
     finally:
+        await app.state.art.close()
         await pool.close_pool()
 
 
@@ -337,6 +346,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_api.router)
     app.include_router(artifacts_api.router)
     app.include_router(library_api.router)
+    app.include_router(art_api.router)
     app.include_router(state_api.router)
     app.include_router(rate_api.router)
     app.include_router(rank_api.router)

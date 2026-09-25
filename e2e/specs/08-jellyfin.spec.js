@@ -367,4 +367,32 @@ test.describe('jellyfin', () => {
     await panel.getByRole('button', { name: 'Mark seen' }).click();
     await expect(panel.getByRole('button', { name: 'Seen', exact: true })).toBeVisible();
   });
+
+  test("an owned title wears the household's own poster, from this app's origin", async () => {
+    // Decision 483. Here and not in a later file because this is where the connector is known to
+    // be configured and Heat known to hold a Jellyfin item: the sweep above matched it. The fake
+    // Jellyfin serves a real PNG, so the image DECODES - the half a status code cannot show - and
+    // the stack runs with the no-egress switch on (`ops/compose.e2e.yml`), so no image host on
+    // the internet is asked for anything.
+    const found = await page.request.get('/api/titles?kind=movie&q=Heat');
+    const heat = (await found.json()).items.find((t) => t.name === 'Heat');
+    const art = await page.request.get(`/api/art/${heat.id}/poster`);
+    expect(art.status(), 'the owned title has art on the household server').toBe(200);
+    expect(art.headers()['content-type']).toBe('image/png');
+    expect(art.headers()['cache-control']).toBe('private, max-age=15552000');
+
+    const panel = await openTitle(page, 'Heat');
+    const img = panel.locator('[data-testid="rate-poster"] img');
+    await expect(img).toHaveAttribute('src', `/api/art/${heat.id}/poster`);
+    await expect
+      .poll(() => img.evaluate((el) => el.complete && el.naturalWidth), {
+        message: 'the title card drew a poster that did not decode'
+      })
+      .toBeGreaterThan(0);
+
+    // And no image anywhere on the page names another origin: the art route is the only door.
+    const origin = new URL(page.url()).origin;
+    const sources = await page.locator('img').evaluateAll((els) => els.map((el) => el.src));
+    expect(sources.filter((src) => new URL(src, origin).origin !== origin)).toEqual([]);
+  });
 });

@@ -847,6 +847,10 @@ JOB_NAMES: tuple[str, ...] = (
     # title"; this tuple answers "is the thing that walks them running at all", and the second
     # question is the one an operator asks first. [M5.1; decisions 321 and 336]
     "acquisition-drain",
+    # Decision 484's poster lookup, the drain's neighbour in the registry and on this card: a
+    # lookup that has stopped leaves every posterless card tinted, which from Home looks exactly
+    # like a title that has no art anywhere.
+    "art-lookup",
     "jellyfin-seen-sync",
     "jellyfin-sessions-poll",
     # M5.2 registered §7.2's two intake paths, and they are the drain's entry above read from the

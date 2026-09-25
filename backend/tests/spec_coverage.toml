@@ -9792,7 +9792,7 @@ id = "platform-every-route-is-behind-a-session"
 spec = "§3.1 first-login lock; §3.2 (every route behind a session)"
 milestone = "M4.16"
 kind = "static"
-what = "Every HTTP and WebSocket route the app registers either resolves `active_user`, `admin_user` or `active_user_ws` through its dependant; or resolves only `current_user`/`current_user_ws` and is named in `CURRENT_ONLY` with what makes it a way out of section 3.1's first-login lock (decision 179); or resolves none of the five and is named with a reason in `ANONYMOUS`, or in `CONFIGURED_SURFACES` for the one surface only a static build registers; a websocket that authenticates inline rather than through a dependant resolves nothing and counts as unguarded."
+what = "Every HTTP and WebSocket route the app registers either resolves `active_user`, `admin_user`, `active_user_ws` or `active_user_brief` (the same gate on a connection released before the route body, for the poster route) through its dependant; or resolves only `current_user`/`current_user_ws`/`current_user_brief` and is named in `CURRENT_ONLY` with what makes it a way out of section 3.1's first-login lock (decision 179); or resolves none of the seven and is named with a reason in `ANONYMOUS`, or in `CONFIGURED_SURFACES` for the one surface only a static build registers; a websocket that authenticates inline rather than through a dependant resolves nothing and counts as unguarded."
 why = "Nothing enumerated the routes: `test_api_gating.py` sweeps the ones that already declare a gate and `test_route_inventory.py` asks only whether each is named by a test, so a route added with no ActiveUser at all was absent from both walks and absence read as green. A new route added without ActiveUser passed the whole suite, and the one route that authenticates inline is the one the spec's blind-vote property depends on."
 # FastAPI 0.141.1 wraps includes as `_IncludedRouter`, so the walk reads `r.original_router.routes`;
 # `app.openapi()['paths']` carries neither the dependant nor the websockets.
@@ -11357,4 +11357,91 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The owner's instruction of 2026-09-25, after the first household user test: no cover art was
+# shown anywhere, because decision 190 had held the whole poster path back. Decision 483 ships it
+# (reversing 190, adopting 178(4) as amended) and decision 485 says which process fetches what.
+# `spec` cites the sections alone for the reason the vocabulary row above gives:
+# `_unresolvable_decision_citations` reddens a row citing a decision until its entry lands.
+[[requirement]]
+id = "library-rate-poster-art-resolves-within-its-licences"
+spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §6.1 (\"two posters are the buttons\"); §3.1 first-login lock; §3.2"
+milestone = "M5"
+kind = "integration"
+what = "GET /api/art/{title_id}/poster answers from this app's origin behind the session and section 3.1's lock (a stranger 401, a locked account 403, neither reaching a source), holds no pooled connection while it waits on a host, and serves the household's Jellyfin Primary image for a title with a jellyfin_id, else title.poster_path at TMDB w342 (rewritten, never prefixed) only when art/hosts.py passes its host, else the worker's lookup answer; m.media-amazon.com is never asked; bytes are served only when they are a JPEG, PNG or WebP under 2 MB and the final URL is still on the allow-list; every 200 is `private, max-age=15552000` and never immutable, every 404 is cacheable; answers live under /data/cache/art per title and per list of sources, TMDB and TVmaze files 180 days, Jellyfin 7, a stand-in after a Jellyfin error 1 day, a missing image 7 days, a failed host 10 minutes; concurrent misses for one title make one upstream request; with SPIELPLAN_ART_EGRESS off no image host is asked; and PosterCard, RatePoster and every surface built on them (the title card, the finish prompt, Tonight's winner) draw an img with empty alt keyed on the title's id or title_id over the tinted panel, drop it on error, and give it neither the pointer nor the iOS callout."
+why = "Two members of the first household test would not open the app again, and every choosing surface was a tinted panel while the install held TMDB art for all 888 owned and 823 watchlisted titles: decision 190 had deferred posters for cost, not principle (decision 483, owner instruction of 2026-09-25). A route that fetched on a held connection would 503 every other surface while a cold Home asked for sixty posters against a pool of ten, which is why the gate is the brief pair and the sweep follows it."
+tests = [
+    "backend/tests/test_art_route.py::test_a_stranger_is_refused_before_any_source_is_asked",
+    "backend/tests/test_art_route.py::test_a_locked_account_is_refused_by_the_poster_route",
+    "backend/tests/test_art_route.py::test_a_tmdb_poster_is_served_private_for_180_days_and_never_immutable",
+    "backend/tests/test_art_route.py::test_an_owned_title_is_served_from_the_households_jellyfin",
+    "backend/tests/test_art_route.py::test_an_unknown_title_is_a_cacheable_404",
+    "backend/tests/test_art_route.py::test_no_pooled_connection_is_held_while_the_host_is_asked",
+    "backend/tests/test_art_route.py::test_a_title_id_that_is_not_a_number_is_refused_by_the_route",
+    "backend/tests/test_api_gating.py::test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_request",
+    "backend/tests/test_art_poster.py::test_a_tmdb_poster_is_fetched_at_w342_once_and_then_served_from_disk",
+    "backend/tests/test_art_poster.py::test_imdb_hosted_art_never_reaches_the_transport",
+    "backend/tests/test_art_poster.py::test_an_upstream_404_is_remembered_and_not_asked_again_inside_its_ttl",
+    "backend/tests/test_art_poster.py::test_a_host_that_refuses_is_asked_again_after_ten_minutes",
+    "backend/tests/test_art_poster.py::test_bytes_that_are_not_a_poster_are_never_stored_or_served",
+    "backend/tests/test_art_poster.py::test_two_phones_asking_at_once_cost_one_upstream_request",
+    "backend/tests/test_art_poster.py::test_a_tmdb_file_is_fetched_again_after_180_days",
+    "backend/tests/test_art_poster.py::test_a_new_source_is_a_new_question_under_the_same_url",
+    "backend/tests/test_art_poster.py::test_the_households_jellyfin_is_asked_first",
+    "backend/tests/test_art_poster.py::test_a_title_jellyfin_holds_no_image_for_falls_through_to_tmdb",
+    "backend/tests/test_art_poster.py::test_jellyfin_down_falls_through_to_tmdb_and_is_asked_again_tomorrow",
+    "backend/tests/test_art_poster.py::test_with_egress_off_no_image_host_is_asked_and_jellyfin_still_is",
+    "backend/tests/test_art_poster.py::test_a_redirect_off_the_allow_list_is_neither_stored_nor_served",
+    "backend/tests/test_art_poster.py::test_a_title_the_database_does_not_hold_is_a_cacheable_404",
+    "backend/tests/test_art_poster.py::test_the_candidates_are_jellyfin_then_the_stored_path_then_the_lookup",
+    "backend/tests/test_art_poster.py::test_the_jellyfin_client_reads_the_primary_image_as_bytes",
+    "backend/tests/test_art_poster.py::test_both_image_hosts_are_declared_with_the_reasoning_for_their_robots_override",
+    "backend/tests/test_art_cache.py::test_a_stored_poster_is_read_back_with_its_type_and_a_strong_etag",
+    "backend/tests/test_art_cache.py::test_an_entry_answers_only_the_sources_it_was_fetched_from",
+    "backend/tests/test_art_cache.py::test_an_entry_expires_at_its_ttl",
+    "backend/tests/test_art_cache.py::test_a_negative_answer_is_remembered_and_takes_the_old_bytes_with_it",
+    "backend/tests/test_art_cache.py::test_damage_to_the_cache_is_a_miss_and_never_an_error",
+    "backend/tests/test_art_hosts.py::test_the_allow_list_is_tmdb_and_tvmaze_and_nothing_else",
+    "backend/tests/test_art_hosts.py::test_an_https_url_on_a_named_host_is_servable",
+    "backend/tests/test_art_hosts.py::test_anything_else_is_refused",
+    "backend/tests/test_art_hosts.py::test_tmdb_size_rewrites_the_size_segment_and_never_prefixes",
+    "backend/tests/test_art_hosts.py::test_tmdb_size_leaves_a_url_with_no_tmdb_size_segment_unchanged",
+    "backend/tests/test_art_hosts.py::test_tmdb_size_refuses_a_size_tmdb_does_not_serve",
+    "frontend/src/lib/art.test.js::prefers title_id when a payload carries both, because there id is its own row",
+    "frontend/src/lib/art.test.js::asks for a title with no poster_path too, since Jellyfin or the lookup may hold one",
+    "frontend/src/lib/art.test.js::never names a third-party host",
+    "frontend/src/lib/art.test.js::preloads every title on Rate's held-back card: the sweep's one or the battle's two",
+    "frontend/src/lib/components/posters.svelte.test.js::draws the same-origin poster over the tinted panel, eagerly and without alt text",
+    "frontend/src/lib/components/posters.svelte.test.js::takes a Tonight payload keyed title_id, and names the title it draws",
+    "frontend/src/lib/components/posters.svelte.test.js::drops the image on error and keeps the tinted panel, then tries the next title again",
+    "frontend/src/lib/components/posters.svelte.test.js::draws the poster lazily under its chips, and drops it on error",
+    "frontend/src/lib/components/posters.svelte.test.js::puts the title's poster on the title card",
+    "frontend/src/lib/components/posters.svelte.test.js::keys the finish prompt poster on the title and not on the prompt row",
+    "frontend/src/routes/tonight/tonight-winner.test.js::draws the winner's poster on the reveal, keyed on the payload's title_id",
+    "e2e/specs/08-jellyfin.spec.js::an owned title wears the household's own poster, from this app's origin",
+]
+
+# Decision 484, and the half of the poster row the seed corpus cannot supply on its own: 9,194 of
+# the install's titles have no servable poster, 2,064 of them warm and served by Rate, and every one
+# carries an id TMDB answers by. The worker asks, never the web process (section 1, decision 340).
+[[requirement]]
+id = "library-rate-posterless-titles-are-looked-up-by-the-worker"
+spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §1 (the worker's acquisition); §8"
+milestone = "M5"
+kind = "integration"
+what = "A poster view of a title with no servable poster files one art_lookup row and answers a 404 cacheable for one art-lookup interval; the worker's art-lookup job (every 1800 s) asks TMDB through the polite fetcher - /3/movie|tv/{tmdb_id} by title.kind, falling back to /3/find/{imdb_id} and the result list of that kind - and records found (the w342 image.tmdb.org URL), none (asked again after 30 days) or failed (after a day); it files placed titles nobody has viewed yet, warm first, behind the viewed ones; a refused key stops the batch with nothing recorded; no key or SPIELPLAN_ART_EGRESS off asks nothing; title, title_meta and the identity columns are byte-identical afterwards; and the art route then serves the found poster."
+why = "The corpus fetched TMDB detail for about half its titles and section 8 stage 2 runs for acquired titles only, so The Village, Outbreak and Starman had no art for the life of the install; decisions 162 and 372 keep the answer off `title`, and one bucket per host keeps the asking in the worker (decision 484, owner instruction of 2026-09-25)."
+tests = [
+    "backend/tests/test_art_route.py::test_a_posterless_title_is_filed_for_the_worker_and_drawn_as_the_tinted_panel",
+    "backend/tests/test_art_lookup.py::test_a_film_is_asked_for_by_its_tmdb_id_and_a_series_on_tmdb_s_tv_path",
+    "backend/tests/test_art_lookup.py::test_an_imdb_only_title_is_found_through_tmdb_s_find_by_its_kind",
+    "backend/tests/test_art_lookup.py::test_a_tmdb_id_of_the_other_kind_falls_back_to_the_imdb_id",
+    "backend/tests/test_art_lookup.py::test_nothing_found_is_remembered_for_thirty_days",
+    "backend/tests/test_art_lookup.py::test_no_key_no_lookup",
+    "backend/tests/test_art_lookup.py::test_with_egress_off_tmdb_is_asked_nothing",
+    "backend/tests/test_art_lookup.py::test_a_refused_key_stops_the_batch_and_records_nothing_against_the_titles",
+    "backend/tests/test_art_lookup.py::test_the_lookup_writes_art_lookup_and_nothing_on_the_title",
+    "backend/tests/test_art_lookup.py::test_the_worker_fires_the_lookup_from_its_own_registry_and_pool",
+    "backend/tests/test_art_lookup.py::test_placed_titles_nobody_viewed_are_filed_warm_first_and_viewed_ones_lead",
 ]

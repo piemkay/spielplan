@@ -789,6 +789,18 @@ async def _acquisition_drain() -> dict[str, object] | None:
         return detail
 
 
+async def _art_lookup() -> dict[str, object] | None:
+    """Decision 484: TMDB asked for the poster of each title that has none, here and not in the
+    web process, because §1 puts acquisition in the worker and decision 340 gives
+    `api.themoviedb.org` one bucket - this loop is sequential, so it is never asked by a drain and
+    by this job at once. `art/lookup.py` says what is asked and what is written; None when there
+    was no key, nothing owed, or the install runs with decision 483's egress switch off."""
+    from spielplan.art import lookup
+
+    async with pool.acquire() as conn:
+        return await lookup.drain(conn)
+
+
 async def _jellyfin_delta_poll() -> dict[str, object] | None:
     """§7.2's fallback intake, the fifteen-minute delta poll (decision 409), driven.
 
@@ -1306,6 +1318,15 @@ JOBS: tuple[Job, ...] = (
     Job("acquisition-drain", "M5.1", "queue",
         "~9 s/title of paced crawl x 8 a tick + <1 s/title placed",
         _acquisition_drain, every=1800, timeout=420),
+    # Decision 484's poster lookup, beside the drain whose host it shares and absent from §5.3's
+    # table for the drain's reason: it is acquisition, which §8 writes down. The drain's interval
+    # and not a shorter one: `test_worker_schedule.py` sizes its minutely and quarter-hourly sets on
+    # the registry, and a title filed by a view waits one run - the 404 the art route answers
+    # meanwhile says so in its max-age. 300 lookups at `api.themoviedb.org`'s declared 18 rps is
+    # under twenty seconds of pacing, so 300 s covers a slow host several times and stays a sixth
+    # of the interval. [decisions 340, 483, 484]
+    Job("art-lookup", "M5", "queue", "~17 s of paced TMDB lookups x 300 a tick",
+        _art_lookup, every=1800, timeout=300),
     Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900,
         timeout=600),
     Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,

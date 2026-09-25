@@ -18,15 +18,16 @@
 
 <script>
   /**
-   * Poster-forward 2:3 card (spec §6.8). There are no poster images in the corpus bundle —
-   * only paths — so until an image source is configured the card renders a deterministic
-   * tinted panel derived from the title's own id. It is a placeholder that is stable across
-   * reloads, which matters: a card that changes colour every render reads as a bug.
+   * Poster-forward 2:3 card (spec §6.8). The art is the same-origin poster route's (decision
+   * 483), drawn over a deterministic tinted panel derived from the title itself: the panel is
+   * what shows while the image loads and what stays for a title with no art anywhere, and it is
+   * stable across reloads, which matters — a card that changes colour every render reads as a bug.
    */
   // One runtime label, not three. This copy and the title card's had drifted apart — the card
   // two taps away had no kind branch at all — so the same episode read `24m/ep` here and
   // `0h 24m` there. [M4.9 finding 37]
   import { runtimeLabel } from '$lib/rate.svelte.js';
+  import { posterSrc } from '$lib/art.js';
 
   let { title, onSelect } = $props();
 
@@ -49,6 +50,10 @@
   // §8 stage 10's badge. `e_source` comes from `title_prior` where the payload has it; where it
   // does not, fall back to the placement stamp rather than silently badging nothing.
   const noCrowdData = $derived(isColdPlaced(title));
+  // Decision 483's art, keyed on `id` or `title_id` (`lib/art.js`), and the src that failed
+  // rather than a flag, so a card reused for another title does not inherit its missing image.
+  const src = $derived(posterSrc(title));
+  let failed = $state(null);
 </script>
 
 <button class="card-wrap" onclick={onSelect} title={title.name}>
@@ -56,6 +61,19 @@
     class="poster"
     style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
   >
+    {#if src && failed !== src}
+      <!-- `alt=""`: the name is printed under the poster. Lazy, because a shelf or a catalog
+           grid draws many more cards than a phone shows at once. -->
+      <img
+        class="art"
+        {src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable="false"
+        onerror={() => (failed = src)}
+      />
+    {/if}
     {#if noCrowdData}
       <!-- §8 stage 10: "new — model placement, no crowd data" until ratings accrue.
 
@@ -103,6 +121,19 @@
     /* design.css's `.poster` already sets the frame — aspect ratio, radius, border,
        positioning and clipping. Only what is this component's own belongs here. */
     transition: border-color 0.12s ease;
+  }
+  /* Over the tinted panel and under the chips, which come after it in the markup. Inert to the
+     finger, so the card's own button takes every tap and a long press offers no image callout. */
+  .art {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .badge,
   .seen {

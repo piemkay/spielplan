@@ -20,6 +20,7 @@
   import { facetColour } from '$lib/home.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { dismiss } from '$lib/dismiss.js';
+  import RatePoster from '$lib/components/RatePoster.svelte';
 
   let { titleId, onClose, onPerson, onStateChange } = $props();
 
@@ -126,11 +127,19 @@
     <p class="data">loading…</p>
   {:else}
     {@const t = data.title}
-    <h2>{t.name}</h2>
-    <div class="data sub">{subline}</div>
-    {#if t.original_name && t.original_name !== t.name}
-      <div class="data">{t.original_name}</div>
-    {/if}
+    <!-- §6.8's poster, beside the name rather than above it (decision 483): above it, a phone
+         would push the overview and both actions below the fold. Inert, so a tap on it is a tap
+         inside the panel and never reaches `dismiss`. -->
+    <div class="head">
+      <div class="thumb"><RatePoster title={t} showName={false} /></div>
+      <div class="head-text">
+        <h2>{t.name}</h2>
+        <div class="data sub">{subline}</div>
+        {#if t.original_name && t.original_name !== t.name}
+          <div class="data">{t.original_name}</div>
+        {/if}
+      </div>
+    </div>
 
     {#if t.overview}<p class="overview">{t.overview}</p>{/if}
 
@@ -429,6 +438,20 @@
   }
   .sub {
     margin-bottom: 10px;
+  }
+  /* The prototype's 88 x 132 poster, the name and its lines beside it. */
+  .head {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .thumb {
+    width: 88px;
+    flex: none;
+  }
+  .head-text {
+    flex: 1;
+    min-width: 0;
   }
   .overview {
     font-size: 13px;
