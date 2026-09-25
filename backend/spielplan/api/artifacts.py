@@ -65,9 +65,14 @@ RESTART_REQUIRED = (
 # the same state, and it names the restore. Beside `RESTART_REQUIRED` because the two sentences are
 # the two halves of one §10 clause and a reader has to be able to see they are different.
 # [M4.13 cycle 1, m413-c1-dim1-broken-bundle-refusal-is-worker-only]
+#
+# In the member register, as `RESTART_REQUIRED` is: Rate and Rank render it as it is, and it named
+# a bundle, a basis, a refit and /data/artifacts to the person holding the phone (decision 486;
+# WJ's integration note of the 2026-09-25 user test). The operator's half - the path and both
+# repairs - is the error log line beside the 409 and the worker's boot report.
 RESTORE_REQUIRED = (
-    "the active bundle's files are missing - restore /data/artifacts or import the bundle "
-    "again; no process may score or refit in a basis whose files are gone"
+    "Spielplan's movie data is missing on this server, so nothing can be saved right now. An admin "
+    "needs to restore it."
 )
 
 # The `job_run.name` this route enqueues under, and `worker.JOBS`'s own name for section 5.3's

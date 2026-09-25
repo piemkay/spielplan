@@ -19,9 +19,10 @@
    *
    * `?head=` is §6.0's pending-verdicts banner arriving with its titles pinned to the front of
    * the queue — repeated parameters, one per title, which is why it is read with `getAll`. The
-   * title card's "Rate it" arrives the same way, and this page's own "find" search pins through
-   * the same `head` (C5.2 of the 2026-09-25 household test): a person who knows a film can rate
-   * it without marking it seen and waiting for the queue to come round.
+   * finish prompt's "Rate it now" arrives the same way (the title card answers on the card itself
+   * since decision 487), and this page's own "find" search pins through the same `head` (C5.2 of
+   * the 2026-09-25 household test): a person who knows a film can rate it without marking it seen
+   * and waiting for the queue to come round.
    */
   import { onDestroy, onMount } from 'svelte';
   import { modelGate } from '$lib/home.svelte.js';

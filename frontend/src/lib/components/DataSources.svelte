@@ -99,10 +99,11 @@
            terms section 3 fixes this sentence and licenses exactly one edit in it: the bracketed
            "[website, program, service, application, product]" is a choose-one and nothing else in
            it is ours to write. What shipped was "uses the TMDB API" - the head of TMDB's
-           developer-FAQ form welded to the tail of the terms form, a quotation of neither - and
-           it dropped the clause that is true of this build for one that is not, since no code
-           here calls TMDB: the overviews and poster paths arrive inside the corpus bundle.
-           [decision 319] -->
+           developer-FAQ form welded to the tail of the terms form, a quotation of neither.
+           [decision 319] The build did not call TMDB when that was written - the overviews and
+           poster paths arrived inside the corpus bundle - and it does now: §8 stage 2 since M5.3,
+           the worker's poster lookup (decision 484) and the art route's fetch from TMDB's image
+           host (decision 485), so the verbatim sentence is true of it as well as required. -->
       <p class="why" data-notice="tmdb">
         This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise
         approved by TMDB.

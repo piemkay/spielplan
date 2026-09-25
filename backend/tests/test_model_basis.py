@@ -782,6 +782,18 @@ async def test_a_broken_store_carries_the_active_version_and_still_refuses_on_it
         store.path("backbone.npz")
 
 
+def test_the_two_refusals_rate_and_rank_render_speak_the_member_register():
+    """Rate and Rank render a 409's `message` as it is, so both of §10's refusal sentences are read
+    by the person holding the phone (decision 486): the restore's named a bundle, a basis, a refit
+    and /data/artifacts to them (WJ's integration note of the 2026-09-25 user test). Each still
+    names its own repair - the operator's words for it are the log line beside the 409."""
+    for message in (artifacts_api.RESTART_REQUIRED, artifacts_api.RESTORE_REQUIRED):
+        for noun in ("bundle", "basis", "refit", "process", "/data", "ledger", "fold-in"):
+            assert noun not in message.lower(), f"{noun!r} reaches a member in {message!r}"
+    assert "restore" in artifacts_api.RESTORE_REQUIRED
+    assert "restart" in artifacts_api.RESTART_REQUIRED
+
+
 async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothing(
     db, app, tmp_path
 ):
