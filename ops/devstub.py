@@ -56,7 +56,11 @@ from spielplan.api import llm as llm_api  # noqa: E402 - the real provider card 
 from spielplan.api import setup as setup_api  # noqa: E402 - the rows setup may not seed
 from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
 from spielplan.api.auth import SURFACES, shipped  # noqa: E402 - the real surface list, not a copy
-from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
+from spielplan.api.rank import (  # noqa: E402 - §6.8's arm-independent lines, not copies
+    _QUEUE_SETTLED,
+    _QUEUE_THIN,
+    _QUEUE_WHY,
+)
 from spielplan.connectors import registry  # noqa: E402 - the real connector table
 from spielplan.core import logs as core_logs  # noqa: E402 - the real redaction and scope
 from spielplan.core.config import settings  # noqa: E402
@@ -4025,7 +4029,14 @@ def _rank_board_payload(
         "queue_eligible": len(rank_queue.eligible(rows, cuts=cuts, hp=hp)),
         "filters": active,
         "dna_tiers": None,
-        "why": f"{len(rows)} rated · learned cutpoints, refit nightly",
+        # The app's own words (decision 486). The harness counts a comparison per title, so
+        # half their sum is the number of answers; a drop here writes the edit alone.
+        "why": rank_board.why_line(
+            rated=len(rows),
+            compared=sum(STATE["rank_comparisons"].get((user["id"], kind), {}).values()) // 2,
+            placed_by_you=sum(1 for r in rows if r.assigned_tier is not None),
+            fitting=False,
+        ),
         "model": {
             "cutpoints": [float(b) for b in cuts],
             "hyperparams": hp.source,
@@ -4136,9 +4147,7 @@ def rank_queue_route(
         return {
             "kind": kind,
             "pair": None,
-            "reason": (
-                "There is nothing to compare yet — rate a few more titles and the queue fills up."
-            ),
+            "reason": _QUEUE_SETTLED if len(pool) >= 2 else _QUEUE_THIN,
         }
     names = {t["id"]: t["name"] for t in _catalog()}
     served = pair.public()
@@ -4186,7 +4195,18 @@ def rank_answer(
         selection=str(sealed["arm"]),
     )
     _rail_record("duel", line, user_id=user["id"])
+    # Where the two titles sit now, as the app's answer route reports it (decision 495's
+    # sheet reads it). The harness has no Ledger, so this is where they already were.
+    board_now = _rank_board_payload(user, kind, _rank_filters(None, None, None, None, None,
+                                                              "any", None))
+    wanted = {int(sealed["a"]), int(sealed["b"])}
     payload = rank_queue_route(kind=kind, spielplan_session=spielplan_session)
+    payload["placed"] = [
+        entry
+        for tier in board_now["tiers"]
+        for entry in tier["entries"]
+        if entry["title_id"] in wanted
+    ]
     payload["log"] = [line]
     return rail.redact(payload, show_model=_show_model(user))
 
@@ -4199,8 +4219,8 @@ def rank_tier_set(spielplan_session: str | None = Cookie(default=None)) -> dict[
         "min": rank_tiers.MIN_TIERS,
         "max": rank_tiers.MAX_TIERS,
         "warning": (
-            "Changing the number of tiers discards your learned cutpoints and queues a refit. "
-            "Your past moves are kept."
+            "Changing how many tiers you have throws away where your tier lines were learned to "
+            "fall, and works them out again shortly. Your past moves are kept."
         ),
     }
 

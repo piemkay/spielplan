@@ -189,7 +189,8 @@ async def asked_pairs(
 ) -> set[frozenset[int]]:
     """The unordered pairs this person has already judged, **excluding §13's held-out stream**.
 
-    `queue._exploration` refuses to re-serve one. Without it the arm re-served the same handful
+    Neither adaptive arm re-serves one (the boundary arm since decision 494). Without it the
+    exploration arm re-served the same handful
     forever (finding 12: one pair took 78 of 109 exploration draws in a 500-answer simulation),
     and each repeat is an independent Davidson row — ten repeats shrink that pair's posterior by
     the root of ten on the strength of one judgement, which is §13's reliability inflation
@@ -216,6 +217,57 @@ async def asked_pairs(
         HELD_OUT,
     )
     return {frozenset((int(r["title_a"]), int(r["title_b"]))) for r in rows}
+
+
+async def recent_titles(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, window: int = queue.RECENT_WINDOW
+) -> set[int]:
+    """The titles of this person's last `window` answered queue pairs, **held-out ones excluded**.
+
+    Decision 494's no-repeat window: the adaptive arms hold these back while another title can
+    take their place. The held-out exclusion is `asked_pairs`' and for its reason - this is a
+    selector input, and §13 keeps the uniform tenth out of the selection rule. `tier_queue` alone,
+    because the window is about the sitting in front of the person: a title from last week's Rate
+    battle coming up here is not a title coming straight back.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT d.title_a, d.title_b FROM duel d
+        JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
+        JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
+        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND d.selection <> $3
+        ORDER BY d.id DESC
+        LIMIT $4
+        """,
+        user_id,
+        kind,
+        HELD_OUT,
+        window,
+    )
+    return {int(r[side]) for r in rows for side in ("title_a", "title_b")}
+
+
+async def compared_count(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
+    """How many comparisons this person has answered for this kind, for the board's why-line.
+
+    Every question they were asked - §6.1's battles and this queue - and the held-out tenth
+    INCLUDED, which is the opposite of the two selector reads above and for the same guard: a
+    count a person watches that stands still after one answer in ten tells them which answer
+    §13 set aside (M4.10 finding 16). `tier_insert` is left out because it is a drop's
+    by-product, two rows for one gesture, and the person asked nothing.
+    """
+    return int(
+        await conn.fetchval(
+            """
+            SELECT count(*) FROM duel d
+            JOIN title t ON t.id = d.title_a AND t.kind = $2
+            WHERE d.user_id = $1 AND d.context IN ('profile_battle', 'tier_queue')
+            """,
+            user_id,
+            kind,
+        )
+        or 0
+    )
 
 
 async def answered_comparisons(
@@ -265,6 +317,28 @@ async def load(
     rows = await items(conn, user_id=user_id, kind=kind, filters=filters)
     tiers = board.build(rows, cuts=cuts.boundaries, tier_set=cuts.tier_set, hp=hp)
     return tiers, cuts, rows
+
+
+async def placements(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    hp: Hyperparams,
+    title_ids: Sequence[int],
+) -> list[dict[str, Any]]:
+    """Where these titles sit on the whole board now, as the board's own public rows.
+
+    What a queue answer reports back (§6.3 "incremental immediately"): the sheet covers the board
+    it is sharpening, so the person saw the filters and a pair and never the board move. Read off
+    the UNFILTERED board, because the answer is about the whole ranking and the filters are only a
+    way of looking at it. The same shape on every arm - placement, never "moved" - because a
+    held-out answer is never refitted (§13) and a line that could say "unchanged" would name it.
+    `Entry.public()` carries no `s` and no σ, so nothing here needs decision 117's gate.
+    """
+    tiers, _cuts, _rows = await load(conn, user_id=user_id, kind=kind, hp=hp)
+    by_id = {entry.title_id: entry for tier in tiers for entry in tier.entries}
+    return [by_id[int(t)].public() for t in title_ids if int(t) in by_id]
 
 
 async def candidates(
@@ -318,10 +392,13 @@ __all__ = [
     "answered_comparisons",
     "asked_pairs",
     "candidates",
+    "compared_count",
     "comparison_counts",
     "cutpoints_of",
     "items",
     "load",
     "names_for",
+    "placements",
     "public",
+    "recent_titles",
 ]

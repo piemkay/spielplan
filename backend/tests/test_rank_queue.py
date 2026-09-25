@@ -273,9 +273,9 @@ def test_exploration_never_re_serves_a_pair_it_has_already_asked():
     # roll is 0.968 -- the held-out band. The branch never executed, so a `draw` that dropped
     # `asked=asked` on its way to `_exploration` passed it, which is the only forwarding the route
     # depends on. Two hundred draws over §6.3's mix give the arm its 20%, and the count says so
-    # rather than hoping. The other two arms are deliberately not asserted: the held-out arm must
-    # not consult `asked` at all (§13), and the boundary arm's own repetition is
-    # M3-open-points §3.1's remaining half. [M4.10 cycle 1, M410-REV3]
+    # rather than hoping. The other two arms are deliberately not asserted here: the held-out arm
+    # must not consult `asked` at all (§13), and the boundary arm's no-repeat rule has tests of
+    # its own below (decision 494). [M4.10 cycle 1, M410-REV3]
     explored = 0
     for draw in range(200):
         served = queue.draw(pool(sigma=sigmas, comparisons=counts), rng=rng, asked=asked)
@@ -327,3 +327,202 @@ def test_the_selector_reads_no_held_out_comparison():
     fields = set(vars(candidate))
     assert fields == {"item", "comparisons", "straddle", "tier"}
     assert not hasattr(candidate.item, "duels")
+
+
+# --- decision 494: which pair inside an adaptive arm ------------------------------------------
+
+
+def board_of(spec, *, comparisons=None):
+    """A board laid out title by title: `(title_id, s, reach)`, reach 0 for a settled title.
+
+    The value-weight and partner tests are claims about WHERE on the board a straddler sits and
+    which titles are near it across the cut, so the board is written out rather than spread by
+    `pool()`. The cuts are §6.3's prior shape: B/A at 0.0, A+/S at 2.442.
+    """
+    items = [
+        board.Item(
+            title_id=title_id, name=f"T{title_id}", s=float(s),
+            sigma=sigma_for(reach) if reach else 1e-6,
+        )
+        for title_id, s, reach in spec
+    ]
+    return queue.candidates(
+        items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS, comparisons=comparisons
+    )
+
+
+# Three straddlers at B/A (tier 3 reaching 4), three at A+/S (5 reaching 6), and settled titles in
+# A and S for each of them to be paired across the cut with.
+TWO_BOUNDARIES = [
+    (1, -0.01, 0.05), (2, -0.02, 0.05), (3, -0.03, 0.05),
+    (4, 2.43, 0.05), (5, 2.42, 0.05), (6, 2.41, 0.05),
+    (11, 0.3, 0), (12, 0.5, 0), (13, 0.7, 0),
+    (14, 3.0, 0), (15, 3.2, 0), (16, 3.4, 0),
+]
+
+
+def test_the_boundary_arm_favours_boundaries_near_the_top():
+    """Decision 494: the anchor is drawn in proportion to the height of the boundary it straddles
+    (the index of the cut's upper tier), so A+/S (6) is drawn 1.5 times as often as B/A (4).
+
+    Drawn uniformly, the two groups split 50/50 - and on the first household's boards the B/A cut
+    held most of the straddlers, because while nobody has moved a title the cut sits at s = 0 in
+    the middle of the verdict arm's "fine" band: 15 of Patrick's 21 straddlers were films he had
+    rated fine, and the boundary arm spent itself on pairs of them."""
+    candidates = board_of(TWO_BOUNDARIES)
+    by_id = {c.title_id: c for c in candidates}
+    assert {by_id[t].straddle for t in (1, 2, 3)} == {4}
+    assert {by_id[t].straddle for t in (4, 5, 6)} == {6}
+    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [4, 6]
+
+    rng = random.Random(41)
+    anchors = Counter(queue._boundary(candidates, rng).title_a for _ in range(20_000))
+    top = sum(anchors[t] for t in (4, 5, 6)) / 20_000
+    assert top == pytest.approx(6 / (6 + 4), abs=0.015), f"the A+/S share was {top:.3f}"
+    # Weighted, never restricted: every straddler is still an anchor (M4.10 finding 12).
+    assert set(anchors) == {1, 2, 3, 4, 5, 6}
+
+
+def test_a_boundary_partner_is_the_least_compared_of_the_five_nearest_across_the_cut():
+    """Decision 494's partner, which is M3-open-points §3.1's fix shape ("draw the partner from
+    the k nearest"). The nearest title across the cut is the most informative one and also the one
+    every draw lands on - Patrick's first sitting partnered Ready Player One in four of six boundary
+    draws. The sixth-nearest is never reached for, however rarely it has been compared."""
+    spec = [(1, -0.01, 0.05)] + [(10 + i, 0.1 * i, 0) for i in range(1, 7)]
+    comparisons = {11: 10, 12: 3, 13: 0, 14: 5, 15: 5, 16: 0}
+    candidates = board_of(spec, comparisons=comparisons)
+    rng = random.Random(3)
+    partners = Counter(queue._boundary(candidates, rng).title_b for _ in range(300))
+    assert partners == Counter({13: 300}), partners
+
+
+def test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked():
+    """M3-open-points §3.1's remaining half, closed by decision 494. The partner used to be the
+    nearest title across the cut with no memory, so whenever the shuffle landed on the same anchor
+    it served the same pair: Jenny answered the same pair twice in four answers, and each repeat is
+    an independent Davidson row - one judgement asked twice shrinks that pair's posterior by root
+    two (§13's reliability inflation, reached through the selector)."""
+    spec = [(1, -0.01, 0.05), (11, 0.3, 0), (12, 0.5, 0), (13, 0.7, 0)]
+    candidates = board_of(spec)
+    asked = {frozenset((1, 11)), frozenset((1, 12))}
+    rng = random.Random(19)
+    for _ in range(2_000):
+        pair = queue._boundary(candidates, rng, asked=asked)
+        assert frozenset((pair.title_a, pair.title_b)) == frozenset((1, 13))
+
+    # And over a whole board, answering each pair as it comes until the arm has nothing left:
+    # nothing comes back, and the arm ends rather than repeating itself.
+    candidates = pool()
+    served: set[frozenset[int]] = set()
+    rng = random.Random(29)
+    for draw in range(5_000):
+        pair = queue._boundary(candidates, rng, asked=served)
+        if pair is None:
+            break
+        key = frozenset((pair.title_a, pair.title_b))
+        assert key not in served, f"draw {draw} re-served {sorted(key)}"
+        served.add(key)
+    else:
+        raise AssertionError("the boundary arm never ran out on a sixty-title board")
+    assert len(served) > 100, f"the arm gave up after {len(served)} pairs"
+
+
+def test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so():
+    """A board whose every straddler has been asked against every partner across its cut has no
+    boundary pair left. The roll that picked the boundary arm then draws an exploration pair and
+    reports it as exploration - never a boundary label on a pair that is not one (proposal 120),
+    and never a fall into the held-out arm, whose rate must not move (§13)."""
+    spec = [(1, -0.01, 0.05), (11, 0.3, 0), (12, 0.5, 0), (21, -0.5, 0), (22, -0.7, 0)]
+    candidates = board_of(spec)
+    asked = {frozenset((1, 11)), frozenset((1, 12))}
+    assert queue._boundary(candidates, random.Random(1), asked=asked) is None
+
+    rng = random.Random(9)
+    arms = Counter()
+    for _ in range(4_000):
+        pair = queue.draw(candidates, rng=rng, asked=asked)
+        arms[pair.arm] += 1
+        if pair.arm == queue.ARM_EXPLORATION:
+            assert frozenset((pair.title_a, pair.title_b)) not in asked
+    assert arms[queue.ARM_BOUNDARY] == 0
+    assert arms[queue.ARM_EXPLORATION] / 4_000 == pytest.approx(0.90, abs=0.02)
+    assert arms[queue.ARM_HOLDOUT] / 4_000 == pytest.approx(0.10, abs=0.02)
+
+
+def test_a_tie_in_s_is_broken_by_the_draw_and_not_by_the_lowest_id():
+    """About ten films on each first-household board have no coordinate at all and sit on one `s`
+    set by their verdict alone (five of Jenny's fine films at 0.224). `_nearest` broke every such
+    tie by title id, so the same film won it on every draw."""
+    spec = [(1, -0.01, 0.05)] + [(10 + i, 0.5, 0) for i in range(1, 5)]
+    candidates = board_of(spec)
+    rng = random.Random(2)
+    partners = Counter(queue._boundary(candidates, rng).title_b for _ in range(400))
+    assert set(partners) == {11, 12, 13, 14}, partners
+    assert max(partners.values()) < 400 * 0.4, partners
+
+
+def test_the_recent_window_holds_a_title_back_while_another_can_take_its_place():
+    """Decision 494's window: a title from one of the last few answered pairs does not come
+    straight back as anchor or partner while another can serve (Meet Joe Black was in three of
+    Jenny's ten answers). Soft, so a board with nothing else still draws."""
+    spec = [(1, -0.01, 0.05), (2, -0.02, 0.05), (11, 0.1, 0), (12, 0.2, 0)]
+    candidates = board_of(spec)
+    rng = random.Random(5)
+    for _ in range(500):
+        pair = queue._boundary(candidates, rng, recent={1, 11})
+        assert (pair.title_a, pair.title_b) == (2, 12)
+
+    everything = {1, 2, 11, 12}
+    assert queue._boundary(candidates, rng, recent=everything) is not None
+    assert queue._exploration(candidates, rng, recent=everything) is not None
+
+    # The exploration arm's anchor: equally compared, the recent one waits.
+    settled = board_of([(1, 0.5, 0), (2, 0.6, 0), (3, 0.7, 0)])
+    for _ in range(200):
+        pair = queue._exploration(settled, rng, recent={3})
+        assert pair.title_a != 3
+
+
+def test_exploration_breaks_ties_toward_the_top_of_the_board():
+    """Decision 494: among equally compared titles the higher tier anchors first. The widest
+    posterior used to decide, and on a real board the widest σ belonged to off-scale embeddings at
+    the far tails - Grease against Miss Congeniality at s = -17 and -14, which no answer could move
+    out of F."""
+    spec = [(i, s, 0) for i, s in enumerate((-4.0, -3.0, -1.5, -0.5, 0.5, 1.5, 3.0, 3.5), start=1)]
+    candidates = board_of(spec)
+    by_id = {c.title_id: c for c in candidates}
+    top = max(c.tier for c in candidates)
+    for seed in range(200):
+        pair = queue._exploration(candidates, random.Random(seed))
+        assert by_id[pair.title_a].tier == top, f"seed {seed} anchored on tier {pair.title_a}"
+
+
+def test_exploration_still_explores_a_board_that_is_all_bottom_tiers():
+    """The weighting orders the anchors and removes none. A restricted anchor set is how M4.10's
+    finding 12 served one pair 78 times in 109, so a board that is all F and D - somebody who has
+    so far rated only what they disliked - must still be explored until its pairs run out."""
+    spec = [(i, -4.0 + 0.2 * i, 0) for i in range(1, 7)]
+    candidates = board_of(spec)
+    assert {c.tier for c in candidates} <= {0, 1}
+    asked: set[frozenset[int]] = set()
+    rng = random.Random(7)
+    for draw in range(15):
+        pair = queue._exploration(candidates, rng, asked=asked)
+        assert pair is not None, f"the all-bottom board stopped being explored at {draw}"
+        asked.add(frozenset((pair.title_a, pair.title_b)))
+    assert queue._exploration(candidates, rng, asked=asked) is None
+
+
+def test_a_board_with_every_adaptive_pair_asked_still_draws_the_held_out_tenth():
+    """The held-out arm reads neither `asked` nor the window (§13): with every pair answered and
+    every title recent, the adaptive arms have nothing, `draw` is None nine times in ten, and the
+    tenth is still a uniform held-out pair. Its rate did not move with what the model was told."""
+    candidates = pool(n=4, sigma=STRADDLING)
+    asked = {frozenset((a, b)) for a in range(1, 5) for b in range(a + 1, 5)}
+    rng = random.Random(11)
+    outcomes = Counter()
+    for _ in range(6_000):
+        pair = queue.draw(candidates, rng=rng, asked=asked, recent={1, 2, 3, 4})
+        outcomes[None if pair is None else pair.arm] += 1
+    assert set(outcomes) == {None, queue.ARM_HOLDOUT}, outcomes
+    assert outcomes[queue.ARM_HOLDOUT] / 6_000 == pytest.approx(0.10, abs=0.015)

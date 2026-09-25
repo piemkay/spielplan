@@ -58,6 +58,7 @@ from spielplan.home import rail
 from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.models import artifacts
+from spielplan.rank import board as board_rules
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
 
@@ -84,7 +85,23 @@ _ANSWER_LOCK = 6303
 # carries a one-line why"); what is not owed is telling the person which of their answers §13
 # will ignore. The arm's own sentence survives under `model`, for the reader decision 117 opens
 # the rail to. [M4.10 finding 16]
-_QUEUE_WHY = "one more comparison sharpens your board"
+#
+# It asks the question and says what answers are for, in the plural, because it has to be true
+# of every arm: a held-out answer is never refitted, so "this answer sharpens your board" would
+# be false one time in ten, and the round count beside it (decision 495) is what says how far
+# the sitting has come - the old line said "one more" on every pair with no end in sight.
+_QUEUE_WHY = "Pick the one you enjoyed more — your answers are what put your board in order."
+
+# The two zero states of the queue (proposal 80's, and decision 495's). A board too thin to pair
+# is told to rate more; a board whose adaptive arms have asked every pair worth asking is told
+# exactly that, where it used to get the first sitting's "there is nothing to compare yet" - which
+# decision 494's no-repeat rule makes reachable on a board a person has worked through. `len(pool)`
+# decides, because the route holds the pool and not the board's counts.
+_QUEUE_THIN = "There is nothing to compare yet — rate a few more titles and the queue fills up."
+_QUEUE_SETTLED = (
+    "Nothing left to compare right now — you've answered every pair worth asking. "
+    "Rate a few more titles and new ones turn up."
+)
 
 # The draw is a function of the queue position (`_queue_rng`), so production has no ambient
 # generator and this stays None. It is the seam the tests reach for: `random.Random(7)` here
@@ -159,13 +176,16 @@ def _draw(
     kind: str,
     answered: int,
     asked: set[frozenset[int]],
+    recent: set[int],
 ) -> queue.Pair | None:
     """One pair, through the one place the derivation and the test seam meet.
 
     Both paths go through here on purpose: a seam the production draw does not use is a seam
     that tests something else. [M4.10 findings 15, 30]
     """
-    return queue.draw(pool, rng=_queue_rng(user_id, kind, answered), asked=asked)
+    return queue.draw(
+        pool, rng=_queue_rng(user_id, kind, answered), asked=asked, recent=recent
+    )
 
 
 def _hyperparams(request: Request) -> Hyperparams:
@@ -334,6 +354,8 @@ async def _payload(
     # started", and an instrument whose healthy value equals its broken one is not an instrument.
     # The stamp the queued fit already wrote is what separates them; it says owed, not missing.
     fitting = cuts.refit_owed
+    compared = await read.compared_count(conn, user_id=user.id, kind=kind)
+    placed_by_you = sum(1 for r in unfiltered if r.assigned_tier is not None)
     payload: dict[str, Any] = {
         "kind": kind,
         "tier_set": list(cuts.tier_set),
@@ -351,10 +373,12 @@ async def _payload(
         # nothing yet readable, "0 rated" is the reading decision 209 takes off this surface,
         # printed a second time in §6.8's own register. A board that has rows keeps its number —
         # a refit owed over a board that already reads is decision 11's window, with its own copy.
-        "why": (
-            "tiers are still being fitted · learned cutpoints, refit nightly"
-            if fitting and not unfiltered
-            else f"{len(unfiltered)} rated · learned cutpoints, refit nightly"
+        # The words are `board.why_line`'s, in the member register (decision 486).
+        "why": board_rules.why_line(
+            rated=len(unfiltered),
+            compared=compared,
+            placed_by_you=placed_by_you,
+            fitting=fitting,
         ),
     }
     if show_model:
@@ -497,18 +521,18 @@ async def next_pair(
         # Finding 12's other half: the exploration arm re-served the pairs it had already asked,
         # and each repeat is an independent Davidson row. `read.asked_pairs` leaves the held-out
         # stream out of the set, because a selector that consulted §13's rows would be reading
-        # the evaluation data it exists to be audited by.
+        # the evaluation data it exists to be audited by. Both adaptive arms read it now, and
+        # the recent window beside it (decision 494), under the same exclusion.
         asked=await read.asked_pairs(conn, user_id=user.id, kind=kind),
+        recent=await read.recent_titles(conn, user_id=user.id, kind=kind),
     )
     if pair is None:
         # Proposal 80's zero state, in §6.8's register: an honest "nothing to sharpen" rather
-        # than an empty card.
+        # than an empty card - and which one of the two it is (decision 495).
         return {
             "kind": kind,
             "pair": None,
-            "reason": (
-                "There is nothing to compare yet — rate a few more titles and the queue fills up."
-            ),
+            "reason": _QUEUE_SETTLED if len(pool) >= 2 else _QUEUE_THIN,
         }
     names = await read.names_for(conn, [pair.title_a, pair.title_b])
     served = pair.public()
@@ -610,7 +634,15 @@ async def answer(
         selection=str(sealed["arm"]),
     )
     rail.record(user_id=user.id, kind="duel", line=line)
+    # Where the two answered titles sit now, read after the refit and before the next draw.
+    # The sheet covers the board it sharpens, so without this the person answered into a board
+    # they could not see; `read.placements` argues why it is placement and never "moved", on
+    # every arm alike (§13, M4.10 finding 16).
+    placed = await read.placements(
+        conn, user_id=user.id, kind=kind, hp=hp, title_ids=[int(sealed["a"]), int(sealed["b"])]
+    )
     payload = await next_pair(conn, user, request, kind=kind)
+    payload["placed"] = placed
     payload["log"] = [line]
     payload["ledger"] = ledger
     return rail.redact(payload, show_model=rail.visible_to(user))
@@ -633,9 +665,12 @@ async def tier_set(conn: DB, user: ActiveUser) -> dict[str, Any]:
         "tier_set": list(tier_set),
         "min": tiers.MIN_TIERS,
         "max": tiers.MAX_TIERS,
+        # Decision 11's warning - that the save discards the learned boundaries and fits them
+        # again - in the member register (decision 486): "cutpoints" and "refit" are the model's
+        # nouns, and "shortly" is decision 209's word for the 60 s sweep that serves the fit.
         "warning": (
-            "Changing the number of tiers discards your learned cutpoints and queues a refit. "
-            "Your past moves are kept."
+            "Changing how many tiers you have throws away where your tier lines were learned to "
+            "fall, and works them out again shortly. Your past moves are kept."
         ),
     }
 

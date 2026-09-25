@@ -480,7 +480,34 @@ def test_a_tension_badge_names_both_tiers():
     )
     entry = by_id(tiers)[1]
     assert entry.model_tier == 2 and entry.tier == 6
-    assert entry.tension == "you put it in S — the ledger still reads C"
+    # Both tiers, in the member register (decision 486): "the ledger" was the model's noun on a
+    # chip every member reads, and what disagrees with the drop is the rest of their answers.
+    assert entry.tension == "you put it in S — your other answers still point to C"
+    assert "ledger" not in entry.tension
+
+
+def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window():
+    """The board's why-line, as `board.why_line` words it (decision 486).
+
+    "{n} rated · learned cutpoints, refit nightly" was false twice on the first household: the
+    cutpoints learn from `tier_edit` alone and nobody had moved a title, so they were the prior
+    shape exactly; and the board moves on every answer (§6.3, "incremental immediately"). The
+    line now says what is true of the board and nothing about the model's machinery - and decision
+    209's window keeps its own words, with no number and no duration."""
+    assert board.why_line(rated=0, compared=0, placed_by_you=0, fitting=True) == (
+        "tiers are still being fitted"
+    )
+    fresh = board.why_line(rated=59, compared=12, placed_by_you=0, fitting=False)
+    assert fresh == (
+        "59 rated · 12 compared · tiers follow a typical split until you place a title yourself"
+    )
+    moved = board.why_line(rated=59, compared=12, placed_by_you=3, fitting=True)
+    assert moved == "59 rated · 12 compared · 3 placed by you", (
+        "a refit owed over a board that already reads keeps its counts (decision 11's window)"
+    )
+    for line in (fresh, moved):
+        for noun in ("cutpoint", "refit", "learned", "ledger", "nightly", "overnight"):
+            assert noun not in line, line
 
 
 def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():

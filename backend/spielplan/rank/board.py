@@ -171,10 +171,36 @@ def tension_of(
     lower, upper = item.s - z * item.sigma, item.s + z * item.sigma
     if high > lower and upper > low:          # the intervals meet: not tension
         return None
+    # The member register (decision 486): "the ledger" is the model's noun, and what disagrees
+    # with the drop is everything else the person has said about the title - their rating and
+    # their comparisons - which is what the model tier is fitted from.
     return (
         f"you put it in {tier_set[int(item.assigned_tier)]} — "
-        f"the ledger still reads {tier_set[int(model_tier)]}"
+        f"your other answers still point to {tier_set[int(model_tier)]}"
     )
+
+
+def why_line(*, rated: int, compared: int, placed_by_you: int, fitting: bool) -> str:
+    """§6.8's one-line why for the board, in the member register (decision 486).
+
+    It used to read "{n} rated · learned cutpoints, refit nightly", which was proposal 81's
+    suggested wording and false on the first real household: nobody had moved a title, the
+    cutpoints learn from `tier_edit` alone (§5.2's tier arm), so they were exactly the prior
+    shape, and the board had been moving on every answer rather than nightly (§6.3, "incremental
+    immediately"). So it says what is true of this board, in plain words: how much the person has
+    told it, and whether the tier lines are still the typical split §6.3 starts from.
+
+    `compared` counts every question answered, the held-out tenth included, so the number moves
+    after every answer and never singles one out (§13, M4.10 finding 16). Decision 209's copy is
+    kept for its window: with a fit owed and nothing yet readable the line says so, and gives no
+    number and no duration.
+    """
+    if fitting and rated == 0:
+        return "tiers are still being fitted"
+    counts = f"{rated} rated · {compared} compared"
+    if placed_by_you == 0:
+        return f"{counts} · tiers follow a typical split until you place a title yourself"
+    return f"{counts} · {placed_by_you} placed by you"
 
 
 def _badge(label: str, above: str | None, below: str | None) -> str:
@@ -304,4 +330,4 @@ def build(
     return tuple(reversed(tiers))
 
 
-__all__ = ["Entry", "Item", "Tier", "build", "straddles", "tension_of"]
+__all__ = ["Entry", "Item", "Tier", "build", "straddles", "tension_of", "why_line"]
