@@ -147,7 +147,9 @@ describe('a yes', () => {
     const app = await open();
     try {
       await tap('Yes');
-      expect(target.querySelector(HANDOFF).textContent).toContain('Jellyfin not configured');
+      // The reason, in the member register rather than the rail's words (decision 486).
+      expect(target.querySelector(HANDOFF).textContent).toContain("Jellyfin isn't connected");
+      expect(target.querySelector(HANDOFF).textContent).not.toContain('not configured');
     } finally {
       unmount(app);
     }

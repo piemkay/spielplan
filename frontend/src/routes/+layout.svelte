@@ -386,14 +386,13 @@
     <div class="reauth" role="alert" data-testid="admin-reauth">
       {#if pinSession}
         <span>
-          This profile was switched into with a PIN, which §3.2 makes a convenience on a
-          device someone is already signed in on — not proof of who is holding it. Sign
-          in with your password or a passkey to reach the admin view.
+          This profile was switched into with a PIN, which is a convenience on a device
+          someone is already signed in on — not proof of who is holding it. Sign in with
+          your password or a passkey to reach the admin view.
         </span>
       {:else}
         <span>
-          This admin session is more than 24 hours old (§3.2). Confirm your password to
-          carry on.
+          This admin session is more than 24 hours old. Confirm your password to carry on.
         </span>
         <form class="reauthform" onsubmit={reauth}>
           <input
@@ -482,11 +481,13 @@
              read failed, to households that had imported one (decision 271).
              §3.1: a bundle-less app is a legal state, said out loud rather than crashed on.
              Only an admin gets a link out of it: importing is §6.6's Data tab, and offering a
-             member a door they will meet a 403 behind is worse than stating the fact. -->
+             member a door they will meet a 403 behind is worse than stating the fact.
+             And only the admin reads §3.1's name for the state: "bundle" is the operator's noun,
+             so a member is told the same fact in the member register (decision 486). -->
         {#if canAdmin}
           <a class="nobundle data" href="/admin/data">no bundle imported</a>
         {:else}
-          <span class="nobundle data">no bundle imported</span>
+          <span class="nobundle data">no movie data yet</span>
         {/if}
       {/if}
       {#if showModel}

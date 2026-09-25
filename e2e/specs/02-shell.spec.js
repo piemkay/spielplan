@@ -8,14 +8,28 @@ test.beforeEach(async ({ page }) => {
   await signedIn(page);
 });
 
-test('the nav carries the six spec surface names', async ({ page }) => {
+test('the nav carries the shipped surfaces and no unbuilt one', async ({ page }) => {
   // §6: "Surface names (prototype, normative): Home / Rate / Tonight / Rank / Map / Taste".
-  // The prototype called Map "Explore" and hid Taste in the account menu; the spec wins.
+  // The prototype called Map "Explore" and hid Taste in the account menu; the spec's names win.
+  // Decision 488: a surface whose milestone has not shipped is absent from navigation, so Map
+  // and Taste - two of six tabs that both opened a placeholder in the 2026-09-25 user test - are
+  // not here until M6 flips their flag.
   const nav = page.getByRole('navigation', { name: 'Surfaces' });
-  for (const name of ['Home', 'Rate', 'Tonight', 'Rank', 'Map', 'Taste']) {
+  for (const name of ['Home', 'Rate', 'Tonight', 'Rank']) {
     await expect(nav.getByRole('link', { name, exact: true })).toBeVisible();
   }
-  await expect(nav.getByRole('link')).toHaveCount(6);
+  await expect(nav.getByRole('link')).toHaveCount(4);
+  for (const name of ['Map', 'Taste']) {
+    await expect(nav.getByRole('link', { name, exact: true })).toHaveCount(0);
+  }
+});
+
+test('the account menu links no unbuilt surface', async ({ page }) => {
+  // Decision 488: "My Taste" led to the same placeholder as the Taste tab, from the chip.
+  const menu = await openAccountMenu(page);
+  await expect(menu.getByRole('link', { name: /Account/ })).toBeVisible();
+  await expect(menu.locator('a[href="/taste"], a[href="/map"]')).toHaveCount(0);
+  await expect(menu).not.toContainText('My Taste');
 });
 
 /**
@@ -28,18 +42,16 @@ test('the nav carries the six spec surface names', async ({ page }) => {
  * vacuous rather than merely weak. Its companion "main is not empty" was satisfied by
  * SvelteKit's own error page and by either placeholder, so neither half could fail.
  *
- * §12's unbuilt surfaces are identified by the placeholder's heading rather than by a testid:
- * `Milestone.svelte` renders the surface name as its `h1`, and the nav carries a LINK of the
- * same name, so the role filter is what separates the destination from the way in.
- * [tq4-nav-dead-link-check-against-a-200-for-everything]
+ * §12's unbuilt surfaces are not in this table because they are not in the nav (decision 488):
+ * `05-milestones.spec.js` identifies them by address. The day M6 flips a flag, the nav carries
+ * an href this table does not know and the assertion below fails by name, which is the reminder
+ * to add that surface's marker. [tq4-nav-dead-link-check-against-a-200-for-everything]
  */
 const MARKER = {
   '/': (page) => page.getByTestId('home-mode'),
   '/rate': (page) => page.getByTestId('rate-surface'),
   '/tonight': (page) => page.getByTestId('tonight-surface'),
-  '/rank': (page) => page.getByTestId('rank-surface'),
-  '/map': (page) => page.getByRole('heading', { level: 1, name: 'Map', exact: true }),
-  '/taste': (page) => page.getByRole('heading', { level: 1, name: 'Taste', exact: true })
+  '/rank': (page) => page.getByTestId('rank-surface')
 };
 
 test('every nav destination resolves to its own surface', async ({ page }) => {

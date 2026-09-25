@@ -525,7 +525,7 @@ id = "library-rate-platform-scores-display-only"
 spec = "§6.0 (\"platform scores, display-only, labelled as such\") + §4.1 rule 3"
 milestone = "M0"
 kind = "integration"
-what = "Platform scores come back from the title-card route flagged display_only with the caption \"display-only schema — platform scores are a popularity conduit and are never model features\" in the same object as the number, so no client can render the number bare."
+what = "Platform scores come back from the title-card route flagged display_only with a caption in the same object as the number, so no client can render the number bare. Since the 2026-09-25 user test the caption says the same fact in the member register - \"For reference only - these scores never affect your suggestions.\" - where it read \"display-only schema — platform scores are a popularity conduit and are never model features\"."
 why = "Aggregate platform scores are a popularity conduit (measured −0.010 Spearman for nothing); the label has to travel with the number or the compact layout drops it."
 tests = ["e2e/specs/04-title-card.spec.js::platform scores travel with their display-only caption"]
 
@@ -1394,11 +1394,16 @@ id = "map-taste-admin-show-model-toggle-scope"
 spec = "§6.7 (decision 117)"
 milestone = "M2"
 kind = "e2e"
-what = "A single per-user 'show the model' toggle lives in the account dropdown and is off by default: with it off the event rail and every inline numeric annotation are absent while the title card's b(t) · β · gate line still renders; turning it on reveals them for that user only and leaves another user's session unchanged."
-why = "Decision 117: one global per-user toggle, default off, a debugging instrument — the title card's model line is the M0 transparency promise and stays ungated."
+what = "A single per-user 'show the model' toggle lives in the account dropdown and is off by default: with it off the event rail, every inline numeric annotation and the title card's b(t) · β · gate line are absent from the payload; turning it on reveals them for that user only and leaves another user's session unchanged."
+why = "Decision 117: one global per-user toggle, default off, a debugging instrument. Its exemption for the title card's model line was withdrawn by the owner instruction of 2026-09-25 after the first household user test: two members met b(t), β and gate with the switch off, and β and σ in that line are the viewer's own fit."
+# Restated in place for the user-test wave: the row keeps its milestone and its first test, and
+# the model-line test is renamed with its assertion (absent with the switch off, present with it
+# on). The spec field gains "; decision 486" when that entry lands in the record, not before:
+# `_unresolvable_decision_citations` fails a shipped row citing a decision the record lacks.
 tests = [
     "e2e/specs/10-home.spec.js::with the toggle off the rail and every inline number are absent, not merely hidden",
-    "e2e/specs/10-home.spec.js::the title card model line renders with the toggle off and with it on",
+    "e2e/specs/10-home.spec.js::the title card model line renders only with the toggle on",
+    "backend/tests/test_home.py::test_the_title_card_model_line_is_absent_with_the_toggle_off_and_present_with_it_on",
     "e2e/specs/10-home.spec.js::turning the toggle on reveals the rail, the inline numbers and what did not ship",
     "e2e/specs/10-home.spec.js::the toggle is off by default, and one user turning it on leaves the other unchanged",
 ]
@@ -6256,7 +6261,7 @@ id = "library-rate-title-card-dna-chips-print-their-term-once"
 spec = "§6.0 (the DNA card) + §6.8"
 milestone = "M4.9"
 kind = "e2e"
-what = "A DNA chip on the title card and on a Home shelf renders the term exactly once (`mood.cosy`, never `mood_tone.mood.cosy`) and resolves its colour to that facet's custom property rather than to --ink-4."
+what = "A DNA chip on the title card and on a Home shelf renders the term exactly once (never `mood_tone.mood.cosy`) and resolves its colour to that facet's custom property rather than to --ink-4. On the title card the term is printed by its vocabulary label and never as the raw id `mood.cosy`, which appears only beside the label while Show the model is on (owner instruction of 2026-09-25)."
 why = "§6.8 calls the facet colour identity, not decoration; the double prefix and the neutral fallback made it inoperative for 92.5% of tags on the surface §6.0 uses to teach that DNA terms are searchable."
 tests = [
     "e2e/specs/04-title-card.spec.js::a DNA chip prints its term once and wears its facet colour",
@@ -9624,7 +9629,7 @@ id = "platform-nav-destinations-are-identified-not-merely-answered"
 spec = "§6 (surface names, normative); §1 (the backend serves the SPA)"
 milestone = "M4.15"
 kind = "e2e"
-what = "Every nav destination is verified by identity — the URL matches the href and that surface's own marker is on screen — never by HTTP status, and the surfaces beyond the current milestone are identified by their placeholder rather than by an empty shell."
+what = "Every nav destination is verified by identity — the URL matches the href and that surface's own marker is on screen — never by HTTP status. A surface beyond the current milestone is not a nav destination at all since the 2026-09-25 user test (row `platform-unbuilt-surfaces-absent-from-navigation`); the day one ships, the nav carries an href this test has no marker for and it fails by name."
 why = "app.py's SPA fallback returns index.html with status 200 for every non-/api path, so the previous 'no dead links' assertion passed for a renamed href, a typo and a path that never existed; 07-boundaries already documents the fallback that made it vacuous."
 # This is the row that renames a registered test: 02-shell.spec.js's dead-link title changes with
 # its assertion, and the row must carry the NEW title in the same commit — test_spec_coverage.py
@@ -11357,4 +11362,78 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# Workstream WE of the owner instruction of 2026-09-25, after the first household user test. The
+# four rows below cite sections only, for the reason the row above gives: decisions 486 (the member
+# register), 487 (the title card's own answer) and 488 (unbuilt surfaces absent from navigation)
+# are recorded in the same wave, and `_unresolvable_decision_citations` reddens a shipped row that
+# cites a decision the record does not hold yet. Each spec field gains its decision when it lands.
+[[requirement]]
+id = "library-rate-title-card-speaks-the-member-register"
+spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons)"
+milestone = "M5"
+kind = "integration"
+what = "With the viewer's Show the model off, the title card's payload carries no model line and no extracted-tag weight (salience, confidence, n_sources); with it on, both come back. Every DNA term travels with its vocabulary label and gloss, the platform caption keeps `display_only` and speaks plainly, and the card renders the kind in words, the trailer as a labelled link, evidence sources by name, a quote cut mid-sentence with an ellipsis at the cut, each projected term with the number of sources behind it (quieter at one, never hidden), one credit row per person and role with only the jobs that are different credits, and the seen toggle's note in plain words under the actions."
+why = "Two members read the title card with the switch off and met b(t)/β/σ/gate, `cold_tower · bundle v20260925`, raw ids such as `register.plays_it_straight`, `sal 2`, `metacritic:critic`, `TRAILER F-eMt3SrfFU`, one composer twice and a sync note run into CAST & CREW. §6.8's register is quiet reasons, and the model's numbers are §6.7's toggle's (owner instruction of 2026-09-25)."
+tests = [
+    "backend/tests/test_title_card.py::test_a_card_read_with_the_switch_off_carries_no_model_number",
+    "backend/tests/test_title_card.py::test_the_switch_brings_the_model_line_and_the_weights_back",
+    "backend/tests/test_title_card.py::test_the_card_names_every_term_by_its_shipped_label",
+    "backend/tests/test_title_card.py::test_the_platform_caption_is_plain_and_the_flag_still_travels",
+    "e2e/specs/04-title-card.spec.js::salience is Show the model's, and nothing is filtered by it",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::names terms by label, drops the weights and the raw ids, and names sources",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::marks a quote cut from a longer sentence at the end it was cut",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::shows how many sources suggest each inferred term, quieter at one, and hides none",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::print one row per person and role, with only the jobs that are different credits",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::links the trailer by what it is and never prints its key",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::sits under the actions and outside the credits, in the display face",
+    "frontend/src/lib/titleCard.test.js::maps every reason the seen sync publishes to a plain sentence",
+]
+
+[[requirement]]
+id = "library-rate-title-card-play-names-its-reason"
+spec = "§6.0 (the card's actions, Play on Jellyfin first); §7.1; §6.8 (quiet reasons)"
+milestone = "M5"
+kind = "integration"
+what = "When Play on Jellyfin is unavailable the card's payload names which of two causes it is - `no_server` when the household has linked no Jellyfin, `not_in_library` when it has and the title has no copy - and the card prints that cause in plain words with no milestone label."
+why = "The card told every title outside the library \"Play needs a linked Jellyfin server — an admin links one in Admin (M1)\" on an install whose server was linked (owner instruction of 2026-09-25)."
+tests = [
+    "backend/tests/test_title_card.py::test_play_names_which_of_its_two_reasons_it_is",
+    "e2e/specs/04-title-card.spec.js::Play is disabled with its reason, and Show on map waits for the Map",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::names a title outside the library as that, not as a missing server",
+]
+
+[[requirement]]
+id = "library-rate-title-card-answers-through-the-rate-session"
+spec = "§6.0 (the title detail card's actions); §6.1 (Liked / Fine / Disliked, Not seen; the reveal strictly after the tap)"
+milestone = "M5"
+kind = "integration"
+what = "The title card answers its title with §6.1's four sweep answers through the person's own Rate session: the title is put on the table as a sweep card under a fresh token and answered there, so the answer is a journal row Undo reverses, §6.1's counter moves, the reveal rides on that response, a verdict implies seen, a second verdict supersedes the first, Not seen flips the state and leaves the verdict standing, a device holding the replaced card's token meets the stale-card refusal, and the card shows the standing verdict pressed."
+why = "The only road from 'I know this one' to a verdict was Mark seen and then waiting for the title in Rate behind the parked card; one member's marked title was never reached. Decision 212 refused a second verdict writer without a session, a token and a counter, so the card writes through the session rather than beside it (owner instruction of 2026-09-25)."
+tests = [
+    "backend/tests/test_title_card.py::test_a_verdict_from_the_card_is_a_sweep_answer_in_the_rate_session",
+    "backend/tests/test_title_card.py::test_the_card_answers_a_title_the_queue_would_never_serve",
+    "backend/tests/test_title_card.py::test_not_seen_from_the_card_flips_the_state_and_keeps_the_verdict",
+    "backend/tests/test_title_card.py::test_the_card_answer_takes_the_table_and_the_old_token_goes_stale",
+    "backend/tests/test_title_card.py::test_the_card_answer_route_refuses_what_it_cannot_answer",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::writes through the Rate session and says what it saved and what we guessed",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::shows the standing verdict pressed, and Not seen flips the state and keeps it",
+]
+
+[[requirement]]
+id = "platform-unbuilt-surfaces-absent-from-navigation"
+spec = "§6 (surface names, normative); §12 (the build order)"
+milestone = "M5"
+kind = "e2e"
+what = "A surface whose milestone has not shipped is absent from navigation for both roles and from every entry point to it - the tab bar, the account menu, and the title card's Show on map - while its route still answers by address with a placeholder that says it is not built and names no milestone; flipping the surface's `built` flag in SURFACES is all it takes to bring it back, in §6's order."
+why = "Map and Taste were two of six tabs on the phone and both opened a developer placeholder naming M6, and the account menu's My Taste led to the same page (owner instruction of 2026-09-25: hidden from members until M6 ships)."
+tests = [
+    "e2e/specs/02-shell.spec.js::the nav carries the shipped surfaces and no unbuilt one",
+    "e2e/specs/02-shell.spec.js::the account menu links no unbuilt surface",
+    # The PENDING loop's titles are template literals, which only the file's wildcard can name.
+    "e2e/specs/05-milestones.spec.js::*",
+    "backend/tests/test_api_gating.py::test_both_roles_see_every_shipped_surface",
+    "backend/tests/test_api_gating.py::test_a_surface_enters_navigation_in_its_place_when_it_ships",
+    "backend/tests/test_title_card.py::test_show_on_map_is_absent_until_the_map_ships",
 ]

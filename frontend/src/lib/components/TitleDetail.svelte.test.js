@@ -51,11 +51,13 @@ const payload = (over = {}) => ({
     trailer_key: null,
     ...over
   },
-  model_line: { available: false, reason: 'no bundle' },
+  // No `model_line`: the server leaves it out while Show the model is off (decision 486), and
+  // that is the default every case below starts from.
   credits: [],
   platform_ratings: { items: [], note: 'display-only' },
   dna: { extracted: [], projected: [] },
-  actions: { play_on_jellyfin: null, show_on_map: { title_id: 6 } }
+  my_verdict: null,
+  actions: { play_on_jellyfin: null, play_reason: 'no_server', show_on_map: null }
 });
 
 let target;
@@ -146,7 +148,10 @@ describe('the sync note', () => {
     const app = await open();
     try {
       await tapSeen();
-      expect(target.querySelector(SYNCNOTE).textContent).toContain('series unseen is app-only');
+      const note = target.querySelector(SYNCNOTE).textContent;
+      // The reason, in the member register (decision 486) rather than the rail's words.
+      expect(note).toContain('Jellyfin keeps its own episode history');
+      expect(note).not.toContain('up to date');
     } finally {
       unmount(app);
     }
@@ -154,12 +159,32 @@ describe('the sync note', () => {
 
   it('still says so when the push really did land', async () => {
     // The negative control `08-jellyfin.spec.js` asserts on the movie path: a successful push with
-    // nothing to explain must keep reading "synced to Jellyfin".
+    // nothing to explain must say Jellyfin was told.
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: true, reason: null });
     const app = await open({ kind: 'movie', seen_state: 'unseen' });
     try {
       await tapSeen();
-      expect(target.querySelector(SYNCNOTE).textContent).toContain('synced to Jellyfin');
+      expect(target.querySelector(SYNCNOTE).textContent).toContain('Jellyfin is up to date');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('sits under the actions and outside the credits, in the display face', async () => {
+    // It sat after the series note in the mono data voice at -4 px and read as part of CAST &
+    // CREW (user test 2026-09-25).
+    vi.mocked(post).mockResolvedValue({ state: 'seen', synced: false, reason: 'not on Jellyfin' });
+    const app = await open(
+      { kind: 'movie', seen_state: 'unseen' },
+      { credits: [{ person_id: 1, name: 'Michael Mann', job: 'Director', sources: ['tmdb'] }] }
+    );
+    try {
+      await tapSeen();
+      const note = target.querySelector(SYNCNOTE);
+      expect(note.textContent).toContain("isn't in your Jellyfin library");
+      expect(note.closest('section'), 'the note is inside a section').toBeNull();
+      expect(note.classList.contains('why')).toBe(true);
+      expect(note.classList.contains('data')).toBe(false);
     } finally {
       unmount(app);
     }
@@ -171,11 +196,14 @@ describe("§6.0's second action, on a screen with no hover", () => {
     // The reason used to live in `title="link a Jellyfin server in Admin (M1)"`, and a `title`
     // attribute is a hover tooltip: on §6 preamble's primary form factor it does not exist, so
     // §6.0's second action was a dead button with no explanation reachable anywhere on the device.
-    const app = await open();
+    const app = await open({}, { actions: { play_on_jellyfin: null, play_reason: 'no_server' } });
     try {
       const why = target.querySelector(JELLYFIN_WHY);
       expect(why, 'the disabled action carries no reason on the screen').not.toBeNull();
-      expect(why.textContent).toContain('Jellyfin server');
+      expect(why.textContent).toContain("Jellyfin isn't connected");
+      expect(why.textContent, 'a milestone label in member copy (decision 486)').not.toMatch(
+        /\bM\d\b/
+      );
       // §6.8's register, not a new one: `.why` is the class design.css sets in the display face.
       expect(why.classList.contains('why')).toBe(true);
       expect(why.tagName).toBe('P');
@@ -196,7 +224,7 @@ describe("§6.0's second action, on a screen with no hover", () => {
     // disclaimer under an action that works.
     const app = await open(
       {},
-      { actions: { play_on_jellyfin: 'http://jf.lan/web/#/details?id=1', show_on_map: { title_id: 6 } } }
+      { actions: { play_on_jellyfin: 'http://jf.lan/web/#/details?id=1', play_reason: null } }
     );
     try {
       expect(target.querySelector(JELLYFIN_WHY)).toBeNull();
@@ -256,5 +284,271 @@ describe('the panel dismisses', () => {
     tap(document.body);
     press('Escape');
     expect(onClose, 'the unmounted panel is still listening on document').not.toHaveBeenCalled();
+  });
+});
+
+// --- the 2026-09-25 user test: the member register (decision 486), the card's own answer
+// (decision 487) and an unbuilt Map (decision 488) ------------------------------------------
+
+describe('Play says which of its two reasons it is', () => {
+  it('names a title outside the library as that, not as a missing server', async () => {
+    // Live: every unowned title read "Play needs a linked Jellyfin server - an admin links one in
+    // Admin (M1)" on an install whose server was linked.
+    const app = await open(
+      { kind: 'movie' },
+      { actions: { play_on_jellyfin: null, play_reason: 'not_in_library' } }
+    );
+    try {
+      const why = target.querySelector(JELLYFIN_WHY).textContent;
+      expect(why).toContain('Not in your Jellyfin library');
+      expect(why).not.toContain('server');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe("the model line is Show the model's", () => {
+  it('is absent when the payload carries none, and drawn when it does', async () => {
+    let app = await open();
+    expect(target.querySelector('[data-testid="title-model-line"]')).toBeNull();
+    unmount(app);
+    app = await open(
+      {},
+      {
+        model_line: {
+          available: true,
+          text: 'b(t) 0.52 · β 0.20 · gate 0.93',
+          e_source: 'backbone',
+          bundle: 'v1'
+        }
+      }
+    );
+    try {
+      expect(target.querySelector('[data-testid="title-model-line"]').textContent).toContain(
+        'b(t) 0.52'
+      );
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the header', () => {
+  it('draws the poster primitive for this title, inert and nameless', async () => {
+    // Decision 483's same-origin art arrives through RatePoster; the card passes the title with
+    // its `id`, which is what the art route is keyed on.
+    const app = await open();
+    try {
+      const poster = target.querySelector('[data-testid="rate-poster"]');
+      expect(poster, 'no poster on the title card').not.toBeNull();
+      expect(poster.getAttribute('data-title-id')).toBe('6');
+      expect(poster.querySelector('.name'), 'the name is printed twice').toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names the kind in words, not by its column value', async () => {
+    const app = await open({ kind: 'movie', seen_state: 'unseen' });
+    try {
+      const sub = target.querySelector('.sub').textContent;
+      expect(sub).toContain('film');
+      expect(sub).not.toContain('movie');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('links the trailer by what it is and never prints its key', async () => {
+    // It printed `TRAILER F-eMt3SrfFU` (user test 2026-09-25).
+    const app = await open({ trailer_key: 'F-eMt3SrfFU' });
+    try {
+      const link = target.querySelector('a.trailer');
+      expect(link.textContent.trim()).toBe('Watch the trailer');
+      expect(link.getAttribute('href')).toBe('https://www.youtube.com/watch?v=F-eMt3SrfFU');
+      expect(link.textContent).not.toContain('F-eMt3SrfFU');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe("§6.0's Show on map waits for the Map (decision 488)", () => {
+  it('is absent while the payload carries no target', async () => {
+    const app = await open();
+    try {
+      expect(target.textContent).not.toContain('Show on map');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('links to the map on the day the server sends one', async () => {
+    const app = await open({}, { actions: { play_on_jellyfin: null, show_on_map: { title_id: 6 } } });
+    try {
+      const link = [...target.querySelectorAll('a')].find((a) =>
+        a.textContent.includes('Show on map')
+      );
+      expect(link?.getAttribute('href')).toBe('/map?title=6');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the DNA card in the member register', () => {
+  const dna = {
+    extracted: [
+      {
+        term: 'era.wwii',
+        facet: 'era',
+        label: 'World War II',
+        gloss: 'set during the war',
+        provider: '',
+        evidence: [
+          {
+            quote: 'not this serious, gritty crime epic that is being attempted here',
+            source: 'trakt:4'
+          },
+          { quote: 'A war film.', source: 'wiki:music' }
+        ]
+      }
+    ],
+    projected: [
+      { term: 'characters.teen_protagonist', facet: 'characters', label: 'teen lead', weight: 1 },
+      { term: 'place.los_angeles', facet: 'place', label: 'Los Angeles', weight: 4 }
+    ]
+  };
+
+  it('names terms by label, drops the weights and the raw ids, and names sources', async () => {
+    const app = await open({}, { dna });
+    try {
+      expect(target.querySelector('.tag .term').textContent.trim()).toBe('World War II');
+      const text = target.textContent;
+      expect(text).not.toContain('era.wwii');
+      expect(text).not.toContain('characters.teen_protagonist');
+      expect(text).not.toMatch(/\bsal\b/);
+      expect(text).not.toMatch(/DNA|EXTRACTED|PROJECTED/);
+      const sources = [...target.querySelectorAll('.src')].map((s) => s.textContent.trim());
+      expect(sources).toEqual(['Trakt', 'Wikipedia · music']);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('marks a quote cut from a longer sentence at the end it was cut', async () => {
+    // Heat's mood.gritty quote read as a negation because nothing said it was a fragment.
+    const app = await open({}, { dna });
+    try {
+      const quotes = [...target.querySelectorAll('.quote')].map((q) => q.textContent);
+      expect(quotes[0]).toBe(
+        '“…not this serious, gritty crime epic that is being attempted here…”'
+      );
+      expect(quotes[1]).toBe('“A war film.”');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows how many sources suggest each inferred term, quieter at one, and hides none', async () => {
+    const app = await open({}, { dna });
+    try {
+      const chips = [...target.querySelectorAll('.chips .chip')];
+      expect(chips, '§4.1 rule 2: a weight is never a filter').toHaveLength(2);
+      const [weak, strong] = chips;
+      expect(weak.querySelector('.chiplabel').textContent.trim()).toBe('teen lead');
+      expect(weak.classList.contains('weak')).toBe(true);
+      expect(weak.querySelector('.n').textContent).toBe('1');
+      expect(strong.classList.contains('weak')).toBe(false);
+      expect(strong.querySelector('.n').textContent).toBe('4');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('credits', () => {
+  it('print one row per person and role, with only the jobs that are different credits', async () => {
+    // Heat: Goldenthal as "Original Music Composer" and "Composer", Mann as "Writer" and
+    // "Screenplay" (user test 2026-09-25). A Novel credit is a different credit and stays.
+    const credits = [
+      {
+        person_id: 1, name: 'Elliot Goldenthal', job: 'Original Music Composer',
+        role_class: 'composer', jobs: ['Composer', 'Original Music Composer'],
+        sources: ['tmdb', 'wikidata']
+      },
+      {
+        person_id: 2, name: 'Michael Mann', job: 'Writer', role_class: 'writer',
+        jobs: ['Screenplay', 'Writer'], sources: ['tmdb', 'wikidata']
+      },
+      {
+        person_id: 2, name: 'Michael Mann', job: 'Director', role_class: 'director',
+        jobs: ['Director'], sources: ['tmdb']
+      },
+      {
+        person_id: 3, name: 'Somebody', job: 'Screenplay', role_class: 'writer',
+        jobs: ['Novel', 'Screenplay'], sources: ['tmdb']
+      }
+    ];
+    const app = await open({}, { credits });
+    try {
+      const rows = [...target.querySelectorAll('.person .data')].map((r) => r.textContent.trim());
+      expect(rows).toEqual(['Original Music Composer', 'Writer', 'Director', 'Screenplay · Novel']);
+      // The source count is the operator's provenance (decision 486).
+      expect(target.textContent).not.toContain('2 sources');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe("the card's own answer (decision 487)", () => {
+  it('writes through the Rate session and says what it saved and what we guessed', async () => {
+    vi.mocked(post).mockResolvedValue({
+      reveal: { available: true, agreed: true, predicted_label: 'liked', cdf: 0.71, text: 'x' }
+    });
+    const onStateChange = vi.fn();
+    const app = await open({ kind: 'movie', seen_state: 'unseen' }, { props: { onStateChange } });
+    try {
+      const liked = target.querySelector('[data-answer="liked"]');
+      expect(liked.getAttribute('aria-pressed')).toBe('false');
+      liked.click();
+      await settle();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'liked' });
+      const note = target.querySelector('[data-testid="title-rate-note"]').textContent;
+      expect(note).toContain('you liked it');
+      expect(note).toContain("We'd have guessed the same.");
+      expect(note, "the reveal's number is Show the model's").not.toContain('0.71');
+      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
+        'true'
+      );
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Seen');
+      expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows the standing verdict pressed, and Not seen flips the state and keeps it', async () => {
+    vi.mocked(post).mockResolvedValue({ reveal: null });
+    const app = await open(
+      { kind: 'movie', seen_state: 'seen' },
+      { my_verdict: { value: 1, label: 'fine' } }
+    );
+    try {
+      expect(target.querySelector('[data-answer="fine"]').getAttribute('aria-pressed')).toBe(
+        'true'
+      );
+      target.querySelector('[data-answer="not_seen"]').click();
+      await settle();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'not_seen' });
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark seen');
+      // Nothing is pressed on an unseen title: the verdict survives the flip (§4.2) but it is
+      // not what the person just said.
+      expect(target.querySelector('[aria-pressed="true"][data-answer]')).toBeNull();
+    } finally {
+      unmount(app);
+    }
   });
 });

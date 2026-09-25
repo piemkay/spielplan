@@ -32,7 +32,7 @@ from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import EmbeddingSource
 from spielplan.models import artifacts
-from spielplan.rate import session
+from spielplan.rate import direct, session
 
 log = logging.getLogger("spielplan.api.rate")
 
@@ -434,3 +434,45 @@ async def class_balance(conn: DB, user: ActiveUser) -> dict[str, Any]:
     """
     s = await _resume(conn, user.id)
     return (await session.payload(conn, s, user=user))["class_balance"]
+
+
+class TitleAnswerBody(BaseModel):
+    answer: Literal["disliked", "fine", "liked", "not_seen"]
+
+
+@router.post("/title/{title_id}")
+async def answer_from_title_card(
+    title_id: int, body: TitleAnswerBody, conn: DB, user: ActiveUser, request: Request
+) -> dict[str, Any]:
+    """Decision 487: §6.0's title card answers a title with §6.1's four sweep answers.
+
+    The one route here that names a title rather than a `card_token`, and the module docstring's
+    rule still holds, because the title never reaches a writer as a title: `rate.direct` puts it
+    on the person's own table as a sweep card under a fresh token and answers that token through
+    `rate.session`, so the card, the block counter, Undo and the after-the-tap reveal are §6.1's
+    own. The envelope is the Rate surface's, so the reveal rides on this response and no other.
+    """
+    if body.answer != "not_seen":
+        # Before any write, for `_assert_active_basis`'s own reason: a verdict is a score and a
+        # refit; not-seen is a state change and fits nothing, which is why `/not-seen` skips it.
+        await _assert_active_basis(request, conn)
+    try:
+        outcome = await direct.answer(
+            conn,
+            user_id=user.id,
+            title_id=title_id,
+            choice=body.answer,
+            hp=_hyperparams(request),
+            embeddings=_embeddings(request, conn),
+            bundle_version=_basis(request),
+            jf=await _jellyfin(conn),
+        )
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such title") from exc
+    except session.StaleCard as exc:
+        raise _stale(exc) from exc
+    event = "not_seen" if body.answer == "not_seen" else "verdict"
+    return await session.payload(
+        conn, outcome.session, reveal=outcome.reveal, log=outcome.log,
+        ledger=outcome.ledger, event_kind=event, user=user,
+    )

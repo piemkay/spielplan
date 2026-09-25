@@ -10,6 +10,13 @@
    * The prototype's version of this card omitted the model line and Play on Jellyfin; both are
    * here, and each degrades to an honest disabled state rather than disappearing when the
    * thing behind it (a bundle, a Jellyfin link) does not exist yet.
+   *
+   * Since the 2026-09-25 user test it speaks the member register (decision 486): the model line
+   * and every weight arrive only while the viewer's Show the model is on, because the server
+   * leaves them out otherwise; terms are named by their label; and every sentence under an action
+   * is a plain one. It also answers the title itself - Liked / Fine / Disliked / Not seen, through
+   * §6.1's own session (decision 487) - and Show on map waits, absent, for §6.4's Map
+   * (decision 488).
    */
   import { get, post } from '$lib/api.js';
   // The palette and the runtime label are shared, not copied. This file held a second FACETS set
@@ -17,9 +24,23 @@
   // how one of them stops matching the data. Same argument for `runtimeLabel`, which existed
   // here without the kind branch the other two copies had, so a series read `0h 24m` two taps
   // after a poster that said `24m/ep`. [M4.9 findings 3, 4, 37]
-  import { facetColour } from '$lib/home.svelte.js';
-  import { runtimeLabel } from '$lib/rate.svelte.js';
+  import { facetColour, modelGate } from '$lib/home.svelte.js';
+  import { KIND_LABELS, runtimeLabel } from '$lib/rate.svelte.js';
+  import { session } from '$lib/session.svelte.js';
+  import { termLabel } from '$lib/terms.js';
+  import {
+    ANSWERS,
+    answeredLine,
+    creditJobs,
+    creditKey,
+    playWhy,
+    quoteText,
+    revealLine,
+    sourceLabel,
+    syncNote as syncNoteFor
+  } from '$lib/titleCard.js';
   import { dismiss } from '$lib/dismiss.js';
+  import RatePoster from './RatePoster.svelte';
 
   let { titleId, onClose, onPerson, onStateChange } = $props();
 
@@ -30,6 +51,13 @@
   let error = $state('');
   let syncNote = $state('');
   let saving = $state(false);
+  // Decision 487's answer row has its own line, for the same reason the seen toggle does.
+  let answerNote = $state('');
+  let answering = $state(false);
+  // What the viewer asked to see. The server has already left the numbers out when this is off,
+  // so this decides only the few labels that sit beside data the payload always carries (a
+  // term's raw id, a credit's source count, an evidence key).
+  const showModel = $derived(!!session.user?.show_model);
   // The collapsed default, and the twelve that fit under it. Twelve is what shipped; what was
   // missing is that the card never said it was twelve of anything. [M4.9 finding 7]
   const CREDIT_FOLD = 12;
@@ -44,12 +72,19 @@
 
   // Re-fetch whenever the panel is pointed at a different title. On mount alone, tapping a
   // second poster while the panel is open left the first title's card on screen.
+  //
+  // And whenever Show the model settles, because the model line is absent from the payload rather
+  // than hidden in it (decision 486): the only way to show it is to ask again. `modelGate.epoch`
+  // and not the local flag, for the reason `routes/+page.svelte` gives - the epoch moves once the
+  // server has the preference, and a refetch on the optimistic flip would race the write.
   $effect(() => {
     const id = titleId;
+    void modelGate.epoch;
     let cancelled = false;
     data = null;
     error = '';
     syncNote = '';
+    answerNote = '';
     // Reset with the rest: an expanded list carried into the next title would show the previous
     // film's credit count against this film's people for as long as the fetch takes.
     showAllCredits = false;
@@ -83,12 +118,45 @@
       // folder — and `seen.set_state` reports it as `synced: true` with the reason
       // "series unseen is app-only", because the row is settled and nothing is owed. Reading only
       // `synced` printed "synced to Jellyfin" about a write that was deliberately never sent.
-      syncNote = res.reason || (res.synced ? 'synced to Jellyfin' : '');
+      // `syncNoteFor` keeps that order and says it in the member register (decision 486).
+      syncNote = syncNoteFor(res);
       onStateChange?.(data.title.id, next);
     } catch (err) {
-      syncNote = `could not save that — ${err.message}`;
+      syncNote = `Could not save that — ${err.message}`;
     } finally {
       saving = false;
+    }
+  }
+
+  /**
+   * Decision 487: the card's answer to the title, written as §6.1's sweep answer. The route puts
+   * the title on the person's own Rate table and answers it there, so this tap has the journal
+   * row Undo reverses on Rate, the block counter, the §7.3 push and the reveal - which arrives in
+   * the response to the tap and in no earlier one, §6.1's anchoring rule.
+   */
+  async function answer(choice) {
+    if (!data || answering) return;
+    answering = true;
+    answerNote = '';
+    try {
+      const res = await post(`/rate/title/${data.title.id}`, { answer: choice });
+      const next = choice === 'not_seen' ? 'unseen' : 'seen';
+      data = {
+        ...data,
+        title: { ...data.title, seen_state: next },
+        // §4.2: Not seen writes a state and no observation, so the verdict it follows survives
+        // the flip; a verdict supersedes the last one. The stored ordinal is the label's index.
+        my_verdict:
+          choice === 'not_seen'
+            ? data.my_verdict
+            : { value: ['disliked', 'fine', 'liked'].indexOf(choice), label: choice }
+      };
+      answerNote = [answeredLine(choice), revealLine(res?.reveal)].filter(Boolean).join(' ');
+      onStateChange?.(data.title.id, next);
+    } catch (err) {
+      answerNote = `Could not save that — ${err.message}`;
+    } finally {
+      answering = false;
     }
   }
 
@@ -102,10 +170,11 @@
   const shownCredits = $derived(
     showAllCredits ? (data?.credits ?? []) : (data?.credits ?? []).slice(0, CREDIT_FOLD)
   );
-  // Joined in JS — Svelte collapses whitespace around {#if} blocks in markup.
+  // Joined in JS — Svelte collapses whitespace around {#if} blocks in markup. The kind by the
+  // word the Rate card uses for it, not the enum (decision 486): `movie` is a column value.
   const subline = $derived(
     data
-      ? [data.title.year ?? '—', runtime, data.title.kind,
+      ? [data.title.year ?? '—', runtime, KIND_LABELS[data.title.kind] ?? data.title.kind,
          data.title.seen_state === 'seen' ? 'seen' : null].filter(Boolean).join(' · ')
       : ''
   );
@@ -126,45 +195,80 @@
     <p class="data">loading…</p>
   {:else}
     {@const t = data.title}
-    <h2>{t.name}</h2>
-    <div class="data sub">{subline}</div>
-    {#if t.original_name && t.original_name !== t.name}
-      <div class="data">{t.original_name}</div>
-    {/if}
+    <!-- §6.8's poster-forward card, small and beside the name so a phone keeps the overview and
+         the actions in reach. RatePoster is the one poster primitive and draws the art over its
+         tinted panel once decision 483's same-origin route serves it; inert, because a tap
+         anywhere in this panel must never be read as `dismiss`'s outside tap or as an action. -->
+    <div class="head">
+      <div class="thumb"><RatePoster title={t} showName={false} /></div>
+      <div class="headtext">
+        <h2>{t.name}</h2>
+        <div class="data sub">{subline}</div>
+        {#if t.original_name && t.original_name !== t.name}
+          <div class="data">{t.original_name}</div>
+        {/if}
+      </div>
+    </div>
 
     {#if t.overview}<p class="overview">{t.overview}</p>{/if}
 
     {#if t.trailer_key}
-      <!-- §6.0 lists the trailer key as M0 content on the card. -->
+      <!-- §6.0 lists the trailer key as M0 content on the card, and the content is the trailer:
+           the key is the link's address, not its text. It was printed as the label, and a member
+           read `TRAILER F-eMt3SrfFU` (user test 2026-09-25). -->
       <a
         class="trailer"
         href={`https://www.youtube.com/watch?v=${t.trailer_key}`}
         target="_blank"
         rel="noreferrer"
+        aria-label="Watch the trailer on YouTube"
       >
-        <span class="data">TRAILER</span>
-        <span>{t.trailer_key}</span>
+        Watch the trailer
       </a>
     {/if}
 
-    <!-- §6.0: the model line, in the data voice, never bare: `b(t) 0.52 · β 0.8 · gate 0.93`.
-         Rendered from the server's own `text`, not recomposed here, so the card and §6.7's rail
-         print the same number to the same precision.
+    {#if data.model_line}
+      <!-- §6.0: the model line, in the data voice, never bare: `b(t) 0.52 · β 0.8 · gate 0.93`.
+           Rendered from the server's own `text`, not recomposed here, so the card and §6.7's rail
+           print the same number to the same precision.
 
-         NOT gated by decision 117's "show the model" toggle, deliberately. §6.0 lists this line
-         unconditionally as the M0 transparency promise, and proposal 19 says so again: it is the
-         one place a model number is part of the product rather than part of the debugging. -->
-    <div class="modelline" data-testid="title-model-line">
-      {#if data.model_line.available}
-        <span class="data-lg">{data.model_line.text}</span>
-        {#if data.model_line.second_line}
-          <span class="data support">{data.model_line.second_line}</span>
+           Present only while the viewer's Show the model is on: decision 486 amends decision 117,
+           which had left this line ungated, and the server now omits the key with the switch off
+           rather than this card hiding what it was sent. -->
+      <div class="modelline" data-testid="title-model-line">
+        {#if data.model_line.available}
+          <span class="data-lg">{data.model_line.text}</span>
+          {#if data.model_line.second_line}
+            <span class="data support">{data.model_line.second_line}</span>
+          {/if}
+          <span class="data source">{data.model_line.e_source} · bundle {data.model_line.bundle}</span>
+        {:else}
+          <span class="data-lg">model line unavailable — {data.model_line.reason}</span>
         {/if}
-        <span class="data source">{data.model_line.e_source} · bundle {data.model_line.bundle}</span>
-      {:else}
-        <span class="data-lg">model line unavailable — {data.model_line.reason}</span>
-      {/if}
+      </div>
+    {/if}
+
+    <!-- Decision 487: §6.1's four sweep answers, on the card of a title the person already knows.
+         One group rather than four loose buttons, with the standing verdict pressed, so the row
+         reads as "your answer" and a second tap is visibly a change of mind. -->
+    <div class="answers" role="group" aria-label="Your rating" data-testid="title-rate">
+      {#each ANSWERS as a (a.answer)}
+        <button
+          class="pill answer"
+          aria-pressed={a.answer !== 'not_seen' &&
+            t.seen_state === 'seen' &&
+            data.my_verdict?.label === a.answer}
+          disabled={answering}
+          data-answer={a.answer}
+          onclick={() => answer(a.answer)}
+        >
+          {a.label}
+        </button>
+      {/each}
     </div>
+    {#if answerNote}
+      <p class="why note" role="status" data-testid="title-rate-note">{answerNote}</p>
+    {/if}
 
     <div class="actions">
       <!-- §4.2: two states and only two — there is no 'forgotten' (owner decision
@@ -185,16 +289,27 @@
       {:else}
         <button class="btn-primary" disabled>Play on Jellyfin</button>
       {/if}
-      <a class="btn-ghost" href="/map?title={t.id}">Show on map</a>
+      {#if data.actions.show_on_map}
+        <!-- Decision 488: absent while §6.4's Map is unbuilt, as the Map tab is. The server
+             sends the target again on the day the surface ships. -->
+        <a class="btn-ghost" href="/map?title={t.id}">Show on map</a>
+      {/if}
     </div>
     {#if !data.actions.play_on_jellyfin}
       <!-- §6.8: every conflict carries its one-line why. This one was carried in `title=`, which
            is a hover tooltip and does not exist on touch — so on §6 preamble's primary form factor
            §6.0's second action was simply a dead button with no reason attached to it anywhere.
-           The register is the quiet reason the rest of this card already speaks in. -->
+           The register is the quiet reason the rest of this card already speaks in, and the
+           reason is the true one of two: a title outside the library is not a missing server. -->
       <p class="why actionwhy" data-testid="title-jellyfin-why">
-        Play needs a linked Jellyfin server — an admin links one in Admin (M1).
+        {playWhy(data.actions.play_reason ?? 'no_server')}
       </p>
+    {/if}
+    {#if syncNote}
+      <!-- Under the row it reports on, in the display face with a margin of its own: it sat after
+           the series note in the mono data voice at -4 px, and read as part of the CAST & CREW
+           heading below it (user test 2026-09-25). -->
+      <p class="why syncnote" role="status">{syncNote}</p>
     {/if}
     {#if t.kind === 'series' && t.seen_state === 'seen'}
       <!-- Decision 210(a): a series is app-only in the un-marking direction. Jellyfin stores no
@@ -207,9 +322,6 @@
         Marking a series not seen is kept in Spielplan only — Jellyfin is never told to un-play its
         episodes.
       </div>
-    {/if}
-    {#if syncNote}
-      <div class="data syncnote" role="status">{syncNote}</div>
     {/if}
 
     {#if data.credits.length}
@@ -233,18 +345,26 @@
           >
         </div>
         <div class="people">
-          <!-- Keyed by person AND job, delimited: `credits_for` collapses to one row per
-               (person, job), and the delimiter is what stops person 700 + job `1Actor` colliding
-               with person 7001 + job `Actor`. The undelimited key threw on 1,216 real titles
-               where one person held one job under two department spellings, and with no
-               +error.svelte the whole card died mid-render. Keyed, not unkeyed: the key is what
-               keeps `onPerson` attached to the right person. -->
-          {#each shownCredits as c (c.person_id + ':' + c.job)}
+          <!-- Keyed by person AND role class, delimited (`creditKey`): `credits_for` collapses to
+               one row per (person, role class), because one person reached the card twice when
+               two sources spelled one job two ways - Heat's composer as "Original Music Composer"
+               and "Composer" (user test 2026-09-25). The job is the key's fallback for a payload
+               without the class. The delimiter is what stops person 700 + `1Actor` colliding
+               with person 7001 + `Actor`, and keyed, not unkeyed, because the key is what keeps
+               `onPerson` attached to the right person.
+
+               The job line names further jobs only where they are different credits (Writer ·
+               Novel), never a second spelling; the source count is provenance for the operator
+               and rides on Show the model (decision 486). -->
+          {#each shownCredits as c (creditKey(c))}
             <button class="person" onclick={() => onPerson(c)}>
               <span class="dot">{c.name.charAt(0)}</span>
               <span class="pname">{c.name}</span>
               <span class="data"
-                >{[c.job, c.sources?.length > 1 ? `${c.sources.length} sources` : null]
+                >{[
+                  creditJobs(c),
+                  showModel && c.sources?.length > 1 ? `${c.sources.length} sources` : null
+                ]
                   .filter(Boolean)
                   .join(' · ')}</span
               >
@@ -295,9 +415,11 @@
       </section>
     {/if}
 
-    <!-- §4.1 rule 1: the two tiers are visibly distinct, and never interleaved. -->
+    <!-- §4.1 rule 1: the two tiers are visibly distinct, and never interleaved. The distinction
+         is the rule; the words were the operator's ("DNA — EXTRACTED quote-verified"), and the
+         headings now say what each tier is to someone choosing a film (decision 486). -->
     <section>
-      <div class="data heading">DNA — EXTRACTED <span class="qv">quote-verified</span></div>
+      <div class="data heading">WHAT IT'S LIKE <span class="qv">each one quoted</span></div>
       {#if data.dna.extracted.length}
         <!-- Keyed on facet, term AND PROVIDER, delimited. The crash is the platform-scores
              block's above: `dna_tag` is unique on (title_id, version, term, provider), so §6.6's
@@ -309,43 +431,71 @@
              de-duplicated here — §4.1 rule 1 and §6.6 both want both rows visible; the key is
              what makes two rows two rows. [M4.9 finding 8; review cycle 1]
 
-             `{tag.term}` alone: §4.3's vocabulary id IS `facet.term`, so the shipped term
-             already carries its prefix and printing the facet again read
-             `narrative_themes.themes.love_romance`. The facet is spent on the colour, which is
-             the identity §6.8 asks for. [M4.9 finding 3] -->
+             The term by its LABEL (decision 486 clause 4): `era.wwii` is the key and "World War
+             II" is the term. Printing the facet on top of the id read
+             `narrative_themes.themes.love_romance` [M4.9 finding 3]; printing the id alone read
+             `register.plays_it_straight` to a member (user test 2026-09-25). The facet is spent
+             on the colour, which is the identity §6.8 asks for, and the id itself appears only
+             beside the label while Show the model is on. -->
         {#each data.dna.extracted as tag (tag.facet + ':' + tag.term + ':' + tag.provider)}
           <div class="tag" style:border-left-color={facetColour(tag.facet)}>
             <div class="tagline">
-              <span class="term" style:color={facetColour(tag.facet)}>{tag.term}</span>
-              <span class="data">sal {tag.salience}</span>
+              <span class="term" style:color={facetColour(tag.facet)} title={tag.gloss ?? undefined}
+                >{termLabel(tag)}</span
+              >
+              {#if showModel}
+                <span class="data">{[tag.term, tag.salience != null ? `sal ${tag.salience}` : null]
+                    .filter(Boolean)
+                    .join(' · ')}</span>
+              {/if}
             </div>
             {#each tag.evidence as e}
-              <div class="quote">“{e.quote}”</div>
-              <div class="data src">{e.source}</div>
+              <!-- `quoteText` marks a span cut from a longer sentence; the stored quote is what
+                   §4.1 rule 1 verified and it is unchanged. -->
+              <div class="quote">“{quoteText(e.quote)}”</div>
+              <div class="data src">{showModel ? e.source : sourceLabel(e.source)}</div>
             {/each}
           </div>
         {/each}
       {:else}
-        <p class="why">No extracted tags yet — this title has not been through DNA extraction.</p>
+        <p class="why">No quoted tags for this title yet.</p>
       {/if}
     </section>
 
     <section>
-      <div class="data heading">DNA — PROJECTED (INFERRED)</div>
+      <div class="data heading">PROBABLY ALSO <span class="inferred">inferred, not quoted</span></div>
       {#if data.dna.projected.length}
         <div class="chips">
           <!-- Same label rule as the extracted tier above, and one key component fewer:
                `dna_projected` is UNIQUE (title_id, version, term), so no second provider can put
                one term on this list twice and the term is a key here on its own merits.
-               [M4.9 review cycle 1] -->
+               [M4.9 review cycle 1]
+
+               Each chip carries its weight, which is how many sources suggested it, and a
+               one-source chip is drawn quieter: Heat's lone "teenage girl" tag made
+               "teen protagonist" look as settled as a four-source "Los Angeles" (user test
+               2026-09-25). Emphasis only, never a filter - §4.1 rule 2: weights are never
+               filters, so no chip is dropped however weak. -->
           {#each data.dna.projected as p (p.facet + ':' + p.term)}
-            <span class="chip" style:color={facetColour(p.facet)} style:border-color={facetColour(p.facet)}>
-              {p.term}
+            {@const n = p.weight == null ? null : Math.round(p.weight)}
+            <span
+              class="chip"
+              class:weak={n != null && n <= 1}
+              style:color={facetColour(p.facet)}
+              style:border-color={facetColour(p.facet)}
+              title={[p.gloss, n != null ? `suggested by ${n} source${n === 1 ? '' : 's'}` : null]
+                .filter(Boolean)
+                .join(' - ')}
+              data-weight={n}
+            >
+              <span class="chiplabel">{termLabel(p)}</span>
+              {#if n != null}<span class="n" aria-label={`${n} source${n === 1 ? '' : 's'}`}>{n}</span>{/if}
+              {#if showModel}<span class="rawid">{p.term}</span>{/if}
             </span>
           {/each}
         </div>
       {:else}
-        <p class="why">No projected tags.</p>
+        <p class="why">Nothing inferred for this title yet.</p>
       {/if}
     </section>
   {/if}
@@ -430,6 +580,32 @@
   .sub {
     margin-bottom: 10px;
   }
+  /* The poster beside the name rather than above it: on a phone the panel is the screen, and a
+     full-width poster would push the overview and the actions below the fold. 72 px of 2:3. */
+  .head {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .thumb {
+    flex: none;
+    width: 72px;
+  }
+  .headtext {
+    flex: 1;
+    min-width: 0;
+  }
+  /* Decision 487's answers: `.pill` is §6.8's selection grammar, so the standing verdict wears
+     the one accent and the others do not. Wraps rather than scrolls on a narrow phone. */
+  .answers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 8px;
+  }
+  .note {
+    margin: 0 0 12px;
+  }
   .overview {
     font-size: 13px;
     line-height: 1.55;
@@ -439,8 +615,7 @@
     display: inline-flex;
     gap: 8px;
     align-items: baseline;
-    font-family: var(--mono);
-    font-size: 11px;
+    font-size: 12px;
     padding: 6px 10px;
     border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
@@ -456,10 +631,14 @@
     background: var(--card);
     margin: 12px 0;
   }
-  .syncnote,
   .seriesnote {
     margin-top: -4px;
     color: var(--ink-4);
+  }
+  /* Pulled up under the actions like `.actionwhy`, and given the section gap below it, so the
+     note belongs to the row it reports on and not to the CAST & CREW heading after it. */
+  .syncnote {
+    margin: -10px 0 18px;
   }
   .actions {
     display: flex;
@@ -490,6 +669,9 @@
   }
   .qv {
     color: #5fae7a;
+  }
+  .inferred {
+    color: var(--ink-4);
   }
   /* The count rides in the heading, at the heading's own weight: it is a fact about the list,
      not a control. §6.8's data voice is already on `.heading`. */
@@ -589,12 +771,24 @@
     gap: 6px;
   }
   .chip {
+    display: inline-flex;
+    gap: 5px;
+    align-items: baseline;
     font-family: var(--mono);
     font-size: 10px;
     padding: 4px 9px;
     border: 1px solid;
     border-radius: var(--r-pill);
     opacity: 0.85;
+  }
+  /* One source behind it: quieter, never absent (§4.1 rule 2). */
+  .chip.weak {
+    border-style: dashed;
+    opacity: 0.55;
+  }
+  .n,
+  .rawid {
+    color: var(--ink-4);
   }
   .err {
     color: var(--ember-lift);

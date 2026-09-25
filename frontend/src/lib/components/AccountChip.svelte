@@ -127,8 +127,10 @@
         <!-- §6.7, owner decision 2026-08-29: one global per-user "show the model" toggle,
              default off, here rather than on a settings page — it is a debugging instrument
              reached often and briefly, and this dropdown is on every screen. It governs the
-             transparency rail and the inline numeric annotations; the title card's model line
-             is deliberately not gated (§6.0).
+             transparency rail, the inline numeric annotations and, since decision 486 amended
+             decision 117, the title card's model line too. The hint says so in the member
+             register: it read "the §6.7 event rail and every inline number — the title card's
+             b(t) · β · gate line is not gated", to a member.
 
              "On every screen" is now true of the thing it governs as well: `+layout.svelte`
              mounts the one `ModelRail` and its trigger in this same header, so the switch and
@@ -147,9 +149,8 @@
             <span class="track" class:on={session.user?.show_model}><span class="knob"></span></span>
             <span class="preflabel">Show the model</span>
           </button>
-          <div class="why hint">
-            the §6.7 event rail and every inline number — the title card's b(t) · β · gate line
-            is not gated and stays either way
+          <div class="why hint" data-testid="show-model-hint">
+            Shows the numbers behind your suggestions, and a log of what changed them.
           </div>
         </div>
 
@@ -361,7 +362,7 @@
   /* §6 preamble: "phone-first (48 px targets, one-handed)". `design.css`'s coarse block raises
      `.pill, .btn-primary, .btn-ghost, button, select, [role='button']` and a bare `<a>` is in
      none of those — deliberately, because widening it to `a[href]` would grow every inline prose
-     link in the app. So the rule lands where the anchors are. These four entries are the only
+     link in the app. So the rule lands where the anchors are. These entries are the only
      phone path to /account and /admin at all (`api/auth.py`'s SURFACES carries neither), and at
      `padding: 9px 10px` they measured about 34 px, sitting four pixels above a `Log out` button
      that the global rule had already taken to 48. This is what `NavRail.svelte` does for its own

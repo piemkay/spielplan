@@ -387,7 +387,8 @@ async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
     _admin, member = await _bootstrap(app)
     payload = (await member.get("/api/auth/me")).json()
     keys = {entry["key"] for entry in payload["nav"]["account"]}
-    assert keys == {"account", "taste"}
+    # "My Taste" left with decision 488: it led to the same unbuilt placeholder as the tab.
+    assert keys == {"account"}
     assert "admin" not in str(payload["nav"])
 
 
@@ -398,14 +399,33 @@ async def test_an_admin_receives_the_admin_entries(app):
     assert {"admin", "setup"} <= keys
 
 
-async def test_both_roles_see_every_surface(app):
-    """§6: the six surface names are normative and none of them is role-gated."""
+async def test_both_roles_see_every_shipped_surface(app):
+    """§6: the surface names are normative and none of them is role-gated; decision 488: a
+    surface whose §12 milestone has not shipped is in neither role's navigation, nor behind any
+    other entry point to it."""
     admin, member = await _bootstrap(app)
     for client in (admin, member):
         payload = (await client.get("/api/auth/me")).json()
         assert [s["key"] for s in payload["nav"]["surfaces"]] == [
-            "home", "rate", "tonight", "rank", "map", "taste"
+            "home", "rate", "tonight", "rank"
         ]
+        hrefs = [e["href"] for e in payload["nav"]["surfaces"] + payload["nav"]["account"]]
+        assert "/map" not in hrefs and "/taste" not in hrefs, hrefs
+
+
+async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monkeypatch):
+    """Decision 488's other half: the flag is what hides a surface, so flipping it is all M6 has
+    to do, and the surface arrives in §6's order - between Rank and Taste, not appended."""
+    from spielplan.api import auth as auth_api
+
+    shipped = tuple({**s, "built": True} if s["key"] == "map" else s for s in auth_api.SURFACES)
+    monkeypatch.setattr(auth_api, "SURFACES", shipped)
+    _admin, member = await _bootstrap(app)
+    payload = (await member.get("/api/auth/me")).json()
+    assert [s["key"] for s in payload["nav"]["surfaces"]] == [
+        "home", "rate", "tonight", "rank", "map"
+    ]
+    assert auth_api.shipped("map") and not auth_api.shipped("taste")
 
 
 # --- §3.2: the 24-hour admin re-prompt ------------------------------------------------------

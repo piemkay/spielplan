@@ -55,7 +55,7 @@ from spielplan.api import curated as curated_api  # noqa: E402 - each ledger's `
 from spielplan.api import llm as llm_api  # noqa: E402 - the real provider card and batch reason
 from spielplan.api import setup as setup_api  # noqa: E402 - the rows setup may not seed
 from spielplan.api.artifacts import QUEUED, RUNNING  # noqa: E402 - the real phase names
-from spielplan.api.auth import SURFACES  # noqa: E402 - the real surface list, not a copy
+from spielplan.api.auth import SURFACES, shipped  # noqa: E402 - the real surface list, not a copy
 from spielplan.api.rank import _QUEUE_WHY  # noqa: E402 - §6.8's arm-independent line, not a copy
 from spielplan.connectors import registry  # noqa: E402 - the real connector table
 from spielplan.core import logs as core_logs  # noqa: E402 - the real redaction and scope
@@ -63,6 +63,7 @@ from spielplan.core.config import settings  # noqa: E402
 from spielplan.curated import adjudications as curated_verdicts  # noqa: E402 - the real refusals
 from spielplan.curated import axes as curated_axes  # noqa: E402
 from spielplan.curated import corrections as curated_corrections  # noqa: E402
+from spielplan.db.dna_terms import label_of  # noqa: E402 - decision 486's label fallback
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
 from spielplan.dna import review as dna_review  # noqa: E402 - the review's real bound
 from spielplan.flywheel import batch as flywheel_batch  # noqa: E402 - decision 441's arithmetic
@@ -79,6 +80,7 @@ from spielplan.rank import board as rank_board  # noqa: E402 - the real badges
 from spielplan.rank import queue as rank_queue  # noqa: E402 - the real 70/20/10 selector
 from spielplan.rank import tiers as rank_tiers  # noqa: E402 - decision 11's real rules
 from spielplan.rate import VERDICT_LABELS, balance, battle, queue  # noqa: E402
+from spielplan.rate import direct as rate_direct  # noqa: E402 - decision 487's card reason
 from spielplan.rate import session as rate_session  # noqa: E402
 from spielplan.sources import base as sources  # noqa: E402 - the adapters' own key registry
 from spielplan.tonight import combine as tonight_combine  # noqa: E402 - the real slate
@@ -170,19 +172,19 @@ def _db() -> closing[sqlite3.Connection]:
     return closing(db)
 
 
-def _nav(role: str) -> dict[str, list[dict[str, str]]]:
+def _nav(role: str) -> dict[str, list[dict[str, str | bool]]]:
     """§6.6 is admin-role only, so the harness has to hide the admin entries too — a UI built
-    against a stub that always returns them would never exercise the member shell."""
-    account = [
+    against a stub that always returns them would never exercise the member shell. Decision 488,
+    mirrored from `api/auth.py._nav`: an unbuilt surface is absent, and "My Taste" with it."""
+    account: list[dict[str, str | bool]] = [
         {"key": "account", "href": "/account", "label": "Account & passkeys"},
-        {"key": "taste", "href": "/taste", "label": "My Taste"},
     ]
     if role == "admin":
         account += [
             {"key": "admin", "href": "/admin/data", "label": "Admin view"},
             {"key": "setup", "href": "/setup", "label": "Setup wizard"},
         ]
-    return {"surfaces": [dict(s) for s in SURFACES], "account": account}
+    return {"surfaces": [dict(s) for s in SURFACES if s["built"]], "account": account}
 
 
 def _user(name: str, role: str, **extra: Any) -> dict[str, Any]:
@@ -865,7 +867,10 @@ def list_titles(
 
 
 @app.get("/api/titles/{title_id}")
-def title_detail(title_id: int) -> dict[str, Any]:
+def title_detail(
+    title_id: int, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    user = _me(spielplan_session)
     with _db() as db:
         t = db.execute("SELECT * FROM title WHERE id = ?", (title_id,)).fetchone()
         if not t:
@@ -910,15 +915,22 @@ def title_detail(title_id: int) -> dict[str, Any]:
                 "SELECT quote, src FROM dna_evidence WHERE title_id = ? AND term = ?",
                 (title_id, g["term"]),
             ).fetchall()
+            # Decision 486: named by label, and the weights only while Show the model is on -
+            # `api/library.py._extracted`'s shape. The fixture ships no label that differs from
+            # the leaf, so `label_of`'s fallback is the label here.
+            numbers = {
+                "salience": g["salience"], "confidence": g["confidence"],
+                "n_sources": g["runs_found"],
+            } if _show_model(user) else {}
             extracted.append({
                 "term": g["term"], "facet": app_facet(g["term"], g["facet"]),
-                "salience": g["salience"],
-                "confidence": g["confidence"], "n_sources": g["runs_found"],
+                "label": label_of(g["term"], None), "gloss": None, **numbers,
                 "provider": "",
                 "evidence": [{"quote": e["quote"], "source": e["src"]} for e in ev],
             })
         projected = [
             {"term": r["term"], "facet": app_facet(r["term"], r["facet"]),
+             "label": label_of(r["term"], None), "gloss": None,
              "weight": r["n_sources"],
              "via": ",".join(json.loads(r["sources"]))}
             for r in db.execute(
@@ -954,14 +966,24 @@ def title_detail(title_id: int) -> dict[str, Any]:
         "credits": credits,
         "platform_ratings": {
             "display_only": True,
-            "note": "display-only schema — platform scores are a popularity conduit and are "
-                    "never model features",
+            "note": "For reference only - these scores never affect your suggestions.",
             "items": ratings,
         },
         "dna": {"extracted": extracted, "projected": projected,
                 "note": "extracted tags are quote-verified; projected tags are inferred"},
-        "model_line": {"available": False, "reason": "dev harness — no artifact bundle loaded"},
-        "actions": {"play_on_jellyfin": None, "show_on_map": {"title_id": title_id}},
+        "my_verdict": (
+            {"value": v, "label": VERDICT_LABELS[v]}
+            if (v := _verdicts(user["id"]).get(title_id)) is not None else None
+        ),
+        # The harness links no Jellyfin server, so Play is always the no-server reason here, and
+        # Show on map follows the same `built` flag `api/library.py` reads (decision 488).
+        "actions": {
+            "play_on_jellyfin": None, "play_reason": "no_server",
+            "show_on_map": {"title_id": title_id} if shipped("map") else None,
+        },
+        # Decision 486: behind Show the model, absent otherwise.
+        **({"model_line": {"available": False, "reason": "dev harness — no artifact bundle loaded"}}
+           if _show_model(user) else {}),
     }
 
 
@@ -2980,6 +3002,31 @@ def rate_not_seen(
         log=(f"not_seen(title {title_id}) -> state unseen, no observation row",
              _sync_line("unseen")),
     )
+
+
+class TitleAnswerBody(BaseModel):
+    answer: Literal["disliked", "fine", "liked", "not_seen"]
+
+
+@app.post("/api/rate/title/{title_id}")
+def rate_title(
+    title_id: int, body: TitleAnswerBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """Decision 487: the title card's answer, mirrored from `rate/direct.py`. The title is put
+    on the person's own table as a sweep card under a fresh token and that token is answered by
+    the two routes above, so the journal, the counter and the reveal are theirs."""
+    user = _me(spielplan_session)
+    title = next((t for t in _catalog() if t["id"] == title_id), None)
+    if title is None:
+        raise HTTPException(404, "no such title")
+    s = _stash(_rate(user), {
+        **_sweep_card(title, source=rate_direct.SOURCE),
+        "reason": rate_direct.REASON, "p_seen": None,
+    })
+    if body.answer == "not_seen":
+        return rate_not_seen(CardBody(card_token=s["card_token"]), spielplan_session)
+    value = VERDICT_LABELS.index(body.answer)
+    return rate_verdict(VerdictBody(card_token=s["card_token"], value=value), spielplan_session)
 
 
 @app.post("/api/rate/skip")

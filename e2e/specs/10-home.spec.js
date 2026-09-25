@@ -371,23 +371,31 @@ test('with the toggle off the rail and every inline number are absent, not merel
   expect([...gatedKeysIn(payload)]).toEqual([]);
 });
 
-test('the title card model line renders with the toggle off and with it on', async ({ page }) => {
-  // Decision 117, in as many words: "The title card's `b(t) · β · gate` line is **not** gated
-  // — §6.0 lists it unconditionally as the M0 transparency promise." A spec that let this line
-  // ride on the toggle would pass while the product broke its oldest promise, so the assertion
-  // is equality of the two renders rather than presence in one of them.
+test('the title card model line renders only with the toggle on', async ({ page }) => {
+  // Decision 486, amending decision 117: §6.7's toggle governs §6.0's model line too. Decision
+  // 117 had left this one line ungated as the M0 transparency promise; the 2026-09-25 user test
+  // put `b(t) · β · gate` in front of two members with the switch off, and β and σ in it are the
+  // viewer's own fit. The sharp half is the payload, as for the rail: absent, not hidden.
   await openTitle(page, 'Heat');
-  const line = page.getByTestId('title-model-line');
-  await expect(line).toBeVisible();
-  const off = (await line.textContent())?.trim();
-  expect(off, 'the line must say something, even if it is why it is unavailable').toBeTruthy();
+  await expect(page.getByRole('complementary', { name: 'Title detail' })).toBeVisible();
+  await expect(page.getByTestId('title-model-line')).toHaveCount(0);
+  const listing = await (await page.request.get('/api/titles?kind=movie&q=Heat')).json();
+  const heat = listing.items.find((t) => t.name === 'Heat');
+  expect(heat, 'the film this test opens must be in the catalog').toBeTruthy();
+  const off = await (await page.request.get(`/api/titles/${heat.id}`)).json();
+  expect(off, 'the model line is on the wire with the switch off').not.toHaveProperty('model_line');
 
   await page.goto('/');
   await setShowModel(page, true);
-
-  await openTitle(page, 'Heat');
-  await expect(page.getByTestId('title-model-line')).toBeVisible();
-  expect((await page.getByTestId('title-model-line').textContent())?.trim()).toBe(off);
+  try {
+    await openTitle(page, 'Heat');
+    const line = page.getByTestId('title-model-line');
+    await expect(line).toBeVisible();
+    expect((await line.textContent())?.trim(), 'the line must say something').toBeTruthy();
+  } finally {
+    await page.goto('/');
+    await setShowModel(page, false);
+  }
 });
 
 test('turning the toggle on reveals the rail, the inline numbers and what did not ship', async ({
@@ -521,10 +529,11 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     await expect(other.locator('[data-model-note]')).toHaveCount(0);
     expect([...gatedKeysIn(await homePayload(other.request))]).toEqual([]);
 
-    // The ungated half survives the split too: §6.0's model line is there for the account that
-    // never asked to see the model.
+    // And the title card's model line with them: since decision 486 it is Show the model's too,
+    // so the account that never asked to see the model does not see it on the card either.
     await openTitle(other, 'Heat');
-    await expect(other.getByTestId('title-model-line')).toBeVisible();
+    await expect(other.getByRole('complementary', { name: 'Title detail' })).toBeVisible();
+    await expect(other.getByTestId('title-model-line')).toHaveCount(0);
   } finally {
     await context.close();
   }

@@ -2,21 +2,19 @@
   /**
    * The nav rail. Surface names are normative (spec §6): Home / Rate / Tonight / Rank / Map /
    * Taste. The prototype called Map "Explore" and hid Taste in the account menu; the spec's
-   * names win, and every surface is visible from day one, so the shape of the finished app is
-   * legible rather than appearing later as a surprise.
+   * names win. Which of them the rail offers is decision 488's: a surface whose milestone has
+   * not shipped is absent, because Map and Taste were two of six tabs on the phone and both
+   * opened a placeholder (user test 2026-09-25). A surface appears here, in §6's order, on the
+   * day `api/auth.py` flips its `built` flag.
    *
-   * The milestone that owns each surface travels in the same payload and is rendered on the
-   * DESTINATION, by `Milestone.svelte` — not here. This comment used to say the rail shows it,
-   * which was never true of any line below: the markup renders `s.label` and `title={s.label}`
-   * and reads `s.milestone` nowhere. Putting it in the rail is the rejected option, and not
-   * only because nobody asked for a milestone token beside every link: the payload carries the
-   * milestone that owns a surface and no flag for whether it has shipped, so the rail would
-   * label Home "M0" and Rank "M3" with the same emphasis it labels the two that are still
-   * placeholders. [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
+   * No milestone is rendered here or anywhere a member looks (decision 486): the markup renders
+   * `s.label` and `title={s.label}` and nothing else.
+   * [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
    *
    * The list comes from `/auth/me` rather than from here. §6.6 is admin-role only, and a
    * client-side `{#if role === 'admin'}` hides a link from someone reading the screen while
-   * showing it to anyone reading the response. Navigation is a server decision.
+   * showing it to anyone reading the response. Navigation is a server decision, and so is
+   * whether a surface has shipped.
    */
   import { page } from '$app/stores';
   import { session } from '$lib/session.svelte.js';

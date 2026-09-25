@@ -89,7 +89,9 @@
     <header>
       <div>
         <div class="title">Model log</div>
-        <div class="data">last 15 events · never persisted · §6.7</div>
+        <!-- The drawer is Show the model's own register, so its numbers and nouns stay; a spec
+             reference never renders on a member surface, switch on or off (decision 486). -->
+        <div class="data">last 15 events · never saved</div>
       </div>
       <button class="close" onclick={onClose} aria-label="Close the model log" data-testid="model-rail-close">✕</button>
     </header>

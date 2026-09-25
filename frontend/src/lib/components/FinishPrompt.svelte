@@ -32,6 +32,7 @@
    */
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
+  import { syncNote } from '$lib/titleCard.js';
 
   /**
    * Called after a successful answer, with the title and the state that was written. Home wires
@@ -66,13 +67,16 @@
       queue = queue.filter((p) => p.id !== card.id);
       // `sync` travels for both answers now (§6.7's rail prints these reasons verbatim), and for
       // a series a "seen" that reached Jellyfin and an `unseen` that deliberately did not both
-      // report `synced: true` — so the reason, when there is one, is the honest line.
+      // report `synced: true` — so the reason, when there is one, is the honest line. It is the
+      // title card's sentence for the same reason (`syncNote`), because the rail's words are
+      // the operator's and this banner is a member's (decision 486); a plain success says
+      // nothing, since the hand-off line above already says what was written.
       const sync = result?.sync ?? null;
       answered = {
         title_id: card.title_id,
         name: card.name,
         seen: finished,
-        note: sync ? (sync.reason ?? (sync.synced ? '' : 'your Jellyfin was not told')) : ''
+        note: sync && (sync.reason || !sync.synced) ? syncNote(sync) : ''
       };
       onAnswered?.(card.title_id, finished ? 'seen' : 'unseen');
     } catch (err) {

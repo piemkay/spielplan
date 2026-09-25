@@ -14,9 +14,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from spielplan.api import auth as auth_api
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, library
+from spielplan.home import rail
+from spielplan.rate import direct
 from spielplan.scoring import serve
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -90,18 +93,37 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such title")
 
     store = request.app.state.artifacts
+    # Decision 486: model numbers reach a member only while their Show the model is on, and the
+    # gate is here, where the payload is built, so a card read with the switch off carries none.
+    show_model = rail.visible_to(user)
     # Resolved once and handed down, so the card cannot show one vocabulary's tags beside
     # another's — §10's "a bundle re-import leaves two vocabularies coexisting" (M4.9 finding 10).
     dna = await library.dna_for(conn, title_id, version=await dna_terms.active_version(conn))
+    # Decision 486 clause 4: a term is shown by the label the vocabulary ships, never its id.
+    labels = await dna_terms.labels_for(
+        conn, [t["term"] for t in dna["extracted"]] + [p["term"] for p in dna["projected"]]
+    )
 
+    # Read whether or not the title has a Jellyfin copy, because the two reasons Play can be
+    # unavailable are different sentences: the card told every unowned title "Play needs a linked
+    # Jellyfin server" on an install whose server was linked (user test 2026-09-25). Hoisted out of
+    # the branch rather than queried twice, which `test_layering_guards`' ratchet counts.
+    jf_base = await conn.fetchval(
+        "SELECT config->>'url' FROM connector_config WHERE name = 'jellyfin'"
+    )
     jf_url = None
-    if title.get("jellyfin_id"):
-        cfg = await conn.fetchval("SELECT config->>'url' FROM connector_config WHERE name = 'jellyfin'")
-        if cfg:
-            # §7.1: deep-link to the server's web player; direct playback is a later refinement.
-            jf_url = f"{cfg.rstrip('/')}/web/#/details?id={title['jellyfin_id']}"
+    play_reason = None
+    # The server first: with none linked no title has a copy to find, and "not in your library"
+    # would blame the title for the household's missing connector.
+    if not jf_base:
+        play_reason = "no_server"
+    elif not title.get("jellyfin_id"):
+        play_reason = "not_in_library"
+    else:
+        # §7.1: deep-link to the server's web player; direct playback is a later refinement.
+        jf_url = f"{jf_base.rstrip('/')}/web/#/details?id={title['jellyfin_id']}"
 
-    return {
+    body: dict[str, Any] = {
         "title": {
             k: title[k]
             for k in (
@@ -111,38 +133,65 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
             )
         },
         "credits": await library.credits_for(conn, title_id),
-        # §4.1 rule 3 — labelled at the boundary so the client cannot forget.
+        # §4.1 rule 3 — labelled at the boundary so the client cannot forget. `display_only` is
+        # the flag the rule rests on; the note is the same fact in the member register (decision
+        # 486), because "popularity conduit" and "model features" are the operator's words.
         "platform_ratings": {
             "display_only": True,
-            "note": "display-only schema — platform scores are a popularity conduit and are "
-                    "never model features",
+            "note": "For reference only - these scores never affect your suggestions.",
             "items": await library.platform_ratings(conn, title_id),
         },
         # §4.1 rule 1 — two tiers, two lists.
         "dna": {
-            "extracted": dna["extracted"],
-            "projected": dna["projected"],
+            "extracted": [_extracted(t, labels, show_model) for t in dna["extracted"]],
+            "projected": [{**p, **labels[p["term"]]} for p in dna["projected"]],
             "note": "extracted tags are quote-verified; projected tags are inferred",
         },
-        # §6.0: "the model line in the data voice (`b(t) 0.52 · β 0.8 · gate 0.93`)".
-        # With no bundle there is nothing honest to print, so the card says so (§3.1).
+        # Decision 487: the person's own answer, so the card can show which one is standing.
+        "my_verdict": await direct.live_verdict(conn, user_id=user.id, title_id=title_id),
+        "actions": {
+            "play_on_jellyfin": jf_url,
+            # Which of the two causes it is when Play is unavailable; None when it is not.
+            "play_reason": play_reason,
+            # Decision 488: §6.0's second action waits, absent, until §6.4's Map ships - the same
+            # flag that keeps Map out of navigation, so the two cannot disagree.
+            "show_on_map": {"title_id": title_id} if auth_api.shipped("map") else None,
+        },
+    }
+    if show_model:
+        # §6.0: "the model line in the data voice (`b(t) 0.52 · β 0.8 · gate 0.93`)". With no
+        # bundle there is nothing honest to print, so the card says so (§3.1).
         #
-        # Decision 117 gates §6.7's rail and every other inline number behind the per-user
-        # "show the model" toggle. This line is deliberately NOT gated: §6.0 lists it
-        # unconditionally as the M0 transparency promise, and it is the one place a model number
-        # is part of the product rather than part of the debugging.
-        "model_line": (
+        # Behind Show the model since decision 486, which amends decision 117: that decision
+        # left this one line ungated as "the M0 transparency promise", and the code argued the
+        # line was crowd-level provenance rather than a statement about the viewer - but β is read
+        # from this viewer's fit and σ from this viewer's ledger row (`serve.model_line`), and the
+        # 2026-09-25 user test put it in front of two members who could read none of it. The
+        # promise is one tap away in the account menu now, not deleted.
+        body["model_line"] = (
             {"available": False, "reason": "no artifact bundle imported"}
             if store.is_empty
             else await serve.model_line(
                 conn, user_id=user.id, title_id=title_id, bundle_version=store.version
             )
-        ),
-        "actions": {
-            "play_on_jellyfin": jf_url,
-            "show_on_map": {"title_id": title_id},
-        },
-    }
+        )
+    return body
+
+
+# The extracted tier's weights, which are model numbers: §4.1 rule 2 makes them weights and never
+# filters, and decision 486 makes them a Show-the-model annotation rather than member copy.
+_TAG_NUMBERS = ("salience", "confidence", "n_sources")
+
+
+def _extracted(
+    tag: dict[str, Any], labels: dict[str, dict[str, Any]], show_model: bool
+) -> dict[str, Any]:
+    """One extracted tag, named by its label, with its weights only while the switch is on."""
+    shaped = {**tag, **labels[tag["term"]]}
+    if not show_model:
+        for key in _TAG_NUMBERS:
+            shaped.pop(key, None)
+    return shaped
 
 
 @router.get("/titles/{title_id}/similar-by-term")

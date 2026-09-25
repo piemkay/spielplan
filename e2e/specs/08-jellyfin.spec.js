@@ -150,7 +150,9 @@ test.describe('jellyfin', () => {
     await panel.getByRole('button', { name: 'Seen', exact: true }).click();
 
     await expect(panel.getByRole('button', { name: 'Mark seen' })).toBeVisible();
-    await expect(panel.locator('.syncnote')).toHaveText('synced to Jellyfin');
+    // The member register's sentence for a push that landed (decision 486); `syncNote` in
+    // `lib/titleCard.js` maps the rail's reasons, and this is the one with none to map.
+    await expect(panel.locator('.syncnote')).toHaveText('Saved, and Jellyfin is up to date.');
 
     const state = await jellyfinState(page.request);
     expect(state.played[JELLYFIN.user.patrick]).not.toContain(JELLYFIN.item.heat);
