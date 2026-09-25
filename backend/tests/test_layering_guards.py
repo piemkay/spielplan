@@ -869,9 +869,11 @@ def test_the_residue_table_is_ascii():
 # carries both, and the routers declare their own `prefix="/api"`, so the paths are complete.
 # `app.openapi()["paths"]` is no use at all: it has neither the dependant nor the websockets.
 
-# The dependencies that ARE the gate, and the weaker one that only proves a session.
-_GATES = ("active_user", "admin_user", "active_user_ws")
-_SESSION_ONLY = ("current_user", "current_user_ws")
+# The dependencies that ARE the gate, and the weaker one that only proves a session. The `_brief`
+# pair is the same two functions on a connection released before the route body runs, which is
+# what decision 483's poster route needs and what `deps.py` argues beside it.
+_GATES = ("active_user", "admin_user", "active_user_ws", "active_user_brief")
+_SESSION_ONLY = ("current_user", "current_user_ws", "current_user_brief")
 
 _METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

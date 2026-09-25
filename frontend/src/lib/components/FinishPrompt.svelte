@@ -32,6 +32,7 @@
    */
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
+  import RatePoster from '$lib/components/RatePoster.svelte';
 
   /**
    * Called after a successful answer, with the title and the state that was written. Home wires
@@ -85,6 +86,12 @@
 
 {#if current}
   <div class="prompt" role="status" data-finish-prompt={current.title_id}>
+    <!-- The poster the household just watched (decision 483), which answers "which one?" faster
+         than the name does. Built from `title_id` by hand: this row's own `id` is the prompt's,
+         and a poster keyed on it would be some other title's. -->
+    <div class="thumb">
+      <RatePoster title={{ title_id: current.title_id, name: current.name }} showName={false} />
+    </div>
     <div class="text">
       <div class="q">Did you finish <strong>{current.name}</strong>?</div>
       <div class="data why">
@@ -157,6 +164,14 @@
     border: 1px solid var(--ember-edge);
     background: var(--ember-wash);
     border-radius: var(--r-md);
+  }
+  .thumb {
+    width: 44px;
+    flex: none;
+  }
+  .text {
+    flex: 1 1 12rem;
+    min-width: 0;
   }
   .q {
     font-size: 14px;

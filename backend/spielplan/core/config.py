@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # accident says so in the log rather than signing cookies with nothing.
     insecure_dev: bool = Field(default=False, alias="SPIELPLAN_INSECURE_DEV")
 
+    # Decision 483's no-egress switch for §6.8's posters. On in every install; `ops/compose.e2e.yml`
+    # turns it off so an e2e or CI run makes no internet request for a poster (the art route asks
+    # no image host and the worker's `art-lookup` asks TMDB nothing), whatever URLs the fixture
+    # bundle carries. The household's own Jellyfin is §8's exemption, not the internet, and is
+    # asked either way - which is how e2e still sees real art, from the fake Jellyfin.
+    art_egress: bool = Field(default=True, alias="SPIELPLAN_ART_EGRESS")
+
     # §3.2: 90-day sliding sessions; admin routes re-prompt after 24 h. Both numbers are fixed
     # by the spec, so the env vars tune them and cannot turn them off: 0 is not "disabled", it
     # is a session that has expired by the time the login response arrives, or an admin route

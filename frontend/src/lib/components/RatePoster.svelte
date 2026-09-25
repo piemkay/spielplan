@@ -9,11 +9,16 @@
    * stage-10 cold badge is still a statement about the model, which is why the server does not
    * even send `placement` on this card.
    *
-   * There are no poster images in the bundle — only paths — so this is PosterCard's stable
-   * tinted panel: a hue derived from the title's own name, identical on every surface and
-   * across reloads, because a card that changes colour every render reads as a bug.
+   * The art is the same-origin poster route's (decision 483), drawn over PosterCard's stable
+   * tinted panel: a hue derived from the title's own name, identical on every surface and across
+   * reloads, which is what shows while the image loads and what stays when the title has none
+   * (a designed state, not an error). The image is dropped on error rather than left broken.
+   *
+   * It takes the title under either key, `id` or `title_id` (`lib/art.js` says why), so every
+   * surface that shows a title as a 2:3 card can hand it the payload it already holds.
    */
   import { hueOf } from '$lib/rate.svelte.js';
+  import { posterSrc, titleIdOf } from '$lib/art.js';
 
   /**
    * `showName` exists because §6.8's card grammar puts the title on the poster, and a surface
@@ -22,15 +27,33 @@
    */
   let { title, showName = true } = $props();
 
-  const h = $derived(hueOf(title?.name ?? String(title?.id ?? '')));
+  const h = $derived(hueOf(title?.name ?? String(titleIdOf(title) ?? '')));
+  const src = $derived(posterSrc(title));
+  // The src that failed, rather than a flag: this component is reused as Rate's card changes,
+  // and a flag would carry one title's missing art onto the next title's poster.
+  let failed = $state(null);
 </script>
 
 <div
   class="poster"
   data-testid="rate-poster"
-  data-title-id={title?.id}
+  data-title-id={titleIdOf(title)}
   style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
 >
+  {#if src && failed !== src}
+    <!-- `alt=""`: the title is printed beside or over the poster, and a screen reader reading it
+         twice is the card saying it twice. Eager, because a Rate card is on screen the moment it
+         is drawn and the next one was preloaded during the reveal hold. -->
+    <img
+      class="art"
+      {src}
+      alt=""
+      loading="eager"
+      decoding="async"
+      draggable="false"
+      onerror={() => (failed = src)}
+    />
+  {/if}
   {#if showName}
     <span class="scrim"></span>
     <span class="name">{title?.name ?? '—'}</span>
@@ -44,6 +67,20 @@
     display: block;
     width: 100%;
     transition: border-color 0.18s ease, transform 0.18s ease;
+  }
+  /* Over the tinted panel and under the scrim and the name. Inert to the finger: §6.1's long
+     press on a battle poster is a decisive duel, and iOS's image callout would take the same
+     press for itself - so the image neither receives the pointer nor offers the callout. */
+  .art {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .scrim {
     position: absolute;

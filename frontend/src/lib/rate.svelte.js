@@ -25,6 +25,7 @@
  */
 
 import { ApiError, get, post, qs } from '$lib/api.js';
+import { preloadPoster } from '$lib/art.js';
 
 /** Proposal 42: "~1.2 s or until the next card". */
 export const HOLD_MS = 1200;
@@ -210,6 +211,15 @@ export function latency() {
 
 // --- the envelope --------------------------------------------------------------------------
 
+/**
+ * The held-back card's posters, asked for while the reveal holds (decision 483). The response
+ * already carries the next card so the swap costs no request; without this its art would still
+ * cost one, after the swap, inside §6's "<2 s per sweep card, <1.5 s per battle".
+ */
+export function preloadArt(card) {
+  return [card?.title, card?.left, card?.right].filter(Boolean).map(preloadPoster);
+}
+
 function apply(res, { holdReveal = false } = {}) {
   const answeredCard = rate.card;
   const answeredBlock = rate.session?.block ?? null;
@@ -229,6 +239,7 @@ function apply(res, { holdReveal = false } = {}) {
     rate.frozenBlock = answeredBlock;
     rate.holding = true;
     pendingCard = res.card ?? null;
+    preloadArt(pendingCard);
     holdTimer = setTimeout(commit, HOLD_MS);
     return;
   }

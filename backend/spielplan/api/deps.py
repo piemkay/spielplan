@@ -185,6 +185,58 @@ async def active_user(user: CurrentUser) -> auth.SessionUser:
 ActiveUser = Annotated[auth.SessionUser, Depends(active_user)]
 
 
+# --- the same two gates, holding the pool only for the session read ----------------------------
+#
+# Decision 483's poster route answers sixty `<img>`s at once on a cold Home and may wait on an
+# image host for each, and `DB` above holds one of the pool's ten connections for the whole
+# request: sixty posters on `ActiveUser` would answer every other surface 503 while a shelf filled
+# (`test_api_gating.py` states the rule as "every authenticated route is behind `deps.db`"). So
+# the gate is the same function with a different lifetime for its connection - the pair below
+# acquire, call `current_user` and `active_user` as they are, and release before the route body
+# runs - and the route takes each further connection through `brief_connection` for one read at a
+# time. Declared here, as dependencies, so the gating sweeps walk them like `active_user_ws`
+# (decision 225): a route that read the cookie in its own body would be invisible to all of them.
+# [decisions 179, 483]
+
+
+@asynccontextmanager
+async def brief_connection():
+    """One pooled connection for one piece of work, released on exit, bounded like `db`."""
+    connections = pool.pool()
+    try:
+        conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
+    except TimeoutError:
+        log.warning(
+            "no pooled connection within %ss for a brief read: pool size %d, idle %d",
+            _ACQUIRE_TIMEOUT_S,
+            connections.get_size(),
+            connections.get_idle_size(),
+        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from None
+    try:
+        yield conn
+    finally:
+        await connections.release(conn)
+
+
+async def current_user_brief(request: Request, response: Response) -> auth.SessionUser:
+    """`current_user`, on a connection held for the session read alone - the slide included."""
+    async with brief_connection() as conn:
+        return await current_user(request, response, conn)
+
+
+CurrentUserBrief = Annotated[auth.SessionUser, Depends(current_user_brief)]
+
+
+async def active_user_brief(user: CurrentUserBrief) -> auth.SessionUser:
+    """§3.1's first-login lock in front of `current_user_brief`: `active_user`'s predicate, called
+    rather than copied, so the two cannot come to disagree about who is locked."""
+    return await active_user(user)
+
+
+ActiveUserBrief = Annotated[auth.SessionUser, Depends(active_user_brief)]
+
+
 # --- the same two gates, for a socket ----------------------------------------------------------
 #
 # §3.2 puts every route behind a session and §3.1 locks a new account to a password change, and

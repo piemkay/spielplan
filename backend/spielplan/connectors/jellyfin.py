@@ -1007,6 +1007,35 @@ class JellyfinClient:
         """§7.1: 'Play on Jellyfin' — deep-link to the server's own web player."""
         return f"{self.base_url.rstrip('/')}/web/#/details?id={jellyfin_id}"
 
+    async def primary_image(
+        self, item_id: str, *, max_width: int = 342
+    ) -> tuple[bytes, str] | None:
+        """The item's Primary image, resized by the server, or None when it has none.
+
+        Decision 483's first poster source, and a read like the rest of this client's: the admin
+        key, the same `MediaBrowser` header, and §3.3's rule that a failure is a `JellyfinError`
+        the caller can fall through on rather than an httpx exception. Bytes rather than JSON,
+        which is why it does not go through `_request`. `maxWidth` asks the server for the size a
+        2:3 card draws (TMDB's w342, the other source's width), so a phone is never sent the
+        original scan of a Blu-ray cover.
+        """
+        path = f"/Items/{quote(str(item_id), safe='')}/Images/Primary"
+        headers = {**self._headers(self.api_key), "Accept": "image/webp,image/jpeg,image/png"}
+        try:
+            async with self._client() as client:
+                response = await client.get(
+                    self._url(path), params={"maxWidth": max_width, "quality": 85}, headers=headers
+                )
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise JellyfinError(f"GET {path} failed: {_scrubbed(str(exc), self.api_key)}") from None
+        if response.status_code == 404:
+            return None
+        # A redirect is refused like `_request` refuses one: httpx follows none, and a proxy's
+        # login page is not a poster.
+        if response.status_code >= 300:
+            raise JellyfinError(f"GET {path} -> {response.status_code}", status=response.status_code)
+        return response.content, response.headers.get("content-type", "")
+
 
 def played_of(item: dict) -> bool:
     return bool((item.get("UserData") or {}).get("Played"))

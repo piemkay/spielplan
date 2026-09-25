@@ -122,6 +122,20 @@ def paths_behind(target) -> set[tuple[str, str]]:
     }
 
 
+# Each session loader with the first-login gate in front of it. Two pairs since decision 483: the
+# poster route loads the session on a connection it releases before its body waits on an image
+# host (`deps.current_user_brief`), which is `current_user` called on a shorter-lived connection
+# and not a second door. A walk that followed only the first pair would pass over that route in
+# both halves of the subtraction below - authenticated nowhere, gated nowhere - which is exactly
+# the invisibility decision 225 took the Tonight socket out of.
+SESSION_LOADERS = (deps.current_user, deps.current_user_brief)
+FIRST_LOGIN_GATES = (deps.active_user, deps.active_user_brief)
+
+
+def paths_behind_any(targets) -> set[tuple[str, str]]:
+    return set().union(*(paths_behind(target) for target in targets))
+
+
 def admin_paths() -> list[tuple[str, str]]:
     """Every (method, path) actually behind `deps.admin_user` in the running app.
 
@@ -197,6 +211,21 @@ def test_a_route_without_conn_still_holds_a_pooled_connection_for_its_session():
     # session load is. A sweep, so a future connection-free route cannot be read as free.
     behind_user = paths_behind(deps.active_user)
     assert behind_user <= behind_db, sorted(behind_user - behind_db)
+
+
+def test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_request():
+    """The other side of the sweep above, for the one route written to be its exception.
+
+    Decision 483's poster route waits on an image host, and sixty of them answer a cold Home at
+    once against a pool of ten, so it must NOT be behind `deps.db` - and must still be behind §3.1's
+    lock, which is why it takes `ActiveUserBrief` rather than no gate at all. Asserted on the graph
+    for the reason the test above gives: the wiring is what keeps the sentence true.
+    """
+    brief = paths_behind(deps.active_user_brief)
+    assert ("GET", "/api/art/{title_id}/poster") in brief, sorted(brief)
+    held = brief & paths_behind(deps.db)
+    assert not held, f"these hold a pooled connection for the whole request: {sorted(held)}"
+    assert brief <= paths_behind(deps.current_user_brief)
 
 
 def test_the_app_actually_has_admin_routes_to_gate():
@@ -643,8 +672,8 @@ def test_the_forced_change_gate_covers_every_authenticated_route_but_four():
         "name it in AUTHENTICATES_BY_HAND with the live test that holds it to §3.1's lock"
     )
 
-    authenticated = paths_behind(deps.current_user)
-    gated = paths_behind(deps.active_user)
+    authenticated = paths_behind_any(SESSION_LOADERS)
+    gated = paths_behind_any(FIRST_LOGIN_GATES)
     assert gated, "the walk found nothing behind active_user — it is sweeping an empty set"
     # `active_user` depends on `current_user`, so the gated set is a strict subset by construction;
     # asserting it catches a future gate wired around the session loader rather than through it.
@@ -664,7 +693,7 @@ async def test_every_other_authenticated_route_refuses_a_locked_account(app):
     runs — nothing is written, so nothing needs a clean database between them.
     """
     member = await _locked_member(app)
-    for method, path in sorted(paths_behind(deps.active_user)):
+    for method, path in sorted(paths_behind_any(FIRST_LOGIN_GATES)):
         response = await member.request(method, concrete(path), json={})
         assert response.status_code == 403, (
             f"{method} {path} let an account locked to a first-login change through "

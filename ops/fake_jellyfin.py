@@ -28,13 +28,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import struct
 import uuid
+import zlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import unquote_plus
 
 import httpx
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 TICKS_PER_MINUTE = 60 * 10_000_000
@@ -586,6 +588,41 @@ async def show_episodes(
             }
         rows.append(row)
     return {"Items": rows, "TotalRecordCount": len(rows)}
+
+
+# Decision 483's first poster source. The two awkward items have no Primary image, as a home
+# video and an unidentified film have none on a real server, so a test can watch the art route
+# fall through to the next source on a 404 rather than only ever taking the first.
+NO_PRIMARY_IMAGE = {"jf-8", "jf-x"}
+IMAGES_ASKED: list[str] = []
+
+
+def _png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """A real PNG of one flat colour: the smallest thing a browser decodes to a nonzero
+    `naturalWidth`, which is what the e2e asserts about a poster, built with no image library."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    row = b"\x00" + bytes(rgb) * width
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(row * height))
+        + chunk(b"IEND", b"")
+    )
+
+
+@router.get("/Items/{item_id}/Images/Primary")
+async def primary_image(item_id: str) -> Response:
+    """Anonymous, as Jellyfin serves item images: its own web client loads them with a bare
+    `<img>`. `maxWidth` and `quality` are accepted and ignored - the double's art is 2 by 3."""
+    IMAGES_ASKED.append(item_id)
+    known = {str(item["Id"]) for item in ITEMS} | set(EPISODE_SERIES)
+    if item_id not in known or item_id in NO_PRIMARY_IMAGE:
+        raise HTTPException(404, "no such image")
+    shade = sum(item_id.encode()) % 200
+    return Response(_png(2, 3, (shade, 64, 200 - shade)), media_type="image/png")
 
 
 @router.get("/Sessions")

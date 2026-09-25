@@ -116,6 +116,14 @@ HOST_POLICIES: dict[str, HostPolicy] = {
                                      respect_robots=False, note=_API_TERMS),
     "image.tmdb.org": HostPolicy(rps=10.0, burst=10, max_concurrency=6,
                                  respect_robots=False, note=_API_TERMS),
+    # TVmaze's image store, the second host decision 483's art route may fetch a poster from (the
+    # first is the row above). A row rather than `DEFAULT_RPS` with robots honoured, because the
+    # route's fetcher lives as long as the web process (decision 485) and a robots.txt that did
+    # not answer once would refuse every TVmaze poster until a restart. The files are the ones
+    # api.tvmaze.com's documented answers name as a show's image, asked for one card at a time,
+    # at the API's own rate - `_API_TERMS` exactly.
+    "static.tvmaze.com": HostPolicy(rps=2.0, burst=2, max_concurrency=2,
+                                    respect_robots=False, note=_API_TERMS),
     "www.omdbapi.com": HostPolicy(rps=8.0, burst=8, max_concurrency=4,
                                   respect_robots=False, note=_API_TERMS),
     "api.trakt.tv": HostPolicy(rps=2.5, burst=3, max_concurrency=2,

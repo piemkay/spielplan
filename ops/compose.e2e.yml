@@ -17,6 +17,17 @@ services:
       # default, same reason; see ops/compose.dev.yml.
       - "127.0.0.1:${DB_PORT:-5432}:5432"
 
+  # Decision 483's no-egress switch: a harness run asks no internet host for a poster - not the
+  # art route (TMDB's and TVmaze's image stores) and not the worker's `art-lookup` (TMDB's API) -
+  # whatever the fixture bundle's poster paths say. The fake Jellyfin below is not the internet
+  # and still serves art, so e2e sees a real image. Merged into each service's own environment.
+  backend:
+    environment:
+      SPIELPLAN_ART_EGRESS: "false"
+  worker:
+    environment:
+      SPIELPLAN_ART_EGRESS: "false"
+
   jellyfin-fake:
     # Reuses the backend image purely for its Python + FastAPI + uvicorn; the file itself is
     # mounted, so editing the fake does not mean rebuilding an image.

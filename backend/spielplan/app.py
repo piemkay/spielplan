@@ -33,6 +33,7 @@ from starlette.types import Scope
 
 from spielplan.api import acquisition as acquisition_api
 from spielplan.api import admin as admin_api
+from spielplan.api import art as art_api
 from spielplan.api import artifacts as artifacts_api
 from spielplan.api import auth as auth_api
 from spielplan.api import curated as curated_api
@@ -49,6 +50,7 @@ from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
 from spielplan.api.deps import carry_slid_session_cookie
+from spielplan.art.poster import ArtService
 from spielplan.connectors import registry
 from spielplan.core import logs, secrets, storage
 from spielplan.core.config import Settings, settings
@@ -243,6 +245,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.storage = storage.Watch(cfg.data_dir, storage.BACKEND_MOUNTS)
     if (problem := storage.refusal(app.state.storage.result)) is not None:
         log.warning("storage: %s", problem)
+    # Decision 483's poster cache and the one fetcher this process holds for the two image hosts
+    # (decision 485), opened after every step above that can fail so a boot that fails there leaves
+    # nothing to close, and closed before the pool its reads borrow from.
+    app.state.art = await ArtService(
+        cfg.data_dir / "cache" / "art", egress=cfg.art_egress
+    ).open()
     # Decision 497: from here on this process follows the active row instead of waiting for §10's
     # restart. Armed after the boot pin, so the first comparison is against what was loaded.
     basis.start(app.state, cfg.artifacts_dir)
@@ -251,6 +259,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await basis.stop(app.state)
         app.state.storage.close()
+        await app.state.art.close()
         await pool.close_pool()
 
 
@@ -282,6 +291,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_api.router)
     app.include_router(artifacts_api.router)
     app.include_router(library_api.router)
+    app.include_router(art_api.router)
     app.include_router(state_api.router)
     app.include_router(rate_api.router)
     app.include_router(rank_api.router)

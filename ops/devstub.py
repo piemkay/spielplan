@@ -1083,6 +1083,15 @@ def passkey_login(body: PasskeyLoginVerify) -> dict[str, Any]:
     raise HTTPException(501, "the dev harness has no authenticator — run the real stack")
 
 
+@app.get("/api/art/{title_id}/poster", response_class=Response)
+def poster(title_id: int) -> Response:
+    """Decision 483's art route, answered the way the app answers a title with no servable
+    image: a cacheable 404, which every card draws as its tinted 2:3 panel. The harness holds no
+    image store and reaches no image host, so the designed state is the honest one to develop
+    against; `backend/spielplan/api/` is where a real poster comes from."""
+    return Response(status_code=404, headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.get("/api/titles/{title_id}/state")
 def get_state(title_id: int) -> dict[str, Any]:
     return {"state": STATE["seen"].get(title_id, "unseen"), "state_changed_at": None,
