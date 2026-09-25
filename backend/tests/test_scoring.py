@@ -233,7 +233,10 @@ def test_the_backbone_loads_the_shipped_bundle_and_indexes_it_by_title_id(backbo
     # and the support the app can use is nothing, which is the pair cs-01 is about.
     assert backbone.support(8) == 0
     assert backbone.embedding(8) is None
-    assert backbone.raw_prior(8) is None
+    # The mask takes the coordinate and not the crowd prior (C1.2): the flagged row's b_i is read
+    # as the file ships it, which on this fixture is 0.0 - `make_bundle` zeroes the flagged row's
+    # b_i with its E. `test_a_zeroed_backbone_row_is_not_a_warm_title` ships a non-zero one.
+    assert backbone.raw_prior(8) == 0.0
     # And the OTHER accessor, which is the half cs-01 took with it by accident. §4.3 ships
     # `item_n` as "the per-title support counts" and glosses it "(the §5.1 gate input)"; those are
     # one number only while every row carries a coordinate, and excluding the flagged rows is
@@ -410,21 +413,28 @@ def test_a_zeroed_backbone_row_is_not_a_warm_title(tmp_path):
     back = bb.Backbone.open(store)
     assert back.row(2) is None and back.row(3) is None
     assert back.row(1) == 0 and back.row(4) == 3
-    assert back.support(2) == 0 and back.embedding(2) is None and back.raw_prior(2) is None
+    assert back.support(2) == 0 and back.embedding(2) is None
+    # The mask is the corpus's evaluation holdout, so it takes the coordinate and NOT the crowd
+    # prior: a flagged row's b_i is a real fitted bias over its real support (C1.2, owner
+    # instruction of 2026-09-25). It used to answer None, and a film 192,061 people rated was
+    # ranked on the Cold Tower's guess instead.
+    assert back.raw_prior(2) == pytest.approx(0.5) and back.crowd_support(2) == 900
     # The count is reported rather than swallowed: an operator reading the load notes can see
     # how much of the basis the corpus did not place.
     assert any("2 of 4 rows carry no coordinate" in note for note in back.notes)
 
     # No Cold Tower placement: the title has no coordinate, and says so. That is the state
-    # §12's M2 criterion has to be able to count.
+    # §12's M2 criterion has to be able to count - a prior alone is not a coordinate.
     assert bb.coordinate(2, back) is None
 
-    # With one, the coordinate is the pure cold limit — gate exactly 0, nothing blended in.
+    # With one, e(t) is the pure cold limit — gate exactly 0, nothing blended in — and b(t) blends
+    # the row's own b_i with b̂ at the gate of the crowd support the file carries for it.
     e_hat = cold_vector(2)
     c = bb.coordinate(2, back, (e_hat, 0.33))
     assert c.e_source == "cold_tower"
-    assert c.gate == 0.0 and c.item_n == 0
-    assert np.array_equal(c.e, e_hat) and c.b == pytest.approx(0.33)
+    assert c.gate == 0.0 and c.item_n == 0 and c.crowd_n == 900
+    g = bb.gate(900)
+    assert np.array_equal(c.e, e_hat) and c.b == pytest.approx(g * 0.5 + (1 - g) * 0.33)
 
     # And it is not excused from the sweep. Row 2 clears WARM_SUPPORT and would have been
     # stamped warm on support alone; row 3 is thin as well as cold.
@@ -442,14 +452,25 @@ def test_a_zeroed_backbone_row_is_not_a_warm_title(tmp_path):
 
 def test_a_title_with_no_backbone_row_scores_entirely_from_the_cold_tower(backbone):
     """§5.1: "b̂(t) from the Cold Tower for cold titles". n_t = 0 ⇒ gate 0 ⇒ both terms are the
-    Cold Tower's, exactly — not approximately, because the blend weight is exactly zero."""
-    e_hat = cold_vector(8)
-    c = bb.coordinate(8, backbone, (e_hat, 0.41))
+    Cold Tower's, exactly — not approximately, because the blend weight is exactly zero.
+
+    Title 999 is in no row of the file, which is what "cold" means for b as well as e. The
+    fixture's title 8 is the other shape of "no coordinate" - a row the corpus's holdout masked -
+    and since C1.2 it keeps its crowd prior, so only its e(t) is the tower's.
+    """
+    e_hat = cold_vector(999)
+    c = bb.coordinate(999, backbone, (e_hat, 0.41))
     assert c.e_source == "cold_tower"
     assert c.gate == 0.0
-    assert c.item_n == 0
+    assert c.item_n == 0 and c.crowd_n == 0
     assert c.b == pytest.approx(0.41)
     assert np.array_equal(c.e, e_hat)
+
+    masked = bb.coordinate(8, backbone, (cold_vector(8), 0.41))
+    assert masked.e_source == "cold_tower" and masked.gate == 0.0
+    assert np.array_equal(masked.e, cold_vector(8))
+    g = bb.gate(fx.COLD_BACKBONE_ROWS[8])
+    assert masked.b == pytest.approx(g * backbone.raw_prior(8) + (1 - g) * 0.41)
 
 
 def test_a_thin_crowd_row_blends_both_halves_rather_than_choosing_between_them(backbone):
@@ -470,17 +491,34 @@ def test_a_thin_crowd_row_blends_both_halves_rather_than_choosing_between_them(b
     assert not np.allclose(c.e, e_hat)
 
 
-def test_a_warm_title_with_no_placement_keeps_its_row_and_shrinks_only_its_prior(backbone):
+def test_a_warm_title_with_no_placement_keeps_its_row_and_its_shipped_prior(backbone):
     """§5.1: "e(t) = E[t] if rated (warm)" — the row itself, not a rounded copy of it.
 
-    "b(t) = shrunk item prior" still applies: with no b̂ to shrink toward, the gate pulls b_i
-    toward the crowd mean μ, which is the only shrinkage constant §5.1 defines.
+    "b(t) = shrunk item prior" is the file's b_i: the corpus already shrinks it toward zero with a
+    pseudo-count of 25. With no b̂ to blend it with, the gate is a no-op for b exactly as for e -
+    it used to pull b_i toward μ, the rating intercept, which is not b_i's mean. (C1.1)
     """
     c = bb.coordinate(1, backbone, None)
     assert c.e_source == "backbone"
     assert np.array_equal(c.e, backbone.embedding(1).astype(np.float64))
-    g = bb.gate(SUPPORT[1])
-    assert c.b == pytest.approx(g * backbone.raw_prior(1) + (1 - g) * backbone.mu)
+    assert c.b == backbone.raw_prior(1)
+    assert backbone.mu != 0.0, "a zero intercept could not tell the two readings apart"
+
+
+def test_a_thin_title_cannot_outrank_a_warm_one_on_the_intercept():
+    """C1.1, and the defect that put every item_n-5 title above the classics.
+
+    b_i is a residual centred on zero and μ is the crowd's rating intercept (0.680 on v20260925).
+    Shrinking a thin title's b_i toward μ added (1-gate)·μ to it - +0.45 at five ratings here - so
+    a title nobody has an opinion about outranked one a hundred thousand people like. With the gate
+    a no-op where there is no b̂, the order is the crowd's.
+    """
+    back = basis([(1, 5, 0.1), (2, 100_000, 0.5)], mu=0.68)
+    back.b_i[:] = [0.0, 0.1]
+    thin, warm = bb.coordinate(1, back), bb.coordinate(2, back)
+    assert thin.b == 0.0
+    assert warm.b == pytest.approx(0.1)
+    assert thin.b < warm.b
 
 
 def test_a_title_with_neither_a_row_nor_a_placement_has_no_coordinate(backbone):
@@ -787,6 +825,125 @@ def test_score_many_agrees_with_score_one_at_a_time():
         assert cf == pytest.approx(one_cf)
 
 
+# --- decision 469: the personal half reads directions, not norms --------------------------------
+
+
+def _rescaled(coords: dict[int, bb.Coordinate], factors: np.ndarray) -> dict[int, bb.Coordinate]:
+    """The same titles with every coordinate's LENGTH changed and nothing else."""
+    return {
+        t: bb.Coordinate(title_id=c.title_id, e=c.e * float(f), b=c.b, gate=c.gate,
+                         item_n=c.item_n, e_source=c.e_source, crowd_n=c.crowd_n)
+        for (t, c), f in zip(coords.items(), factors, strict=True)
+    }
+
+
+def test_the_fit_and_its_scores_do_not_move_when_a_rows_norm_does():
+    """Decision 469. On the shipped basis a row's norm is its crowd support (E = V·S, 0.008 below 20
+    ratings and 6.94 above 10,000) or the Cold Tower's scale (~30), so a personal half that read the
+    norm ranked by popularity and provenance: Raiders at 13.28 on a scale whose p99 was 1.97.
+
+    Rescaling every coordinate by an arbitrary positive factor - 0.001x to 1000x, independently per
+    title - must therefore leave the whole fit where it was: the same λ and β chosen by the
+    cross-validation, the same held-out ρ, the same v and every score to the last digit that
+    matters. That is also decision 235's step-18 invariant from the other side: the search and
+    both scorers read the coordinate through one normaliser, or the β chosen on one scale would be
+    served on another.
+    """
+    coords, reference, labels = synth(300, 60, seed=19)
+    factors = 10.0 ** np.random.default_rng(3).uniform(-3, 3, size=len(coords))
+    scaled = _rescaled(coords, factors)
+
+    a = foldin.fit_user(labels, coords, reference, seed=4)
+    b = foldin.fit_user(labels, scaled, list(scaled.values()), seed=4)
+    assert (a.lam, a.beta) == (b.lam, b.beta) and a.beta > 0.0
+    assert a.cv_rho == pytest.approx(b.cv_rho, abs=1e-9)
+    assert np.allclose(a.v, b.v, atol=1e-9)
+    ranked_a = foldin.score_many(a, reference)
+    ranked_b = foldin.score_many(b, list(scaled.values()))
+    assert np.allclose([s for _, s, _ in ranked_a], [s for _, s, _ in ranked_b], atol=1e-9)
+    assert np.allclose([cf for _, _, cf in ranked_a], [cf for _, _, cf in ranked_b], atol=1e-9)
+
+
+def test_on_a_support_weighted_basis_the_personal_top_is_taste_and_not_popularity():
+    """Decision 469, the failure the household saw, in miniature.
+
+    A basis built the way the corpus builds E: every title's DIRECTION carries the taste, and its
+    NORM grows with its crowd support (0.002·n^0.6 - about 400x from five ratings to 100,000).
+    One rater likes the titles pointing along w, the other those pointing away, and each labels 60
+    titles drawn from the whole support range. Read raw, both personal halves are ruled by the
+    long rows: the top twenty is the most popular fifth of the catalogue, and a person's taste
+    only picks which end of it. Read as directions, the top twenty is the titles each person
+    likes, from across the support range, and the two tops share nothing.
+    """
+    rng = np.random.default_rng(469)
+    n = 500
+    support = np.round(10.0 ** rng.uniform(np.log10(5), 5, size=n)).astype(int)
+    direction = rng.standard_normal((n, 64))
+    direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+    w = rng.standard_normal(64)
+    w /= np.linalg.norm(w)
+    taste = direction @ w
+    coords = {
+        i: bb.Coordinate(title_id=i, e=direction[i] * 0.002 * support[i] ** 0.6, b=0.0,
+                         gate=bb.gate(int(support[i])), item_n=int(support[i]),
+                         e_source="backbone", crowd_n=int(support[i]))
+        for i in range(n)
+    }
+    reference = list(coords.values())
+    picked = rng.choice(n, size=60, replace=False)
+    rated = {int(i) for i in picked}
+    popular = support >= np.quantile(support, 0.8)
+    raw = np.asarray([c.e for c in reference])
+
+    tops = {}
+    for sign in (1.0, -1.0):
+        liking = sign * taste
+        cuts = np.quantile(liking, [1 / 3, 2 / 3])
+        labels = [(int(i), int(np.searchsorted(cuts, liking[i], side="right"))) for i in picked]
+        fit = foldin.fit_user(labels, coords, reference, seed=11)
+        order = sorted(foldin.score_many(fit, reference), key=lambda row: -row[2])
+        chosen = [t for t, _, _ in order if t not in rated][:20]
+        liked = sum(bool(liking[t] > 0) for t in chosen)
+        from_popular = sum(bool(popular[t]) for t in chosen)
+        assert liked >= 17, f"only {liked} of the personal top 20 match the taste"
+        assert from_popular <= 10, (
+            f"{from_popular} of the personal top 20 are the most popular fifth: the half is "
+            "ranking by norm"
+        )
+        tops[sign] = set(chosen)
+
+        # Anti-vacuity: the same ridge over the raw rows is what the fit used to read, and on
+        # this basis its top twenty is the popular fifth - so the assertions above can fail.
+        y = np.asarray([foldin.VERDICT_TO_Y[v] for _, v in labels], dtype=float)
+        v_raw = foldin.fold_in(raw[[t for t, _ in labels]], y - y.mean(), 1.0)
+        raw_top = [int(t) for t in np.argsort(-(raw @ v_raw)) if int(t) not in rated][:20]
+        assert sum(bool(popular[t]) for t in raw_top) >= 15
+    assert not tops[1.0] & tops[-1.0]
+
+
+def test_a_coordinates_direction_speaks_at_the_evidence_behind_it():
+    """Decision 469's weight. Normalising a row throws away its norm, and for a Backbone row the
+    norm was carrying the corpus's own shrinkage of a thin row as well as its popularity; the gate
+    puts the first back in §5.1's measure. A coordinate the Cold Tower contributed to speaks at
+    full voice, as §5.1's third line takes ê outright. A zero row says nothing.
+    """
+    e = np.random.default_rng(5).standard_normal(64) * 37.0
+    unit = e / np.linalg.norm(e)
+
+    def coordinate(source: str, gate: float, vector=e) -> bb.Coordinate:
+        return bb.Coordinate(title_id=1, e=vector, b=0.0, gate=gate, item_n=5, e_source=source)
+
+    thin = bb.direction(coordinate("backbone", bb.gate(5)))
+    assert np.allclose(thin, unit * bb.gate(5)) and np.linalg.norm(thin) == pytest.approx(1 / 3)
+    for source in ("blended", "cold_tower"):
+        assert np.allclose(bb.direction(coordinate(source, 0.375)), unit)
+    assert np.array_equal(bb.direction(coordinate("backbone", 0.9, np.zeros(64))), np.zeros(64))
+    matrix = bb.directions([coordinate("backbone", 0.5), coordinate("cold_tower", 0.0)])
+    assert matrix.shape == (2, 64)
+    assert np.allclose(np.linalg.norm(matrix, axis=1), [0.5, 1.0])
+    assert bb.directions([]).shape == (0, 64)
+
+
 # ==============================================================================================
 # The materialised stack and the ranked read — real Postgres
 # ==============================================================================================
@@ -803,8 +960,11 @@ async def test_priors_name_every_e_source_the_spec_defines(db, world):
     assert rows[8]["e_source"] == "cold_tower"
     assert rows[5]["e_source"] == "blended"      # §5.1's gate branch, reachable and reached
     assert rows[8]["gate"] == 0.0
-    assert rows[8]["b_i"] is None                # no Backbone row: there is no raw crowd bias
-    assert rows[8]["b"] == pytest.approx(0.41, abs=1e-5)
+    # A flagged row keeps its crowd prior (C1.2): b_i as the file ships it (0.0 on this fixture),
+    # blended with b̂ = 0.41 at the gate of the 900 ratings the file carries for it.
+    assert rows[8]["b_i"] == 0.0
+    g = bb.gate(900)
+    assert rows[8]["b"] == pytest.approx(g * 0.0 + (1 - g) * 0.41, abs=1e-5)
     assert rows[1]["item_n"] == SUPPORT[1]
     assert world["report"].priors.by_source == {"backbone": 6, "blended": 1, "cold_tower": 1}
 

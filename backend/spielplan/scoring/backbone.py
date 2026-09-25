@@ -11,8 +11,8 @@
 THE BRANCH THAT ISN'T ONE. The two lines above are the two limits of a single expression, so
 this module writes the expression and never the branch:
 
-    e(t) = gate·E[t] + (1-gate)·ê(t)      with ê := E[t] when the Cold Tower has not placed it
-    b(t) = gate·b_i[t] + (1-gate)·b̂(t)    with b̂ := μ    when the Cold Tower has not placed it
+    e(t) = gate·E[t] + (1-gate)·ê(t)      with ê := E[t]   when the Cold Tower has not placed it
+    b(t) = gate·b_i[t] + (1-gate)·b̂(t)    with b̂ := b_i[t] when the Cold Tower has not placed it
 
 "e(t) = E[t] if rated (warm)" is the gate → 1 limit; a title with no Backbone row has n_t = 0,
 so gate is exactly 0 and both terms collapse onto the Cold Tower's. Written as one expression
@@ -23,10 +23,17 @@ particular title actually landed in.
 the gate is a crowd quantity, and §6.0 prints it as one number on a shared title card rather
 than a different number per viewer.
 
-"b(t) = shrunk item prior" is read as an instruction to the serving layer rather than a claim
-about the file: §4.3 ships the raw `b_i`, §5.1 names `b(t)`, and the gate is the only shrinkage
-constant the section defines. Reusing it is a smaller choice than inventing a second, unmeasured
-one — so a title with a thin crowd row has its bias pulled toward the crowd mean μ.
+"b(t) = shrunk item prior" IS A CLAIM ABOUT THE FILE, and the file already keeps it. The corpus
+fits `b_i = sum(z) / (25 + n)` - a pseudo-count of 25 toward zero, the `item_prior_shrink` its
+exporter writes into `ledger_hyperparams.json` - so the shipped b_i is the shrunk prior, centred
+on zero (median -0.006 on v20260925). This module used to read the sentence as an instruction and
+pulled a title with no placement toward μ with the gate. μ is the crowd's rating INTERCEPT (0.680
+on v20260925), not the mean of b_i, so that "shrinkage" added (1-gate)·μ to every thin title:
++0.23 at n = 5, which is +3.2 sd of the prior, and every item_n-5 title outranked the classics.
+So the gate blends b_i with b̂ where the Cold Tower gave one, exactly as it blends E with ê, and
+is a no-op where it did not; a second shrink of an already-shrunk prior was a tie on held-out
+Spearman (0.4725 against 0.4711 over 132 corpus raters at 60 labels) and has no clause behind it.
+[owner instruction of 2026-09-25 after the first household user test, C1.1]
 
 THE ID MAPPING IS NOT IN THE SPEC. §4.3 lists E, E_full, b_i, μ and item_n and names no
 alignment between a row of E and a row of `title`. Without one no row can be joined to anything,
@@ -48,7 +55,7 @@ from __future__ import annotations
 import logging
 import zipfile
 import zlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -149,6 +156,16 @@ _REQUIRED = ("title_ids", "E", "b_i", "item_n", "mu")
 # `0009_scoring.sql`, not the one on `title.placement` in `0003_content.sql`), or a flag beside
 # it. Recorded as its own line so it is not absorbed into a repair that cannot perform it.
 # [M4.13 cycle 2, M413-C2-DIM5-06]
+#
+# THE MASK TAKES THE COORDINATE AND NOT THE PRIOR. `cold_mask` is the corpus's evaluation holdout -
+# every fifth title by rating count, 20% of the rows (exp_cold_tower2.py) - so a flagged row's
+# b_i is a real fitted bias over the same crowd support as any other row's (median item_n 299 on
+# v20260925, the warm rows' own median). Reading the row as absent threw that away too, and a film
+# the crowd rated 192,061 times was ranked on the Cold Tower's guess b̂ instead of its own crowd
+# prior. `raw_prior` therefore reads every row the file ships, and `coordinate` blends that b_i
+# with b̂ at the gate of the row's crowd support; e(t) still comes from the Cold Tower alone,
+# because E really is zero there. [owner instruction of 2026-09-25 after the first household
+# user test, C1.2]
 COLD_MASK_ARRAY = "cold_mask"
 
 # The fallback when no mask ships. Measured on v20260828: the largest flagged row's norm is
@@ -261,6 +278,9 @@ class Backbone:
     # indexes answer two different questions and this milestone is where they stopped being the
     # same answer. [M4.13 cycle 2, M413-C2-DIM5-01]
     support_of: dict[int, int] = field(default_factory=dict)
+    # b_i for every row the file ships, cold-masked ones included, for the same reason: the mask
+    # takes the coordinate and not the crowd prior (see the block over `COLD_MASK_ARRAY`).
+    prior_of: dict[int, float] = field(default_factory=dict)
     e_full_shape: tuple[int, ...] | None = None
     notes: tuple[str, ...] = ()
 
@@ -313,9 +333,9 @@ class Backbone:
                 )
         if mu_arr.size != 1:
             raise BackboneError(
-                f"mu has {mu_arr.size} entries; §5.1 uses it as the crowd's global mean (a "
-                "scalar) — a per-item μ would change b(t)'s shrinkage target from a constant "
-                "to a vector and must be settled before the first real bundle"
+                f"mu has {mu_arr.size} entries; §5.1 uses it as the crowd's global rating "
+                "intercept (a scalar), and a per-item μ is a different model that must be "
+                "settled before a bundle ships one"
             )
         if n and not np.all(np.diff(title_ids) > 0):
             raise BackboneError(
@@ -360,6 +380,7 @@ class Backbone:
             mu=float(mu_arr.reshape(-1)[0]),
             row_of={int(t): i for i, t in enumerate(title_ids) if not cold[i]},
             support_of={int(t): int(item_n[i]) for i, t in enumerate(title_ids)},
+            prior_of={int(t): float(b_i[i]) for i, t in enumerate(title_ids)},
             e_full_shape=e_full_shape,
             notes=tuple(notes),
         )
@@ -404,9 +425,12 @@ class Backbone:
         return None if row is None else self.E[row]
 
     def raw_prior(self, title_id: int) -> float | None:
-        """`b_i[t]` as shipped — the *un*shrunk crowd bias. `b(t)` is what §5.1 ranks on."""
+        """`b_i[t]` as shipped - the corpus's shrunk crowd bias - for every row, cold-masked ones
+        included. `b(t)` is what §5.1 ranks on; see `coordinate`."""
         row = self.row(title_id)
-        return None if row is None else float(self.b_i[row])
+        if row is not None:
+            return float(self.b_i[row])
+        return self.prior_of.get(int(title_id))
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -518,9 +542,12 @@ def coordinate(
     row = backbone.row(title_id)
     n_t = 0 if row is None else int(backbone.item_n[row])
     g = gate(n_t)
+    # The prior's gate is the crowd support behind b_i. That is n_t itself for every row with a
+    # coordinate, and the file's own count for a cold-masked one, whose b_i survives the mask.
+    g_b = g if row is not None else gate(backbone.crowd_support(title_id))
 
     e_row = None if row is None else backbone.E[row].astype(np.float64)
-    b_row = None if row is None else float(backbone.b_i[row])
+    b_row = backbone.raw_prior(title_id)
     e_hat, b_hat = (None, None) if placement is None else (np.asarray(placement[0], dtype=np.float64),
                                                            float(placement[1]))
 
@@ -528,11 +555,12 @@ def coordinate(
         return None
 
     # The one expression. `warm` is what the gate weights, `cold` what (1-gate) weights; when
-    # one half is absent the other stands in, which is exactly the limit §5.1 writes out.
+    # one half is absent the other stands in, which is exactly the limit §5.1 writes out - for b
+    # as for e, so a title the Cold Tower has not placed keeps its (already shrunk) b_i.
     e_warm = e_row if e_row is not None else e_hat
     e_cold = e_hat if e_hat is not None else e_row
     b_warm = b_row if b_row is not None else b_hat
-    b_cold = b_hat if b_hat is not None else backbone.mu
+    b_cold = b_hat if b_hat is not None else b_row
 
     if e_row is None:
         source: ESource = "cold_tower"
@@ -544,7 +572,7 @@ def coordinate(
     # `e_warm is e_cold` only when there is nothing to blend: return the row untouched rather
     # than g·E + (1-g)·E, which is E to within float error and not E.
     e = e_warm if e_cold is e_warm else g * e_warm + (1.0 - g) * e_cold
-    b = b_warm if b_cold is b_warm else g * b_warm + (1.0 - g) * b_cold
+    b = b_warm if b_cold is b_warm else g_b * b_warm + (1.0 - g_b) * b_cold
 
     return Coordinate(
         title_id=int(title_id),
@@ -555,6 +583,62 @@ def coordinate(
         e_source=source,
         crowd_n=backbone.crowd_support(title_id),
     )
+
+
+# --- what the personal half reads -----------------------------------------------------------
+# DECISIONS 469 AND 471. §5.1's personal half is ⟨v_u, e(t)⟩ and §5.2's Ledger fits s = μ +
+# ⟨v, e⟩ + r, and on the shipped basis neither can be read off the raw coordinate. E is an SVD of
+# zero-imputed residuals, E = V·S (exp_cold_tower2.py), so a row's norm grows with the crowd
+# support behind it - median 0.008 below 20 ratings, 6.94 above 10,000 - and the Cold Tower's ê
+# sits on a third scale (median ||ê|| 27-32). Standardised over the reference population, the raw
+# inner product was 0.01 sd on a typical warm title, 2-13 sd on a popular one and up to 44 sd on a
+# tower placement, so both fits ranked by popularity and provenance: Raiders at 13.28 on a member's
+# scale whose p99 was 1.97, Zootopia at s 21.8 with σ 36 on one verdict.
+#
+# So both read the coordinate's DIRECTION, weighted by the evidence behind it. Normalising a row
+# throws away its norm, and the norm was carrying two things: popularity, which is the defect, and
+# the Backbone's own shrinkage of a thin row, which is not. The gate puts the second back in §5.1's
+# own measure: a coordinate that is the Backbone's alone is weighted by its gate n/(n+k), bounded
+# at 1 and reaching 0.9 at WARM_SUPPORT, so a five-rating row's noisy direction speaks at a third
+# of full voice. A coordinate the Cold Tower contributed to is weighted 1 - its (1-gate) share is
+# the tower's full answer, as §5.1's third line takes ê outright. A zero row contributes zero.
+#
+# Measured over corpus raters through this app's own fit_user (reviews.sqlite user reviews, which
+# may sit inside the Backbone's training data, so the absolute numbers are optimistic and the
+# comparison like-for-like): held-out Spearman at 30/60/100 labels 0.4903/0.5012/0.5224 against
+# 0.4597/0.4711/0.4789 for the raw coordinate; the Ledger's unobserved-title order 0.3948/0.4149/
+# 0.4762 against 0.3405/0.3678/0.4006. The plain unit direction ties both (within 0.002); the gate
+# is kept because it halves the personal spread of rows below 20 ratings (sd 0.85 to 0.48) at no
+# measured cost. Under a production Backbone with no evaluation holdout, simulated by mapping
+# E_full into E's basis, the same reading leads the raw one by +0.027/+0.017/+0.024.
+#
+# `coordinate` above is untouched and still returns the unscaled blend, which is what
+# `title_placement.e_hat`, §6.0's model line and `blend_ratios` below report: decision 236's
+# contract question about E's scale stays open for the file, and this is how the app reads it
+# meanwhile. [owner instruction of 2026-09-25 after the first household user test]
+
+# Stamped on every `user_vector` and `ledger_fit` row this reading writes (0031). A stored fit
+# with any other stamp was fitted in another space and is refitted, not served.
+COORDINATE_GEOMETRY = "gated-direction"
+
+
+def direction(c: Coordinate) -> np.ndarray:
+    """The coordinate §5.1's fold-in and §5.2's Ledger read (decisions 469, 471): e(t)'s unit
+    direction, weighted by its gate when it is the Backbone's alone and by 1 otherwise."""
+    return directions([c])[0]
+
+
+def directions(coords: Sequence[Coordinate]) -> np.ndarray:
+    """`direction` for many titles at once, as one (n, 64) float64 matrix."""
+    if not coords:
+        return np.zeros((0, EMBED_DIM))
+    e = np.ascontiguousarray([c.e for c in coords], dtype=np.float64)
+    weight = np.asarray(
+        [c.gate if c.e_source == "backbone" else 1.0 for c in coords], dtype=np.float64
+    )
+    norm = np.linalg.norm(e, axis=1)
+    scale = np.divide(weight, norm, out=np.zeros_like(norm), where=norm > 0.0)
+    return e * scale[:, None]
 
 
 # --- what the gate is actually weighting ----------------------------------------------------
@@ -587,6 +671,11 @@ def coordinate(
 # same reason and a second one: `title_placement.e_hat` is read by the Ledger's fit and by §6.7's
 # rail as well, so a scale applied at the write would move three readers at once.
 # [M4.13 step 13, cs-02 / dd15, decision 236]
+#
+# The question now has half an answer from the corpus's own code: E = V·S from an SVD of
+# zero-imputed residuals is support-weighted by construction. Decisions 469 and 471 act on that
+# half where the app READS the coordinate (`direction` above, the "support-weighted" branch
+# decision 236 named) and leave the file, this blend and the stored ê exactly as shipped.
 
 
 @dataclass(frozen=True)

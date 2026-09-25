@@ -1898,7 +1898,9 @@ async def test_a_board_row_whose_other_task_is_still_in_flight_is_left_alone(db,
 # --- review cycle 2: the three writes stage 1 and stage 9 could not take back ---------------------
 
 
-async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_closed(db, bundled):
+async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_closed(
+    db, bundled, monkeypatch
+):
     """Stage 9's second refusal, and it was the one park in the file carrying no deadline.
 
     `place` reads the title back because `place_titles` reports a non-finite placement per title
@@ -1909,15 +1911,28 @@ async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_clos
     revive the key. The task was closed for ever on a condition that clears itself, and stage 10
     reads the IDENTICAL predicate one call later and parks it WITH a deadline.
 
-    THE PATH HERE NEEDS NO BROKEN VECTOR, which is why it is the one worth asserting: stage 1
-    resolves onto an existing corpus title, `app_acquired` is `WHERE origin = 'acquired'`, so that
-    title is structurally absent from the work list stage 9 just ran and the readback returns
-    whatever §5.3's nightly sweep has not yet done. A Jellyfin add whose corpus title the 03:00
-    sweep has not reached is exactly decision 336's "waiting on something that may change".
+    THE PATH HERE NEEDS A BROKEN VECTOR SINCE 2026-09-25. It used to need none: stage 1 resolves
+    onto an existing corpus title, and stage 9 ran `app_acquired` (`WHERE origin = 'acquired'`),
+    so that title was structurally absent from the work list and waited for §5.3's 03:00 sweep.
+    That wait is gone - stage 9 now runs the sweep's own scope for a title the corpus supplied, and
+    the first household's eight parked additions are placed on arrival
+    (`test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine`). A forward pass that returns no
+    finite vector is the case left, and decision 336's "waiting on something that may change" is
+    still its reading: a tower or a contract the next bundle import replaces.
 
-    So the second half changes the world the reason names - `scope="owned_missing"`, the sweep's
-    own scope - and drains again. [M5.1 review cycle 2, d323-park-02]
+    So the second half changes the world the reason names - the tower answers again, and the
+    sweep's own scope runs - and drains again. [M5.1 review cycle 2, d323-park-02]
     """
+    import numpy as np
+
+    from spielplan.placement import tower as tower_module
+
+    def no_finite_placement(self, x):
+        n = x.shape[0]
+        return np.full((n, 64), np.nan, dtype=np.float32), np.full(n, np.nan, dtype=np.float32)
+
+    answers = tower_module.Tower.place
+    monkeypatch.setattr(tower_module.Tower, "place", no_finite_placement)
     await db.execute(
         "INSERT INTO title (id, kind, name, year, imdb_id, is_owned, owned_checked_at) "
         "VALUES (900000001, 'movie', 'The Duellists', 1977, 'tt5000001', true, now())"
@@ -1937,7 +1952,9 @@ async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_clos
     assert task_row["state"] == queue.PENDING, task_row["state"]
     assert task_row["attempts"] == 0, "a deferral hands the attempt back (decision 336)"
 
-    # The world changes exactly as the reason says it does: §5.3's nightly reconciliation.
+    # The world changes exactly as the reason says it does: the tower answers, and §5.3's nightly
+    # reconciliation places what is still unplaced.
+    monkeypatch.setattr(tower_module.Tower, "place", answers)
     store = await stages.active_store(db)
     swept = await reconcile.reconcile(db, store, scope="owned_missing")
     assert swept.placed >= 1, swept.as_dict()
@@ -1951,6 +1968,34 @@ async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_clos
     assert drained.leased == 1, "the parked task was never leasable again"
     assert drained.ready == 1, drained.as_dict()
     assert (await _board(db, 900000001))["status"] == "ready"
+
+
+async def test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine(db, bundled):
+    """§8 stage 9, "feature vector per the feature contract -> Cold Tower -> e(t), b(t)", for a
+    title the corpus supplied and the household has only just added to Jellyfin.
+
+    Stage 9 ran `app_acquired`, whose work list is `origin = 'acquired'`, so a Jellyfin add that
+    resolved onto a corpus title placed nothing and parked until §5.3's 03:00 sweep - while it
+    ranked as a raw thin Backbone row, or, with no row, not at all. The first household parked
+    eight on its first afternoon; The Rivals of Amziah King (item_n 6) became an owned #1 on
+    exactly that path. The sweep's own scope covers such a title, so stage 9 runs it on arrival.
+    [owner instruction of 2026-09-25 after the first household user test]
+    """
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, imdb_id, is_owned, owned_checked_at) "
+        "VALUES (900000001, 'movie', 'The Duellists', 1977, 'tt5000001', true, now())"
+    )
+    report = await pipeline.run_task(db, await _leased(db, item=MOVIE))
+
+    assert report.title_id == 900000001
+    assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 0
+    assert await db.fetchval("SELECT placement FROM title WHERE id = 900000001") == "cold_tower"
+    assert await db.fetchval(
+        "SELECT count(*) FROM title_placement WHERE title_id = 900000001"
+    ) == 1
+    assert report.reason != stages.NOT_PLACED
+    board = await _board(db, 900000001)
+    assert board["stage"] == 10 and board["status"] in ("ready", "parked"), dict(board)
 
 
 async def test_a_mint_for_an_item_jellyfin_never_showed_us_claims_no_ownership(db, bundled):

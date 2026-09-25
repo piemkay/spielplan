@@ -33,7 +33,7 @@ from spielplan.importer import bundle as bundle_import
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import features, reconcile, tower
 from spielplan.placement.contract import ContractError, FeatureContract, unproducible_meta_names
-from spielplan.scoring import backbone, serve
+from spielplan.scoring import backbone, foldin, serve
 from tests.fixtures import make_bundle as fx
 
 # The real keys the fixture's content spine (plus `_seed_extra_titles`) actually contains, per
@@ -899,6 +899,60 @@ async def test_a_bundle_with_no_backbone_row_for_a_title_never_calls_it_warm(db,
     assert await db.fetchval(
         "SELECT count(*) FROM title_placement WHERE title_id = 8"
     ) == 1
+
+
+async def test_the_sweep_places_what_the_household_rated_or_is_asked_to_rate(db, placed):
+    """Decision 470: §5.3's "any owned title lacking a coordinate", widened to the seed list and
+    to every title a member has a verdict on.
+
+    On the first real household 21 of the corpus's 100 seed-list titles were unowned rows the
+    corpus's evaluation holdout had masked, so about ten of each member's sixty verdicts - Lady
+    Bird's among them - reached neither the fold-in nor the Ledger. A title with none of the three
+    reasons is still left alone: `all_missing` stays the admin's widening, not the night's.
+    """
+    store, _ = placed
+    for title_id, name in ((11, "Rated, Unowned"), (12, "On The Seed List"), (13, "Nobody's")):
+        await db.execute(
+            "INSERT INTO title (id, kind, name, year, runtime_min, is_owned) "
+            "VALUES ($1, 'movie', $2, 2017, 94, false)",
+            title_id, name,
+        )
+    user = await db.fetchval(
+        "INSERT INTO app_user (name, role) VALUES ('jenny', 'member') RETURNING id"
+    )
+    await db.execute("INSERT INTO verdict (user_id, title_id, value) VALUES ($1, 11, 2)", user)
+    position = await db.fetchval("SELECT COALESCE(max(position), 0) + 1 FROM seed_list")
+    await db.execute(
+        "INSERT INTO seed_list (position, title_id, decade) VALUES ($1, 12, 2010)", position
+    )
+
+    assert await reconcile.titles_needing_placement(
+        db, bundle_version="test-v1", scope="owned_missing"
+    ) == [11, 12]
+    basis = backbone.load_for(store)
+    labels = await foldin.live_labels(db, user_id=user, kind="movie")
+    before = await serve.coordinates(db, basis, bundle_version="test-v1", kind="movie")
+    assert foldin.fit_user(labels, before, list(before.values())).dropped == 1
+
+    report = await reconcile.reconcile(db, store, scope="owned_missing")
+    assert report.placed == 2 and report.failed == 0
+    after = await serve.coordinates(db, basis, bundle_version="test-v1", kind="movie")
+    assert foldin.fit_user(labels, after, list(after.values())).dropped == 0, (
+        "a verdict still sits on a title with no coordinate after the sweep"
+    )
+    placed_now = await db.fetch(
+        "SELECT title_id FROM title_placement WHERE title_id = ANY(ARRAY[11, 12, 13]) "
+        " ORDER BY title_id"
+    )
+    assert [r["title_id"] for r in placed_now] == [11, 12]
+    assert await db.fetchval("SELECT placement FROM title WHERE id = 13") == "unplaced"
+
+    # Placed, and still not owned: §6.6's owned counters and §8 stage 10's "New in the library"
+    # shelf read `is_owned`, so widening the sweep adds nothing to either.
+    counts = await reconcile.placement_counts(db, bundle_version="test-v1")
+    assert counts["owned_cold"] == 6 and counts["placement_rows"] == 8
+    again = await reconcile.reconcile(db, store, scope="owned_missing")
+    assert again.considered == 0
 
 
 # --- the nine blocks' key grammar, and the block that hits none of its columns -----------------

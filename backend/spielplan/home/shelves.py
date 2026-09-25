@@ -898,7 +898,10 @@ async def shared_sweet_spot(
     computed per kind", and `ledger_state.cdf` carries it — but only for titles the person has
     RATED. This shelf ranks titles neither has seen, so the same construction is applied to the
     serving score inside (user, kind) with `percent_rank()`. Same definition, same partition,
-    over the set the shelf is actually about.
+    over the set the shelf is actually about - the OWNED library, which the ranking CTE used to
+    skip: it ranked all 9.5k scored films, most of them unowned, so the owned library's mean
+    rank was 0.42-0.46 and the floor was read against a catalogue nobody could play.
+    [owner instruction of 2026-09-25 after the first household user test, C1.7]
 
     COPY NOTE. §6.0's title reads as "have already rated" over titles neither has seen. §6.5
     defines the sweet spot as "the region both like — doubles as the couple's watch-now prior"
@@ -920,6 +923,7 @@ async def shared_sweet_spot(
             SELECT us.user_id, us.title_id, us.score,
                    percent_rank() OVER (PARTITION BY us.user_id ORDER BY us.score) AS cdf
               FROM user_score us
+              JOIN title o ON o.id = us.title_id AND o.is_owned
              WHERE us.user_id = ANY($4) AND us.kind = $2 AND us.bundle_version = $3
         )
         SELECT t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path,

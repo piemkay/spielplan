@@ -77,6 +77,15 @@ def _as_vector(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype="<f4").astype(float)
 
 
+def _as_fitted(blob: bytes) -> np.ndarray:
+    """What `standard_embeddings` hands the Ledger for a title the Cold Tower alone placed: the
+    placement's unit direction (decision 471 - the fit reads the fold-in's gate-weighted
+    direction, and a tower coordinate is weighted 1). The basis each test threads is the claim;
+    the reading of the coordinate is the same in both."""
+    vector = _as_vector(blob)
+    return vector / np.linalg.norm(vector)
+
+
 async def _user(db, name: str = "Patrick", role: str = "admin") -> int:
     return await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
@@ -200,10 +209,10 @@ async def test_standard_embeddings_reads_the_placements_of_the_version_it_was_gi
         observations.standard_embeddings(db, None, bundle_version="test-v2"), [8]
     )
     assert old_seen[0] and new_seen[0], "a version was threaded and no placement was found"
-    assert np.allclose(old[0], _as_vector(_e_hat(11))), (
+    assert np.allclose(old[0], _as_fitted(_e_hat(11))), (
         "the version asked for is not the version read"
     )
-    assert np.allclose(new[0], _as_vector(_e_hat(22)))
+    assert np.allclose(new[0], _as_fitted(_e_hat(22)))
     assert not np.allclose(old[0], new[0]), (
         "the two bundles' placements are identical, so this test cannot tell them apart"
     )
@@ -231,7 +240,7 @@ async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as
         observations.standard_embeddings(db, None), [8]
     )
     assert embedded[0], "the fallback found no placement at all"
-    assert np.allclose(matrix[0], _as_vector(_e_hat(22))), (
+    assert np.allclose(matrix[0], _as_fitted(_e_hat(22))), (
         "the no-version branch must read the ACTIVE row's placements"
     )
 

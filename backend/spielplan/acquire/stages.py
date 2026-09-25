@@ -294,8 +294,9 @@ AMBIGUOUS_IDENTITY = (
 # cannot say whether §8 has anything left to do. Two columns can: `origin = 'bundle'` says the
 # curated corpus already did this title's acquisition, and a placement says stages 2 to 9 have
 # nothing left to produce. Each half keeps a walk M5.1 built on purpose. A bundle title still
-# `unplaced` -- a Jellyfin add the nightly reconciliation has not reached -- walks to stage 9 and
-# waits there exactly as `NOT_PLACED` argues. A title THIS PIPELINE minted resumes from its own
+# `unplaced` -- a Jellyfin add the nightly reconciliation has not reached -- walks to stage 9,
+# which places it through the sweep's own scope (see `place`), and waits there as `NOT_PLACED`
+# argues only if the tower produced nothing. A title THIS PIPELINE minted resumes from its own
 # board row, because that row is unfinished work of the pipeline's: a reclaim after a worker died
 # between the mint and `_remember_title`, and the loser of a copy race resolving onto the winner's
 # row, both finish that way. A thin title's `(2, parked)` inbox row is left for the `title:` task
@@ -1853,7 +1854,17 @@ async def place(ctx: StageContext) -> Outcome:
         # pipeline has. [M5.1 review cycle 1, M51-CRASH-01, M51-REV-03]
         return park(NO_ACTIVE_BUNDLE, until=waiting_on_the_world())
 
-    report = await reconcile.reconcile(ctx.conn, store, scope="app_acquired")
+    # A title the corpus supplied is not in `app_acquired`'s work list (`origin = 'acquired'`), so
+    # a Jellyfin add that resolved onto one walked here, placed nothing and parked until §5.3's
+    # 03:00 sweep - while it ranked as a raw thin row, or not at all. The first household parked
+    # eight that way on its first afternoon (The Rivals of Amziah King, Lanterns, The Count of
+    # Monte Cristo among them). The sweep's own scope is the one that covers such a title - it is
+    # owned and unplaced - so stage 9 runs it: the same work list, asked for when the title arrives
+    # rather than at night, and no fifth definition of "who needs placing".
+    # [owner instruction of 2026-09-25 after the first household user test]
+    origin = await ctx.conn.fetchval("SELECT origin FROM title WHERE id = $1", ctx.title_id)
+    scope = "app_acquired" if origin == "acquired" else "owned_missing"
+    report = await reconcile.reconcile(ctx.conn, store, scope=scope)
     placement = await ctx.conn.fetchval(
         "SELECT placement FROM title WHERE id = $1", ctx.title_id
     )

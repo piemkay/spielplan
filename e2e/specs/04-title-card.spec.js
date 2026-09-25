@@ -40,10 +40,10 @@ test('the card carries metadata, overview and the model line', async ({ page }) 
   // figure beside it would satisfy a presence check while saying nothing.
   // [M4.9, plan §6 "Rows to amend"]
   //
-  // THE SIGN IS PART OF THE NUMBER. §5.1 defines b(t) as "the shrunk item prior" — a quantity on
-  // the latent score scale, pulled toward the crowd mean μ by the gate — so it is centred, and a
-  // title the crowd rates below that mean carries a negative one. Heat's is: the fixture's
-  // backbone draws b_i from N(0, 0.6) and Heat's draw is -0.7997, which at n=4218 (gate 0.998)
+  // THE SIGN IS PART OF THE NUMBER. §5.1 defines b(t) as "the shrunk item prior" — the corpus's
+  // crowd bias, already shrunk toward zero — so it is centred, and a title the crowd rates below
+  // the mean carries a negative one. Heat's is: the fixture's backbone draws b_i from N(0, 0.6)
+  // and Heat's draw is -0.7997, which with no Cold Tower placement to blend is b(t) itself and
   // prints `b(t) -0.80`. `[\d.]+` encoded a non-negativity §5 does not state, and three of the
   // fixture's seven backbone titles falsify it. Two decimals, because that is what
   // `scoring/serve._format_line` guarantees — §6.0's own example prints one on β and the

@@ -597,6 +597,45 @@ async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
                 assert seen == 0, f"{title_id} is on a 'neither of you has seen these' shelf"
 
 
+async def test_the_sweet_spot_floor_is_read_against_the_owned_library(world):
+    """The floor is a rank within the set the shelf is about, and that set is the owned library.
+
+    `user_score` holds a row for every coordinated title of the kind - on the first household 9.5k
+    films, most of them unowned - and the ranking CTE ranked all of them, so the owned library's
+    mean rank was 0.42-0.46 and a catalogue nobody could play decided which owned titles cleared
+    0.70. Forty unowned films scored above everything here would have pushed every owned film
+    below the floor and emptied the shelf; read against the owned library they change nothing.
+    [owner instruction of 2026-09-25 after the first household user test, C1.7]
+    """
+    def shelf(payload):
+        return {
+            base: [c["title_id"] for c in world.section(
+                payload, "shared_sweet_spot", kind_of(base)
+            )["items"]]
+            for base in BASES
+        }
+
+    before = shelf(await world.home())
+    assert all(before.values()), before
+    for title_id in range(5000, 5040):
+        await world.db.execute(
+            "INSERT INTO title (id, kind, name, is_owned) VALUES ($1, 'movie', $2, false)",
+            title_id, f"Unowned Film {title_id}",
+        )
+        await world.db.execute(
+            "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
+            "VALUES ($1, $2, 0.9, 0.9, 5000, 0.998, 'backbone')",
+            title_id, BUNDLE,
+        )
+        for user_id in (world.patrick, world.jenny):
+            await world.db.execute(
+                "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
+                "VALUES ($1, $2, 'movie', $3, 9.0, 0.0)",
+                user_id, title_id, BUNDLE,
+            )
+    assert shelf(await world.home()) == before
+
+
 # --- library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned ----------------
 
 
