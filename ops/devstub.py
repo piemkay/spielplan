@@ -812,7 +812,7 @@ def list_titles(
     genre: str | None = None,
     decade: int | None = None,
     seen: str = "any",
-    person_id: int | None = None,
+    person_id: list[int] | None = Query(None),
     limit: int = 60,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -842,8 +842,10 @@ def list_titles(
                 if not g:
                     continue
             if person_id:
+                # A folded credit row's whole `person_ids` set, as `db/library._filters` reads it.
                 c = db.execute(
-                    "SELECT 1 FROM credit WHERE title_id = ? AND person_id = ?", (r["id"], person_id)
+                    "SELECT 1 FROM credit WHERE title_id = ? AND person_id IN "
+                    f"({','.join('?' * len(person_id))})", (r["id"], *person_id)
                 ).fetchone()
                 if not c:
                     continue

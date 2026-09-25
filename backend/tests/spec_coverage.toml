@@ -11610,7 +11610,7 @@ id = "library-rate-title-card-credits-fold-per-person-and-class"
 spec = "§4.1 (\"credit — dedupe at read time, never at import\") + §6.0 title card + §3.1 (roles)"
 milestone = "M5"
 kind = "integration"
-what = "credits_for returns one row per (person, role class): TMDB's job label on it, every spelling in `jobs` by source priority, every agreeing source in `sources`, and a stored class outside the closed vocabulary (the corpus's `crew`) classed by derive/ids.class_of; within one title and class, people whose loose_name agrees are one row when they carry at most one imdb id and one tmdb id between them, led by the person with the most ids and listing all of them in `person_ids`, and stay apart when their ids disagree or their name folds to nothing; §8 stage 3 matches a name-only credit to the person already credited on the same title in the same class before minting one, so a retry re-points an old twin and mints nothing; migration 0037 classes the seeded install's five `crew` composer credits."
+what = "credits_for returns one row per (person, role class): TMDB's job label on it, every spelling in `jobs` by source priority, every agreeing source in `sources`, and a stored class outside the closed vocabulary (the corpus's `crew`) classed by derive/ids.class_of; within one title and class, people whose loose_name agrees are one row when they carry at most one imdb id and one tmdb id between them, led by the person with the most ids and listing all of them in `person_ids`, and stay apart when their ids disagree or their name folds to nothing; §8 stage 3 matches a name-only credit to the person already credited on the same title in the same class before minting one, so a retry re-points an old twin and mints nothing; migration 0037 classes the seeded install's five `crew` composer credits; and a tap on a folded row filters the library by every id in its `person_ids` - the listing, its hidden-by-kind count and GET /api/titles take a repeated person_id."
 why = "Heat showed Elliot Goldenthal twice ('Original Music Composer' and 'Composer') and Michael Mann as Writer and Screenplay; one human arrives as an imdb-only and a tmdb-only person (John Williams on Schindler's List, 1,685 groups on bundle titles); and the derive minted a name-only twin for every OMDb credit, 76 on the 14 acquired titles."
 tests = [
     "backend/tests/test_import_integration.py::test_a_crew_member_is_one_row_per_role_across_job_spellings",
@@ -11619,6 +11619,7 @@ tests = [
     "backend/tests/test_derive_rebuild.py::test_a_name_only_credit_finds_the_person_this_title_already_credits",
     "backend/tests/test_derive_rebuild.py::test_the_same_title_match_prefers_the_person_who_carries_an_id",
     "backend/tests/test_title_card_upgrade.py::test_0037_classes_the_crew_credit_and_marks_the_lexicon_aliases",
+    "backend/tests/test_library_search.py::test_a_folded_credit_filters_the_library_by_every_person_it_names",
 ]
 
 [[requirement]]

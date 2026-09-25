@@ -53,7 +53,8 @@
   let seen = $state('any');
   // The catalog lists all of it; this narrows it to what the household can press Play on.
   let owned = $state(false);
-  let personId = $state(null);
+  // The person filter is a SET of person ids: see `filterToPerson`.
+  let personIds = $state(null);
   let personName = $state('');
 
   let items = $state([]);
@@ -72,8 +73,8 @@
 
   const LIMIT = 60;
 
-  const mode = $derived(homeMode({ q, personId, genre, decade, seen, owned }));
-  const reason = $derived(gridReason({ q, personId, genre, decade, seen, owned }));
+  const mode = $derived(homeMode({ q, personId: personIds, genre, decade, seen, owned }));
+  const reason = $derived(gridReason({ q, personId: personIds, genre, decade, seen, owned }));
 
   // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
   // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
@@ -153,7 +154,7 @@
           genre,
           decade: decade || undefined,
           seen: seen === 'any' ? undefined : seen,
-          person_id: personId ?? undefined,
+          person_id: personIds ?? undefined,
           owned_only: owned || undefined,
           limit: LIMIT,
           offset: append ? offset : 0
@@ -259,7 +260,11 @@
   function filterToPerson(person) {
     // Proposal 30: "Tapping a credit navigates to Home, closes the title card, and clears the
     // search box; the person chip is itself the clear control. Matching is by `person.id`."
-    personId = person.person_id ?? person.id;
+    // A credit row can stand for several person rows of one human - two sources minted them, and
+    // `db/library.fold_credits` folds them into the row and names them all in `person_ids` - so
+    // the filmography is the whole set's; the lead id alone was half of it. [C9.3, C9.4 of the
+    // 2026-09-25 user test]
+    personIds = person.person_ids?.length ? person.person_ids : [person.person_id ?? person.id];
     personName = person.name;
     selected = null;
     q = '';
@@ -277,7 +282,7 @@
   }
 
   function clearPerson() {
-    personId = null;
+    personIds = null;
     personName = '';
     load();
   }
@@ -371,7 +376,7 @@
       onclick={toggleOwned}
       data-testid="filter-owned"
     >in my library</button>
-    {#if personId}
+    {#if personIds}
       <!-- Proposal 30: the chip IS the clear control, and it is the only way back out of a
            filmography — so it is always visible and always removable. -->
       <button class="pill on" onclick={clearPerson} data-testid="person-chip">{personName} ✕</button>

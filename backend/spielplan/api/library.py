@@ -37,7 +37,7 @@ async def list_titles(
     genre: str | None = None,
     decade: int | None = None,
     seen: Literal["any", "seen", "unseen"] = "any",
-    person_id: int | None = None,
+    person_id: list[int] | None = Query(None),
     owned_only: bool = False,
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -46,6 +46,9 @@ async def list_titles(
 
     Repeated rather than comma-joined (`?kind=movie&kind=series`) so the empty selection is
     unrepresentable in the URL — `?kind=` is a validation error, not a silent "everything".
+
+    `person_id` repeats the same way: a credit row can stand for several person rows of one
+    human (`db/library.fold_credits`), and a tap on it filters by the whole set.
     """
     try:
         kinds = library.normalise_kinds(kind)

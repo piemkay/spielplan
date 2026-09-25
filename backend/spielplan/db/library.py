@@ -225,7 +225,7 @@ def _filters(
     genre: str | None = None,
     decade: int | None = None,
     seen: SeenFilter = "any",
-    person_id: int | None = None,
+    person_id: int | Sequence[int] | None = None,
     owned_only: bool = False,
     runtime_max: int | None = None,
     runtime_min: int | None = None,
@@ -265,8 +265,14 @@ def _filters(
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")
     if person_id is not None:
+        # One person or a set. `fold_credits` folds the person rows two sources minted for one
+        # human into one credit row and names them all in `person_ids`, so a tap on that row asks
+        # for the set: the lead id alone was half the filmography. [C9.3, C9.4 of the 2026-09-25
+        # user test]
+        ids = [person_id] if isinstance(person_id, int) else [int(p) for p in person_id]
         where.append(
-            f"EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id AND c.person_id = {arg(person_id)})"
+            "EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id"
+            f" AND c.person_id = ANY({arg(ids)}::int[]))"
         )
     # §6.3's two filters the §6.0 catalog does not have. Runtime is a bound on `runtime_min`
     # (the column is minutes, the parameter is the ceiling the person asked for) and a NULL
@@ -419,7 +425,7 @@ async def list_titles(
     genre: str | None = None,
     decade: int | None = None,
     seen: SeenFilter = "any",
-    person_id: int | None = None,
+    person_id: int | Sequence[int] | None = None,
     owned_only: bool = False,
     limit: int = 60,
     offset: int = 0,
@@ -487,7 +493,7 @@ async def count_by_kind(
     genre: str | None = None,
     decade: int | None = None,
     seen: SeenFilter = "any",
-    person_id: int | None = None,
+    person_id: int | Sequence[int] | None = None,
     owned_only: bool = False,
 ) -> dict[str, int]:
     """How many titles each unselected kind holds **under the same filters as the listing**.

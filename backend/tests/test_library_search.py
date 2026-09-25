@@ -229,3 +229,52 @@ def test_every_genre_mapping_names_the_canonical_vocabulary():
     with pytest.raises(ValueError, match="unknown genre"):
         genres.canonical("heist film")
     assert genres.canonical("science FICTION") == "Science Fiction"
+
+
+# --- a folded credit row filters by every person it names ---------------------------------------
+
+
+async def test_a_folded_credit_filters_the_library_by_every_person_it_names(app, db):
+    """§6.0: a credit is "tappable → filters the library to their filmography". Since the user
+    test of 2026-09-25 one credit row can stand for several person rows of one human - an imdb-only
+    and a tmdb-only John Williams, folded by `library.fold_credits` and named together in
+    `person_ids` - and a tap filtered by the lead id alone, which is half the filmography. The
+    listing, the hidden-by-kind count and the route all take the set; one id still works.
+    [C9.3, C9.4; WK's integration note]
+    """
+    await _bundle(db)
+    for title_id, name, kind in (
+        (1, "Jaws", "movie"), (2, "Schindler's List", "movie"), (3, "Heat", "movie"),
+        (4, "Amazing Stories", "series"),
+    ):
+        await _title(db, title_id, name, 1990, kind=kind)
+    await db.executemany(
+        "INSERT INTO person (id, name, imdb_id, tmdb_id) VALUES ($1, $2, $3, $4)",
+        [(80, "John Williams", "nm0002354", None), (81, "John Williams", None, 491),
+         (90, "Elliot Goldenthal", None, None)],
+    )
+    await db.executemany(
+        "INSERT INTO credit (title_id, person_id, department, job, source, role_class)"
+        " VALUES ($1, $2, 'Sound', 'Original Music Composer', 'tmdb', 'composer')",
+        [(1, 80), (2, 81), (3, 90), (4, 81)],
+    )
+
+    rows, total = await library.list_titles(db, kinds=["movie"], person_id=[80, 81])
+    assert {r["id"] for r in rows} == {1, 2} and total == 2
+    assert await library.count_by_kind(db, exclude=["movie"], person_id=[80, 81]) == {"series": 1}
+    lead_only, _ = await library.list_titles(db, kinds=["movie"], person_id=80)
+    assert {r["id"] for r in lead_only} == {1}
+
+    client = app()
+    created = await client.post(
+        "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
+    )
+    assert created.status_code == 201, created.text
+    both = await client.get(
+        "/api/titles", params=[("kind", "movie"), ("person_id", "80"), ("person_id", "81")]
+    )
+    assert both.status_code == 200, both.text
+    assert {i["id"] for i in both.json()["items"]} == {1, 2}
+    assert both.json()["hidden"] == {"series": 1}
+    one = await client.get("/api/titles", params=[("kind", "movie"), ("person_id", "80")])
+    assert {i["id"] for i in one.json()["items"]} == {1}
