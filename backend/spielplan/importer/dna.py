@@ -240,7 +240,8 @@ async def _load_aliases(
 ) -> None:
     """§8 stage 8 projects the second tier through this map, so a map that loads as empty makes
     `dna_projected` unreproducible in-app. The file is `alias_map_<version>.tsv` and its two
-    load-bearing columns are `raw_term` and `vocab_term`, not `alias` and `term`.
+    load-bearing columns are `raw_term` and `vocab_term`, not `alias` and `term`; `kind` rides
+    along and is required of no map (decision 500).
 
     Read through `validate._read_tsv` rather than opened here. This is one of the hand-edited
     curated files, so a stray latin-1 byte is exactly what reaches it, and the header check is
@@ -256,7 +257,7 @@ async def _load_aliases(
     if parsed is None:
         return
 
-    rows: list[tuple[str, str, str]] = []
+    rows: list[tuple[str, str, str, str | None]] = []
     unmapped = 0
     for row in parsed:
         alias = (row.get("raw_term") or "").strip()
@@ -266,15 +267,22 @@ async def _load_aliases(
         if not alias or not term:
             unmapped += 1
             continue
-        rows.append((version, alias, term))
+        # `kind` as shipped, and NULL where a map has no such column: decision 383's owed fill.
+        # `dna/aliases.load_alias_map` refuses to project a `lexicon` row, and until this line the
+        # column was NULL on all 4,108 rows of the seeded install, so the corpus's 84 lexicon
+        # aliases projected for every acquired title. [decision 500; owner instruction of
+        # 2026-09-25 after the first household user test]
+        rows.append((version, alias, term, (row.get("kind") or "").strip() or None))
 
     await conn.executemany(
-        "INSERT INTO dna_alias (version, alias, term) VALUES ($1, $2, $3) "
+        "INSERT INTO dna_alias (version, alias, term, kind) VALUES ($1, $2, $3, $4) "
         "ON CONFLICT (version, alias) DO NOTHING",
         rows,
     )
-    report.note("vocabulary", f"{len(rows)} alias mappings ({unmapped} raw terms map to nothing)",
-                aliases=len(rows), unmapped=unmapped)
+    lexicon = sum(1 for r in rows if (r[3] or "").casefold() == "lexicon")
+    report.note("vocabulary", f"{len(rows)} alias mappings ({unmapped} raw terms map to nothing; "
+                f"{lexicon} are extraction lexicon and never project)",
+                aliases=len(rows), unmapped=unmapped, lexicon=lexicon)
 
 
 async def load_adjudications(

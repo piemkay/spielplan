@@ -44,8 +44,9 @@ nothing but a mounted component can hold a response open for it -- so `jsdom` is
 `@testing-library/svelte` still is not, and mounting 1,216 payloads through the real card on every
 run is the second half of the decision, which nothing has asked for. So measure 2 stays a
 KEY-INJECTIVITY check over the payloads this script
-dumps: for every title it asserts that `person_id + ':' + job` -- the expression
-`TitleDetail.svelte` keys its `{#each}` on -- is injective over the first twelve credits and
+dumps: for every title it asserts that `person_id + ':' + (role_class ?? job)` -- the expression
+`TitleDetail.svelte` keys its `{#each}` on since the read folds per (person, class) -- is injective
+over the first twelve credits and
 over the whole list. That is exactly what Svelte 5's `each_key_duplicate` checks, at a cost
 that lets it run on every change rather than once. The render itself is covered in a real
 browser by `e2e/specs/04-title-card.spec.js::the worst cross-department titles open without a
@@ -395,17 +396,21 @@ async def main() -> int:
                 """
             )
         ]
+        # The read groups by (person, §3.1 class) since the 2026-09-25 user test, with the job as
+        # the key only where a row has no class, so the SQL half groups the same way. The class
+        # of a `crew` row is `derive/ids.class_of`'s and 0037 has already restored `composer`
+        # onto the five the corpus wrote, so the stored column is the class here.
         collisions = await conn.fetchval(
             """
             WITH grouped AS (
-                SELECT c.title_id, c.person_id, p.name, c.job
+                SELECT c.title_id, c.person_id, p.name, coalesce(c.role_class, c.job) AS class
                   FROM credit c JOIN person p ON p.id = c.person_id
                  WHERE c.title_id = ANY($1)
-                 GROUP BY c.title_id, c.person_id, p.name, c.job
+                 GROUP BY c.title_id, c.person_id, p.name, coalesce(c.role_class, c.job)
             )
             SELECT COALESCE(sum(rows_out - keys), 0) FROM (
                 SELECT count(*) AS rows_out,
-                       count(DISTINCT person_id::text || ':' || job) AS keys
+                       count(DISTINCT person_id::text || ':' || class) AS keys
                   FROM grouped GROUP BY title_id
             ) t
             """,
@@ -426,7 +431,8 @@ async def main() -> int:
                 with_credits += 1
             if len(credits) > CREDIT_FOLD:
                 folded_titles += 1
-            keys = [f"{c['person_id']}:{c['job']}" for c in credits]
+            # `TitleDetail.svelte`'s key: person_id + ':' + (role_class ?? job).
+            keys = [f"{c['person_id']}:{c['role_class'] or c['job']}" for c in credits]
             folded = keys[:CREDIT_FOLD]
             if len(set(keys)) == len(keys) and len(set(folded)) == len(folded):
                 rendered += 1

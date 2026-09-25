@@ -424,6 +424,53 @@ async def test_two_sources_whose_plots_tie_pick_the_same_one_after_a_re_import(d
     )
 
 
+def test_a_shared_plot_gives_way_to_the_next_longest_and_the_order_is_retaken():
+    """Decision 499's rule inside `_pick_plot`, no database. The field is what is dropped and not
+    the row: a Wikipedia page matched to another film loses its plot and keeps its own one-liner
+    as a candidate, and the ranking is taken again over what is left, because the text that was
+    longest is exactly the one removed."""
+    rows = [
+        {"source": "wikipedia", "plot_full": "w" * 50, "plot_short": "its own one-liner"},
+        {"source": "tmdb", "plot_full": "t" * 10, "plot_short": None},
+    ]
+    assert packs._pick_plot(rows, set()) == "w" * 50
+    assert packs._pick_plot(rows, {("wikipedia", "plot_full")}) == "t" * 10
+    assert packs._pick_plot(
+        rows, {("wikipedia", "plot_full"), ("tmdb", "plot_full")}
+    ) == "its own one-liner"
+    assert packs._pick_plot([], set()) is None
+
+
+async def test_a_plot_another_title_carries_never_reaches_the_pack(db):
+    """Decision 499, in the one reader that takes the LONGEST plot and so the one a collision won
+    most often: 157 titles of the seeded install had a Wikipedia page matched to another film as
+    their longest text (The Eighth Sense carried 3,483 characters of 'Oppenheimer (film)' against
+    tmdb's 117), and Insomnia (1997) holds quote-verified tags quoted from the 2002 remake's MPST
+    synopsis. A text only this title carries still wins on length - an unshared MPST retelling
+    included, which decision 499 keeps out of the card and in the pack."""
+    await seed_title(db)
+    await seed_title(db, 2, name="Oppenheimer", year=2023)
+    collided = "A 1959 Senate committee questions a synthetic physicist at length. " * 20
+    await db.executemany(
+        "INSERT INTO title_meta (title_id, source, payload) VALUES ($1, $2, $3)",
+        [
+            (1, "tmdb", {"plot_full": "A short plot of its own."}),
+            (1, "wikipedia", {"plot_full": collided}),
+            (2, "wikipedia", {"plot_full": collided}),
+        ],
+    )
+    text, _info = await packs.build_pack(db, 1)
+    assert dict(blocks(text))["plot:1"] == "A short plot of its own."
+
+    retelling = "A synthetic retelling of this film alone, ending included. " * 10
+    await db.execute(
+        "INSERT INTO title_meta (title_id, source, payload) VALUES (1, 'mpst', $1)",
+        {"plot_full": retelling},
+    )
+    text, _info = await packs.build_pack(db, 1)
+    assert dict(blocks(text))["plot:1"] == packs.clean(retelling)
+
+
 async def test_a_review_under_the_word_floor_never_reaches_the_pack(db):
     """`MIN_WORDS = 50`: "below this a 'review' is a rating with a sentence". The floor is a
     WHERE clause in `_REVIEWS`, so it is asserted here rather than in the no-DB half -- and

@@ -63,12 +63,13 @@ from spielplan.core.config import settings  # noqa: E402
 from spielplan.curated import adjudications as curated_verdicts  # noqa: E402 - the real refusals
 from spielplan.curated import axes as curated_axes  # noqa: E402
 from spielplan.curated import corrections as curated_corrections  # noqa: E402
-from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
+from spielplan.db.library import fold_credits, normalise_kinds  # noqa: E402 - §4.1's real rules
 from spielplan.dna import review as dna_review  # noqa: E402 - the review's real bound
 from spielplan.flywheel import batch as flywheel_batch  # noqa: E402 - decision 441's arithmetic
 from spielplan.home import rail, shelves  # noqa: E402 - decision 117's real gate, real copy
 from spielplan.home.why import NAMED_TERM_CAP, WhyTerm  # noqa: E402
 from spielplan.importer import dna as importer_dna  # noqa: E402 - the ledgers' real columns
+from spielplan.importer import meta as importer_meta  # noqa: E402 - the real card resolution
 from spielplan.importer.dna import app_facet  # noqa: E402 - the real facet rule, not a copy
 from spielplan.importer.report import ImportReport  # noqa: E402 - `_real_report`'s return type
 from spielplan.ledger.hyperparams import Hyperparams  # noqa: E402 - §4.3's real margins
@@ -760,30 +761,35 @@ def _titles(kind: str) -> list[sqlite3.Row]:
 
 
 def _card(title_id: int) -> dict[str, Any]:
-    """The per-source meta rows resolved per field, in the corpus's own source order."""
+    """The per-source meta rows resolved per field, in the corpus's own source order.
+
+    By `importer/meta.card_fields` itself rather than a local walk, so the harness inherits
+    decisions 499 and 501 - no MPST overview, no synopsis another title shares, no art on a host
+    the app may not serve - instead of drifting from them. The shared test is the fixture's own
+    rows, compared as `importer/meta.shared_plot_texts` compares them.
+    """
     with _db() as db:
         rows = {
-            r["source"]: r for r in db.execute(
+            r["source"]: dict(r) for r in db.execute(
                 "SELECT * FROM title_meta WHERE title_id = ?", (title_id,)
             )
+        }
+        shared = {
+            (source, field)
+            for source, row in rows.items() if source in importer_meta.MATCHED_TEXT_SOURCES
+            for field in ("plot_full", "plot_short")
+            if (text := (row.get(field) or "").strip(" ")) and db.execute(
+                f"SELECT 1 FROM title_meta WHERE title_id <> ? AND trim({field}, ' ') = ?",
+                (title_id, text),
+            ).fetchone()
         }
         video = db.execute(
             "SELECT key FROM title_video WHERE title_id = ?"
             " ORDER BY (type = 'trailer') DESC, (site = 'YouTube') DESC LIMIT 1", (title_id,)
         ).fetchone()
 
-    def best(field: str) -> Any:
-        for source in CARD_SOURCES:
-            row = rows.get(source)
-            if row is not None and row[field] not in (None, "", 0):
-                return row[field]
-        return None
-
     return {
-        "overview": best("plot_full") or best("plot_short"),
-        "tagline": best("tagline"),
-        "poster_path": best("poster_url"),
-        "backdrop_path": best("backdrop_url"),
+        **importer_meta.card_fields(rows, CARD_SOURCES, shared),
         "trailer_key": video["key"] if video else None,
     }
 
@@ -870,31 +876,20 @@ def title_detail(title_id: int) -> dict[str, Any]:
         t = db.execute("SELECT * FROM title WHERE id = ?", (title_id,)).fetchone()
         if not t:
             raise HTTPException(404, "no such title")
-        # One row per (person, job), mirroring db/library.credits_for: the corpus files one job
-        # under two department spellings, and grouping on the department hands the card two rows
-        # under one client key. The character comes from a correlated subquery rather than the
-        # app's `array_agg(... ORDER BY ...)`, which SQLite only understands from 3.44; the
-        # ordering it applies is the same one. The harness follows the app;
+        # Folded by db/library.fold_credits itself - one row per (person, class), `job` the
+        # highest-priority source's label, `jobs` every spelling, one person written as two on
+        # one title merged where their ids cannot disagree - over the same rows in the same order
+        # the app's `_CREDIT_ROWS` reads. The harness follows the app;
         # `backend/spielplan/api/` wins on any disagreement.
-        credits = [
-            {"person_id": r["person_id"], "name": r["name"], "department": r["department"],
-             "departments": sorted({d for d in (r["departments"] or "").split(",") if d}),
-             "job": r["job"], "ord": r["ord"], "character": r["character"],
-             "sources": sorted({s for s in (r["sources"] or "").split(",") if s})}
-            for r in db.execute(
-                "SELECT c.person_id, p.name, min(c.department) AS department,"
-                " group_concat(DISTINCT c.department) AS departments, c.job,"
-                " min(c.billing_order) AS ord,"
-                " (SELECT c2.character FROM credit c2 WHERE c2.title_id = c.title_id"
-                "    AND c2.person_id = c.person_id AND c2.job = c.job"
-                "    AND c2.character IS NOT NULL"
-                "  ORDER BY c2.billing_order IS NULL, c2.billing_order, c2.source"
-                "  LIMIT 1) AS character,"
-                " group_concat(DISTINCT c.source) AS sources"
+        credits = fold_credits([
+            dict(r) for r in db.execute(
+                "SELECT c.person_id, p.name, p.imdb_id, p.tmdb_id, c.source, c.department,"
+                " c.job, c.character, c.billing_order, c.role_class"
                 " FROM credit c JOIN person p ON p.id = c.person_id WHERE c.title_id = ?"
-                " GROUP BY c.person_id, p.name, c.job", (title_id,)
+                " ORDER BY p.name, c.person_id, c.billing_order IS NULL, c.billing_order,"
+                " c.source, c.id", (title_id,)
             ).fetchall()
-        ]
+        ])
         # Upstream keys evidence by (title_id, term) and ships no `dna_tag.id`; `runs_found`
         # is the weight the importer stores as `n_sources`, and there is no provider column —
         # so `provider` is `''`, which is what the loader writes and what 0018 made NOT NULL.

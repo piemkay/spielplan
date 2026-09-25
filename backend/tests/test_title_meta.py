@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from spielplan.art import hosts
 from spielplan.db import library
 from spielplan.importer import dna as dna_loader
 from spielplan.importer import load, meta
@@ -64,6 +65,18 @@ def add_meta(root: Path, title_id: int, source: str, **fields: object) -> None:
     )
     db.commit()
     db.close()
+
+
+# Heat's tmdb art as the corpus stores it. `make_bundle` ships bare file paths instead, which the
+# host rule refuses, so no bundle it builds names a URL the art route would fetch from CI; a test
+# that asserts art writes these into its own copy first. [decision 501]
+HEAT_POSTER = "https://image.tmdb.org/t/p/w500/heat.jpg"
+HEAT_BACKDROP = "https://image.tmdb.org/t/p/w1280/heat-bd.jpg"
+
+
+def servable_heat(root: Path) -> None:
+    edit(root, f"UPDATE title_meta SET poster_url = '{HEAT_POSTER}', backdrop_url = "
+               f"'{HEAT_BACKDROP}' WHERE title_id = 1 AND source = 'tmdb'")
 
 
 def set_bundle_key(root: Path, key: str, value: object) -> None:
@@ -129,13 +142,18 @@ async def test_a_source_can_be_dropped_without_taking_the_others_with_it(db, roo
 
 
 async def test_the_content_spine_reads_the_resolved_card(db, root):
-    """§6.0's title detail card comes through `db.library`, which is the content spine."""
+    """§6.0's title detail card comes through `db.library`, which is the content spine.
+
+    The art is written into this bundle as the corpus stores it, a full TMDB URL: the fixture's
+    bare file paths are refused by decision 501's host rule, and a card asserting None for its
+    poster would hold the spine to nothing."""
+    servable_heat(root)
     await load_content(db, root)
     title = await library.get_title(db, 1)
     assert title["overview"] == fx.META[0][4]
     assert title["tagline"] == fx.META[0][2]
-    assert title["poster_path"] == "/heat.jpg"
-    assert title["backdrop_path"] == "/heat-bd.jpg"
+    assert title["poster_path"] == HEAT_POSTER
+    assert title["backdrop_path"] == HEAT_BACKDROP
     assert title["trailer_key"] == "heat-trailer-key"
 
 
@@ -210,14 +228,20 @@ async def test_a_bundle_with_no_meta_table_still_imports(db, root):
 
 async def test_the_source_order_travels_with_the_bundle(db, root):
     """Decision 162 makes this app the consumer of an order the corpus owns, so the order is
-    read from the bundle. Reversing the first two sources moves the plot and the poster and
-    leaves the tagline where it was — only tmdb has one."""
+    read from the bundle. Reversing the first two sources moves the plot and leaves the tagline
+    where it was — only tmdb has one.
+
+    AND IT NO LONGER MOVES THE POSTER, which this test used to assert it did: omdb's poster is
+    OMDb's IMDb-hosted URL, and decision 501 takes an image only from a host the app may serve,
+    whatever the order says. The order still decides between eligible values; the host rule
+    decides which values are eligible. [owner instruction of 2026-09-25]"""
+    servable_heat(root)
     set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia", "trakt", "tvmaze"])
     await load_content(db, root)
 
     title = await library.get_title(db, 1)
     assert title["overview"] == "A shorter synthetic plot."
-    assert title["poster_path"] == "/heat-omdb.jpg"
+    assert title["poster_path"] == HEAT_POSTER
     assert title["tagline"] == "A Los Angeles crime saga."
 
 
@@ -230,6 +254,98 @@ async def test_a_bundle_shipping_no_order_gets_the_corpus_order_and_a_report_lin
     assert notes[0].detail["priority"] == list(meta.SOURCE_PRIORITY)
     title = await library.get_title(db, 1)
     assert title["overview"] == fx.META[0][4]
+
+
+# --- decisions 499 and 501: what the walk may not take ------------------------------------------
+#
+# The first household user test (2026-09-25) met three values the per-field walk took because
+# nothing made them ineligible: an MPST retelling as a card's only text, one film's synopsis on
+# another film's card, and an IMDb-hosted poster no licence lets this app serve.
+
+MPST_PLOT = "The film opens on its own ending and then retells the rest, ending included."
+TVMAZE_POSTER = "https://static.tvmaze.com/uploads/images/original_untouched/1/prisoners.jpg"
+
+
+async def test_an_mpst_synopsis_is_never_the_overview(db, root):
+    """Decision 499. mpst sits last in `SOURCE_PRIORITY` and was still eligible, so for 965 titles
+    of the seeded install the last resort was the only resort and the card led with a full
+    retelling. Heat keeps tmdb's plot beside an mpst row; Tampopo carries mpst alone and shows no
+    overview - while its poster, from another source, still resolves, because the rule is about
+    one field and not one block. The mpst row itself is kept (§4.1): it still feeds a pack."""
+    add_meta(root, 1, "mpst", plot_full="A retelling of Heat, ending included.")
+    add_meta(root, 8, "mpst", plot_full=MPST_PLOT)
+    add_meta(root, 8, "tvmaze", poster_url=TVMAZE_POSTER)
+    report = await load_content(db, root)
+
+    assert (await library.get_title(db, 1))["overview"] == fx.META[0][4]
+    tampopo = await library.get_title(db, 8)
+    assert tampopo["overview"] is None
+    assert tampopo["poster_path"] == TVMAZE_POSTER
+    assert await db.fetchval(
+        "SELECT payload ->> 'plot_full' FROM title_meta WHERE title_id = 8 AND source = 'mpst'"
+    ) == MPST_PLOT
+    note = next(f for f in report.findings if "without_overview" in f.detail)
+    assert note.detail["without_overview"] == 1, report.render()
+
+
+async def test_a_synopsis_another_title_shares_is_absent_from_both_cards(db, root):
+    """Decision 499's second half. MPST attached the 2001 Moulin Rouge's synopsis to the 1952 film,
+    and 102 Wikipedia pages were each matched to two or more titles on the seeded install. Nothing
+    on the row says which film the text is about, so both members lose it and the next eligible
+    text takes its place - Severance's own `plot_short` here - while a text one title alone carries
+    is kept, padding or no padding.
+
+    A shared TMDB overview is kept: TMDB and trakt were measured sharing 31 texts, and every one is
+    one novel's synopsis on each of its adaptations (Jane Eyre 1943, 1983 and 1996), true of all of
+    them. The rule is for the two sources whose text is MATCHED onto a title, by page or dataset
+    row. The scoped path a derive takes answers the same.
+    """
+    shared = "Two lovers in a Paris nightclub - a synthetic plot two titles carry."
+    edit(root, "DELETE FROM title_meta WHERE title_id IN (6, 7)")
+    add_meta(root, 6, "wikipedia", plot_full=shared, plot_short="Severance's own one line.")
+    add_meta(root, 7, "wikipedia", plot_full=f"  {shared}  ")
+    add_meta(root, 8, "wikipedia", plot_full="A synthetic plot only Tampopo carries.")
+    edit(root, "UPDATE title_meta SET plot_full = 'One novel, adapted twice.'"
+               " WHERE source = 'tmdb' AND title_id IN (3, 4)")
+    await load_content(db, root)
+
+    assert (await library.get_title(db, 6))["overview"] == "Severance's own one line."
+    assert (await library.get_title(db, 7))["overview"] is None
+    assert (await library.get_title(db, 8))["overview"] == "A synthetic plot only Tampopo carries."
+    assert (await library.get_title(db, 3))["overview"] == "One novel, adapted twice."
+    assert (await library.get_title(db, 4))["overview"] == "One novel, adapted twice."
+
+    await _write_card(db, 7, ACQUIRED)
+    await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), title_ids=[7])
+    assert (await library.get_title(db, 7))["overview"] is None
+
+
+async def test_an_image_on_a_host_the_app_may_not_serve_is_skipped(db, root):
+    """Decision 501, on decision 483's hosts. OMDb's poster is always IMDb-hosted and it outranks
+    TVmaze's, so 157 seeded cards carried a URL this app may not serve and 8 of them hid a TVmaze
+    poster it may. The host rule narrows what is eligible and leaves the order alone: tmdb still
+    wins where it has art, TVmaze now wins over OMDb, and a title with only OMDb's has none. The
+    import says how many it skipped, and a derive's scoped resolution applies the same rule."""
+    servable_heat(root)
+    add_meta(root, 2, "tvmaze", poster_url=TVMAZE_POSTER)
+    report = await load_content(db, root)
+
+    assert (await library.get_title(db, 1))["poster_path"] == HEAT_POSTER
+    assert (await library.get_title(db, 2))["poster_path"] == TVMAZE_POSTER
+    held = await db.fetch("SELECT payload FROM title_meta")
+    refused = sum(
+        1 for row in held for field in ("poster_url", "backdrop_url")
+        if row["payload"].get(field) and not hosts.servable(row["payload"][field])
+    )
+    note = next(f for f in report.findings if "refused_images" in f.detail)
+    assert note.detail["refused_images"] == refused >= 2, report.render()
+
+    await db.execute("DELETE FROM title_meta WHERE title_id = 2 AND source = 'tvmaze'")
+    await _write_card(db, 2, ACQUIRED)
+    await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), title_ids=[2])
+    assert (await library.get_title(db, 2))["poster_path"] is None, (
+        "an IMDb-hosted poster is the only art this title has, and it is not art this app serves"
+    )
 
 
 # --- jellyfin-acquisition-eval-a-re-derive-is-idempotent (the resolution half) -------------
@@ -275,6 +391,7 @@ async def test_a_scoped_resolve_touches_only_the_titles_it_names(db, root):
     pass has something to write over both of its fields - which is what makes the trailer key
     the assertion that fails when the grouping query is scoped and the UPDATE below it is not.
     """
+    servable_heat(root)
     await load_content(db, root)
     await _write_card(db, 3, ACQUIRED)
     await _write_card(db, 1, BLANK)
@@ -283,7 +400,7 @@ async def test_a_scoped_resolve_touches_only_the_titles_it_names(db, root):
     await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), report, title_ids=[1])
 
     assert await _card(db, 1) == (
-        fx.META[0][4], fx.META[0][2], "/heat.jpg", "/heat-bd.jpg", "heat-trailer-key",
+        fx.META[0][4], fx.META[0][2], HEAT_POSTER, HEAT_BACKDROP, "heat-trailer-key",
     )
     assert await _card(db, 3) == ACQUIRED
     # §10's accounting is per table and not a total; the same applies to a call that resolved one

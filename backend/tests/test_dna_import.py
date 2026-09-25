@@ -39,6 +39,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from spielplan.api import admin as admin_api
+from spielplan.dna import aliases as dna_aliases
 from spielplan.importer import dna
 from spielplan.importer import validate as validator
 from spielplan.importer.load import SKIPPED_TABLES
@@ -639,6 +640,40 @@ async def test_the_alias_map_loads_under_the_name_the_bundle_uses(db, vocab_dir)
     assert [(r["alias"], r["term"]) for r in rows] == [
         ("cozy", "mood.cosy"), ("slow-burn", "pacing.patient")
     ]
+
+
+async def test_the_alias_kind_is_stored_and_a_lexicon_row_never_projects(db, vocab_dir):
+    """Decision 383's owed fill, taken by decision 500. The loader read `raw_term` and `vocab_term`
+    and dropped `kind`, so all 4,108 rows of the seeded install stored NULL there and the corpus's
+    84 `lexicon` rows - extraction lexicon that its own projector skips - projected for every
+    acquired title at §8 stage 8. The column is stored as shipped, the report counts the lexicon,
+    and the reader `dna/aliases.load_alias_map` then refuses the row. A map with no `kind` column
+    still loads, with NULL, which is "not known to be lexicon"."""
+    (vocab_dir / "alias_map_v1.tsv").write_text(
+        "raw_term\tdf\tfacet\tvocab_term\tvia_concept\tkind\n"
+        "slow-burn\t12\tpacing\tpacing.patient\t\talias\n"
+        "cozy\t9\tmood\tmood.cosy\t\tlexicon\n",
+        encoding="utf-8",
+    )
+    report = ImportReport()
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    kinds = {r["alias"]: r["kind"] for r in await db.fetch("SELECT alias, kind FROM dna_alias")}
+    assert kinds == {"slow-burn": "alias", "cozy": "lexicon"}
+    note = next(f for f in report.findings if "lexicon" in f.detail)
+    assert note.detail["lexicon"] == 1
+    projected = await dna_aliases.load_alias_map(db, "v1")
+    assert projected["slow burn"] == ("pacing", "pacing.patient")
+    assert "cozy" not in projected, "a lexicon row projected"
+
+    await db.execute("DELETE FROM dna_alias")
+    (vocab_dir / "alias_map_v1.tsv").write_text(
+        "raw_term\tdf\tfacet\tvocab_term\tvia_concept\ncozy\t9\tmood\tmood.cosy\t\n",
+        encoding="utf-8",
+    )
+    await dna._load_aliases(db, vocab_dir / "alias_map_v1.tsv", "v1", ImportReport())
+    assert await db.fetchval("SELECT kind FROM dna_alias WHERE alias = 'cozy'") is None
+    assert (await dna_aliases.load_alias_map(db, "v1"))["cozy"] == ("mood", "mood.cosy")
 
 
 async def test_an_alias_that_maps_to_nothing_is_skipped_rather_than_crashing(db, vocab_dir):

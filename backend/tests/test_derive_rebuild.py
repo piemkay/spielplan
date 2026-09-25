@@ -240,10 +240,12 @@ async def test_a_second_derive_adds_no_person_and_keeps_every_credit_pointed_at_
     that the DERIVE does not defeat it -- it hands the parser's person block over whole, so the
     second run finds each human by the same key the first minted them under.
 
-    THE TWO SOURCES ARE NOT MERGED, which is the half that fails silently. TMDB's credits carry a
+    THE ID IS NEVER DROPPED, which is the half that fails silently. TMDB's credits carry a
     `tmdb_id` and OMDb's carry a bare name, so `Denis Villeneuve` is looked up two different ways;
-    dropping the id would collapse them onto one `person` row, losing the identifier §4.3's
-    `p:<role_class>:<name>` grammar and M5.4's DNA both read.
+    a derive that dropped the id would lose the identifier §4.3's `p:<role_class>:<name>` grammar
+    and M5.4's DNA both read. What the OMDb credit now finds is the person TMDB identified on this
+    same title, id and all (`ids.upsert_person`'s named change) - asserted in the test below - and
+    the second run finds each human by the same keys again.
     """
     await _seed_arrival(db)
     await rebuild.derive_title(db, ARRIVAL)
@@ -265,6 +267,66 @@ async def test_a_second_derive_adds_no_person_and_keeps_every_credit_pointed_at_
     assert [tuple(r) for r in await db.fetch(
         "SELECT person_id, source, job FROM credit WHERE title_id = $1 ORDER BY id",
         ARRIVAL)] == credits_before
+
+
+async def test_a_name_only_credit_finds_the_person_this_title_already_credits(db, raw_root):
+    """OMDb names Arrival's director and TMDB identifies him, and the corpus's lookup order - imdb,
+    then tmdb, then name among people with neither - minted a name-only twin for every OMDb credit:
+    76 split people across the seeded install's 14 acquired titles, each on §6.0's card twice. The
+    derive now resolves the id'd credits first and matches a bare name against the people already
+    credited on THIS title in the same class, by `loose_name`.
+
+    The second half is the repair the 14 titles get from a board retry at stage 3 (decision 444): a
+    twin a previous derive minted is still credited when the next derive reads the title, and the
+    person carrying the id wins the match, so the retry re-points the OMDb credit and mints nothing.
+    [C9.4 of the 2026-09-25 user test]
+    """
+    await _seed_arrival(db)
+    twin = await db.fetchval(
+        "INSERT INTO person (name) VALUES ('Denis Villeneuve') RETURNING id"
+    )
+    await db.execute(
+        "INSERT INTO credit (title_id, person_id, department, job, role_class, source)"
+        " VALUES ($1, $2, 'Directing', 'Director', 'director', 'omdb')", ARRIVAL, twin,
+    )
+
+    await rebuild.derive_title(db, ARRIVAL)
+
+    directors = await db.fetch(
+        "SELECT DISTINCT c.person_id, p.tmdb_id FROM credit c JOIN person p ON p.id = c.person_id"
+        " WHERE c.title_id = $1 AND c.role_class = 'director'", ARRIVAL,
+    )
+    assert len(directors) == 1 and directors[0]["tmdb_id"], (
+        f"Arrival's director is credited as {len(directors)} people: {[tuple(r) for r in directors]}"
+    )
+    assert set(await db.fetchval(
+        "SELECT array_agg(DISTINCT source) FROM credit WHERE title_id = $1 AND person_id = $2",
+        ARRIVAL, directors[0]["person_id"],
+    )) >= {"tmdb", "omdb"}
+    assert await db.fetchval(
+        "SELECT count(*) FROM person WHERE name = 'Denis Villeneuve' AND tmdb_id IS NULL"
+    ) == 1, "the derive minted another name-only Villeneuve beside the one it was repairing"
+
+
+def test_the_same_title_match_prefers_the_person_who_carries_an_id():
+    """`ids.note_credited` without a database: an id'd person beats a name-only one whichever is
+    read first, two different id'd people under one key match nothing, two name-only people keep
+    the lower id, and a name `loose_name` folds to nothing keys nothing."""
+    credited: ids.Credited = {}
+    ids.note_credited(credited, "Denis Villeneuve", "director", 1_000_000_021, False)
+    ids.note_credited(credited, "Denis  Villeneuve", "director", 40115, True)
+    assert credited[("denisvilleneuve", "director")] == (40115, True)
+    ids.note_credited(credited, "Denis Villeneuve", "director", 1_000_000_030, False)
+    assert credited[("denisvilleneuve", "director")] == (40115, True)
+    ids.note_credited(credited, "Denis Villeneuve", "director", 50000, True)
+    assert credited[("denisvilleneuve", "director")] == (None, True)
+
+    ids.note_credited(credited, "Ali Abbasi", "director", 1_000_000_018, False)
+    ids.note_credited(credited, "Ali Abbasi", "director", 1_000_000_009, False)
+    assert credited[("aliabbasi", "director")] == (1_000_000_009, False)
+
+    ids.note_credited(credited, "王家卫", "director", 7, True)
+    assert ("", "director") not in credited
 
 
 # --- decision 375's scope -----------------------------------------------------------------------

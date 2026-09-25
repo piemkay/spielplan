@@ -332,9 +332,13 @@ async def test_library_search_matches_titles_and_aliases(db, bundle, tmp_path):
     assert 5 in {t["id"] for t in hits}
 
 
+# `role_class = 'cast'`, which the corpus writes on every credit (NULL on none of the seeded
+# install's 281,655 rows). The insert used to leave it NULL, and since the read folds per (person,
+# class) a classless row keys on its job and stands apart from the fixture's classed ones - the
+# shape of no real bundle. [C9.3 of the 2026-09-25 user test]
 _CROSS_DEPARTMENT = (
-    "INSERT INTO credit (title_id, person_id, department, job, character, billing_order, source)"
-    " VALUES ($1, $2, $3, 'Actor', $4, $5, $6)"
+    "INSERT INTO credit (title_id, person_id, department, job, character, billing_order, source,"
+    " role_class) VALUES ($1, $2, $3, 'Actor', $4, $5, $6, 'cast')"
 )
 
 
@@ -371,8 +375,9 @@ async def test_a_credit_is_one_row_per_person_and_job_across_department_spelling
     assert rows[0]["department"] == "Acting"
     assert sorted(rows[0]["sources"]) == ["omdb", "tmdb"]
 
-    # The client key is total: one `person_id:job` per row, which is what stops the throw.
-    keys = {f"{c['person_id']}:{c['job']}" for c in credits}
+    # The client key is total: one `person_id:(role_class ?? job)` per row - the expression
+    # `TitleDetail.svelte` keys on since the read folds per class - which is what stops the throw.
+    keys = {f"{c['person_id']}:{c['role_class'] or c['job']}" for c in credits}
     assert len(keys) == len(credits)
 
     # The directing-first sort survives losing `c.department` as a grouping column.
@@ -391,6 +396,90 @@ async def test_a_credit_is_one_row_per_person_and_job_across_department_spelling
     reinserted = await library.credits_for(db, 1)
     again = next(c for c in reinserted if c["person_id"] == 4 and c["job"] == "Actor")
     assert again["character"] == "Vincent Hanna"
+
+
+_CREDIT = (
+    "INSERT INTO credit (title_id, person_id, department, job, billing_order, source, role_class)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7)"
+)
+
+
+async def test_a_crew_member_is_one_row_per_role_across_job_spellings(db, bundle, tmp_path):
+    """§4.1's read-time dedupe, keyed on what the credit IS rather than how a source spelled it.
+
+    Heat on the seeded install: TMDB's 'Original Music Composer' and Wikidata's 'Composer' put
+    Elliot Goldenthal on the card twice, and TMDB's 'Writer' beside Wikidata's 'Screenplay' made
+    Michael Mann his own film's writer twice over. Both carry the corpus's `role_class`, so the
+    card gets one row per (person, class), TMDB's label on it, every spelling in `jobs`, and every
+    source that agreed. Mann's directing credit is a different class and stays its own row, first.
+    The five `crew` composer credits the corpus corrections ledger wrote are classed by
+    `derive/ids.class_of` and fold with the rest. [C9.3 of the 2026-09-25 user test]
+    """
+    await _import(db, bundle, tmp_path / "artifacts")
+    await db.execute("INSERT INTO person (id, name) VALUES (70, 'Elliot Goldenthal')")
+    await db.executemany(_CREDIT, [
+        (1, 70, "Sound", "Original Music Composer", None, "tmdb", "composer"),
+        (1, 70, "Music", "Composer", None, "wikidata", "composer"),
+        (1, 70, "Sound", "Original Music Composer", None, "correction", "crew"),
+        (1, 1, "Writing", "Writer", None, "tmdb", "writer"),
+        (1, 1, "Writing", "Screenplay", None, "wikidata", "writer"),
+    ])
+
+    credits = await library.credits_for(db, 1)
+    goldenthal = [c for c in credits if c["person_id"] == 70]
+    assert len(goldenthal) == 1, goldenthal
+    assert goldenthal[0]["role_class"] == "composer"
+    assert goldenthal[0]["job"] == "Original Music Composer"
+    assert goldenthal[0]["jobs"] == ["Original Music Composer", "Composer"]
+    assert goldenthal[0]["sources"] == ["correction", "tmdb", "wikidata"]
+
+    mann = [c for c in credits if c["person_id"] == 1]
+    assert [(c["role_class"], c["job"]) for c in mann] == [
+        ("director", "Director"), ("writer", "Writer"),
+    ]
+    assert mann[1]["jobs"] == ["Writer", "Screenplay"]
+    assert credits[0]["role_class"] == "director", "the directing-first order did not survive"
+    keys = [f"{c['person_id']}:{c['role_class'] or c['job']}" for c in credits]
+    assert len(set(keys)) == len(keys)
+
+
+async def test_one_name_with_ids_that_cannot_disagree_is_one_credit_row(db, bundle, tmp_path):
+    """The corpus mints a person per id it saw, so one human arrives as an imdb-only row and a
+    tmdb-only row with one name: John Williams twice on Schindler's List, 1,685 such groups across
+    the seeded install's bundle titles. Within one title and one class, people whose `loose_name`
+    agrees are one row when their ids cannot disagree, `person_ids` names them all, and the one
+    carrying the most ids leads. Two people of one name with two different imdb ids are two people
+    and stay two rows, and a name in a script `loose_name` does not fold never merges on an empty
+    key. [C9.4 of the 2026-09-25 user test]
+    """
+    await _import(db, bundle, tmp_path / "artifacts")
+    await db.executemany(
+        "INSERT INTO person (id, name, imdb_id, tmdb_id) VALUES ($1, $2, $3, $4)",
+        [
+            (80, "John Williams", "nm0002354", None), (81, "John Williams", None, 491),
+            (82, "John  Williams", None, None),
+            (90, "Sam Jones", "nm0000001", None), (91, "Sam Jones", "nm0000002", None),
+            (95, "王家卫", None, None), (96, "王家卫", None, None),
+        ],
+    )
+    await db.executemany(_CREDIT, [
+        (1, 80, "Sound", "Original Music Composer", None, "wikidata", "composer"),
+        (1, 81, "Sound", "Original Music Composer", None, "tmdb", "composer"),
+        (1, 82, "Music", "Composer", None, "omdb", "composer"),
+        (1, 90, "Acting", "Actor", 7, "tmdb", "cast"),
+        (1, 91, "Acting", "Actor", 8, "wikidata", "cast"),
+        (1, 95, "Editing", "Editor", None, "tmdb", "editor"),
+        (1, 96, "Editing", "Editor", None, "wikidata", "editor"),
+    ])
+
+    credits = await library.credits_for(db, 1)
+    williams = [c for c in credits if c["name"].startswith("John")]
+    assert len(williams) == 1, williams
+    assert williams[0]["person_ids"] == [80, 81, 82]
+    assert williams[0]["person_id"] == 80
+    assert williams[0]["job"] == "Original Music Composer"
+    assert len([c for c in credits if c["name"] == "Sam Jones"]) == 2
+    assert len([c for c in credits if c["name"] == "王家卫"]) == 2
 
 
 async def test_title_card_payload_is_complete(db, bundle, tmp_path):

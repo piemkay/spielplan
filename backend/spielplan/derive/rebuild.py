@@ -733,7 +733,7 @@ async def _write(
             by_table[TARGET_OF.get(table, table)].extend(result.table(table))
 
     written: dict[str, int] = {}
-    written["person"] = await _people(conn, by_table)
+    written["person"] = await _people(conn, title_id, by_table)
 
     for target, rows in by_table.items():
         if target == "award":
@@ -768,7 +768,7 @@ async def _write(
 
 
 async def _people(
-    conn: asyncpg.Connection, by_table: dict[str, list[Mapping[str, Any]]]
+    conn: asyncpg.Connection, title_id: int, by_table: dict[str, list[Mapping[str, Any]]]
 ) -> int:
     """Resolve every credit's human to a `person` row, then put the id on the row.
 
@@ -779,18 +779,38 @@ async def _people(
 
     The id lands on a COPY of the row, because `ParsedTitle.rows` holds mappings a frozen dataclass
     handed out and a derive that mutated them would be writing into the parse result.
+
+    CREDITS THAT CARRY AN ID ARE RESOLVED FIRST, and each resolution is noted in `credited`, so an
+    OMDb credit naming the director TMDB already identified finds that person on this title rather
+    than minting a name-only twin (`ids.upsert_person`'s named change). The rows keep their own
+    order; only the lookups are reordered.
     """
-    minted: dict[tuple[Any, Any, Any], int] = {}
-    resolved: list[Mapping[str, Any]] = []
-    for row in by_table["credit"]:
+    credited = await ids.credited_on(conn, title_id)
+    minted: dict[tuple[Any, ...], int] = {}
+    person_ids: dict[int, int] = {}
+    rows = by_table["credit"]
+
+    def has_id(i: int) -> bool:
+        person = rows[i].get("person") or {}
+        return bool(person.get("imdb_id") or person.get("tmdb_id"))
+
+    for i in sorted(range(len(rows)), key=lambda i: not has_id(i)):
+        row = rows[i]
         person = dict(row.get("person") or {})
         person.setdefault("name", "?")
-        key = (person.get("name"), person.get("imdb_id"), person.get("tmdb_id"))
+        role_class = row.get("role_class")
+        key = (person.get("name"), person.get("imdb_id"), person.get("tmdb_id"),
+               None if has_id(i) else role_class)
         if key not in minted:
-            minted[key] = await ids.upsert_person(conn, **person)
-        resolved.append({**row, "person_id": minted[key]})
-    by_table["credit"] = resolved
-    return len(minted)
+            minted[key] = await ids.upsert_person(
+                conn, **person, role_class=role_class, credited=credited
+            )
+            ids.note_credited(credited, person["name"], role_class, minted[key], has_id(i))
+        person_ids[i] = minted[key]
+    by_table["credit"] = [{**row, "person_id": person_ids[i]} for i, row in enumerate(rows)]
+    # Distinct people rather than distinct lookups: two lookups that land on one person are the
+    # named change working, and counting them twice would report the split it just closed.
+    return len(set(person_ids.values()))
 
 
 async def _meta(

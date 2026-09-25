@@ -258,3 +258,59 @@ describe('the panel dismisses', () => {
     expect(onClose, 'the unmounted panel is still listening on document').not.toHaveBeenCalled();
   });
 });
+
+describe('the DNA card and the credits after the 2026-09-25 user test', () => {
+  it('marks a quote cut mid-sentence and draws a one-source projection fainter, dropping none', async () => {
+    // C9.6 and C9.5. §4.1 rule 2 makes a projected weight a weight and never a filter, so the
+    // single-source chip is on the card, only drawn fainter than the four-source one.
+    const app = await open(
+      {},
+      {
+        dna: {
+          extracted: [
+            {
+              term: 'mood.gritty',
+              facet: 'mood',
+              salience: 2,
+              provider: '',
+              evidence: [{ quote: 'not this serious, gritty crime epic', source: 'trakt:1' }]
+            }
+          ],
+          projected: [
+            { term: 'characters.teen_protagonist', facet: 'characters', weight: 1, via: 'movielens' },
+            { term: 'themes.obsession', facet: 'themes', weight: 4, via: 'keyword' }
+          ]
+        }
+      }
+    );
+    try {
+      expect(target.querySelector('.quote').textContent).toBe(
+        '“…not this serious, gritty crime epic…”'
+      );
+      const chips = [...target.querySelectorAll('.chip')];
+      expect(chips).toHaveLength(2);
+      expect(chips.map((c) => c.classList.contains('faint'))).toEqual([true, false]);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('keys the credit list by person and class, so one person in two classes is two rows', async () => {
+    // C9.3: `credits_for` folds per (person, role class) and the card's key follows it.
+    const credit = (over) => ({ name: 'Michael Mann', department: 'Directing', sources: ['tmdb'], ...over });
+    const app = await open(
+      {},
+      {
+        credits: [
+          credit({ person_id: 1, role_class: 'director', job: 'Director' }),
+          credit({ person_id: 1, role_class: 'writer', job: 'Writer', jobs: ['Writer', 'Screenplay'] })
+        ]
+      }
+    );
+    try {
+      expect(target.querySelectorAll('.people .person')).toHaveLength(2);
+    } finally {
+      unmount(app);
+    }
+  });
+});

@@ -108,13 +108,14 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
 
 from spielplan.acquire import rawstore
+from spielplan.importer import meta
 
 MAX_REVIEWS = 60          # total, across all sources
 MAX_PER_SOURCE = 12       # so no single reviewer culture dominates
@@ -192,14 +193,21 @@ SELECT payload ->> 'season_count'  AS season_count,
 # which moves `dna_pack.pack_sha` under a verdict decision 382 exists to keep reproducible --
 # named change 3's own sentence, arriving through the one query that did not carry the guard.
 # `source` rather than a rowid because `(title_id, source)` is the key, so it cannot tie.
+#
+# EVERY CANDIDATE AND NOT `LIMIT 1`, because the longest text is where a wrong film wins: 157
+# titles on the seeded install had a Wikipedia page matched to another film as their longest plot
+# (The Eighth Sense carried 3,483 characters of 'Oppenheimer (film)' against tmdb's 117), and
+# Insomnia (1997) holds five quote-verified tags quoted from the 2002 remake's MPST synopsis. So a
+# text `importer/meta.shared_plot_texts` flags is dropped in `_pick_plot` and the next-longest
+# takes its place, in this same order. [decision 499; owner instruction of 2026-09-25]
 _PLOT = """
-SELECT payload ->> 'plot_full'  AS plot_full,
+SELECT source,
+       payload ->> 'plot_full'  AS plot_full,
        payload ->> 'plot_short' AS plot_short
   FROM title_meta
  WHERE title_id = $1
    AND (payload ->> 'plot_full' IS NOT NULL OR payload ->> 'plot_short' IS NOT NULL)
  ORDER BY length(coalesce(payload ->> 'plot_full', '')) DESC, source
- LIMIT 1
 """
 
 # Named change 3. `word_count` is not one of §4.1 rule 2's weights -- it is a property of the
@@ -210,6 +218,26 @@ SELECT source, body
  WHERE title_id = $1 AND word_count >= $2
  ORDER BY word_count DESC, id
 """
+
+
+def _pick_plot(rows: Sequence[Any], shared: Collection[tuple[str, str]]) -> str | None:
+    """`_PLOT`'s answer once decision 499's shared texts are out: longest `plot_full`, ties by
+    source, and a row's `plot_short` only where it has no full plot.
+
+    A flagged field is absent rather than its row, so a Wikipedia page matched to another film
+    loses its plot while its own `plot_short` stays a candidate if that is not shared too; and the
+    order is re-taken over what is left, because the text that was longest is the one removed.
+    """
+    kept = []
+    for row in rows:
+        full = None if (row["source"], "plot_full") in shared else row["plot_full"]
+        short = None if (row["source"], "plot_short") in shared else row["plot_short"]
+        if full is not None or short is not None:
+            kept.append((-len(full or ""), row["source"], full, short))
+    if not kept:
+        return None
+    _length, _source, full, short = min(kept, key=lambda k: (k[0], k[1]))
+    return full or short
 
 
 def _largest_count(rows: Sequence[asyncpg.Record], column: str) -> int | None:
@@ -297,14 +325,15 @@ async def build_pack(conn: asyncpg.Connection, title_id: int) -> tuple[str, Pack
         return None
 
     counts = await conn.fetch(_COUNTS, title_id) if row["kind"] == "series" else []
-    plot_row = await conn.fetchrow(_PLOT, title_id)
+    plot_rows = await conn.fetch(_PLOT, title_id)
+    shared = {(s, f) for _t, s, f in await meta.shared_plot_texts(conn, [title_id])}
     reviews = await conn.fetch(_REVIEWS, title_id, MIN_WORDS)
 
     return render_pack(
         row["id"], row["name"], row["year"], row["kind"],
         _largest_count(counts, "season_count"),
         _largest_count(counts, "episode_count"),
-        (plot_row["plot_full"] or plot_row["plot_short"]) if plot_row is not None else None,
+        _pick_plot(plot_rows, shared),
         [(r["source"], r["body"]) for r in reviews],
     )
 

@@ -2973,7 +2973,7 @@ id = "library-rate-title-card-text-and-art-resolve-from-title-meta"
 spec = "§4.1 (title_meta) + §6.0 (title detail card)"
 milestone = "M4.5"
 kind = "integration"
-what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video **per field**, by the priority order the corpus itself uses, treating NULL, empty string and zero as absent: a title whose preferred source carries no tagline takes the next source's tagline while keeping the preferred source's plot, and a title with no meta row renders the card without those fields rather than erroring. The order travels with the bundle rather than being hard-coded in the app."
+what = "The title card's overview, tagline, poster, backdrop and trailer key resolve from title_meta and title_video **per field**, by the priority order the corpus itself uses, treating NULL, empty string and zero as absent: a title whose preferred source carries no tagline takes the next source's tagline while keeping the preferred source's plot, and a title with no meta row renders the card without those fields rather than erroring. The order travels with the bundle rather than being hard-coded in the app. Since the 2026-09-25 user test the order walks eligible values only: an mpst synopsis is never the overview, a Wikipedia or MPST plot another title also carries is absent (decision 499), and a poster or backdrop on a host the app may not serve is absent (decision 501) - so omdb ranking first moves the plot and not an IMDb-hosted poster."
 why = "The corpus already resolves per field: mdc/export.py:34-45 walks SOURCE_PRIORITY (tmdb, omdb, trakt, tvmaze, wikipedia, jellyfin, wikidata, letterboxd, rottentomatoes, metacritic, mpst) with mpst last on purpose because its synopses give the ending away. Per field rather than per block because the sources are complementary, not ranked: tmdb carries tagline and poster and plot, omdb carries poster and no tagline, and wikipedia is the only source carrying plot_short — so a whole-block rule blanks fields another source has. §4.1's 'one block = one droppable source' is a storage invariant, not a rendering rule. Spielplan read flattened columns the bundle does not export, so all five fields have been NULL for every real title."
 tests = [
     "backend/tests/test_title_meta.py::test_the_content_spine_reads_the_resolved_card",
@@ -3047,14 +3047,11 @@ tests = [
     # the fixture bundle rather than restating it.
     "backend/tests/test_dna_import.py::test_the_spec_states_the_axis_filename_rule_the_loader_enforces",
 ]
-# NOT widened by M5.4, and the absence is decision 383 rather than an oversight. `0027` adds
-# `dna_alias.kind text` so an extraction-lexicon row can be told from a projecting one, and
-# `importer/dna._load_aliases` still reads `raw_term` and `vocab_term` only and drops the
-# column - so this row's sentence about what the loader reads may not widen yet. The one-line
-# fill is owed: `importer/dna.py` is M5.3's file under ROADMAP-M5's file-locality table and
-# that lane is building in parallel, which is why M5.4 takes the schema and not the loader.
-# The rule the column exists for is asserted against a directly inserted row instead, by
-# `data-rules-the-projected-tier-reads-the-alias-map-the-way-it-was-built`. [decision 383]
+# NOT widened by M5.4, and the absence was decision 383 rather than an oversight: `0027` added
+# `dna_alias.kind text` and the loader's fill was recorded as owed. The fill landed with the
+# 2026-09-25 user-test wave (decision 500) and is held by its own M5 row,
+# `data-rules-the-alias-kind-is-stored-and-a-lexicon-row-never-projects`, rather than by widening
+# this M4.5 row. [decisions 383 and 500]
 
 [[requirement]]
 id = "data-rules-validation-reports-rather-than-raises"
@@ -5452,7 +5449,7 @@ id = "library-rate-title-card-credits-are-one-row-per-person-and-job"
 spec = "§4.1 (\"credit — dedupe at read time, never at import\") + §6.0 title card"
 milestone = "M4.9"
 kind = "integration"
-what = "A person credited with one job under two department spellings comes back as exactly one credit row; the set of `person_id:job` keys derived from the response is as large as the row list; and the `character` in the payload is stable under insertion order (§6.0's card list does not name it, so no surface prints it yet — decision 197)."
+what = "A person credited with one job under two department spellings comes back as exactly one credit row; the set of `person_id:(role_class ?? job)` keys derived from the response is as large as the row list (the read folds per person and class since the 2026-09-25 user test, which is `library-rate-title-card-credits-fold-per-person-and-class`); and the `character` in the payload is stable under insertion order (§6.0's card list does not name it, so no surface prints it yet — decision 197)."
 why = "TMDB records leads under both `Acting` and `Actor`: 7,918 (title, person, job) triples span more than one department across 1,216 of 19,071 titles, 816 of them inside the twelve credits the card renders, and Svelte 5's keyed each throws on a duplicate key in the production branch too."
 tests = [
     "backend/tests/test_import_integration.py::test_a_credit_is_one_row_per_person_and_job_across_department_spellings",
@@ -11357,4 +11354,83 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The data-quality half of the owner's instruction of 2026-09-25 after the first household user
+# test (workstream WK). Four rows, one per rule the test met on the seeded install: a card that led
+# with an MPST retelling or another film's synopsis, a poster on a host the app may not serve, a
+# credit list that named one person twice, and an alias map whose `kind` column was never loaded.
+# Every `spec` cites sections only, for the reason the vocabulary-label row above gives: decisions
+# 499-501 are recorded in the same wave, and `_unresolvable_decision_citations` reddens a row whose
+# decision is not yet headed in the register. The merge appends them once the entries land.
+[[requirement]]
+id = "library-rate-title-card-never-leads-with-mpst-or-another-titles-synopsis"
+spec = "§4.1 (title_meta, \"one block = one droppable source\") + §6.0 title card + §8 stage 5 (packs)"
+milestone = "M5"
+kind = "integration"
+what = "The card's overview never comes from an mpst synopsis, and a Wikipedia or MPST plot that another title also carries (same field, spaces trimmed) is absent from both titles' cards and from both titles' extraction packs, the next eligible text taking its place; a shared TMDB overview is kept, the mpst rows stay in title_meta and an unshared mpst retelling still feeds the pack; the scoped resolution a derive runs answers the same; and migration 0037 writes onto a seeded install exactly what the new walk answers, after which the walk changes nothing (decision 499)."
+why = "On the seeded install 965 titles had only an MPST retelling for text (up to 45,643 characters, ending included) and the sweep's recall aid quoted it; 84 MPST synopses and 102 Wikipedia pages were attached to two or more titles, so Moulin Rouge (1952) showed the 2001 plot and a verdict landed on it, and Insomnia (1997) holds quote-verified tags quoted from the 2002 remake's synopsis."
+tests = [
+    "backend/tests/test_title_meta.py::test_an_mpst_synopsis_is_never_the_overview",
+    "backend/tests/test_title_meta.py::test_a_synopsis_another_title_shares_is_absent_from_both_cards",
+    "backend/tests/test_dna_packs.py::test_a_shared_plot_gives_way_to_the_next_longest_and_the_order_is_retaken",
+    "backend/tests/test_dna_packs.py::test_a_plot_another_title_carries_never_reaches_the_pack",
+    "backend/tests/test_title_card_upgrade.py::test_0037_writes_what_the_new_walk_answers_and_the_walk_then_changes_nothing",
+]
+
+[[requirement]]
+id = "library-rate-title-card-art-is-stored-only-from-servable-hosts"
+spec = "§6.8 (\"Poster-forward 2:3 cards\") + §4.1 (title_meta)"
+milestone = "M5"
+kind = "integration"
+what = "The import and §8 stage 3 resolve title.poster_path and title.backdrop_path only from a URL art/hosts.servable accepts (https, image.tmdb.org or static.tvmaze.com, exact host), walking the same source order over the eligible values: tmdb still wins, TVmaze now wins over OMDb's IMDb-hosted poster, a title with only an IMDb-hosted poster has none, and the import report counts the URLs it skipped; migration 0037 clears the seeded install's IMDb-hosted posters and restores the TVmaze ones (decision 501, on decision 483's hosts)."
+why = "OMDb ranks above TVmaze and its poster is always m.media-amazon.com, so the seed wrote 157 posters no licence lets this app serve and hid 8 TVmaze posters it may; with art served from this app's origin, poster_path has to be servable by construction."
+tests = [
+    "backend/tests/test_title_meta.py::test_an_image_on_a_host_the_app_may_not_serve_is_skipped",
+    "backend/tests/test_title_meta.py::test_the_source_order_travels_with_the_bundle",
+    "backend/tests/test_title_card_upgrade.py::test_0037_writes_what_the_new_walk_answers_and_the_walk_then_changes_nothing",
+]
+
+[[requirement]]
+id = "library-rate-title-card-credits-fold-per-person-and-class"
+spec = "§4.1 (\"credit — dedupe at read time, never at import\") + §6.0 title card + §3.1 (roles)"
+milestone = "M5"
+kind = "integration"
+what = "credits_for returns one row per (person, role class): TMDB's job label on it, every spelling in `jobs` by source priority, every agreeing source in `sources`, and a stored class outside the closed vocabulary (the corpus's `crew`) classed by derive/ids.class_of; within one title and class, people whose loose_name agrees are one row when they carry at most one imdb id and one tmdb id between them, led by the person with the most ids and listing all of them in `person_ids`, and stay apart when their ids disagree or their name folds to nothing; §8 stage 3 matches a name-only credit to the person already credited on the same title in the same class before minting one, so a retry re-points an old twin and mints nothing; migration 0037 classes the seeded install's five `crew` composer credits."
+why = "Heat showed Elliot Goldenthal twice ('Original Music Composer' and 'Composer') and Michael Mann as Writer and Screenplay; one human arrives as an imdb-only and a tmdb-only person (John Williams on Schindler's List, 1,685 groups on bundle titles); and the derive minted a name-only twin for every OMDb credit, 76 on the 14 acquired titles."
+tests = [
+    "backend/tests/test_import_integration.py::test_a_crew_member_is_one_row_per_role_across_job_spellings",
+    "backend/tests/test_import_integration.py::test_one_name_with_ids_that_cannot_disagree_is_one_credit_row",
+    "backend/tests/test_import_integration.py::test_a_credit_is_one_row_per_person_and_job_across_department_spellings",
+    "backend/tests/test_derive_rebuild.py::test_a_name_only_credit_finds_the_person_this_title_already_credits",
+    "backend/tests/test_derive_rebuild.py::test_the_same_title_match_prefers_the_person_who_carries_an_id",
+    "backend/tests/test_title_card_upgrade.py::test_0037_classes_the_crew_credit_and_marks_the_lexicon_aliases",
+]
+
+[[requirement]]
+id = "data-rules-the-alias-kind-is-stored-and-a-lexicon-row-never-projects"
+spec = "§8 stage 8 (\"per-title alias-map projection of its keywords\") + §4.3 (dna_vocab)"
+milestone = "M5"
+kind = "integration"
+what = "importer/dna._load_aliases stores each alias row's shipped `kind` (NULL where the map has no such column) and reports how many are lexicon; dna/aliases.load_alias_map refuses a lexicon row and projects every other kind and NULL; and migration 0037 writes `lexicon` onto the seeded install's 84 corpus lexicon rows and the four teen presence keywords, never overwriting a stored kind (decision 500, taking decision 383's owed fill)."
+why = "The loader dropped the column, so kind was NULL on all 4,108 rows of the seeded install and the corpus's lexicon rows projected register terms for every acquired title; 'teenage girl' and three like it project characters.teen_protagonist, a lead-role term, as they did onto Heat for a supporting role."
+tests = [
+    "backend/tests/test_dna_import.py::test_the_alias_kind_is_stored_and_a_lexicon_row_never_projects",
+    "backend/tests/test_dna_aliases.py::test_a_row_the_loader_wrote_with_no_kind_is_in_the_map",
+    "backend/tests/test_title_card_upgrade.py::test_0037_classes_the_crew_credit_and_marks_the_lexicon_aliases",
+]
+
+[[requirement]]
+id = "library-rate-title-card-dna-quotes-and-weights-read-as-what-they-are"
+spec = "§4.1 rule 1 (\"a tag without its quote is unfalsifiable\") + §4.1 rule 2 (weights, never filters) + §6.0 DNA card"
+milestone = "M5"
+kind = "backend"
+what = "An evidence quote that starts mid-sentence is printed with a leading ellipsis and one that stops short of a sentence's end with a trailing one, changing no character of the stored quote; a projected term with a weight of one is drawn fainter than a term several sources agree on and is never dropped from the card; and the card keys its credit list by person_id + ':' + (role_class ?? job)."
+why = "Heat's mood.gritty rests on 'not this serious, gritty crime epic', a fragment of a review that calls Heat exactly that, and printed bare it read as the reviewer denying it; Heat's characters.teen_protagonist rests on one MovieLens tag and looked as sure as a four-source term (C9.5, C9.6 of the 2026-09-25 user test)."
+tests = [
+    "frontend/src/lib/quote.test.js::marks a span that starts mid-sentence and stops short of its end",
+    "frontend/src/lib/quote.test.js::leaves a whole sentence exactly as stored",
+    "frontend/src/lib/quote.test.js::changes no character of the stored quote",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::marks a quote cut mid-sentence and draws a one-source projection fainter, dropping none",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::keys the credit list by person and class, so one person in two classes is two rows",
 ]
