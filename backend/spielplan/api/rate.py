@@ -452,10 +452,11 @@ async def answer_from_title_card(
     `rate.session`, so the card, the block counter, Undo and the after-the-tap reveal are §6.1's
     own. The envelope is the Rate surface's, so the reveal rides on this response and no other.
     """
-    if body.answer != "not_seen":
-        # Before any write, for `_assert_active_basis`'s own reason: a verdict is a score and a
-        # refit; not-seen is a state change and fits nothing, which is why `/not-seen` skips it.
-        await _assert_active_basis(request, conn)
+    # First, and for all four answers: three of them score and refit, and the route is one
+    # fitting route to `test_model_basis`'s inventory whichever answer arrives. Refusing a
+    # not-seen on a swapped basis costs a retry after the restart; skipping the guard for it
+    # would make the route's first statement depend on its body.
+    await _assert_active_basis(request, conn)
     try:
         outcome = await direct.answer(
             conn,
