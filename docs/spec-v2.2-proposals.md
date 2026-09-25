@@ -12391,9 +12391,8 @@ One helper (`scoring/backbone.directions`) is the only reading of the coordinate
 step-18 invariant holds.
 
 `backbone.coordinate`, `title_placement.e_hat`, `blend_ratios` and §6.0's model line keep the
-unscaled coordinates. Decision 236's contract question stays open for the artifact itself, and the
-measurement goes upstream with it. (Decision 503, in this block, is the corpus's answer: E is
-support-weighted.)
+unscaled coordinates. Decision 236's contract question for the artifact itself is answered by
+decision 503, in this block: E is support-weighted, and this decision is how the app reads it.
 
 The per-user (λ, β) search, BETA_GRID, BETA_MAX = 0.8 and the noise-floor rule are unchanged.
 
@@ -12404,9 +12403,11 @@ paragraph.
 **Cost.**
 - One migration column, shared with decision 471.
 - One rewrite of every `user_score` partition on the first tick after the upgrade.
-- A re-read of Tonight's D threshold (decision 217), because user_score's spread changes.
-  Owned-title sd is now 0.81 and 0.95 for the two live members (max 2.26 and 2.09), against 0.57 and
-  1.08 (max 3.13 and 13.27) before.
+- A re-read of Tonight's D threshold (decision 478), because the members' Ledger orders change:
+  decision 478 measured its ~14.5% on the orders this decision replaces, and under decision 477 D
+  reads rank-standardised scores, so it is the orders and not the spread that move it. Owned-title
+  sd is now 0.81 and 0.95 for the two live members (max 2.26 and 2.09), against 0.57 and 1.08 (max
+  3.13 and 13.27) before.
 - The λ grid now acts on rows of length ≤ 1. λ 1, the grid's low end, is chosen for both members, so
   fits pinned at the grid's edge are to be watched.
 
@@ -12869,8 +12870,9 @@ mean the same thing for each member.
   re-measured on standardised inputs.
 - Small pools now resolve in few pairs, as a real small library would, so integration fixtures that
   needed long rounds were widened to household size.
-- §5.1's cf tail is upstream and not fixed here. This decision makes Tonight robust to it; Home and
-  solo browsing still see the raw tail.
+- §5.1's cf tail is not fixed here. This decision makes Tonight robust to it, and decision 469, in
+  the same deploy, removes it for Home and solo browsing too: the fold-in reads gate-weighted
+  directions, and owned-title maxima fall to 2.26 and 2.09 from 13.27.
 
 ### 478. D is read on the standardised scale and its threshold is 0.40
 
@@ -12902,6 +12904,13 @@ acted on). It does not trigger the person split of decision 479.
 cross 0.40 far more often (7–83% across ρ from −0.3 to 0.8 and pools of 120–700). Real Ledgers share
 the crowd prior at the top and a Gaussian copula does not. The threshold is re-read once more
 evenings exist; `session_result.conflict` records every surfaced split. The spec's 0.20 changes.
+
+The ~14.5% is provisional. The frozen pool it was simulated on carries `user_score` written before
+decision 469, and decisions 469 and 503 replace those Ledger orders in this same deploy - the two
+members' owned top-50 share 6 titles under 469 against 19 before, and D grows as the members' tops
+diverge. So the 0.40 and its rate are read again on the refitted Ledgers, after 469's first-tick
+refit and 503's re-import, from the same sub-pool simulation and from `session_result.conflict`, and
+the threshold or the rate is restated then.
 
 ### 479. A split with no axis is surfaced by person under its own reservation; the stake guarantee is not adopted
 
@@ -12952,8 +12961,11 @@ for the four ballot titles were 4, 7, 8 and 47 of 719. Where a household genuine
 and this decision's reservation serves it.
 
 **Cost.**
-- A new column (0033) and a second reserved label beside 54d's.
-- On the real household's simulated nights the person split fires on about 14.5% of nights. On about
+- A new column (0033) and a second reserved label beside 54d's. 0033's header says 0031 and 0032
+  belong to other streams of this wave; 0032 was allotted and never written, and the header stays
+  as applied, because an applied migration is checksummed.
+- On the real household's simulated nights the person split fires on about 14.5% of nights - decision
+  478's rate, measured on the Ledger orders before decision 469 and provisional with it. On about
   half of those, a seat's own pick displaces the group's third-ranked title. That is a small cost in
   predicted group score in exchange for having the alternative in hand.
 - Stricter stake measures (two of four ballot titles in a member's own top ten) stay unmet for
@@ -13676,8 +13688,9 @@ prior's shape) and not selection.
   fall-through is labelled exploration.
 - The low tiers get fewer comparisons, so D/F order stays coarser, by design.
 - The weighting is not yet measured against §13's agreement figure; that needs the held-out stream
-  to accrue. It should be re-tuned, if at all, after the embedding-scale question (C6.6, decision
-  236) is settled.
+  to accrue. The embedding-scale question it waited on (C6.6, decision 236) is settled in this
+  block by decisions 469, 471 and 503, so it is re-tuned, if at all, once the held-out stream has
+  accrued on the refitted Ledgers.
 - One more query per queue read (read.recent_titles).
 - The held-out rate is unaffected.
 
@@ -14006,8 +14019,13 @@ content-correction mode is deferred, and the test install is re-seeded or models
   - projections from presence keywords onto bundle titles;
   - the corrections ledger's literal 'crew';
   - quote-verified tags quoted from another film's text.
-- Curated verdicts reach an install through `adjudications_v1.tsv` on a models-only import (decision
-  247), or through the §6.6 editor, which applies them at once (decision 445).
+- Curated verdicts reach an install through the §6.6 editor, which applies them at once (decision
+  445), or with the content of a re-seed. A models-only import loads `adjudications_v1.tsv` (decision
+  247) but applies it to no seeded title: the ledger is applied only when a title is derived or
+  re-extracted, a seeded title arrived whole and is never derived, and the rebuild after an import
+  has no ledger pass. So v20260926b's 22 wrong-film drops (on titles 19516, 19229, 5602, 491 and
+  8840) stay on a seeded install after its models-only re-import until they are entered in the
+  editor or the install is re-seeded.
 - The app-side halves ship now: decisions 499, 500 and 501, the read-time credit fold, and the
   derive's same-title person match.
 
@@ -14062,9 +14080,10 @@ The app changes no code to accept the bundle. It arrives on a seeded install as 
 re-import (decisions 162 and 247), followed by a full refit with priors.
 
 **Cost.** One models-only re-import and one full refit of `title_prior` and `user_score`. Every
-ranked surface moves, and Tonight's D threshold (decision 217) must be re-read. Formerly held-out
-titles change `e_source` from `cold_tower` to `backbone`, so they lose the 'no crowd data' badge
-(decision 238). Decision 470's widening finds no uncoordinated seed-list title once this bundle is
+ranked surface moves, and Tonight's D threshold (decision 478) must be re-read. Formerly held-out
+titles change `e_source` from `cold_tower` to `backbone`; the 'no crowd data' badge had already left
+them at this deploy, because decision 475 admits to it only a title with no crowd rating (`item_n`
+null or 0), whatever `e_source` says. Decision 470's widening finds no uncoordinated seed-list title once this bundle is
 imported, and stays for a rated title with no crowd data of its own, such as an acquired one. §4.3
 gains one paragraph.
 

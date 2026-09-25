@@ -10671,7 +10671,8 @@ def test_the_archive_cadence_guard_reads_the_claim_and_not_the_subject(name, tex
         # rather than an append, so the case stops passing the day somebody rewords that row --
         # which is the assertion above this docstring's whole point. [M4.16 cycle 4, M416-C4-SPEC-02]
         ("the fixed-count round back in the milestone table",
-         lambda t: t.replace("the adaptive round (median ~11 pairs", "the ~10-vote round (median")),
+         lambda t: t.replace("the adaptive round (median about ten pairs",
+                             "the ~10-vote round (median")),
         ("the abstain verdict", lambda t: t.replace("NEITHER", "neither")),
         ("the hold-out draw", lambda t: t.replace("uniform_holdout", "holdout")),
         ("the dated point release", lambda t: _POINT_RELEASE.sub("**v2.1.1 undated:**", t)),

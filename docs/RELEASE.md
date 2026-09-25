@@ -43,8 +43,10 @@ guard should enforce: **every §12 row either names an output file that exists i
 recorded as `UNMEASURED` / `NOT BUILT` / `RUN, OUTPUT NOT COMMITTED` with an unfilled verdict.**
 
 M2 is the row that rule was written for (decision 297). Its criterion is §12's own gate — "the
-first real-user validation of the whole corpus project" — and it has never been measured. Its
-verdict may therefore be filled only by deleting the `UNMEASURED` marker, which takes a run. A
+first real-user validation of the whole corpus project" — and no run has measured it: the first
+household's test read it by hand and it did not hold (decision 469), which is evidence against it
+and not a run of it. Its verdict may therefore be filled only by deleting the `UNMEASURED` marker,
+which takes a run. A
 guard asserting M2's verdict is unfilled goes red on the day the owner honestly signs it, and the
 repair that day is to delete the guard together with its coverage-row entry, in the same change.
 That is `test_the_owed_device_checks_are_recorded_and_still_unsigned`'s polarity, deliberately:
@@ -126,7 +128,9 @@ row or Cold Tower placement)"
 See §3 below. The second clause has effectively been measured — `ops/m45_exit_criterion.py`'s
 "owned titles still unplaced after import" check reads 0 against the real bundle, and it is a real
 check rather than a tautology since M4.8 repaired it. The first clause, which is the one §12 calls
-"the gate", has never been run by anybody.
+"the gate", has never been run as a measurement. The first household's test read it by hand on two
+real members and it did not hold; decision 469 records what was seen and the fold-in change it led
+to. No script ran and nothing it produced is committed.
 
 ### M3 — Rank view: tiers, filters, drag-drop, comparison queue
 
@@ -901,9 +905,11 @@ criterion, as written:
 > whole corpus project; every owned title has a coordinate (warm Backbone row or Cold Tower
 > placement)
 
-**It has never been measured, by anybody, in any form.** The second clause has been: M4.5's exit
-script asserts zero owned titles unplaced after a real import, and since M4.8 that check can fail.
-The first clause has not.
+**No run has measured it.** The second clause has been: M4.5's exit script asserts zero owned
+titles unplaced after a real import, and since M4.8 that check can fail. The first clause has been
+read once, by hand, in the first household's test after build ed1f690, and it did not hold (decision
+469). That is evidence against the criterion and not a run of it: nothing below was built for it,
+and nothing it produced is committed.
 
 **What a measurement would take**, so that the size of the ask is on the record rather than in
 somebody's head:
@@ -1508,8 +1514,8 @@ exhausted pool as `CAP` under a comment ending "Reported as a v2.2 spec defect",
 a provenance header. `DNA_MODEL.md` is **not** in this repository, and `docs/spielplan-spec_v2.1.md`
 still cites it normatively in three places: §0's Group row and §6.2 step 5 both bind conflict copy to
 "DNA_MODEL §5.3", and §6.3 initialises the tier shape from "DNA_MODEL §4.5's measured quantile
-shape". The divergence `D` that step 5 thresholds at 0.20 therefore still cannot be checked against
-its source. Decision 294's own argument — "a normative pointer nobody here can read is not
+shape". The divergence `D` that step 5 thresholds at 0.40 on the rank-standardised scale (decision
+478) therefore still cannot be checked against its source. Decision 294's own argument — "a normative pointer nobody here can read is not
 normative" — applies here unchanged and was spent on the other document.
 
 **3.3 is part measured.** `BETA = 0.5` (`round.py:137`) and `GUEST_VAR_FACTOR = 4.0` (`:142`) are
@@ -1521,7 +1527,8 @@ baseline on a household's own evenings, and **that comparison has still not been
 **§4 "What was measured" is superseded as evidence, and the numbers themselves stand.** The
 simulation table (convergence 0-2 in 60 at every pool size, median 20 pairs) was taken before
 `straddle_z` and `BOUNDARY_Z` were retuned and before the fallback fix it names; M4.12's own sweep
-over the shipped 696-title pool is the current reading. The section's last paragraph — "the fixture
+over the shipped 696-title pool was the next reading, and decision 477's sweep, restated on the
+rank-standardised scale Tonight now reads, is the current one. The section's last paragraph — "the fixture
 library cannot show any of this ... it is a claim about a real library, and it needs one" — is
 exactly what `ops/m412_exit_criterion.py` was built to answer, and §1 above records that its output
 is not committed.
