@@ -11,8 +11,9 @@ every signed-in device so the open-rooms list and the lobby banner are live. **S
 carry a room's seats and progress, and go only to devices watching that room.
 
 BLIND BY CONSTRUCTION, HERE TOO. Every frame this hub sends is built by `rooms.lobby` or
-`play.progress`, and neither can return an answer: one has no join to `session_answer` at all,
-the other selects counts and never titles. So the blind property is a fact about what the
+`play.progress`, or is `ballot_frame`'s two integers, and none can return an answer: one has no
+join to `session_answer` at all, the next selects counts and never titles, the last takes no row.
+So the blind property is a fact about what the
 payload builders can produce, not a rule this module has to remember — which matters because a
 hub is exactly the place a later feature reaches for "just send them everything".
 
@@ -38,6 +39,7 @@ log = logging.getLogger("spielplan.tonight.channel")
 ROOMS_CHANGED = "rooms.changed"
 LOBBY = "lobby"
 PROGRESS = "progress"
+BALLOT = "ballot"
 REVEAL = "reveal"
 
 # How long one device gets to take one frame. A household WebSocket fails two ways: the phone
@@ -206,6 +208,19 @@ def progress_frame(session_id: int, progress: list[dict[str, Any]]) -> dict[str,
     }
 
 
+def ballot_frame(session_id: int, *, submitted: int, seated: int) -> dict[str, Any]:
+    """54e's waiting count, live: "1 of 2 submitted".
+
+    The ballot screen prints this count, and a submit that did not complete the reveal used to
+    push the ROUND's progress frame instead — which the client files under the round, so the other
+    phone read "0 of 2 submitted" for as long as it stayed on the screen (the first household
+    evening: still 0 of 2 eighteen seconds after the other vote was in). Two integers and nothing
+    else, because this is the frame most tempting to enrich with who voted for what, and 54e's
+    blindness holds until the reveal.
+    """
+    return {"kind": BALLOT, "session_id": session_id, "submitted": submitted, "seated": seated}
+
+
 def reveal_frame(session_id: int) -> dict[str, Any]:
     """54e's simultaneity, as a moment rather than a state: "Approvals … are revealed together."
 
@@ -217,6 +232,7 @@ def reveal_frame(session_id: int) -> dict[str, Any]:
 
 
 __all__ = [
+    "BALLOT",
     "GAVE_UP",
     "Hub",
     "LOBBY",
@@ -228,6 +244,7 @@ __all__ = [
     "Subscriber",
     "close_quietly",
     "wire",
+    "ballot_frame",
     "lobby_frame",
     "progress_frame",
     "reveal_frame",

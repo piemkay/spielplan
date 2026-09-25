@@ -896,6 +896,14 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
     )
     assert rows[3]["slot"] == "wildcard"
 
+    # Every seat votes first, because the reveal now also carries each seat's approval breadth and
+    # refuses it, as `ballot.tally` refuses the counts, until every ballot is in (54e; the
+    # 2026-09-25 wave replaced "Unanimous." with it). A reveal read over an unvoted ballot is not a
+    # reveal this app can produce, so the fixture stops asking for one.
+    from spielplan.tonight import ballot as ballot_rules
+
+    for seat in seats:
+        await ballot_rules.submit(db, participant_id=seat, approved=[slate.finalists[0]])
     reveal = await result_rules.slate(
         db, sid, [], {"chosen_title_id": slate.finalists[0], "approval_share": 0.5,
                       "participants": 2},

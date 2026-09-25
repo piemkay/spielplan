@@ -34,6 +34,7 @@ and not a permanent name.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import string
@@ -42,7 +43,7 @@ from typing import Any
 
 import asyncpg
 
-from spielplan.tonight.pool import Seat
+from spielplan.tonight.pool import MAX_VETOES, VETOES, Seat
 
 log = logging.getLogger("spielplan.tonight.rooms")
 
@@ -306,7 +307,8 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
     row = await conn.fetchrow(
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
-               s.started_at, s.ended_at, s.host_user_id, u.name AS host_name
+               s.started_at, s.ended_at, s.host_user_id, u.name AS host_name,
+               s.context -> 'vetoes' AS vetoes
           FROM session s JOIN app_user u ON u.id = s.host_user_id
          WHERE s.id = $1
         """,
@@ -334,6 +336,11 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
         "include_rewatches": row["include_rewatches"],
         "started_at": row["started_at"],
         "host": {"user_id": row["host_user_id"], "name": row["host_name"]},
+        # §6.2 step 1's "not tonight" control (decision 480): what the room has vetoed, and the
+        # fixed list it may choose from, by label. Controls of the room rather than facts about
+        # the pool, so they sit beside the budget and carry no candidate.
+        "vetoes": _vetoes_payload(vetoes_of({"vetoes": row["vetoes"]})),
+        "veto_options": [{"key": k, "label": label} for k, (label, _) in VETOES.items()],
         "seats": [
             {
                 "participant_id": p["id"],
@@ -363,7 +370,7 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
     rows = await conn.fetch(
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
-               s.started_at, u.name AS host_name,
+               s.started_at, u.name AS host_name, s.context -> 'vetoes' AS vetoes,
                count(p.id) AS seated,
                bool_or(p.user_id = $1) AS viewer_seated
           FROM session s
@@ -391,9 +398,64 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
             # A room that has started is still listed — the household can see the evening is
             # happening — but its seat is not tappable. Hiding it would be a worse lie.
             "joinable": r["state"] == STATE_OPEN and not r["viewer_seated"],
+            # Shown on the row so somebody deciding whether to join knows what tonight has
+            # already ruled out (decision 480).
+            "vetoes": _vetoes_payload(vetoes_of({"vetoes": r["vetoes"]})),
         }
         for r in rows
     ]
+
+
+def vetoes_of(context: Any) -> list[str]:
+    """The veto keys a session's `context` carries, known keys only and in `VETOES` order.
+
+    Tolerant of the two shapes jsonb reaches here in — decoded by `db/pool.py`'s codec, or a
+    string where a connection has none — and of a key a later build retired, which simply stops
+    vetoing anything rather than failing the room.
+    """
+    ctx = context if isinstance(context, dict) else json.loads(context or "{}")
+    raw = ctx.get("vetoes") or []
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return [k for k in VETOES if k in set(raw)]
+
+
+def _vetoes_payload(keys: Sequence[str]) -> list[dict[str, str]]:
+    return [{"key": k, "label": VETOES[k][0]} for k in keys]
+
+
+async def set_vetoes(
+    conn: asyncpg.Connection, *, session_id: int, user_id: int, keys: Sequence[str]
+) -> list[str]:
+    """Replace a room's "not tonight" vetoes. §6.2 step 1 as decision 480 amends it.
+
+    ANY SEATED MEMBER, and only before Start. The first household evening's member who wanted
+    "nothing violent" was not the host, so a host-only control would have left her exactly where
+    she was; and the pool is built once at Start and frozen (§6.2 step 6, "nothing re-ranks"), so
+    a veto after that would be a promise the evening cannot keep. The state predicate is in the
+    UPDATE for `join`'s reason: a veto racing the host's Start either lands before the claim or is
+    refused, never written into a room whose pool is already built without it.
+    """
+    unknown = sorted(set(keys) - set(VETOES))
+    if unknown:
+        raise RoomError("bad_veto", f"{unknown} are not on the list")
+    wanted = [k for k in VETOES if k in set(keys)]
+    if len(wanted) > MAX_VETOES:
+        raise RoomError("bad_veto", f"at most {MAX_VETOES} vetoes a room")
+    seated = await conn.fetchval(
+        "SELECT 1 FROM session_participant WHERE session_id = $1 AND user_id = $2",
+        session_id, user_id,
+    )
+    if seated is None:
+        raise RoomError("not_seated", "only somebody in the room can change what it rules out")
+    moved = await conn.fetchval(
+        "UPDATE session SET context = jsonb_set(context, '{vetoes}', to_jsonb($2::text[])) "
+        "WHERE id = $1 AND state = $3 AND ended_at IS NULL RETURNING id",
+        session_id, wanted, STATE_OPEN,
+    )
+    if moved is None:
+        raise RoomError("started", "the room has started, so tonight's list is already built")
+    return wanted
 
 
 async def set_state(conn: asyncpg.Connection, session_id: int, state: str) -> None:
@@ -488,8 +550,9 @@ async def invite(
     replaced an unread §7.3 finish prompt, on the phone, where the banner fallback is not the
     thing the member is looking at. Keying it on the session makes two rooms two notifications
     and a re-announced room one. `url` is where a tap lands, and §6.2 step 2's answer to an
-    invitation is the lobby, not Home. The service worker stays a dumb renderer and keeps its
-    default for a sender that sets neither.
+    invitation is the lobby, not Home — the room's own join link, so the tap seats the member in
+    THIS room rather than at the two doors with a code to type (decision 481). The service
+    worker stays a dumb renderer and keeps its default for a sender that sets neither.
     """
     invited = await members_to_invite(
         conn, session_id=session_id, host_user_id=host_user_id
@@ -500,7 +563,7 @@ async def invite(
                 conn, user_id,
                 {"kind": "tonight.invite", "session_id": session_id, "room_code": room_code,
                  "title": "Tonight", "body": f"A room is open — {room_code}",
-                 "tag": f"tonight:{session_id}", "url": "/tonight"},
+                 "tag": f"tonight:{session_id}", "url": f"/tonight?room={room_code}"},
             )
         except Exception:
             # Best-effort, per member: §6's preamble guarantees an in-app equivalent for every
@@ -544,4 +607,6 @@ __all__ = [
     "resolve_code",
     "seats_of",
     "set_state",
+    "set_vetoes",
+    "vetoes_of",
 ]

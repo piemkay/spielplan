@@ -258,7 +258,29 @@ test.describe('tonight together', () => {
       await expect(page.getByTestId('tonight-runners-up')).toBeVisible();
       await expect(page.getByTestId('tonight-play')).toBeVisible();
     }
-    // Both approved the same title, so §6.2 step 7's unanimity is called out.
-    await expect(a.getByTestId('tonight-unanimous')).toBeVisible();
+    // Both approved the same one title. The reveal used to call that out as "Unanimous." — which
+    // was just as true over an evening where one person approved four and the other one. It says
+    // how broad each person's yes was instead, and whose only yes the winner was.
+    await expect(a.getByTestId('tonight-unanimous')).toHaveCount(0);
+    await expect(a.getByTestId('tonight-breadth')).toContainText(/said yes to 1 of \d/);
+    await expect(a.getByTestId('tonight-only-yes')).toHaveCount(2);
+  });
+
+  test('a ?room= link lands the other device in the room, and the lobby offers the link', async () => {
+    // Decision 481: the lobby said "or send the link" and there was no link. The link is the
+    // room code's own URL, which the push invitation also carries; opening it on a device that is
+    // signed in seats that member in the room with no code typed.
+    await room({ join: false });
+    await expect(a.getByTestId('tonight-share')).toBeVisible();
+    await expect(a.getByTestId('tonight-share-caption')).not.toContainText('send the link');
+    const code = (await a.getByTestId('tonight-room-code').textContent()).trim();
+
+    await b.goto(`/tonight?room=${code}`);
+    await expect(b.getByTestId('tonight-lobby')).toBeVisible({ timeout: 15_000 });
+    await expect(b.getByTestId('tonight-room-code')).toHaveText(code);
+    await expect(b).toHaveURL(/\/tonight$/);
+    await expect(a.getByTestId('tonight-seats').locator('li')).toHaveCount(2, { timeout: 15_000 });
+    await a.getByTestId('tonight-end-room').click();
+    await a.getByTestId('tonight-end-room-confirm').click();
   });
 });

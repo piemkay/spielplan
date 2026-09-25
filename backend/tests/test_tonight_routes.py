@@ -130,6 +130,28 @@ async def solo_room(app, db, library):
     }
 
 
+@pytest.fixture
+async def wide_solo_room(app, db, library):
+    """`solo_room` over a hundred and twenty films rather than six, for a test whose subject is
+    the second answer of a round: what keeps a round asking on the room's scale is how many
+    titles sit near the cut (decision 477)."""
+    await db.execute(
+        """
+        INSERT INTO title (id, kind, name, year, runtime_min, is_owned)
+        SELECT g, 'movie', 'Film ' || g, 2010, 100, true FROM generate_series(7, 120) AS g
+        """
+    )
+    client, user_id = await admin_client(app)
+    await score(db, user_id, list(range(1, 121)))
+    room = await open_room(client)
+    started = await client.post(f"/api/tonight/sessions/{room['session_id']}/start")
+    assert started.status_code == 200, started.text
+    return {
+        "client": client, "user_id": user_id, "session_id": room["session_id"],
+        "seat": room["lobby"]["seats"][0]["participant_id"],
+    }
+
+
 def leaks_pool(payload) -> list[str]:
     """The pool's own ranking, in any of the shapes it could arrive in.
 
@@ -176,11 +198,16 @@ async def test_an_answer_names_a_sealed_pair_and_never_two_title_ids(solo_room):
     assert res.json()["detail"]["reason"] == "stale_pair"
 
 
-async def test_the_seal_is_single_use(db, solo_room):
+async def test_the_seal_is_single_use(db, wide_solo_room):
     """§13's figures count rows and §4.2's tables are append-only, so a replay would weight one
     judgement twice in the only data admitted to evaluate the round, permanently. The same
-    property `api/rank.py` gives a queue pair, for the same reason."""
-    client, seat = solo_room["client"], solo_room["seat"]
+    property `api/rank.py` gives a queue pair, for the same reason.
+
+    Over a household-sized library, so the first answer does not also end the round: on the
+    rank-standardised scale (decision 477) six films resolve their shortlist in one pair, and a
+    replay onto an ended seat is refused as `round_over` — true, and not the refusal this is about.
+    """
+    client, seat = wide_solo_room["client"], wide_solo_room["seat"]
     token = (await client.get(f"/api/tonight/seats/{seat}/round")).json()["card_token"]
 
     first = await client.post(
@@ -557,7 +584,13 @@ async def test_the_result_is_refused_until_every_seat_has_submitted(app, db, lib
     assert body["winner"]["title_id"] == chosen[0]
     assert body["approval_share"] == pytest.approx(1.0)
     assert body["participants"] == 2
-    assert body["unanimous"] is True
+    # Not "unanimous" any more: it was literally true over an evening where one member approved
+    # four titles and the other one, the winner being her only yes. Each seat's breadth instead,
+    # released with the rest of the reveal and not before (54e) — both said yes to exactly the one.
+    assert "unanimous" not in body
+    assert [(b["approved"], b["of"], b["only_yes"]) for b in body["breadth"]] == [
+        (1, len(card["slate"]), True), (1, len(card["slate"]), True),
+    ]
     assert body["winner"]["fit_line"]
     assert body["winner"]["match_lines"], "§6.2 step 7: one match line per participant"
     # The runtime does not mean the same thing without the kind: §6.0's label reads a series in
@@ -737,7 +770,9 @@ async def test_the_invitation_names_its_own_replacement_key_and_the_surface_that
     assert len(service.payloads) == 1, "one invitation, to the member who was not holding the host's phone"
     payload = service.payloads[0]
     assert payload["tag"] == f"tonight:{room['session_id']}"
-    assert payload["url"] == "/tonight"
+    # The room's own join link rather than the bare surface (decision 481): a tap on the
+    # invitation lands in THIS room, not at the two doors with a code still to type.
+    assert payload["url"] == f"/tonight?room={room['room_code']}"
     # The kind is the one the frontend switches on; the tag is for the browser, not instead of it.
     assert payload["kind"] == "tonight.invite"
     assert room["room_code"] in payload["body"]
@@ -1468,3 +1503,117 @@ async def test_the_arm_is_still_the_servers_and_never_the_clients(app, db, libra
     assert counted == len(honest) - 1, (
         f"{len(honest)} answers sent, the one at pair {held} held out, provenance claims {counted}"
     )
+
+
+# --- the 2026-09-25 wave: decisions 479-481 at the HTTP seam --------------------------------
+
+
+class _Records:
+    """A household device that takes every frame, for asserting what the hub was asked to send."""
+
+    def __init__(self):
+        self.frames = []
+
+    async def send_json(self, data):
+        self.frames.append(data)
+
+    async def close(self, code=1000):
+        return None
+
+
+async def _frames_settled():
+    from spielplan.api import tonight as tonight_api
+
+    await asyncio.gather(*list(tonight_api._FRAMES), return_exceptions=True)
+
+
+async def test_a_ballot_submit_pushes_the_submitted_count_and_no_approvals(app, db, library):
+    """The other phone's "0 of 2 submitted" stayed at 0 after the first vote was in, because the
+    submit pushed the ROUND's progress frame. It pushes the ballot's own count now — two integers,
+    no title, no approval (54e) — and the reveal frame once the last vote lands."""
+    from spielplan.api import tonight as tonight_api
+
+    host, host_id = await admin_client(app)
+    member, member_id = await member_client(app, host)
+    await score(db, host_id, library)
+    await score(db, member_id, library)
+    room = await open_room(host)
+    sid = room["session_id"]
+    joined = (await member.post("/api/tonight/sessions/join", json={"session_id": sid})).json()
+    await host.post(f"/api/tonight/sessions/{sid}/start")
+    host_seat = room["lobby"]["seats"][0]["participant_id"]
+    await _play_out(host, host_seat)
+    await _play_out(member, joined["participant_id"])
+    slate = (await host.get(f"/api/tonight/sessions/{sid}/ballot")).json()["slate"]
+
+    watcher = _Records()
+    sub = tonight_api.HUB.subscribe(watcher, user_id=member_id, session_id=sid)
+    try:
+        first = await host.post(
+            f"/api/tonight/seats/{host_seat}/ballot", json={"approved": [slate[0]["title_id"]]}
+        )
+        assert first.status_code == 200, first.text
+        await _frames_settled()
+    finally:
+        tonight_api.HUB.unsubscribe(sub)
+
+    # Equality over the whole frame, which is what "no approval leaves before the reveal" means:
+    # there is no key a title id or a yes could be carried under.
+    ballots = [f for f in watcher.frames if f["kind"] == "ballot"]
+    assert ballots == [{"kind": "ballot", "session_id": sid, "submitted": 1, "seated": 2}]
+    assert not [f for f in watcher.frames if f["kind"] == "progress"], (
+        "the round's progress frame is not the ballot's count"
+    )
+
+
+async def test_any_seated_member_sets_the_rooms_vetoes_over_http(app, db, library):
+    """Decision 480's control through the route: the member (not only the host) sets the chips,
+    the lobby and the open-rooms row both carry them, a key off the fixed list is a 422, and
+    somebody with no seat in the room is refused."""
+    host, host_id = await admin_client(app)
+    member, member_id = await member_client(app, host)
+    await score(db, host_id, library)
+    await score(db, member_id, library)
+    room = await open_room(host)
+    sid = room["session_id"]
+    assert [o["key"] for o in room["lobby"]["veto_options"]] == [
+        "violence", "sexual_violence", "horror", "harrowing"
+    ]
+    assert room["lobby"]["vetoes"] == []
+
+    outsider = await member.post(f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["horror"]})
+    assert outsider.status_code == 403, outsider.text
+
+    await member.post("/api/tonight/sessions/join", json={"session_id": sid})
+    set_ = await member.post(f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["violence"]})
+    assert set_.status_code == 200, set_.text
+    assert set_.json()["vetoes"] == [{"key": "violence", "label": "violence"}]
+    lobby = (await host.get(f"/api/tonight/sessions/{sid}")).json()
+    assert lobby["vetoes"] == [{"key": "violence", "label": "violence"}]
+    rooms_row = next(
+        r for r in (await host.get("/api/tonight/rooms")).json()["rooms"] if r["session_id"] == sid
+    )
+    assert rooms_row["vetoes"] == [{"key": "violence", "label": "violence"}]
+
+    bad = await member.post(f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["gore"]})
+    assert bad.status_code == 422, bad.text
+
+
+async def test_the_round_card_says_what_to_expect_rather_than_the_cap(solo_room):
+    """"pair 1 · cap 20" read as the plan for the evening. The card carries the sweep's median
+    beside the cap, so the header can say "usually about ten" and keep the cap for a quiet line."""
+    client, seat = solo_room["client"], solo_room["seat"]
+    card = (await client.get(f"/api/tonight/seats/{seat}/round")).json()
+    assert card["typical"] == rnd.TYPICAL_PAIRS
+    assert card["typical"] < card["cap"] == rnd.CAP_PAIRS
+
+
+def test_the_reveal_route_asks_the_callers_own_toggle_before_it_shows_d():
+    """Decision 486's register is gated where the payload is built: the result route hands the
+    reveal builder the caller's Show-the-model answer, and asks nothing else."""
+    import inspect
+
+    from spielplan.api import tonight as tonight_api
+
+    source = inspect.getsource(tonight_api.result)
+    assert "show_model=rail.visible_to(user)" in source

@@ -6,7 +6,7 @@ rows 3 and 4, §6.5.
     "Per-participant tonight scores are averaged across participants — plain averaging,
      unchanged … The round produces **three finalists and a wildcard**: the top three by group
      score, plus one exploratory pick honestly labelled … A hard split — divergent answers on
-     the leading candidates, or Ledger divergence **D ≥ 0.20** (~14.5% of nights; below that,
+     the leading candidates, or Ledger divergence **D ≥ 0.40** (~14.5% of nights; below that,
      decide silently) — is **surfaced with the alternative in hand**, never silently averaged.
      The contested axis is **zeroed, not averaged**, and because zeroing only removes an
      influence it cannot by itself produce an alternative: **the third finalist slot is reserved
@@ -18,10 +18,11 @@ from the ranking cannot put a title on the other pole into the result — the pr
 is a construction step, and it **replaces** the third-ranked title rather than being appended
 beside it: a fourth finalist would be a different promise from the one §6.2 makes.
 
-D's FORMULA IS RECOVERED, NOT CHOSEN. §6.2 gives the threshold (0.20) and the frequency (~14.5%
-of nights) and never defines D. Proposal 63 says to recover the formula from `DNA_MODEL` §5.3 —
-which is not vendored in this repo, so its own escalation clause fires and the owner settled it
-on 2026-08-29: **mean − min of the seated members' §5.1 scores, per candidate**, guests without
+D's FORMULA IS RECOVERED, NOT CHOSEN. §6.2 gives the threshold (0.20 then, 0.40 since decision
+478) and the frequency (~14.5% of nights) and never defines D. Proposal 63 says to recover the
+formula from `DNA_MODEL` §5.3 — which is not vendored in this repo, so its own escalation clause
+fires and the owner settled it on 2026-08-29: **mean − min of the seated members' §5.1 scores,
+per candidate**, guests without
 a grid profile excluded. That is the prototype's `spread()`, the only formula any artifact here
 carries. The risk is stated rather than hidden: mean-minus-min and |Δ| differ by exactly 2× for
 a couple, so a threshold calibrated on one and shipped against the other fires at half or double
@@ -32,18 +33,23 @@ PER CANDIDATE, NOT PER NIGHT. Proposal 63 again: "the ~14.5% figure is the share
 which the **winning** candidate crosses the threshold". So D is computed per candidate and the
 session's split test reads the leading one.
 
-AND 0.20 IS NOT READ ON THE SCALE IT WAS WRITTEN ON. `member_ledger` carries §5.1 `user_score`
-values, which ship z-scored with a measured sd of 0.50 over the owned pool — so for a couple,
-where mean-minus-min is half the gap, `D_THRESHOLD = 0.20` means the two members differ by 0.80 sd,
-which 35-57% of top candidates do unless tastes correlate at rho ~ 0.93. §6.2's own ~14.5% is
-therefore a claim this code does not meet, and `divergent_answers` below over-fires for a second,
-unrelated reason. Neither is re-tuned here: §6.2's number is normative and the correction needs one
-evening of real answers, so the measured rates are recorded in decision 217 beside the reason they
-were not acted on, and this note is here so nobody reads 0.20 as calibrated. [decision 217]
+THE THRESHOLD IS READ ON THE SCALE IT WAS CALIBRATED ON, AND THAT IS NOW A FACT RATHER THAN A HOPE.
+Decision 217 recorded that 0.20 was never calibrated: `member_ledger` carried raw §5.1 scores, on
+a premise that they ship at sd 0.50 over the owned pool, and deferred the correction to "one
+evening of real answers". The first household evening was that evening, and it refuted the
+premise — owned-pool sd 1.081 and 0.572 for its two members, with D = 5.07 on a title both rank
+first. So `member_ledger` is now each member's rank-standardised score over the frozen pool
+(decision 477, sd 1.0), and the threshold was re-read on that household's own Ledgers: over
+simulated nights (random 40-100% sub-pools of its 719 films, mood noise sd 0.2 / 0.4 / 0.8) the
+leader crosses 0.40 on 16.7% / 13.0% / 14.6% of nights, which is §6.2's ~14.5%. One household is
+one household: Gaussian households with tastes uncorrelated at the top cross it far more often, so
+the figure is re-read when there are more evenings to read it on. `divergent_answers` is left as
+decision 217 found it and does not trigger the person split below. [decisions 217, 478]
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,8 +57,9 @@ from typing import Any
 from spielplan.tonight import copy as copy_rules
 
 # §6.2 step 5's threshold, inclusive. "~14.5% of nights; below that, decide silently" — the
-# silence is half the rule, and the half an implementation drops.
-D_THRESHOLD = 0.20
+# silence is half the rule, and the half an implementation drops. 0.40 on the rank-standardised
+# scale, recalibrated on the first household evening's Ledgers (module docstring; decision 478).
+D_THRESHOLD = 0.40
 
 # 54d: "three finalists and a wildcard".
 FINALISTS = 3
@@ -60,6 +67,15 @@ FINALISTS = 3
 # §6.4's explore policy: "~1 exploratory slot in 6, ranked by prior + proximity; cost ≈ −1 pp
 # top-hit rate, honestly labelled". One slot beside three finalists is that ratio at this scale.
 WILDCARD_LABEL = "a step outside your usual"
+
+# How far down the ranking the wildcard may be drawn from: the best twentieth of the pool, and
+# never fewer than twelve candidates so a small pool still has somewhere to step to. This is the
+# reading of §6.4's "ranked by prior + proximity" — the prior bounds the draw, the distance picks
+# within it — and it has no measurement behind it, which is why it lives in one place and why the
+# owner took it as a decision rather than it arriving as a tuned number. Without it the first
+# household evening's wildcard was the most distant title of 719, ranked 105th. [decision 482]
+WILDCARD_SHARE = 0.05
+WILDCARD_FLOOR = 12
 
 SLOT_FINALIST = "finalist"
 SLOT_WILDCARD = "wildcard"
@@ -86,6 +102,10 @@ class Slate:
     # tells the person nothing about which is which. None on a night with no reservation, which is
     # every night on the shipped bundle (decision 173 ships no axes). [decision 220]
     reserved: int | None = None
+    # The person split's reservations, {title_id: participant_id}: the finalists placed as a
+    # seat's own pick because none of that seat's own top three was on the slate. Never folded
+    # into `reserved`, which is the axis counterweight and carries a different label. [decision 479]
+    reserved_for: dict[int, int] = field(default_factory=dict)
 
     @property
     def ballot_titles(self) -> list[int]:
@@ -255,8 +275,15 @@ def wildcard_from(
     The candidate outside the finalists that is furthest, in DNA terms, from what the finalists
     already are. Distance rather than rank, because a wildcard drawn by rank is the fourth-best
     film and not a step outside anything.
+
+    AND ONLY FROM NEAR THE TOP OF THE RANKING. §6.4 ranks the explore slot "by prior +
+    proximity", and this read only the half after the plus: the farthest title in the whole pool,
+    whatever it scored — the first household evening's wildcard sat at rank 105 of 719. The draw
+    is now bounded to the best `WILDCARD_SHARE` of the ranking (at least `WILDCARD_FLOOR`), and
+    distance decides within that.
     """
-    rest = [t for t, _ in order if t not in set(chosen)]
+    reach = max(WILDCARD_FLOOR, math.ceil(len(order) * WILDCARD_SHARE))
+    rest = [t for t, _ in order[:reach] if t not in set(chosen)]
     if not rest:
         return None
     if not dna:
@@ -276,6 +303,62 @@ def wildcard_from(
     return max(rest, key=lambda t: (distance(t), -rest.index(t)))
 
 
+def one_for_each(
+    order: Sequence[tuple[int, float]], per_participant: Mapping[int, Mapping[int, float]]
+) -> tuple[list[int], dict[int, int], bool]:
+    """Decision 479's person split: three finalists on which each seat has one of its own.
+
+    "One of their own" is one of the seat's own top three tonight scores — the size of the
+    shortlist its own round resolved (§6.2 step 4's rank-3/4 cut), so the sentence the household
+    is shown means what the round measured. The group leader always stays in slot 1. Seats are then
+    visited in the order the leader serves them least (lowest tonight score on it first, the side
+    D's "min" is about), and each seat none of whose top three is on the slate yet gets one: a
+    finalist from the plain top three that is theirs if there is one, otherwise a slot RESERVED for
+    their own highest-scoring title not already placed. Remaining slots take the group ranking.
+    Still exactly three (decision 221's rule), with the reserved picks read last, as 54d's third
+    slot is.
+
+    Returns (finalists, {title: seat it is reserved for}, whether every seat has one of its own) —
+    the last because a room of four or more can outnumber the two slots after the leader, and the
+    headline must not claim "one for each of you" over a slate where that is false.
+    """
+    own = {
+        p: [t for t, _ in ranked(scores)] for p, scores in per_participant.items()
+    }
+    top = {p: set(titles[:FINALISTS]) for p, titles in own.items()}
+    leader = order[0][0]
+    plain = [t for t, _ in order[:FINALISTS]]
+
+    def served(p: int, chosen: Sequence[int]) -> bool:
+        return bool(top[p] & set(chosen))
+
+    chosen = [leader]
+    reserved_for: dict[int, int] = {}
+    by_leader = sorted(per_participant, key=lambda p: (per_participant[p].get(leader, 0.0), p))
+    for p in by_leader:
+        if len(chosen) >= FINALISTS:
+            break
+        if served(p, chosen):
+            continue
+        free = next((t for t in plain if t not in chosen and t in top[p]), None)
+        if free is not None:
+            chosen.append(free)
+            continue
+        pick = next((t for t in own[p] if t not in chosen), None)
+        if pick is not None:
+            chosen.append(pick)
+            reserved_for[pick] = p
+    for t, _ in order:
+        if len(chosen) >= FINALISTS:
+            break
+        if t not in chosen:
+            chosen.append(t)
+    rank = {t: i for i, (t, _) in enumerate(order)}
+    finalists = sorted((t for t in chosen if t not in reserved_for), key=rank.__getitem__)
+    finalists += [t for t in chosen if t in reserved_for]
+    return finalists, reserved_for, all(served(p, finalists) for p in per_participant)
+
+
 def combine(
     *,
     per_participant: Mapping[int, Mapping[int, float]],
@@ -287,11 +370,11 @@ def combine(
 ) -> Slate:
     """§6.2 step 5, end to end.
 
-    `member_ledger` is {title_id: [each seated member's §5.1 score]} — D's input, and
-    deliberately not the tonight scores: D is *Ledger* divergence, a fact about the household's
-    stable taste, which is what DNA_MODEL §5.3 measured. A D computed from tonight scores would
-    move with the round's own answers and stop being the quantity the 0.20 threshold was
-    calibrated on.
+    `member_ledger` is {title_id: [each seated member's Ledger score, rank-standardised over the
+    pool]} — D's input, and deliberately not the tonight scores: D is *Ledger* divergence, a fact
+    about the household's stable taste, which is what DNA_MODEL §5.3 measured. A D computed from
+    tonight scores would move with the round's own answers and stop being the quantity
+    `D_THRESHOLD` was calibrated on (decisions 477, 478).
     """
     axes = axes or {}
     dna = dna or {}
@@ -387,6 +470,20 @@ def combine(
             slate_order = adjusted_order
             conflict = copy_rules.conflict(contested, d=d, phrasing=phrasing)
 
+    # AN AXIS-LESS SPLIT IS SURFACED BY PERSON (decision 479). Everything above needs §6.4's axis
+    # artifact, and the corpus bundle ships none (decision 173), so on release data a split evening
+    # was decided silently however far apart the household was — the first real evening measured
+    # D = 5.07 on raw scores and showed nothing. With no axis loaded the alternative in hand is a
+    # PERSON's: `one_for_each` puts one of every seat's own top three on the slate, reserving a slot
+    # where the plain ranking did not. D alone triggers it, on the standardised scale decision 478
+    # recalibrated; `divergent_answers` is left to the facet branch, because decision 217 measured
+    # it firing on 84-97% of evenings and a surfaced split that fires nightly is background noise.
+    reserved_for: dict[int, int] = {}
+    by_person = not axes and len(per_participant) >= 2 and d >= D_THRESHOLD
+    if by_person:
+        finalists, reserved_for, each = one_for_each(order, per_participant)
+        conflict = copy_rules.person_conflict(d=d, phrasing=phrasing, one_for_each=each)
+
     # ONE RANKING, NOT TWO. The wildcard used to be drawn from `order` while a surfaced split's
     # finalists came from `adjusted_order`, so §6.4's "a step outside your usual" was decided by a
     # ranking the slate was not built from — and on a tie, or a pool whose tail carries no DNA, the
@@ -400,8 +497,9 @@ def combine(
     # three by group score, the wildcard sits below them, and the rank is also the "how close they
     # came" that §6.2 step 7's runners-up are sorted by. `group_score` stays the plain average on
     # every row either way, and the sequence stays a permutation of the pool, which is what
-    # `session_result_rank`'s UNIQUE (session_id, rank) requires of 1..n. [finding 23]
-    if contested:
+    # `session_result_rank`'s UNIQUE (session_id, rank) requires of 1..n. [finding 23] The person
+    # split reorders for the same reason: a reserved pick is read last among the finalists.
+    if contested or by_person:
         placed = {*finalists, wildcard}
         sequence = [
             *finalists,
@@ -421,11 +519,13 @@ def combine(
         rows.append({
             "title_id": title_id, "rank": rank, "group_score": scores[title_id], "slot": slot,
             "reserved": title_id == reserved,
+            "reserved_for": reserved_for.get(title_id),
         })
 
     return Slate(
         ranked=order, finalists=finalists, wildcard=wildcard,
         contested=contested, conflict=conflict, d=d, rows=rows, reserved=reserved,
+        reserved_for=reserved_for,
     )
 
 
@@ -436,7 +536,9 @@ __all__ = [
     "SLOT_RUNNER_UP",
     "SLOT_WILDCARD",
     "Slate",
+    "WILDCARD_FLOOR",
     "WILDCARD_LABEL",
+    "WILDCARD_SHARE",
     "axis_position",
     "axis_positions",
     "combine",
@@ -444,6 +546,7 @@ __all__ = [
     "divergence",
     "divergent_answers",
     "group_scores",
+    "one_for_each",
     "ranked",
     "wildcard_from",
     "zeroed",

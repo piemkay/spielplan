@@ -4339,7 +4339,21 @@ def _tonight_lobby(room: dict[str, Any]) -> dict[str, Any]:
         "started_at": room["started_at"],
         "host": room["host"],
         "seats": [dict(s) for s in room["seats"]],
+        # Decision 480's lobby control, from the real list so the chips the harness draws are the
+        # chips the app draws.
+        "vetoes": _tonight_vetoes(room),
+        "veto_options": [
+            {"key": k, "label": label} for k, (label, _) in tonight_pool.VETOES.items()
+        ],
     }
+
+
+def _tonight_vetoes(room: dict[str, Any]) -> list[dict[str, str]]:
+    return [{"key": k, "label": tonight_pool.VETOES[k][0]} for k in room.get("vetoes", [])]
+
+
+class TonightVetoBody(BaseModel):
+    vetoes: list[str] = []
 
 
 class TonightOpenBody(BaseModel):
@@ -4391,11 +4405,30 @@ def tonight_rooms(spielplan_session: str | None = Cookie(default=None)) -> dict[
                 "viewer_seated": any(s["user_id"] == user["id"] for s in r["seats"]),
                 "joinable": r["state"] == "open"
                 and not any(s["user_id"] == user["id"] for s in r["seats"]),
+                "vetoes": _tonight_vetoes(r),
             }
             for r in STATE["tonight"].values()
             if r["ended_at"] is None
         ]
     }
+
+
+@app.post("/api/tonight/sessions/{session_id}/vetoes")
+def tonight_vetoes(
+    session_id: int, body: TonightVetoBody, spielplan_session: str | None = Cookie(default=None)
+) -> dict[str, Any]:
+    """Decision 480's "not tonight" chips. The harness keeps the set on the room and refuses what
+    the app refuses; it builds no pool, so a veto here changes the lobby and nothing else."""
+    user = _me(spielplan_session)
+    room = _tonight_room(session_id)
+    if not any(s["user_id"] == user["id"] for s in room["seats"]):
+        raise HTTPException(403, {"reason": "not_seated", "message": "not in this room"})
+    if set(body.vetoes) - set(tonight_pool.VETOES) or len(set(body.vetoes)) > tonight_pool.MAX_VETOES:
+        raise HTTPException(422, {"reason": "bad_veto", "message": "not on the list"})
+    if room["state"] != "open":
+        raise HTTPException(409, {"reason": "started", "message": "the room has started"})
+    room["vetoes"] = [k for k in tonight_pool.VETOES if k in set(body.vetoes)]
+    return {"session_id": session_id, "vetoes": _tonight_vetoes(room)}
 
 
 @app.post("/api/tonight/sessions", status_code=201)

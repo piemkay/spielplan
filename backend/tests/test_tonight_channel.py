@@ -143,6 +143,18 @@ def test_the_reveal_frame_carries_no_result():
     assert frame["kind"] == channel.REVEAL
 
 
+def test_the_ballot_frame_carries_the_submitted_count_and_nothing_else():
+    """54e's waiting count, live. The ballot screen prints "1 of 2 submitted", and the submit
+    that did not complete the reveal pushed the ROUND's progress frame instead, so the other phone
+    read "0 of 2" until the reveal. Two integers and the kind — the frame most tempting to enrich
+    with who voted for what carries neither, because approvals stay hidden until everyone is in."""
+    frame = channel.ballot_frame(7, submitted=1, seated=2)
+    assert frame == {"kind": channel.BALLOT, "session_id": 7, "submitted": 1, "seated": 2}
+    assert channel.BALLOT not in (
+        channel.ROOMS_CHANGED, channel.LOBBY, channel.PROGRESS, channel.REVEAL
+    ), "its own kind, so the client never files a ballot count under the round"
+
+
 def test_the_rooms_frame_may_be_empty():
     """A device that receives a bare `rooms.changed` re-reads over REST, which is what a
     reconnecting client does anyway — so the frame never has to carry a list the sender would

@@ -759,20 +759,37 @@ def test_a_non_positive_straddle_threshold_would_end_every_round_before_it_start
 # decisions 175 and 205 asked for, run on this side of the code rather than in a notebook.
 
 
-def _simulate(z=None, *, prior_var=1.0, seeds=20, n_pool=40, score_sd=0.5):
+def _heavy_tailed(rng, n_pool):
+    """A pool shaped like the first household evening's raw §5.1 scores: a body of sd ~0.45 and
+    a handful of owned blockbusters lifted by the cf half into the tens (decision 477's 13.28 /
+    9.43 / 6.52 / 5.82 at the top of a 719-title pool)."""
+    raw = {i: rng.gauss(0.0, 0.45) for i in range(n_pool)}
+    for i, lift in enumerate((13.28, 9.43, 6.52, 5.82, 4.1, 3.6, 3.2, 2.9)):
+        raw[i] = lift
+    return raw
+
+
+def _simulate(z=None, *, prior_var=1.0, seeds=20, n_pool=700, score_sd=1.0,
+              standardise=True, draw=None):
     """Whole rounds at the shipped scale, against a noisy oracle.
 
-    The pool means are drawn at the measured owned-pool spread — `user_score` sd 0.50 over the
-    696 titles the shipped bundle leaves owned — and the simulated participant answers by their
-    own latent order plus a mood-sized wobble, because a perfectly consistent answerer resolves
-    any boundary and would make every threshold look reasonable. Returns (converged, median).
+    The pool is drawn and then handed to the round the way `play.Snapshot` hands it over: through
+    `pool.rank_normal` at the shipped sd, over a 700-title pool — the first household's movie
+    pool at the default budget was 719 (decision 477). `standardise=False` hands the round the
+    raw draw instead, which is how every room started before the scale marker reads. The
+    simulated participant answers by their own order plus a mood-sized wobble, because a
+    perfectly consistent answerer resolves any boundary and would make every threshold look
+    reasonable. Returns (converged, median).
     """
+    from spielplan.tonight import pool as pool_rules
+
     kwargs = {} if z is None else {"z": z}
     reasons: list[str | None] = []
     lengths: list[int] = []
     for seed in range(seeds):
         rng = random.Random(seed)
-        truth = {i: rng.gauss(0.0, score_sd) for i in range(n_pool)}
+        raw = (draw or (lambda r, n: {i: r.gauss(0.0, score_sd) for i in range(n)}))(rng, n_pool)
+        truth = pool_rules.rank_normal(raw) if standardise else raw
         answers: list[rnd.Answered] = []
         for seq in range(1, rnd.CAP_PAIRS + 1):
             played = rnd.replay(
@@ -896,32 +913,62 @@ def test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way():
     which in a comment whose numbers ARE the argument is the whole of its usefulness.
 
     So the comment and this test are one record. Re-tuning the round moves both, deliberately.
-    Fifteen simulated sweeps, ~2 s: the cost of a paragraph that can be checked.
     [M4.12 review cycle 1: M412-RND-02]
+
+    RE-TAKEN ON THE SCALE THE ROUND READS (decision 477). The first record was a Gaussian pool of
+    sd 0.50 at 12/20/40 titles; the round now reads every member through `pool.rank_normal` at
+    sd 1.0, and a household's film pool is ~700 titles, so the pools are a series night (120), a
+    middle one (300) and the film night (700) and `_simulate` standardises its draw exactly as
+    `play.Snapshot` does. `TYPICAL_PAIRS` — the waiting line's estimate — is the film night's
+    median, so it is pinned here beside the figure it is read from. Fifteen sweeps, ~5 s.
     """
-    pools = (12, 20, 40)
+    pools = (120, 300, 700)
     at_one = [_simulate(1.0, n_pool=n) for n in pools]
-    assert all(0 <= c <= 2 for c, _ in at_one), f"z = 1.0 is written as 0-2 in 20: {at_one}"
+    assert all(0 <= c <= 3 for c, _ in at_one), f"z = 1.0 is written as 0-3 in 20: {at_one}"
     assert all(m == rnd.CAP_PAIRS for _, m in at_one), f"and every median as the cap: {at_one}"
 
     at_boundary = [_simulate(rnd.BOUNDARY_Z, n_pool=n) for n in pools]
-    assert all(13 <= c <= 17 for c, _ in at_boundary), (
-        f"z = {rnd.BOUNDARY_Z} is written as 13-17 in 20: {at_boundary}"
+    assert [c for c, _ in at_boundary] == [17, 13, 19], (
+        f"z = {rnd.BOUNDARY_Z} is written as 17, 13 and 19 in 20: {at_boundary}"
     )
-    assert all(8.5 <= m <= 13 for _, m in at_boundary), (
-        f"with a median of 8.5-13 pairs, which is step 4's ~10: {at_boundary}"
+    assert [m for _, m in at_boundary] == [9.0, 11.0, 10.0], (
+        f"with medians of 9, 11 and 10 pairs, which is step 4's ~10: {at_boundary}"
+    )
+    assert round(at_boundary[-1][1]) == rnd.TYPICAL_PAIRS, (
+        "the waiting line's estimate is the film night's median, read off this same sweep"
     )
 
     at_badge = [_simulate(DEFAULTS.straddle_z, n_pool=n) for n in pools]
     assert all(c == 20 for c, _ in at_badge), f"the badge threshold: 20 in 20, {at_badge}"
-    assert all(1 <= m <= 2 for _, m in at_badge), f"with a median of 1-2 pairs: {at_badge}"
+    assert all(m == 1 for _, m in at_badge), f"with a median of 1 pair: {at_badge}"
 
     # `initial`'s own paragraph, which quotes the same sweep at a quarter of the prior.
     narrow_at_one = [_simulate(1.0, n_pool=n, prior_var=0.25)[0] for n in pools]
-    assert narrow_at_one == [0, 1, 0], f"written as 0, 1 and 0 over 12/20/40: {narrow_at_one}"
+    assert narrow_at_one == [0, 0, 0], f"written as 0, 0 and 0 over 120/300/700: {narrow_at_one}"
     narrow = [_simulate(rnd.BOUNDARY_Z, n_pool=n, prior_var=0.25)[0] for n in pools]
-    assert [c for c, _ in at_boundary] == [17, 13, 16], "the figures the drop is quoted from"
-    assert narrow == [13, 9, 10], f"and the narrowed prior drops each of them: {narrow}"
+    assert narrow == [11, 15, 13], (
+        f"and at 0.6 the narrowed prior is lower on two pools and higher on one: {narrow}"
+    )
+
+
+def test_a_heavy_tailed_ledger_does_not_end_the_round_at_one_pair():
+    """The first household evening, as a pool (decision 477).
+
+    One member's raw §5.1 scores over the frozen 719-title pool ran 13.28 / 9.43 / 6.52 / 5.82 at
+    the top, because §5.1 standardises the cf half over a population the owned pool is not drawn
+    from. With `prior_var` 1.0 and `BOUNDARY_Z` 0.6 only two titles straddled the rank-3/4 cut,
+    one answer moved both clear of it, and the round reported `converged` at pair one — that
+    member's Ledger alone then decided the slate. Standardised over the pool the same shape asks
+    about ten questions, like any other pool; handed over raw it still ends at one. The raw half
+    stays asserted because it is what a room started before the scale marker still reads.
+    """
+    raw_converged, raw_median = _simulate(draw=_heavy_tailed, standardise=False)
+    assert raw_median == 1, "the defect this decision closes, reproduced"
+    converged, median = _simulate(draw=_heavy_tailed)
+    assert median > rnd.ESCAPE_FROM_PAIR, (
+        f"a standardised heavy-tailed pool ends at a median of {median} pairs"
+    )
+    assert converged >= 12, f"and still resolves its shortlist ({converged} of 20)"
 
 
 # --- perf-01: the fast search is the same search -------------------------------------------

@@ -320,6 +320,29 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-answer-NEITHER')).toBeVisible();
     await expect(page.getByTestId('tonight-escape-locked')).toBeVisible();
     await expect(page.getByTestId('tonight-escape')).toHaveCount(0);
+    // What to expect, never "cap 20" as the plan (the first household evening's header).
+    await expect(page.getByTestId('tonight-round-count')).toContainText('usually about');
+    await expect(page.getByTestId('tonight-round-count')).not.toContainText('cap');
+
+    // AND ALL FOUR ARE ON THE SCREEN AT ONCE on the phone, above the bottom bar: the pair buttons
+    // wore design.css's global 2:3 `.poster` frame and stacked at 560 px, so on an iPhone 13 the
+    // first option filled the screen and the second option and every answer sat below the fold.
+    // Measured against the scroll container's visible band rather than the window, because the
+    // bar is drawn over the bottom of the window and a button under it is not reachable either.
+    const nav = page.getByRole('navigation', { name: 'Surfaces' });
+    const bottom = (await nav.boundingBox())?.y ?? page.viewportSize().height;
+    for (const id of ['tonight-pick-A', 'tonight-pick-B', 'tonight-answer-EITHER',
+      'tonight-answer-NEITHER']) {
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box, `${id} is not laid out`).not.toBeNull();
+      expect(box.y, `${id} starts above the top of the page`).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height, `${id} ends below the fold`).toBeLessThanOrEqual(bottom + 1);
+    }
+    const [a, b] = [
+      await page.getByTestId('tonight-pick-A').boundingBox(),
+      await page.getByTestId('tonight-pick-B').boundingBox()
+    ];
+    expect(Math.abs(a.y - b.y), 'the pair stacked instead of sitting side by side').toBeLessThan(2);
 
     // Leave the room resolved rather than live, so the next test's open-rooms list is its own.
     for (let i = 0; i < 24; i++) {

@@ -19,6 +19,8 @@
    * so that there is nothing to render even by accident.
    */
   import { onDestroy, onMount } from 'svelte';
+  import { replaceState } from '$app/navigation';
+  import RatePoster from '$lib/components/RatePoster.svelte';
   import { session } from '$lib/session.svelte.js';
   import {
     ANSWERS,
@@ -29,31 +31,43 @@
     ESCAPE_LABEL,
     JOIN_CAPTION,
     MAX_GUESTS,
+    MAX_VETOES,
     RESERVED_LABEL,
     REVEAL_BEAT,
+    SHARE_CAPTION,
     WRAPPED_LINE,
     answer,
     approvalShare,
     ballotTurns,
+    ballotWaitingLine,
     bootstrap,
+    breadthLine,
     leave,
     connect,
     endRoom,
     escape,
+    followLink,
     handBallot,
     join,
+    linkedRoom,
     loadBallot,
     loadRooms,
     loadRound,
     loadSolo,
+    onlyYesLines,
     openRoom,
+    pickLabel,
     progressLine,
     roomLine,
+    roundHeader,
+    shareRoom,
     sharpen,
     start,
     stopClock,
     submitBallot,
+    submitLabel,
     toggleApproval,
+    toggleVeto,
     tonight,
     undo
   } from '$lib/tonight.svelte.js';
@@ -63,7 +77,6 @@
   // taps back said `2h 50m`, and a title of unknown runtime — nullable, and the corpus has them
   // — rendered a bare unit with no number. [M4.9 finding 37; review cycle 1: M49-CARD-2]
   import { metaLine } from '$lib/rate.svelte.js';
-  import RatePoster from '$lib/components/RatePoster.svelte';
 
   let code = $state('');
   let sharpening = $state(false);
@@ -98,8 +111,29 @@
     // (§6.2 step 4 puts them on their own device for up to twenty pairs, and 54e's reveal
     // waits for every seat).
     const resumed = await bootstrap();
-    if (watching === null) watch(resumed);
+    // Decision 481: a `?room=` link — the lobby's Share, or the push invitation — lands in that
+    // room. Taken off the address afterwards, so a reload of an evening that has since ended does
+    // not try to join it again.
+    const code = linkedRoom(location.search);
+    const linked = code ? await followLink(code) : null;
+    if (code) {
+      try {
+        replaceState(location.pathname, {});
+      } catch {
+        // Not under the router (a component test): the link stays in the bar, which is harmless.
+      }
+    }
+    if (linked !== null) watch(linked);
+    else if (watching === null) watch(resumed);
   });
+
+  /** A title as the shared poster reads it. Every Tonight payload names the title `title_id`, which
+   * `RatePoster` reads first since decision 483 (`lib/art.js`); the adapter also sets `id`, so no
+   * other key a payload carries can name a different title. One adapter rather than a spread. */
+  const posterOf = (t) => (t ? { ...t, id: t.title_id } : null);
+
+  /** The chips the room has on, by key. */
+  const vetoKeys = $derived((tonight.lobby?.vetoes ?? []).map((v) => v.key));
   onDestroy(() => {
     destroyed = true;
     disconnect();
@@ -363,16 +397,18 @@
   {#if tonight.step === 'lobby' && tonight.lobby}
     <div class="card lobby" data-testid="tonight-lobby">
       <p class="data code" data-testid="tonight-room-code">{tonight.lobby.room_code}</p>
-      <!-- §6.2 step 2 names "room code / QR". The code ships; the QR does not.
-           A placeholder SVG stood here with an alt that told a screen-reader user it was a QR
-           and a comment claiming it encoded PUBLIC_URL — it was a rectangle with the code
-           written in it, and the review caught the lie. A real encoder is a day's work with
-           its own tests and no dependency is permitted to bring one in, so the honest thing is
-           to ship the channel that works and say the other is not here yet. Recorded in
-           M4-open-points. -->
-      <p class="why" data-testid="tonight-no-qr">
-        Read the code out, or send the link — the QR arrives later.
-      </p>
+      <!-- §6.2 step 2 names "room code / QR". The code ships and now its link does (decision
+           481); the QR does not. A placeholder SVG once stood here claiming to be one, and this
+           line then said "or send the link" with no link anywhere to send — the first household
+           evening looked for it. Share opens the phone's own sheet, and where there is none the
+           link is written out below so it can still be read aloud or pasted. -->
+      <div class="row">
+        <p class="why" data-testid="tonight-share-caption">{SHARE_CAPTION}</p>
+        <button class="pill" onclick={shareRoom} data-testid="tonight-share">Share link</button>
+      </div>
+      {#if tonight.shareUrl}
+        <p class="data link" data-testid="tonight-share-url">{tonight.shareUrl}</p>
+      {/if}
       <p class="why">{JOIN_CAPTION}</p>
       <ul class="seats" data-testid="tonight-seats">
         {#each tonight.lobby.seats as seat (seat.participant_id)}
@@ -384,6 +420,25 @@
           </li>
         {/each}
       </ul>
+      <!-- Decision 480's "not tonight": any seated member, before Start, up to three. A title
+           carrying the term with a quote behind it leaves tonight's list; an inference alone does
+           not, which is what kept Raiders of the Lost Ark in a "no violence" evening. -->
+      <div class="vetoes" data-testid="tonight-vetoes">
+        <p class="data label">NOT TONIGHT</p>
+        <div class="row">
+          {#each tonight.lobby.veto_options ?? [] as option (option.key)}
+            {@const on = vetoKeys.includes(option.key)}
+            <button
+              class="pill veto"
+              aria-pressed={on}
+              disabled={tonight.busy || (!on && vetoKeys.length >= MAX_VETOES)}
+              onclick={() => toggleVeto(option.key)}
+              data-testid={`tonight-veto-${option.key}`}>{option.label}</button
+            >
+          {/each}
+        </div>
+        <p class="why">Anyone here can rule out up to three before the round starts.</p>
+      </div>
       {#if isHost}
         <p class="why">Start whenever you are ready. Anyone who joins before you start is in.</p>
         <button
@@ -402,18 +457,24 @@
 
   {#if tonight.step === 'round' && tonight.round?.pair}
     <div class="round" data-testid="tonight-round">
-      <p class="data label" data-testid="tonight-round-count">
-        pair {tonight.round.answered + 1} · cap {tonight.round.cap}
-      </p>
+      <!-- What to expect, not the cap: "pair 1 · cap 20" read as the plan for the evening, when
+           the cap is the ending the round is built to avoid. `roundHeader` adds it back near it. -->
+      <p class="data label" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
       <h2>Which one tonight?</h2>
+      <!-- `.choice`, never `.poster`: design.css's global `.poster` is a 2:3 frame, and a button
+           wearing it was a screen-high box on an iPhone 13 — the second option and every answer
+           below the fold (the first household evening's screenshot). The frame belongs to the
+           shared poster inside, bounded in height, and the pair stays two columns on a phone the
+           way the Rate battle card does. -->
       <div class="pair">
         {#each [['A', tonight.round.pair.a], ['B', tonight.round.pair.b]] as [side, title]}
           <button
-            class="poster"
+            class="choice"
             onclick={() => answer(side)}
             disabled={tonight.busy}
             data-testid={`tonight-pick-${side}`}
           >
+            <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
             <span class="big">{title?.name}</span>
             <span class="why">{title?.year} · {title?.fit_line}</span>
           </button>
@@ -445,15 +506,22 @@
   {#if tonight.step === 'waiting'}
     <div class="card" data-testid="tonight-waiting">
       <p class="data label">WAITING</p>
-      <p class="data" data-testid="tonight-progress">{progressLine(tonight.progress)}</p>
-      <p class="why">Nobody sees anybody's answers until every round has finished.</p>
-      {#each guestTurns as guest (guest.participant_id)}
-        <button
-          class="pill"
-          onclick={() => loadRound(guest.participant_id)}
-          data-testid={`tonight-hand-to-${guest.participant_id}`}>pass to {guest.name}</button
-        >
-      {/each}
+      {#if tonight.lobby?.state === 'ballot'}
+        <!-- After this phone has voted, the ballot's own status. It showed the ROUND's counts
+             ("Patrick 1/1 done · Jenny 6/6 done") under a ballot that was still waiting. -->
+        <p class="data" data-testid="tonight-ballot-waiting">{ballotWaitingLine(tonight.ballot)}</p>
+        <p class="why">Nobody sees anybody's votes until every vote is in.</p>
+      {:else}
+        <p class="data" data-testid="tonight-progress">{progressLine(tonight.progress)}</p>
+        <p class="why">Nobody sees anybody's answers until every round has finished.</p>
+        {#each guestTurns as guest (guest.participant_id)}
+          <button
+            class="pill"
+            onclick={() => loadRound(guest.participant_id)}
+            data-testid={`tonight-hand-to-${guest.participant_id}`}>pass to {guest.name}</button
+          >
+        {/each}
+      {/if}
     </div>
   {/if}
 
@@ -466,26 +534,36 @@
              person handed a phone has to be told which vote they are casting before they cast
              it — the screen is otherwise identical for every seat. -->
         <p class="data label" data-testid="tonight-ballot-seat">{ballotSeat.name}</p>
+        <!-- Full-width rows with a tick, and Submit a different object entirely. The options were
+             ember pills and Submit was an ember pill (`.pill.on` and `.pill[aria-pressed]` are
+             one rule in design.css), so four chosen titles and the button that casts them read as
+             five of the same thing. A chosen row is outlined and ticked; the one filled control
+             on the screen is the one that submits, and it says what it will cast. -->
         <ul class="slate">
           {#each tonight.ballot.slate as card (card.title_id)}
+            {@const picked = tonight.approved.includes(card.title_id)}
             <li>
               <button
-                class="pill"
-                aria-pressed={tonight.approved.includes(card.title_id)}
+                class="option"
+                aria-pressed={picked}
                 onclick={() => toggleApproval(card.title_id)}
                 data-testid={`tonight-approve-${card.title_id}`}
               >
-                {card.name}
-                {#if card.slot === 'wildcard'}<span class="why">· wildcard</span>{/if}
+                <span class="thumb"><RatePoster title={posterOf(card)} showName={false} /></span>
+                <span class="option-text">
+                  <span class="big">{card.name}</span>
+                  {#if card.slot === 'wildcard'}<span class="why">a step outside your usual</span>{/if}
+                </span>
+                <span class="tick" aria-hidden="true">{picked ? '✓' : ''}</span>
               </button>
             </li>
           {/each}
         </ul>
         <button
-          class="pill on"
+          class="btn-primary submit"
           onclick={() => submitBallot(tonight.activeSeat)}
           disabled={tonight.busy || tonight.activeSeat === null}
-          data-testid="tonight-submit-ballot">Submit</button
+          data-testid="tonight-submit-ballot">{submitLabel(tonight.approved.length)}</button
         >
       {/if}
       <!-- The round's hand-off (the waiting screen's `tonight-hand-to-` control), one screen
@@ -514,9 +592,10 @@
            moment ships half of it." -->
       <p class="data beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
       <div class="winner card" data-testid="tonight-winner">
-        <!-- The winner's poster (decision 483). The payload is keyed `title_id`, which
-             RatePoster reads as it reads `id`. After the reveal, so no anchoring rule applies. -->
-        <div class="winner-art"><RatePoster title={tonight.result.winner} showName={false} /></div>
+        <!-- The winner's poster (decision 483), the card's first child. The payload is keyed
+             `title_id`, which RatePoster reads first; `.hero` bounds it so Play on Jellyfin stays
+             on a phone's first screen. After the reveal, so no anchoring rule applies. -->
+        <span class="hero"><RatePoster title={posterOf(tonight.result.winner)} showName={false} /></span>
         <h2>{tonight.result.winner?.name}</h2>
         <!-- 54h's per-episode qualifier arrives here for free, and that is worth saying rather
              than re-deriving: `metaLine` reads the card's `kind` and prints `24m/ep` for a
@@ -533,9 +612,20 @@
                data — but the rule is the rule. [decision 220] -->
           <p class="data" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
         {/if}
-        {#if tonight.result.unanimous}
-          <p class="data" data-testid="tonight-unanimous">Unanimous.</p>
+        {#if tonight.result.winner?.reserved_for}
+          <!-- Decision 479: a seat's own pick, placed because none of their top three was on the
+               plain ranking. Its own label, never the axis counterweight's. -->
+          <p class="data" data-testid="tonight-reserved-for">
+            {pickLabel(tonight.result.winner.reserved_for.name)}
+          </p>
         {/if}
+        <!-- How broad each yes was, instead of "Unanimous." — which was true over an evening where
+             one member approved four and the other one, the winner being her only yes. Released
+             with the reveal and not before (54e). -->
+        <p class="why" data-testid="tonight-breadth">{breadthLine(tonight.result)}</p>
+        {#each onlyYesLines(tonight.result) as only (only)}
+          <p class="why" data-testid="tonight-only-yes">{only}</p>
+        {/each}
         <p class="why" data-testid="tonight-fit-line">{tonight.result.winner?.fit_line}</p>
         <ul class="matches" data-testid="tonight-match-lines">
           {#each tonight.result.winner?.match_lines ?? [] as line}
@@ -569,11 +659,19 @@
                  wherever it lands: the counterweight is a finalist and the votes may leave it
                  here. Built as a `const` so the row's text stays one node — Svelte collapses the
                  whitespace around an expression that spans lines, and this row is read by the
-                 eye as one sentence. [decision 220] -->
-            {@const counterweight = card.reserved ? ` · ${RESERVED_LABEL}` : ''}
-            <li class="why" data-testid={`tonight-runner-up-${card.title_id}`}
-              >{card.name} · {card.approvals} approved{counterweight}</li
-            >
+                 eye as one sentence. [decision 220] A seat's own pick follows its card the same
+                 way (decision 479). -->
+            {@const counterweight = card.reserved
+              ? ` · ${RESERVED_LABEL}`
+              : card.reserved_for
+                ? ` · ${pickLabel(card.reserved_for.name)}`
+                : ''}
+            <li class="runner">
+              <span class="thumb"><RatePoster title={posterOf(card)} showName={false} /></span>
+              <span class="why" data-testid={`tonight-runner-up-${card.title_id}`}
+                >{card.name} · {card.approvals} approved{counterweight}</span
+              >
+            </li>
           {/each}
           {#if (tonight.result.runners_up ?? []).length === 0}
             <li class="why">nothing else was in the running</li>
@@ -584,9 +682,16 @@
       {#if tonight.result.wildcard}
         <div class="wildcard card" data-testid="tonight-wildcard">
           <p class="data label">WILDCARD</p>
-          <p>{tonight.result.wildcard.name}</p>
-          <!-- §6.4's "honestly labelled". Served, not spelled here: the words are the rule. -->
-          <p class="why">{tonight.result.wildcard.label}, honestly labelled</p>
+          <div class="runner">
+            <span class="thumb"><RatePoster title={posterOf(tonight.result.wildcard)} showName={false} /></span>
+            <div>
+              <p>{tonight.result.wildcard.name}</p>
+              <!-- §6.4's "honestly labelled" is served, not spelled here: the words are the rule,
+                   and the label IS the honesty, so the screen does not also announce that it is
+                   being honest. -->
+              <p class="why">{tonight.result.wildcard.label}</p>
+            </div>
+          </div>
         </div>
       {/if}
     </div>
@@ -600,18 +705,24 @@
       {:else}
         <ul class="picks" data-testid="tonight-picks">
           {#each tonight.solo.picks as pick (pick.title_id)}
-            <li class="card" data-testid={`tonight-pick-${pick.title_id}`}>
-              <span class="big">{pick.name}</span>
-              <span class="why">{pick.why}</span>
-              <span class="data">{pick.fit_line}</span>
+            <li class="card pick" data-testid={`tonight-pick-${pick.title_id}`}>
+              <span class="thumb"><RatePoster title={posterOf(pick)} showName={false} /></span>
+              <span class="pick-text">
+                <span class="big">{pick.name}</span>
+                <span class="why">{pick.why}</span>
+                <span class="data">{pick.fit_line}</span>
+              </span>
             </li>
           {/each}
         </ul>
         {#if tonight.solo.wildcard}
-          <div class="card" data-testid="tonight-solo-wildcard">
-            <span class="big">{tonight.solo.wildcard.name}</span>
-            <span class="why">{tonight.solo.wildcard.why}</span>
-            <span class="data">{tonight.solo.wildcard.fit_line}</span>
+          <div class="card pick" data-testid="tonight-solo-wildcard">
+            <span class="thumb"><RatePoster title={posterOf(tonight.solo.wildcard)} showName={false} /></span>
+            <span class="pick-text">
+              <span class="big">{tonight.solo.wildcard.name}</span>
+              <span class="why">{tonight.solo.wildcard.why}</span>
+              <span class="data">{tonight.solo.wildcard.fit_line}</span>
+            </span>
           </div>
         {/if}
         <div class="row">
@@ -674,11 +785,12 @@
             <div class="pair">
               {#each [['A', tonight.solo.pair.a], ['B', tonight.solo.pair.b]] as [side, title]}
                 <button
-                  class="poster"
+                  class="choice"
                   onclick={() => sharpen(side)}
                   disabled={tonight.busy}
                   data-testid={`tonight-sharpen-${side}`}
                 >
+                  <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
                   <span class="big">{title?.name}</span>
                   <span class="why">{title?.year} · {title?.fit_line}</span>
                 </button>
@@ -751,28 +863,64 @@
      ember, which §6.8 spends on selection and primary actions — and the primary action on this
      step is Start. [§6.8; decision 276] */
   .code { font-size: 22px; letter-spacing: 0.18em; color: var(--ink); }
+  /* Two columns at every width, like the Rate battle card: a pair is a comparison, and stacked on a
+     phone it put the second option and the answers below the fold. */
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .poster {
-    min-height: 140px; display: flex; flex-direction: column; justify-content: flex-end;
-    gap: 6px; padding: 14px; background: var(--card-raised);
+  .choice {
+    display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 0;
+    background: var(--card-raised);
     border: 1px solid var(--line-2); border-radius: var(--r-lg); color: var(--ink);
     text-align: left; cursor: pointer;
   }
-  .poster:hover, .poster:focus-visible { border-color: var(--ember-edge); }
+  .choice:hover, .choice:focus-visible { border-color: var(--ember-edge); }
+  /* The art's WIDTH is what bounds it, because the shared poster is `width: 100%` inside a 2:3
+     frame: 13vh wide is at most 19.5vh tall, and the title is held to two lines, so on an iPhone
+     13's 664 px the pair, the two level answers and Undo all sit above the bottom bar (measured
+     against the devstub at 390 x 664: the level answers wrap to two rows at that width). */
+  .art { display: block; width: min(100%, 13vh); align-self: center; }
+  .choice .big {
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .thumb { display: block; flex: 0 0 44px; width: 44px; }
+  /* Bounded like `.art`, so the winner's Play on Jellyfin stays on a phone's first screen. */
+  .hero { display: block; width: min(100%, 16vh); }
+  .link { word-break: break-all; }
+  .vetoes { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; }
+  .vetoes p { margin: 0; }
+  /* An on veto is outlined, not filled, for the ballot's reason: the lobby's one filled control
+     is Start, and a filled "violence" beside it read as a second thing to press to begin. */
+  .veto[aria-pressed='true'] {
+    border-color: var(--ember-edge); background: var(--ember-wash); color: var(--ink);
+  }
   /* Proposal 60's beat is a label over the reveal, and nothing here is chosen yet — so it keeps
      the data voice's own `--ink-2` (this file's `.data`, one rule up) and spends no accent. The
      letter-spacing is what makes it a beat. [§6.8; decision 276] */
   .beat { letter-spacing: 0.2em; }
   .winner { border-color: var(--ember-edge); }
-  .winner-art { width: 132px; margin-bottom: 10px; }
   /* `.slate` rows are plain list items; `.picks` rows are cards, so they take the card's own
      padding rather than a bare vertical rhythm. Sharing one rule left them with no horizontal
      padding at all, text starting on the border. */
-  .slate li { padding: 6px 0; }
-  /* The pick cards and the wildcard beside them are the same object and lay out the same way.
-     Only the list items had the column rule, so the wildcard's three spans ran together on one
-     line: "Tampopo a stretch - outside your usual fits your 130 min". */
-  .picks li, .solo > .card { display: flex; flex-direction: column; gap: 4px; }
+  .slate li { padding: 4px 0; }
+  /* A ballot option: a full-width row, outlined and ticked when chosen. Deliberately not the
+     filled ember of `.pill[aria-pressed]`, which is the same rule as `.pill.on` and made four
+     chosen titles look exactly like the Submit beneath them; the fill is Submit's alone. */
+  .option {
+    display: flex; align-items: center; gap: 12px; width: 100%; min-height: var(--touch);
+    padding: 6px 12px 6px 6px; background: var(--card-raised); color: var(--ink);
+    border: 1px solid var(--line-2); border-radius: var(--r-md); text-align: left; cursor: pointer;
+  }
+  .option[aria-pressed='true'] { border-color: var(--ember-edge); background: var(--ember-wash); }
+  .option-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .tick { flex: 0 0 18px; color: var(--ember-lift); font-size: 16px; }
+  .submit { width: 100%; min-height: var(--touch); margin-top: 8px; }
+  .runner { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .runner p { margin: 0; }
+  /* The pick cards and the wildcard beside them are the same object and lay out the same way:
+     the shared poster on the left and the three lines beside it in a column. Only the list items
+     had the column rule once, so the wildcard's spans ran together on one line. */
+  .pick { display: flex; align-items: flex-start; gap: 12px; }
+  .pick-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   /* Cards in a stack need a gap or their borders meet and read as one box with rules across it. */
   .picks { display: flex; flex-direction: column; gap: 10px; }
   /* Every step wrapper is a column of blocks and none of them said so, so each one's children
@@ -797,6 +945,6 @@
     min-height: var(--touch); padding-inline: 20px;
   }
   @media (max-width: 560px) {
-    .doors, .pair { grid-template-columns: 1fr; }
+    .doors { grid-template-columns: 1fr; }
   }
 </style>

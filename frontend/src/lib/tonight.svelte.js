@@ -57,7 +57,22 @@ export const REVEAL_BEAT = 'VOTES REVEALED TOGETHER';
  * sending the household to a screen that will 404. The room code and the banner are the two
  * channels §6.2 step 2 still has, and they are the two that were ever reliable. [finding 43] */
 export const JOIN_CAPTION =
-  'Push is best effort. The room code and the in-app banner both reach the same session.';
+  'A phone notification can go missing. The room code, the link and the open-rooms list always reach the same room.';
+
+/** The lobby's line about how people get in, true since the link exists (decision 481). It read
+ * "or send the link" when there was no link to send and nothing on the screen that could make
+ * one; the QR §6.2 step 2 also names is still owed and is not promised here. */
+export const SHARE_CAPTION = 'Read the code out, or share the link.';
+
+/** Decision 479's label for a finalist the slate reserved for one person — their own pick, placed
+ * because none of their own top three made the plain ranking. Not RESERVED_LABEL, which is the axis
+ * counterweight's and would print "the other side of the split" over somebody's favourite. */
+export function pickLabel(name) {
+  return `${name}'s pick`;
+}
+
+/** Decision 480's "not tonight" chips: at most this many per room, which the server enforces too. */
+export const MAX_VETOES = 3;
 
 /** 54d's reserved finalist, "labelled as such": the card carrying the other pole of the
  * contested axis, so a household told "here's one of each" can see which one is the other each.
@@ -119,7 +134,10 @@ export const tonight = $state({
   /** @type {any[]} 54f's sharpen round, carried by the client because §6.2 step 8 mints no
    * session row and therefore no `session_answer` to hold them */
   soloAnswers: [],
-  soloOffset: 0
+  soloOffset: 0,
+  /** @type {string} the room's join link, shown in the lobby once Share had to fall back to the
+   * clipboard or to nothing — a link the person cannot see is a link they cannot read out */
+  shareUrl: ''
 });
 
 function fail(err) {
@@ -421,6 +439,8 @@ export function leave() {
   // next evening a seat id from the last one. [findings 13, 14]
   tonight.activeSeat = null;
   tonight.submittedSeats = [];
+  // The link on the screen belongs to the room being left. [decision 481]
+  tonight.shareUrl = '';
   // No pair is on screen any more, so the clock behind §4.2's `latency_ms` is not running. A
   // device that steps out and comes back re-enters through `loadRound`, which re-arms it — so
   // leaving this set would charge the first answer of the next round the whole of the time the
@@ -804,6 +824,7 @@ export function connect(sessionId = null) {
         // doing it — no poll.
         if (tonight.lobby) await refresh();
       } else if (frame.kind === 'progress') tonight.progress = frame.participants;
+      else if (frame.kind === 'ballot') applyBallotCount(frame);
       else if (frame.kind === 'lobby' || frame.kind === 'reveal') await refresh();
     };
     // A phone that locks, a laptop that sleeps and a proxy that times out all close the socket
@@ -841,7 +862,9 @@ export function roomLine(room) {
     room.kind === 'series'
       ? `${room.runtime_budget_min} min per episode`
       : `${room.runtime_budget_min} min`,
-    room.skips_seen ? 'skips seen' : 'includes rewatches'
+    room.skips_seen ? 'skips seen' : 'includes rewatches',
+    // Decision 480: what the room has ruled out, so somebody deciding whether to join knows.
+    room.vetoes?.length ? `not tonight: ${room.vetoes.map((v) => v.label).join(', ')}` : null
   ]
     .filter(Boolean)
     .join(' · ');
@@ -868,4 +891,133 @@ export function approvalShare(result) {
   if (!result) return '';
   const approved = Math.round(result.approval_share * result.participants);
   return `${approved} of ${result.participants} approved`;
+}
+
+/**
+ * 54e's submitted count, from the ballot frame. The ballot screen prints "1 of 2 submitted", and
+ * the only frame a submit pushed was the ROUND's progress, which lands in `tonight.progress` — so
+ * the other phone read "0 of 2" until the reveal (the first household evening: still 0 of 2
+ * eighteen seconds after the vote was in). Two integers; the frame carries nothing else.
+ */
+export function applyBallotCount(frame) {
+  if (!tonight.ballot) return;
+  tonight.ballot = { ...tonight.ballot, submitted: frame.submitted, seated: frame.seated };
+}
+
+/** The round's header: which pair this is and what to expect, never the cap as the plan. The cap
+ * joins the line only once a round is near it, because by then it is the useful number. */
+export function roundHeader(round) {
+  if (!round) return '';
+  const n = (round.answered ?? 0) + 1;
+  const parts = [`pair ${n}`, `usually about ${round.typical ?? 10}`];
+  if (round.cap && n >= round.cap - 5) parts.push(`at most ${round.cap}`);
+  return parts.join(' · ');
+}
+
+/** After this phone has voted: the ballot's own status, never the round's counts. */
+export function ballotWaitingLine(ballot) {
+  if (!ballot) return '';
+  const left = Math.max(0, (ballot.seated ?? 0) - (ballot.submitted ?? 0));
+  return left ? `Your vote is in · waiting for ${left} more` : 'Your vote is in';
+}
+
+/** Submit says what it will cast, so it can never be mistaken for one more option to tick. */
+export function submitLabel(count) {
+  if (!count) return 'Submit — none of these';
+  return `Submit ${count} ${count === 1 ? 'pick' : 'picks'}`;
+}
+
+/**
+ * How broad each person's yes was, after the reveal. "Unanimous." stood here and was literally
+ * true over an evening where one member approved four titles and the other one — the winner being
+ * her only yes. 54e reveals the approvals together once every ballot is in, which is when this
+ * payload exists at all.
+ */
+export function breadthLine(result) {
+  const rows = result?.breadth ?? [];
+  return rows.map((b) => `${b.name} said yes to ${b.approved} of ${b.of}`).join(' · ');
+}
+
+/** "the only one Jenny said yes to", for each person whose one yes became the winner. */
+export function onlyYesLines(result) {
+  return (result?.breadth ?? []).filter((b) => b.only_yes).map((b) => `the only one ${b.name} said yes to`);
+}
+
+/**
+ * Decision 480's "not tonight" chips: the whole set, replaced, so two phones tapping at once
+ * cannot leave half of each. Any seated member, before Start; the server refuses the rest.
+ */
+export async function setVetoes(keys) {
+  if (!tonight.lobby || tonight.busy) return;
+  tonight.busy = true;
+  try {
+    const out = await post(`/tonight/sessions/${tonight.lobby.session_id}/vetoes`, { vetoes: keys });
+    tonight.lobby = { ...tonight.lobby, vetoes: out.vetoes };
+    tonight.error = '';
+  } catch (err) {
+    fail(err);
+  } finally {
+    tonight.busy = false;
+  }
+}
+
+export async function toggleVeto(key) {
+  const now = (tonight.lobby?.vetoes ?? []).map((v) => v.key);
+  const next = now.includes(key) ? now.filter((k) => k !== key) : [...now, key];
+  if (next.length > MAX_VETOES) return;
+  await setVetoes(next);
+}
+
+/** The room's join link (decision 481): the QR's missing half, and what the push carries too. */
+export function shareLink(code, origin = typeof location === 'undefined' ? '' : location.origin) {
+  return `${origin}/tonight?room=${encodeURIComponent(code)}`;
+}
+
+/** The room code a `?room=` link names, or null. */
+export function linkedRoom(search) {
+  const code = new URLSearchParams(search ?? '').get('room');
+  return code && code.trim() ? code.trim() : null;
+}
+
+/**
+ * Share the lobby's link: the phone's own share sheet where there is one, the clipboard where
+ * there is not, and the link written on the screen either way the sheet did not open — a link the
+ * person cannot see is one they cannot read out.
+ */
+export async function shareRoom() {
+  const code = tonight.lobby?.room_code;
+  if (!code) return null;
+  const url = shareLink(code);
+  const nav = typeof navigator === 'undefined' ? null : navigator;
+  try {
+    if (nav?.share) {
+      await nav.share({ title: 'Tonight', text: `Join the room ${code}`, url });
+      return 'shared';
+    }
+  } catch {
+    // Dismissed, or refused by the browser: fall through to the link on the screen.
+  }
+  tonight.shareUrl = url;
+  try {
+    if (nav?.clipboard?.writeText) {
+      await nav.clipboard.writeText(url);
+      return 'copied';
+    }
+  } catch {
+    // A clipboard the page may not write is still a link the person can read out.
+  }
+  return 'shown';
+}
+
+/**
+ * A `?room=` link, followed (decision 481). The device joins that room — `join` is idempotent, so
+ * a member who is already seated gets their seat back — unless it is the room this device is
+ * already showing, which needs nothing.
+ */
+export async function followLink(code) {
+  if (!code) return null;
+  const here = tonight.lobby?.room_code;
+  if (here && here.toUpperCase() === code.toUpperCase()) return tonight.lobby.session_id;
+  const joined = await join({ roomCode: code });
+  return joined ? joined.session_id : null;
 }

@@ -9,26 +9,39 @@ import {
   ESCAPE_LABEL,
   JOIN_CAPTION,
   MAX_GUESTS,
+  MAX_VETOES,
   RECONNECT_MAX_MS,
+  RESERVED_LABEL,
   REVEAL_BEAT,
   answer,
   approvalShare,
   ballotTurns,
+  ballotWaitingLine,
+  breadthLine,
   connect,
   endRoom,
   escape,
+  followLink,
   handBallot,
   leave,
+  linkedRoom,
   loadRooms,
   loadRound,
   loadSolo,
   minutesAgo,
+  onlyYesLines,
+  pickLabel,
   progressLine,
   reconnectDelay,
   refresh,
   roomLine,
+  roundHeader,
+  shareLink,
+  shareRoom,
   submitBallot,
+  submitLabel,
   toggleApproval,
+  toggleVeto,
   tonight,
   undo
 } from './tonight.svelte.js';
@@ -83,10 +96,13 @@ describe('the waiting line (54c)', () => {
   // keeps both off the wire. They are here so the claim below can fail — grepping a line built
   // from `name`, `answered`, `expected` and `finished` for words no field can supply asserts
   // nothing about the renderer, only about the fixture. [M4.10 finding 33]
+  // `expected` is the server's estimate since the 2026-09-25 wave (`play.expected_pairs`): the
+  // sweep's typical round until a seat passes it, one more than answered after that. It was the
+  // cap for every seat, so this fixture carried 20 and the line read "Jenny 9/~20".
   const progress = [
-    { name: 'Patrick', answered: 6, expected: 20, finished: true, answer: 'NEITHER', pair: 'Heat' },
-    { name: 'Jenny', answered: 9, expected: 20, finished: false, answer: 'EITHER', pair: 'Drive' },
-    { name: 'Mia', answered: 4, expected: 20, finished: false, answer: 'A', pair: 'Sicario' }
+    { name: 'Patrick', answered: 6, expected: 10, finished: true, answer: 'NEITHER', pair: 'Heat' },
+    { name: 'Jenny', answered: 11, expected: 12, finished: false, answer: 'EITHER', pair: 'Drive' },
+    { name: 'Mia', answered: 4, expected: 10, finished: false, answer: 'A', pair: 'Sicario' }
   ];
 
   it('shows counts and names, and nothing that could be an answer', () => {
@@ -94,7 +110,8 @@ describe('the waiting line (54c)', () => {
     // second half — the renderer must not draw them even when they are handed to it.
     const line = progressLine(progress);
     expect(line).toContain('Patrick 6/6 done');
-    expect(line).toContain('Jenny 9/~20');
+    expect(line).toContain('Jenny 11/~12');
+    expect(line).toContain('Mia 4/~10');
     expect(line).toContain('waiting for 2');
     expect(line, "a seat's answer reached the waiting line").not.toMatch(/EITHER|NEITHER/i);
     expect(line, 'the pair a seat answered about reached the waiting line').not.toMatch(
@@ -147,7 +164,10 @@ describe('the constants the spec fixes', () => {
   it('keeps the two strings the spec fixes verbatim', () => {
     expect(REVEAL_BEAT).toBe('VOTES REVEALED TOGETHER');
     expect(ESCAPE_LABEL).toBe('just pick for us');
-    expect(JOIN_CAPTION).toContain('Push is best effort');
+    // The join caption is the household's copy and not the spec's, so it is held to decision
+    // 486's register rather than to a verbatim string: "Push is best effort" was engineering
+    // vocabulary on a member's screen.
+    expect(JOIN_CAPTION).not.toMatch(/push|best effort/i);
   });
 });
 
@@ -688,10 +708,13 @@ describe('the copy and the controls this milestone moved', () => {
   it('names only the join channels that still exist', () => {
     // Decision 165 retires the TV client. A caption advertising a route that no longer answers
     // sends the household to a screen that will 404. [finding 43]
-    expect(JOIN_CAPTION).toContain('Push is best effort');
+    // And since decision 481 the link is one of them; the in-app channel is named as the
+    // household sees it (the open-rooms list) rather than as the WebSocket's "banner".
+    expect(JOIN_CAPTION).toContain('can go missing');
     expect(JOIN_CAPTION).not.toMatch(/TV/i);
     expect(JOIN_CAPTION).toContain('room code');
-    expect(JOIN_CAPTION).toContain('banner');
+    expect(JOIN_CAPTION).toContain('link');
+    expect(JOIN_CAPTION).toContain('open-rooms list');
   });
 
   it('says which minutes a series room is counting', () => {
@@ -922,5 +945,137 @@ describe('overlapping reads land in order (finding 21)', () => {
 
     expect(tonight.round.card_token, 'a spent card landed over the live one').toBe('card-newest');
     expect(tonight.activeSeat, 'the seat followed the stale card').toBe(12);
+  });
+});
+
+describe('the first household evening (owner instruction of 2026-09-25)', () => {
+  it('heads the round with what to expect, and names the cap only near it', () => {
+    // "pair 1 · cap 20" read as the plan for the evening; the cap is the ending the round is
+    // built to avoid, so it joins the line only when a round is close enough for it to matter.
+    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('pair 1 · usually about 10');
+    expect(roundHeader({ answered: 13, cap: 20, typical: 10 })).not.toContain('20');
+    expect(roundHeader({ answered: 14, cap: 20, typical: 10 })).toBe(
+      'pair 15 · usually about 10 · at most 20'
+    );
+    expect(roundHeader(null)).toBe('');
+  });
+
+  it("files the ballot's count under the ballot, which is the number the screen prints", async () => {
+    // The other phone read "0 of 2 submitted" for as long as it stayed on the ballot: the only
+    // frame a submit pushed was the round's progress, which lands in `tonight.progress`.
+    vi.stubGlobal('WebSocket', FakeSocket);
+    vi.stubGlobal('location', { protocol: 'http:', host: 'host' });
+    sockets.length = 0;
+    tonight.ballot = { slate: [{ title_id: 1 }], submitted: 0, seated: 2, revealed: false };
+    const stop = connect(7);
+    try {
+      await sockets[0].onmessage({
+        data: JSON.stringify({ kind: 'ballot', session_id: 7, submitted: 1, seated: 2 })
+      });
+      expect(tonight.ballot.submitted).toBe(1);
+      expect(tonight.ballot.slate, 'the frame replaced the ballot rather than its count').toEqual([
+        { title_id: 1 }
+      ]);
+      expect(calls, 'a count needs no re-read').toEqual([]);
+    } finally {
+      stop();
+    }
+  });
+
+  it('says the vote is in, and how many are still out, once this phone has voted', () => {
+    expect(ballotWaitingLine({ submitted: 1, seated: 2 })).toBe('Your vote is in · waiting for 1 more');
+    expect(ballotWaitingLine({ submitted: 2, seated: 2 })).toBe('Your vote is in');
+    expect(ballotWaitingLine(null)).toBe('');
+  });
+
+  it('labels Submit with what it will cast', () => {
+    expect(submitLabel(0)).toBe('Submit — none of these');
+    expect(submitLabel(1)).toBe('Submit 1 pick');
+    expect(submitLabel(3)).toBe('Submit 3 picks');
+  });
+
+  it("says how broad each person's yes was, and whose only yes won", () => {
+    // "Unanimous." stood over one member's four yeses and the other's one — the winner.
+    const result = {
+      breadth: [
+        { participant_id: 1, name: 'Patrick', approved: 4, of: 4, only_yes: false },
+        { participant_id: 2, name: 'Jenny', approved: 1, of: 4, only_yes: true }
+      ]
+    };
+    expect(breadthLine(result)).toBe('Patrick said yes to 4 of 4 · Jenny said yes to 1 of 4');
+    expect(onlyYesLines(result)).toEqual(['the only one Jenny said yes to']);
+    expect(breadthLine({})).toBe('');
+  });
+
+  it("labels a seat's own pick by name and never as the axis counterweight", () => {
+    expect(pickLabel('Jenny')).toBe("Jenny's pick");
+    expect(pickLabel('Jenny')).not.toBe(RESERVED_LABEL);
+  });
+
+  it('shows what a room has ruled out on its open-rooms row', () => {
+    const row = roomLine({
+      room_code: 'QC-4397', host: 'Patrick', started_at: null, kind: 'movie',
+      runtime_budget_min: 130, skips_seen: true,
+      vetoes: [{ key: 'violence', label: 'violence' }, { key: 'horror', label: 'horror' }]
+    });
+    expect(row).toContain('not tonight: violence, horror');
+  });
+
+  it('sets the whole veto set, and never a fourth', async () => {
+    // Decision 480: a replace rather than a toggle, so two phones tapping at once cannot leave
+    // half of each; and the store refuses a fourth before the server has to.
+    world.room = roomOf({ state: 'open', vetoes: [] });
+    tonight.lobby = { ...world.room };
+    fetchMock.mockImplementation(async (path, opts = {}) => {
+      calls.push({ method: opts.method ?? 'GET', path, body: opts.body ? JSON.parse(opts.body) : null });
+      const keys = JSON.parse(opts.body).vetoes;
+      return reply({ session_id: 7, vetoes: keys.map((k) => ({ key: k, label: k })) });
+    });
+    await toggleVeto('violence');
+    expect(posted('/api/tonight/sessions/7/vetoes')).toEqual({ vetoes: ['violence'] });
+    expect(tonight.lobby.vetoes.map((v) => v.key)).toEqual(['violence']);
+
+    tonight.lobby = {
+      ...tonight.lobby,
+      vetoes: [{ key: 'a' }, { key: 'b' }, { key: 'c' }]
+    };
+    calls = [];
+    await toggleVeto('violence');
+    expect(calls, 'a fourth veto went to the server').toEqual([]);
+    expect(MAX_VETOES).toBe(3);
+  });
+
+  it('builds the join link from the page origin, and reads one back', () => {
+    // Decision 481: the QR's missing half, and what the push invitation carries.
+    expect(shareLink('QC-4397', 'https://spielplan.home')).toBe(
+      'https://spielplan.home/tonight?room=QC-4397'
+    );
+    expect(linkedRoom('?room=QC-4397')).toBe('QC-4397');
+    expect(linkedRoom('?room=%20')).toBeNull();
+    expect(linkedRoom('')).toBeNull();
+  });
+
+  it('shows the link on the screen when the phone has no share sheet', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', host: 'spielplan.home', origin: 'https://spielplan.home' });
+    vi.stubGlobal('navigator', {});
+    tonight.lobby = roomOf({ room_code: 'QC-4397' });
+    expect(await shareRoom()).toBe('shown');
+    expect(tonight.shareUrl).toBe('https://spielplan.home/tonight?room=QC-4397');
+    leave();
+    expect(tonight.shareUrl, 'the link outlived the room it belongs to').toBe('');
+  });
+
+  it('follows a link by joining that room, and does nothing for the room already on screen', async () => {
+    fetchMock.mockImplementation(async (path, opts = {}) => {
+      calls.push({ method: opts.method ?? 'GET', path, body: opts.body ? JSON.parse(opts.body) : null });
+      return reply({ session_id: 9, participant_id: 31, lobby: roomOf({ session_id: 9, room_code: 'QC-4397' }) });
+    });
+    expect(await followLink('qc-4397')).toBe(9);
+    expect(posted('/api/tonight/sessions/join')).toEqual({ session_id: null, room_code: 'qc-4397' });
+
+    calls = [];
+    expect(await followLink('QC-4397'), 'the room on screen is joined already').toBe(9);
+    expect(calls).toEqual([]);
+    expect(await followLink(null)).toBeNull();
   });
 });

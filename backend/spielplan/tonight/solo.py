@@ -30,6 +30,7 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.db import dna_terms
 from spielplan.tonight import combine as combine_rules
 from spielplan.tonight import dna as dna_reads
 from spielplan.tonight import pool as pool_rules
@@ -156,7 +157,11 @@ async def picks(
     # a library with no DNA tilts nothing, but its sharpen round still re-ranked the picks and
     # 54f's provenance line has to be able to say so.
     vectors = {t: tagged.get(t, {}) for t in ids}
-    prior = {c.title_id: c.group_score for c in candidates}
+    # The same scale the group round reads (decision 477), so "sharpen this" asks about as many
+    # questions as a room's round and the tilt weighs the same against a solo Ledger as against a
+    # member's. Monotone, so the door's no-tilt order is the Ledger's own order either way. Solo
+    # has no frozen pool to stamp a marker into: it rebuilds per request, as §6.2 step 8 has it.
+    prior = pool_rules.rank_normal({c.title_id: c.group_score for c in candidates})
 
     played = round_rules.replay(
         prior, list(answers), z=z, has_profile=True,
@@ -213,19 +218,27 @@ async def picks(
         terms = await dna_reads.terms_carried_by(
             conn, title_id, version=version or "", limit=NAMED_TERMS
         )
+        # Decision 486: a member reads the vocabulary by its label, never its id — "pulls you with
+        # mood.dark" was the id on the screen. The id stays on `terms` for the carried-term check.
+        named = await dna_terms.labels_for(conn, [t["term"] for t in terms])
+        words = [str((named.get(t["term"]) or {}).get("label") or t["term"]) for t in terms]
         return {
             "title_id": title_id, "name": c.name, "year": c.year,
             "runtime_min": c.runtime_min, "poster_path": c.poster_path,
             "fit_line": c.fit_line, "over_budget_min": c.over_budget_min,
             # §6.8 makes the one-line why mandatory. A pick with no carried term still gets a
             # line rather than an empty string — an unexplained pick is the register failing at
-            # its cheapest point, and silence is worse than "we cannot say yet".
+            # its cheapest point, and silence is worse than "we cannot say yet". Not "your ledger":
+            # the Ledger is a model noun (decision 486).
             "why": (
                 STRETCH_WHY if stretch
-                else why_line([t["term"] for t in terms]) if terms
-                else "top of your ledger tonight"
+                else why_line(words) if terms
+                else "near the top of your list tonight"
             ),
-            "terms": [{"term": t["term"], "tier": t["tier"]} for t in terms],
+            "terms": [
+                {"term": t["term"], "tier": t["tier"], "label": w}
+                for t, w in zip(terms, words, strict=True)
+            ],
         }
 
     return {

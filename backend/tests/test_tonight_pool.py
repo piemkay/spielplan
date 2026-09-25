@@ -226,3 +226,78 @@ def test_the_budget_filter_drops_only_what_it_must():
         budget_min=BUDGET,
     )
     assert [c.title_id for c in built] == [1, 2]
+
+
+# --- decision 477: one scale for every member ----------------------------------------------
+
+
+def test_each_members_scores_are_rank_standardised_over_the_frozen_pool():
+    """The first household evening, in miniature (decision 477).
+
+    One member's raw scores ran to 13.28 against the other's 3.13 because §5.1's cf half is
+    standardised over a population the owned pool is not drawn from, so the plain average was one
+    person's Ledger. `rank_normal` maps each member's own order onto the same normal quantiles:
+    monotone, so nobody's order moves; the same spread for everyone, so nobody's units outvote
+    anybody's; and ties broken by title id, so two reads of one frozen pool agree to the bit.
+    """
+    import statistics
+
+    heavy = {1: 13.28, 2: 9.43, 3: 6.52, 4: 5.82, **{t: 0.01 * t for t in range(5, 205)}}
+    std = pool.rank_normal(heavy)
+
+    assert sorted(std, key=std.__getitem__) == sorted(heavy, key=lambda t: (heavy[t], t)), (
+        "a member's own order is untouched"
+    )
+    assert statistics.pstdev(std.values()) == pytest.approx(pool.SCALE_SD, abs=0.02)
+    assert max(std.values()) < 3.0, "the runaway favourite counts for the top quantile, not 13"
+    assert statistics.mean(std.values()) == pytest.approx(0.0, abs=1e-9)
+
+    tied = pool.rank_normal({9: 0.5, 3: 0.5, 5: 0.5})
+    assert tied[3] < tied[5] < tied[9], "ties go by title id, the same way on every read"
+    assert pool.rank_normal({7: 42.0}) == {7: 0.0}, "a pool of one has no spread to map"
+    assert pool.rank_normal({}) == {}
+
+
+def test_two_members_on_different_scales_count_the_same_after_standardising():
+    """The plain average stays plain (§0 row 3) — it is taken over scores that mean the same
+    thing for each member. Raw, the wide member's favourite wins the average by their units
+    alone; standardised, each member's own first choice is worth the same."""
+    wide = {1: 13.0, 2: 0.2, 3: 0.1, 4: 0.0}
+    narrow = {1: 0.0, 2: 0.3, 3: 0.2, 4: 0.1}
+    raw_winner = max(wide, key=lambda t: (wide[t] + narrow[t]) / 2)
+    assert raw_winner == 1, "the defect: one member's scale decides"
+
+    a, b = pool.rank_normal(wide), pool.rank_normal(narrow)
+    assert a[1] == pytest.approx(b[2]), "each member's first choice is worth the same"
+    assert pool.group_score({1: a[1], 2: b[1]}) < pool.group_score({1: a[2], 2: b[2]}), (
+        "and the title both rank near the top beats the one only the wide member loves"
+    )
+
+
+# --- decision 480: "not tonight" ------------------------------------------------------------
+
+
+def test_a_veto_names_vocabulary_terms_and_nothing_else():
+    """Each chip is a fixed set of vocabulary-v1 ids, so a veto is a presence predicate over the
+    same terms every other DNA read uses; an unknown key vetoes nothing rather than failing."""
+    assert pool.veto_terms(["violence"]) == ["mood.gory", "mood.violent", "themes.violence"]
+    assert pool.veto_terms(["no-such-chip"]) == []
+    assert pool.veto_labels(["harrowing", "violence"]) == ["violence", "harrowing"]
+    assert all("." in term for _, terms in pool.VETOES.values() for term in terms)
+    assert pool.MAX_VETOES == 3
+
+
+def test_a_veto_reads_the_quote_verified_tier_and_never_a_weight():
+    """§4.1 rules 1 and 2 on the new predicate (decision 480): it names the tier, so the
+    discriminator is kept, and it compares no salience, confidence or weight — a threshold on a
+    weight is the cut §4.1 rule 2 forbids. The extracted tier because the projected one would
+    have removed Raiders of the Lost Ark and Eternal Sunshine of the Spotless Mind on inference
+    alone on the first household's library."""
+    import inspect
+    import re
+
+    assert pool.VETO_TIER == "extracted"
+    source = inspect.getsource(pool.build)
+    predicate = source[source.index("FROM dna_tagged d"):source.index("list(vetoed_terms)")]
+    assert "d.tier = $7" in predicate
+    assert not re.search(r"salience|confidence|weight", predicate), predicate
