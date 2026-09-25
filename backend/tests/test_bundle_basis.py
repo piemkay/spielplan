@@ -181,6 +181,44 @@ async def test_a_restaged_broken_install_is_served_without_a_restart(app, db, tm
     assert not state.artifacts.broken and not state.artifacts.is_empty
 
 
+async def test_a_restage_whose_load_fails_is_reported_as_the_restart_it_owes(
+    app, db, tmp_path, monkeypatch
+):
+    """Decision 497 point 3 names the Data tab's `restart_required` for a load that raised, and
+    point 1 names decision 253's restage among the re-pins. A restage moves `activated_at` and not
+    the version, so a flag that compared versions said nothing was owed while the header said a
+    restart was - and over the broken store the process kept serving, the page went on asking for
+    the restore the restage had just done."""
+    admin = await _admin(app)
+    state = admin._transport.app.state
+    root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
+    await _import(db, root)
+    shutil.rmtree(settings().artifacts_dir / "test-v1")
+    basis.pin(state, await basis.load(db, settings().artifacts_dir))
+    assert state.artifacts.broken and state.artifacts.version == "test-v1"
+
+    real = basis.load
+
+    async def refuses(conn, artifacts_dir):
+        raise OSError("simulated: manifest.json is unreadable")
+
+    monkeypatch.setattr(basis, "load", refuses)
+    await _import(db, root)
+
+    stuck = (await admin.get("/api/admin/bundle/state")).json()
+    assert stuck["active"] == "test-v1" and state.artifacts.version == "test-v1"
+    assert stuck["restart_required"] is True, "the one state decision 497 owes a restart for"
+    assert stuck["broken"] is False and stuck["missing_path"] is None, (
+        "the page asked for the restore the restage had just done"
+    )
+    assert (await admin.get("/api/config")).json()["restart_required"] is True
+
+    monkeypatch.setattr(basis, "load", real)
+    settled = (await admin.get("/api/admin/bundle/state")).json()
+    assert settled["restart_required"] is False and settled["broken"] is False
+    assert settled["loaded"]["version"] == "test-v1"
+
+
 async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
     app, db, tmp_path, monkeypatch, caplog
 ):

@@ -11448,6 +11448,7 @@ tests = [
     "backend/tests/test_bundle_basis.py::test_a_models_only_reimport_of_a_new_version_is_served_without_a_restart",
     "backend/tests/test_bundle_basis.py::test_a_restaged_broken_install_is_served_without_a_restart",
     "backend/tests/test_bundle_basis.py::test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed",
+    "backend/tests/test_bundle_basis.py::test_a_restage_whose_load_fails_is_reported_as_the_restart_it_owes",
     "backend/tests/test_bundle_basis.py::test_the_timer_repins_without_any_request",
     "backend/tests/test_bundle_import_job.py::test_the_state_route_reports_the_phase_until_the_bundle_is_active",
     "backend/tests/test_devstub_contract.py::test_the_harness_reports_the_import_phase_until_the_bundle_is_active",

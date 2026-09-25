@@ -318,6 +318,12 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
     )
     active = next((r["version"] for r in rows if r["state"] == "active"), None)
     store = request.app.state.artifacts
+    # Decision 497 point 3's one state that still owes a restart, read from the follower's memory
+    # as `/api/config` reads it, so the header and this page describe one state. Comparing
+    # versions alone cannot see it after decision 253's restage, which moves `activated_at` and not
+    # the version: a failed re-pin there left `active == store.version`, no restart banner, and -
+    # over the broken store it had to keep serving - the restore banner after the restore.
+    failed = basis.unloaded(request.app.state)
     return {
         "bundles": [dict(r) for r in rows],
         "active": active,
@@ -336,7 +342,7 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
         # files are gone the restore is the only banner, and the swap's restart is still owed
         # after it and is still reported by this flag once the store is whole.
         # [M4.14 step D3, decision 258, finding 2.17]
-        "restart_required": active != store.version and not store.broken,
+        "restart_required": failed or (active != store.version and not store.broken),
         # The third state this pair could not express. `active != store.version` is False when the
         # active row's DIRECTORY is gone, because `load_active` now carries that row's version with
         # `broken = True` - correctly, so the fit is stamped honestly - and `loaded` above is None
@@ -344,8 +350,12 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
         # bundle, no loaded bundle and no restart required, which describes nothing. The only other
         # report of this state is one ERROR line at boot, and §6.6 makes the Data tab the place an
         # operator finds out. [M4.13, data-03]
-        "broken": store.broken,
-        "missing_path": str(store.root) if store.broken else None,
+        #
+        # Not while a re-pin has failed: the store pinned then is the outgoing one, and its missing
+        # directory is the one the import that moved the row has already written - one state, one
+        # instruction, and the one decision 497 names is the restart.
+        "broken": store.broken and not failed,
+        "missing_path": str(store.root) if store.broken and not failed else None,
         "import_dir": str(settings().import_dir),
         "rebuild_set": list(bundle_import.REBUILD_SET),
         # The import the Data tab is waiting on, or the last one it ran. None on an install that
