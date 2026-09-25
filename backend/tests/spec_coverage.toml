@@ -1416,7 +1416,7 @@ what = "A single per-user 'show the model' toggle lives in the account dropdown 
 why = "Decision 117: one global per-user toggle, default off, a debugging instrument. Its exemption for the title card's model line was withdrawn by the owner instruction of 2026-09-25 after the first household user test: two members met b(t), β and gate with the switch off, and β and σ in that line are the viewer's own fit."
 # Restated in place for the user-test wave: the row keeps its milestone and its first test, and
 # the model-line test is renamed with its assertion (absent with the switch off, present with it
-# on). The spec field gains "; decision 486" when that entry lands in the record, not before:
+# on). The spec field gained "; decision 486" once that entry was recorded, not before:
 # `_unresolvable_decision_citations` fails a shipped row citing a decision the record lacks.
 tests = [
     "e2e/specs/10-home.spec.js::with the toggle off the rail and every inline number are absent, not merely hidden",
@@ -11410,8 +11410,8 @@ tests = [
 # one fallback on each side of the wire; the surfaces that print a term name it on their own rows.
 # Every id the tests use is dotted with a label that differs from its leaf, because the fixture
 # vocabulary test_home.py builds on is dotless and an id printed raw there reads as plain words.
-# `spec` cites the section alone: decision 486 (the member register this row serves) is recorded
-# in the same wave, and `_unresolvable_decision_citations` would redden the row until it lands.
+# `spec` was filed citing the section alone, because `_unresolvable_decision_citations` reddens a
+# row citing a decision the record lacks, and gained decision 486 when the wave recorded it.
 [[requirement]]
 id = "library-rate-vocabulary-terms-shown-by-label"
 spec = "§6.8 (\"a one-line why in vocabulary terms\"); decision 486"
@@ -11433,9 +11433,8 @@ tests = [
 # somebody with a shell restarted two containers - an install that was no longer compose up plus
 # the wizard (§2). Decision 497 makes the backend follow the active row, so §10's sequence ends at
 # the flip for a first import, a models-only re-import and a restage alike, and the restart is
-# the fallback for a load that failed, named where the household reads it. `spec` cites sections
-# alone until decision 497 is recorded, for `_unresolvable_decision_citations`' reason; append
-# "; decision 497" when it lands.
+# the fallback for a load that failed, named where the household reads it. `spec` gained
+# "; decision 497" when the wave recorded it (`_unresolvable_decision_citations`' reason).
 [[requirement]]
 id = "platform-a-bundle-import-is-served-without-a-restart"
 spec = "§2 (\"`docker compose up` + the setup wizard is the whole install\"); §3.1; §4.3 (\"hot-swapped on bundle import\"); §10 swap sequence; decision 497"
@@ -11487,8 +11486,8 @@ tests = [
 # The owner's instruction of 2026-09-25, after the first household user test: no cover art was
 # shown anywhere, because decision 190 had held the whole poster path back. Decision 483 ships it
 # (reversing 190, adopting 178(4) as amended) and decision 485 says which process fetches what.
-# `spec` cites the sections alone for the reason the vocabulary row above gives:
-# `_unresolvable_decision_citations` reddens a row citing a decision until its entry lands.
+# `spec` gained decisions 483 and 484 when the wave recorded them, for the reason the vocabulary
+# row above gives.
 [[requirement]]
 id = "library-rate-poster-art-resolves-within-its-licences"
 spec = "§6.8 (\"Poster-forward 2:3 cards.\"); §6.1 (\"two posters are the buttons\"); §3.1 first-login lock; §3.2; decision 483"
@@ -11575,9 +11574,8 @@ tests = [
 # test (workstream WK). Four rows, one per rule the test met on the seeded install: a card that led
 # with an MPST retelling or another film's synopsis, a poster on a host the app may not serve, a
 # credit list that named one person twice, and an alias map whose `kind` column was never loaded.
-# Every `spec` cites sections only, for the reason the vocabulary-label row above gives: decisions
-# 499-501 are recorded in the same wave, and `_unresolvable_decision_citations` reddens a row whose
-# decision is not yet headed in the register. The merge appends them once the entries land.
+# Every `spec` was filed citing sections only, for the reason the vocabulary-label row above gives,
+# and gained its decision (499-501) when the wave recorded them.
 [[requirement]]
 id = "library-rate-title-card-never-leads-with-mpst-or-another-titles-synopsis"
 spec = "§4.1 (title_meta, \"one block = one droppable source\") + §6.0 title card + §8 stage 5 (packs); decision 499"
@@ -11655,10 +11653,9 @@ tests = [
 # The owner's instruction of 2026-09-25, after the first household user test: two members who
 # rated about sixty films each got rankings led by five-rating titles and by blockbusters neither
 # had asked for, so §12 M2's "visibly personal rankings" did not hold. The six rows below are the
-# scoring repair (workstream WA). `spec` cites sections alone for the reason the vocabulary-label
-# row above gives: decisions 469, 470 and 471 are recorded in the same wave, and
-# `_unresolvable_decision_citations` would redden a row that cited them before their entries land.
-# The merge appends `; decision 469` (and 470, 471) to the rows that `why` names them in.
+# scoring repair (workstream WA). `spec` was filed citing sections alone, for the reason the
+# vocabulary-label row above gives, and gained `; decision 469` (and 470, 471) on the rows `why`
+# names them in when the wave recorded them.
 [[requirement]]
 id = "data-rules-the-item-prior-is-the-shipped-b-i"
 spec = "§5.1 (\"b(t) = shrunk item prior; b̂(t) from the Cold Tower for cold titles\"); §4.3 backbone.npz"
@@ -11738,10 +11735,10 @@ tests = [
 
 # --- Home and the catalog after the first household user test (owner instruction of 2026-09-25) ---
 #
-# Workstream WB's rows. Each `spec` cites the section alone and the decision in `what`/`why`:
-# decisions 472-476 are recorded in docs/spec-v2.2-proposals.md in the same wave, and
-# `_unresolvable_decision_citations` reddens a shipped row whose `spec` cites a decision the file
-# does not yet carry. The merge that records them may append "; decision N" to each `spec`.
+# Workstream WB's rows. Each `spec` was filed citing the section alone and the decision in
+# `what`/`why`, because `_unresolvable_decision_citations` reddens a shipped row whose `spec` cites a
+# decision docs/spec-v2.2-proposals.md does not yet carry; each gained its decision (472-476) when
+# the wave recorded them.
 
 # Decision 472. "up" found Up at 131 of 362 and "heat" found Heat tenth: a search kept the
 # catalog's year order. The predicate - and so the count line - is unchanged.
@@ -11863,11 +11860,9 @@ tests = [
 ]
 
 # Workstream WE of the owner instruction of 2026-09-25, after the first household user test. The
-# four rows below cite sections only, for the reason the vocabulary-label row above gives: decisions
-# 486 (the member register), 487 (the title card's own answer) and 488 (unbuilt surfaces absent
-# from navigation) are recorded in the same wave, and `_unresolvable_decision_citations` reddens a
-# shipped row that cites a decision the record does not hold yet. Each spec field gains its
-# decision when it lands.
+# four rows below were filed citing sections only, for the reason the vocabulary-label row above
+# gives, and each spec field gained its decision - 486 (the member register), 487 (the title card's
+# own answer) or 488 (unbuilt surfaces absent from navigation) - when the wave recorded them.
 [[requirement]]
 id = "library-rate-title-card-speaks-the-member-register"
 spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons); decision 486"
@@ -12028,11 +12023,10 @@ tests = [
 
 # The owner's instruction of 2026-09-25, after the first household user test, on the Rank surface:
 # both members stopped comparing after ten and eleven answers and said they would not come back.
-# Five rows, one per thing the surface now promises. Each `spec` field cites sections and decisions
-# already recorded; the wave's own decisions (494 which pair, 495 the round, 496 tap opens / Move
-# lifts, 486 the member register) are named in `why` and in the comments, because
-# `_unresolvable_decision_citations` reddens a row whose `spec` cites a number the register does
-# not head yet - the merge that records them appends them to `spec`.
+# Five rows, one per thing the surface now promises. Each `spec` field was filed citing sections
+# and decisions already recorded, because `_unresolvable_decision_citations` reddens a row whose
+# `spec` cites a number the register does not head yet, and gained the wave's own (494 which pair,
+# 495 the round, 496 tap opens / Move lifts, 486 the member register) when the wave recorded them.
 
 [[requirement]]
 id = "tonight-rank-queue-pairs-that-matter"
@@ -12129,9 +12123,9 @@ tests = [
 
 # --- the 2026-09-25 wave, workstream WC: Tonight after the first household evening ------------
 # Owner instruction of 2026-09-25 after the first household user test (session QC-4397: a
-# 719-title frozen pool, two members, build ed1f690). Each row's `spec` cites the section alone:
-# decisions 477-481 are recorded in the same wave, and `_unresolvable_decision_citations` reddens a
-# row citing one before its entry lands. The merge appends the decision to each `spec` field.
+# 719-title frozen pool, two members, build ed1f690). Each row's `spec` was filed citing the
+# section alone, because `_unresolvable_decision_citations` reddens a row citing a decision before
+# its entry lands, and gained its decision (477-482, 486) when the wave recorded them.
 
 [[requirement]]
 id = "tonight-member-scores-are-commensurate"
