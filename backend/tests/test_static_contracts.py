@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import html
 import io
 import operator
 import os
@@ -14100,3 +14101,364 @@ def test_no_criterion_promises_a_raw_store_read_the_parked_resume_cannot_perform
             "`rawstore.read` is stage 3's, which the resume is past. Say what the retry does -- it "
             "opens no socket and builds no client -- or make the sentence true first."
         )
+
+
+# --- Decision 486 clause 2: no member surface renders a spec or milestone reference -------------
+#
+# The first household user test (2026-09-25) put "§6.7", "§6.3", "decision 170", "Admin (M1)" and
+# "arrives with M6" in front of two members who had never read the spec, each written by a
+# different milestone into a different file, and each correct by the house rule that a choice
+# cites its clause. That rule is right about comments and wrong about copy, and nothing in the tree
+# told the two apart. Decision 486 clause 2 does: the member register never renders a spec
+# reference ("§N", "decision N", "proposal N") or a milestone label (M0-M7), whether or not Show
+# the model is on; references stay in comments, commit bodies, coverage rows and admin surfaces.
+# Nine workstreams each rewrote their own surfaces, and this holds the rule across all of them,
+# because the leak was never one file's.
+#
+# WHAT IS READ. Every route except `admin/` and `setup/` (clause 1), and every module those routes
+# import, followed through `$lib/` and relative imports -- clause 1's "every component those routes
+# mount" -- so a component mounted on a member surface is read the day it is mounted, not the day
+# somebody remembers a list. Then the backend that writes member copy: why-lines, captions, card
+# reasons, reveals and refusals travel as JSON and a member reads them as they are. That is the
+# four member domain packages whole, the five surface routers, and the two 409 sentences Rate and
+# Rank render from `api/artifacts.py`, whose other strings are the Data tab's.
+#
+# WHAT IS NOT. Comments and styles in all three languages, because comments are where the house
+# rule sends the citations. SVG geometry, because `M7 5 3.5 8.5 7 12` is a moveto and not a
+# milestone: the `d`/`points` attributes in markup and, in script, a literal made of path commands
+# and at least two numbers (NavRail's icon map). In Python: docstrings, a logger's arguments (the
+# operator's log), a route parameter's `description=` (the OpenAPI schema, served to no member),
+# and `--` comments inside SQL. A raised error is NOT exempt: the routers relay a ValueError's
+# text as a 422's detail, and a guard cannot tell which ones they relay.
+# [decision 486 clauses 1-2; §6.8 "Member register"; C4.1 of the 2026-09-25 user test]
+
+_SPEC_REFERENCE = re.compile(
+    r"§\s?\d+(?:\.\d+)*|\b(?:[Dd]ecision|[Pp]roposal)s?\s+\d+|\bM[0-7](?:\.\d+)?\b"
+)
+_OPERATOR_ROUTES = ("admin", "setup")
+_LOCAL_IMPORT = re.compile(r"""\b(?:from|import)\s*['"](\$lib/[^'"]+|\.{1,2}/[^'"]+)['"]""")
+_SVG_GEOMETRY = re.compile(r"""\s(?:d|points)\s*=\s*(?:"[^"]*"|'[^']*'|\{[^{}]*\})""")
+_STYLE_ATTRIBUTE = re.compile(r"""\sstyle\s*=\s*(?:"[^"]*"|'[^']*')""")
+_PATH_DATA = re.compile(r"\s*[Mm][MmLlHhVvCcSsQqTtAaZz\d.,\s+-]*")
+_PATH_NUMBER = re.compile(r"\d*\.?\d+")
+_LOGGER_CALLS = {"debug", "info", "warning", "error", "exception", "critical"}
+_SQL_COMMENT = re.compile(r"--[^\n]*")
+_JS_WORD = re.compile(r"[\w$]+")
+
+_SPIELPLAN = REPO / "backend" / "spielplan"
+_MEMBER_COPY_PACKAGES = ("home", "rate", "rank", "tonight")
+_MEMBER_ROUTERS = ("home", "library", "rank", "rate", "tonight")
+_MEMBER_COPY_CONSTANTS = {"api/artifacts.py": ("RESTART_REQUIRED", "RESTORE_REQUIRED")}
+
+
+def _is_path_data(text: str) -> bool:
+    return bool(_PATH_DATA.fullmatch(text)) and len(_PATH_NUMBER.findall(text)) >= 2
+
+
+def _blank(match: re.Match[str]) -> str:
+    """A removed span, kept as its newlines so every later line number still points at its line."""
+    return "\n" * match.group(0).count("\n")
+
+
+def _js_literals(source: str) -> list[tuple[int, str]]:
+    """(line, text) of every string literal in a JavaScript source, comments skipped.
+
+    A lexer rather than a pattern, because the two mistakes a pattern makes are both live here: a
+    `//` inside a string ('http://…') read as a comment hides the rest of the line, and an
+    apostrophe inside a comment ("the card's") read as a quote swallows the code after it. Template
+    literals yield their text halves; a `${…}` inside one is code, and its own strings are read as
+    strings. A `/` opens a regex where an operand is expected, which is the usual heuristic, and a
+    regex's body is skipped rather than read.
+    """
+    out: list[tuple[int, str]] = []
+    templates: list[int] = []  # the brace depth each open `${` returns to
+    depth = 0
+    operand_expected = True
+    i, n = 0, len(source)
+
+    def line(at: int) -> int:
+        return source.count("\n", 0, at) + 1
+
+    def template_text(start: int) -> int:
+        """Read template text from `start` to the closing backtick or the next `${`."""
+        j = start
+        while j < n and source[j] != "`" and not source.startswith("${", j):
+            j += 2 if source[j] == "\\" else 1
+        out.append((line(start), source[start:j]))
+        if j < n and source[j] == "`":
+            return j + 1
+        templates.append(depth)
+        return j + 2
+
+    while i < n:
+        char = source[i]
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+        elif source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif char == "/" and operand_expected:
+            j, in_class = i + 1, False
+            while j < n and source[j] != "\n" and (in_class or source[j] != "/"):
+                if source[j] == "\\":
+                    j += 1
+                elif source[j] == "[":
+                    in_class = True
+                elif source[j] == "]":
+                    in_class = False
+                j += 1
+            i, operand_expected = j + 1, False
+        elif char in "'\"":
+            j = i + 1
+            while j < n and source[j] not in (char, "\n"):
+                j += 2 if source[j] == "\\" else 1
+            out.append((line(i), source[i + 1:j]))
+            i, operand_expected = j + 1, False
+        elif char == "`":
+            i, operand_expected = template_text(i + 1), False
+        elif char == "}" and templates and templates[-1] == depth:
+            templates.pop()
+            i, operand_expected = template_text(i + 1), False
+        elif char.isalpha() or char in "_$":
+            word = _JS_WORD.match(source, i).group(0)
+            operand_expected = word in {"return", "typeof", "case", "in", "of", "void", "throw", "else"}
+            i += len(word)
+        else:
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            if not char.isspace():
+                operand_expected = char not in ")]" and not char.isdigit()
+            i += 1
+    return out
+
+
+def _references(text: str) -> list[str]:
+    return [found.group(0) for found in _SPEC_REFERENCE.finditer(text)]
+
+
+def _frontend_register_leaks(path: Path) -> list[str]:
+    """Every spec or milestone reference a member-facing Svelte or JavaScript file can render."""
+    source = _src(path)
+    label = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else path.name
+    leaks: list[str] = []
+    scripts = [(source.count("\n", 0, m.start(1)), m.group(1))
+               for m in re.finditer(r"<script\b[^>]*>(.*?)</script>", source, re.S)]
+    if path.suffix != ".svelte":
+        scripts = [(0, source)]
+    for offset, script in scripts:
+        for line, text in _js_literals(script):
+            if _is_path_data(text):
+                continue
+            leaks += [f"{label}:{offset + line}: {ascii(ref)} in {ascii(text.strip()[:90])}"
+                      for ref in _references(text)]
+    if path.suffix == ".svelte":
+        markup = re.sub(r"<script\b.*?</script>|<style\b.*?</style>|<!--.*?-->", _blank, source,
+                        flags=re.S)
+        markup = _STYLE_ATTRIBUTE.sub(_blank, _SVG_GEOMETRY.sub(_blank, markup))
+        markup = html.unescape(markup)
+        for found in _SPEC_REFERENCE.finditer(markup):
+            line = markup.count("\n", 0, found.start()) + 1
+            context = markup[max(0, found.start() - 50):found.end() + 30].split("\n")
+            near = " ".join(part.strip() for part in context)
+            leaks.append(f"{label}:{line}: {ascii(found.group(0))} in the markup, near {ascii(near)}")
+    return leaks
+
+
+def _member_sources(routes: Path = FRONTEND / "routes", lib: Path = FRONTEND / "lib") -> list[Path]:
+    """The member routes and every module they import, transitively (decision 486 clause 1)."""
+    todo = [
+        path.resolve() for path in routes.rglob("*")
+        if path.is_file() and path.suffix in {".svelte", ".js"} and not path.name.endswith(".test.js")
+        and path.relative_to(routes).parts[0] not in _OPERATOR_ROUTES
+    ]
+    seen: set[Path] = set()
+    while todo:
+        path = todo.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for spec in _LOCAL_IMPORT.findall(_src(path)):
+            base = lib / spec[len("$lib/"):] if spec.startswith("$lib/") else path.parent / spec
+            for candidate in (base, base.with_name(base.name + ".js")):
+                if candidate.is_file() and candidate.suffix in {".svelte", ".js"}:
+                    todo.append(candidate.resolve())
+                    break
+    return sorted(seen)
+
+
+def _python_register_leaks(path: Path, names: tuple[str, ...] | None = None) -> list[str]:
+    """Every spec or milestone reference in the strings a backend module can hand a member.
+
+    `names` narrows a module to the constants of those names, for a module whose other strings
+    belong to an admin surface.
+    """
+    tree = ast.parse(_src(path))
+    skip = _docstrings(tree)
+    roots: list[ast.AST] = [tree]
+    if names is not None:
+        roots = [
+            node.value for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id in names for t in node.targets)
+        ]
+        assert len(roots) == len(names), f"{path.name} no longer defines all of {names}"
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        exempt = [kw.value for kw in node.keywords if kw.arg == "description"]
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr in _LOGGER_CALLS
+                and isinstance(func.value, ast.Name) and func.value.id in {"log", "logger"}):
+            exempt += [*node.args, *(kw.value for kw in node.keywords)]
+        skip |= {id(sub) for arg in exempt for sub in ast.walk(arg)}
+    label = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else path.name
+    return [
+        f"{label}:{sub.lineno}: {ascii(ref)} in {ascii(sub.value.strip()[:90])}"
+        for root in roots
+        for sub in ast.walk(root)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and id(sub) not in skip
+        for ref in _references(_SQL_COMMENT.sub("", sub.value))
+    ]
+
+
+def _member_copy_modules() -> list[tuple[Path, tuple[str, ...] | None]]:
+    modules: list[tuple[Path, tuple[str, ...] | None]] = [
+        (path, None) for package in _MEMBER_COPY_PACKAGES
+        for path in sorted((_SPIELPLAN / package).glob("*.py"))
+    ]
+    modules += [(_SPIELPLAN / "api" / f"{name}.py", None) for name in _MEMBER_ROUTERS]
+    modules += [(_SPIELPLAN / rel, names) for rel, names in _MEMBER_COPY_CONSTANTS.items()]
+    return modules
+
+
+def test_member_surfaces_render_no_spec_or_milestone_reference():
+    """Decision 486 clause 2, over every file a member's screen is made of.
+
+    The walk is asserted before the scan, because a scan over nothing passes: every member route
+    and the components the user test read the leaks off must be among the files read, and no admin
+    or setup route may be (clause 1 gives those the operator's register, references included).
+    [decision 486; §6.8 "Member register"; C4.1 of the 2026-09-25 user test]
+    """
+    sources = _member_sources()
+    read = {path.relative_to(FRONTEND).as_posix() for path in sources}
+    expected = {
+        "routes/+layout.svelte", "routes/+page.svelte", "routes/account/+page.svelte",
+        "routes/rate/+page.svelte", "routes/rank/+page.svelte", "routes/tonight/+page.svelte",
+        "routes/map/+page.svelte", "routes/taste/+page.svelte",
+        "lib/components/TitleDetail.svelte", "lib/components/ShelfRow.svelte",
+        "lib/components/PosterCard.svelte", "lib/components/ModelRail.svelte",
+        "lib/components/Milestone.svelte", "lib/components/RateRail.svelte",
+        "lib/components/RateUndo.svelte", "lib/components/NavRail.svelte",
+        "lib/rate.svelte.js", "lib/rank.svelte.js", "lib/tonight.svelte.js", "lib/home.svelte.js",
+    }
+    assert expected <= read, f"the import walk no longer reaches {sorted(expected - read)}"
+    operator = sorted(p for p in read if p.startswith(("routes/admin/", "routes/setup/")))
+    assert not operator, f"the walk read operator routes as member surfaces: {operator}"
+
+    leaks = [leak for path in sources for leak in _frontend_register_leaks(path)]
+    leaks += [leak for path, names in _member_copy_modules()
+              for leak in _python_register_leaks(path, names)]
+    assert not leaks, (
+        "a member surface renders a spec reference or a milestone label, which decision 486 "
+        "clause 2 forbids whether or not Show the model is on. Move the citation into a comment "
+        "and say the thing itself in the member's words; a surface that is not built says it is "
+        "coming in a later update:\n  " + "\n  ".join(leaks)
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        ("Text.svelte", "<p>Random pairs (§6.3) teach it fastest.</p>\n"),
+        ("Attr.svelte", '<button title="an admin links one in Admin (M1)">Play</button>\n'),
+        ("Entity.svelte", "<p>see &sect;6.1</p>\n"),
+        ("Expr.svelte", "<span>{built ? '' : 'arrives with M6'}</span>\n"),
+        ("Script.svelte", "<script>\n  const note = 'as decision 170 says';\n</script>\n<p>{note}</p>\n"),
+        ("Point.svelte", "<p>Shipped in M4.9</p>\n"),
+        ("store.svelte.js", "export const REASON = `from proposal 22 ${n} ratings`;\n"),
+        ("inner.svelte.js", "const s = `${ok ? 'fine' : 'see §7.3'}`;\n"),
+        ("url.svelte.js", "const u = 'https://example.org/'; const s = 'see §7.3';\n"),
+        ("aside.svelte.js", "// the card's own copy\nconst s = 'decision 4 says so';\n"),
+    ],
+)
+def test_the_member_register_guard_catches_a_real_violation(tmp_path, name, source):
+    """Each way a reference reaches the screen: text, attribute, entity, expression, script,
+    point release, template literal, a string nested inside a template's `${}`, and a string after
+    a `//` inside a string or an apostrophe inside a comment, which a pattern would lose."""
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    assert _frontend_register_leaks(path), f"the guard did not see the reference in {source!r}"
+
+
+def test_the_member_register_guard_leaves_path_data_comments_and_styles_alone(tmp_path):
+    """The verifier's pitfalls, each written where the guard must not read it: a path's `d`, an
+    icon map, three comment syntaxes, a style block and a style attribute, a `//` and an apostrophe
+    inside strings, and a regex literal whose body holds a quote."""
+    path = tmp_path / "Innocent.svelte"
+    path.write_text(
+        "<script>\n"
+        "  // §6.1: the rail. Decision 486 keeps this here.\n"
+        "  /* proposal 117, M2 */\n"
+        "  const ICONS = { rank: 'M3 5h13 M3 10h9 M3 15h5', undo: 'm13 13 4.5 4.5' };\n"
+        "  const url = 'https://example.org/'; // the card's §6.0 link\n"
+        "  const quote = /['\"]M6/g;\n"
+        "  const name = \"it's M-ish\";\n"
+        "</script>\n"
+        "<!-- §6.0 M0: the title card -->\n"
+        '<svg><path d="M7 5 3.5 8.5 7 12" /><polyline points="M1 2 3 4" /></svg>\n'
+        '<svg><path d={ICONS.rank} /></svg>\n'
+        '<p style="margin: 0 /* M3 */">Rated {count} of 100</p>\n'
+        "<style>\n  /* §6.8: one ember accent. M4.15 */\n  .x { color: red; }\n</style>\n",
+        encoding="utf-8",
+    )
+    assert _frontend_register_leaks(path) == []
+
+
+def test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs(tmp_path):
+    """A why-line's reference is a leak; the same words in a docstring, a logger call, a route
+    parameter's OpenAPI description or a SQL comment are the operator's and the developer's."""
+    module = tmp_path / "copy.py"
+    module.write_text(
+        '"""Shelf copy (§6.0, decision 476)."""\n'
+        "import logging\n"
+        "log = logging.getLogger(__name__)\n"
+        "SQL = '''SELECT 1 -- §5.1 and M4.13\n  FROM t'''\n"
+        "def why(n):\n"
+        '    """§6.8 quiet reasons."""\n'
+        '    log.info("M2 exit criterion (§12): %d", n)\n'
+        '    q = Query(None, description="§4.1 rule 5")\n'
+        '    return f"blended at your fitted weight (§5.1) over {n} titles"\n',
+        encoding="utf-8",
+    )
+    leaks = _python_register_leaks(module)
+    assert len(leaks) == 1 and ascii("§5.1") in leaks[0] and "blended" in leaks[0], leaks
+
+    module.write_text('ADMIN = "see §6.6"\nMEMBER = "Try again in a few seconds."\n', encoding="utf-8")
+    assert _python_register_leaks(module, ("MEMBER",)) == []
+    assert _python_register_leaks(module, ("ADMIN",))
+
+
+def test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes(tmp_path):
+    """Clause 1's "every component those routes mount", read off the imports: a component two
+    imports away from a member route is read, and one only an admin route mounts is not."""
+    routes, lib = tmp_path / "routes", tmp_path / "lib"
+    (routes / "rate").mkdir(parents=True)
+    (routes / "admin" / "data").mkdir(parents=True)
+    (lib / "components").mkdir(parents=True)
+    (routes / "rate" / "+page.svelte").write_text(
+        "<script>\n  import Card from '$lib/components/Card.svelte';\n</script>\n", encoding="utf-8"
+    )
+    (routes / "admin" / "data" / "+page.svelte").write_text(
+        "<script>\n  import Panel from '$lib/components/Panel.svelte';\n</script>\n", encoding="utf-8"
+    )
+    (lib / "components" / "Card.svelte").write_text(
+        "<script>\n  import { copy } from '../copy.svelte.js';\n</script>\n", encoding="utf-8"
+    )
+    (lib / "copy.svelte.js").write_text("export const copy = 'x';\n", encoding="utf-8")
+    (lib / "components" / "Panel.svelte").write_text("<p>§6.6</p>\n", encoding="utf-8")
+
+    read = {p.relative_to(tmp_path.resolve()).as_posix() for p in _member_sources(routes, lib)}
+    assert read == {"routes/rate/+page.svelte", "lib/components/Card.svelte", "lib/copy.svelte.js"}

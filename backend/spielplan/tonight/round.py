@@ -379,7 +379,7 @@ def update(
     those two.
     """
     if answer not in ANSWERS:
-        raise ValueError(f"{answer!r} is not one of {ANSWERS} (decision 154)")
+        raise ValueError(f"{answer!r} is not one of {ANSWERS}")
     out = dict(beliefs)
     a, b = out[title_a], out[title_b]
     if answer == A:

@@ -12272,3 +12272,22 @@ tests = [
     "frontend/src/routes/tonight/tonight-page.test.js::makes the ballot options and Submit two different objects, and Submit counts its picks",
     "frontend/src/lib/tonight.svelte.test.js::labels Submit with what it will cast",
 ]
+
+# Decision 486 clause 2, held across every workstream's files at once. The user test found spec and
+# milestone references on member screens that several milestones had written into several files,
+# and each surface's own tests hold only that surface; this is the static guard decision 486's
+# record names as owed. Filed at M5 under decision 498.
+[[requirement]]
+id = "platform-member-register-renders-no-spec-or-milestone-reference"
+spec = "§6.8 (\"Member register\"); decision 486"
+milestone = "M5"
+kind = "static"
+what = "No member-facing source carries a spec reference (§N, \"decision N\", \"proposal N\") or a milestone label (M0-M7) in a string or in rendered markup: every route except admin/ and setup/ and every module those routes import, followed through their imports; the home, rate, rank and tonight packages; the five surface routers; and the two refusals Rate and Rank render from api/artifacts.py. Comments, styles, docstrings, log calls, OpenAPI descriptions, SQL comments and SVG path data are not read, and each exemption and each way a reference reaches the screen has a self-test."
+why = "Two members read \"§6.7\", \"§6.3\", \"decision 170\", \"Admin (M1)\" and \"arrives with M6\" on their phones (user test of 2026-09-25). Each was written by a different milestone into a different file under the house rule that every choice cites its clause, which is right about comments and wrong about copy; decision 486 clause 2 keeps references out of the member register whether or not Show the model is on."
+tests = [
+    "backend/tests/test_static_contracts.py::test_member_surfaces_render_no_spec_or_milestone_reference",
+    "backend/tests/test_static_contracts.py::test_the_member_register_guard_catches_a_real_violation",
+    "backend/tests/test_static_contracts.py::test_the_member_register_guard_leaves_path_data_comments_and_styles_alone",
+    "backend/tests/test_static_contracts.py::test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs",
+    "backend/tests/test_static_contracts.py::test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes",
+]

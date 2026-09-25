@@ -13338,8 +13338,10 @@ viewer's fit and σ from this viewer's ledger row.
   transparency promise becomes one tap away in the account menu instead of always on, and the spec's
   quoted copy stops being its builders' words.
 
-A static guard over member-facing sources, to hold clause 2 across every workstream's files, is owed
-and not yet written; until it lands, each surface's own tests hold the register for that surface.
+A static guard over member-facing sources holds clause 2 across every workstream's files:
+`test_static_contracts.py::test_member_surfaces_render_no_spec_or_milestone_reference`, registered
+as `platform-member-register-renders-no-spec-or-milestone-reference`. Each surface's own tests hold
+clauses 3-7 for that surface.
 
 ### 487. The title card answers its title - Liked / Fine / Disliked / Not seen - through §6.1's own session
 
