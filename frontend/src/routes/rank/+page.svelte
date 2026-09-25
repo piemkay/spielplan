@@ -60,8 +60,9 @@
   const empty = $derived(emptyState());
   const why = $derived(sharpenWhy());
   const lifted = $derived(rank.lifted);
-  // The two titles the last answer was about, marked on the board so the person can find them
-  // once the sheet is down. Placement only, the same on every arm (`read.placements`).
+  // The two titles the last answer was about, marked on the board while the sheet is up, so the
+  // part of the board above it shows where they landed. Placement only, the same on every arm
+  // (`read.placements`); closing the sheet clears it with the round.
   const compared = $derived(new Set((rank.placed ?? []).map((p) => p.title_id)));
 
   // The sheet is fixed over `main`, which is the scroll container (+layout.svelte), and nothing
