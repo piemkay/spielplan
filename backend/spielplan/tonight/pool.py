@@ -39,9 +39,61 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from statistics import NormalDist
 from typing import Any
 
 import asyncpg
+
+# ONE SCALE FOR EVERY MEMBER, FROZEN WITH THE POOL (decision 477). §5.1 standardises a score's cf
+# half over the whole reference population, which the owned pool is not drawn from: on the first
+# household evening one member's owned-pool scores ran to 13.28 (owned cf sd 3.16 against 0.45
+# elsewhere) and the other's to 3.13, so the plain average of step 5 was one person's Ledger, and
+# the round's boundary resolved after one pair. Every Tonight read of a member's Ledger therefore
+# goes through `rank_normal` below — ranks over tonight's pool, mapped onto normal quantiles at
+# sd 1.0 — and the marker names the rule a room was started under, so a deploy never changes the
+# prior, the next pair or the combine of an evening already in flight (decision 223's reason for
+# freezing the hold-out nonce with the pool). A rule that changes takes a new marker.
+SCALE_MARKER = "rank_normal_sd1"
+# sd 1.0 and not 0.5, from the sweep `test_tonight_round.py` pins beside `BOUNDARY_Z`: at a
+# 700-title pool the median round is 14.5 pairs at sd 0.5, 12.5 at 0.75 and 11.5 at 1.0, and 1.0
+# is also the variance decision 214's `prior_var = 1.0` argument assumes. [decision 477]
+SCALE_SD = 1.0
+
+_NORMAL = NormalDist()
+
+# §6.2 step 1's "not tonight" control (decision 480): up to three of these per room, each a
+# presence predicate over vocabulary-v1 terms. Authored here rather than in the bundle because
+# the list is a household control and not a model artifact; a term the active vocabulary does
+# not carry matches nothing, so a re-import can only make a veto remove less, never break it.
+VETOES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "violence": ("violence", ("mood.violent", "themes.violence", "mood.gory")),
+    "sexual_violence": ("sexual violence", ("themes.sexual_violence",)),
+    "horror": ("horror", ("mood.terrifying", "themes.slasher", "themes.body_horror")),
+    "harrowing": (
+        "harrowing",
+        ("sensibility.harrowing", "sensibility.emotionally_devastating", "mood.devastating",
+         "mood.bleak"),
+    ),
+}
+MAX_VETOES = 3
+
+# The tier a veto reads, and the one this module names in its predicate (§4.1 rule 1 keeps the
+# discriminator). Measured on the first household's 760 owned films: both tiers would remove 295
+# under "violence" (Raiders of the Lost Ark and Aliens by projection alone) and 297 under
+# "harrowing" (Eternal Sunshine of the Spotless Mind by projection alone); the quote-verified tier
+# removes 99 and 154. A projection is an inference from keyword sources, and a veto that takes a
+# household's favourite off the evening on an inference is the over-exclusion §4.1 rule 2 exists
+# to stop arriving by another door. [decision 480]
+VETO_TIER = "extracted"
+
+
+def veto_terms(keys: Iterable[str]) -> list[str]:
+    """The vocabulary terms a set of veto keys removes; an unknown key removes nothing."""
+    return sorted({term for key in keys if key in VETOES for term in VETOES[key][1]})
+
+
+def veto_labels(keys: Iterable[str]) -> list[str]:
+    return [VETOES[k][0] for k in VETOES if k in set(keys)]
 
 # §6.2 step 1: "the pool admits up to budget + 40 min". The spec's number, not a tunable — it
 # is not a constant of the §5.2 recipe, so §4.3's `ledger_hyperparams.json` is not where it
@@ -122,6 +174,22 @@ def group_score(scores: Mapping[int, float]) -> float:
     if not scores:
         return 0.0
     return sum(scores.values()) / len(scores)
+
+
+def rank_normal(scores: Mapping[int, float], *, sd: float = SCALE_SD) -> dict[int, float]:
+    """One member's scores over tonight's pool, as normal quantiles of their own ranks.
+
+    Φ⁻¹((r − 0.5)/n)·sd, r the 1-based rank ascending, ties broken by title id so two builds over
+    the same numbers agree. Monotone, so a member's own order is untouched; what changes is that
+    every member now spans the same range, and a runaway favourite counts for the pool's top
+    quantile rather than for thirteen of somebody else's units (decision 477). A pool of one has
+    no spread to map, so its title sits at the centre.
+    """
+    items = sorted(scores.items(), key=lambda kv: (kv[1], kv[0]))
+    n = len(items)
+    if n < 2:
+        return {t: 0.0 for t, _ in items}
+    return {t: sd * _NORMAL.inv_cdf((i + 0.5) / n) for i, (t, _) in enumerate(items)}
 
 
 def score_for_seats(
@@ -238,6 +306,8 @@ async def build(
     budget_min: int,
     include_rewatches: bool,
     bundle_version: str,
+    vetoed_terms: Sequence[str] = (),
+    dna_version: str | None = None,
 ) -> list[Candidate]:
     """§6.2 step 3's pool, ordered.
 
@@ -256,6 +326,12 @@ async def build(
 
     §10's invariant binds `bundle_version` into the read: a score from a superseded basis is
     not returned as a stale number, it is not returned at all.
+
+    And a fifth, when the room asked for it: **not tonight** — a title carrying a vetoed term in
+    the quote-verified tier is not a candidate (decision 480). A presence predicate on `term` and
+    `tier` through the sanctioned view, like §6.4's `NOT has(...)`, and never a salience or
+    confidence threshold (§4.1 rule 2). No vocabulary version means no DNA to read, so nothing is
+    vetoed rather than everything.
     """
     member_user_ids = [s.user_id for s in seats if s.is_member and s.user_id is not None]
     by_user = {s.user_id: s.participant_id for s in seats if s.user_id is not None}
@@ -283,8 +359,17 @@ async def build(
                      )
                 )
            )
+           AND (
+                cardinality($5::text[]) = 0 OR $6::text IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM dna_tagged d
+                     WHERE d.title_id = t.id AND d.version = $6 AND d.tier = $7
+                       AND d.term = ANY($5::text[])
+                )
+           )
         """,
         member_user_ids, kind, bundle_version, include_rewatches,
+        list(vetoed_terms), dna_version, VETO_TIER,
     )
 
     grouped: dict[int, dict[str, Any]] = {}
@@ -325,7 +410,12 @@ __all__ = [
     "BUDGET_GRACE_MIN",
     "DEFAULT_BUDGET_MIN",
     "KIND_SERIES",
+    "MAX_VETOES",
     "PER_EPISODE",
+    "SCALE_MARKER",
+    "SCALE_SD",
+    "VETOES",
+    "VETO_TIER",
     "Candidate",
     "Seat",
     "admits",
@@ -334,6 +424,9 @@ __all__ = [
     "group_score",
     "order",
     "over_budget_by",
+    "rank_normal",
     "score_for_seats",
+    "veto_labels",
+    "veto_terms",
     "with_budget",
 ]

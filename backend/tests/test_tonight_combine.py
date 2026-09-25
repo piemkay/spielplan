@@ -21,6 +21,8 @@ Four things here, and three of them are traps the prototype fell into.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from spielplan.tonight import combine as C
@@ -121,18 +123,25 @@ def test_d_is_the_mean_minus_the_minimum_of_the_seated_members():
     assert C.divergence([]) == pytest.approx(0.0)
 
 
-def test_the_threshold_is_inclusive_at_exactly_twenty_hundredths():
-    """§6.2 step 5: "**D ≥ 0.20**". An implementation using `>` fires on 0.2000001 and not on
-    0.20, which is invisible on real data and wrong on the boundary the spec names."""
-    assert C.D_THRESHOLD == 0.20
+def test_the_threshold_is_inclusive_at_exactly_its_value():
+    """§6.2 step 5: "**D ≥** the threshold". An implementation using `>` fires just above it and
+    not on it, which is invisible on real data and wrong on the boundary the spec names.
+
+    The value is 0.40 on the rank-standardised scale since decision 478: decision 217 left 0.20
+    uncalibrated pending one real evening, and the first household evening put the leader across
+    0.40 on 13-17% of simulated nights over its own Ledgers — §6.2's ~14.5%. This test was
+    `..._at_exactly_twenty_hundredths` and pinned the old number; the inclusivity is what it is
+    about, so the name no longer carries a value that moves with a calibration.
+    """
+    assert C.D_THRESHOLD == 0.40
     at = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3},
                                p2={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3}),
-        member_ledger={1: [0.6, 0.2], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5]},
+        member_ledger={1: [1.2, 0.4], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5]},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
     )
-    assert at.d == pytest.approx(0.20)
-    assert at.contested is not None, "D = 0.20 is a split"
+    assert at.d == pytest.approx(C.D_THRESHOLD)
+    assert at.contested is not None, "D exactly at the threshold is a split"
 
 
 def test_below_the_threshold_the_split_is_decided_silently():
@@ -141,10 +150,10 @@ def test_below_the_threshold_the_split_is_decided_silently():
     quiet = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3},
                                p2={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3}),
-        member_ledger={1: [0.599, 0.201], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5]},
+        member_ledger={1: [1.199, 0.401], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5]},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
     )
-    assert quiet.d == pytest.approx(0.199)
+    assert quiet.d == pytest.approx(C.D_THRESHOLD - 0.001)
     assert quiet.contested is None
     assert quiet.conflict is None
     assert len(quiet.finalists) == 3
@@ -183,7 +192,7 @@ def test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole():
     slate = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
-        member_ledger={1: [0.7, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
+        member_ledger={1: [1.3, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
     )
     assert slate.contested == "mood"
@@ -209,7 +218,7 @@ def test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole():
     per = {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.40, 5: 0.20}
     slate = C.combine(
         per_participant=scores(p1=per, p2=per),
-        member_ledger={1: [0.7, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
+        member_ledger={1: [1.3, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
     )
     assert slate.contested == "mood", "the split has to be surfaced for the reservation to run"
@@ -226,7 +235,7 @@ def test_the_reserved_slot_replaces_the_third_rather_than_being_appended():
     slate = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
-        member_ledger={1: [0.7, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
+        member_ledger={1: [1.3, 0.1], 2: [0.5, 0.5], 3: [0.5, 0.5], 4: [0.5, 0.5], 5: [0.5, 0.5]},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
     )
     assert len(slate.finalists) == 3
@@ -278,7 +287,7 @@ def test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one():
     slate = C.combine(
         per_participant=scores(p1={t: 1.0 - 0.05 * t for t in (1, 2, 3, 4, 5)},
                                p2={t: 1.0 - 0.05 * t for t in (1, 2, 3, 4, 5)}),
-        member_ledger={1: [0.7, 0.1], **{t: [0.5, 0.5] for t in (2, 3, 4, 5)}},
+        member_ledger={1: [1.3, 0.1], **{t: [0.5, 0.5] for t in (2, 3, 4, 5)}},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=one_sided, axes=AXES,
     )
     assert slate.contested is None
@@ -350,7 +359,7 @@ def test_the_headline_is_the_specs_own_sentence_and_never_a_models():
     block = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
-        member_ledger={1: [0.7, 0.1], **{t: [0.5, 0.5] for t in (2, 3, 4, 5)}},
+        member_ledger={1: [1.3, 0.1], **{t: [0.5, 0.5] for t in (2, 3, 4, 5)}},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
         phrasing="They will hate it.",
     ).conflict
@@ -432,12 +441,12 @@ def _split(dna, per, *, top):
     """A two-member evening that agrees on the ranking and diverges on `top` in the Ledger.
 
     D carries the split rather than `divergent_answers`, so the fixtures below can hold the group
-    order fixed and vary only the DNA - mean minus min of [0.7, 0.1] is 0.30, comfortably over the
-    0.20 threshold.
+    order fixed and vary only the DNA - mean minus min of [1.3, 0.1] is 0.60, comfortably over the
+    0.40 threshold (decision 478; it read [0.7, 0.1] = 0.30 against the old 0.20).
     """
     return C.combine(
         per_participant={10: per, 20: per},
-        member_ledger={top: [0.7, 0.1], **{t: [0.5, 0.5] for t in per if t != top}},
+        member_ledger={top: [1.3, 0.1], **{t: [0.5, 0.5] for t in per if t != top}},
         tilts=PULLING_APART, dna=dna, axes=PACE,
     )
 
@@ -624,3 +633,152 @@ def test_exactly_the_reserved_finalist_is_labelled_as_such():
     assert not any(r["reserved"] for r in quiet.rows), (
         "no reservation happened, so no card claims to be the far side of anything"
     )
+
+
+# --- decision 479: an axis-less split is surfaced by person ---------------------------------
+#
+# The corpus bundle ships no axis artifact (decision 173), so every split above is unreachable on
+# release data and the first household evening — D = 5.07 on raw scores — was decided silently.
+# With no axis loaded the alternative in hand is a person's.
+
+from spielplan.tonight import pool as pool_rules  # noqa: E402
+
+# Nine titles, two members whose tops are disjoint: A-F (1-6) are Patrick's order, X-Z (7-9) are
+# Jenny's top three and Patrick's bottom three. On the rank-standardised scale the plain top three
+# is 1, 2, 3 — Patrick's top three — and none of Jenny's own top three is on it.
+PATRICK = pool_rules.rank_normal({1: .9, 2: .8, 3: .7, 4: .6, 5: .5, 6: .4, 9: .3, 8: .2, 7: .1})
+JENNY = pool_rules.rank_normal({7: .9, 8: .8, 9: .7, 1: .6, 2: .5, 3: .4, 4: .3, 5: .2, 6: .1})
+
+
+def _household(patrick=PATRICK, jenny=JENNY, *, per=None, **kw):
+    return C.combine(
+        per_participant=per or {10: patrick, 20: jenny},
+        member_ledger={t: [patrick[t], jenny[t]] for t in patrick},
+        **kw,
+    )
+
+
+def test_an_axisless_split_is_surfaced_by_person_not_silenced():
+    """D ≥ the threshold with no axis loaded: the slate carries one of each seat's own top three,
+    the missing one by a reserved slot, and the reveal says so in the fixed sentence."""
+    slate = _household()
+    assert slate.d >= C.D_THRESHOLD
+    assert slate.finalists == [1, 2, 7], "the leader, the next by group score, and Jenny's pick"
+    assert slate.reserved_for == {7: 20}, "reserved FOR the seat none of whose top three made it"
+    assert slate.conflict is not None, "surfaced, never silently averaged"
+    assert slate.conflict["headline"] == copy_rules.PERSON_SPLIT_LINE
+    assert slate.conflict["by"] == "person" and slate.conflict["facet"] is None
+    assert not copy_rules.overclaims(slate.conflict["explanation"]), "AUC 0.610's bound holds"
+    row = next(r for r in slate.rows if r["title_id"] == 7)
+    assert (row["slot"], row["reserved_for"], row["rank"]) == (C.SLOT_FINALIST, 20, 3), (
+        "the pick is the third finalist and is read last, as 54d's third slot is"
+    )
+
+
+def test_a_person_split_keeps_three_finalists_and_never_claims_the_axis_counterweight():
+    """Two reservations with two meanings, kept apart: `reserved` is the axis counterweight and
+    prints "the other side of the split"; a seat's pick is `reserved_for`. Still exactly three."""
+    slate = _household()
+    assert len(slate.finalists) == C.FINALISTS
+    assert slate.reserved is None
+    assert not any(r["reserved"] for r in slate.rows)
+    assert sum(r["reserved_for"] is not None for r in slate.rows) == 1
+
+
+def test_below_the_threshold_an_axisless_evening_stays_silent():
+    """"below that, decide silently" still holds on release data: the same disjoint tonight
+    scores over a household whose LEDGERS agree carry no conflict and no reservation."""
+    slate = C.combine(
+        per_participant={10: PATRICK, 20: JENNY},
+        member_ledger={t: [PATRICK[t], PATRICK[t]] for t in PATRICK},
+    )
+    assert slate.d == pytest.approx(0.0)
+    assert slate.conflict is None and slate.reserved_for == {}
+    assert slate.finalists == [1, 2, 3], "the plain top three by group score"
+
+
+def test_divergent_answers_alone_never_surface_an_axisless_split():
+    """Decision 217 measured `divergent_answers` firing on 84-97% of evenings, so the person split
+    is D's alone: opposite orders on the leading three with equal Ledgers stay silent."""
+    ledger = {t: [0.5, 0.5] for t in range(1, 6)}
+    slate = C.combine(
+        per_participant={10: {1: 0.9, 2: 0.8, 3: 0.7, 4: 0.1, 5: 0.0},
+                         20: {1: 0.7, 2: 0.8, 3: 0.9, 4: 0.1, 5: 0.0}},
+        member_ledger=ledger,
+    )
+    assert C.divergent_answers(
+        [{1: 0.9, 2: 0.8, 3: 0.7}, {1: 0.7, 2: 0.8, 3: 0.9}], [1, 2, 3]
+    ), "the fixture does diverge on the leading candidates"
+    assert slate.conflict is None and slate.reserved_for == {}
+
+
+def test_a_seat_already_holding_one_of_its_own_needs_no_reservation():
+    """The split is surfaced, and the slate is already true: Jenny's own #3 is the group's #2, so
+    no slot is reserved and nothing is labelled as anybody's pick."""
+    jenny = pool_rules.rank_normal({7: .9, 8: .8, 2: .7, 1: .6, 9: .5, 3: .4, 4: .3, 5: .2, 6: .1})
+    slate = _household(jenny=jenny)
+    assert slate.d >= C.D_THRESHOLD and slate.conflict is not None
+    assert slate.reserved_for == {}
+    assert slate.conflict["headline"] == copy_rules.PERSON_SPLIT_LINE
+
+
+def test_a_room_the_slots_cannot_serve_gets_the_headline_without_the_promise():
+    """Four seats pulling four ways outnumber the two slots after the leader, so "here's one for
+    each of you" would be false; the split is still surfaced, under the sentence that is true."""
+    n = 12
+    tops = {10: [1, 2, 3], 20: [4, 5, 6], 30: [7, 8, 9], 40: [10, 11, 12]}
+    per = {}
+    for seat, mine in tops.items():
+        # Each seat's own three on top, and the rest in an order of its own below them.
+        raw = {t: (1.0 if t in mine else 0.0) - 0.01 * ((t * seat) % 13) for t in range(1, n + 1)}
+        per[seat] = pool_rules.rank_normal(raw)
+    slate = C.combine(
+        per_participant=per,
+        member_ledger={t: [per[s][t] for s in per] for t in range(1, n + 1)},
+    )
+    assert slate.d >= C.D_THRESHOLD
+    assert len(slate.finalists) == C.FINALISTS
+    served = [s for s, mine in tops.items() if set(mine) & set(slate.finalists)]
+    assert len(served) < len(tops), "the fixture really does outnumber the slots"
+    assert slate.conflict["headline"] == copy_rules.PERSON_SPLIT_SHORT
+
+
+def test_the_wildcard_is_drawn_from_near_the_top_of_the_ranking_not_its_tail():
+    """§6.4 ranks the explore slot "by prior + proximity". The first household evening's
+    wildcard was the most distant title of 719 at rank 105; bounded to the best twentieth (and
+    never fewer than twelve), distance decides only among titles the ranking already favours."""
+    n = 40
+    per = {t: 1.0 - t / n for t in range(1, n + 1)}
+    dna = {t: {"slow": 1.0} for t in range(1, n + 1)}
+    dna[6] = {"fast": 1.0}             # a step outside, near the top
+    dna[n] = {"fast": 9.0}             # the farthest thing in the pool, at the very bottom
+    slate = C.combine(
+        per_participant={10: per, 20: per},
+        member_ledger={t: [0.5, 0.5] for t in per},
+        dna=dna,
+    )
+    assert slate.wildcard == 6, f"drawn from rank {slate.wildcard}, not from the top of the ranking"
+    reach = max(C.WILDCARD_FLOOR, math.ceil(n * C.WILDCARD_SHARE))
+    assert [t for t, _ in slate.ranked].index(slate.wildcard) < reach
+
+
+def test_a_member_reads_the_plain_sentence_and_never_the_number():
+    """Decision 486's register on the conflict: D is a model number and "the axis is zeroed" is
+    model vocabulary, so a member with Show the model off is sent neither — `for_member` is what
+    the reveal's payload builder applies. A phrasing that passed `bounded` is the household's own
+    sentence and is left alone."""
+    person = copy_rules.for_member(copy_rules.person_conflict(d=0.61, one_for_each=True))
+    assert "d" not in person
+    assert person["explanation"] == copy_rules.D_LINE_PLAIN
+    assert "0.61" not in repr(person)
+
+    axis = copy_rules.for_member(copy_rules.conflict("pace", d=0.61))
+    assert axis["headline"] == "You're split on pace — here's one of each."
+    assert "zeroed" not in repr(axis) and "d" not in axis
+
+    phrased = copy_rules.for_member(
+        copy_rules.person_conflict(d=0.61, phrasing="Jenny may want something lighter.",
+                                   one_for_each=True)
+    )
+    assert phrased["explanation"] == "Jenny may want something lighter."
+    assert copy_rules.for_member(None) is None

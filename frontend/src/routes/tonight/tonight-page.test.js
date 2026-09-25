@@ -24,6 +24,16 @@ import TonightPage from './+page.svelte';
 import { session } from '$lib/session.svelte.js';
 import { leave, tonight } from '$lib/tonight.svelte.js';
 
+/** Decision 481's link is taken off the address bar once followed, through the router's own
+ * `replaceState`; recorded rather than stubbed away, because "the link was consumed" is the
+ * observable half of that clause. */
+const navigation = vi.hoisted(() => ({ replaced: [] }));
+vi.mock('$app/navigation', () => ({
+  replaceState: vi.fn((url) => {
+    navigation.replaced.push(url);
+  })
+}));
+
 /** Every socket the page opened. The page is the only caller of `connect` here, so a non-empty
  * list after an unmount is precisely the leak. */
 const sockets = [];
@@ -432,5 +442,159 @@ describe("the budget the household is setting, on a series night (decision 219)"
     byTestId('tonight-kind-movie').click();
     flushSync();
     expect(readout()).not.toContain('per episode');
+  });
+});
+
+describe('the first household evening, on the screen (owner instruction of 2026-09-25)', () => {
+  const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
+  const room = {
+    session_id: 7,
+    room_code: 'QC-4397',
+    state: 'voting',
+    host: { user_id: 1, name: 'Mia' },
+    seats: [hostSeat],
+    me: hostSeat,
+    vetoes: [],
+    veto_options: [
+      { key: 'violence', label: 'violence' },
+      { key: 'harrowing', label: 'harrowing' }
+    ]
+  };
+
+  it('draws the pair as two shared posters, never as buttons wearing the global 2:3 frame', () => {
+    // `class="poster"` on the pair buttons inherited design.css's `.poster { aspect-ratio: 2/3 }`,
+    // so on an iPhone 13 the first option filled the screen and the second option and every answer
+    // sat below the fold. The frame belongs to the shared poster INSIDE the button now.
+    tonight.lobby = room;
+    tonight.round = {
+      participant_id: 11, answered: 0, cap: 20, typical: 10, ended_by: null, stop_reason: null,
+      escape_available: false, card_token: 'card-11',
+      pair: { a: { title_id: 5, name: 'Heat', year: 1995 }, b: { title_id: 6, name: 'Drive' } }
+    };
+    tonight.step = 'round';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    for (const [side, id] of [['A', '5'], ['B', '6']]) {
+      const pick = byTestId(`tonight-pick-${side}`);
+      expect(pick.classList.contains('poster'), 'the button wears the global 2:3 frame').toBe(false);
+      const art = pick.querySelector('[data-testid="rate-poster"]');
+      expect(art, 'no shared poster inside the pick').not.toBeNull();
+      expect(art.getAttribute('data-title-id'), 'the poster was not keyed on the title').toBe(id);
+    }
+    expect(byTestId('tonight-round-count').textContent).toContain('pair 1 · usually about 10');
+    expect(byTestId('tonight-round-count').textContent).not.toContain('cap');
+  });
+
+  it('makes the ballot options and Submit two different objects, and Submit counts its picks', () => {
+    tonight.lobby = { ...room, state: 'ballot' };
+    tonight.ballot = {
+      slate: [
+        { title_id: 1, slot: 'finalist', name: 'Heat' },
+        { title_id: 2, slot: 'wildcard', name: 'Tampopo' }
+      ],
+      submitted: 0,
+      seated: 2
+    };
+    tonight.activeSeat = 11;
+    tonight.step = 'ballot';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    const submit = byTestId('tonight-submit-ballot');
+    expect(submit.classList.contains('pill'), 'Submit looks like one more option').toBe(false);
+    expect(submit.textContent).toContain('none of these');
+    byTestId('tonight-approve-1').click();
+    flushSync();
+    expect(byTestId('tonight-approve-1').getAttribute('aria-pressed')).toBe('true');
+    expect(byTestId('tonight-approve-1').textContent).toContain('✓');
+    expect(submit.textContent).toContain('Submit 1 pick');
+    expect(byTestId('tonight-approve-2').textContent).toContain('a step outside your usual');
+  });
+
+  it('shows the ballot status after this phone has voted, never the round counts', () => {
+    tonight.lobby = { ...room, state: 'ballot' };
+    tonight.ballot = { slate: [], submitted: 1, seated: 2 };
+    tonight.progress = [{ name: 'Mia', answered: 1, expected: 10, finished: true }];
+    tonight.step = 'waiting';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    expect(byTestId('tonight-ballot-waiting').textContent).toBe('Your vote is in · waiting for 1 more');
+    expect(byTestId('tonight-progress'), 'the round counts under a ballot that is waiting').toBeNull();
+  });
+
+  it("reveals each person's breadth and a seat's own pick, and never a bare 'Unanimous'", () => {
+    tonight.lobby = { ...room, state: 'resolved' };
+    tonight.result = {
+      beat: 'VOTES REVEALED TOGETHER',
+      approval_share: 1,
+      participants: 2,
+      winner: {
+        title_id: 5, name: 'Eternal Sunshine', approvals: 2, match_lines: [], fit_line: 'fits',
+        reserved: false, reserved_for: { participant_id: 12, name: 'Jenny' }
+      },
+      breadth: [
+        { participant_id: 11, name: 'Patrick', approved: 4, of: 4, only_yes: false },
+        { participant_id: 12, name: 'Jenny', approved: 1, of: 4, only_yes: true }
+      ],
+      runners_up: [],
+      wildcard: null,
+      finalists: []
+    };
+    tonight.step = 'reveal';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    expect(target.textContent).not.toContain('Unanimous');
+    expect(byTestId('tonight-breadth').textContent).toBe(
+      'Patrick said yes to 4 of 4 · Jenny said yes to 1 of 4'
+    );
+    expect(byTestId('tonight-only-yes').textContent).toBe('the only one Jenny said yes to');
+    expect(byTestId('tonight-reserved-for').textContent).toContain("Jenny's pick");
+    expect(byTestId('tonight-reserved'), 'the axis label over a seat pick').toBeNull();
+    expect(byTestId('tonight-winner').querySelector('[data-testid="rate-poster"]')).not.toBeNull();
+  });
+
+  it('offers the lobby its share link and the not-tonight chips', () => {
+    tonight.lobby = { ...room, state: 'open', vetoes: [{ key: 'violence', label: 'violence' }] };
+    tonight.step = 'lobby';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    expect(byTestId('tonight-share')).not.toBeNull();
+    expect(byTestId('tonight-share-caption').textContent).not.toContain('send the link');
+    expect(byTestId('tonight-veto-violence').getAttribute('aria-pressed')).toBe('true');
+    expect(byTestId('tonight-veto-harrowing').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('joins the room a ?room= link names, and takes the link off the address bar', async () => {
+    navigation.replaced.length = 0;
+    window.history.replaceState({}, '', '/tonight?room=QC-4397');
+    tonight.booted = false;
+    const posts = [];
+    fetchMock.mockImplementation(async (path, opts = {}) => {
+      if ((opts.method ?? 'GET') === 'POST') {
+        posts.push({ path, body: JSON.parse(opts.body) });
+        return reply({ session_id: 7, participant_id: 11, lobby: { ...room, state: 'open' } });
+      }
+      return reply({ rooms: [] });
+    });
+    try {
+      app = mount(TonightPage, { target });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      flushSync();
+    } finally {
+      window.history.replaceState({}, '', '/');
+    }
+
+    expect(posts).toEqual([
+      { path: '/api/tonight/sessions/join', body: { session_id: null, room_code: 'QC-4397' } }
+    ]);
+    expect(navigation.replaced, 'the followed link stayed in the address bar').toEqual(['/tonight']);
+    expect(byTestId('tonight-lobby'), 'the link did not land in the room').not.toBeNull();
+    expect(sockets.at(-1)?.url, 'and the device is not watching the room it joined').toContain(
+      'session_id=7'
+    );
   });
 });

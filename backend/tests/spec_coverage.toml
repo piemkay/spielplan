@@ -2269,7 +2269,12 @@ id = "tonight-rank-pool-order-plain-average"
 spec = "§6.2 step 3 (plain average) + §0 row 3 + §5.1"
 milestone = "M4"
 kind = "backend"
-what = "The pool's order is the unweighted arithmetic mean of the seated members' §5.1 scores and nothing else — a title where the minimum favours one candidate but the mean favours another places the mean's winner first, every member counts equally regardless of label count, and no mood tilt (this session's or a stored one) enters the pool prior, so two sessions opened over the same filters against the same Ledgers produce the identical order."
+what = "The pool's order is the unweighted arithmetic mean of the seated members' §5.1 scores and nothing else — a title where the minimum favours one candidate but the mean favours another places the mean's winner first, every member counts equally regardless of label count, and no mood tilt (this session's or a stored one) enters the pool prior, so two sessions opened over the same filters against the same Ledgers produce the identical order. Wherever the evening reads that order — a profile-less guest's prior — the mean is taken over each member's scores rank-standardised over the frozen pool, so no member's scale outvotes another's."
+# Amended in the 2026-09-25 wave: the last sentence, and the integration test that reads it off a
+# real frozen pool. The first household evening's plain average was one member's Ledger, because
+# his owned-pool scores ran to 13.28 against hers at 3.13 (§5.1's cf half is standardised over a
+# population the owned pool is not drawn from). Plain averaging is unchanged; its inputs mean the
+# same thing for each member now.
 why = "No aggregation rule dominates plain averaging and dominance rules cost −0.012 against a 0.003–0.008 noise floor; the stored mood profile is worth 0.000 for choose-tonight, so a tilt in the prior is measured harm rather than a refinement."
 tests = [
     "backend/tests/test_tonight_pool.py::test_the_group_score_is_the_unweighted_arithmetic_mean",
@@ -2280,6 +2285,7 @@ tests = [
     "backend/tests/test_tonight_pool.py::test_the_order_is_stable_and_deterministic",
     "backend/tests/test_tonight_pool.py::test_no_tilt_can_reach_the_pool_prior",
     "backend/tests/test_tonight_integration.py::test_the_pool_is_ordered_by_the_plain_average_of_both_members",
+    "backend/tests/test_tonight_integration.py::test_the_round_prior_and_the_combine_read_the_standardised_scores",
 ]
 
 [[requirement]]
@@ -2598,14 +2604,20 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-split-threshold-and-silence-below"
-spec = "§6.2 step 5 (\"D ≥ 0.20 (~14.5% of nights; below that, decide silently)\")"
+spec = "§6.2 step 5 (\"Ledger divergence D ≥ the threshold (~14.5% of nights; below that, decide silently)\")"
 milestone = "M4"
 kind = "backend"
-what = "The threshold is inclusive and the silence below it is real: a session whose leading candidates draw no divergent answers surfaces the split at D = 0.20 and surfaces nothing at D = 0.199 — no split copy, no zeroed facet, no reserved third slot — and the unsurfaced session still yields three finalists ordered by the plain average; whether the split fired is recorded on the session so the rate behind the ~14.5% figure is recoverable."
+what = "The threshold is inclusive and the silence below it is real: a session whose leading candidates draw no divergent answers surfaces the split at D exactly at the threshold and surfaces nothing a thousandth below it — no split copy, no zeroed facet, no reserved third slot — and the unsurfaced session still yields three finalists ordered by the plain average; whether the split fired is recorded on the session so the rate behind the ~14.5% figure is recoverable. The threshold is 0.40 on the rank-standardised scale, recalibrated on the first household evening's Ledgers."
+# Amended in the 2026-09-25 wave (owner instruction after the first household user test). The
+# threshold decision 217 left uncalibrated "pending one evening of real answers" was re-read on
+# that evening's Ledgers once D reads them rank-standardised over the frozen pool (sd 1.0): the
+# leader crosses 0.40 on 13-17% of simulated nights, which is §6.2's ~14.5%. The two tests pinned
+# 0.20 and 0.199; they pin the constant and a thousandth below it now, and the first was renamed
+# from `..._at_exactly_twenty_hundredths` because its subject is the inclusivity, not the number.
 why = "\"Below that, decide silently\" is half the rule and the half an implementation drops: a surfacing that fires on every measurable disagreement turns the repair-explanation register into background noise, and §14 risk 6 needs the fire rate before anyone re-tunes the threshold."
 tests = [
     "backend/tests/test_tonight_combine.py::test_d_is_the_mean_minus_the_minimum_of_the_seated_members",
-    "backend/tests/test_tonight_combine.py::test_the_threshold_is_inclusive_at_exactly_twenty_hundredths",
+    "backend/tests/test_tonight_combine.py::test_the_threshold_is_inclusive_at_exactly_its_value",
     "backend/tests/test_tonight_combine.py::test_below_the_threshold_the_split_is_decided_silently",
     "backend/tests/test_tonight_combine.py::test_the_fire_rate_is_recoverable_from_the_slate",
     "backend/tests/test_tonight_combine.py::test_divergent_answers_surface_a_split_even_when_d_is_zero",
@@ -2616,8 +2628,13 @@ id = "tonight-rank-match-line-terms-are-carried"
 spec = "§6.2 step 7 (per-person match lines; rewritten 54e) + §6.8 (\"quiet reasons\") + §4.1 rules 1 and 2"
 milestone = "M4"
 kind = "integration"
-what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast; and a participant for whom no carried term reaches either sign gets a stated term-free line instead of an invented term -- the no-pull line names the term that works against them, so it cannot serve a participant no term reaches (owner decision at the M4 merge)."
+what = "Every vocabulary term a per-person match line names is a term the winning title actually carries in the sanctioned two-tier read, carrying its tier; the honest negative names a carried term that genuinely scores against that participant rather than one chosen for contrast, and only for a title below that participant's median tonight score over the pool; and a participant for whom no carried term reaches either sign gets a stated term-free line instead of an invented term -- the no-pull line names the term that works against them, so it cannot serve a participant no term reaches (owner decision at the M4 merge)."
 why = "§6.8 makes the one-line why in vocabulary terms normative and §6.0's shelves already enforce it — a card shown under a reason it does not satisfy is the defect `home/why.py` was inverted to make unrepresentable, and the winner card is the one screen the whole round exists to produce."
+# Amended in the 2026-09-25 wave: "and only for a title below that participant's median". The first
+# household evening printed "nothing here is their pull" over the other member's own top Ledger
+# title, because the branch read the tilt alone; §6.2 step 5's bound is "below your usual", which
+# only the tonight score can answer. The branch test was rewritten in the same change to pass the
+# per-seat scores and to pin a below-median title, and gained the above-median case.
 tests = [
     "backend/tests/test_tonight_integration.py::test_every_participant_gets_a_match_line_naming_terms_the_title_carries",
     "backend/tests/test_tonight_integration.py::test_the_match_lines_actually_name_something",
@@ -11357,4 +11374,154 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# --- the 2026-09-25 wave, workstream WC: Tonight after the first household evening ------------
+# Owner instruction of 2026-09-25 after the first household user test (session QC-4397: a
+# 719-title frozen pool, two members, build ed1f690). Each row's `spec` cites the section alone:
+# decisions 477-481 are recorded in the same wave, and `_unresolvable_decision_citations` reddens a
+# row citing one before its entry lands. The merge appends the decision to each `spec` field.
+
+[[requirement]]
+id = "tonight-member-scores-are-commensurate"
+spec = "§6.2 steps 3-5 (\"their Ledger score for that title\"; \"plain averaging\") + §5.1 + §0 row 3"
+milestone = "M5"
+kind = "integration"
+what = "Every Tonight read of a seated member's Ledger — the round's prior, a profile-less guest's pool prior, step 5's per-participant prior and D — is that member's rank-standardised score over the frozen pool (normal quantiles of their own ranks at sd 1.0, ties by title id), under a scale marker frozen with the pool at Start; the raw §5.1 scores stay in the snapshot, a room started before the marker keeps reading them raw, an unknown marker is refused, and the round's boundary sweep is restated on that scale (a heavy-tailed pool shaped like the first household evening's runs about ten pairs once standardised and one pair raw)."
+why = "On the first household evening one member's owned-pool scores ran to 13.28 against the other's 3.13, because §5.1 standardises the cf half over a population the owned pool is not drawn from: his round converged after one pair and his Ledger alone decided the slate. Plain averaging stays; it averages scores that mean the same thing for each member."
+tests = [
+    "backend/tests/test_tonight_pool.py::test_each_members_scores_are_rank_standardised_over_the_frozen_pool",
+    "backend/tests/test_tonight_pool.py::test_two_members_on_different_scales_count_the_same_after_standardising",
+    "backend/tests/test_tonight_round.py::test_a_heavy_tailed_ledger_does_not_end_the_round_at_one_pair",
+    "backend/tests/test_tonight_round.py::test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way",
+    "backend/tests/test_tonight_integration.py::test_the_round_prior_and_the_combine_read_the_standardised_scores",
+    "backend/tests/test_tonight_integration.py::test_a_room_started_before_the_marker_keeps_its_raw_scale",
+]
+
+[[requirement]]
+id = "tonight-an-axisless-split-is-surfaced-by-person"
+spec = "§6.2 step 5 (\"surfaced with the alternative in hand, never silently averaged\")"
+milestone = "M5"
+kind = "integration"
+what = "With no axis artifact loaded and Ledger divergence D at or past the threshold, the split is surfaced by person: the leader keeps slot 1, each seat none of whose own top three tonight scores is on the slate gets a finalist reserved for its highest-scoring title not already placed (slot 3, then slot 2), still exactly three finalists; the reserved finalist is stored as session_result.reserved_for that seat and never as `reserved` (the axis counterweight), the reveal labels it with the seat's name, and the fixed headline claims one for each person only when every seat has one; below the threshold, or on divergent answers alone, the evening stays silent."
+why = "The corpus bundle ships no axis artifact, so on release data every split evening was decided silently — the first household evening measured D = 5.07 on raw scores and showed nothing, and the member whose top titles never reached the ballot approved one title of four."
+tests = [
+    "backend/tests/test_tonight_combine.py::test_an_axisless_split_is_surfaced_by_person_not_silenced",
+    "backend/tests/test_tonight_combine.py::test_a_person_split_keeps_three_finalists_and_never_claims_the_axis_counterweight",
+    "backend/tests/test_tonight_combine.py::test_below_the_threshold_an_axisless_evening_stays_silent",
+    "backend/tests/test_tonight_combine.py::test_divergent_answers_alone_never_surface_an_axisless_split",
+    "backend/tests/test_tonight_combine.py::test_a_seat_already_holding_one_of_its_own_needs_no_reservation",
+    "backend/tests/test_tonight_combine.py::test_a_room_the_slots_cannot_serve_gets_the_headline_without_the_promise",
+    "backend/tests/test_tonight_integration.py::test_the_person_reservation_is_persisted_and_labelled_with_the_member",
+    "frontend/src/routes/tonight/tonight-page.test.js::reveals each person's breadth and a seat's own pick, and never a bare 'Unanimous'",
+]
+
+[[requirement]]
+id = "tonight-not-tonight-vetoes"
+spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates)"
+milestone = "M5"
+kind = "integration"
+what = "Before Start any seated member may set up to three 'not tonight' vetoes from a fixed list mapped to vocabulary terms; a stranger is refused, a key off the list or a fourth veto is a 422, and a room that has started refuses a change; the pool is then built without every title carrying a vetoed term in the quote-verified tier — a presence predicate that names the tier and compares no salience, confidence or weight — while a title carrying it only by projection stays; the lobby and the open-rooms row show the vetoes, and a pool the vetoes empty is refused naming them."
+why = "The first household evening served a member who wanted nothing violent a pair with American History X in it, and she had no way to say so; the projected tier would have removed Raiders of the Lost Ark and Eternal Sunshine of the Spotless Mind by inference alone."
+tests = [
+    "backend/tests/test_tonight_pool.py::test_a_veto_names_vocabulary_terms_and_nothing_else",
+    "backend/tests/test_tonight_pool.py::test_a_veto_reads_the_quote_verified_tier_and_never_a_weight",
+    "backend/tests/test_tonight_integration.py::test_a_vetoed_term_removes_the_titles_that_carry_it_in_the_quote_verified_tier",
+    "backend/tests/test_tonight_integration.py::test_vetoes_are_any_seated_members_to_set_and_only_before_start",
+    "backend/tests/test_tonight_integration.py::test_a_pool_the_vetoes_empty_says_which_veto_to_lift",
+    "backend/tests/test_tonight_routes.py::test_any_seated_member_sets_the_rooms_vetoes_over_http",
+    "frontend/src/lib/tonight.svelte.test.js::sets the whole veto set, and never a fourth",
+    "frontend/src/routes/tonight/tonight-page.test.js::offers the lobby its share link and the not-tonight chips",
+]
+
+[[requirement]]
+id = "tonight-a-room-has-a-join-link"
+spec = "§6.2 step 2 (\"Join channels, all equivalent ... room code / QR in the lobby\")"
+milestone = "M5"
+kind = "e2e"
+what = "Every room has a join link, /tonight?room=CODE: the lobby offers it through the phone's share sheet or, failing that, writes it on the screen; the push invitation carries it; and opening it on a signed-in device seats that member in the room — idempotently, through the same join every other channel uses — and takes the parameter off the address bar."
+why = "The lobby told the host to 'send the link' and no link existed anywhere; the QR §6.2 step 2 names is still owed, and a link is its missing half."
+tests = [
+    "e2e/specs/15-tonight-group.spec.js::a ?room= link lands the other device in the room, and the lobby offers the link",
+    "backend/tests/test_tonight_routes.py::test_the_invitation_names_its_own_replacement_key_and_the_surface_that_answers_it",
+    "backend/tests/test_tonight_integration.py::test_the_invitation_asks_every_member_even_when_one_send_fails",
+    "frontend/src/lib/tonight.svelte.test.js::builds the join link from the page origin, and reads one back",
+    "frontend/src/lib/tonight.svelte.test.js::shows the link on the screen when the phone has no share sheet",
+    "frontend/src/lib/tonight.svelte.test.js::follows a link by joining that room, and does nothing for the room already on screen",
+    "frontend/src/routes/tonight/tonight-page.test.js::joins the room a ?room= link names, and takes the link off the address bar",
+]
+
+[[requirement]]
+id = "tonight-the-reveal-says-how-broad-each-yes-was"
+spec = "§6.2 steps 6-7 (approval share; \"then they are revealed together\")"
+milestone = "M5"
+kind = "e2e"
+what = "After every ballot is in, the reveal carries each seat's approval breadth — how many of the ballot they said yes to — and says when the winner was a seat's only yes; it never prints a bare 'Unanimous', and the breadth is refused with the ballot's own reason until every seat has submitted."
+why = "'Unanimous.' was literally true over an evening where one member approved four titles and the other one, the winner being her only yes."
+tests = [
+    "e2e/specs/15-tonight-group.spec.js::the reveal beat precedes the winner, and the card carries its whole inventory",
+    "backend/tests/test_tonight_integration.py::test_the_reveal_carries_each_members_approval_breadth",
+    "backend/tests/test_tonight_integration.py::test_breadth_is_not_readable_before_every_ballot_is_in",
+    "backend/tests/test_tonight_routes.py::test_the_result_is_refused_until_every_seat_has_submitted",
+    "frontend/src/lib/tonight.svelte.test.js::says how broad each person's yes was, and whose only yes won",
+]
+
+[[requirement]]
+id = "tonight-the-wildcard-is-drawn-near-the-top"
+spec = "§6.2 step 5 (\"one exploratory pick honestly labelled\") + §6.4 (\"ranked by prior + proximity\")"
+milestone = "M5"
+kind = "backend"
+what = "The wildcard is the candidate farthest in DNA terms from the finalists among the best twentieth of the ranking (never fewer than twelve candidates), not the farthest title in the whole pool."
+why = "The first household evening's wildcard was the most distant title of 719, ranked 105th; §6.4 ranks the explore slot by prior and proximity, and the code read only the second."
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_wildcard_is_drawn_from_near_the_top_of_the_ranking_not_its_tail",
+    "backend/tests/test_tonight_combine.py::test_the_wildcard_is_a_step_outside_rather_than_the_fourth_best",
+]
+
+[[requirement]]
+id = "tonight-copy-in-the-member-register"
+spec = "§6.8 (\"quiet reasons\"; \"a one-line why in vocabulary terms\") + §6.2 steps 5, 7 and 8"
+milestone = "M5"
+kind = "integration"
+what = "Tonight's member copy carries no model number and no vocabulary id: the reveal's conflict reaches a member with Show the model off without D and without the axis sentence (and with them when it is on), gated where the payload is built; match lines and solo's why-lines name terms by their labels and every match line names its person; the round header says what to expect rather than the cap; and the refusal for an unscored member names no model noun and no false clock."
+why = "The first household evening showed 'pacing.relentless + register.pulp', an unnamed 'nothing here is their pull', 'pair 1 · cap 20' and 'the nightly fit writes them' over a job that runs every minute."
+tests = [
+    "backend/tests/test_tonight_combine.py::test_a_member_reads_the_plain_sentence_and_never_the_number",
+    "backend/tests/test_tonight_integration.py::test_solo_and_the_reveal_speak_in_term_labels_and_never_ids",
+    "backend/tests/test_tonight_integration.py::test_the_person_reservation_is_persisted_and_labelled_with_the_member",
+    "backend/tests/test_tonight_integration.py::test_each_match_line_branch_says_the_thing_it_is_for",
+    "backend/tests/test_tonight_integration.py::test_a_refusal_names_the_member_the_pool_cannot_rank",
+    "backend/tests/test_tonight_routes.py::test_the_reveal_route_asks_the_callers_own_toggle_before_it_shows_d",
+    "frontend/src/lib/tonight.svelte.test.js::heads the round with what to expect, and names the cap only near it",
+]
+
+[[requirement]]
+id = "tonight-waiting-says-an-estimate-and-the-ballot-count-is-live"
+spec = "§6.2 step 4 (\"Jenny 9/~12\") + §6.2 step 6 (the blind ballot)"
+milestone = "M5"
+kind = "integration"
+what = "A seat still answering is told to expect the typical round from the same sweep the boundary is calibrated on, never the cap, and the estimate is a function of its own count alone; a ballot submit that does not complete the reveal pushes the ballot's submitted count — two integers, no title, no approval — which the other devices file under the ballot, and a phone that has voted shows that its vote is in and how many are still out, never the round's counts."
+why = "Every unfinished seat read '~20', and the other phone kept reading '0 of 2 submitted' eighteen seconds after the first vote was in, because the only frame a submit pushed was the round's progress."
+tests = [
+    "backend/tests/test_tonight_integration.py::test_progress_expected_is_an_estimate_not_the_cap",
+    "backend/tests/test_tonight_routes.py::test_the_round_card_says_what_to_expect_rather_than_the_cap",
+    "backend/tests/test_tonight_routes.py::test_a_ballot_submit_pushes_the_submitted_count_and_no_approvals",
+    "backend/tests/test_tonight_channel.py::test_the_ballot_frame_carries_the_submitted_count_and_nothing_else",
+    "frontend/src/lib/tonight.svelte.test.js::files the ballot's count under the ballot, which is the number the screen prints",
+    "frontend/src/lib/tonight.svelte.test.js::says the vote is in, and how many are still out, once this phone has voted",
+    "frontend/src/routes/tonight/tonight-page.test.js::shows the ballot status after this phone has voted, never the round counts",
+]
+
+[[requirement]]
+id = "tonight-the-round-and-ballot-fit-a-phone"
+spec = "§6 preamble (\"phone-first (48 px targets, one-handed)\") + §6.8 (\"Poster-forward 2:3 cards\"; one ember accent)"
+milestone = "M5"
+kind = "e2e"
+what = "On an iPhone 13 both options of a pair and the two level answers are on the screen at once above the bottom bar, side by side; the pair, the solo picks, the ballot, the runners-up, the wildcard and the winner card show the shared poster keyed on the title rather than wearing the global 2:3 frame on a button; and a chosen ballot option is outlined and ticked while Submit is the one filled control and says what it will cast."
+why = "The pair buttons wore design.css's global `.poster` frame and stacked at 560 px, so the first option filled the phone's screen and everything else sat below the fold; and four chosen ember chips looked exactly like the ember Submit beneath them."
+tests = [
+    "e2e/specs/14-tonight.spec.js::the round offers all four answers and locks the escape until pair 6",
+    "frontend/src/routes/tonight/tonight-page.test.js::draws the pair as two shared posters, never as buttons wearing the global 2:3 frame",
+    "frontend/src/routes/tonight/tonight-page.test.js::makes the ballot options and Submit two different objects, and Submit counts its picks",
+    "frontend/src/lib/tonight.svelte.test.js::labels Submit with what it will cast",
 ]

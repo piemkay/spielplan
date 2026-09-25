@@ -33,7 +33,9 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.tonight import ballot as ballot_rules
 from spielplan.tonight import combine as combine_rules
+from spielplan.tonight import copy as copy_rules
 from spielplan.tonight import pool as pool_rules
 
 # 54e/proposal 60: the reveal opens with an explicit beat before the winner appears — "shipping
@@ -51,6 +53,7 @@ def card(
     budget_min: int,
     approvals: int,
     play_url: Callable[[str], str] | None,
+    show_model: bool = False,
 ) -> dict[str, Any]:
     """One card on the reveal, from one `session_result` row joined to its title.
 
@@ -73,13 +76,23 @@ def card(
         "poster_path": row["poster_path"],
         "approvals": approvals,
         "match_lines": list((row["per_user_match"] or {}).values()),
-        "conflict": row["conflict"],
+        # Decision 486's register, applied where the payload is built: D is a model number and
+        # "the axis is zeroed" is model vocabulary, so a member with Show the model off is sent
+        # the plain sentences and never the number (`copy.for_member`).
+        "conflict": row["conflict"] if show_model else copy_rules.for_member(row["conflict"]),
         # 54d: the reserved slot is "**labelled as such**". `conflict` beside it says the household
         # is split and names the facet; this says which of the three cards is the other side of it,
         # which is the half the clause asks for and the half nothing carried. A plain bool rather
         # than the copy, because §6.2 fixes the headline verbatim and `copy.py` keeps it out of
         # reach — the words belong to the client's label, the fact belongs here. [decision 220]
         "reserved": bool(row["reserved"]),
+        # Decision 479's person reservation, which is a different claim from the axis one above
+        # and carries its own label on the client: "{name}'s pick". The seat and its display name,
+        # never the seat's scores.
+        "reserved_for": (
+            None if row["reserved_for"] is None
+            else {"participant_id": row["reserved_for"], "name": row["reserved_name"]}
+        ),
         # §6.4's "honestly labelled", from the one place that holds the words. The client spelled
         # them itself, which left `combine.WILDCARD_LABEL` with no reader and the two free to
         # drift — and §6.4 is a claim about what the person is told, so the copy is the rule
@@ -109,6 +122,7 @@ async def slate(
     outcome: Mapping[str, Any],
     *,
     play_url: Callable[[str], str] | None = None,
+    show_model: bool = False,
 ) -> dict[str, Any]:
     """§6.2 step 7's winner card, its runners-up, and the beat before them.
 
@@ -128,9 +142,12 @@ async def slate(
     rows = await conn.fetch(
         """
         SELECT r.title_id, r.rank, r.slot, r.group_score, r.per_user_match, r.conflict,
-               r.reserved,
+               r.reserved, r.reserved_for,
+               coalesce(u.name, 'Guest ' || (p.seat - 1)) AS reserved_name,
                t.name, t.year, t.runtime_min, t.poster_path, t.jellyfin_id
           FROM session_result r JOIN title t ON t.id = r.title_id
+          LEFT JOIN session_participant p ON p.id = r.reserved_for
+          LEFT JOIN app_user u ON u.id = p.user_id
          WHERE r.session_id = $1 AND r.slot IN ('finalist', 'wildcard')
          ORDER BY r.rank
         """,
@@ -151,6 +168,7 @@ async def slate(
             budget_min=budget,
             approvals=approvals.get(row["title_id"], 0),
             play_url=play_url,
+            show_model=show_model,
         )
         for row in rows
         # Belt and braces now that the predicate is in the statement: `ON_THE_BALLOT` is what
@@ -169,7 +187,12 @@ async def slate(
         "winner": winner,
         "approval_share": outcome["approval_share"],
         "participants": outcome["participants"],
-        "unanimous": winner is not None and winner["approvals"] == outcome["participants"],
+        # "Unanimous." used to stand here, and it was literally true over an evening where one
+        # member said yes to all four titles and the other to one — the winner being her only
+        # yes. Approval share is the number §13 evaluates on and it stays; beside it the reveal
+        # now says how broad each person's yes was, which step 6's "then they are revealed
+        # together" permits once every ballot is in and not a moment before.
+        "breadth": await breadth(conn, session_id, winner_id=outcome["chosen_title_id"]),
         "runners_up": runners_up,
         "wildcard": next(
             (c for c in cards if c["slot"] == combine_rules.SLOT_WILDCARD), None
@@ -178,4 +201,44 @@ async def slate(
     }
 
 
-__all__ = ["BEAT", "ON_THE_BALLOT", "card", "slate"]
+async def breadth(
+    conn: asyncpg.Connection, session_id: int, *, winner_id: int | None
+) -> list[dict[str, Any]]:
+    """Each seat's approval breadth, for the reveal: how many of the ballot they said yes to, and
+    whether the winner was their only yes.
+
+    Refused with the ballot's own reason until every seat has submitted, IN THIS FUNCTION, for
+    `ballot.tally`'s reason: 54e's blindness is a property of the read, and the per-seat counts are
+    the most direct leak of who voted how that this module could produce. The route reaches here
+    only after `tally` has already refused, and the guard is repeated so a second caller cannot
+    forget it.
+    """
+    if not await ballot_rules.everyone_submitted(conn, session_id):
+        raise ballot_rules.BallotError(
+            "still_voting", "approvals stay hidden until everyone has submitted"
+        )
+    rows = await conn.fetch(
+        """
+        SELECT p.id, p.seat, coalesce(u.name, 'Guest ' || (p.seat - 1)) AS name,
+               count(*) FILTER (WHERE b.approved) AS yes, count(b.id) AS of,
+               coalesce(bool_or(b.approved AND b.title_id = $2), false) AS chose_winner
+          FROM session_participant p
+          LEFT JOIN app_user u ON u.id = p.user_id
+          LEFT JOIN session_ballot b ON b.participant_id = p.id
+         WHERE p.session_id = $1
+         GROUP BY p.id, p.seat, u.name
+         ORDER BY p.seat
+        """,
+        session_id, winner_id,
+    )
+    return [
+        {
+            "participant_id": r["id"], "name": r["name"],
+            "approved": int(r["yes"]), "of": int(r["of"]),
+            "only_yes": int(r["yes"]) == 1 and bool(r["chose_winner"]),
+        }
+        for r in rows
+    ]
+
+
+__all__ = ["BEAT", "ON_THE_BALLOT", "breadth", "card", "slate"]

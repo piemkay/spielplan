@@ -195,6 +195,10 @@ def _room_error(exc: rooms.RoomError | play.RoundError | ballot_rules.BallotErro
         "bad_answer": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "guest_count": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "not_on_slate": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        # Decision 480's control: a key off the fixed list or a fourth veto is a malformed
+        # request; a caller with no seat in the room is not entitled to change its evening.
+        "bad_veto": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "not_seated": status.HTTP_403_FORBIDDEN,
         "not_your_turn": status.HTTP_409_CONFLICT,
         "too_early": status.HTTP_409_CONFLICT,
         # The request is well formed and the world is not ready: a member the nightly fit has
@@ -261,6 +265,13 @@ class AnswerBody(BaseModel):
 
 class BallotBody(BaseModel):
     approved: list[int] = Field(default_factory=list, max_length=8)
+
+
+class VetoBody(BaseModel):
+    """§6.2 step 1's "not tonight" chips (decision 480), as the whole set the room now holds —
+    a replace rather than a toggle, so two phones tapping at once cannot leave half of each."""
+
+    vetoes: list[str] = Field(default_factory=list, max_length=8)
 
 
 class SoloAnswer(BaseModel):
@@ -445,6 +456,23 @@ async def lobby(session_id: int, user: ActiveUser, conn: DB) -> dict[str, object
     }
 
 
+@router.post("/sessions/{session_id}/vetoes")
+async def set_vetoes(
+    session_id: int, body: VetoBody, user: ActiveUser, conn: DB
+) -> dict[str, object]:
+    """Decision 480's lobby control: any seated member, before Start. The rule is
+    `rooms.set_vetoes`; this pushes the lobby to the room and the row to the household, because
+    §6.2 step 2's open-rooms list shows what a room has ruled out before anybody joins it."""
+    try:
+        await rooms.set_vetoes(conn, session_id=session_id, user_id=user.id, keys=body.vetoes)
+        lobby = await rooms.lobby(conn, session_id)
+    except rooms.RoomError as exc:
+        raise _room_error(exc) from exc
+    _nudge(HUB.to_session(session_id, channel_rules.lobby_frame(lobby)))
+    _nudge(HUB.to_household(channel_rules.rooms_changed()))
+    return {"session_id": session_id, "vetoes": lobby["vetoes"]}
+
+
 @router.post("/sessions/{session_id}/start")
 async def start(session_id: int, user: ActiveUser, conn: DB) -> dict[str, object]:
     """The host closes the join window. §6.2 step 2, as the host's lobby states it: "Anyone who
@@ -510,6 +538,7 @@ def _public_state(state: dict[str, Any], token: str | None) -> dict[str, Any]:
         "participant_id": state["participant_id"],
         "answered": state["answered"],
         "cap": state["cap"],
+        "typical": state["typical"],
         "ended_by": state["ended_by"],
         "stop_reason": state["stop_reason"],
         "escape_available": state["escape_available"],
@@ -729,8 +758,12 @@ async def submit_ballot(
         _nudge(HUB.to_session(session_id, channel_rules.reveal_frame(session_id)))
         _nudge(HUB.to_household(channel_rules.rooms_changed()))
     else:
-        progress = channel_rules.progress_frame(session_id, await play.progress(conn, session_id))
-        _nudge(HUB.to_session(session_id, progress))
+        # The BALLOT's count, which is the number the ballot screen prints. This pushed the round's
+        # progress frame, which the client files under the round, so the other phone kept reading
+        # "0 of 2 submitted" after the first vote was in. Two integers and no title (54e).
+        _nudge(HUB.to_session(
+            session_id, channel_rules.ballot_frame(session_id, submitted=submitted, seated=seated)
+        ))
     return {"submitted": submitted, "seated": seated, "revealed": revealed}
 
 
@@ -768,6 +801,9 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
         # Absent rather than guessed when no connector is configured (§6.0) — which is why the
         # link-maker itself is None here rather than a function that returns a bare path.
         play_url=play_url if base else None,
+        # Decision 117's one question, asked of the caller: D and the axis sentence reach a member
+        # only with Show the model on, and the gate is where the payload is built (decision 486).
+        show_model=rail.visible_to(user),
     )
 
 

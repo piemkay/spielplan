@@ -32,12 +32,14 @@ import asyncio
 import json
 import random
 import secrets
-from collections.abc import Sequence
-from dataclasses import dataclass
+import statistics
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
 
+from spielplan.db import dna_terms
 from spielplan.tonight import combine as combine_rules
 from spielplan.tonight import copy as copy_rules
 from spielplan.tonight import dna as dna_reads
@@ -74,48 +76,96 @@ class Snapshot:
     # every read of it, and the pool is the thing the round is drawn from (decision 223). None
     # for a room started before this shipped — `_round_of` says what it falls back to and why.
     holdout_seed: str | None = None
+    # Which rule turns `scores` into what every Tonight purpose reads, frozen with the pool for the
+    # hold-out nonce's reason: a deploy must not move the prior, the next pair or the combine of an
+    # evening already in flight. `pool.SCALE_MARKER` for a room started since decision 477; None
+    # for one started before it, which keeps reading the raw §5.1 scores it was started on.
+    scale: str | None = None
+    # title_id -> {participant_id: the score every Tonight purpose reads}. Derived from `scores`
+    # under `scale` in `_as_snapshot`, never stored: the raw scores stay the provenance and the
+    # derivation is a pure function of them, so two reads of one room cannot disagree.
+    ledger: dict[int, dict[int, float]] = field(default_factory=dict)
 
     @property
     def title_ids(self) -> list[int]:
         return list(self.candidates)
 
     def pool_scores_for(self, participant_id: int) -> dict[int, float]:
-        """One seat's §5.1 scores over the pool — the round's prior for a member.
+        """One seat's Ledger over the pool, on the room's scale — the round's prior for a member.
 
-        A guest has no entry anywhere in `scores`, so this is empty for them, which is exactly
-        54c's "starts from the pool prior and is carried entirely by their answers".
+        Rank-standardised over tonight's pool for a room carrying the scale marker, so each
+        member's stable taste spans the same range and neither Ledger can outvote the other by
+        its units (decision 477). A guest has no entry anywhere in `scores`, so this is empty for
+        them, which is exactly 54c's "starts from the pool prior and is carried entirely by their
+        answers".
         """
         return {
             t: seat_scores[participant_id]
-            for t, seat_scores in self.scores.items()
+            for t, seat_scores in self.ledger.items()
             if participant_id in seat_scores
         }
 
     def member_average(self) -> dict[int, float]:
         """The pool's own order (§6.2 step 3), which is what a profile-less guest is ranked by.
 
+        The plain average of the members' scores ON THE ROOM'S SCALE: step 3's order is read by
+        the evening only here, as a guest's prior, and a prior averaged over raw scores would be
+        the widest-scaled member's Ledger wearing the pool's name (decision 477).
+
         Never a member's Ledger wearing the guest's name — the prototype's `const u = guest ?
         'p' : who` is a privacy-shaped bug, not "contributes no taste term".
         """
-        return {t: pool_rules.group_score(s) for t, s in self.scores.items()}
+        return {t: pool_rules.group_score(s) for t, s in self.ledger.items()}
+
+    def member_ledger(self) -> dict[int, list[float]]:
+        """D's input: {title_id: [each seated member's score]}, on the room's scale — the scale
+        `combine.D_THRESHOLD` was recalibrated on (decision 478)."""
+        return {t: list(s.values()) for t, s in self.ledger.items()}
 
     def frame(self) -> tilt_rules.Frame:
         return tilt_rules.frame(self.dna)
 
 
+def _on_scale(scores: dict[int, dict[int, float]], scale: str | None) -> dict[int, dict[int, float]]:
+    """`scores` as the room's scale reads them. Each member is standardised over the titles THEY
+    scored in the frozen pool — which is every candidate, since `pool.build` admits only titles
+    every seated member has scored — and an unknown marker is refused rather than guessed at,
+    because reading a room under the wrong rule is the in-flight change the marker exists to stop.
+    """
+    if scale is None:
+        return scores
+    if scale != pool_rules.SCALE_MARKER:
+        raise RoundError(
+            "no_room", "this room was started by a different version of Spielplan - start a new one"
+        )
+    by_member: dict[int, dict[int, float]] = {}
+    for t, seats in scores.items():
+        for p, v in seats.items():
+            by_member.setdefault(p, {})[t] = v
+    out: dict[int, dict[int, float]] = {t: {} for t in scores}
+    for p, own in by_member.items():
+        for t, v in pool_rules.rank_normal(own).items():
+            out[t][p] = v
+    return out
+
+
 def _as_snapshot(context: Any) -> Snapshot:
     ctx = context if isinstance(context, dict) else json.loads(context or "{}")
     raw = ctx.get("pool") or {}
+    scores = {
+        int(t): {int(p): float(v) for p, v in seats.items()}
+        for t, seats in (raw.get("scores") or {}).items()
+    }
+    scale = raw.get("scale")
     return Snapshot(
         candidates={int(k): v for k, v in (raw.get("candidates") or {}).items()},
-        scores={
-            int(t): {int(p): float(v) for p, v in seats.items()}
-            for t, seats in (raw.get("scores") or {}).items()
-        },
+        scores=scores,
         dna={int(k): {t: float(w) for t, w in v.items()} for k, v in (raw.get("dna") or {}).items()},
         axes={f: {t: float(w) for t, w in v.items()} for f, v in (raw.get("axes") or {}).items()},
         version=raw.get("version"),
         holdout_seed=raw.get("holdout_seed"),
+        scale=scale,
+        ledger=_on_scale(scores, scale),
     )
 
 
@@ -168,10 +218,13 @@ async def _refuse_unscored_members(
     if not missing:
         return
     who = ", ".join(r["name"] for r in missing)
+    # Decision 486's register: this sentence reaches the household, so it names no model noun, and
+    # it says "a couple of minutes" because that is how often the fold-in tick writes scores (the
+    # worker's `every=60`); "the nightly fit" was the wrong job and the wrong clock.
     raise RoundError(
         "unscored_member",
-        f"no Ledger scores for {who} yet — tonight's pool is ranked from every member's "
-        "scores, and the nightly fit writes them",
+        f"{who} has no scores yet — Tonight ranks from every member's scores, and new ones "
+        "arrive within a couple of minutes, so try Start again shortly",
     )
 
 
@@ -219,7 +272,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
     async with conn.transaction():
         row = await conn.fetchrow(
             "UPDATE session SET state = $2 WHERE id = $1 AND state = $3 "
-            "RETURNING kind, runtime_budget_min, include_rewatches, bundle_version",
+            "RETURNING kind, runtime_budget_min, include_rewatches, bundle_version, context",
             session_id, rooms.STATE_VOTING, rooms.STATE_OPEN,
         )
         if row is None:
@@ -243,6 +296,8 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
 
         seats = await rooms.seats_of(conn, session_id)
         await _refuse_unscored_members(conn, session_id, bundle_version=row["bundle_version"])
+        version = await dna_reads.active_version(conn)
+        vetoes = rooms.vetoes_of(row["context"])
         candidates = await pool_rules.build(
             conn,
             seats=seats,
@@ -250,6 +305,8 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             budget_min=row["runtime_budget_min"],
             include_rewatches=row["include_rewatches"],
             bundle_version=row["bundle_version"],
+            vetoed_terms=pool_rules.veto_terms(vetoes),
+            dna_version=version,
         )
         if len(candidates) < 2:
             # §6.2 defines the happy path only. An empty or one-title pool is not a round, and
@@ -258,12 +315,17 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             # itself at zero answers and the evening goes straight to 54e's ballot rather than
             # being refused a round a household with three owned shows could never have
             # (decision 215).
+            #
+            # And a pool the room's vetoes emptied says so: "widen the budget" is not the
+            # remedy for "nothing is left after vetoing violence", and a refusal the household
+            # cannot act on is the §6.8 failure decision 216 already fixed once. [decision 480]
+            named = pool_rules.veto_labels(vetoes)
             raise RoundError(
                 "empty_pool",
-                "nothing in the library fits tonight — widen the budget or include rewatches",
+                "nothing in the library fits tonight — widen the budget or include rewatches"
+                + (f", or lift the veto on {' and '.join(named)}" if named else ""),
             )
 
-        version = await dna_reads.active_version(conn)
         ids = [c.title_id for c in candidates]
         payload = {
             "candidates": {
@@ -289,6 +351,14 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             # migration; `secrets` rather than `random` because a client that could guess it
             # could pre-compute every hold-out pair of an evening it is about to be asked about.
             "holdout_seed": secrets.token_hex(16),
+            # Decision 477's rule, named with the pool it applies to. `scores` above stays the raw
+            # §5.1 read — the provenance, and what a reader comparing this evening with the Ledger
+            # needs — and `_as_snapshot` derives the standardised read from it under this marker.
+            "scale": pool_rules.SCALE_MARKER,
+            # The vetoes this pool was built under, frozen for §14 risk 6's reader: the lobby
+            # stops accepting changes at Start, and an evening's candidates are only explicable
+            # beside the filters that made them. [decision 480]
+            "vetoes": vetoes,
         }
         await conn.execute(
             # The dict, not a dumped string: `db/pool.py` registers a JSON codec on jsonb, so a
@@ -524,6 +594,9 @@ def _card(
         # questions keep their own homes. [M4.12 finding 9]
         "escape_available": ended_by is None and round_rules.escape_available(answered),
         "cap": round_rules.CAP_PAIRS,
+        # What the header says to expect: the sweep's median, not the cap. "pair 1 · cap 20" read
+        # as the plan for the evening, when the cap is the ending the round is built to avoid.
+        "typical": round_rules.TYPICAL_PAIRS,
         "pair": None if pair is None else {
             "selection": pair.selection,
             "reason": pair.reason,
@@ -995,12 +1068,24 @@ async def progress(conn: asyncpg.Connection, session_id: int) -> list[dict[str, 
             "seat": r["seat"],
             "name": r["name"] or f"Guest {r['seat'] - 1}",
             "answered": r["answered_count"],
-            "expected": round_rules.CAP_PAIRS,
+            "expected": expected_pairs(r["answered_count"]),
             "finished": r["ended_by"] is not None,
             "ended_by": r["ended_by"],
         }
         for r in rows
     ]
+
+
+def expected_pairs(answered: int) -> int:
+    """54c's "Jenny 9/~12": an ESTIMATE of a seat's round, never the cap.
+
+    The typical round until the seat has passed it, then one more than it has answered — so the
+    line never tells somebody at pair 13 that they are due to stop at 10 — and never past the cap
+    that does end it. A function of the count alone, which is what keeps this statement blind: an
+    estimate read off the seat's own straddlers would put answer-derived data into the one payload
+    54c promises carries none.
+    """
+    return min(round_rules.CAP_PAIRS, max(answered + 1, round_rules.TYPICAL_PAIRS))
 
 
 async def everyone_finished(conn: asyncpg.Connection, session_id: int) -> bool:
@@ -1019,6 +1104,7 @@ async def _match_lines(
     snapshot: Snapshot,
     seats: Sequence[asyncpg.Record],
     title_id: int,
+    tonight: Mapping[int, Mapping[int, float]],
 ) -> dict[str, Any]:
     """§6.2 step 7's per-person match lines, "in DNA terms including the honest negative".
 
@@ -1031,10 +1117,32 @@ async def _match_lines(
     Three branches, and §6.2 fixes two of them verbatim: the pull line, the honest negative
     ("nothing here is their pull — *bleak* works against them"), and — for a guest with no grid
     profile — a line rather than silence, because every participant gets one.
+
+    THE NEGATIVE IS FOR A TITLE BELOW THE PERSON'S USUAL, AND ONLY THEN. The branch read the tilt
+    alone, so on the first household evening the winner — the other member's own top Ledger
+    title — was printed under "nothing here is their pull" because six answers had moved no term
+    it carries upward. §6.2 step 4 defines the tonight score as stable taste plus the tilt, and
+    step 5's bound is "land below your usual", so `tonight` (the combine's per-seat scores)
+    decides whether a negative can be true: below the seat's median over the pool it may be
+    printed; at or above it the title is theirs by stable taste, and the line names what it
+    carries the way solo's pull line does ("pulls you with {terms}", §6.2 step 8).
+
+    AND EVERY LINE NAMES ITS PERSON AND SPEAKS IN LABELS (decision 486). The honest negative was
+    the one template with no name in it, so two on one card could not be told apart, and the
+    terms reached the screen as vocabulary ids ("characters.charismatic_lead"). The id stays on
+    `terms` for the invariant above; the words are `dna_term.label`.
     """
     carried = await dna_reads.terms_carried_by(
         conn, title_id, version=snapshot.version or "", limit=8
     )
+    named = await dna_terms.labels_for(conn, [t["term"] for t in carried])
+
+    def word(term: str) -> str:
+        return str((named.get(term) or {}).get("label") or dna_terms.label_of(term, None))
+
+    def listed(terms: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
+        return [{"term": t, "tier": tier, "label": word(t)} for t, tier in terms]
+
     lines: dict[str, Any] = {}
     for seat in seats:
         name = seat["name"] or f"Guest {seat['seat'] - 1}"
@@ -1044,6 +1152,8 @@ async def _match_lines(
                 "name": name, "line": copy_rules.no_profile(name), "terms": [], "sign": "none",
             }
             continue
+        own = tonight.get(seat["id"]) or {}
+        below_usual = title_id in own and own[title_id] < statistics.median(own.values())
         # The tilt weights the terms the title carries. It never admits one: a term the title
         # does not carry cannot appear here whatever the tilt says about it.
         scored = sorted(
@@ -1051,21 +1161,25 @@ async def _match_lines(
             key=lambda x: -x[1],
         )
         pulls = [x for x in scored if x[1] > 0.0][:2]
+        if not pulls and not below_usual:
+            # Theirs by stable taste: the title's own loudest carried terms, which is what solo
+            # already says of a pick the Ledger put on top (`solo.PULL_WHY`).
+            pulls = [(t["term"], 0.0, t["tier"]) for t in carried[:2]]
         if pulls:
             lines[str(seat["id"])] = {
                 "name": name,
-                "line": f"pulls {name} with " + " + ".join(t for t, _, _ in pulls),
-                "terms": [{"term": t, "tier": tier} for t, _, tier in pulls],
+                "line": f"pulls {name} with " + " + ".join(word(t) for t, _, _ in pulls),
+                "terms": listed([(t, tier) for t, _, tier in pulls]),
                 "sign": "pull",
             }
             continue
         against = [x for x in scored if x[1] < 0.0]
-        if against:
+        if against and below_usual:
             worst = against[-1]
             lines[str(seat["id"])] = {
                 "name": name,
-                "line": copy_rules.no_pull(worst[0]),
-                "terms": [{"term": worst[0], "tier": worst[2]}],
+                "line": copy_rules.no_pull(word(worst[0]), name=name),
+                "terms": listed([(worst[0], worst[2])]),
                 "sign": "against",
             }
             continue
@@ -1139,12 +1253,11 @@ async def finish(
             for t, b in played.beliefs.items()
         }
 
-    member_ledger = {
-        t: [v for p, v in seat_scores.items()] for t, seat_scores in snapshot.scores.items()
-    }
     slate = combine_rules.combine(
         per_participant=per_participant,
-        member_ledger=member_ledger,
+        # On the room's scale, which is the scale decision 478 recalibrated the threshold on; the
+        # raw §5.1 read measured D = 5.07 on a title both members rank first.
+        member_ledger=snapshot.member_ledger(),
         tilts=tilts,
         axes=snapshot.axes,
         dna=snapshot.dna,
@@ -1155,7 +1268,9 @@ async def finish(
     # — a line per candidate on a fifty-title pool is a query nobody reads.
     on_the_slate = set(slate.ballot_titles)
     matches = {
-        title_id: await _match_lines(conn, snapshot=snapshot, seats=seats, title_id=title_id)
+        title_id: await _match_lines(
+            conn, snapshot=snapshot, seats=seats, title_id=title_id, tonight=per_participant,
+        )
         for title_id in on_the_slate
     }
     async with conn.transaction():
@@ -1210,8 +1325,8 @@ async def finish(
                 """
                 INSERT INTO session_result
                     (session_id, title_id, rank, slot, group_score, per_user_match, conflict,
-                     reserved)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     reserved, reserved_for)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """,
                 session_id, row["title_id"], row["rank"], row["slot"], row["group_score"],
                 matches.get(row["title_id"], {}),
@@ -1222,6 +1337,11 @@ async def finish(
                 # row of every night that surfaced no split, which is all of them on the shipped
                 # bundle. [decision 220; migration 0021]
                 row["reserved"],
+                # The person reservation's own discriminator, never `reserved` above: that column
+                # means "the other pole of the contested axis" to every reader and every test that
+                # pins it, and a seat's pick is a different claim with a different label.
+                # [decision 479; migration 0033]
+                row["reserved_for"],
             )
         await rooms.set_state(conn, session_id, rooms.STATE_BALLOT)
     return slate
@@ -1272,6 +1392,7 @@ __all__ = [
     "Snapshot",
     "escape",
     "everyone_finished",
+    "expected_pairs",
     "finish",
     "progress",
     "record_answer",

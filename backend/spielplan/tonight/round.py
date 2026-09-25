@@ -109,15 +109,23 @@ SHORTLIST_SIZE = 3
 # WHY IT IS NOT §6.3's `straddle_z` (decisions 175, 205, 214). The round borrowed that constant on
 # the argument that "still straddles" is one predicate. It is one predicate over two scales: §6.3
 # measures a Ledger posterior in logit units against learned cutpoints roughly one unit apart,
-# this measures a §5.1 score standardised to unit variance against the midpoint of ranks 3 and 4.
-# One sigma multiple cannot calibrate both, and sharing it made this side a no-op. Re-measured at
-# the shipped owned-pool scale (score sd 0.50, prior_var 1.0, pools of 12/20/40, 20 seeded rounds
-# each): at z = 1.0 `converged` fires 0-2 times in 20 and the median round is the full cap of 20;
-# at z = 0.6 it fires 13-17 in 20 with a median of 8.5-13 pairs, which is §6.2 step 4's "~10
-# candidate votes per participant"; at z = 0.15 — what §6.3's badge constant is now tuned to — it
-# fires 20 in 20 with a median of 1-2 pairs, an evening over before it started. Decision 175's own
-# sweep found the same shape from the other side (z = 0.6: converged 9/10, median 11 pairs;
-# z = 1.0: cap 10/10), which is why 205 left this retune here rather than taking it in M4.10.
+# this measures a member's score over tonight's pool against the midpoint of ranks 3 and 4.
+# One sigma multiple cannot calibrate both, and sharing it made this side a no-op.
+#
+# RE-MEASURED ON THE SCALE THE ROUND NOW READS (decision 477). The sweep below was first taken on
+# a Gaussian pool of sd 0.50, which was the premise that `user_score` ships at that spread over the
+# owned pool; the first household evening measured 1.081 and 0.572, with one member's top four at
+# 13.28 / 9.43 / 6.52 / 5.82 — and on that tail the round converged after ONE pair, because only
+# two titles straddled a cut at 6.17. Every member's scores now reach the round through
+# `pool.rank_normal` (sd 1.0 over tonight's pool), so the figures are restated there, over pools
+# of 120 (a series night), 300 and 700 (the household's film pool at the default budget), 20
+# seeded rounds each: at z = 1.0 `converged` fires 0-3 times in 20 and the median round is the
+# full cap of 20; at z = 0.6 it fires 17, 13 and 19 times with medians of 9, 11 and 10 pairs, which
+# is §6.2 step 4's "about ten quick votes"; at z = 0.15 — what §6.3's badge constant is tuned to —
+# it fires 20 in 20 with a median of 1 pair, an evening over before it started. The heavy-tailed
+# pool that ended the real round at pair one converges 14 times in 20 with a median of 10 once it
+# is standardised, and 20 times at a median of 1 when it is not. Decision 175's own sweep found the
+# same shape from the other side (z = 0.6: converged 9/10, median 11 pairs; z = 1.0: cap 10/10).
 #
 # THE FIGURES ARE ASSERTED RATHER THAN REMEMBERED. This paragraph invites a re-derivation — "do
 # not narrow this without a new measurement" below — and it first shipped with two of its four
@@ -130,6 +138,14 @@ SHORTLIST_SIZE = 3
 # It is not a §4.3 bundle knob for CAP_PAIRS' reason — it is not a constant of the §5.2 recipe —
 # and it is not the prior's to fix either; `initial` carries that measurement.
 BOUNDARY_Z = 0.6
+
+# What a seat still answering is told to expect, and the only number the waiting line may print
+# for it. It was `CAP_PAIRS`, so every unfinished seat read "~20" — a cap the round is built to
+# stop well short of, printed as if it were the plan. The median of the same sweep at the
+# household's real pool size, so the estimate moves when the constant above does; and a constant
+# rather than anything derived from the seat's own straddlers, because `play.progress` is blind by
+# construction and must stay a query that reads counts and nothing else (54c).
+TYPICAL_PAIRS = 10
 
 # The pairwise noise of a single answer, on the tonight-score scale. "Which one tonight?" is a
 # noisier question than a considered verdict — the person is choosing a mood, not reporting a
@@ -231,16 +247,15 @@ def initial(
     for no information gained — and the ordering the row requires was not there either.
 
     `prior_var` STAYS AT 1.0, and this is where the argument goes so it is not re-derived from
-    the same numbers a third time. §5.1's score is standardised, so a unit prior is what "one
-    score's worth of uncertainty" means structurally; the finding that it is "four times the
-    real owned-pool variance" reads a *pool* sd of 0.50 as if it were the spread of one
-    person's belief about one title, which are different quantities. It was measured rather
+    the same numbers a third time. A member's scores reach the round rank-standardised to sd 1.0
+    over tonight's pool (decision 477), so a unit prior is now the pool's variance by
+    construction rather than by the argument decision 214 made for it. It was measured rather
     than argued away: over the same 20 seeded rounds BOUNDARY_Z is calibrated against, narrowing
-    the prior to 0.25 leaves convergence at 0-1 in 20 at z = 1.0 (0, 1 and 0 over pools of
-    12/20/40) and drops it at z = 0.6 from 17/13/16 to 13/9/10 over the same three pools — the
-    tighter prior makes fewer rounds resolve, not more, because the boundary moves as far as the
-    intervals shrink. The threshold is the controlling variable. Decision 214 records the finding
-    as refuted; do not narrow this without a new measurement.
+    the prior to 0.25 leaves convergence at 0 in 20 at z = 1.0 (0, 0 and 0 over pools of
+    120/300/700) and moves it at z = 0.6 from 17/13/19 to 11/15/13 over the same three pools —
+    lower on two and higher by two on the third, so not a lever, because the boundary moves as
+    far as the intervals shrink. The threshold is the controlling variable. Decision 214 records
+    the finding as refuted; do not narrow this without a new measurement.
 
     PER POOL, because the single pair this once quoted ("from 14/20 to 7/20") is produced by no
     pool size the sweep names, and a reader who cannot reproduce the number cannot tell a stale
@@ -1117,6 +1132,7 @@ __all__ = [
     "SELECTION_ADAPTIVE",
     "SELECTION_HOLDOUT",
     "SHORTLIST_SIZE",
+    "TYPICAL_PAIRS",
     "anchor_of",
     "boundary",
     "escape",

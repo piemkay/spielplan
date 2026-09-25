@@ -34,6 +34,23 @@ SPLIT_LINE = "You're split on {facet} — here's one of each. The axis is zeroed
 # appear next to their name, never bare).
 D_LINE = "D {d:.2f} — one of you is likely to land below your usual tonight."
 
+# The same sentence in the member register (decision 486): D is a model number, and a member with
+# Show the model off is told what it predicts and never the number. `for_member` below swaps it in
+# at read time, so a stored conflict written with the number still reads plainly.
+D_LINE_PLAIN = "One of you is likely to land below your usual tonight."
+
+# Decision 479's headline for a split with no axis to name: the alternative in hand is a person's,
+# and the slate is built so the sentence is true. Fixed like SPLIT_LINE, never a model's.
+PERSON_SPLIT_LINE = "You're pulling different ways tonight — here's one for each of you."
+# And the same headline without the promise, for the room the three slots could not serve (four or
+# more seats pulling apart): the split is still surfaced, and nothing is claimed that is false.
+PERSON_SPLIT_SHORT = "You're pulling different ways tonight."
+
+# SPLIT_LINE's second sentence is model vocabulary ("axis", "zeroed"), so a member without Show
+# the model reads the first sentence alone (decision 486; §6.2 step 5's copy as decision 479
+# amends it). Kept verbatim in the stored row, which is the record of what the spec fixed.
+_MODEL_SENTENCE = " The axis is zeroed, not averaged."
+
 # The honest negative §6.2 step 7 quotes verbatim, for a participant no term pulls toward.
 NO_PULL_LINE = "nothing here is their pull — {term} works against them"
 
@@ -97,8 +114,44 @@ def conflict(facet: str, *, d: float, phrasing: str | None = None) -> dict[str, 
     }
 
 
-def no_pull(term: str) -> str:
-    return NO_PULL_LINE.format(term=term)
+def person_conflict(
+    *, d: float, phrasing: str | None = None, one_for_each: bool
+) -> dict[str, object]:
+    """Decision 479's surfaced split, in `conflict`'s shape. `facet` is None because no axis is
+    named; `by` says which of the two splits this is, so a reader never infers it from the copy."""
+    return {
+        "facet": None,
+        "by": "person",
+        "d": round(float(d), 4),
+        "headline": PERSON_SPLIT_LINE if one_for_each else PERSON_SPLIT_SHORT,
+        "explanation": bounded(phrasing, d=d),
+    }
+
+
+def for_member(conflict: dict[str, object] | None) -> dict[str, object] | None:
+    """A stored conflict as a member with Show the model off may read it (decision 486).
+
+    Server-side, where the payload is built: the number `d` leaves the payload, the D line becomes
+    its plain sentence, and the axis split's second sentence goes. A model phrasing that survived
+    `bounded` is the household's own sentence and passes through untouched.
+    """
+    if not conflict:
+        return conflict
+    plain = {k: v for k, v in conflict.items() if k != "d"}
+    explanation = str(plain.get("explanation") or "")
+    if re.fullmatch(r"D -?\d+\.\d+ — one of you is likely to land below your usual tonight\.",
+                    explanation):
+        plain["explanation"] = D_LINE_PLAIN
+    headline = str(plain.get("headline") or "")
+    plain["headline"] = headline.replace(_MODEL_SENTENCE, "")
+    return plain
+
+
+def no_pull(term: str, *, name: str | None = None) -> str:
+    """§6.2 step 7's honest negative, verbatim, and — when there is more than one person on the
+    card — whose it is. Two of the unnamed sentence on one winner card could not be told apart."""
+    line = NO_PULL_LINE.format(term=term)
+    return f"{name}: {line}" if name else line
 
 
 def no_profile(name: str) -> str:
@@ -107,13 +160,18 @@ def no_profile(name: str) -> str:
 
 __all__ = [
     "D_LINE",
+    "D_LINE_PLAIN",
     "NO_PROFILE_LINE",
     "NO_PULL_LINE",
+    "PERSON_SPLIT_LINE",
+    "PERSON_SPLIT_SHORT",
     "SPLIT_LINE",
     "bounded",
     "conflict",
+    "for_member",
     "no_profile",
     "no_pull",
     "overclaims",
+    "person_conflict",
     "split_line",
 ]
