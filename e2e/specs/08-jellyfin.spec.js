@@ -310,8 +310,11 @@ test.describe('jellyfin', () => {
     await expect(page.getByTestId('finish-prompt-cta')).toHaveCount(0);
     // Decision 210(a) on the same line, and this is the only layer that can assert it: a series
     // is app-only in the un-marking direction, and the surface says so instead of claiming a push
-    // that never happened.
-    await expect(handoff).toContainText('series unseen is app-only');
+    // that never happened - in the member register since decision 486, which maps the rail's
+    // "series unseen is app-only" to the sentence below (`titleCard.syncNote`).
+    await expect(handoff).toContainText(
+      'Saved here only - Jellyfin keeps its own episode history.'
+    );
 
     const state = await (await page.request.get(`/api/titles/${titleId}/state`)).json();
     expect(state.state, 'a declined prompt is an explicit action, not an absence').toBe('unseen');

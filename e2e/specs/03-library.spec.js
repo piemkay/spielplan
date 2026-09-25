@@ -9,6 +9,12 @@ import { kindToggle, openTitle, signedIn } from '../helpers.js';
  * Needs an imported bundle. Skips rather than pretending if the app has none.
  */
 
+// Home's count line by its own test id: every shelf row now carries a `.count` of its own - how
+// many titles the row holds, so a phone that shows under three knows there is more (ShelfRow,
+// owner instruction of 2026-09-25) - and a bare `.count` resolves to two elements the moment the
+// household has shelves, which by filename order the phone project always does.
+const countLine = (page) => page.getByTestId('count-line');
+
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
   const config = await (await page.request.get('/api/config')).json();
@@ -22,11 +28,11 @@ test('films only, and the hidden count names what is missing', async ({ page }) 
   // the household's library, which is all they draw on; in the grid it is the catalog listed.
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.count')).toContainText(
+  await expect(countLine(page)).toContainText(
     /\d+ films? in your library · \d+ series hidden/
   );
   await page.getByLabel('Search titles').fill('a');
-  await expect(page.locator('.count')).toContainText(/\d+ films? · \d+ series hidden/);
+  await expect(countLine(page)).toContainText(/\d+ films? · \d+ series hidden/);
 });
 
 test('both kinds on shows everything and nothing is reported hidden', async ({ page }) => {
@@ -34,8 +40,8 @@ test('both kinds on shows everything and nothing is reported hidden', async ({ p
   await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'false');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.count')).toContainText(/\d+ titles? in your library/);
-  await expect(page.locator('.count')).not.toContainText('hidden');
+  await expect(countLine(page)).toContainText(/\d+ titles? in your library/);
+  await expect(countLine(page)).not.toContainText('hidden');
 });
 
 test('the kind switch selects one kind or both, never neither', async ({ page }) => {
@@ -51,15 +57,17 @@ test('the kind switch selects one kind or both, never neither', async ({ page })
         .allTextContents()
     ).map((t) => t.trim());
 
-  expect(await pressed()).toEqual(['Films']);
+  // Polled, because `allTextContents` does not wait: read straight after the navigation it
+  // found the switch not yet drawn and reported no position at all.
+  await expect.poll(pressed).toEqual(['Films']);
   await kindToggle(page, 'Series').click();
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'true');
-  expect(await pressed()).toEqual(['Series']);
+  await expect.poll(pressed).toEqual(['Series']);
   await kindToggle(page, 'Series').click(); // the position already held: still Series
-  expect(await pressed()).toEqual(['Series']);
+  await expect.poll(pressed).toEqual(['Series']);
   await kindToggle(page, 'Both').click();
   await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
-  expect(await pressed()).toEqual(['Both']);
+  await expect.poll(pressed).toEqual(['Both']);
 });
 
 test('the API refuses an empty kind selection outright', async ({ page }) => {
@@ -104,7 +112,7 @@ test('owned titles are marked in the catalog and one pill narrows to them', asyn
   await page.getByTestId('filter-owned').click();
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.count')).toContainText('in your library');
+  await expect(countLine(page)).toContainText('in your library');
   const cards = page.locator('.grid .card-wrap');
   await expect(cards.first()).toBeVisible();
   const n = await cards.count();
@@ -115,14 +123,14 @@ test('search matches an alias, not just the title', async ({ page }) => {
   // §6.0: "filter/search on title/alias". The fixture's CJK title carries its English name
   // only as an alias, which is the case a title-only search silently fails.
   await page.getByLabel('Search titles').fill('chungking');
-  await expect(page.locator('.count')).toContainText(/[1-9]/);
+  await expect(countLine(page)).toContainText(/[1-9]/);
   await expect(page.locator('.grid')).toBeVisible();
 });
 
 test('a query with no matches says so instead of showing an empty grid', async ({ page }) => {
   await page.getByLabel('Search titles').fill('zzzzzzzz');
   await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible();
-  await expect(page.locator('.count')).toContainText('0 films');
+  await expect(countLine(page)).toContainText('0 films');
 });
 
 test('non-ASCII titles survive to the screen', async ({ page }) => {

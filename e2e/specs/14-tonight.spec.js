@@ -329,8 +329,12 @@ test.describe('tonight', () => {
     // first option filled the screen and the second option and every answer sat below the fold.
     // Measured against the scroll container's visible band rather than the window, because the
     // bar is drawn over the bottom of the window and a button under it is not reachable either.
-    const nav = page.getByRole('navigation', { name: 'Surfaces' });
-    const bottom = (await nav.boundingBox())?.y ?? page.viewportSize().height;
+    // The bar's top edge is the fold only where the nav IS a bottom bar. On desktop the same
+    // landmark is a rail down the side (06-responsive's first test), whose top sits under the
+    // header - read as a fold it put every answer "below" it, so there the window is the fold.
+    const nav = await page.getByRole('navigation', { name: 'Surfaces' }).boundingBox();
+    const viewport = page.viewportSize().height;
+    const bottom = nav && nav.y > viewport / 2 ? nav.y : viewport;
     for (const id of ['tonight-pick-A', 'tonight-pick-B', 'tonight-answer-EITHER',
       'tonight-answer-NEITHER']) {
       const box = await page.getByTestId(id).boundingBox();

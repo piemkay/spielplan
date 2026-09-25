@@ -453,6 +453,12 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   // /login with no seam involved at all.
   await page.goto('/');
   await expect(page.getByTestId('home-greeting')).toBeVisible();
+  // And Home's own reads finished, posters included. Since decision 483 every card draws its art
+  // from the session-gated `/api/art/<id>/poster`, and those images keep arriving after the
+  // greeting: a cookie cut while they are still in flight 401s them on the surface the member
+  // was already on, which is not the navigation under test. Cut after they land, and a Home read
+  // that fires AFTER the tap is still a failure of the line below.
+  await page.waitForLoadState('networkidle');
 
   const unauthorized = [];
   const watch = (res) => {
