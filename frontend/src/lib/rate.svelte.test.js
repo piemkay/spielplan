@@ -2,16 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOLD_MS,
+  LEARNING_CURVE_COPY,
+  MODES,
+  PAIR_SELECTION_COPY,
+  UNDO_KIND_LABELS,
   commit,
   counterLine,
+  findTitles,
+  finder,
   hueOf,
   kindLabel,
   metaLine,
+  pendingHead,
   rate,
+  rateTitle,
+  ratingsLabel,
   revealLine,
   runtimeLabel,
   setHead,
   sharePct,
+  undoKindLabel,
   undoMessage,
   load,
   verdict,
@@ -311,5 +321,107 @@ describe('the envelope', () => {
     expect(rate.holding).toBe(false);
     expect(rate.reveal).toBe(null);
     expect(rate.card.token).toBe('t1');
+  });
+
+  it('drops a pin once its card is on the table, so a skip does not bring it straight back', async () => {
+    // C5.2: the server serves a pin even over this sitting's skip or an earlier "not seen", so a
+    // pin still carried after its card was answered would hand the same card back. The banner's
+    // other named titles stay pinned, in their order (§6.0).
+    setHead([1, 9]);
+    fetchMock.mockResolvedValue(ok(envelope()));
+    await load({ quiet: true });
+    expect(pendingHead()).toEqual([9]);
+
+    fetchMock.mockClear();
+    await skip();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).head).toEqual([9]);
+    setHead([]);
+  });
+});
+
+describe('the member register (decisions 486 and 491)', () => {
+  it('names the undo in words and keeps the raw kind for the data attribute', () => {
+    expect(undoKindLabel('verdict')).toBe('rating');
+    expect(undoKindLabel('not_seen')).toBe('not seen');
+    expect(undoKindLabel('correction')).toBe('not seen');
+    expect(undoKindLabel('duel')).toBe('pick');
+    expect(undoKindLabel('tie')).toBe('tie');
+    expect(undoKindLabel('skip')).toBe('skip');
+    expect(undoKindLabel(null)).toBe('');
+    expect(Object.values(UNDO_KIND_LABELS).join(' ')).not.toMatch(/_/);
+  });
+
+  it('counts ratings, one or many', () => {
+    expect(ratingsLabel(1)).toBe('1 rating');
+    expect(ratingsLabel(0)).toBe('0 ratings');
+    expect(ratingsLabel(15)).toBe('15 ratings');
+  });
+
+  it('carries no section number, milestone or model noun in the copy it ships', () => {
+    const shipped = [PAIR_SELECTION_COPY, LEARNING_CURVE_COPY, ...MODES.map(([, why]) => why)];
+    for (const line of shipped) {
+      expect(line).not.toMatch(/§|decision \d|proposal \d|\bM[0-7]\b/);
+      expect(line).not.toMatch(/\blabels?\b|\bcdf\b|\bledger\b/);
+    }
+    expect(PAIR_SELECTION_COPY).toContain('Sharpen my ranking');
+    expect(LEARNING_CURVE_COPY).toContain('ratings');
+    // Decision 492: Mix's line says when the pairs start rather than promising them at once.
+    expect(MODES.find(([key]) => key === 'mix')[1]).toContain('pairs from 15 ratings on');
+  });
+});
+
+describe('"a title you know" (C5.2)', () => {
+  /** @type {any} */
+  let fetchMock;
+
+  beforeEach(() => {
+    reset();
+    fetchMock = vi.fn();
+    globalThis.fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    reset();
+    setHead([]);
+    delete globalThis.fetch;
+  });
+
+  it('asks nothing for one character, and lets the newest query win', async () => {
+    await findTitles('h');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(finder.items).toEqual([]);
+
+    /** @type {(value: any) => void} */
+    let answerSlow = () => {};
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => (answerSlow = resolve)))
+      .mockResolvedValueOnce(ok({ q: 'heat', items: [{ id: 41, name: 'Heat', rated: null }] }));
+    const slow = findTitles('he');
+    await findTitles('heat');
+    answerSlow(ok({ q: 'he', items: [{ id: 99, name: 'Hell', rated: null }] }));
+    await slow;
+
+    expect(finder.items.map((h) => h.id)).toEqual([41]);
+    expect(finder.searched).toBe('heat');
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/rate/search?q=heat');
+  });
+
+  it('never pins a title the person already rated', async () => {
+    expect(await rateTitle({ id: 42, name: 'The Heat', rated: 'fine' })).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pendingHead()).toEqual([]);
+  });
+
+  it('pins a pick, and says so when the table could not take it', async () => {
+    fetchMock.mockResolvedValueOnce(ok(envelope()));
+    expect(await rateTitle({ id: 1, name: 'Heat', rated: null })).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/rate?head=1');
+    expect(rate.notice).toBe('');
+    expect(pendingHead()).toEqual([]);
+
+    fetchMock.mockResolvedValueOnce(ok(envelope()));
+    expect(await rateTitle({ id: 5, name: 'Drive', rated: null })).toBe(false);
+    expect(rate.notice).toBe("Drive can't be rated right now.");
+    expect(pendingHead(), 'a pick that did not land is not left pinned').toEqual([]);
   });
 });

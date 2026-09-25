@@ -33,9 +33,13 @@ export const HOLD_MS = 1200;
 /** §4.1 rule 5's partition, in the words the surface uses. */
 export const KIND_LABELS = { movie: 'film', series: 'series' };
 
-/** §6.1's three modes; Mix is the default and every entry point lands on it (proposal 36). */
+/**
+ * §6.1's three modes; Mix is the default and every entry point lands on it (proposal 36).
+ * Decision 492: Mix serves single titles until 15 ratings stand, so its line says when the pairs
+ * begin rather than promising them from the second card.
+ */
 export const MODES = [
-  ['mix', 'alternates sweep and battle'],
+  ['mix', 'single titles, and pairs from 15 ratings on'],
   ['sweep', 'one title at a time'],
   ['battle', 'two posters, pick one']
 ];
@@ -57,16 +61,47 @@ export const DECISIVE_COPY = 'a decisive pick teaches more than a hesitant one';
  * reads this card and then watches Tonight pick has been told something untrue. So the sentence
  * now names the distinction rather than one of its two sides — the behaviour is unchanged, which
  * is the whole point: 54a amends the explanation, not the rule. [§6.1, §6.8, 54a; finding 22]
+ *
+ * Decision 491 restates it for members: the same claim and the same distinction, with the two
+ * places named by what a person taps rather than by section number (decision 486).
  */
 export const PAIR_SELECTION_COPY =
-  'Random pairs. For profiles no selection rule beats random — the clever ones pay off where ' +
-  'the question is which of these few, not how do you rank everything: the tier queue (§6.3) ' +
-  "and tonight's round (§6.2).";
+  'Random pairs. For building your profile nothing beats random - smarter picking only pays ' +
+  "off when the question is which of a few: Sharpen my ranking on Rank, and Tonight's round.";
 
-/** §6.1's learning curve. Proposal 49: the copy is the caption, the position is the point. */
+/**
+ * §6.1's learning curve. Proposal 49: the copy is the caption, the position is the point.
+ * Decision 491: counted in ratings, the word the rest of the surface uses, not "labels".
+ */
 export const LEARNING_CURVE_COPY =
-  'Personal signal roughly triples from 5 to 100 labels. Aim for 50–100 in the first ' +
-  'sitting or two.';
+  'Your suggestions get about three times more personal between 5 and 100 ratings. Aim for ' +
+  '50-100 in your first sitting or two.';
+
+/**
+ * Decision 35's chip names the observation it will take back. The server sends the journal's
+ * own `kind_of`, and `not_seen` on a button is a column name; `data-undo-kind` keeps the raw
+ * value for the tests and the words are for the person (decision 486).
+ */
+export const UNDO_KIND_LABELS = {
+  verdict: 'rating',
+  not_seen: 'not seen',
+  correction: 'not seen',
+  skip: 'skip',
+  duel: 'pick',
+  tie: 'tie'
+};
+
+/** @param {string | null | undefined} kind */
+export function undoKindLabel(kind) {
+  if (!kind) return '';
+  return UNDO_KIND_LABELS[kind] ?? kind.replace(/_/g, ' ');
+}
+
+/** One rating, two ratings — the count the balance widget and the rail both print. */
+export function ratingsLabel(n) {
+  const count = Number(n) || 0;
+  return `${count} ${count === 1 ? 'rating' : 'ratings'}`;
+}
 
 /** §12's M2 exit criterion, which proposal 49 makes legible to the person doing the labelling. */
 export const LEARNING_TARGET = 100;
@@ -100,11 +135,30 @@ export const rate = $state({
   log: []
 });
 
+/**
+ * Rate's "a title you know" search: the hits from `GET /api/rate/search`, each saying whether
+ * the person already rated it. Choosing one pins it with `head`, the banner's own mechanism, so
+ * the verdict is still given on §6.1's card (C5.2 of the 2026-09-25 household test).
+ */
+export const finder = $state({
+  q: '',
+  /** @type {any[]} */
+  items: [],
+  busy: false,
+  error: '',
+  /** The query the items answer, so an empty list can say "nothing matched" honestly. */
+  searched: ''
+});
+
+/** Below this many characters a search matches half the catalogue and helps nobody. */
+export const FIND_MIN_CHARS = 2;
+
 /** §6.0's pending-verdicts banner pins titles to the front with repeated `?head=` parameters. */
 let head = [];
 let pendingCard = null;
 let holdTimer = null;
 let shownAt = 0;
+let findSeq = 0;
 
 /** @param {(string|number)[]} ids */
 export function setHead(ids) {
@@ -113,6 +167,24 @@ export function setHead(ids) {
   // broken rather than as one bad segment in a URL.
   head = (ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
   return head;
+}
+
+/** The pins still owed, for tests and for the page's own reasoning. */
+export function pendingHead() {
+  return [...head];
+}
+
+/**
+ * A pin has done its job once its card is on the table, so it leaves `head`.
+ *
+ * Every write re-sends `head`, and the server now serves a pin even over this sitting's skip or
+ * an earlier "not seen" (a person who searched for a film has asked for it again). Kept after its
+ * card was answered, a pin would therefore hand the same card straight back after a skip. The
+ * banner's other named titles stay pinned in their order, which is §6.0's promise.
+ */
+function consumePin(card) {
+  const id = card?.type === 'sweep' ? card.title?.id : null;
+  if (id != null && head.includes(id)) head = head.filter((t) => t !== id);
 }
 
 // --- pure helpers, all of them rendered somewhere and all of them testable ------------------
@@ -230,6 +302,7 @@ function apply(res, { holdReveal = false } = {}) {
   rate.ledger = res.ledger ?? null;
   rate.log = res.log ?? [];
   rate.drained = res.drained ?? null;
+  consumePin(res.card);
 
   clearTimeout(holdTimer);
   if (holdReveal && res.reveal && answeredCard) {
@@ -400,4 +473,67 @@ export function reset() {
   rate.holding = false;
   rate.reveal = null;
   rate.frozenBlock = null;
+  clearFinder();
+}
+
+// --- "a title you know" ---------------------------------------------------------------------
+
+export function clearFinder() {
+  findSeq++;
+  finder.q = '';
+  finder.items = [];
+  finder.busy = false;
+  finder.error = '';
+  finder.searched = '';
+}
+
+/**
+ * Look a remembered title up. Each keystroke's request carries a sequence number, so a slow
+ * answer to "he" can never overwrite the list for "heat".
+ */
+export async function findTitles(q) {
+  finder.q = q ?? '';
+  const query = finder.q.trim();
+  const seq = ++findSeq;
+  if (query.length < FIND_MIN_CHARS) {
+    finder.items = [];
+    finder.searched = '';
+    finder.error = '';
+    finder.busy = false;
+    return finder.items;
+  }
+  finder.busy = true;
+  try {
+    const res = await get(`/rate/search${qs({ q: query })}`);
+    if (seq !== findSeq) return finder.items;
+    finder.items = res?.items ?? [];
+    finder.searched = query;
+    finder.error = '';
+  } catch (err) {
+    if (seq === findSeq) finder.error = err.message || 'the search did not answer';
+  } finally {
+    if (seq === findSeq) finder.busy = false;
+  }
+  return finder.items;
+}
+
+/**
+ * Put a chosen hit on the table: pin it and re-read, exactly as the banner's link does. A title
+ * the person already rated is never offered, and a pin the server could not serve says so rather
+ * than leaving the old card up as if the tap had worked.
+ */
+export async function rateTitle(item) {
+  if (!item || item.rated || rate.busy) return false;
+  setHead([item.id]);
+  clearFinder();
+  rate.notice = '';
+  await load({ quiet: true });
+  const served = rate.card?.type === 'sweep' && rate.card?.title?.id === item.id;
+  if (!served) {
+    // Not left pinned: every later tap would carry it, and a pick that surfaced three cards on
+    // would be a card nobody asked for at that moment.
+    setHead([]);
+    rate.notice = `${item.name} can't be rated right now.`;
+  }
+  return served;
 }

@@ -18,7 +18,10 @@
    *     next card, so the only request between two taps is the tap itself.
    *
    * `?head=` is §6.0's pending-verdicts banner arriving with its titles pinned to the front of
-   * the queue — repeated parameters, one per title, which is why it is read with `getAll`.
+   * the queue — repeated parameters, one per title, which is why it is read with `getAll`. The
+   * title card's "Rate it" arrives the same way, and this page's own "find" search pins through
+   * the same `head` (C5.2 of the 2026-09-25 household test): a person who knows a film can rate
+   * it without marking it seen and waiting for the queue to come round.
    */
   import { onDestroy, onMount } from 'svelte';
   import { modelGate } from '$lib/home.svelte.js';
@@ -32,13 +35,19 @@
   import RateSweepCard from '$lib/components/RateSweepCard.svelte';
   import RateUndo from '$lib/components/RateUndo.svelte';
   import {
+    FIND_MIN_CHARS,
+    KIND_LABELS,
     MODES,
+    clearFinder,
     commit,
     correct,
     duel,
+    findTitles,
+    finder,
     load,
     notSeen,
     rate,
+    rateTitle,
     reset,
     revealLine,
     setDecisive,
@@ -103,6 +112,35 @@
     if (rate.booted) load({ quiet: true });
   });
 
+  // "a title you know". Closed by default so the card keeps the phone's vertical budget; the
+  // query waits a beat after the last keystroke, and `findTitles` drops any answer a newer
+  // keystroke has overtaken.
+  let finding = $state(false);
+  let findTimer = null;
+  let findInput = $state(null);
+
+  function toggleFind() {
+    finding = !finding;
+    if (!finding) clearFinder();
+  }
+
+  $effect(() => {
+    if (finding && findInput) findInput.focus();
+  });
+
+  function onFindInput(event) {
+    const value = event.currentTarget.value;
+    finder.q = value;
+    clearTimeout(findTimer);
+    findTimer = setTimeout(() => findTitles(value), 250);
+  }
+
+  async function pick(item) {
+    if (await rateTitle(item)) finding = false;
+  }
+
+  onDestroy(() => clearTimeout(findTimer));
+
   function toggleKind(kind) {
     // §4.1 rule 5 partitions every ranking surface; the empty selection is a 422 rather than
     // "everything", so the last active toggle does not turn off.
@@ -119,10 +157,10 @@
       <RateBlockCounter {block} {kinds} />
     </div>
 
-    <div class="controls" data-nobar>
+    <div class="controls">
       <!-- §6.1's three modes. Mix is where every entry point lands (proposal 36); a mode
            becomes sticky only once the person changes it themselves. -->
-      <div class="group" role="group" aria-label="Mode">
+      <div class="group modes" role="group" aria-label="Mode">
         {#each MODES as [key] (key)}
           <button
             class="pill"
@@ -132,6 +170,24 @@
           >{key}</button>
         {/each}
       </div>
+
+      <!-- "a title you know" (C5.2), beside the modes: on a phone it shares their row, so the
+           kinds and Undo keep one row of their own whatever the chip's words are. -->
+      <button
+        class="pill find"
+        data-testid="rate-find-toggle"
+        aria-label="Find a title you know to rate"
+        aria-expanded={finding}
+        aria-controls="rate-find"
+        onclick={toggleFind}
+      >
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+          stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="8.5" cy="8.5" r="5.5" />
+          <path d="m13 13 4.5 4.5" />
+        </svg>
+        <span class="find-word">find</span>
+      </button>
 
       <!-- Proposal 46: the Rate surface carries the partition control itself, and the counter
            names the active partition. The queue and the battle pool never mix kinds. -->
@@ -149,6 +205,58 @@
       <RateUndo undo={rate.undo} busy={rate.busy} onUndo={undo} />
     </div>
   </header>
+
+  {#if finding}
+    <!-- The person's own pick: a title they know, pinned to the head of the queue and rated
+         on §6.1's card like every other. A title already rated says so and is not offered —
+         the queue never serves one, and a tap that did nothing would be the defect this fixes. -->
+    <section class="find-panel card" id="rate-find" data-testid="rate-find">
+      <input
+        bind:this={findInput}
+        class="find-input"
+        type="search"
+        data-testid="rate-find-input"
+        placeholder="Rate a title you know..."
+        aria-label="Find a title you know to rate"
+        autocomplete="off"
+        value={finder.q}
+        oninput={onFindInput}
+      />
+      {#if finder.error}
+        <p class="why" role="alert" data-testid="rate-find-error">{finder.error}</p>
+      {:else if finder.items.length}
+        <ul class="hits" data-testid="rate-find-results">
+          {#each finder.items as item (item.id)}
+            <li>
+              <button
+                class="hit"
+                data-testid="rate-find-hit"
+                data-title-id={item.id}
+                disabled={!!item.rated || rate.busy}
+                onclick={() => pick(item)}
+              >
+                <span class="hit-name">{item.name}</span>
+                <span class="data">
+                  {[item.year, KIND_LABELS[item.kind] ?? item.kind].filter(Boolean).join(' · ')}
+                </span>
+                {#if item.rated}
+                  <span class="data rated" data-testid="rate-find-rated">
+                    you rated it {item.rated}
+                  </span>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else if finder.searched && !finder.busy}
+        <p class="why" data-testid="rate-find-none">Nothing matches "{finder.searched}".</p>
+      {:else if finder.q.trim().length < FIND_MIN_CHARS}
+        <p class="why" data-testid="rate-find-hint">
+          Type a title you have seen, then tap it to rate it.
+        </p>
+      {/if}
+    </section>
+  {/if}
 
   <!-- §6.8's register: the control says what it is, and one line says what it does. Hanging
        that sentence off each pill's `title` would make it a tooltip no phone can read and
@@ -214,7 +322,7 @@
             <h2>Nothing left to queue</h2>
             <p class="why">{rate.drained.text}</p>
             <p class="why">
-              The §6.3 comparison queue sharpens the boundaries once the tier list has some.
+              "Sharpen my ranking" on the Rank page fine-tunes your tiers from here.
             </p>
             <a class="btn-ghost" data-testid="rate-drained-cta" href="/rank">Go to Rank</a>
           {/if}
@@ -224,7 +332,7 @@
 
     <div class="side">
       <RateClassBalance balance={rate.balance} />
-      <RateRail balance={rate.balance} {mode} />
+      <RateRail balance={rate.balance} {mode} {showModel} />
       {#if showModel}
         <!-- §6.7, per-user toggle, default off. Everything in it describes a write that has
              already landed, which is the only reason it may be shown at all. -->
@@ -270,8 +378,72 @@
     display: flex;
     gap: 6px;
   }
+  .find {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
   .mode-why {
     margin: 0;
+  }
+  .find-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* Tight: a tool strip above the card being rated, and on a phone every pixel it takes is
+       one the card does not get. */
+    padding: var(--card-pad-tight);
+  }
+  .find-panel .why {
+    margin: 0;
+  }
+  .find-input {
+    width: 100%;
+    min-height: var(--touch);
+    padding: 0 12px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-2);
+    background: var(--card-raised);
+    color: var(--ink);
+    font: inherit;
+  }
+  .hits {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .hit {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    width: 100%;
+    min-height: var(--touch);
+    padding: 8px 12px;
+    text-align: left;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .hit:hover:not(:disabled),
+  .hit:focus-visible {
+    border-color: var(--line-2);
+    color: var(--ink);
+  }
+  .hit:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .hit-name {
+    font-weight: 600;
+  }
+  .rated {
+    flex-basis: 100%;
   }
   .banner {
     margin: 0;
@@ -330,8 +502,12 @@
   }
 
   /* The compact layout spends its vertical budget on the card, not on the chrome above it.
-     The controls scroll sideways rather than stacking into three rows — §6 preamble's 48 px
-     targets are non-negotiable, so the row that holds them has to move instead. */
+     It used to scroll the controls sideways under `data-nobar`, so on an iPhone 13 the Series
+     toggle and §6.1's persistent Undo sat off the right edge with nothing showing the row
+     moved -- decision 35's chip "disables visibly" only if it can be seen at all. The row wraps
+     now: the three modes as one segmented control with find beside them, then the kinds and
+     Undo. One more row of 48 px targets (§6 preamble), and nothing out of sight.
+     [C5.6 of the 2026-09-25 household test] */
   @media (max-width: 720px) {
     .rate {
       gap: 10px;
@@ -339,15 +515,33 @@
     h1 {
       font-size: 17px;
     }
+    /* The mode's one-line why moves under the card rather than going: above it, it cost the
+       battle card the row its decisive toggle needed. */
+    .mode-why {
+      order: 5;
+    }
     .controls {
       gap: 8px;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      padding-bottom: 2px;
       width: 100%;
     }
     .group {
       flex: none;
+    }
+    .group.modes {
+      flex: 1 1 250px;
+    }
+    .group.modes .pill {
+      flex: 1;
+    }
+    /* The magnifier alone on a phone: the word is the one thing in that row that can go. */
+    .find {
+      justify-content: center;
+      min-width: var(--touch);
+      padding-left: 0;
+      padding-right: 0;
+    }
+    .find-word {
+      display: none;
     }
   }
 </style>

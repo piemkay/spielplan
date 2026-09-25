@@ -2494,7 +2494,8 @@ def _sweep_card(title: dict[str, Any], *, source: str) -> dict[str, Any]:
         "kind": title["kind"],
         "title_id": title["id"],
         "reason": queue.reason_for(features, source=source, years_out=years_out),
-        "p_seen": None if source == "seed" else queue.p_seen(features),
+        # Decision 490: a seed card carries its P(seen) like every other card.
+        "p_seen": queue.p_seen(features),
         # §13: `source` and `reask_of` are both re-ask markers. They live on the card the
         # server holds and are never projected — see `_public_card`.
         "source": source,
@@ -2578,9 +2579,17 @@ def _ensure_card(s: dict[str, Any], *, head: Sequence[int] = ()) -> dict[str, An
     yet holds two titles, a sweep is served in its place and THE SLOT IS NOT CHANGED — so
     alternation resumes by itself rather than the surface silently becoming Sweep-only.
     """
-    if s["current_card"] is not None:
-        return s
     served = _observed_title_ids(s)
+    if s["current_card"] is not None:
+        # A pin (§6.0's banner, the title card's "Rate it", Rate's search) replaces a stashed
+        # card that is not one of its titles, and lifts the sitting's suppression of the titles it
+        # names -- `rate_session.ensure_card`'s rule, so a pick tried here lands as it does there.
+        if not head or s["current_card"].get("title_id") in head:
+            return s
+        pinned = _draw_sweep(s, exclude=served - set(head), head=head)
+        if pinned is None or pinned["title_id"] not in head:
+            return s
+        return _stash(s, pinned)
     skipped = _skipped_title_ids(s)
     # Decision 200: the type follows the session's MONOTONE observation index, not the slot.
     # Fifteen is odd, so the old slot rule served a sweep at slot 15 and another at slot 1 of
@@ -2809,13 +2818,10 @@ def _prediction(user_id: int, title_id: int, kind: str) -> dict[str, Any]:
     counts = _label_counts(user_id, [kind])
     total = sum(counts)
     if total == 0:
-        return {"available": False, "reason": "no labels of your own to band against yet"}
+        return {"available": False, "reason": rate_session.NO_GUESS_YET}
     cdf = _cdfs(user_id, kind).get(title_id)
     if cdf is None:
-        return {
-            "available": False,
-            "reason": "no fitted ranking for this title yet — rate a few more first",
-        }
+        return {"available": False, "reason": rate_session.NO_GUESS_YET}
     low, high = counts[0] / total, (counts[0] + counts[1]) / total
     guess = 0 if cdf < low else (1 if cdf < high else 2)
     return {
@@ -3203,6 +3209,36 @@ def rate_balance(spielplan_session: str | None = Cookie(default=None)) -> dict[s
     """§5.2's running class balance on its own, for the widget's own poll. Not partitioned by
     kind: §4.1 rule 5 binds surfaces that RANK, and this one ranks nothing."""
     return _class_balance(_rate(_me(spielplan_session)))
+
+
+@app.get("/api/rate/search")
+def rate_search(
+    spielplan_session: str | None = Cookie(default=None),
+    q: str = Query("", max_length=200),
+    limit: int = Query(8, ge=1, le=20),
+) -> dict[str, Any]:
+    """Rate's "a title you know" over the fixture: an exact name first, then a prefix, each hit
+    saying whether the person already rated it. The app's ranking is `rate/search.py`'s."""
+    user = _me(spielplan_session)
+    needle = q.strip().lower()
+    verdicts = _verdicts(user["id"])
+    hits = sorted(
+        (t for t in _catalog() if needle and needle in t["name"].lower()),
+        key=lambda t: (
+            t["name"].lower() != needle, not t["name"].lower().startswith(needle), t["id"]
+        ),
+    )
+    return {
+        "q": q,
+        "items": [
+            {
+                "id": t["id"], "kind": t["kind"], "name": t["name"], "year": t["year"],
+                "runtime_min": t["runtime_min"], "poster_path": None, "is_owned": True,
+                "rated": VERDICT_LABELS[verdicts[t["id"]]] if t["id"] in verdicts else None,
+            }
+            for t in hits[:limit]
+        ],
+    }
 
 
 # --- M2: Home and the model-log rail (§6.0, §6.7, decisions 18 and 117) ------

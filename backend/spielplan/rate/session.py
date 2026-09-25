@@ -54,6 +54,9 @@ log = logging.getLogger("spielplan.rate.session")
 # `ledger_hyperparams.json`, which §4.3 reserves for what the corpus project re-tunes offline.
 BLOCK_SIZE = 15
 
+# Decision 492: Mix starts battling once the person holds one block of live ratings. See `warm_up`.
+MIX_WARMUP_LABELS = BLOCK_SIZE
+
 MODES: tuple[str, ...] = ("mix", "sweep", "battle")
 CardType = Literal["sweep", "battle"]
 Side = Literal["left", "both", "right"]
@@ -80,6 +83,11 @@ BATTLE_SELECTION = "random"
 # own state a matter of honesty, and `cause` travels beside the copy so a client can pick its
 # own heading instead of inferring one. No new session state: the cause is the mode, because the
 # mode is what decided which draws were attempted (see `ensure_card`). [M4.10 finding 20]
+#
+# The pool sentences no longer say "not two of them yet": a band can now be empty of NEW pairs
+# as well as of titles -- `battle.draw` serves no pair the person has already compared, and
+# decision 493 keeps the disliked band out of a first sitting -- so they say what is true in all
+# three cases, and "band" goes with the model's vocabulary (decision 486).
 DRAINED_CAUSES: dict[str, dict[str, str]] = {
     "queue": {
         "cause": "queue",
@@ -91,15 +99,15 @@ DRAINED_CAUSES: dict[str, dict[str, str]] = {
     "pool": {
         "cause": "pool",
         "text": (
-            "A battle compares two titles you have already rated the same way, and there are "
-            "not two of them yet. Rate a few in Sweep and the pairs start arriving."
+            "A battle compares two titles you rated the same way, and there is no new pair to "
+            "compare yet. Rate a few more in Sweep and the pairs start arriving."
         ),
     },
     "both": {
         "cause": "both",
         "text": (
-            "You've rated everything we can queue right now, and no two of your ratings sit in "
-            "the same band, so there is no pair left to compare either."
+            "You've rated everything we can queue right now, and there is no new pair of your "
+            "ratings left to compare either."
         ),
     },
 }
@@ -240,6 +248,26 @@ def card_type_for(mode: str, index: int) -> CardType:
     if mode == "battle":
         return "battle"
     return "sweep" if index % 2 == 0 else "battle"
+
+
+def warm_up(wanted: CardType, *, mode: str, labels: int) -> CardType:
+    """Decision 492: in Mix, no battle until `MIX_WARMUP_LABELS` live ratings stand.
+
+    §6.1's Mix alternated from the second card, so both household members met their first battle
+    on card 4 from a pool of three titles -- one eligible pair, served three times in eight cards --
+    and both switched to Sweep before card 10. A first block of single titles gives the pool
+    something to draw from, and §6.1's "50-100 in the first sitting" counts verdicts anyway.
+
+    It changes the counter's CALL, not the card under it. Written as a marked substitution the
+    warm-up would have printed "a battle was due in this slot" on half of a new member's first
+    fifteen cards and left `serving` saying battle; here the counter says sweep and nothing is
+    marked. Applied over `card_type_for` rather than inside it, so decision 200's alternation is
+    the same pure function of the monotone index from the moment Mix starts battling. Sweep and
+    Battle modes are what the person chose and are left alone.
+    """
+    if mode == "mix" and labels < MIX_WARMUP_LABELS:
+        return "sweep"
+    return wanted
 
 
 def advance(block_index: int, slot: int) -> tuple[int, int]:
@@ -426,11 +454,71 @@ async def _draw_sweep(
     }
 
 
+async def _draw_pinned(
+    conn: asyncpg.Connection, s: RateSession, *, served: Sequence[int], head: Sequence[int]
+) -> dict[str, Any] | None:
+    """A sweep card for the first drawable pinned title, or None.
+
+    The pin lifts this sitting's suppression for the titles it names: a person who skipped a
+    film, then searched for it or tapped "Rate it" on it, has asked for it again, and a pin the
+    queue quietly refused looked exactly like a search that did nothing. `rate.svelte.js` drops a
+    pin from `head` once its card has been served, so an answer to the pinned card -- a skip, a
+    "not seen" -- does not bring the same card straight back.
+    """
+    pinned = set(head)
+    card = await _draw_sweep(
+        conn, s, exclude=[t for t in served if t not in pinned], head=head
+    )
+    return card if card is not None and card["title_id"] in pinned else None
+
+
+async def _admit_pinned_kinds(
+    conn: asyncpg.Connection, s: RateSession, head: Sequence[int]
+) -> RateSession:
+    """A pin of a kind the session does not hold widens the session to hold it.
+
+    Rate's search looks through both kinds and the title card's "Rate it" knows nothing of the
+    session at all, so a films-only session handed a series pin would otherwise keep its card and
+    say nothing. Widening rather than serving across the partition keeps proposal 46's counter
+    naming the partition the card is drawn from, and §4.1 rule 5 is untouched: the queue still
+    ranks inside the selection it is given. Only for a pin the queue could serve -- a rated title
+    is never drawn, so it widens nothing.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT t.kind
+          FROM title t
+         WHERE t.id = ANY($1::int[])
+           AND NOT EXISTS (
+               SELECT 1 FROM verdict v
+                WHERE v.user_id = $2 AND v.title_id = t.id AND NOT v.is_reask
+           )
+        """,
+        [int(t) for t in head],
+        s.user_id,
+    )
+    missing = [r["kind"] for r in rows if r["kind"] not in s.kinds]
+    if not missing:
+        return s
+    return await set_controls(conn, s, kinds=[*s.kinds, *missing])
+
+
+async def _live_labels(conn: asyncpg.Connection, s: RateSession) -> int:
+    """The person's live ratings over the session's kinds: the class-balance widget's own total,
+    so the number the widget shows and the number decisions 492 and 493 test are one number."""
+    return (await balance.class_balance(conn, user_id=s.user_id, kinds=s.kinds)).total
+
+
 async def _draw_battle(
-    conn: asyncpg.Connection, s: RateSession, *, exclude: Sequence[int], rng: Any = None
+    conn: asyncpg.Connection,
+    s: RateSession,
+    *,
+    exclude: Sequence[int],
+    rng: Any = None,
+    labels: int | None = None,
 ) -> dict[str, Any] | None:
     pair = await battle.next_battle_pair(
-        conn, user_id=s.user_id, kinds=s.kinds, exclude=tuple(exclude), rng=rng
+        conn, user_id=s.user_id, kinds=s.kinds, exclude=tuple(exclude), rng=rng, labels=labels
     )
     if pair is None:
         return None
@@ -476,16 +564,28 @@ async def ensure_card(
 
     So an explicit `head` that the stashed card does not satisfy redraws once. It stays
     idempotent, because after the redraw the card *is* one of the named titles; and when none of
-    them can be drawn — all rated already, or none of this session's kinds — the stashed card is
-    kept rather than the surface flickering on every GET.
+    them can be drawn — all rated already, or no such title — the stashed card is kept rather than
+    the surface flickering on every GET.
+
+    Rate's search and the title card's "Rate it" pin through the same `head`, and three things
+    changed for them (C5.2 of the 2026-09-25 household test): a pin of another kind widens the
+    session to it (`_admit_pinned_kinds`), a pin lifts this sitting's suppression of the title
+    (`_draw_pinned`), and a pin is served on an EMPTY table too, before the slot's own draw --
+    the table is empty after every tap, and a battle slot used to spend the pin on a pair.
     """
+    head = tuple(int(t) for t in head)
+    if head:
+        s = await _admit_pinned_kinds(conn, s, head)
     served = await _observed_title_ids(conn, s.id)
-    wanted = card_type_for(s.mode, observation_index(s.block_index, s.slot))
+    labels = await _live_labels(conn, s)
+    wanted = warm_up(
+        card_type_for(s.mode, observation_index(s.block_index, s.slot)), mode=s.mode, labels=labels
+    )
     if s.current_card is not None:
-        if not head or s.current_card.get("title_id") in tuple(head):
+        if not head or s.current_card.get("title_id") in head:
             return s
-        replacement = await _draw_sweep(conn, s, exclude=served, head=head)
-        if replacement is None or replacement["title_id"] not in tuple(head):
+        replacement = await _draw_pinned(conn, s, served=served, head=head)
+        if replacement is None:
             return s
         # The banner's redraw is a sweep whatever the counter called for, so it is a
         # substitution exactly as much as the thin-pool one below is, and it said so nowhere.
@@ -494,10 +594,15 @@ async def ensure_card(
             conn, s, _mark_substitution(replacement, instead_of=wanted)
         )
 
+    if head:
+        pinned = await _draw_pinned(conn, s, served=served, head=head)
+        if pinned is not None:
+            return await _stash_if_empty(conn, s, _mark_substitution(pinned, instead_of=wanted))
+
     skipped = await _skipped_title_ids(conn, s.id)
     card: dict[str, Any] | None = None
     if wanted == "battle":
-        card = await _draw_battle(conn, s, exclude=skipped, rng=rng)
+        card = await _draw_battle(conn, s, exclude=skipped, rng=rng, labels=labels)
         if card is None and s.mode != "battle":
             card = _mark_substitution(
                 await _draw_sweep(conn, s, exclude=served, head=head), instead_of=wanted
@@ -508,7 +613,8 @@ async def ensure_card(
             # §6.1's drained state: the queue is spent but the ratings already given can still
             # be sharpened against each other.
             card = _mark_substitution(
-                await _draw_battle(conn, s, exclude=skipped, rng=rng), instead_of=wanted
+                await _draw_battle(conn, s, exclude=skipped, rng=rng, labels=labels),
+                instead_of=wanted,
             )
     return await _stash_if_empty(conn, s, card)
 
@@ -520,18 +626,17 @@ def _mark_substitution(
 
     Three sites stash a card of the other type and only one of them marked it: the thin-pool
     substitution did, while `ensure_card`'s banner redraw and both of `_redraw_pair`'s fallbacks
-    did not. `public_card` ships `substituted_for` and `RateSweepCard.svelte` is the sentence
-    that explains why a battle slot is showing a sweep ("a battle was due in this slot"), so an
-    unmarked substitution is a surface that changed the question and said nothing — while the
-    payload's own `serving` went on naming the type the counter wanted. One rule, applied at
-    every flip, so the three sites cannot drift again.
+    did not. `public_card` ships `substituted_for`, so an unmarked substitution was a payload
+    that changed the question and said nothing — while its own `serving` went on naming the type
+    the counter wanted. One rule, applied at every flip, so the three sites cannot drift again.
 
-    The field carries the TYPE and no cause, and the client's sentence states no cause either:
-    these three sites have three different ones (a thin pool, §6.0's pinned head, an emptied
-    verdict band) and the marker cannot tell them apart. The sentence named the thin pool while
-    that was the only marked site, and marking the other two made it false where the pool can be
-    demonstrably full — §6.8's honesty, so the claim went rather than the marker.
-    [M4.10 finding 21, cycle 1 M410-D8-07]
+    The field carries the TYPE and no cause: these three sites have three different ones (a thin
+    pool, §6.0's pinned head, an emptied verdict band) and the marker cannot tell them apart. The
+    sweep card no longer prints a sentence off it at all -- "a battle was due in this slot" was
+    the block machine talking to a member (decision 486) -- and the battle card's line names the
+    one cause a battle can stand in for, a drained sweep queue. The marker stays on the wire for
+    the payload's own consistency, which `serving` relies on. [M4.10 finding 21, cycle 1
+    M410-D8-07; C4.5 of the 2026-09-25 household test]
     """
     if card is not None and card["type"] != instead_of:
         card["substituted_for"] = instead_of
@@ -655,7 +760,18 @@ async def _stash_if_empty(
     return _session(current)
 
 
-_TITLE_COLUMNS = "id, kind, name, year, runtime_min, poster_path, overview"
+# `overview_is_mpst`: whether the overview IS the title's MPST synopsis. On v20260925 that is 965
+# titles, 25 of them on the seed list, and exactly the titles whose only plot source is MPST.
+_TITLE_CARDS = """
+SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.overview,
+       EXISTS (
+           SELECT 1 FROM title_meta m
+            WHERE m.title_id = t.id AND m.source = 'mpst'
+              AND btrim(m.payload->>'plot_full') = btrim(t.overview)
+       ) AS overview_is_mpst
+  FROM title t
+ WHERE t.id = ANY($1::int[])
+"""
 
 
 async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int, dict[str, Any]]:
@@ -665,9 +781,7 @@ async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int
     `user_score` is not joined, and `title.placement` — the §8 stage-10 cold badge — is not
     read, because a badge that says "no crowd data yet" is still a statement about the model.
     """
-    rows = await conn.fetch(
-        f"SELECT {_TITLE_COLUMNS} FROM title WHERE id = ANY($1::int[])", list(ids)
-    )
+    rows = await conn.fetch(_TITLE_CARDS, list(ids))
     return {
         r["id"]: {
             "id": r["id"],
@@ -676,9 +790,14 @@ async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int
             "year": r["year"],
             "runtime_min": r["runtime_min"],
             "poster_path": r["poster_path"],
-            # §6.1's task on a sweep card is "did you see this?", so the aid is a plot
-            # logline. Never "cleaned" — §4.1 rule 8.
-            "recall_aid": _recall_aid(r["overview"]),
+            # §6.1's task on a sweep card is "did you see this?", so the aid is a plot logline --
+            # and never an MPST synopsis. Those are full retellings, ending included (the reason
+            # `importer/meta.py` ranks the source last), some opening with an IMDb user's
+            # editorial note: The Grudge's aid read "The film begins with the suicide of Peter,
+            # and ends with Karen in the hospital". A card with no aid still asks its question;
+            # a card that spoils the film answers it. §4.1 rule 8 is about non-ASCII text and
+            # has nothing to say here. [C9.2 of the 2026-09-25 household test]
+            "recall_aid": None if r["overview_is_mpst"] else _recall_aid(r["overview"]),
         }
         for r in rows
     }
@@ -749,6 +868,10 @@ async def public_card(
 
 
 # --- the reveal, which happens only after the tap ------------------------------------------
+
+# Proposal 153's suppressed reveal, in the member register (decision 486): both reasons it can be
+# dark -- no fit yet, no labels to band against -- have one remedy, and that is what it says.
+NO_GUESS_YET = "no guess yet - rate a few more first"
 
 
 async def _predicted_coordinate(
@@ -836,10 +959,9 @@ async def predicted_class(
             conn, user_id=user_id, title_id=title_id, kind=kind, hp=hp, embeddings=embeddings
         )
         if coordinate is None:
-            return {
-                "available": False,
-                "reason": "no fitted ranking for this title yet — rate a few more first",
-            }
+            # Decision 486: "fitted ranking" and "labels" are the model's nouns; the member is
+            # told what they can do about it.
+            return {"available": False, "reason": NO_GUESS_YET}
         predicted_s, predicted_cdf = coordinate
     else:
         predicted_s, predicted_cdf = float(row["s"]), float(row["cdf"])
@@ -858,7 +980,7 @@ async def predicted_class(
         counts[label["value"]] = label["n"]
     total = sum(counts)
     if total == 0:
-        return {"available": False, "reason": "no labels of your own to band against yet"}
+        return {"available": False, "reason": NO_GUESS_YET}
 
     cdf = predicted_cdf
     low = counts[0] / total
@@ -875,15 +997,35 @@ async def predicted_class(
 
 
 def reveal_for(prediction: dict[str, Any], value: int) -> dict[str, Any]:
-    """§6.1's phrasing: "we'd have guessed the same" / "we'd have guessed {class}", with the
-    number in the data voice beside its name (§6.8)."""
+    """§6.1's phrasing: "we'd have guessed the same" / "we'd have guessed {class}".
+
+    The sentence carries no number any more. §6.1 mandates only the phrasing; the " · cdf 0.71"
+    beside it rested on proposal 42's example, which is provenance, and decisions 486 and 491 put
+    the model's numbers behind Show the model -- where `viewer_reveal` adds it back in the data
+    voice beside its name (§6.8).
+    """
     if not prediction.get("available"):
         return dict(prediction)
     agreed = prediction["predicted"] == value
     head = "we'd have guessed the same" if agreed else (
         f"we'd have guessed {prediction['predicted_label']}"
     )
-    return {**prediction, "agreed": agreed, "text": f"{head} · cdf {prediction['cdf']:.2f}"}
+    return {**prediction, "agreed": agreed, "text": head}
+
+
+# The reveal's model quantities: the displayed weight, the coordinate and the band's support.
+_REVEAL_NUMBERS = ("cdf", "s", "label_count")
+
+
+def viewer_reveal(reveal: dict[str, Any] | None, *, show_model: bool) -> dict[str, Any] | None:
+    """The reveal as one viewer may see it: decisions 486 and 491, gated where the payload is
+    built so a member with the switch off is SENT no model number rather than sent one to hide.
+    The guessed class stays either way -- it is §6.1's whole reveal."""
+    if reveal is None or not reveal.get("available"):
+        return reveal
+    if not show_model:
+        return {key: value for key, value in reveal.items() if key not in _REVEAL_NUMBERS}
+    return {**reveal, "text": f"{reveal['text']} · cdf {reveal['cdf']:.2f}"}
 
 
 # --- §7.3's push, and its symmetric retraction ----------------------------------------------
@@ -1578,7 +1720,15 @@ async def _redraw_pair(
         kinds=[card["kind"]],
         exclude=tuple(sorted(exclude | {survivor})),
     )
-    band = sorted(m.title_id for m in pool if m.verdict_class == card["verdict_class"])
+    # Not an opponent the survivor has already been compared with: the repaired pair is a draw
+    # like any other, and `battle.draw`'s no-repeat rule holds here too.
+    answered = await battle.answered_pairs(conn, user_id=s.user_id, kinds=[card["kind"]])
+    band = sorted(
+        m.title_id
+        for m in pool
+        if m.verdict_class == card["verdict_class"]
+        and frozenset((survivor, m.title_id)) not in answered
+    )
     if band:
         opponent = (rng or random).choice(band)
         keep_left = survivor == card["title_a"]
@@ -1845,7 +1995,14 @@ async def payload(
                 # weighed and refused: it would make the field a second spelling of `card.type` and
                 # leave the counter's call nowhere, and `ops/devstub.py` mirrors this definition on
                 # purpose. [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
-                "serving": card_type_for(s.mode, observation_index(s.block_index, s.slot)),
+                #
+                # Decision 492's warm-up is part of the call, over the same label count
+                # `ensure_card` drew under, so a new member's counter reads sweep and not battle.
+                "serving": warm_up(
+                    card_type_for(s.mode, observation_index(s.block_index, s.slot)),
+                    mode=s.mode,
+                    labels=shares.total,
+                ),
             },
         },
         "card": card,
@@ -1856,7 +2013,9 @@ async def payload(
         # by `balance`'s own projection, so the widget's copy and its threshold have one home.
         "class_balance": shares.as_dict(),
         "undo": await undo_availability(conn, s),
-        "reveal": reveal,
+        "reveal": reveal if user is None else viewer_reveal(
+            reveal, show_model=rail.visible_to(user)
+        ),
         "ledger": ledger,
         # §6.7's rail. Also recorded above, into the ephemeral buffer §6.7 asks for; the
         # response carries them too so the client can show the line for the tap just made
@@ -1866,7 +2025,8 @@ async def payload(
     # Decision 117: with the toggle off the rail and every inline number are ABSENT, not hidden.
     # Same gate as §6.0's Home, so one preference cannot mean two things on two surfaces — and a
     # surface that shipped the numbers and let the client hide them would make the promise
-    # cosmetic. `reveal` survives: §6.1 requires the prediction after the tap.
+    # cosmetic. `reveal` survives: §6.1 requires the prediction after the tap -- its guessed
+    # class, which is §6.1's; its numbers went with `viewer_reveal` above (decision 491).
     return rail.redact(body, show_model=rail.visible_to(user)) if user is not None else body
 
 
@@ -1883,6 +2043,8 @@ __all__ = [
     "advance",
     "card_type_for",
     "drained_for",
+    "viewer_reveal",
+    "warm_up",
     "end_session",
     "ensure_card",
     "observation_index",

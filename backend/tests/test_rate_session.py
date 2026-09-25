@@ -127,6 +127,33 @@ async def rated(db, world):
     return world
 
 
+async def rated_elsewhere(db, user_id: int, ids, value: int) -> None:
+    """Live labels on titles outside the sweep queue's twenty — rated already, so never served.
+
+    Decision 492 holds Mix's battles back until one block of ratings stands, so a test about
+    Mix's alternation needs fifteen labels without spending the queue it is about to walk.
+    """
+    await db.execute(
+        """
+        INSERT INTO title (id, kind, name, is_owned, overview)
+        SELECT x, 'movie', 'Rated ' || x, true, 'A film about ' || x FROM unnest($1::int[]) x
+        ON CONFLICT (id) DO NOTHING
+        """,
+        list(ids),
+    )
+    for title_id in ids:
+        await label(db, user_id, title_id, value)
+
+
+@pytest.fixture
+async def warm(db, rated):
+    """`rated`, holding a block of ratings: the four liked titles plus eleven disliked ones, so
+    Mix battles from its second slot (decision 492) and every pair still comes from the liked
+    four -- a first sitting leaves the disliked band out of its battles (decision 493)."""
+    await rated_elsewhere(db, rated["user"], range(21, 32), 0)
+    return rated
+
+
 async def open_session(db, user_id, *, mode="mix", kinds=("movie",)) -> session.RateSession:
     s = await session.open_or_resume(db, user_id=user_id, kinds=list(kinds))
     if mode != "mix":
@@ -179,12 +206,17 @@ async def test_mix_alternates_on_the_counter_and_not_on_the_last_card_served(db,
 
     The sequence is chosen so that "flip from the slot" and "flip from the last card served"
     disagree. At slot 2 the counter calls for a battle and the person has exactly one rated
-    title, so no pair exists and a sweep is substituted — the slot is untouched, which the
-    payload says out loud (`substituted_for: 'battle'`). At slot 3 the counter calls for a
-    sweep again. An implementation that flipped off the last card served would hand back a
-    battle there; this asserts a sweep, and that the substitution marker is gone.
+    title in a band a first sitting may draw from, so no pair exists and a sweep is substituted
+    — the slot is untouched, which the payload says out loud (`substituted_for: 'battle'`). At
+    slot 3 the counter calls for a sweep again. An implementation that flipped off the last card
+    served would hand back a battle there; this asserts a sweep, and that the marker is gone.
+
+    The person holds a block of disliked ratings first: decision 492 lets Mix battle only past
+    fifteen live ratings, and decision 493 keeps those fifteen out of the pairs, so the pool is
+    thin in exactly the way the slot-2 substitution needs.
     """
     user = world["user"]
+    await rated_elsewhere(db, user, range(21, 36), 0)
     s = await open_session(db, user)
     assert s.slot == 1
     assert s.current_card["type"] == "sweep"
@@ -208,13 +240,14 @@ async def test_mix_alternates_on_the_counter_and_not_on_the_last_card_served(db,
     assert s.current_card["type"] == "battle", "three titles in one class is a pool"
 
 
-async def test_a_run_of_duels_still_returns_sweep_cards(db, rated):
+async def test_a_run_of_duels_still_returns_sweep_cards(db, warm):
     """§6.1, and the prototype bug proposal 36 names: the queue index advanced only on a
     verdict, so a Mix session that reached an odd slot never came back from battles.
 
-    Four duels in a row, and the sweep cards keep arriving between them.
+    Four duels in a row, and the sweep cards keep arriving between them. `warm`, because
+    decision 492 holds Mix's battles until a block of ratings stands.
     """
-    user = rated["user"]
+    user = warm["user"]
     s = await open_session(db, user)
     served: list[str] = []
     for _ in range(6):
@@ -231,7 +264,7 @@ async def test_a_run_of_duels_still_returns_sweep_cards(db, rated):
     ) == 3, "every battle slot wrote its duel"
 
 
-async def test_mix_keeps_alternating_across_the_block_roll(db, rated):
+async def test_mix_keeps_alternating_across_the_block_roll(db, warm):
     """§6.1's "alternates sweep and battle" over "blocks of 15", asserted AT the roll.
 
     Fifteen is odd. A type derived from the slot therefore made slot 15 a sweep and the next
@@ -244,8 +277,9 @@ async def test_mix_keeps_alternating_across_the_block_roll(db, rated):
     Sixteen taps through the real taps rather than through `card_type_for`, because the claim is
     about what the surface serves: the pool grows as the sweeps are answered, so every battle
     slot has a pair and no substitution can stand in for the card under test. [decision 200]
+    `warm` holds a block of ratings already, which is where decision 492 lets Mix battle from.
     """
-    s = await open_session(db, rated["user"])
+    s = await open_session(db, warm["user"])
     served: list[str] = []
     for _ in range(16):
         card = s.current_card
@@ -374,7 +408,7 @@ async def test_the_empty_state_names_the_pool_that_is_empty_rather_than_claiming
         assert body["drained"]["text"].isascii(), body["drained"]["text"]
 
 
-async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db, rated):
+async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db, warm):
     """§6.1's substitution rule: "the slot is not changed", so the payload has to say why the
     card in front of the person is not the type the counter names.
 
@@ -384,12 +418,15 @@ async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db,
     disappeared and the payload contradicted itself: `serving` said battle over an unmarked sweep
     card. [M4.10 finding 21]
     """
-    user = rated["user"]
+    user = warm["user"]
     s = await open_session(db, user)
     assert s.current_card["type"] == "sweep" and s.current_card.get("substituted_for") is None
 
     # 1. The thin-pool substitution, which always worked — the guard that this stayed marked.
+    #    A block of disliked ratings puts the lonely member past decision 492's warm-up while
+    #    decision 493 keeps every one of them out of a first sitting's pairs.
     lonely = await make_user(db, "lonely", "member")
+    await rated_elsewhere(db, lonely, range(21, 36), 0)
     thin = await open_session(db, lonely)
     thin = (await session.record_verdict(db, thin, card_token=token(thin), value=2, hp=HP)).session
     assert thin.slot == 2 and thin.current_card["type"] == "sweep"
@@ -425,7 +462,7 @@ async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db,
     assert repaired["substituted_for"] == "battle"
 
 
-async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_call(db, rated):
+async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_call(db, warm):
     """The one flip no draw-time marker can see, pinned so the payload's promise stays the truth.
 
     `_mark_substitution` marks a flip at the moment a card is DRAWN, which covers all three draws
@@ -442,7 +479,7 @@ async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_ca
     spelling of `card.type`, which would leave the counter's call nowhere and drift from
     `ops/devstub.py`'s mirror of the same definition. [M4.10 finding 21, cycle 1 M410-D8-03]
     """
-    user = rated["user"]
+    user = warm["user"]
     s = await open_session(db, user)
     s = (await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP)).session
     assert s.slot == 2 and s.current_card["type"] == "battle", "slot 2 of block 0 is a battle"
@@ -548,7 +585,14 @@ async def test_the_sweep_card_carries_no_model_belief_and_the_reveal_arrives_wit
     assert out.reveal["predicted"] in (0, 1, 2)
     assert out.reveal["cdf"] == pytest.approx(MARKER_CDF)
     assert out.reveal["text"].startswith("we'd have guessed")
-    assert "cdf 0.91" in out.reveal["text"], "§6.8: the number appears beside its name"
+    # Decision 491: the number rides beside its name (§6.8) for a viewer with Show the model on,
+    # and a member with it off is sent the guessed class and no number at all.
+    modelled = session.viewer_reveal(out.reveal, show_model=True)
+    assert "cdf 0.91" in modelled["text"], "§6.8: the number appears beside its name"
+    member = session.viewer_reveal(out.reveal, show_model=False)
+    assert member["text"] == out.reveal["text"] and "cdf" not in member["text"]
+    assert {"cdf", "s", "label_count"}.isdisjoint(member)
+    assert member["predicted_label"] == out.reveal["predicted_label"]
     # And the card that comes back with it is still clean.
     assert_no_model_belief(await session.public_card(db, out.session))
 
@@ -1440,7 +1484,10 @@ async def test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo
     assert first["card"]["type"] == "sweep"
     assert first["undo"] == {"available": False, "kind": None, "reason": "empty"}
     assert first["class_balance"]["counts"] == [0, 0, 4]
-    assert first["class_balance"]["warn"] is True, "4 of 4 liked is past the 60% line"
+    # 4 of 4 liked is past the 60% line, and four labels are not yet a habit: decision 491
+    # arms the warning at fifteen and says so on the wire.
+    assert first["class_balance"]["warn"] is False
+    assert first["class_balance"]["arms_at"] == 15
     assert_no_model_belief(first["card"])
     assert str(MARKER_CDF) not in json.dumps(first["card"])
     assert first["reveal"] is None
@@ -1723,22 +1770,26 @@ async def test_the_banner_cta_serves_a_named_title_even_over_a_standing_session(
 
 
 async def test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone(db, rate_client):
-    """The other half: if none of the named titles can be served — already rated, or not of this
-    session's kinds — the surface must keep the card it has rather than redrawing on every GET.
-    A head that never matches would otherwise make the card a moving target, which is what the
-    idempotency exists to prevent."""
+    """The other half: if none of the named titles can be served — already rated, or no such
+    title — the surface must keep the card it has rather than redrawing on every GET. A head
+    that never matches would otherwise make the card a moving target, which is what the
+    idempotency exists to prevent.
+
+    A title of the other kind used to be the third case. It is not any more: a pin now widens the
+    session to its kind (`test_a_pin_of_the_other_kind_widens_the_session_to_serve_it`), because
+    Rate's search and the title card's "Rate it" pin titles of either kind."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 5)])
     await make_titles(db, [(90, "series", "A Series")])
     await label(db, user_id, 3, 2)
-    # Films only, so the series below is genuinely out of this session's reach rather than a
-    # title the queue would happily have served.
+    await label(db, user_id, 90, 1)
     await client.post("/api/rate/session", json={"kinds": ["movie"]})
 
     standing = (await client.get("/api/rate")).json()["card"]
     for absent in (3, 90, 12345):
-        held = (await client.get("/api/rate", params=[("head", absent)])).json()["card"]
-        assert held["token"] == standing["token"], f"head={absent} should not have redrawn"
+        held = (await client.get("/api/rate", params=[("head", absent)])).json()
+        assert held["card"]["token"] == standing["token"], f"head={absent} should not have redrawn"
+        assert held["session"]["kinds"] == ["movie"], "a pin nobody can serve widens nothing"
 
 
 async def test_a_correction_repairs_the_pair_from_the_survivors_own_band(db, rate_client):
@@ -2710,7 +2761,186 @@ async def test_the_balance_route_serves_the_widgets_own_poll(db, rate_client):
     assert answered.status_code == 200
     balance = answered.json()
     assert balance["counts"] == [1, 0, 5]
-    assert balance["warn"] is True, "5 of 6 liked is past §5.2's 60% line"
+    assert balance["warn"] is False, "5 of 6 liked is past the 60% line, under decision 491's 15"
+    assert balance["arms_at"] == 15
     assert balance == (await client.get("/api/rate")).json()["class_balance"], (
         "the widget's poll and the envelope must not be able to disagree"
     )
+
+
+# --- the 2026-09-25 household test: a first sitting, a title you know, and plain words --------
+
+
+async def test_mix_serves_single_titles_until_a_block_of_ratings_stands(db, world):
+    """Decision 492. Mix alternated from the second card, so both household members met their
+    first battle on card 4 from a pool of three titles -- one eligible pair, served three times --
+    and both switched to Sweep before card 10.
+
+    The warm-up changes the counter's CALL rather than marking a substitution: a marked one would
+    have printed "a battle was due in this slot" on half of a new member's first fifteen cards and
+    left `serving` saying battle. So every card here is an unmarked sweep under `serving: sweep`,
+    and the sixteenth -- index 15, odd, with fifteen ratings standing -- is a battle.
+    """
+    user = world["user"]
+    s = await open_session(db, user)
+    for n in range(session.MIX_WARMUP_LABELS):
+        assert s.current_card["type"] == "sweep", f"card {n + 1} of a first block"
+        assert s.current_card.get("substituted_for") is None, "a warm-up is not a substitution"
+        body = await session.payload(db, s)
+        assert body["session"]["block"]["serving"] == "sweep", n
+        s = (
+            await session.record_verdict(
+                db, s, card_token=token(s), value=(2, 1)[n % 2], hp=HP
+            )
+        ).session
+
+    assert (s.block_index, s.slot) == (1, 1)
+    body = await session.payload(db, s)
+    assert body["class_balance"]["total"] == session.MIX_WARMUP_LABELS
+    assert body["session"]["block"]["serving"] == "battle", "decision 200's alternation resumes"
+    assert s.current_card["type"] == "battle"
+    assert s.current_card.get("substituted_for") is None
+
+
+async def test_the_warm_up_is_mixes_alone(db, rated):
+    """Decision 492 holds back the battles Mix would have chosen; Battle mode is what the person
+    chose, and four ratings in one band are a pair."""
+    s = await open_session(db, rated["user"], mode="battle")
+    assert s.current_card["type"] == "battle"
+    assert session.warm_up("battle", mode="battle", labels=0) == "battle"
+    assert session.warm_up("battle", mode="mix", labels=14) == "sweep"
+    assert session.warm_up("battle", mode="mix", labels=15) == "battle"
+    assert session.warm_up("sweep", mode="mix", labels=0) == "sweep"
+
+
+async def test_a_pin_is_served_on_an_empty_table_even_where_a_battle_was_due(db, warm):
+    """C5.2. Every tap ends by drawing the next card on an empty table, and the pin used to win
+    only over a card already stashed: in Mix a battle slot spent a "Rate it" or a search pick on
+    a pair, and the client carried the pin on to the tap after. A pin now leads whatever the slot
+    called for, marked as the substitution it is."""
+    user = warm["user"]
+    s = await open_session(db, user)
+    assert s.current_card["type"] == "sweep" and s.current_card["title_id"] != 9
+    s = (
+        await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP, head=[9])
+    ).session
+    assert s.slot == 2, "slot 2 is a battle slot for a person holding a block of ratings"
+    assert s.current_card["type"] == "sweep" and s.current_card["title_id"] == 9
+    assert s.current_card["source"] == "pinned"
+    assert s.current_card["substituted_for"] == "battle"
+
+
+async def test_a_pin_lifts_this_sittings_skip_and_an_earlier_not_seen(db, world):
+    """C5.2. A person who skipped a film, or once said they had not seen it, and then searched for
+    it has asked for it again: the pin re-opens both. It re-opens nothing else -- a rated title
+    stays out (`test_rate_queue.py::test_a_pinned_title_is_served_even_after_a_not_seen_answer`)."""
+    user = world["user"]
+    s = await open_session(db, user, mode="sweep")
+    skipped = s.current_card["title_id"]
+    s = (await session.record_skip(db, s, card_token=token(s))).session
+    not_seen = s.current_card["title_id"]
+    s = (await session.record_not_seen(db, s, card_token=token(s))).session
+    assert s.current_card["title_id"] not in (skipped, not_seen)
+
+    s = await session.ensure_card(db, s, head=[skipped])
+    assert s.current_card["title_id"] == skipped
+    s = (await session.record_verdict(db, s, card_token=token(s), value=1, hp=HP)).session
+
+    s = await session.ensure_card(db, s, head=[not_seen])
+    assert s.current_card["title_id"] == not_seen
+    assert s.current_card["reason"] == "queued because: you picked it"
+
+
+async def test_a_pin_of_the_other_kind_widens_the_session_to_serve_it(db, rate_client):
+    """Rate's search looks through both kinds and the title card's "Rate it" knows nothing of
+    the session, so a films-only session handed a series pin kept its card and said nothing. It
+    widens to take the pin instead, which keeps proposal 46's counter naming the partition the
+    card is drawn from; a pin nobody can serve widens nothing
+    (`test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone`)."""
+    client, _user_id = rate_client
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 5)])
+    await make_titles(db, [(90, "series", "A Series")])
+    await client.post("/api/rate/session", json={"kinds": ["movie"]})
+    assert (await client.get("/api/rate")).json()["card"]["title"]["id"] != 90
+
+    body = (await client.get("/api/rate", params=[("head", 90)])).json()
+    assert body["card"]["title"]["id"] == 90
+    assert sorted(body["session"]["kinds"]) == ["movie", "series"]
+
+
+async def test_the_search_finds_a_title_and_its_pick_is_rated_on_the_card(db, rate_client):
+    """C5.2, through the routes a person taps: `GET /api/rate/search` finds a film they know,
+    choosing it pins it (`head=`), and the verdict is given on §6.1's card under its token --
+    even for a film they once answered "not seen". Afterwards the search says it is rated."""
+    client, user_id = rate_client
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
+    await make_titles(db, [(40, "movie", "Dunkirk")])
+    await observations.record_not_seen(db, user_id=user_id, title_id=40)
+
+    empty = await client.get("/api/rate/search", params={"q": ""})
+    assert empty.status_code == 200 and empty.json()["items"] == []
+
+    found = (await client.get("/api/rate/search", params={"q": "dunk"})).json()
+    assert [h["id"] for h in found["items"]] == [40]
+    assert found["items"][0]["rated"] is None
+
+    card = (await client.get("/api/rate", params=[("head", 40)])).json()["card"]
+    assert card["type"] == "sweep" and card["title"]["id"] == 40
+    assert card["reason"] == "queued because: you picked it"
+    answered = await client.post(
+        "/api/rate/verdict", json={"card_token": card["token"], "value": 2, "head": [40]}
+    )
+    assert answered.status_code == 200
+    assert answered.json()["card"]["title"]["id"] != 40, "a rated pin is not served again"
+
+    after = (await client.get("/api/rate/search", params={"q": "dunk"})).json()["items"]
+    assert after[0]["rated"] == "liked"
+
+
+async def test_the_reveal_carries_its_number_only_behind_show_the_model(db, rate_client):
+    """Decisions 486 and 491: "we'd have guessed the same" is §6.1's reveal; the " · cdf 0.91"
+    beside it is the model's number, so it reaches a member only with Show the model on -- and
+    is gated where the payload is built, so a member with the switch off is not SENT it."""
+    client, user_id = rate_client
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
+    await seed_ledger(db, user_id, range(1, 9))
+    for title_id in (1, 2, 3, 4):
+        await label(db, user_id, title_id, 2)
+
+    first = (await client.get("/api/rate")).json()["card"]
+    body = (
+        await client.post("/api/rate/verdict", json={"card_token": first["token"], "value": 2})
+    ).json()
+    reveal = body["reveal"]
+    assert reveal["available"] is True
+    assert reveal["text"].startswith("we'd have guessed")
+    assert not re.search(r"\d", reveal["text"]), reveal["text"]
+    assert {"cdf", "s", "label_count"}.isdisjoint(reveal), reveal
+    assert str(MARKER_CDF) not in json.dumps(body)
+
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    second = body["card"]
+    assert second["type"] == "sweep", "five ratings: Mix is still in decision 492's warm-up"
+    body = (
+        await client.post("/api/rate/verdict", json={"card_token": second["token"], "value": 1})
+    ).json()
+    assert re.search(r" · cdf \d\.\d\d$", body["reveal"]["text"]), body["reveal"]["text"]
+    assert body["reveal"]["cdf"] == pytest.approx(MARKER_CDF)
+
+
+async def test_the_recall_aid_never_shows_an_mpst_synopsis(db, world):
+    """C9.2. An MPST synopsis is a full retelling, ending included, and some open with an IMDb
+    user's editorial note: The Grudge's sweep card read "The film begins with the suicide of
+    Peter, and ends with Karen in the hospital". Where the overview IS the title's MPST text the
+    card goes without an aid; an overview from any other source keeps it."""
+    spoiler = "The film begins with the suicide of Peter, and ends with Karen in the hospital."
+    await db.execute("UPDATE title SET overview = $1 WHERE id = 7", spoiler)
+    await db.execute(
+        "INSERT INTO title_meta (title_id, source, payload) VALUES "
+        "(7, 'mpst', jsonb_build_object('plot_full', $1::text)), "
+        "(6, 'mpst', jsonb_build_object('plot_full', 'a longer retelling nobody resolved'))",
+        "  " + spoiler + "  ",
+    )
+    cards = await session._title_cards(db, [6, 7])
+    assert cards[7]["recall_aid"] is None
+    assert cards[6]["recall_aid"] == "A film about Title 6", "a non-MPST overview keeps its aid"

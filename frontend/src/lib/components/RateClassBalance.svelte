@@ -9,9 +9,10 @@
    *      "about five times more" is §5.2's lever written down. Paraphrasing it — or rebuilding
    *      the sentence here from `heaviest` and a template — changes a measurement into a
    *      slogan, so this renders the string it was given and never composes one.
-   *   2. **The threshold is the server's too.** The widget shows `threshold` rather than a
-   *      hard-coded 60%, so if the number is ever re-measured there is exactly one place it
-   *      lives (`rate.balance.WARN_SHARE`) and this surface follows it.
+   *   2. **The thresholds are the server's too.** The 60% line and decision 491's fifteen-rating
+   *      floor both live in `rate/balance.py`; this renders `arms_at` rather than a literal, so a
+   *      re-measured number has exactly one home. The "warn > 60% of your running distribution"
+   *      caption went with decision 486: it was the model's working, printed for a member.
    *
    * Proposal 43 ("phone-first means the rail is not optional") asks for the widget to collapse
    * to a three-segment bar on phones. It does — but only the per-class counts fold away. The
@@ -19,7 +20,7 @@
    * and hiding it behind a tap on the form factor most of the labelling happens on would drop
    * exactly the thing §5.2 asked the UI to say.
    */
-  import { sharePct } from '$lib/rate.svelte.js';
+  import { ratingsLabel, sharePct } from '$lib/rate.svelte.js';
 
   let { balance } = $props();
 
@@ -29,7 +30,8 @@
   const counts = $derived(balance?.counts ?? [0, 0, 0]);
   const shares = $derived(balance?.shares ?? [0, 0, 0]);
   const total = $derived(balance?.total ?? 0);
-  const threshold = $derived(sharePct(balance?.threshold ?? 0.6));
+  // Decision 491: the check waits for one block of ratings, and says so instead of going quiet.
+  const armsAt = $derived(balance?.arms_at ?? 0);
   // Presentation only: worst → best, left to right, matching the stored ordinal (proposal 52).
   const TONE = ['low', 'mid', 'high'];
 </script>
@@ -41,8 +43,8 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <span class="eyebrow">CLASS BALANCE</span>
-    <span class="data" data-testid="rate-balance-total">{total} labels</span>
+    <span class="eyebrow">YOUR MIX</span>
+    <span class="data" data-testid="rate-balance-total">{ratingsLabel(total)}</span>
   </button>
 
   <div class="bar" role="img" aria-label={labels.map((l, i) => `${l} ${counts[i]}`).join(', ')}>
@@ -69,8 +71,9 @@
   {#if balance?.warn && balance?.copy}
     <!-- Rendered exactly as sent. The sentence is a measurement, not a message. -->
     <p class="warn why" role="status" data-testid="rate-balance-warning">{balance.copy}</p>
-    <p class="data" data-testid="rate-balance-threshold">
-      warn &gt; {threshold}% of your running distribution
+  {:else if armsAt && total < armsAt}
+    <p class="why arming" data-testid="rate-balance-arming">
+      A balance check starts at {armsAt} ratings.
     </p>
   {/if}
 </section>
@@ -155,6 +158,9 @@
      which is how §6.8's prose register came to wear the data face on the surface that argues
      hardest for being read: this copy is, by this component's own docstring, the single largest
      lever a labeller has. [§6.8; decision 275] */
+  .arming {
+    margin: 2px 0 0;
+  }
   .warn {
     margin: 2px 0 0;
     padding: 9px 10px;

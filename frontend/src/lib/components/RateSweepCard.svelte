@@ -15,8 +15,9 @@
    * shape; the two facts that are, are the two that get rendered.
    *
    * After the tap, and only then, the reveal replaces the verdict strip (proposal 42), phrased
-   * by the server ("we'd have guessed the same · cdf 0.71") or suppressed with its reason when
-   * the person has no fit of their own yet (proposal 153).
+   * by the server ("we'd have guessed the same", with its number only behind Show the model --
+   * decision 491) or suppressed with its reason when the person has no fit of their own yet
+   * (proposal 153).
    */
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { metaLine } from '$lib/rate.svelte.js';
@@ -55,21 +56,12 @@
          Proposal 39 puts it under the meta line and above the recall aid. -->
     <p class="why" data-testid="rate-queue-reason">{card?.reason ?? ''}</p>
 
-    <!-- `substituted_for` is the type the counter called for, and it carries nothing about why
-         the flip happened — so this line says that and no more. It used to name a cause ("no
-         battle pair yet in this partition"), which was true while exactly one site set the
-         marker: the thin-pool substitution. M4.10 marks every flip (finding 21), and the other
-         two have other causes — §6.0's banner redraw serves a sweep because the CTA pinned a
-         title, with a battle pool that can be demonstrably full, and the correction fallbacks
-         because the survivor's verdict band emptied. One sentence cannot carry three causes, and
-         §6.8 makes a false line about the app's own state a defect rather than a wording
-         preference. Stating the cause here would need it on the wire; it is not, so the claim
-         goes and the fact stays. [§6.1, §6.8; cycle 1 M410-D8-07] -->
-    {#if card?.substituted_for}
-      <p class="data" data-testid="rate-substituted">
-        a {card.substituted_for} was due in this slot — serving a sweep card instead
-      </p>
-    {/if}
+    <!-- `substituted_for` stays on the wire and is not rendered here any more. The line it drove
+         -- "a battle was due in this slot, serving a sweep card instead" -- told a member about the
+         block machine's plan rather than about the film in front of them, and on a pinned title
+         it answered a search with an apology. The counter above names the card's own type, which
+         is the one fact the person needs; decision 486 keeps the rest with the model.
+         [§6.1, §6.8; M4.10 finding 21; C4.5 and C5.5 of the 2026-09-25 household test] -->
 
     {#if title.recall_aid}
       <p class="recall" data-testid="rate-recall-aid">{title.recall_aid}</p>
@@ -154,9 +146,6 @@
   }
   .why {
     margin: 10px 0 0;
-  }
-  [data-testid='rate-substituted'] {
-    margin: 6px 0 0;
   }
   .recall {
     margin: 12px 0 0;

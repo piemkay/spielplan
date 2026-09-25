@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { signedIn } from '../helpers.js';
+import { createMember, signedIn, signInAsMember } from '../helpers.js';
 
 /**
  * §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
@@ -277,6 +277,58 @@ test('the title detail panel is full-width on a phone', async ({ page, isMobile 
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();
   expect(box.width).toBeGreaterThan(page.viewportSize().width * 0.95);
+});
+
+test('on a phone every Rate control is on screen, and a battle keeps Tie and its toggle in reach', async ({
+  page,
+  isMobile
+}) => {
+  // §6 preamble: "phone-first (48 px targets, one-handed)", and §6.1's "persistent Undo" and
+  // "persistent decisive toggle". The household test found the control row scrolling sideways
+  // under a hidden scrollbar -- the Series toggle and Undo off the right edge -- and the battle
+  // card's Tie, toggle and Skip below the fold. [C5.6 of the 2026-09-25 household test]
+  test.skip(!isMobile, 'the wrap and the fold are the phone layout');
+  const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
+  test.skip(!config.has_bundle, 'needs an imported bundle');
+
+  // A member of its own, with three films liked so a pair exists; the admin's queue is other
+  // specs' fixture (19-phone-shell reads the admin's sweep card).
+  await signInAsMember(page, await createMember(page, 'rate-phone'));
+  await page.request.post('/api/rate/session', {
+    data: { restart: true, mode: 'sweep', kinds: ['movie'] }
+  });
+  for (let i = 0; i < 3; i++) {
+    const { card } = await (await page.request.get('/api/rate')).json();
+    if (card?.type !== 'sweep') break;
+    const res = await page.request.post('/api/rate/verdict', {
+      data: { card_token: card.token, value: 2 }
+    });
+    expect(res.ok(), 'seeding a liked film (§6.1)').toBeTruthy();
+  }
+  await page.request.post('/api/rate/session', {
+    data: { restart: true, kinds: ['movie', 'series'] }
+  });
+
+  await page.goto('/rate');
+  await expect(page.getByTestId('rate-sweep-card')).toBeVisible();
+  for (const id of [
+    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-find-toggle',
+    'rate-kind-movie', 'rate-kind-series', 'rate-undo', 'rate-verdict-0', 'rate-verdict-2'
+  ]) {
+    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
+  }
+  const sideways = await page
+    .getByTestId('rate-surface')
+    .locator('.controls')
+    .evaluate((row) => row.scrollWidth - row.clientWidth);
+  expect(sideways, 'the control row does not scroll sideways').toBeLessThanOrEqual(0);
+
+  await page.request.post('/api/rate/session', { data: { mode: 'battle' } });
+  await page.goto('/rate');
+  await expect(page.getByTestId('rate-battle-card')).toBeVisible();
+  for (const id of ['rate-strip-tie', 'rate-decisive', 'rate-battle-skip']) {
+    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
+  }
 });
 
 test('the app is installable: a manifest, an icon, and a theme colour', async ({ page }) => {

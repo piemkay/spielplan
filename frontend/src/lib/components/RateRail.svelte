@@ -14,15 +14,20 @@
    * Proposal 49 is why the learning curve carries a number: "plotted against the user's own
    * lifetime label count — the copy is the caption, the position is the point. This is the one
    * place §12's M2 exit criterion (50–100 verdicts each) is legible to the user."
+   *
+   * Decision 486's register: the eyebrows name what the card is about for a person ("why these
+   * pairs"), counts are "ratings", and the margin weights are the model's own numbers, so they
+   * render only while the viewer's Show the model is on.
    */
   import {
     DECISIVE_COPY,
     LEARNING_CURVE_COPY,
     LEARNING_TARGET,
-    PAIR_SELECTION_COPY
+    PAIR_SELECTION_COPY,
+    ratingsLabel
   } from '$lib/rate.svelte.js';
 
-  let { balance, mode } = $props();
+  let { balance, mode, showModel = false } = $props();
 
   let open = $state(false);
 
@@ -41,27 +46,29 @@
   <div class="cards" class:open>
     <section class="card" data-testid="rate-learning-curve">
       <span class="eyebrow">WHERE YOU ARE</span>
-      <div class="curve" role="img" aria-label="{labelled} of {LEARNING_TARGET} labels">
+      <div class="curve" role="img" aria-label="{labelled} of {LEARNING_TARGET} ratings">
         <span class="fill" style:width="{position}%"></span>
         <span class="mark" style:left="50%"></span>
       </div>
       <div class="data-lg" data-testid="rate-label-count">
-        {labelled} labels · 50–100 is the first sitting or two
+        {ratingsLabel(labelled)} · 50-100 gets you started
       </div>
       <p class="why">{LEARNING_CURVE_COPY}</p>
     </section>
 
     {#if mode !== 'sweep'}
       <section class="card" data-testid="rate-pair-selection">
-        <span class="eyebrow">PAIR SELECTION</span>
+        <span class="eyebrow">WHY THESE PAIRS</span>
         <!-- Proposal 53: the "Random pairs." lead-in turns a defence into a statement. -->
         <p class="why">{PAIR_SELECTION_COPY}</p>
       </section>
 
       <section class="card" data-testid="rate-resolution">
-        <span class="eyebrow">RESOLUTION</span>
-        <p class="why">{DECISIVE_COPY} — §6.1 sets the margin weight at ~1.6 against ~1.0.</p>
-        <div class="data">decisive 1.6 · hesitant 1.0</div>
+        <span class="eyebrow">DECISIVE PICKS</span>
+        <p class="why">{DECISIVE_COPY}.</p>
+        {#if showModel}
+          <div class="data" data-testid="rate-margin-weights">decisive 1.6 · hesitant 1.0</div>
+        {/if}
       </section>
     {/if}
   </div>

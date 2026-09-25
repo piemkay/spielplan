@@ -2,7 +2,8 @@
 
 §6.1: "Running **class-balance widget** with its warning copy ('Heavy on "liked". Spreading
 across all three classes matters about five times more than anything else you can do here.' —
-the measured 5x lever)."
+the measured 5x lever)." Decision 491 restates that copy in plain words with a tail that says how
+to spread without changing an answer, and arms it at fifteen labels rather than one.
 
 §5.2 supplies both the lever and the threshold: "spreading verdicts across all three classes
 matters ~5x more than anything the corpus side can tune (a 60%-'liked' labeller gives up ~0.07
@@ -49,19 +50,35 @@ log = logging.getLogger("spielplan.rate.balance")
 # ---------------------------------------------------------------------------------------------
 WARN_SHARE = 0.60
 
-# The coverage row is literal — "present once one class exceeds 60% of that distribution and
-# absent below it" — with no floor, so there is none. The decision doc's proposal 41 argues for
-# arming the warning only after ~10 verdicts, on the grounds that a warning on the third tap is
-# noise; if that reading wins, this is the one number that changes and no other line does.
-WARN_MIN_VERDICTS = 1
+# Decision 491: the warning arms once the person holds fifteen live labels -- one §6.1 block,
+# restated rather than imported because `session` imports this module. It was 1, and one label
+# is 100% of a distribution: on the v20260925 install both members were told "Heavy on ..." by
+# their first verdict and the warning switched on and off six and ten times in one sitting. A
+# perfectly balanced labeller trips a 60% rule by chance 100% of the time at one label, 77.8% at
+# three, 13.6% at five, 5.9% at ten and 2.6% at fifteen. The widget's counts still show from the
+# first label; only the sentence waits.
+WARN_MIN_VERDICTS = 15
 
-# §6.1's copy, verbatim. The sentence is the measurement written down, so it is a constant and
-# not an f-string: the "about five times more" is §5.2's 5x lever and must not drift into "much
-# more" the first time someone edits the surrounding paragraph.
+# §6.1's measured sentence, restated in plain words by decision 491. It stays a constant and not
+# an f-string: "about five times more" is §5.2's 5x lever and must not drift into "much more"
+# the first time someone edits the surrounding paragraph.
 WARN_COPY = (
-    "Spreading across all three classes matters about five times more than anything else "
-    "you can do here."
+    "Spreading your ratings across all three answers matters about five times more than "
+    "anything else you can do here."
 )
+
+# Decision 491: what to DO about it, per heavy class, and never "change your answer". The old
+# sentence said what mattered and not how, so it read as a request to relabel -- and the two
+# warnings the household test actually saw were 'disliked' and 'fine', which a tail written for a
+# heavy 'liked' labeller would have answered wrongly. Each tail widens what gets rated (or, for
+# 'fine', asks for the decisive answer where one is true); none asks for a different answer to
+# the same film.
+WARN_TAIL = (
+    "Rate some titles you enjoyed as well",
+    "When a title was better or worse than fine, say so",
+    "Rate some titles you didn't enjoy as well",
+)
+WARN_HONEST = "but never change an honest answer to even things out."
 
 
 @dataclass(frozen=True)
@@ -91,6 +108,8 @@ class ClassBalance:
             "warn": self.warn,
             "copy": self.copy,
             "threshold": WARN_SHARE,
+            # Decision 491: the widget says when the check begins rather than going quiet.
+            "arms_at": WARN_MIN_VERDICTS,
         }
 
     @classmethod
@@ -110,7 +129,11 @@ class ClassBalance:
         # yet given anything up, and a warning fired at equality would be a warning about the
         # inequality sign rather than about their labelling.
         warn = total >= WARN_MIN_VERDICTS and shares[top] > WARN_SHARE
-        copy = f"Heavy on '{VERDICT_LABELS[top]}'. {WARN_COPY}" if warn else None
+        copy = (
+            f"Heavy on '{VERDICT_LABELS[top]}'. {WARN_COPY} {WARN_TAIL[top]} - {WARN_HONEST}"
+            if warn
+            else None
+        )
         return cls(counts=(n0, n1, n2), shares=shares, warn=warn, copy=copy)
 
 
@@ -137,4 +160,12 @@ async def class_balance(
     return ClassBalance.of(counts)
 
 
-__all__ = ["WARN_COPY", "WARN_MIN_VERDICTS", "WARN_SHARE", "ClassBalance", "class_balance"]
+__all__ = [
+    "WARN_COPY",
+    "WARN_HONEST",
+    "WARN_MIN_VERDICTS",
+    "WARN_SHARE",
+    "WARN_TAIL",
+    "ClassBalance",
+    "class_balance",
+]

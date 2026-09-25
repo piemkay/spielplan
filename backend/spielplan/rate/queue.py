@@ -10,11 +10,21 @@ Three sentences, three rules, and they compose in one ORDER BY:
      exactly the population of §6.0's pending-verdicts banner. It is not an estimate, so
      `p_seen` is 1.0 for it by definition rather than by a large weight, and "seen first" and
      "highest P(seen) first" are then the same instruction rather than two that can diverge.
-  2. **Then the seed list, in its position order.** A fresh household has no seen rows and no
-     verdicts, so their first queue *is* `seed_list` — the spec's "seeded first run" falls out
-     of the ordering instead of needing a mode flag. Seed precedence ends by CONSUMPTION: once
-     every seed title carries a verdict the branch is empty and P(seen) governs for good.
+  2. **Then the seed list, most likely seen first (decision 490).** A fresh household has no
+     seen rows and no verdicts, so their first queue *is* `seed_list` — the spec's "seeded first
+     run" falls out of the ordering instead of needing a mode flag. Seed precedence ends by
+     CONSUMPTION: once every seed title carries an answer the branch is empty and P(seen) governs
+     for good. All 100 stay; what changed is the order INSIDE the list. It was the file's own
+     position order, which on v20260925 put 56 pre-2010 titles first and asked a household about
+     divisive films it had mostly not seen: 33% not-seen in the first block. Ordered by P(seen)
+     — popularity, the library, age, and the household — the same two members' own answers put
+     that first block at 1 not-seen in 28. "Decade-stratified" is a property of the list the
+     corpus chose, and every title in it is still served before anything outside it.
   3. **Then descending P(seen).**
+
+A title the person PINNED — §6.0's pending-verdicts banner, the title card's "Rate it" or Rate's
+own search — leads everything, is served even over an earlier "not seen" (a verdict writes seen,
+and the person has just said they know it), and names the pin as its reason.
 
 WHAT P(SEEN) IS, AND WHAT IT IS NOT
 It is a five-feature logistic over signals this app already holds, and it exists to *order a
@@ -103,7 +113,7 @@ NOT_SEEN_WINDOW = 200
 # A recorded state is not an estimate.
 P_SEEN_RECORDED = 1.0
 
-SOURCES: tuple[str, ...] = ("seed", "p_seen", "pending_verdict", "reask")
+SOURCES: tuple[str, ...] = ("pinned", "seed", "p_seen", "pending_verdict", "reask")
 
 FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age")
 
@@ -178,26 +188,33 @@ PHRASES = {
 # would be false on exactly the cards it gave away.
 SEEN_REASON = "queued because: you have this marked seen"
 
+# The person asked for this one — Rate's search or the title card's "Rate it" — so the pin IS the
+# reason, and a probability beside it would explain a placement the queue did not make.
+PINNED_REASON = "queued because: you picked it"
+
 
 def reason_for(
     features: Features,
     *,
     source: str,
-    seed_position: int | None = None,
-    seed_total: int = 0,
     seed_decade: int | None = None,
     years_out: int | None = None,
     weights: SeenWeights = WEIGHTS,
 ) -> str:
-    """§6.8's mandatory one-line why, in the copy register the spec calls "quiet reasons"."""
+    """§6.8's mandatory one-line why, in the copy register the spec calls "quiet reasons".
+
+    A seed card printed "seed list position 0 of 100": 0-based, a file's index, and a statement
+    about the corpus's list rather than about the person. Decision 490 orders the list by P(seen),
+    so the card now says what the list is for and the same probability every other card quotes.
+    """
     if source in ("pending_verdict", "reask"):
         return SEEN_REASON
-    if source == "seed":
-        where = f"seed list position {seed_position} of {seed_total}"
-        if seed_decade:
-            return f"queued because: {where} · {seed_decade}s"
-        return f"queued because: {where}"
+    if source == "pinned":
+        return PINNED_REASON
     pct = round(p_seen(features, weights) * 100)
+    if source == "seed":
+        starter = f"a starter title from the {seed_decade}s" if seed_decade else "a starter title"
+        return f"queued because: {starter} · {pct}% likely you have seen it"
     cause = dominant(features, weights)
     if cause is None:
         return f"queued because: {pct}% likely you have seen it"
@@ -236,7 +253,10 @@ class QueueCard:
 #     every re-asked title straight back to the fresh queue.
 #   * a title the person has explicitly answered "not seen" does not come back either. An
 #     *adopted* unseen is an absent row, never an 'unseen' row (see `sync/seen.py`'s table), so
-#     this only ever removes an answer somebody actually gave.
+#     this only ever removes an answer somebody actually gave. A PINNED title is the exception:
+#     the person has just searched for it or tapped "Rate it" on it, which is a newer answer than
+#     the "not seen" — and one household member's mark-seen-then-wait detour never reached the
+#     film at all. The pin lifts this exclusion and nothing else; a rated title stays out.
 #
 # The person's history arrives as three small CTEs joined to `title`, rather than as correlated
 # sub-selects evaluated per row. Ordering by a computed score means the whole partition is
@@ -294,7 +314,7 @@ WITH household AS (
      WHERE t.kind = ANY($2::text[])
        AND NOT (t.id = ANY($3::int[]))
        AND rt.title_id IS NULL
-       AND NOT (ut.title_id IS NOT NULL AND ut.state = 'unseen')
+       AND (t.id = ANY($6::int[]) OR NOT (ut.title_id IS NOT NULL AND ut.state = 'unseen'))
 ), scored AS (
     SELECT c.*,
            least(1.0, ln(1.0 + c.item_n) / ln(1.0 + $7::float8))              AS crowd,
@@ -312,8 +332,10 @@ SELECT s.*,
   FROM scored s
  ORDER BY s.head_pos ASC NULLS LAST,
           NOT s.seen,
-          s.seed_position ASC NULLS LAST,
+          -- Decision 490: the seed list still leads, and inside it P(seen) decides.
+          s.seed_position IS NULL,
           p_seen DESC,
+          s.seed_position ASC NULLS LAST,
           s.id
  LIMIT $4
 """
@@ -330,10 +352,12 @@ def _features(row: asyncpg.Record) -> Features:
     )
 
 
-def _card(row: asyncpg.Record, *, seed_total: int, weights: SeenWeights) -> QueueCard:
+def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
     features = _features(row)
     if features.seen:
         source = "pending_verdict"
+    elif row["head_pos"] is not None:
+        source = "pinned"
     elif row["seed_position"] is not None:
         source = "seed"
     else:
@@ -355,16 +379,14 @@ def _card(row: asyncpg.Record, *, seed_total: int, weights: SeenWeights) -> Queu
         reason=reason_for(
             features,
             source=source,
-            seed_position=row["seed_position"],
-            seed_total=seed_total,
             seed_decade=row["seed_decade"],
             years_out=years_out,
             weights=weights,
         ),
-        # §6.1's seed list is a decade-stratified *sample*, not a P(seen) ordering. Quoting a
-        # probability on a card the queue did not use one to place would be a number that means
-        # nothing, and §6.8 forbids a bare number next to a name it does not belong to.
-        p_seen=None if source == "seed" else float(row["p_seen"]),
+        # A seed card carried None here while the list was served in file order, because the
+        # queue had not used a probability to place it. Decision 490 orders the list by P(seen),
+        # so the number is now the one that placed the card, as on every other card.
+        p_seen=float(row["p_seen"]),
         source=source,
         reask_of=None,
     )
@@ -386,7 +408,9 @@ async def next_sweep_cards(
 
     `head` is the §7.3 banner CTA's pins: "You've watched X and Y recently — rate them?" puts
     those title ids at the front, in the order given, and they stay ordinary candidates — a
-    pinned title that has since been rated is simply not there.
+    pinned title that has since been rated is simply not there. Rate's own search and the title
+    card's "Rate it" pin the same way; a pin also lifts an earlier "not seen" (see `_CANDIDATES`),
+    and `exclude` still wins over it — the session decides what a pin may re-open.
 
     `rng`, `reask_rate` and `weights` are test seams, not part of the interface this module
     publishes: the declared call — `next_sweep_cards(conn, user_id=..., kinds=..., limit=...,
@@ -398,7 +422,6 @@ async def next_sweep_cards(
     if limit <= 0:
         return []
     rng = rng or random.Random()
-    seed_total = await conn.fetchval("SELECT count(*) FROM seed_list") or 0
     skip = list(dict.fromkeys(int(t) for t in exclude))
 
     fresh_rows = await conn.fetch(
@@ -417,7 +440,7 @@ async def next_sweep_cards(
         weights.owned,
         weights.age,
     )
-    fresh = [_card(row, seed_total=seed_total, weights=weights) for row in fresh_rows]
+    fresh = [_card(row, weights=weights) for row in fresh_rows]
 
     # §13 stream (b): "~10% of comparisons/verdicts re-asked after >= 3 days". The draw is per
     # slot, so the rate is a property of the queue rather than of how long a sitting ran.
