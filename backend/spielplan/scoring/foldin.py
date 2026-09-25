@@ -10,9 +10,12 @@
 READ AS. The two sentences are one expression. `w_cf` **is** β, the crowd prior carries (1−β),
 and both halves are standardised over the same population so β is a genuine convex weight:
 
-    score_u(t) = μ_u + (1−β_u)·(b(t) − prior_mean)/prior_sd + β_u·⟨v_u, e(t)⟩
+    score_u(t) = μ_u + (1−β_u)·(b(t) − prior_mean)/prior_sd + β_u·⟨v_u, d(t)⟩
 
-with `v_u` scaled at fit time so ⟨v_u, e⟩ has unit sd over that population.
+with `v_u` scaled at fit time so ⟨v_u, d⟩ has unit sd over that population, and d(t) the
+coordinate's gate-weighted DIRECTION rather than e(t) itself (decision 469; `backbone.direction`
+says why and what was measured). The fit, the cross-validation and both scorers read d through
+that one helper, so the β chosen is the β served on the scale it is served on (decision 235).
 
 WHICH HALF β WEIGHS IS SETTLED, AND IT IS THIS ONE. Decision 167: **β is the weight on the
 PERSONAL half**, and it stays there. The 0.8 §5.1 quotes is the CORPUS's number in the corpus's
@@ -68,7 +71,14 @@ from spielplan.db.library import KINDS, Kind, household_ids
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 from spielplan.scoring import serve
-from spielplan.scoring.backbone import EMBED_DIM, Backbone, Coordinate, pack_vec
+from spielplan.scoring.backbone import (
+    COORDINATE_GEOMETRY,
+    EMBED_DIM,
+    Backbone,
+    Coordinate,
+    directions,
+    pack_vec,
+)
 
 log = logging.getLogger("spielplan.scoring.foldin")
 
@@ -133,6 +143,11 @@ LOO_BELOW = DEFAULTS.loo_below_labels   # leave-one-out under this many, 5 folds
 # verdict. [M4.13, perf-04; plan step 22]
 PAUSE_SECONDS = 30
 HARD_CAP_SECONDS = 300
+
+# How far `refit_user` backdates its own clock: the window in which a write that began before the
+# fit read its inputs can commit after it (see the clock's comment there). `_is_stale` adds it back
+# when it asks whether a PLACEMENT began after the fit, which is a question about the read itself.
+CLOCK_MARGIN_SECONDS = 2
 
 # §4.2: verdict value 0 disliked / 1 ok / 2 liked. The regression target is the raw verdict, not
 # the Ledger's fitted `s`: anchoring on `s` would make the nightly pass order-dependent and, at
@@ -253,7 +268,7 @@ def _reference_arrays(reference: Sequence[Coordinate]) -> tuple[np.ndarray, np.n
     if not reference:
         return np.zeros((0, EMBED_DIM)), np.zeros(0)
     return (
-        np.ascontiguousarray([c.e for c in reference], dtype=np.float64),
+        directions(reference),
         np.asarray([c.b for c in reference], dtype=np.float64),
     )
 
@@ -290,7 +305,11 @@ def fit_user(
     # rows happened to arrive in: the cross-validation folds are assigned by position, and an
     # order-dependent held-out ρ would make a refit report irreproducible for no reason.
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
-    rows = [(coords[t].e, VERDICT_TO_Y[int(v)], coords[t].b) for t, v in ordered if t in coords]
+    labelled = [(coords[t], VERDICT_TO_Y[int(v)]) for t, v in ordered if t in coords]
+    rows = [
+        (d, y, c.b)
+        for (c, y), d in zip(labelled, directions([c for c, _ in labelled]), strict=True)
+    ]
     dropped = len(labels) - len(rows)
     n = len(rows)
     if n == 0:
@@ -399,8 +418,8 @@ def _cross_validate(
 
 
 def score(fit: Fit, c: Coordinate) -> tuple[float, float]:
-    """(score_u(t), ⟨v_u, e(t)⟩). Both halves are returned so §6.7 can show them separately."""
-    cf = float(fit.v @ c.e)
+    """(score_u(t), ⟨v_u, d(t)⟩). Both halves are returned so §6.7 can show them separately."""
+    cf = float(fit.v @ directions([c])[0])
     z_prior = (c.b - fit.prior_mean) / fit.prior_sd
     return fit.mu + (1.0 - fit.beta) * z_prior + fit.beta * cf, cf
 
@@ -409,7 +428,7 @@ def score_many(fit: Fit, coords: Sequence[Coordinate]) -> list[tuple[int, float,
     """(title_id, score, cf) for a whole reference population — one matvec, ~50 µs at 839 rows."""
     if not coords:
         return []
-    e = np.ascontiguousarray([c.e for c in coords], dtype=np.float64)
+    e = directions(coords)
     b = np.asarray([c.b for c in coords], dtype=np.float64)
     cf = e @ fit.v
     scores = fit.mu + (1.0 - fit.beta) * (b - fit.prior_mean) / fit.prior_sd + fit.beta * cf
@@ -454,19 +473,19 @@ async def write_fit(
         """
         INSERT INTO user_vector (user_id, kind, purpose, vec, blend_beta, label_count, mu,
                                  prior_mean, prior_sd, cf_sd, foldin_lambda, cv_rho,
-                                 bundle_version, updated_at)
-        VALUES ($1, $2, 'foldin', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                 bundle_version, updated_at, geometry)
+        VALUES ($1, $2, 'foldin', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (user_id, kind, purpose) DO UPDATE
            SET vec = EXCLUDED.vec, blend_beta = EXCLUDED.blend_beta,
                label_count = EXCLUDED.label_count, mu = EXCLUDED.mu,
                prior_mean = EXCLUDED.prior_mean, prior_sd = EXCLUDED.prior_sd,
                cf_sd = EXCLUDED.cf_sd, foldin_lambda = EXCLUDED.foldin_lambda,
                cv_rho = EXCLUDED.cv_rho, bundle_version = EXCLUDED.bundle_version,
-               updated_at = EXCLUDED.updated_at
+               updated_at = EXCLUDED.updated_at, geometry = EXCLUDED.geometry
         """,
         user_id, kind, pack_vec(fit.v), fit.beta, fit.label_count, fit.mu,
         fit.prior_mean, fit.prior_sd, fit.cf_sd, fit.lam, fit.cv_rho, bundle_version,
-        updated_at,
+        updated_at, COORDINATE_GEOMETRY,
     )
 
 
@@ -481,6 +500,14 @@ async def refit_user(
     carry a timing object to get one.
     """
     entered = time.perf_counter()
+    # THE FIT'S CLOCK, READ BEFORE THE COORDINATES as well as the labels, since `_is_stale` also
+    # reads it as "the placements this fit saw" (a title placed after it is not in the partition).
+    # A placement whose transaction began after this instant is one the coordinate read below
+    # cannot have seen; one that began before it and committed after the read is the only kind
+    # missed, and the read follows at once.
+    fitted_at = await conn.fetchval(
+        "SELECT clock_timestamp() - ($1::int * interval '1 second')", CLOCK_MARGIN_SECONDS
+    )
     coords = await serve.coordinates(conn, backbone, bundle_version=bundle_version, kind=kind)
     reference = list(coords.values())
     # THE FIT'S CLOCK, READ BEFORE THE LABELS. `user_vector.updated_at` is read by `_is_stale` as
@@ -498,7 +525,6 @@ async def refit_user(
     # one bounded refit on the next tick and a false negative costs the fit for ever. Deliberately
     # not a serializable transaction around the whole refit: §5.3's "seconds" pass must not take a
     # conflict-abort risk on the tap path's writes. [M4.13, dd16; plan step 21]
-    fitted_at = await conn.fetchval("SELECT clock_timestamp() - interval '2 seconds'")
     labels = await live_labels(conn, user_id=user_id, kind=kind)
     # Seeded from the identity of the fit, so a refit of the same (user, kind, basis) draws the
     # same folds and the §6.7 log line means the same thing twice.
@@ -580,6 +606,26 @@ async def run(
     report = FoldInReport()
     if with_priors:
         report.priors = await serve.materialise_priors(conn, backbone, bundle_version=bundle_version)
+    else:
+        # The tick owes the crowd half in two cases, both cheap to ask. A household fitted under
+        # another reading of the coordinate (0031) is an install that has just been upgraded, and
+        # the release that changed the reading changed b(t) with it (C1.1, C1.2), so the whole
+        # table is rewritten once, before the refits below read it. And a title placed since its
+        # prior was written - §8 stage 9 for an acquisition, the sweep for a rated title
+        # (decision 470) - is written alone: stage 10 calls it ready to appear "in ranking", and
+        # every ranked read joins `title_prior`, so a title with no row there is not shown at all
+        # until the nightly pass. The 14 titles the first household acquired were exactly that.
+        # [owner instruction of 2026-09-25 after the first household user test]
+        if await _fitted_under_another_geometry(conn):
+            report.priors = await serve.materialise_priors(
+                conn, backbone, bundle_version=bundle_version
+            )
+        else:
+            owed = await serve.priors_owed(conn, bundle_version=bundle_version)
+            if owed:
+                report.priors = await serve.materialise_priors(
+                    conn, backbone, bundle_version=bundle_version, title_ids=owed
+                )
 
     # §5.3's other nightly pass fits the same people, through the same helper. This query read
     # `role IN ('admin', 'member')` while `refit.refit_all` read `is_active`, so a deactivated
@@ -605,6 +651,21 @@ async def run(
     return report
 
 
+async def _fitted_under_another_geometry(conn) -> bool:
+    """Whether any household member's stored fold-in predates this reading of the coordinate.
+
+    Scoped to the household `run` refits, because a deactivated account's row is never refitted
+    and would otherwise re-trigger the whole-table prior rewrite on every tick for ever.
+    """
+    return bool(
+        await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM user_vector WHERE purpose = 'foldin' "
+            "   AND user_id = ANY($1::bigint[]) AND geometry <> $2)",
+            list(await household_ids(conn)), COORDINATE_GEOMETRY,
+        )
+    )
+
+
 async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> bool:
     """Never fitted, fitted against another basis (§10), or a label moved since the last fit.
 
@@ -618,9 +679,8 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     (`user_vector.updated_at` and `verdict.created_at` are both `now()`), so this is not the
     cross-clock comparison §7.3's sweep got wrong.
 
-    It is deliberately not a trigger for what a *placement* changes — a title that gained a
-    coordinate today moves nobody's labels — so the nightly `only_stale=False` pass is what
-    picks those up, and this says so rather than pretending to cover it.
+    A *placement* newer than the fit is a trigger too, and a fit stamped with another coordinate
+    geometry is one: see the comment over those two checks below for why neither is debounced.
 
     AND THE TRIGGER IS DEBOUNCED, because §12's sentence is "after a sitting". Something having
     moved is necessary and no longer sufficient: the person must have put the phone down for
@@ -640,12 +700,30 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     [M4.13, perf-04; plan step 22]
     """
     row = await conn.fetchrow(
-        "SELECT label_count, bundle_version, updated_at, "
+        "SELECT label_count, bundle_version, geometry, updated_at, "
         "       now() - updated_at > ($3::int * interval '1 second') AS past_cap "
         "  FROM user_vector WHERE user_id = $1 AND kind = $2 AND purpose = 'foldin'",
         user_id, kind, HARD_CAP_SECONDS,
     )
     if row is None or row["bundle_version"] != bundle_version:
+        return True
+    # Two more states the debounce may not gate, for §10's reason: a fit in another reading of the
+    # coordinate (0031, decision 469) is a vector in another space, and a title placed after the
+    # fit is a title the partition does not rank at all. The second used to be left to the
+    # nightly pass on purpose ("a title that gained a coordinate today moves nobody's labels"),
+    # which held while placements were nightly too. They are not any more - §8 stage 9 places an
+    # acquisition when it arrives and stage 10 promises it "in ranking" - so waiting for the night
+    # hid every new title for up to a day. A placement is rare, so the cost is one partition
+    # rewrite per member per acquisition batch. [owner instruction of 2026-09-25]
+    if row["geometry"] != COORDINATE_GEOMETRY:
+        return True
+    placed_since = await conn.fetchval(
+        "SELECT max(p.created_at) > $3::timestamptz + ($4::int * interval '1 second') "
+        "  FROM title_placement p JOIN title t ON t.id = p.title_id "
+        " WHERE p.bundle_version = $1 AND t.kind = $2",
+        bundle_version, kind, row["updated_at"], CLOCK_MARGIN_SECONDS,
+    )
+    if placed_since:
         return True
     live = await conn.fetchrow(
         """

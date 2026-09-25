@@ -104,15 +104,25 @@ async def coordinates(
     return coords
 
 
-async def materialise_priors(conn, backbone: Backbone, *, bundle_version: str) -> PriorReport:
-    """Write `title_prior` for every title. The crowd half of §5.1, computed once.
+async def materialise_priors(
+    conn, backbone: Backbone, *, bundle_version: str, title_ids: Sequence[int] | None = None
+) -> PriorReport:
+    """Write `title_prior` for every title - or for `title_ids` alone, which is how the fold-in
+    tick gives a freshly placed title its row without rewriting 19,000. The crowd half of §5.1,
+    computed once.
 
     An uncoordinated title keeps a row with `b` NULL and `e_source = 'none'` rather than being
     omitted: the row is what lets the reconciliation report name the offenders instead of
     reporting a difference between two counts.
     """
     placed = await placements(conn, bundle_version=bundle_version)
-    titles = await conn.fetch("SELECT id, is_owned FROM title ORDER BY id")
+    if title_ids is None:
+        titles = await conn.fetch("SELECT id, is_owned FROM title ORDER BY id")
+    else:
+        titles = await conn.fetch(
+            "SELECT id, is_owned FROM title WHERE id = ANY($1::int[]) ORDER BY id",
+            [int(t) for t in title_ids],
+        )
 
     ids: list[int] = []
     b_values: list[float | None] = []
@@ -161,6 +171,25 @@ async def materialise_priors(conn, backbone: Backbone, *, bundle_version: str) -
             len(report.uncoordinated_owned), report.uncoordinated_owned[:20],
         )
     return report
+
+
+async def priors_owed(conn, *, bundle_version: str) -> list[int]:
+    """Titles placed in this basis whose `title_prior` row is missing, from another basis, or
+    older than the placement - the rows a ranked read would drop or misreport until the nightly
+    pass rewrote them."""
+    rows = await conn.fetch(
+        """
+        SELECT p.title_id
+          FROM title_placement p
+          LEFT JOIN title_prior tp ON tp.title_id = p.title_id
+         WHERE p.bundle_version = $1
+           AND (tp.title_id IS NULL OR tp.bundle_version IS DISTINCT FROM $1
+                OR tp.computed_at < p.created_at)
+         ORDER BY p.title_id
+        """,
+        bundle_version,
+    )
+    return [int(r["title_id"]) for r in rows]
 
 
 async def uncoordinated_owned(conn, *, kind: Kind, bundle_version: str) -> list[int]:

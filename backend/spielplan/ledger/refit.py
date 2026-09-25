@@ -72,6 +72,7 @@ from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.model import EMBED_DIM, ObservationSet
 from spielplan.ledger.observations import EmbeddingSource, zero_embeddings
 from spielplan.models import artifacts
+from spielplan.scoring.backbone import COORDINATE_GEOMETRY
 
 log = logging.getLogger("spielplan.ledger.refit")
 
@@ -317,7 +318,8 @@ async def load_cache(
     one is not stale either, and returning it would put a title's coordinate in a basis nobody
     uses. And K: the cut-points in this blob index a tier set of a particular length, so a fit
     whose K no longer matches `ledger_cutpoints.tier_set` is not merely out of date, it MEANS
-    something else.
+    something else. A fourth joined them with decision 471: `geometry`, the reading of the
+    coordinate the fit was made in, because the same bundle read two ways is two bases.
 
     §10'S HALF IS TWO QUESTIONS AND USED TO BE ONE. The active row says which basis the household
     SERVES; `bundle_version` says which basis the caller is holding, and those diverge for the
@@ -401,6 +403,19 @@ async def load_cache(
             kind,
             row["bundle_version"],
             bundle_version,
+        )
+        return None
+    if row["geometry"] != COORDINATE_GEOMETRY:
+        # The fourth precondition, and it is §10's in another form: the same bundle read another
+        # way (0031, decision 471). A v fitted to raw coordinates, applied by a tap to the
+        # directions `standard_embeddings` now returns, would solve a residual against a vector
+        # scaled for rows a hundred times longer. `refreshes_owed` names the board to the tick.
+        log.info(
+            "ledger_fit for user %d/%s was fitted to %r coordinates, the app reads %r - refitting",
+            user_id,
+            kind,
+            row["geometry"],
+            COORDINATE_GEOMETRY,
         )
         return None
     mu, v, gamma, cuts, log_nu = _unpack_theta(_unnpy(row["theta"]))
@@ -531,14 +546,20 @@ async def refreshes_owed(
     so the limit is a measured property and not a thing to be rediscovered.
     [M4.13, dd22; cycle 2, M413-D6-03]
     """
+    # A board fitted to another reading of the coordinate (0031, decision 471) is owed at once,
+    # whatever its growth: `load_cache` refuses it, so every tap on it queues a refit and moves
+    # nothing until one runs, and waiting for the nightly would leave an upgraded install's boards
+    # in the raw geometry for up to a day. `grown` is reported as it stands.
     rows = await conn.fetch(
-        "SELECT user_id, kind, n_observed, cdf_reference FROM ledger_fit "
-        " WHERE fit_source = 'incremental' ORDER BY user_id, kind"
+        "SELECT user_id, kind, n_observed, cdf_reference, geometry <> $1 AS regeometry "
+        "  FROM ledger_fit "
+        " WHERE fit_source = 'incremental' OR geometry <> $1 ORDER BY user_id, kind",
+        COORDINATE_GEOMETRY,
     )
     owed: list[tuple[int, str, int]] = []
     for row in rows:
         grown = int(row["n_observed"]) - int(_unnpy(row["cdf_reference"]).size)
-        if grown >= growth:
+        if grown >= growth or row["regeometry"]:
             owed.append((int(row["user_id"]), str(row["kind"]), grown))
     return owed
 
@@ -998,8 +1019,8 @@ async def _write_fit(
         INSERT INTO ledger_fit
             (user_id, kind, theta, title_ids, residuals, sigma, sigma_prior, anchor_curv,
              duel_curv, cdf_reference, z_cov, n_observed, hp_digest, hp_source, bundle_version,
-             fit_source, objective, grad_inf, converged, fitted_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
+             fit_source, objective, grad_inf, converged, fitted_at, geometry)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now(), $20)
         ON CONFLICT (user_id, kind) DO UPDATE SET
             theta = EXCLUDED.theta, title_ids = EXCLUDED.title_ids,
             residuals = EXCLUDED.residuals, sigma = EXCLUDED.sigma,
@@ -1009,7 +1030,7 @@ async def _write_fit(
             hp_digest = EXCLUDED.hp_digest, hp_source = EXCLUDED.hp_source,
             bundle_version = EXCLUDED.bundle_version, fit_source = EXCLUDED.fit_source,
             objective = EXCLUDED.objective, grad_inf = EXCLUDED.grad_inf,
-            converged = EXCLUDED.converged, fitted_at = now()
+            converged = EXCLUDED.converged, fitted_at = now(), geometry = EXCLUDED.geometry
         """,
         user_id,
         kind,
@@ -1030,6 +1051,7 @@ async def _write_fit(
         float(fit.objective),
         float(fit.grad_inf),
         bool(fit.converged),
+        COORDINATE_GEOMETRY,
     )
 
 

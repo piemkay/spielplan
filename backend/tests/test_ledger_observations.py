@@ -559,14 +559,20 @@ async def test_a_warm_title_is_fitted_at_its_backbone_row_outright(db, served):
     limit is the row. The assertion is bit equality, because the old behaviour was ALSO "the row"
     for this title and the regression this guards is the opposite one: a repair that blended every
     title would move a warm row by (1-g)·(ê-E) and still look right to six decimals.
+
+    Since decision 471 the Ledger reads the coordinate's gate-weighted DIRECTION, as the fold-in
+    does (decision 469): the served coordinate is still the row itself, and the fit reads that row
+    scaled to the length of its gate - pointing exactly where the row points.
     """
     assert SUPPORT[1] >= bb.WARM_SUPPORT and 1 not in COLD_PLACEMENTS
     fit_e = await fitted_row(db, served, 1)
     served_e = (await serve.coordinates(db, served["backbone"], bundle_version=BUNDLE))[1]
+    row = served["backbone"].embedding(1).astype(np.float64)
 
     assert served_e.e_source == "backbone"
-    assert np.array_equal(fit_e, served["backbone"].embedding(1).astype(np.float64))
-    assert np.array_equal(fit_e, served_e.e)
+    assert np.array_equal(served_e.e, row)
+    assert np.array_equal(fit_e, bb.direction(served_e))
+    assert np.allclose(fit_e, row / np.linalg.norm(row) * bb.gate(SUPPORT[1]))
 
 
 async def test_a_thin_title_is_fitted_at_the_blend_rather_than_at_its_raw_backbone_row(db, served):
@@ -584,22 +590,31 @@ async def test_a_thin_title_is_fitted_at_the_blend_rather_than_at_its_raw_backbo
     coordinate is exactly three parts E to one part ê. Measured on this fixture, the raw row and
     the blend are ||Δe|| = 0.72 apart at item_n 30, 1.94 at 6 and 0.40 at 55 — against row norms
     of 2.2 to 2.9, so a third of the coordinate was in the wrong place.
+
+    Since decision 471 the fit reads that blend's direction (weight 1: the Cold Tower contributed
+    to it), so the assertion is that the fitted row is the direction of the BLEND and not of the
+    raw row. The published gaps are between the served coordinate and the raw row, which is where
+    dd02 lived and what the three places below quote.
     """
     assert SUPPORT[4] == 30
     raw = served["backbone"].embedding(4).astype(np.float64)
     e_hat = placed_vector(4)
     fit_e = await fitted_row(db, served, 4)
+    coords = await serve.coordinates(db, served["backbone"], bundle_version=BUNDLE)
 
-    assert np.array_equal(fit_e, 0.75 * raw + 0.25 * e_hat), "the fit is not at §5.1's blend"
-    assert not np.allclose(fit_e, raw), "the fit is still at the raw Backbone row (dd02)"
-    assert not np.allclose(fit_e, e_hat)
+    assert np.array_equal(coords[4].e, 0.75 * raw + 0.25 * e_hat), "not served at §5.1's blend"
+    assert np.array_equal(fit_e, bb.direction(coords[4])), "the fit is not at the served blend"
+    blend = 0.75 * raw + 0.25 * e_hat
+    assert np.allclose(fit_e, blend / np.linalg.norm(blend))
+    assert not np.allclose(fit_e, raw / np.linalg.norm(raw)), (
+        "the fit is still at the raw Backbone row's direction (dd02)"
+    )
+    assert not np.allclose(fit_e, e_hat / np.linalg.norm(e_hat))
 
     deltas = {}
     for title_id in (4, 5, 7):
         row = served["backbone"].embedding(title_id).astype(np.float64)
-        deltas[title_id] = float(
-            np.linalg.norm(await fitted_row(db, served, title_id) - row)
-        )
+        deltas[title_id] = float(np.linalg.norm(coords[title_id].e - row))
     print(f"\n||delta e|| fit-vs-raw-row: {deltas}")
     assert deltas[5] > deltas[4] > deltas[7] > 0.2, (
         "the gap between the blend and the raw row must shrink as the crowd support grows"
@@ -621,10 +636,13 @@ async def test_a_title_with_no_backbone_row_is_fitted_at_its_placement_alone(db,
     the fixture expresses that the way the corpus does, as a row `cold_mask` flags rather than an
     absent one — so n_t = 0, the gate is exactly 0.0 and both terms collapse onto the Cold Tower's.
     Exactly, not approximately: that is what makes "no row" and "pure Cold Tower" one statement.
+    Since decision 471 the fit reads ê's unit direction, weight 1, for the reason §5.1's third
+    line takes ê outright.
     """
     assert SUPPORT[8] == 0 and served["backbone"].row(8) is None
     fit_e = await fitted_row(db, served, 8)
-    assert np.array_equal(fit_e, placed_vector(8))
+    e_hat = placed_vector(8)
+    assert np.array_equal(fit_e, e_hat * (1.0 / np.linalg.norm(e_hat)))
     assert bb.gate(0) == 0.0
 
 
@@ -636,6 +654,10 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
     same function of the same two inputs or the Ledger is fitting a basis nobody is served at. The
     loop is over `title`, so a title the bundle does not cover is included and the two paths have
     to agree about it being absent too.
+
+    What both paths read of that coordinate is its gate-weighted direction since decisions 469
+    and 471 - `fit_user` through `backbone.directions` and the Ledger through
+    `backbone.direction` - so the fitted row is the served coordinate's direction, bit for bit.
     """
     backbone = served["backbone"]
     coords = await serve.coordinates(db, backbone, bundle_version=BUNDLE)
@@ -647,7 +669,7 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
     for i, title_id in enumerate(ids):
         if title_id in coords:
             assert embedded[i], f"title {title_id} is served a coordinate and fitted without one"
-            assert np.array_equal(matrix[i], coords[title_id].e), (
+            assert np.array_equal(matrix[i], bb.direction(coords[title_id])), (
                 f"title {title_id} is fitted at a different coordinate than it is served at"
             )
         else:
@@ -659,7 +681,7 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
     assert len(blended) >= 3, f"the fixture has no blended titles to disagree about: {blended}"
     for title_id in blended:
         raw = backbone.embedding(title_id).astype(np.float64)
-        assert not np.allclose(matrix[ids.index(title_id)], raw)
+        assert not np.allclose(matrix[ids.index(title_id)], raw / np.linalg.norm(raw))
     assert {c.e_source for c in coords.values()} == {"backbone", "blended", "cold_tower"}
 
     # The three single-source forms are KEPT — §3.1's bundle-less install has no basis to blend and
@@ -1228,6 +1250,110 @@ async def test_a_cache_from_other_hyperparameters_is_refitted_rather_than_truste
     assert await db.fetchval(
         "SELECT refit_requested_at FROM ledger_cutpoints WHERE user_id=$1 AND kind='movie'", user
     ) is not None
+
+
+async def test_a_fit_in_another_coordinate_geometry_is_refused_and_owed_to_the_tick(db, world):
+    """0031, decision 471. The same bundle read two ways is two bases: a cached v fitted to raw
+    coordinates, applied by a tap to the directions `standard_embeddings` now returns, solves a
+    residual against a vector scaled for rows a hundred times longer. So `load_cache` refuses it,
+    as it refuses another bundle's, and `refreshes_owed` hands the board to the 60 s tick whatever
+    its growth - an upgraded install's boards are refitted within the minute, not overnight.
+    """
+    user = world["user"]
+    await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
+    await refit.refit_user(
+        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
+    )
+    assert await db.fetchval(
+        "SELECT geometry FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", user
+    ) == bb.COORDINATE_GEOMETRY
+    assert await refit.load_cache(db, user_id=user, kind="movie", hp=DEFAULTS, lock=False)
+    assert (user, "movie") not in [(u, k) for u, k, _ in await refit.refreshes_owed(db)]
+
+    await db.execute(
+        "UPDATE ledger_fit SET geometry = 'raw' WHERE user_id = $1 AND kind = 'movie'", user
+    )
+    assert await refit.load_cache(
+        db, user_id=user, kind="movie", hp=DEFAULTS, lock=False
+    ) is None
+    assert (user, "movie") in [(u, k) for u, k, _ in await refit.refreshes_owed(db)]
+
+    await refit.refit_user(
+        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
+    )
+    assert await refit.load_cache(db, user_id=user, kind="movie", hp=DEFAULTS, lock=False)
+    assert (user, "movie") not in [(u, k) for u, k, _ in await refit.refreshes_owed(db)]
+
+
+async def test_one_verdict_on_an_off_scale_coordinate_does_not_decide_the_board(db, served):
+    """Decision 471, and the board the first household saw: Zootopia at #1 of an S tier with
+    s 21.8 and σ 36 on a single "liked", above The Intouchables, which had won its duels.
+
+    The Ledger's s = μ + ⟨v, e⟩ + r read the raw coordinate, and a Cold Tower placement sits at
+    ||ê|| ~ 30-80 against Backbone rows of 0.01 to 127, so an unobserved direction of v was
+    multiplied by the norm - into σ through the (μ, v) posterior and into s through v. Title 9
+    here is that placement (||ê|| = 78, liked once); title 1 is liked and wins every duel it is in.
+    Read raw, title 9's prior σ is an order above the board's; read as a direction, every title's
+    σ is on one scale and the title the person put first by their own answers is first.
+    """
+    await db.execute(
+        "INSERT INTO title (id, kind, name, is_owned) VALUES (9, 'movie', 'Off Scale', true)"
+    )
+    await db.execute(
+        """
+        INSERT INTO title_placement (title_id, bundle_version, e_hat, b_hat, contract_sha256,
+                                     tower_sha256, input_dim, blocks_present, blocks_dropped,
+                                     blocks_imputed, nnz)
+        VALUES (9, $1, $2, 0.3, 'sha-contract', 'sha-tower', 131,
+                ARRAY['genre'], ARRAY[]::text[], ARRAY[]::text[], 7)
+        """,
+        BUNDLE, bb.pack_vec(cold_vector(9) * 78.0),
+    )
+    user = served["user"]
+    await _rate(
+        db, user,
+        verdicts=[(9, 2), (1, 2), (2, 2), (3, 1), (4, 1), (5, 0)],
+        duels=[(1, 2, "A"), (1, 3, "A"), (1, 4, "A"), (1, 5, "A"), (2, 3, "A")],
+    )
+    backbone = served["backbone"]
+
+    async def raw_coordinates(title_ids):
+        """What `standard_embeddings` returned before decision 471: e(t) itself."""
+        coords = await serve.coordinates(db, backbone, bundle_version=BUNDLE, kind="movie")
+        ids = [int(t) for t in title_ids]
+        matrix = np.zeros((len(ids), 64))
+        for i, title_id in enumerate(ids):
+            if title_id in coords:
+                matrix[i] = coords[title_id].e
+        return matrix, np.asarray([t in coords for t in ids])
+
+    async def board():
+        rows = await db.fetch(
+            "SELECT title_id, s, sigma_prior FROM ledger_state WHERE user_id = $1 AND observed",
+            user,
+        )
+        return {r["title_id"]: (float(r["s"]), float(r["sigma_prior"])) for r in rows}
+
+    await refit.refit_user(
+        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=raw_coordinates,
+        bundle_version=BUNDLE,
+    )
+    raw = await board()
+    others = [sp for t, (_s, sp) in raw.items() if t != 9]
+    assert raw[9][1] > 10.0 * max(others), f"the fixture does not reproduce the off-scale σ: {raw}"
+    assert max(raw, key=lambda t: raw[t][0]) == 9, "and the one-verdict title is not on top"
+
+    await refit.refit_user(
+        db, user_id=user, kind="movie", hp=DEFAULTS,
+        embeddings=observations.standard_embeddings(db, backbone, bundle_version=BUNDLE),
+        bundle_version=BUNDLE,
+    )
+    read = await board()
+    assert max(sp for _s, sp in read.values()) < 2.0, read
+    assert read[9][1] < 1.5 * min(sp for _s, sp in read.values()), read
+    assert max(read, key=lambda t: read[t][0]) == 1, (
+        f"the title that won every duel is not first: {sorted(read, key=lambda t: -read[t][0])}"
+    )
 
 
 # --- §5.3's budgets, measured --------------------------------------------------------------------

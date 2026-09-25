@@ -249,7 +249,8 @@ def backbone_embeddings(backbone: Any) -> EmbeddingSource:
 def standard_embeddings(
     conn: Any, backbone: Any = None, *, bundle_version: str | None = None
 ) -> EmbeddingSource:
-    """§5.1's coordinate for every title — `scoring.backbone.coordinate`, per title, nothing else.
+    """§5.1's coordinate for every title, read as its direction (decision 471) —
+    `scoring.backbone.coordinate` then `scoring.backbone.direction`, per title, nothing else.
 
     THIS FUNCTION EXISTS BECAUSE THE COMPOSITION WAS GOT WRONG. The nightly `ledger-map-refit`
     and §10's rebuild step 3 both passed `placement_embeddings` alone. `classify_warm` writes no
@@ -335,7 +336,12 @@ def standard_embeddings(
         for i, title_id in enumerate(ids):
             coordinate = scoring_backbone.coordinate(title_id, basis, placed.get(title_id))
             if coordinate is not None:
-                matrix[i] = coordinate.e
+                # The direction, not e(t) itself: decision 471 gives the Ledger the reading
+                # decision 469 gives the fold-in, through the one helper both call, so the fit and
+                # the serving path still read one coordinate. Raw, a norm-78 tower placement put
+                # Zootopia at s 21.8 with σ 36 on a single verdict and 147 unseen owned films in
+                # S; see `scoring.backbone.direction` for what was measured.
+                matrix[i] = scoring_backbone.direction(coordinate)
                 embedded[i] = True
         return matrix, embedded
 

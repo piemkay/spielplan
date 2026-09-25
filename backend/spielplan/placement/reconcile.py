@@ -195,13 +195,29 @@ SELECT t.id
  ORDER BY t.id
 """
 
+# Decision 470: the sweep places what the household OWNS, what §6.1's first run ASKS it to rate
+# and what any member HAS rated. §5.3 wrote "any owned title", and on the first real household 21
+# of the corpus's 100 seed-list titles were unowned rows with no coordinate - the corpus's
+# evaluation holdout, every fifth title by rating count, Lady Bird and Ocean's Twelve among them -
+# so about ten of each member's sixty verdicts never reached the fold-in or the Ledger. A verdict
+# is an observation both fits count on, and a title with none of the three is still left alone:
+# `all_missing` (every title lacking a coordinate, 11,123 on that install) stays the admin's
+# widening rather than a nightly one. The superseded and the live verdict both count, because
+# §5.2's fit reads both.
+_SWEPT = (
+    "(t.is_owned"
+    " OR EXISTS (SELECT 1 FROM seed_list s WHERE s.title_id = t.id)"
+    " OR EXISTS (SELECT 1 FROM verdict v WHERE v.title_id = t.id))"
+)
+
 
 async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str) -> list[int]:
     """The scope's work list.
 
-    §5.3 scopes the sweep to *owned* titles, and `all_missing` is the admin-triggered widening —
-    an unowned bundle title with no Backbone row genuinely has no coordinate, which is exactly
-    what §5.3 says and is fine while the ranking surfaces rank the owned library.
+    §5.3 scopes the sweep to *owned* titles, and decision 470 adds the seed list and every rated
+    title (`_SWEPT`); `all_missing` is the admin-triggered widening to everything — an unowned
+    bundle title with no Backbone row genuinely has no coordinate, which is exactly what §5.3
+    says and is fine while the ranking surfaces rank the owned library.
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown placement scope {scope!r} (known: {list(SCOPES)})")
@@ -211,7 +227,7 @@ async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str
         )
         return [int(r["id"]) for r in rows]
 
-    owned = "true" if scope == "all_missing" else "t.is_owned"
+    owned = "true" if scope == "all_missing" else _SWEPT
     rows = await conn.fetch(_MISSING_SQL.format(owned=owned), bundle_version)
     ids = [int(r["id"]) for r in rows]
     if scope == "reimport":

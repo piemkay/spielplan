@@ -5475,7 +5475,7 @@ id = "data-rules-a-zeroed-backbone-row-is-not-a-warm-title"
 spec = "§5.1 (the e(t) branch); §4.3 backbone.npz; §12 M2 exit criterion"
 milestone = "M4.13"
 kind = "backend"
-what = "A backbone.npz row flagged by cold_mask — or numerically zero where no cold_mask ships — is treated as absent: it is excluded from row_of, never stamped warm, never excused from the Cold Tower sweep, and its coordinate is the pure cold limit with e_source 'cold_tower'. The count is reported in the load notes. No owned title is served with e(t) = 0 while being reported warm. The exclusion costs the gate its input and nothing else: the crowd's own rating count for that row still reaches title_prior.item_n, so §6.1's P(seen) popularity term and §8 stage 10's badge payload read the file's figure while title_prior.gate carries the 0."
+what = "A backbone.npz row flagged by cold_mask — or numerically zero where no cold_mask ships — is treated as absent: it is excluded from row_of, never stamped warm, never excused from the Cold Tower sweep, and its coordinate is the pure cold limit with e_source 'cold_tower'. The count is reported in the load notes. No owned title is served with e(t) = 0 while being reported warm. The exclusion costs the gate its input and nothing else: the crowd's own rating count for that row still reaches title_prior.item_n, so §6.1's P(seen) popularity term and §8 stage 10's badge payload read the file's figure while title_prior.gate carries the 0. The mask takes the coordinate and not the crowd prior: the row's b_i is still read, and blended with b̂ at the gate of that crowd count once the tower places it."
 why = "The bundle ships E = 0 for all 2,879 cold_mask rows and their real coordinate in E_hat/b_hat; the app reads neither, so 1,915 titles (182 owned) got a Backbone row of zeros, no placement, e_source 'backbone' and gate ~1.0 — a personal term of exactly zero for every user for ever, counted as coordinated by M2's criterion. Excluding the row then wrote 0 into title_prior.item_n for all 2,879 (398 owned in the reference install, 375 shipping item_n >= 90), which §6.1 weights at 2.0 through log1p(n)/log1p(1e5): measured on the fixture, P(seen) for a 25,000-rating film fell from 0.68 to 0.27, so the sweep offered the best-known titles in the catalogue as ones the household has probably never seen."
 tests = ["backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title", "backend/tests/test_placement.py::test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm", "backend/tests/test_placement.py::test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower", "backend/tests/test_rate_queue.py::test_a_cold_masked_titles_crowd_count_still_reaches_the_popularity_term"]
 
@@ -8183,7 +8183,7 @@ id = "data-rules-the-ledger-fits-the-coordinate-it-serves"
 spec = "§5.1 (e(t) and the gate); §5.2 (the MAP fit takes §5.1's coordinates)"
 milestone = "M4.13"
 kind = "integration"
-what = "standard_embeddings returns §5.1's coordinate for every title — E outright for a warm one, gate·E + (1-gate)·ê for a title with a Backbone row below WARM_SUPPORT, ê for one with no row — and equals serve.coordinates()[t].e for every title. A title with item_n = 30 and a placement yields 0.75·E + 0.25·ê on both paths."
+what = "standard_embeddings returns §5.1's coordinate for every title — E outright for a warm one, gate·E + (1-gate)·ê for a title with a Backbone row below WARM_SUPPORT, ê for one with no row — and hands the fit the gate-weighted direction of serve.coordinates()[t] for every title, the one reading the fold-in serves too (decision 471). A title with item_n = 30 and a placement is served at 0.75·E + 0.25·ê and fitted at that blend's direction."
 why = "standard_embeddings composed the two sources as a precedence chain, so any title with a Backbone row took raw E regardless of support while the serving path blended: 33% of the real bundle's covered rows, fitted and served from different inputs, with §6.1's held-out instrument measuring a v the serving path does not use."
 tests = [
     "backend/tests/test_ledger_observations.py::test_a_warm_title_is_fitted_at_its_backbone_row_outright",
@@ -8198,7 +8198,7 @@ id = "data-rules-the-gate-weights-two-comparable-halves"
 spec = "§5.1 (e(t) = gate·E[t] + (1-gate)·ê(t)); §4.3; decision 236"
 milestone = "M4.13"
 kind = "backend"
-what = "The app measures, rather than assumes, what §5.1's gate is weighting: a helper reports the ((1-g)·||ê||)/(g·||E||) distribution over the rows the middle line of §5.1 applies to and the range of a fitted member's owned user_score, the measurement is exercised against synthetic arrays whose two halves are known, and ops/m413_exit_criterion.py prints both against the shipped bundle. Whether the two weighted halves are brought within one order of magnitude of each other — and by which rescaling — is decision 236's upstream contract question, and nothing in the app rescales E or ê before it is answered."
+what = "The app measures, rather than assumes, what §5.1's gate is weighting: a helper reports the ((1-g)·||ê||)/(g·||E||) distribution over the rows the middle line of §5.1 applies to and the range of a fitted member's owned user_score, the measurement is exercised against synthetic arrays whose two halves are known, and ops/m413_exit_criterion.py prints both against the shipped bundle. Whether the two weighted halves are brought within one order of magnitude of each other — and by which rescaling — is decision 236's upstream contract question: coordinate(), title_placement.e_hat and this measurement keep E and ê unscaled, and only the fold-in and the Ledger read each coordinate's gate-weighted direction (decisions 469 and 471)."
 why = "Measured on the shipped bundle over the 3,860 thin non-cold rows the blend applies to (a real Backbone row below WARM_SUPPORT, which is one ulp above 90): median ||E|| 0.0152 against median ||E_hat|| 20.47, and ((1-g)·||ê||)/(g·||E||) runs p10 82.5 / median 525.8 / p90 5,499 — so 'gate' weights two incommensurable quantities and the cold half decides every thin title's personal term. E itself is support-scaled (norm median 0.043, max 127), so standardising ⟨v,e⟩ over the reference population puts owned popular titles at -15.9."
 tests = [
     "backend/tests/test_scoring.py::test_the_blend_report_names_the_ratio_of_the_two_weighted_halves_on_known_arrays",
@@ -11357,4 +11357,88 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The owner's instruction of 2026-09-25, after the first household user test: two members who
+# rated about sixty films each got rankings led by five-rating titles and by blockbusters neither
+# had asked for, so §12 M2's "visibly personal rankings" did not hold. The six rows below are the
+# scoring repair (workstream WA). `spec` cites sections alone for the reason the row above gives:
+# decisions 469, 470 and 471 are recorded in the same wave, and `_unresolvable_decision_citations`
+# would redden a row that cited them before their entries land. The merge appends
+# `; decision 469` (and 470, 471) to the rows that `why` names them in.
+[[requirement]]
+id = "data-rules-the-item-prior-is-the-shipped-b-i"
+spec = "§5.1 (\"b(t) = shrunk item prior; b̂(t) from the Cold Tower for cold titles\"); §4.3 backbone.npz"
+milestone = "M5"
+kind = "backend"
+what = "b(t) is the shipped b_i wherever the Cold Tower gave no b̂ - the gate blends b_i with b̂ where there is one and is a no-op where there is not, exactly as it is for E and ê - so a five-rating title with b_i 0 scores 0 and not (1-gate)·μ; and a cold-masked row keeps its b_i, blended with b̂ at the gate of the crowd support the file carries for it, while only its e(t) comes from the tower."
+why = "The corpus already shrinks b_i toward zero with a pseudo-count of 25 (item_prior_shrink); the app then pulled every thin title toward μ = 0.680, the rating intercept, adding +0.23 at n = 5 (+3.2 sd of the prior), so the admin's top eight user_score rows were all item_n 5. And the cold mask - the corpus's 20% evaluation holdout - threw away the crowd prior of 182 owned films, Raiders (192,061 ratings) among them, which were ranked on the tower's guess instead."
+tests = [
+    "backend/tests/test_scoring.py::test_a_warm_title_with_no_placement_keeps_its_row_and_its_shipped_prior",
+    "backend/tests/test_scoring.py::test_a_thin_title_cannot_outrank_a_warm_one_on_the_intercept",
+    "backend/tests/test_scoring.py::test_a_zeroed_backbone_row_is_not_a_warm_title",
+    "backend/tests/test_scoring.py::test_a_title_with_no_backbone_row_scores_entirely_from_the_cold_tower",
+    "backend/tests/test_scoring.py::test_priors_name_every_e_source_the_spec_defines",
+]
+
+[[requirement]]
+id = "data-rules-the-personal-half-reads-directions-not-norms"
+spec = "§5.1 (score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩; the per-user β search); §12 M2 exit criterion (\"50–100 verdicts each produce visibly personal rankings\")"
+milestone = "M5"
+kind = "integration"
+what = "The fold-in fits, cross-validates and serves ⟨v_u, d(t)⟩ where d(t) is e(t)'s unit direction weighted by its gate when the coordinate is the Backbone's alone and by 1 when the Cold Tower contributed to it, through one helper, so rescaling any row's norm moves neither the fit nor a score; on a support-weighted basis a rater's personal top is their taste from across the support range rather than the most popular fifth; and user_vector records the geometry it was fitted in, so a raw-geometry fit is refitted by the next tick without waiting out the pause and the crowd half is rewritten with it."
+why = "E = V·S is support-weighted (median row norm 0.008 below 20 ratings, 6.94 above 10,000) and the Cold Tower's ê sits near 30, so the raw inner product ranked by popularity and provenance: Raiders at 13.28 on a member's scale whose p99 was 1.97, eight of one member's owned top ten tower placements. Over corpus raters through the app's own fit_user, gate-weighted directions raise held-out Spearman from 0.4597/0.4711/0.4789 to 0.4903/0.5012/0.5224 at 30/60/100 labels (decision 469)."
+tests = [
+    "backend/tests/test_scoring.py::test_the_fit_and_its_scores_do_not_move_when_a_rows_norm_does",
+    "backend/tests/test_scoring.py::test_on_a_support_weighted_basis_the_personal_top_is_taste_and_not_popularity",
+    "backend/tests/test_scoring.py::test_a_coordinates_direction_speaks_at_the_evidence_behind_it",
+    "backend/tests/test_foldin_jobs.py::test_the_cross_validation_standardises_each_fold_the_way_serving_will",
+    "backend/tests/test_foldin_jobs.py::test_a_fit_in_another_coordinate_geometry_is_refitted_at_once_and_the_priors_with_it",
+]
+
+[[requirement]]
+id = "data-rules-the-ledger-reads-the-fold-ins-directions"
+spec = "§5.2 (s = μ + ⟨v, e⟩ + r; the MAP fit takes §5.1's coordinates); §6.3 (the board orders a tier by s)"
+milestone = "M5"
+kind = "integration"
+what = "standard_embeddings hands the Ledger the same gate-weighted direction the fold-in reads, so one verdict on an off-scale coordinate (a Cold Tower placement of norm 78) neither tops the board nor carries a σ an order above the rest while a title that won its duels comes first; and ledger_fit records its geometry, so load_cache refuses a raw-geometry fit and refreshes_owed hands it to the 60 s tick."
+why = "Raw, the Ledger put Zootopia at #1 of an S tier with s 21.8 and σ 36 on one 'liked', 147 unseen owned films in S for one member, and a σ of ±26 on a title card. Over corpus raters the unobserved-title order improves from 0.3405/0.3678/0.4006 to 0.3948/0.4149/0.4762 at 30/60/100 labels (decision 471)."
+tests = [
+    "backend/tests/test_ledger_observations.py::test_one_verdict_on_an_off_scale_coordinate_does_not_decide_the_board",
+    "backend/tests/test_ledger_observations.py::test_a_fit_in_another_coordinate_geometry_is_refused_and_owed_to_the_tick",
+    "backend/tests/test_ledger_observations.py::test_the_fitted_coordinate_equals_the_served_coordinate_for_every_title",
+]
+
+[[requirement]]
+id = "data-rules-every-rated-title-has-a-coordinate"
+spec = "§5.3 (placement reconciliation); §6.1 (the seeded first run from seed_list); §12 M2 exit criterion"
+milestone = "M5"
+kind = "integration"
+what = "The reconciliation sweep's work list is every owned title, every seed-list title and every title a member has a verdict on that lacks a coordinate, placed and stamped the same way; a title with none of the three is left alone, the owned counters do not count the unowned ones, and after the sweep no verdict is dropped from the fold-in for want of a coordinate."
+why = "21 of the corpus's 100 seed-list titles were unowned rows the corpus's holdout had masked, so about ten of each member's sixty verdicts - Lady Bird's among them - reached neither the fold-in nor the Ledger (decision 470)."
+tests = [
+    "backend/tests/test_placement.py::test_the_sweep_places_what_the_household_rated_or_is_asked_to_rate",
+]
+
+[[requirement]]
+id = "jellyfin-acquisition-a-placed-title-is-ranked-by-the-next-tick"
+spec = "§8 stage 9 (\"feature vector per the feature contract -> Cold Tower -> e(t), b(t)\"); §8 stage 10 (\"appears in ranking/search/explore\"); §5.3"
+milestone = "M5"
+kind = "integration"
+what = "A title placed after the fold-in last ran gets its title_prior row and a user_score row for every fitted member on the next tick and appears in the ranked section, once; and a title the corpus supplied that Jellyfin adds is placed at stage 9 through the sweep's own scope rather than parked until the nightly sweep."
+why = "The first household's 14 acquired titles had placements and no title_prior row, so every ranked read, which joins it, dropped them until the nightly pass; and eight corpus titles it added parked at stage 9 with 'the Cold Tower produced no coordinate', one of them (The Rivals of Amziah King, item_n 6) the admin's #1 owned title as a raw thin row."
+tests = [
+    "backend/tests/test_foldin_jobs.py::test_a_title_placed_after_the_fit_is_ranked_by_the_next_tick",
+    "backend/tests/test_acquire_pipeline.py::test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine",
+]
+
+[[requirement]]
+id = "library-rate-sweet-spot-floor-reads-the-owned-library"
+spec = "§6.0 row 4 (\"the shared sweet spot — doubles as the Tonight prior\"); §6.2 step 3 (the plain average)"
+milestone = "M5"
+kind = "integration"
+what = "The sweet-spot shelf's floor is each member's rank within the OWNED library of the kind, so unowned titles scored above everything the household owns change nothing on the shelf."
+why = "The ranking CTE ranked all 9.5k scored films, most of them unowned, so the owned library's mean rank was 0.42-0.46 and a catalogue nobody can play decided which owned titles cleared 0.70."
+tests = [
+    "backend/tests/test_home.py::test_the_sweet_spot_floor_is_read_against_the_owned_library",
 ]

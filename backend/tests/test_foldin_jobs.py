@@ -98,6 +98,14 @@ async def _wait_out_the_pause(conn, user_id: int) -> None:
         " WHERE user_id = $1",
         user_id, shift,
     )
+    # The third clock `_is_stale` reads: a placement newer than the fit is a trigger since the
+    # owner instruction of 2026-09-25, and the import placed this world's thin titles moments before
+    # the first fit. Shifted with the other two - and for everybody, which moves every placement
+    # further behind every fit that was not shifted - so the ORDER is still what this preserves.
+    await conn.execute(
+        "UPDATE title_placement SET created_at = created_at - ($1::int * interval '1 second')",
+        shift,
+    )
 
 
 async def _partition(conn, user_id: int, kind: str = "movie") -> list[tuple]:
@@ -266,6 +274,105 @@ async def test_a_refit_with_unchanged_labels_writes_no_rows(db, world):
         "the nightly pass is the one that rewrites regardless; if it does not, the tick's "
         "restraint has nowhere to hand the work on to"
     )
+
+
+# --- the coordinate geometry and a title placed after the fit -----------------------------------
+#     (decision 469; owner instruction of 2026-09-25 after the first household user test)
+
+
+async def test_a_fit_in_another_coordinate_geometry_is_refitted_at_once_and_the_priors_with_it(
+    db, world
+):
+    """0031. An upgraded install holds fits made against the raw coordinate and priors made by the
+    old b(t) arithmetic, and decision 469 serves neither: its v multiplies directions by a vector
+    scaled for rows a hundred times longer. `bundle_version` cannot tell - the basis is the same
+    file - so every fit carries its geometry, and the first tick after the upgrade refits the
+    stale ones without waiting out the pause (§10's reason: a vector in another space is not stale
+    but wrong) and rewrites `title_prior` before it does.
+
+    A deactivated account is the one row no pass ever refits, so it is the one that would have
+    turned that into a whole-table rewrite on every tick for ever; it has to stay quiet.
+    """
+    patrick, ana, sam = world["patrick"], world["ana"], world["sam"]
+    await _rate(db, patrick)
+    await _rate(db, ana)
+    assert len((await _tick(db, world)).refit) == 4
+    stamps = await db.fetch("SELECT DISTINCT geometry FROM user_vector")
+    assert [r["geometry"] for r in stamps] == [bb.COORDINATE_GEOMETRY]
+
+    await db.execute(
+        "UPDATE user_vector SET geometry = 'raw' WHERE user_id = $1 AND kind = 'movie'", patrick
+    )
+    await db.execute("UPDATE title_prior SET b = 9.0 WHERE title_id = 1")
+    report = await _tick(db, world)
+    assert report.refit == [(patrick, "movie")], report.refit
+    assert report.priors is not None
+    assert report.priors.written == await db.fetchval("SELECT count(*) FROM title")
+    assert await db.fetchval("SELECT b FROM title_prior WHERE title_id = 1") != 9.0
+    assert (await db.fetchval(
+        "SELECT geometry FROM user_vector WHERE user_id = $1 AND kind = 'movie'", patrick
+    )) == bb.COORDINATE_GEOMETRY
+
+    again = await _tick(db, world)
+    assert again.refit == [] and again.priors is None
+
+    await db.execute(
+        "INSERT INTO user_vector (user_id, kind, purpose, vec, geometry) "
+        "VALUES ($1, 'movie', 'foldin', $2, 'raw')",
+        sam, bb.pack_vec(np.zeros(EMBED_DIM)),
+    )
+    quiet = await _tick(db, world)
+    assert quiet.refit == [] and quiet.priors is None, (
+        "a deactivated account's raw row rewrote the crowd half on an ordinary tick"
+    )
+
+
+async def test_a_title_placed_after_the_fit_is_ranked_by_the_next_tick(db, world):
+    """§8 stage 10: an acquisition "appears in ranking/search/explore". It did not, for a day.
+
+    The fold-in wrote `user_score` for whatever had a coordinate when it last ran and `title_prior`
+    only in the nightly pass, and every ranked read joins both - so the first household's fourteen
+    acquired titles, placed within the hour, were on no shelf and in no ranked list until the night.
+    A placement newer than the fit is a trigger now, and the tick writes the prior of a title placed
+    since its prior was written; the nightly pass remains the one that rewrites everything.
+    """
+    patrick, ana = world["patrick"], world["ana"]
+    await _rate(db, patrick)
+    await _tick(db, world)
+    acquired = 1_000_000_001
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned, origin) "
+        "VALUES ($1, 'movie', 'The Apprentice', 2024, true, 'acquired')",
+        acquired,
+    )
+    await db.execute(
+        """
+        INSERT INTO title_placement (title_id, bundle_version, e_hat, b_hat, contract_sha256,
+                                     tower_sha256, input_dim, blocks_present, blocks_dropped,
+                                     blocks_imputed, nnz)
+        VALUES ($1, $2, $3, 0.2, 'sha-contract', 'sha-tower', 131,
+                ARRAY['genre'], ARRAY[]::text[], ARRAY[]::text[], 7)
+        """,
+        acquired, BUNDLE, bb.pack_vec(np.random.default_rng(1).standard_normal(EMBED_DIM) * 30),
+    )
+    assert await db.fetchval("SELECT count(*) FROM title_prior WHERE title_id = $1", acquired) == 0
+
+    report = await _tick(db, world)
+    assert sorted(report.refit) == sorted([(patrick, "movie"), (ana, "movie")]), report.refit
+    assert report.priors is not None and report.priors.written == 1
+    prior = await db.fetchrow("SELECT * FROM title_prior WHERE title_id = $1", acquired)
+    assert prior["e_source"] == "cold_tower" and prior["bundle_version"] == BUNDLE
+    for person in (patrick, ana):
+        assert await db.fetchval(
+            "SELECT count(*) FROM user_score WHERE user_id = $1 AND title_id = $2", person, acquired
+        ) == 1
+    section = await serve.ranked_section(
+        db, user_id=patrick, kind="movie", bundle_version=BUNDLE, limit=50
+    )
+    assert acquired in [item["id"] for item in section["items"]]
+
+    again = await _tick(db, world)
+    assert again.refit == [] and again.priors is None
 
 
 # --- the fit that loses its work (ml08, dd16) ---------------------------------------------------
@@ -503,8 +610,9 @@ def _synthetic_fold_in_case(
     The scale gap is the point and it is not invented: a Backbone row's norm runs with the crowd
     support behind it (0.006 to 5.4 on the real basis) and the titles a person has rated are the
     popular ones, so the labelled rows are long and the population they are standardised over is
-    short. Measured on this fixture, the sd of the personal half over the labelled rows is 2.73x
-    the sd over the reference.
+    short. Since decision 469 the fit reads each row's direction weighted by its gate, so the gap
+    that survives is the gate's: the labelled rows carry gate 0.9 and the population's one-rating
+    Backbone-only rows gate 0.09, a gap the fold's standardisation still has to get right.
     """
     rng = np.random.default_rng(seed)
     taste = rng.standard_normal(EMBED_DIM)
@@ -533,7 +641,7 @@ def _synthetic_fold_in_case(
         reference.append(
             Coordinate(
                 title_id=1000 + j, e=0.2 * e / np.linalg.norm(e),
-                b=float(rng.standard_normal()), gate=0.4, item_n=30, e_source="blended",
+                b=float(rng.standard_normal()), gate=bb.gate(1), item_n=1, e_source="backbone",
             )
         )
     return coords, reference, labels
@@ -548,11 +656,15 @@ def _held_out_table(
     `fit_user`'s preprocessing is restated rather than reached into, because the claim under test
     is an equality between two independent spellings of one piece of arithmetic.
     """
-    ref_e = np.ascontiguousarray([c.e for c in reference], dtype=np.float64)
+    # Each row's gate-weighted direction, which is what `fit_user` reads since decision 469.
+    ref_e = bb.directions(reference)
     ref_b = np.asarray([c.b for c in reference], dtype=np.float64)
     prior_mean, prior_sd = float(ref_b.mean()), float(ref_b.std())
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
-    rows = [(coords[t].e, foldin.VERDICT_TO_Y[int(v)], coords[t].b) for t, v in ordered]
+    rows = [
+        (bb.directions([coords[t]])[0], foldin.VERDICT_TO_Y[int(v)], coords[t].b)
+        for t, v in ordered
+    ]
     x = np.ascontiguousarray([r[0] for r in rows], dtype=np.float64)
     y_raw = np.asarray([r[1] for r in rows], dtype=np.float64)
     z_prior = (np.asarray([r[2] for r in rows], dtype=np.float64) - prior_mean) / prior_sd
@@ -602,9 +714,10 @@ def test_the_cross_validation_standardises_each_fold_the_way_serving_will():
     real Backbone. So the beta this search reported was chosen against a personal half the app
     never serves, and it is a printed number: §6.0's why-line and §6.7's rail both carry it.
 
-    Measured here: the fold-consistent arithmetic chooses beta 0.4 at rho 0.6792 and the old
-    spelling chooses beta 0.5 at rho 0.6745. Not a tie under §0's 0.008 floor, and a different
-    weight - which is why this is a repair and not a rounding.
+    Measured here, over decision 469's gated directions: the fold-consistent arithmetic chooses
+    beta 0.4 at rho 0.6367 and the old spelling chooses beta 0.1 at rho 0.6320, and at beta 0.4 the
+    two differ by 0.033. Not a tie under §0's 0.008 floor, and a different weight - which is why
+    this is a repair and not a rounding.
     """
     coords, reference, labels = _synthetic_fold_in_case()
     fit = foldin.fit_user(labels, coords, reference, seed=9)
