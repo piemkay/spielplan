@@ -19,9 +19,10 @@ payload for every forbidden key rather than enumerating call sites.
 
 WHAT IS *NOT* GATED, and why each survives:
 
-* the **title card's model line** (`b(t) · β · gate`) — proposal 19 and decision 117 both say
-  so in as many words; it is §6.0's M0 transparency promise and predates this toggle. It is
-  served by `scoring.serve.model_line` on the title route, which this module never touches.
+* no longer the **title card's model line** (`b(t) · β · gate`), which proposal 19 and decision
+  117 had left ungated: decision 486 puts it behind this toggle too, because β and σ in it are
+  this viewer's own fit. `api/library.py` applies `visible_to` where it builds the card rather
+  than through `redact()`, since the card is not a Home payload.
 * the **shelf why-line**, including the β it prints. §6.0's own table gives shelf 2's why as
   "clean item prior + your fold-in, blended at β 0.8" — the number is the mandated copy of a
   shelf that must be able to say why it exists, not an annotation about this viewer.

@@ -30,7 +30,8 @@ describe('quoteText (evidence quotes as fragments)', () => {
     expect(quoteText(stored).replaceAll('…', '')).toBe(stored);
     expect(quoteText('')).toBe('');
     expect(quoteText(null)).toBe('');
-    // A span that opens on a digit or a quotation mark is not a lower-case start.
+    // A span that opens on a digit, or on a quotation mark before a capital, is not a lower-case
+    // start.
     expect(quoteText('1959, and a hearing.')).toBe('1959, and a hearing.');
   });
 });

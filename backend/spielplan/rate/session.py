@@ -547,10 +547,11 @@ async def stash_card(
     token here rather than at the route is what makes that CHECK an invariant instead of a
     reminder.
 
-    Unconditional, and only one caller may be: `record_correction`'s repaired pair, which
+    Unconditional, and only two callers may be: `record_correction`'s repaired pair, which
     DELIBERATELY replaces a standing card — a corrected pair that kept the old card would go on
     asking about a title the person has just said they have not seen — and which is serialised
-    anyway, because `_claim_card`'s `FOR UPDATE` is the first statement of its transaction. The
+    anyway, because `_claim_card`'s `FOR UPDATE` is the first statement of its transaction; and
+    `rate/direct.py`'s title-card answer (decision 487), which takes the same row lock first. The
     banner's head redraw replaces a standing card just as deliberately but holds no lock at all,
     so it goes through `_stash_if_unchanged`; everything else goes through `_stash_if_empty`.
     [M4.10 finding 4, cycle 1 m410-rev-02]

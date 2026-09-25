@@ -55,7 +55,7 @@
         This account was created with a one-time password. Setting your own unlocks the rest of
         the app; a passkey can be added afterwards from the account page.
       {:else}
-        §3.2 keeps the password available as a fallback on any device. Changing it signs every
+        Your password stays available as a fallback on any device. Changing it signs every
         other session out; this one stays.
       {/if}
     </p>

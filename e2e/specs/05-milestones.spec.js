@@ -4,12 +4,16 @@ import { signedIn } from '../helpers.js';
 
 /**
  * §12's build order, made visible. Every surface the spec names exists as a destination; the
- * ones their milestone has not reached say so, in the spec's own words, rather than 404ing or
- * pretending.
+ * ones their milestone has not reached say so rather than 404ing or pretending.
  *
  * These assertions are deliberately *inverted* as milestones land: when M2 ships Rate, the
  * "not built yet" expectation here fails, and that failure is the reminder to replace this
  * placeholder test with the real one. See docs/TESTING.md.
+ *
+ * Since the 2026-09-25 user test an unbuilt surface is reached by URL only - it is absent from
+ * navigation and from every entry point (decision 488) - and its placeholder speaks the member
+ * register, so it names no milestone (decision 486 clause 2). The milestone that owes each one
+ * is kept here, in the test's own table, where the build order is the subject.
  */
 
 const PENDING = [
@@ -22,11 +26,16 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const { path, surface, milestone } of PENDING) {
-  test(`${surface} names the milestone that owes it (${milestone})`, async ({ page }) => {
+  test(`${surface} is not built yet, and is reached only by its address (${milestone})`, async ({
+    page
+  }) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { name: surface })).toBeVisible();
-    await expect(page.getByText(milestone, { exact: true })).toBeVisible();
-    await expect(page.getByText(`Not built yet — this surface arrives with ${milestone}.`)).toBeVisible();
+    await expect(page.getByText('Not built yet — this is coming in a later update.')).toBeVisible();
+    // Decision 486: no milestone label on a member surface, switch on or off.
+    await expect(page.getByTestId('placeholder')).not.toContainText(/\bM[0-7](\.\d+)?\b/);
+    // Decision 488: nothing in the shell links here while it is a placeholder.
+    await expect(page.locator(`a[href="${path}"]`)).toHaveCount(0);
   });
 }
 

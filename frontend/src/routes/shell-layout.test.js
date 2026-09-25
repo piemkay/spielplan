@@ -329,12 +329,15 @@ describe('the shell when it cannot tell where a person belongs', () => {
       expect(session.offline).toBe(false);
       const header = target.querySelector('header');
       expect(header).not.toBeNull();
-      expect(header.textContent).not.toContain('no bundle imported');
+      // `ME` is a member, who reads the state in the member register (decision 486); an admin
+      // reads §3.1's own "no bundle imported", behind the same `=== false`.
+      expect(header.textContent).not.toContain('no movie data yet');
 
       // And it is absent because the read failed, not because this build never draws it.
       session.hasBundle = false;
       flushSync();
-      expect(target.querySelector('header').textContent).toContain('no bundle imported');
+      expect(target.querySelector('header').textContent).toContain('no movie data yet');
+      expect(target.querySelector('header').textContent).not.toContain('bundle');
     } finally {
       unmount(app);
     }

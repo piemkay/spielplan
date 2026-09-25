@@ -19,13 +19,38 @@ test.beforeEach(async ({ page }) => {
   await openTitle(page, 'Heat');
 });
 
+/**
+ * Show the model, through the preference route and a fresh boot, so the card is read the way a
+ * member who turned the switch on reads it. Put back in `finally` by the caller: default off is
+ * part of the contract every later spec starts from.
+ */
+async function showModel(page, on) {
+  const set = await page.request.post('/api/auth/preferences', { data: { show_model: on } });
+  expect(set.ok(), 'the preference did not save').toBeTruthy();
+}
+
 test('the card carries metadata, overview and the model line', async ({ page }) => {
-  const panel = page.getByLabel('Title detail');
+  let panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
   await expect(panel.locator('.sub')).toContainText('1995');
-  await expect(panel.locator('.sub')).toContainText('movie');
-  // §6.0: the model line is in the data voice and is NOT gated by the show-the-model toggle
-  // (decision 117) — it is the M0 transparency promise.
+  // The kind in words (decision 486): `movie` is the column value.
+  await expect(panel.locator('.sub')).toContainText('film');
+  // Decision 486, amending decision 117: the model line is Show the model's. With the switch off
+  // it is not on the card at all; everything below reads it with the switch on.
+  await expect(panel.locator('.modelline')).toHaveCount(0);
+  await showModel(page, true);
+  try {
+    panel = await openTitle(page, 'Heat');
+    await expectTheModelLine(panel);
+  } finally {
+    await showModel(page, false);
+  }
+});
+
+async function expectTheModelLine(panel) {
+  // §6.0: the model line is in the data voice. It was ungated as the M0 transparency promise
+  // (decision 117) until decision 486 put it behind the switch; the rest of this comment is about
+  // what the line says once it is shown.
   //
   // ASSERTED OUTRIGHT, not as an alternation. This read
   // `/bundle test-v1|model line unavailable/` — which accepts the FAILING outcome, and this
@@ -50,31 +75,37 @@ test('the card carries metadata, overview and the model line', async ({ page }) 
   // formatter deliberately does not.
   await expect(panel.locator('.modelline')).toContainText('bundle test-v1');
   await expect(panel.locator('.modelline')).toContainText(/b\(t\) -?\d+\.\d\d/);
-});
+}
 
-test('both actions are present, and a missing one is disabled rather than absent', async ({
-  page,
-}) => {
-  // §6.0 requires two actions. The prototype shipped only "Show on map"; a missing Jellyfin
-  // link must read as "not configured", not as "this film cannot be played".
+test('Play is disabled with its reason, and Show on map waits for the Map', async ({ page }) => {
+  // §6.0 names two actions. A missing Jellyfin link must read as its real reason, not as "this
+  // film cannot be played" - and not as a milestone label, which the card printed until the
+  // 2026-09-25 user test (decision 486). Show on map is absent while §6.4's Map is unbuilt, the
+  // same flag that keeps Map out of navigation (decision 488).
   const panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('button', { name: 'Play on Jellyfin' })).toBeDisabled();
-  await expect(panel.getByRole('link', { name: 'Show on map' })).toBeVisible();
+  const why = panel.getByTestId('title-jellyfin-why');
+  await expect(why).toBeVisible();
+  await expect(why).not.toContainText(/\bM\d\b/);
+  await expect(panel.getByRole('link', { name: 'Show on map' })).toHaveCount(0);
 });
 
 test('the two DNA tiers are visibly distinct and a shared term appears in both', async ({
   page,
 }) => {
   // §4.1 rule 1: "14,181 (title,term) pairs exist in both and must stay distinguishable."
-  // The fixture reproduces that overlap in miniature; this is where it becomes visible.
+  // The fixture reproduces that overlap in miniature; this is where it becomes visible. The
+  // headings say what each tier is in the member register (decision 486); the distinction is
+  // the rule, the words were the operator's.
   const panel = page.getByLabel('Title detail');
-  await expect(panel.getByText('DNA — EXTRACTED')).toBeVisible();
-  await expect(panel.getByText('DNA — PROJECTED (INFERRED)')).toBeVisible();
+  await expect(panel.getByText("WHAT IT'S LIKE")).toBeVisible();
+  await expect(panel.getByText('PROBABLY ALSO')).toBeVisible();
 
+  // By label: the fixture ships `themes.obsession` with the label "obsession".
   const extracted = panel.locator('.tag .term');
-  const projected = panel.locator('.chip');
-  await expect(extracted.filter({ hasText: 'themes.obsession' })).toBeVisible();
-  await expect(projected.filter({ hasText: 'themes.obsession' })).toBeVisible();
+  const projected = panel.locator('.chip .chiplabel');
+  await expect(extracted.filter({ hasText: /^obsession$/ })).toBeVisible();
+  await expect(projected.filter({ hasText: /^obsession$/ })).toBeVisible();
 });
 
 test('every extracted tag shows its evidence quote and source', async ({ page }) => {
@@ -90,7 +121,10 @@ test('every extracted tag shows its evidence quote and source', async ({ page })
     // sane count are what would have caught it.
     await expect(quotes.first()).not.toHaveText('“”');
     expect(await quotes.count()).toBeLessThan(6);
-    await expect(tag.locator('.src').first()).toContainText(/:/); // e.g. trakt:comment
+    // The source by name (`trakt:comment` reads "Trakt · comment"), not by its stored key: the
+    // key is Show the model's (decision 486).
+    await expect(tag.locator('.src').first()).toHaveText(/\S/);
+    await expect(tag.locator('.src').first()).not.toContainText(':');
   }
 });
 
@@ -110,27 +144,43 @@ test('a quote cut mid-sentence says so and a one-source projection is fainter, n
   await expect(panel.locator('.chips .chip.faint')).toHaveCount(1);
 });
 
-test('salience is shown, and nothing is filtered by it', async ({ page }) => {
-  // §4.1 rule 2: weights, never filters. Salience is visible next to the tag it weights.
-  const panel = page.getByLabel('Title detail');
-  await expect(panel.locator('.tag').first().getByText(/sal [123]/)).toBeVisible();
+test("salience is Show the model's, and nothing is filtered by it", async ({ page }) => {
+  // §4.1 rule 2: weights, never filters. Salience is a model number, so since decision 486 it is
+  // visible next to the tag it weights only while the switch is on - and the tags are all there
+  // either way.
+  let panel = page.getByLabel('Title detail');
+  const tags = await panel.locator('.tag').count();
+  expect(tags, 'Heat carries extracted tags').toBeGreaterThan(0);
+  await expect(panel.getByText(/\bsal [123]\b/)).toHaveCount(0);
+  await showModel(page, true);
+  try {
+    panel = await openTitle(page, 'Heat');
+    await expect(panel.locator('.tag').first().getByText(/sal [123]/)).toBeVisible();
+    await expect(panel.locator('.tag')).toHaveCount(tags);
+  } finally {
+    await showModel(page, false);
+  }
 });
 
-test('credits are deduped at read time and cite their sources', async ({ page }) => {
+test('credits are deduped at read time, and their source count is the operator\'s', async ({
+  page
+}) => {
   // §4.1: "credit (dedupe at read time, never at import)". The fixture stores the director
-  // twice, from tmdb and omdb; the card must show one row that says so.
+  // twice, from tmdb and omdb; the card must show one row. How many sources agreed is
+  // provenance, printed while Show the model is on (decision 486).
   const panel = page.getByLabel('Title detail');
   const director = panel.locator('.person', { hasText: 'Michael Mann' });
   await expect(director).toHaveCount(1);
-  await expect(director).toContainText('2 sources');
+  await expect(director).not.toContainText('sources');
 });
 
 test('platform scores travel with their display-only caption', async ({ page }) => {
   // §4.1 rule 3: aggregate platform scores are a popularity conduit and are banned as model
-  // features. The caption is the only thing stopping a reader assuming otherwise.
+  // features. The caption is the only thing stopping a reader assuming otherwise, and it says
+  // so in the member register (decision 486); `display_only` travels on the payload.
   const panel = page.getByLabel('Title detail');
   await expect(panel.locator('.scores')).toBeVisible();
-  await expect(panel.getByText(/display-only schema.*never model features/)).toBeVisible();
+  await expect(panel.getByText(/never affect your suggestions/)).toBeVisible();
 });
 
 test('tapping a second poster re-fetches instead of showing the first', async ({ page }) => {
@@ -155,9 +205,9 @@ test('tapping a second poster re-fetches instead of showing the first', async ({
 
 // --- M4.9: the chip, the count line, and the card that used to throw --------------------------
 
-/** §4.3: a vocabulary id IS `facet.term`, so a chip carries exactly one dot. */
+/** §4.3: a vocabulary id IS `facet.term`. Decision 486: no chip prints one. */
 const VOCAB_ID = /^[a-z_]+\.[a-z0-9_]+$/;
-/** The defect: `{facet}.{term}` printed over a term that already carries its prefix. */
+/** The M4.9 defect: `{facet}.{term}` printed over a term that already carries its prefix. */
 const DOUBLED = /^[a-z_]+\.[a-z_]+\./;
 
 /**
@@ -190,28 +240,32 @@ test('a DNA chip prints its term once and wears its facet colour', async ({ page
   //
   // THE LABEL. The corpus keys the vocabulary as `characters.amateur_sleuth`, so `dna_tag.term`
   // already carries its facet; the card printed `{facet}.{term}` on top of that and rendered
-  // `narrative_themes.themes.obsession` for 92.5% of the shipped tags. The term is printed
-  // alone now and the facet is spent on the colour, which is the identity §6.8 asks for.
+  // `narrative_themes.themes.obsession` for 92.5% of the shipped tags. M4.9 printed the id
+  // alone; decision 486 prints the term by the label the vocabulary ships and keeps the id for
+  // Show the model, because a member read `register.plays_it_straight` (user test 2026-09-25).
+  // The facet is spent on the colour, which is the identity §6.8 asks for.
   //
   // THE COLOUR. §6.8: "a fixed colour per vocabulary facet (11)". The extraction axis the
   // corpus ships (`character_dynamics`, `narrative_themes`) is not a vocabulary facet id, so
   // ten of the eleven facets resolved to `--ink-4` and the palette was a decoration nothing
   // could read. Both tiers are walked: the two lists are built from different payload keys and
   // the projected one was written by copying the extracted one, which is how a fix to one of
-  // them could leave the other wrong.
+  // them could leave the other wrong. A projected chip's label is its own span, beside the count
+  // of sources that suggested it, and the colour is on the chip.
   const panel = page.getByLabel('Title detail');
   const chips = [
-    ...(await panel.locator('.tag .term').all()),
-    ...(await panel.locator('.chips .chip').all())
+    ...(await panel.locator('.tag .term').all()).map((el) => [el, el]),
+    ...(await panel.locator('.chips .chip').all()).map((el) => [el, el.locator('.chiplabel')])
   ];
   expect(
     chips.length,
     'Heat carries tags in both tiers - with none, every assertion below is vacuous'
   ).toBeGreaterThan(1);
 
-  for (const chip of chips) {
-    const text = ((await chip.textContent()) ?? '').trim();
-    expect(text, `chip "${text}" is not a vocabulary id printed once`).toMatch(VOCAB_ID);
+  for (const [chip, label] of chips) {
+    const text = ((await label.textContent()) ?? '').trim();
+    expect(text, 'a chip with no name').not.toBe('');
+    expect(text, `chip "${text}" prints the vocabulary id, not its label`).not.toMatch(VOCAB_ID);
     expect(text, `chip "${text}" prints its facet twice`).not.toMatch(DOUBLED);
 
     const colour = await chipColour(chip);

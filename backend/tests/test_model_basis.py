@@ -883,15 +883,19 @@ async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_calle
         await worker._active_store(db)
 
 
-# The five routes data-03's row calls "the five fitting routes", named here because the row's
-# sentence is a claim about an inventory, and an inventory nobody wrote down is a grep.
+# The routes data-03's row calls "the fitting routes", named here because the row's sentence is
+# a claim about an inventory, and an inventory nobody wrote down is a grep. Five until the
+# 2026-09-25 user test; the sixth is the title card's answer (decision 487), which writes a
+# verdict through `rate.session` and threads `_basis(request)` into it like `verdict` does.
 _FITTING_ROUTES = (
     "rate.py::verdict", "rate.py::duel", "rate.py::undo", "rank.py::drop", "rank.py::answer",
+    "rate.py::answer_from_title_card",
 )
 
 
 def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
-    """The row says five; the two 409 tests above drive two of them.
+    """The row said five, and six since the title card answers (decision 487); the two 409 tests
+    above drive two of them.
 
     Both window tests -- the swap arm at
     `test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording` and the broken

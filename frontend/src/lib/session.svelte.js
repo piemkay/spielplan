@@ -223,8 +223,8 @@ export async function refreshUser() {
 
 /**
  * §6.7, owner decision 2026-08-29: one global per-user "show the model" preference, default
- * off, toggled from the account dropdown. It reveals the transparency rail and the inline
- * numeric annotations; the title card's model line is deliberately outside it (§6.0).
+ * off, toggled from the account dropdown. It reveals the transparency rail, the inline numeric
+ * annotations and, since decision 486 amended decision 117, the title card's model line (§6.0).
  */
 export async function setShowModel(on) {
   if (session.user) session.user = { ...session.user, show_model: on };

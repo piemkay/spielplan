@@ -1500,18 +1500,25 @@ async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(worl
     }
 
 
-async def test_the_title_card_model_line_renders_with_the_toggle_off(world):
-    """Proposal 19 and decision 117 both say so: "the title card's model line stays ungated".
+async def test_the_title_card_model_line_is_absent_with_the_toggle_off_and_present_with_it_on(world):
+    """Decision 486, amending decision 117: §6.7's toggle governs §6.0's model line too.
 
-    It is §6.0's M0 transparency promise and predates the §6.7 rail, so it must survive the
-    default-off preference. Gating it would put the app's oldest promise behind a debug flag.
+    Decision 117 left this one line ungated as the M0 transparency promise. The 2026-09-25 user
+    test put it in front of two members with the switch off, and β and σ in it are this viewer's
+    own fit, not crowd provenance - so it is ABSENT from the payload with the switch off, as the
+    rail is, and present the moment it is on.
     """
     assert await world.db.fetchval(
         "SELECT show_model FROM app_user WHERE id = $1", world.patrick
     ) is False
-    card = await world.client.get("/api/titles/1000")
-    assert card.status_code == 200
-    assert "model_line" in card.json(), "the model line is not the rail and is not gated"
+    off = await world.client.get("/api/titles/1000")
+    assert off.status_code == 200
+    assert "model_line" not in off.json(), "the model line reached a member with the switch off"
+
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    on = await world.client.get("/api/titles/1000")
+    assert on.status_code == 200
+    assert "model_line" in on.json(), "the switch is on and the model line is still absent"
 
 
 async def test_the_model_log_route_omits_the_events_key_when_the_toggle_is_off(world):

@@ -782,20 +782,21 @@ describe('the sweep line names what it could not identify (D4)', () => {
   });
 });
 
-describe("the first-boot wizard's two placeholder rows (plan C3)", () => {
-  it('link to this page now that its cards exist, and leave the Jellyfin row alone', async () => {
+describe("the first-boot wizard's connector rows (plan C3; user test 2026-09-25)", () => {
+  it('all three link to this page, and none carries a milestone tag', async () => {
+    // Plan C3 linked the two M5 rows and left Jellyfin as plain text reading
+    // "configure in Admin · M1", although its card has been here since M1.
     const app = mount(SetupPage, { target });
     await settle();
     try {
       const rows = [...target.querySelectorAll('.rows li')];
       const row = (name) => rows.find((li) => li.textContent.includes(name));
-      for (const name of ['LLM providers', 'TMDB / OMDb / Trakt']) {
+      for (const name of ['Jellyfin', 'LLM providers', 'TMDB / OMDb / Trakt']) {
         const link = row(name).querySelector('a');
         expect(link, `${name} is a link`).not.toBeNull();
         expect(link.getAttribute('href')).toBe('/admin/connectors');
+        expect(row(name).textContent, `${name} still names a milestone`).not.toMatch(/· M\d/);
       }
-      expect(target.textContent).not.toContain('configure in Admin · M5');
-      expect(row('Jellyfin').textContent).toContain('configure in Admin · M1');
     } finally {
       unmount(app);
     }

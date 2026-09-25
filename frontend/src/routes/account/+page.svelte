@@ -84,9 +84,13 @@
       const result = await api('/rank/tiers', { method: 'PUT', body });
       tiers = { ...tiers, tier_set: result.tier_set };
       tierDraft = result.tier_set.join(' ');
+      // Decision 11's substance, in the member register (decision 486): a new number of tiers
+      // throws the learned boundaries away and fits them again, and the moves are kept. "Shortly"
+      // and no clock time - decision 209's word for the same wait, which is served by the
+      // tier-set refit every minute, so "overnight" would be false.
       note = result.k_changed
-        ? `Tier set saved. Cutpoints re-initialised and a refit is queued; ${result.tier_edits_kept} past move${result.tier_edits_kept === 1 ? '' : 's'} kept.`
-        : 'Tier set renamed. Your learned cutpoints are unchanged.';
+        ? `Tiers saved. Your board is being re-sorted into the new tiers and updates shortly; your ${result.tier_edits_kept} hand move${result.tier_edits_kept === 1 ? ' is' : 's are'} kept.`
+        : 'Tiers renamed. Nothing else changed.';
     } catch (err) {
       error = err.message || String(err);
     } finally {
@@ -250,7 +254,7 @@
     {:else}
       <p class="why">
         Four digits, for handing the TV remote over. It is not a way in — the device has to be
-        signed in already, and your password sets it (decision 170).
+        signed in already, and your password sets it.
         {#if session.user?.has_pin}<strong> A PIN is set.</strong>{/if}
       </p>
       <div class="row">

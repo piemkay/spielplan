@@ -136,7 +136,12 @@
         automated installs.
       </p>
       <ul class="rows">
-        <li><span>Jellyfin</span><span class="data">configure in Admin · M1</span></li>
+        <!-- Plan C3 linked the two rows below and scoped itself to them, which left this one plain
+             text with a stale "· M1", although its card has been on /admin/connectors since M1
+             (user test 2026-09-25). All three rows are links to the page that holds their card. -->
+        <li>
+          <span>Jellyfin</span><a class="go" href="/admin/connectors">configure in Admin</a>
+        </li>
         <!-- Plan C3: the cards these two rows promised exist now, so the rows go there. -->
         <li>
           <span>LLM providers</span><a class="go" href="/admin/connectors">configure in Admin</a>

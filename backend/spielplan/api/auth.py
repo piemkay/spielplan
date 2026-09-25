@@ -79,44 +79,54 @@ class PreferencesRequest(BaseModel):
     show_model: bool
 
 
-# §6: the surface names are normative — Home / Rate / Tonight / Rank / Map / Taste — and each
-# one is visible from day one, so the shape of the finished app is legible rather than appearing
-# later as a surprise.
+# §6: the surface names are normative — Home / Rate / Tonight / Rank / Map / Taste. Which of them
+# navigation offers is decision 488's: a surface whose §12 milestone has not shipped is absent from
+# the tab bar and from every entry point to it, for both roles, because the 2026-09-25 user test
+# found Map and Taste were two of six primary targets on the phone and both opened a placeholder.
+# The day-one legibility this comment used to argue for survives only by URL: `/map` and `/taste`
+# still answer, with a placeholder in the member register (decision 486).
 #
-# `milestone` is §12's build order, and it is carried to the client here so that the DESTINATION
-# can render it: `Milestone.svelte`, mounted by `/map` and `/taste`, is the only reader. The nav
-# rail shows a label and an icon and always has — this comment claimed otherwise, and the client
-# meanwhile hard-coded "M6" a second time on each placeholder page, so §12's order was stated in
-# three places and kept true in one. The field is the single source; the two pages now read it.
-# [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
-SURFACES: tuple[dict[str, str], ...] = (
-    {"key": "home", "href": "/", "label": "Home", "milestone": "M0"},
-    {"key": "rate", "href": "/rate", "label": "Rate", "milestone": "M2"},
-    {"key": "tonight", "href": "/tonight", "label": "Tonight", "milestone": "M4"},
-    {"key": "rank", "href": "/rank", "label": "Rank", "milestone": "M3"},
-    {"key": "map", "href": "/map", "label": "Map", "milestone": "M6"},
-    {"key": "taste", "href": "/taste", "label": "Taste", "milestone": "M6"},
+# `built` is the flag that flips on the day a surface ships, and it is a literal in this annotated
+# tuple on purpose: `test_static_contracts.py` reads SURFACES with `ast.literal_eval`, and M6's
+# change is then one `False` -> `True` per surface, after which the surface enters navigation in
+# §6's order. `milestone` is §12's build order, kept as the record of which milestone owes the
+# surface; no member surface renders it (decision 486 clause 2).
+SURFACES: tuple[dict[str, str | bool], ...] = (
+    {"key": "home", "href": "/", "label": "Home", "milestone": "M0", "built": True},
+    {"key": "rate", "href": "/rate", "label": "Rate", "milestone": "M2", "built": True},
+    {"key": "tonight", "href": "/tonight", "label": "Tonight", "milestone": "M4", "built": True},
+    {"key": "rank", "href": "/rank", "label": "Rank", "milestone": "M3", "built": True},
+    {"key": "map", "href": "/map", "label": "Map", "milestone": "M6", "built": False},
+    {"key": "taste", "href": "/taste", "label": "Taste", "milestone": "M6", "built": False},
 )
 
 
-def _nav(user: auth.SessionUser) -> dict[str, list[dict[str, str]]]:
+def shipped(key: str) -> bool:
+    """Whether surface `key` has shipped, which is what every entry point to it asks (decision
+    488): the tab bar below, and §6.0's Show on map on the title card (`api/library.py`)."""
+    return any(s["key"] == key and s["built"] for s in SURFACES)
+
+
+def _nav(user: auth.SessionUser) -> dict[str, list[dict[str, str | bool]]]:
     """The navigation payload. §6.6 is admin-role only and §3.1 gives a member 'no admin'.
 
     Computed here rather than in the client, because "hidden" has to mean the entry does not
     exist in what the member's browser receives. A client-side `{#if role === 'admin'}` hides
     a link from someone reading the screen and shows it to anyone reading the response — and
     the prototype it replaces hardcoded the capability flag to true.
+
+    Decision 488 applies the same argument to an unbuilt surface: it is absent from `surfaces`,
+    and the account menu's "My Taste" entry, which led to the same placeholder, is gone with it.
     """
-    account = [
+    account: list[dict[str, str | bool]] = [
         {"key": "account", "href": "/account", "label": "Account & passkeys"},
-        {"key": "taste", "href": "/taste", "label": "My Taste"},
     ]
     if user.is_admin:
         account += [
             {"key": "admin", "href": "/admin/data", "label": "Admin view"},
             {"key": "setup", "href": "/setup", "label": "Setup wizard"},
         ]
-    return {"surfaces": [dict(s) for s in SURFACES], "account": account}
+    return {"surfaces": [dict(s) for s in SURFACES if s["built"]], "account": account}
 
 
 def _me(user: auth.SessionUser) -> dict[str, object]:
@@ -437,8 +447,8 @@ async def set_preferences(
     """§6.7: the per-user "show the model" toggle, reached from the account dropdown.
 
     A preference, not a role: it reveals what the model is doing to the person whose model it
-    is. It gates the transparency rail and the inline numeric annotations; the title card's
-    model line is deliberately outside it (§6.0).
+    is. It gates the transparency rail, the inline numeric annotations and, since decision 486
+    amended decision 117, the title card's model line (§6.0).
     """
     await conn.execute(
         "UPDATE app_user SET show_model = $2 WHERE id = $1", user.id, body.show_model

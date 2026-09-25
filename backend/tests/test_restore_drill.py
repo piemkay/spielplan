@@ -594,6 +594,10 @@ async def test_a_restored_install_with_no_model_bundle_says_so_on_the_title_card
 
         member = installed["members"][0]
         phone = await _sign_in(make, str(member["name"]), MEMBER_PASSWORD)
+        # The model line is Show the model's since decision 486 (amending decision 117), so the
+        # member asks for it first - or the assertions below would read an absent key.
+        shown = await phone.post("/api/auth/preferences", json={"show_model": True})
+        assert shown.status_code == 200, shown.text
         card = await phone.get("/api/titles/1")
         assert card.status_code == 200, card.text
 

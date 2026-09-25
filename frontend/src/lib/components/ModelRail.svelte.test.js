@@ -296,3 +296,20 @@ describe('the drawer dismisses', () => {
     }
   });
 });
+
+describe("the drawer's header", () => {
+  it('states its pinned depth and cites no section, switch on or not (decision 486)', () => {
+    // The drawer is Show the model's register, so its model numbers belong to it; a spec
+    // reference belongs to no member surface. It read "last 15 events · never persisted · §6.7".
+    const { props, rail } = openable();
+    try {
+      props.open = true;
+      flushSync();
+      const header = target.querySelector(`${RAIL} header`).textContent;
+      expect(header).toContain('last 15 events');
+      expect(header).not.toMatch(/§\s?\d/);
+    } finally {
+      unmount(rail);
+    }
+  });
+});

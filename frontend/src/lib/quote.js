@@ -9,9 +9,14 @@
  * when the span starts in lower case, and a trailing one when it stops short of a sentence's end,
  * say "cut from something longer" without changing a character of what was stored - the stored
  * quote is what stage 7 verified and what an adjudication names. [C9.6 of the 2026-09-25 user test]
+ *
+ * A lower-case start behind an opening quote mark is still a lower-case start. This is the one
+ * copy of the rule - `titleCard.js` re-exports it - because two spellings of one rule is how one
+ * of them stops matching the other.
  */
 
 const ELLIPSIS = '…';
+const LOWER_START = /^["'“‘(]*\p{Ll}/u;
 const SENTENCE_END = /[.!?…]["'”’)\]]*$/;
 
 /**
@@ -21,7 +26,7 @@ const SENTENCE_END = /[.!?…]["'”’)\]]*$/;
 export function quoteText(quote) {
   const text = (quote ?? '').trim();
   if (!text) return '';
-  const opens = text[0] !== text[0].toUpperCase() ? ELLIPSIS : '';
+  const opens = LOWER_START.test(text) ? ELLIPSIS : '';
   const closes = SENTENCE_END.test(text) ? '' : ELLIPSIS;
   return opens + text + closes;
 }
