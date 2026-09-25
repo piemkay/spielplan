@@ -1,6 +1,6 @@
 """§6.7's transparency rail, and decision 117's single gate.
 
-Spec v2.1 §6.7, §6.0, §6.8, decision 117.
+Spec v2.1 §6.7, §6.0, §6.8, decisions 117 and 486.
 
 §6.7: "A per-user toggle (default off) reveals an ephemeral log (last ~15 events, never
 persisted) narrating **every model write** in one human-readable line … It is 'drag-and-drop is
@@ -8,7 +8,9 @@ data, not override' made visible, and the primary M2 debugging instrument."
 
 Decision 117: "**One, global per user, in the account dropdown, default off.** A debugging
 instrument reached often and briefly. It governs the rail and every inline annotation; the
-title card's model line stays ungated."
+title card's model line stays ungated." Decision 486 amends the last clause: the title card's
+model line is behind the toggle too, because β and σ in it are this viewer's own fit, and so is
+every model number and model noun a member surface carries (§6.8's member register).
 
 THE GATE IS A DELETION, NOT A CLASS. `redact()` removes the gated keys from the payload rather
 than marking them hidden, because "hidden by CSS" makes the promise cosmetic: the numbers would
@@ -17,15 +19,20 @@ anything that logs a response. One function does the removal for the whole paylo
 can gate three of four annotations and forget the fourth — and one test can walk the redacted
 payload for every forbidden key rather than enumerating call sites.
 
+TWO PLACES APPLY IT, one question. `redact()` strips `GATED_KEYS` from a Home payload; a payload
+that is not Home's asks `visible_to` where it is built - `api/library.py` omits the title card's
+model line and its tag weights, and `rate/session.viewer_reveal` drops the reveal's numbers. Either
+way a payload read with the switch off carries no model number (decision 486 clause 3).
+
 WHAT IS *NOT* GATED, and why each survives:
 
-* no longer the **title card's model line** (`b(t) · β · gate`), which proposal 19 and decision
-  117 had left ungated: decision 486 puts it behind this toggle too, because β and σ in it are
-  this viewer's own fit. `api/library.py` applies `visible_to` where it builds the card rather
-  than through `redact()`, since the card is not a Home payload.
-* the **shelf why-line**, including the β it prints. §6.0's own table gives shelf 2's why as
-  "clean item prior + your fold-in, blended at β 0.8" — the number is the mandated copy of a
-  shelf that must be able to say why it exists, not an annotation about this viewer.
+* the **shelf why-line**. Since decision 476 it carries no number: the β, cosine and CDF floor a
+  shelf's ordering used travel in `why_numbers`, which is gated, and the sentence says why the
+  shelf exists in words.
+* the **Rate reveal**'s guessed class ("we'd have guessed liked"). §6.1's reveal after the tap is
+  the product rather than the debugging, so `reveal` is not a gated key; its cdf, s and label
+  count are the model's, and `rate/session.viewer_reveal` removes them before a member's payload
+  is sent (decisions 486 and 491).
 * the **tier badge** on a shelf card. Proposal 29 makes rank + seen dot + tier the shelf card's
   chrome and §6.3's tier vocabulary "ambient on Home". The letter is chrome; the score, σ and
   CDF behind it are the annotation, and only those are removed.
@@ -113,8 +120,9 @@ AWAITING_PRODUCER: tuple[str, ...] = (
 # not ship and why, which is a debugging instrument by the same argument.
 # Decision 117 governs "the event rail **and** every inline numeric annotation". `log` and
 # `ledger` are §6.1's half of that: the rate surface's own §6.7 lines and the incremental-refit
-# delta. `reveal` is deliberately absent — §6.1 requires the predicted class and its data-voice
-# score *after the tap*, which is the product rather than the debugging.
+# delta. `reveal` is deliberately absent — §6.1 requires the predicted class *after the tap*,
+# which is the product rather than the debugging; its data-voice score is the model's, and
+# `rate/session.viewer_reveal` drops it where the payload is built (decisions 486 and 491).
 #
 # `why_numbers` is Home's: the β, cosine and CDF floor each shelf's ordering used. They were
 # printed inside the why-lines themselves, where no key-based gate could reach them, and a member
