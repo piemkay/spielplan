@@ -115,19 +115,23 @@ def app_facet(term: str, shipped: str) -> str:
     return term.split(".", 1)[0] if "." in term else shipped
 
 
-async def load_vocabulary(
-    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport
-) -> None:
-    """Load `dna_vocab/<version>/` — the per-facet vocabulary TSVs, the alias map, the
-    per-title adjudications, and §6.4's authored axis definitions.
+class VocabTerm(NamedTuple):
+    """One row of a `vocab_<facet>_<version>.tsv`, as far as this app keeps it."""
 
-    §4.3 calls the directory "vocabulary TSVs, alias map, S matrix, adjudications" — plural
-    TSVs, one per facet, named `vocab_<facet>_<version>.tsv`. The term id already carries its
-    facet (`mood.dread`), so the facet is the prefix; rebuilding it from the file name as well
-    produces `mood.mood.dread` and every join against `dna_tag.term` misses.
+    term: str
+    facet: str
+    label: str | None
+    gloss: str | None
+
+
+def read_vocabulary(vocab_dir: Path, version: str, report: ImportReport) -> list[VocabTerm]:
+    """The per-facet vocabulary TSVs under `dna_vocab/<version>/`, parsed.
+
+    One parser for the two writers of `dna_term`: `load_vocabulary` inserts what this returns,
+    and `backfill_labels` fills the labels an install seeded before 0030 never stored. Two
+    readers of one file set is how the extraction label and the facet id diverged (`app_facet`).
     """
-    facet_names: set[str] = set()
-    terms: list[tuple[str, str, str, str | None]] = []
+    terms: list[VocabTerm] = []
     for path in sorted(vocab_dir.glob(f"vocab_*_{version}.tsv")):
         # `vocab_pacing_axes_v1.tsv` matches this glob and is a different artifact: per-term
         # axis coordinates (`id, ax_tempo, ax_pressure, …`) with no label and no gloss. Taken
@@ -142,14 +146,36 @@ async def load_vocabulary(
                 term = (row.get("id") or "").strip()
                 if not term:
                     continue
-                facet = app_facet(term, file_facet)
-                facet_names.add(facet)
-                terms.append((version, term, facet, (row.get("gloss") or "").strip() or None))
+                terms.append(VocabTerm(
+                    term,
+                    app_facet(term, file_facet),
+                    (row.get("label") or "").strip() or None,
+                    (row.get("gloss") or "").strip() or None,
+                ))
+    return terms
 
-    # The shipped columns this schema does not carry — label, aliases, df_lb/df_ub, hub_ub, the
-    # anchors — are vocabulary-*construction* evidence: they are how the corpus decided a term
-    # earns its place, and no app surface reads them. `label` in particular is the term id minus
-    # its facet prefix, so storing it would be storing a substring of the key.
+
+async def load_vocabulary(
+    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport
+) -> None:
+    """Load `dna_vocab/<version>/` — the per-facet vocabulary TSVs, the alias map, the
+    per-title adjudications, and §6.4's authored axis definitions.
+
+    §4.3 calls the directory "vocabulary TSVs, alias map, S matrix, adjudications" — plural
+    TSVs, one per facet, named `vocab_<facet>_<version>.tsv`. The term id already carries its
+    facet (`mood.dread`), so the facet is the prefix; rebuilding it from the file name as well
+    produces `mood.mood.dread` and every join against `dna_tag.term` misses.
+    """
+    terms = read_vocabulary(vocab_dir, version, report)
+    facet_names = {t.facet for t in terms}
+
+    # The shipped columns this schema does not carry — aliases, df_lb/df_ub, hub_ub, the anchors —
+    # are vocabulary-*construction* evidence: they are how the corpus decided a term earns its
+    # place, and no app surface reads them. `label` was dropped with them until 0030, on the claim
+    # that it is the term id minus its facet prefix. The shipped v1 vocabulary refutes that: about
+    # 200 of its 582 labels are not a respelling of the leaf (`era.wwii` is "World War II",
+    # `themes.love_romance` is "love & romance"). It is the name §6.8's "one-line why in vocabulary
+    # terms" speaks in, so it is stored as shipped. [decision 486; owner instruction of 2026-09-25]
     if not terms:
         report.warn(
             "vocabulary",
@@ -170,9 +196,9 @@ async def load_vocabulary(
         [(version, f, i, DEFAULT_FACET_COLOURS.get(f)) for f, i in facets.items()],
     )
     await conn.executemany(
-        "INSERT INTO dna_term (version, term, facet, gloss) VALUES ($1, $2, $3, $4) "
+        "INSERT INTO dna_term (version, term, facet, label, gloss) VALUES ($1, $2, $3, $4, $5) "
         "ON CONFLICT (version, term) DO NOTHING",
-        terms,
+        [(version, t.term, t.facet, t.label, t.gloss) for t in terms],
     )
     report.note("vocabulary", f"vocabulary {version}: {len(facets)} facets, {len(terms)} terms",
                 facets=len(facets), terms=len(terms))
@@ -182,6 +208,31 @@ async def load_vocabulary(
     # The axis definitions key on a facet the vocabulary has just declared -- `dna_axis` has an
     # FK to `dna_facet` -- so the set travels rather than being rediscovered from a file stem.
     await load_axes(conn, vocab_dir, version, report, set(facets))
+
+
+async def backfill_labels(conn: asyncpg.Connection, vocab_dir: Path, version: str) -> int:
+    """Fill `dna_term.label` from the staged TSVs where it is NULL, and return how many were filled.
+
+    For an install seeded before 0030: `load_vocabulary` inserts with `ON CONFLICT DO NOTHING` and
+    decision 162 keeps the vocabulary tier out of every re-import, so no import path would ever
+    reach those rows again. Only NULL labels, so it is idempotent and never overwrites one; an
+    UPDATE and never an INSERT, so a term the files ship and the table lacks stays absent and no
+    content row is written. An absent directory reads as no files and fills nothing, which is the
+    restored install whose /data/artifacts is gone: readers fall back to `db/dna_terms.label_of`.
+    [decision 486; owner instruction of 2026-09-25]
+    """
+    shipped = [t for t in read_vocabulary(vocab_dir, version, ImportReport()) if t.label]
+    if not shipped:
+        return 0
+    return await conn.fetchval(
+        "WITH filled AS ("
+        "  UPDATE dna_term d SET label = s.label"
+        "    FROM unnest($2::text[], $3::text[]) AS s(term, label)"
+        "   WHERE d.version = $1 AND d.term = s.term AND d.label IS NULL"
+        "  RETURNING 1) "
+        "SELECT count(*)::int FROM filled",
+        version, [t.term for t in shipped], [t.label for t in shipped],
+    )
 
 
 async def _load_aliases(

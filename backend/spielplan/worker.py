@@ -1716,6 +1716,28 @@ def _report_basis(store: ArtifactStore) -> None:
         log.info("no artifact bundle active - model jobs stay idle (section 3.1: that is legal)")
 
 
+async def _fill_term_labels(conn: asyncpg.Connection, store: ArtifactStore) -> None:
+    """Give an install seeded before 0030 the vocabulary labels its bundle already ships.
+
+    At boot, because the worker waits for the backend's migrations and so is the first process
+    that can both see the column and read the active bundle's staged tree. It never stops boot: a
+    label is copy, every reader falls back to `db/dna_terms.label_of`, and §3.1 forbids a boot that
+    dies over a missing file. [decision 486; owner instruction of 2026-09-25]
+    """
+    if store.is_empty or store.root is None or store.vocab_version is None:
+        return
+    from spielplan.importer import dna as dna_loader
+
+    vocab_dir = store.root / "dna_vocab" / store.vocab_version
+    try:
+        filled = await dna_loader.backfill_labels(conn, vocab_dir, store.vocab_version)
+    except Exception:  # noqa: BLE001 - labels are copy and must not stop the worker (§3.1)
+        log.warning("vocabulary labels were not backfilled from %s", vocab_dir, exc_info=True)
+        return
+    if filled:
+        log.info("backfilled %d vocabulary label(s) from %s", filled, vocab_dir)
+
+
 def _touch_heartbeat() -> None:
     """Say the loop went round. Never raise: a heartbeat is evidence, not a dependency."""
     global _heartbeat_failed
@@ -2082,6 +2104,7 @@ async def main() -> None:
                     "Nothing here can make progress until it lands."
                 )
             store = await ArtifactStore.load_active(conn, cfg.artifacts_dir)
+            await _fill_term_labels(conn, store)
             local = _now_local()
             last_run, last_date = await _seed_schedule(
                 conn, loop_now=asyncio.get_running_loop().time(), local=local

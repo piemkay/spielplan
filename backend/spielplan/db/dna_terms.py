@@ -1,6 +1,7 @@
-"""The read layer's two DNA constants: how loudly a term speaks, and which vocabulary is live.
+"""The read layer's DNA constants: how loudly a term speaks, which vocabulary is live, and what a
+term is called.
 
-Spec v2.1 §4.1 rules 1 and 2, §4.3, §6.2 steps 4-5, §6.8, §10; decision 188.
+Spec v2.1 §4.1 rules 1 and 2, §4.3, §6.2 steps 4-5, §6.8, §10; decisions 188 and 486.
 
 Both fragments below existed twice before this module did, and both copies had drifted from the
 rows the corpus actually ships. That is the argument for the file: they are read-layer SQL over
@@ -57,9 +58,18 @@ catalog's WHERE builder (`db/library._filters`) is synchronous and shared with t
 so there is no point in it at which a version could be awaited and threaded in. Two spellings of
 one statement is not the second notion of "the active vocabulary" the plan forbids; two
 statements would be.
+
+**THE LABEL.** §6.8 wants every why "in vocabulary terms", and a term id is not one: `era.wwii`
+is the key, "World War II" is the term. `dna_term.label` (0030) holds the name the corpus ships,
+and `label_of` is the one fallback for a row without one - an install seeded before 0030 whose
+artifacts are gone, or a term the active vocabulary does not carry: the id's leaf with its
+underscores as spaces. `frontend/src/lib/terms.js` spells the same fallback for a payload that
+carries only the id. A member surface renders the label and never the id (decision 486).
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 import asyncpg
 
@@ -98,4 +108,39 @@ async def active_version(conn: asyncpg.Connection) -> str | None:
     return await conn.fetchval(f"SELECT {ACTIVE_VERSION}")
 
 
-__all__ = ["ACTIVE_VERSION", "TERM_WEIGHT", "active_version"]
+def label_of(term: str, label: str | None) -> str:
+    """The name a member reads for `term`: its shipped label, or the id's leaf in plain words."""
+    if label and label.strip():
+        return label.strip()
+    leaf = term.split(".", 1)[1] if "." in term else term
+    return leaf.replace("_", " ")
+
+
+async def labels_for(
+    conn: asyncpg.Connection, terms: Iterable[str]
+) -> dict[str, dict[str, str | None]]:
+    """`{term: {"label", "gloss"}}` for every term asked about, read in the active vocabulary.
+
+    Every term asked about gets an entry, a term the vocabulary does not carry included, so a
+    caller can index the answer without a branch and still never print an id: that entry carries
+    `label_of`'s fallback and no gloss.
+    """
+    wanted = list(dict.fromkeys(t for t in terms if t))
+    if not wanted:
+        return {}
+    rows = await conn.fetch(
+        f"SELECT term, label, gloss FROM dna_term WHERE version = {ACTIVE_VERSION} "
+        "AND term = ANY($1::text[])",
+        wanted,
+    )
+    found = {r["term"]: r for r in rows}
+    return {
+        t: {
+            "label": label_of(t, found[t]["label"] if t in found else None),
+            "gloss": found[t]["gloss"] if t in found else None,
+        }
+        for t in wanted
+    }
+
+
+__all__ = ["ACTIVE_VERSION", "TERM_WEIGHT", "active_version", "label_of", "labels_for"]

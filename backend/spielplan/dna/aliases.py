@@ -52,9 +52,9 @@ is the defect M4.9 finding 1 measured at 206,151 of 223,136 projected rows.
 **THE SECOND HALF OF THE MAP.** A term's own id is a legitimate raw spelling of itself, added
 with `setdefault` so an explicit map row always wins -- the corpus's order, and the one that
 matters, because an authored row is a decision and the implicit one is only a default. The corpus
-also keys each term's `label` and its authored `aliases`; this app's `dna_term` stores neither,
-deliberately (`importer/dna.py:143-146`: they are vocabulary-construction evidence, and the label
-is the term id minus its facet prefix, so storing it would be storing a substring of the key).
+also keys each term's `label` and its authored `aliases`. This app's `dna_term` stores the label
+since 0030 as a display name only, and it is not a raw spelling this map resolves; it stores no
+aliases, deliberately (they are vocabulary-construction evidence, `importer/dna.load_vocabulary`).
 Those spellings reach this install through `alias_map_v1.tsv`'s own rows instead, which is where
 the bundle puts them.
 

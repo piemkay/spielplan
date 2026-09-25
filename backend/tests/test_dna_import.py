@@ -577,6 +577,54 @@ async def test_the_pacing_axes_file_is_not_mistaken_for_a_facet_vocabulary(db, v
     assert await db.fetchval("SELECT count(*) FROM dna_term WHERE version = 'v1'") == len(fx.VOCAB)
 
 
+def _ship_a_label_that_is_not_the_leaf(vocab_dir: Path) -> None:
+    """One dotted term whose shipped label is not its id's leaf, as the real v1 vocabulary ships
+    about 200 of them. The fixture's own labels are all the leaf, so a loader that stored the leaf
+    in place of the label would pass against it."""
+    with (vocab_dir / "vocab_era_v1.tsv").open("a", encoding="utf-8", newline="") as fh:
+        fh.write("era.wwii\tWorld War II\tthe Second World War as the ground\t\t0.01\t0.4\t0.5\t\t\t\t\n")
+
+
+async def test_the_vocabulary_label_is_stored_as_shipped(db, vocab_dir):
+    """§6.8's why is 'in vocabulary terms', and the term is what the corpus calls it, not its id:
+    the loader required the `label` column and then dropped it on the claim that a label is the id
+    minus its facet prefix, so every member surface printed `era.wwii`. [decision 486]"""
+    _ship_a_label_that_is_not_the_leaf(vocab_dir)
+    report = ImportReport()
+
+    await dna.load_vocabulary(db, vocab_dir, "v1", report)
+
+    assert report.ok, report.render()
+    labels = {r["term"]: r["label"] for r in await db.fetch("SELECT term, label FROM dna_term")}
+    assert labels["era.wwii"] == "World War II"
+    assert labels["characters.morally_grey"] == "morally_grey", "stored as shipped, not respelled"
+
+
+async def test_label_backfill_fills_only_null_labels_and_is_idempotent(db, vocab_dir):
+    """An install seeded before 0030 holds every term with a NULL label, and no import path reaches
+    those rows again (`ON CONFLICT DO NOTHING`, and decision 162 keeps the vocabulary tier out of
+    every re-import). The worker's boot backfill fills them from the staged TSVs: only the NULL
+    ones, never a row the table lacks, the same answer on a second run, and nothing at all from a
+    directory that is gone. [decision 486]"""
+    _ship_a_label_that_is_not_the_leaf(vocab_dir)
+    await dna.load_vocabulary(db, vocab_dir, "v1", ImportReport())
+    await db.execute("UPDATE dna_term SET label = NULL")
+    await db.execute("UPDATE dna_term SET label = 'kept as stored' WHERE term = 'mood.dread'")
+    await db.execute("DELETE FROM dna_term WHERE term = 'visual.neon'")
+    rows = await db.fetchval("SELECT count(*) FROM dna_term")
+
+    filled = await dna.backfill_labels(db, vocab_dir, "v1")
+
+    labels = {r["term"]: r["label"] for r in await db.fetch("SELECT term, label FROM dna_term")}
+    assert filled == rows - 1, "every NULL label, and not the one already stored"
+    assert labels["era.wwii"] == "World War II"
+    assert labels["mood.dread"] == "kept as stored"
+    assert "visual.neon" not in labels, "a backfill is an UPDATE: it writes no content row"
+    assert await db.fetchval("SELECT count(*) FROM dna_term") == rows
+    assert await dna.backfill_labels(db, vocab_dir, "v1") == 0
+    assert await dna.backfill_labels(db, vocab_dir.parent / "v9", "v9") == 0
+
+
 async def test_the_alias_map_loads_under_the_name_the_bundle_uses(db, vocab_dir):
     """§8 stage 8 projects the second tier through this map. The loader read `aliases.tsv`
     (`alias`, `term`); the bundle ships `alias_map_v1.tsv` (`raw_term`, ..., `vocab_term`)."""

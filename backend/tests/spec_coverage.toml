@@ -11333,3 +11333,28 @@ tests = [
     "backend/tests/test_m5_exit_criterion.py::test_check_two_the_dna_stages_run_in_the_walk_and_an_upgraded_park_re_enters_at_five",
     "backend/tests/test_m5_exit_criterion.py::test_check_six_a_launch_takes_exactly_its_rows_and_leaves_bundle_projection_alone",
 ]
+
+# The owner's instruction of 2026-09-25, after the first household user test: every member surface
+# printed a vocabulary id (`pacing.relentless`, `era.wwii`) because `importer/dna.py` required the
+# `label` column every vocab TSV ships and then dropped it. This row holds the foundation the
+# surfaces render from - the stored label, the backfill for an install seeded before 0030, and the
+# one fallback on each side of the wire; the surfaces that print a term name it on their own rows.
+# Every id the tests use is dotted with a label that differs from its leaf, because the fixture
+# vocabulary test_home.py builds on is dotless and an id printed raw there reads as plain words.
+# `spec` cites the section alone: decision 486 (the member register this row serves) is recorded
+# in the same wave, and `_unresolvable_decision_citations` would redden the row until it lands.
+[[requirement]]
+id = "library-rate-vocabulary-terms-shown-by-label"
+spec = "§6.8 (\"a one-line why in vocabulary terms\")"
+milestone = "M5"
+kind = "integration"
+what = "The vocabulary loader stores each term's shipped label as dna_term.label (era.wwii -> 'World War II'); an install seeded before 0030 has its NULL labels filled from the active bundle's staged vocab TSVs by an UPDATE that is idempotent, overwrites no stored label and inserts no row; and the backend's labels_for and the frontend's termLabel answer a term by its label, or by the id's leaf with underscores as spaces, and never by the id."
+why = "§6.8 wants every why 'in vocabulary terms', and an id is the key rather than the term: about 200 of the shipped v1 vocabulary's 582 labels are not a respelling of the leaf, and the loader discarded all of them on the claim that they were (decision 486, owner instruction of 2026-09-25)."
+tests = [
+    "backend/tests/test_dna_import.py::test_the_vocabulary_label_is_stored_as_shipped",
+    "backend/tests/test_dna_import.py::test_label_backfill_fills_only_null_labels_and_is_idempotent",
+    "backend/tests/test_dna_terms.py::test_labels_for_reads_the_active_vocabulary_and_never_answers_an_id",
+    "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
+    "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
+    "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
