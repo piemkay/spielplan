@@ -447,8 +447,8 @@ async def set_preferences(
     """§6.7: the per-user "show the model" toggle, reached from the account dropdown.
 
     A preference, not a role: it reveals what the model is doing to the person whose model it
-    is. It gates the transparency rail and the inline numeric annotations; the title card's
-    model line is deliberately outside it (§6.0).
+    is. It gates the transparency rail, the inline numeric annotations and, since decision 486
+    amended decision 117, the title card's model line (§6.0).
     """
     await conn.execute(
         "UPDATE app_user SET show_model = $2 WHERE id = $1", user.id, body.show_model

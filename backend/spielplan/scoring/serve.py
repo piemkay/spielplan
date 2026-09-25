@@ -457,8 +457,10 @@ def _format_support(sigma: float | None, item_n: int) -> str:
 async def model_line(conn, *, user_id: int, title_id: int, bundle_version: str) -> dict[str, Any]:
     """The §6.0 title-card model line, with the real b(t), β and gate.
 
-    Ungated by the show-the-model preference (proposal 19, decision 117): this is crowd-level
-    provenance and §6.0's M0 transparency promise, not an annotation about this viewer.
+    Behind the show-the-model preference since decision 486, which amended decision 117's
+    exemption for it: β is read from this viewer's fit and σ from this viewer's ledger row, so it
+    is an annotation about this viewer and not crowd-level provenance. The gate is the route's
+    (`api/library.py` builds the key only while the switch is on); this renders it either way.
     """
     row = await conn.fetchrow(
         """
