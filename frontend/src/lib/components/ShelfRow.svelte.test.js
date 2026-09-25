@@ -182,9 +182,9 @@ describe('what a row says about itself', () => {
       card({ title_id: 2, tier: 'B', seen: true })
     ]);
     const [guess, placed] = target.querySelectorAll('[data-testid="shelf-tier"]');
-    expect(guess.getAttribute('aria-label')).toContain('likely S');
+    expect(guess.getAttribute('aria-label')).toContain('our guess: tier S');
     expect(guess.dataset.guess).toBe('true');
-    expect(placed.getAttribute('aria-label')).toBe('B on your Rank board');
+    expect(placed.getAttribute('aria-label')).toBe('tier B, as on your Rank board');
     expect(placed.dataset.guess).toBe('false');
     unmount(app);
   });

@@ -30,14 +30,15 @@
   const numbers = $derived(whyNumbersLine(section.why_numbers));
 
   /**
-   * The tier letter's own sentence. On a title the person has seen it is where the title sits on
-   * their Rank board; on one they have not, it is the model's guess - and the letter alone said
-   * neither, so on the first household "S" on an unseen card read as a grade someone gave it.
+   * The tier letter's own sentence. On a title the person has seen it is their tier for it; on one
+   * they have not, it is the model's guess at the tier they would give it - an unseen title is on
+   * no Rank board - and the letter alone said neither, so on the first household "S" on an unseen
+   * card read as a grade someone had given it.
    */
   function tierName(item) {
     return item.seen
-      ? `${item.tier} on your Rank board`
-      : `likely ${item.tier} on your Rank board — a guess, you haven't seen it`;
+      ? `tier ${item.tier}, as on your Rank board`
+      : `our guess: tier ${item.tier} if you rated it — you haven't seen it`;
   }
 
   /**

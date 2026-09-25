@@ -390,10 +390,7 @@ test('a tier letter on a shelf card is explained once, in words', async ({ page 
   const letters = await page.getByTestId('shelf-tier').count();
   await expect(page.getByTestId('tier-legend')).toHaveCount(letters ? 1 : 0);
   if (letters) {
-    await expect(page.getByTestId('shelf-tier').first()).toHaveAttribute(
-      'aria-label',
-      /on your Rank board/
-    );
+    await expect(page.getByTestId('shelf-tier').first()).toHaveAttribute('aria-label', /tier /);
   }
 });
 
