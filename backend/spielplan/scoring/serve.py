@@ -33,6 +33,8 @@ from typing import Any
 
 import numpy as np
 
+from spielplan.db import genres as genre_vocab
+
 # `_like_needle` is imported across the module boundary on purpose, underscore and all: it is
 # private to the catalog's WHERE builder, and the ranked section's `q` predicate is a copy of
 # that builder's. Two copies is how the LIKE metacharacters stayed unescaped in both (§6.0's
@@ -263,8 +265,11 @@ def _filters(
             f"))"
         )
     if genre:
+        # Decision 473: the catalog's own genre predicate, so "Action" is one set on both.
         where.append(
-            f"EXISTS (SELECT 1 FROM title_genre g WHERE g.title_id = t.id AND g.genre = {arg(genre)})"
+            genre_vocab.predicate(
+                arg(genre_vocab.raw_labels(genre)), arg(list(genre_vocab.EXCLUDED_SOURCES))
+            )
         )
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")

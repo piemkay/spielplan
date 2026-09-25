@@ -247,6 +247,26 @@ test('the page never scrolls sideways', async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test('a long genre option does not widen the page', async ({ page }) => {
+  // The first household's Wikidata labels ran to 37 characters, and a native select is as wide
+  // as its longest option: at the phone's 16 px monospace the Genre control overflowed and Home
+  // scrolled sideways. Decision 473's vocabulary removed those labels; this puts one back to
+  // prove the row holds any option, the fixture's short names being why the sweep above passed.
+  const genre = page.getByTestId('filter-genre');
+  await expect(genre).toBeVisible();
+  await genre.evaluate((el) => {
+    const option = document.createElement('option');
+    option.textContent = "horror based on children's characters, a long one";
+    el.appendChild(option);
+  });
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow, 'a long genre option pushed the page wider than the screen').toBeLessThanOrEqual(1);
+  const box = await genre.boundingBox();
+  expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize().width + 1);
+});
+
 test('the title detail panel is full-width on a phone', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'desktop shows it as a side panel');
   const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));

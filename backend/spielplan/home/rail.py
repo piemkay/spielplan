@@ -114,7 +114,13 @@ AWAITING_PRODUCER: tuple[str, ...] = (
 # `ledger` are §6.1's half of that: the rate surface's own §6.7 lines and the incremental-refit
 # delta. `reveal` is deliberately absent — §6.1 requires the predicted class and its data-voice
 # score *after the tap*, which is the product rather than the debugging.
-GATED_KEYS: tuple[str, ...] = ("model", "rail", "suppressed", "log", "ledger")
+#
+# `why_numbers` is Home's: the β, cosine and CDF floor each shelf's ordering used. They were
+# printed inside the why-lines themselves, where no key-based gate could reach them, and a member
+# with the switch off read "blended at β 0.20" and "cos 0.41". Decision 486 moves every such
+# number behind Show the model and decision 476 takes them out of the sentences, so the numbers
+# now travel only here and leave the payload with the rest. [owner instruction of 2026-09-25]
+GATED_KEYS: tuple[str, ...] = ("model", "rail", "suppressed", "log", "ledger", "why_numbers")
 
 MAX_LINE = 400  # Enforced here so a caller learns at the write rather than at the render.
 

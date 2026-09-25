@@ -29,6 +29,7 @@ from typing import Any, Literal
 import asyncpg
 
 from spielplan.db import dna_terms
+from spielplan.db import genres as genre_vocab
 
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
@@ -62,6 +63,92 @@ def _like_needle(q: str) -> str:
     for character, escaped in _LIKE_SPECIALS:
         needle = needle.replace(character, escaped)
     return f"%{needle}%"
+
+
+# --- search order (decision 472) ------------------------------------------------------------
+#
+# §6.0 M0 asks for "filter/search on title/alias" and says nothing about order, so a search kept
+# the catalog's year order: on the first household install "up" put Up at 131 of 362, behind
+# "Godzilla x Kong: Supernova", and "heat" put Heat tenth, behind a National Theatre recording.
+# The PREDICATE is untouched - `_like_needle`'s literal substring, so the count line and the
+# hidden count still describe the same set - and only the order learns what was typed.
+#
+# Both sides are normalised the same way, in SQL, so the database's own idea of a letter decides
+# (en_US.utf8's [:alnum:] covers accented and CJK letters) and punctuation stops deciding the
+# order: "Spider-Man" is an exact match for "spider-man". Padded with a space at each end, so a
+# whole word is ` word ` and a word start is ` word`. Nothing left in the normalised query is a
+# LIKE metacharacter - `%`, `_` and `\` are not [:alnum:] - so the LIKEs below need no escaping.
+
+
+def _norm_sql(expr: str) -> str:
+    return f"(' ' || btrim(regexp_replace(lower({expr}), '[^[:alnum:]]+', ' ', 'g')) || ' ')"
+
+
+# A leading English article is not part of what a person types for "The Godfather": without this
+# the 1991 "Godfather" (25 ratings) was an exact match and the 1972 film was not, and "matrix"
+# ranked three sequels above The Matrix. The better of the two readings counts, unpenalised, and
+# the crowd tie-break then settles "Heat" against "The Heat".
+_ARTICLE = "'^ (the|a|an) '"
+
+# 0 the whole text; 1 the phrase starts it; 2 a word starting it begins with the phrase; 3 the
+# phrase as whole words anywhere; 4 a word anywhere begins with it; 5 anywhere inside a word
+# ("theatre" for "heat"); 6 not in this text at all - the predicate matched the other one.
+SEARCH_TIERS = 7
+
+
+def _tier_sql(n: str, nq: str) -> str:
+    return (
+        f"CASE WHEN {n} = {nq} THEN 0"
+        f" WHEN {n} LIKE {nq} || '%' THEN 1"
+        f" WHEN {n} LIKE rtrim({nq}) || '%' THEN 2"
+        f" WHEN {n} LIKE '%' || {nq} || '%' THEN 3"
+        f" WHEN {n} LIKE '%' || rtrim({nq}) || '%' THEN 4"
+        f" WHEN {n} LIKE '%' || btrim({nq}) || '%' THEN 5"
+        f" ELSE {SEARCH_TIERS - 1} END"
+    )
+
+
+def _text_tier_sql(n: str, nq: str) -> str:
+    stripped = f"regexp_replace({n}, {_ARTICLE}, ' ')"
+    return f"LEAST({_tier_sql(n, nq)}, {_tier_sql(stripped, nq)})"
+
+
+def search_order_sql(q_param: str) -> tuple[str, str]:
+    """(joins, ORDER BY keys) that rank a searched listing best match first. Decision 472.
+
+    A title's match is its name's tier doubled, or its best alias's tier doubled plus one - so a
+    name beats an alias of the same quality and an alias beats a worse name. Inside a match:
+    owned first (the household can press Play on it), then the crowd's rating count as a
+    percentile WITHIN THE TITLE'S OWN KIND, then year, name and id.
+
+    Within the kind, because `item_n` sits on two scales - film median 265, series median 0 - and
+    a raw count with both kinds on is the cross-kind crowd comparison §4.1 rule 5 was measured
+    against: it put the 1988 film "The Bear" above the 2022 series. A percentile only breaks
+    ties inside one match tier and is never a score, so the grid stays a list (decision 18).
+
+    `t.id` stays the last key: §6.0 pages this list by OFFSET and a partial order duplicates and
+    drops rows between pages (M4.9 finding 11).
+    """
+    joins = f"""
+          CROSS JOIN (SELECT {_norm_sql(f'{q_param}::text')} AS n) sq
+          CROSS JOIN LATERAL (SELECT {_norm_sql('t.name')} AS n) sn
+          LEFT JOIN LATERAL (
+              SELECT min({_text_tier_sql('sa.n', 'sq.n')}) AS tier
+                FROM (SELECT {_norm_sql('a.alias')} AS n
+                        FROM title_alias a WHERE a.title_id = t.id) sa
+          ) salias ON true
+          LEFT JOIN (
+              SELECT pp.title_id,
+                     percent_rank() OVER (PARTITION BY pt.kind ORDER BY pp.item_n) AS pct
+                FROM title_prior pp JOIN title pt ON pt.id = pp.title_id
+               WHERE pt.kind = ANY($1)
+          ) spop ON spop.title_id = t.id"""
+    order = (
+        f"LEAST({_text_tier_sql('sn.n', 'sq.n')} * 2,"
+        f" COALESCE(salias.tier, {SEARCH_TIERS - 1}) * 2 + 1),"
+        " t.is_owned DESC, COALESCE(spop.pct, 0) DESC, t.year DESC NULLS LAST, lower(t.name), t.id"
+    )
+    return joins, order
 
 
 def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
@@ -143,8 +230,13 @@ def _filters(
             f"))"
         )
     if genre:
+        # Decision 473: one canonical genre, answered by every structured source's spelling of
+        # it. A genre outside the vocabulary binds no label and so matches nothing; the catalog
+        # route refuses it before this point, and Rank's board keeps its empty answer.
         where.append(
-            f"EXISTS (SELECT 1 FROM title_genre g WHERE g.title_id = t.id AND g.genre = {arg(genre)})"
+            genre_vocab.predicate(
+                arg(genre_vocab.raw_labels(genre)), arg(list(genre_vocab.EXCLUDED_SOURCES))
+            )
         )
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")
@@ -326,6 +418,12 @@ async def list_titles(
         seen_select = "COALESCE(ut.state, 'unseen') AS seen_state"
         seen_join = f"LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = {arg(user_id)}"
 
+    # A search is ordered by how well it matched (decision 472); a listing without one keeps the
+    # year order, which is decision 18's kind-independent order unchanged.
+    search_joins, order = "", "t.year DESC NULLS LAST, lower(t.name), t.id"
+    if q and q.strip():
+        search_joins, order = search_order_sql(arg(q))
+
     lim, off = arg(limit), arg(offset)
     rows = await conn.fetch(
         f"""
@@ -337,7 +435,7 @@ async def list_titles(
           -- support is placed by the Cold Tower so the blend can fire, while having plenty of
           -- crowd data behind it. `title_prior` carries the quantity the badge is named for.
           LEFT JOIN title_prior tp ON tp.title_id = t.id
-          {seen_join}
+          {seen_join}{search_joins}
          WHERE {clause}
          -- `t.id` is not decoration: §6.0 pages this list with LIMIT/OFFSET and the client
          -- appends, so a sort that is not a TOTAL order silently duplicates and drops rows.
@@ -349,7 +447,7 @@ async def list_titles(
          -- tied titles and 61/61 with an UPDATE between pages. The two other OFFSET readers
          -- (`scoring/serve.py`, `ledger/refit.py`) already tie-break on the id; this is the
          -- same fix, not keyset pagination, because §6.0 asks for offsets. [M4.9 finding 11]
-         ORDER BY t.year DESC NULLS LAST, lower(t.name), t.id
+         ORDER BY {order}
          LIMIT {lim} OFFSET {off}
         """,
         *args,
@@ -535,12 +633,18 @@ async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict
 
 
 async def genres(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[str]:
+    """The genre facet over the selected kinds, in decision 473's canonical vocabulary.
+
+    The distinct raw labels are read and mapped here rather than listed: a raw DISTINCT offered
+    434 values for films, case duplicates and Wikidata's free text among them (`db/genres.py`).
+    """
     rows = await conn.fetch(
-        "SELECT DISTINCT g.genre FROM title_genre g JOIN title t ON t.id = g.title_id "
-        "WHERE t.kind = ANY($1) ORDER BY 1",
+        "SELECT DISTINCT lower(g.genre) AS genre FROM title_genre g JOIN title t ON t.id = g.title_id "
+        "WHERE t.kind = ANY($1) AND g.source <> ALL($2::text[])",
         normalise_kinds(kinds),
+        list(genre_vocab.EXCLUDED_SOURCES),
     )
-    return [r["genre"] for r in rows]
+    return genre_vocab.facet({r["genre"] for r in rows})
 
 
 async def decades(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[int]:

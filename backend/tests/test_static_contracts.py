@@ -613,9 +613,15 @@ def test_the_dna_key_guard_leaves_the_other_each_blocks_alone():
 # replaced is the natural thing to write: `title.placement === 'cold_tower'` reads correctly and
 # is false 111 times out of 130 on the reference library, since 0008_placement.sql stamps
 # cold_tower on any title with a Backbone row and item_n < 90. [M4.9 finding 18]
+#
+# The crowd count is asked FIRST since the first household install, where `e_source` alone was
+# false 182 times out of 215: the bundle's evaluation holdout serves crowd-rated rows from the
+# Cold Tower, Raiders of the Lost Ark with 192,061 ratings among them. §8 stage 10 names the badge
+# by the absence of crowd data, which is the one fact `item_n` states directly. [owner
+# instruction of 2026-09-25]
 _COLD_BADGE = (
-    "title.e_source ? title.e_source === 'cold_tower' "
-    ": title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower')"
+    "!(title.item_n > 0) && (title.e_source ? title.e_source === 'cold_tower' "
+    ": title.item_n === 0 || (title.item_n == null && title.placement === 'cold_tower'))"
 )
 
 
@@ -654,8 +660,9 @@ def test_the_cold_badge_expression_reads_e_source_not_placement():
 
 
 # The sentence decision 278 moved out of the tooltip, matched on the half that carries no em dash
-# so a failure message stays ASCII on a cp1252 console.
-COLD_REASON = 'Cards marked "new" are placed by the Cold Tower'
+# so a failure message stays ASCII on a cp1252 console. Reworded by decision 476 into the member
+# register (decision 486): the fact it states is unchanged, the model's nouns are gone.
+COLD_REASON = 'Cards marked "new" have no outside ratings yet'
 
 
 def test_every_surface_that_draws_the_cold_badge_states_its_reason():

@@ -91,11 +91,16 @@ describe('the cold-placement note', () => {
     unmount(app);
   });
 
-  it('appears once when a card on the row was placed by the Cold Tower', () => {
-    const app = render([card(), card({ title_id: 2, name: 'Tampopo', e_source: 'cold_tower' })]);
+  it('appears once when a card on the row was placed with no crowd ratings behind it', () => {
+    const app = render([
+      card(),
+      card({ title_id: 2, name: 'Tampopo', e_source: 'cold_tower', item_n: 0 })
+    ]);
     const notes = target.querySelectorAll(COLD_NOTE);
     expect(notes).toHaveLength(1);
-    expect(notes[0].textContent).toContain('Cold Tower');
+    // Decision 486's register: the fact, without the model's nouns.
+    expect(notes[0].textContent).toContain('no outside ratings yet');
+    expect(notes[0].textContent).not.toContain('Cold Tower');
     // The register, not the data voice: §6.8 gives the mono face to model numbers and ids, and
     // this is a sentence about them. The class is what carries that, so it is asserted here.
     expect(notes[0].className).toContain('why');
@@ -104,11 +109,21 @@ describe('the cold-placement note', () => {
 
   it('says it once for the row and not once per card', () => {
     const app = render([
-      card({ title_id: 1, e_source: 'cold_tower' }),
-      card({ title_id: 2, e_source: 'cold_tower' }),
-      card({ title_id: 3, e_source: 'cold_tower' })
+      card({ title_id: 1, e_source: 'cold_tower', item_n: 0 }),
+      card({ title_id: 2, e_source: 'cold_tower', item_n: 0 }),
+      card({ title_id: 3, e_source: 'cold_tower', item_n: 0 })
     ]);
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(1);
+    unmount(app);
+  });
+
+  it('is absent when the Cold Tower placed a title the crowd has rated', () => {
+    // The bundle's evaluation holdout serves crowd-rated rows from the Cold Tower: Raiders of
+    // the Lost Ark wore "new" over 192,061 ratings on the first household (§8 stage 10 names
+    // the badge by the absence of crowd data).
+    const app = render([card({ e_source: 'cold_tower', placement: 'cold_tower', item_n: 192061 })]);
+    expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
+    expect(target.querySelector('.badge')).toBeNull();
     unmount(app);
   });
 
@@ -124,5 +139,64 @@ describe('the cold-placement note', () => {
     const fallback = render([card({ placement: 'cold_tower', item_n: null, e_source: null })]);
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(1);
     unmount(fallback);
+  });
+});
+
+function renderSection(overrides) {
+  const app = mount(ShelfRow, {
+    target,
+    props: { section: { ...section([card()]), ...overrides }, shelfId: 'x', onSelect: () => {} }
+  });
+  flushSync();
+  return app;
+}
+
+describe('what a row says about itself', () => {
+  it('states how many titles it holds, since a phone shows fewer than three', () => {
+    const items = Array.from({ length: 12 }, (_, i) => card({ title_id: i + 1 }));
+    const app = renderSection({ items });
+    expect(target.querySelector('[data-testid="shelf-count"]').textContent.trim()).toBe(
+      '12 titles'
+    );
+    unmount(app);
+  });
+
+  it('names a shared term by its label and never by its vocabulary id', () => {
+    const app = renderSection({
+      shared_terms: [
+        { term: 'era.wwii', facet: 'era', tier: 'extracted', role: 'member', label: 'World War II' },
+        { term: 'pacing.slow_burn', facet: 'pacing', tier: 'projected', role: 'member' }
+      ]
+    });
+    const chips = [...target.querySelectorAll('[data-testid="shelf-term"]')].map((el) =>
+      el.firstChild.textContent.trim()
+    );
+    expect(chips).toEqual(['World War II', 'slow burn']);
+    expect(target.textContent).not.toContain('era.wwii');
+    unmount(app);
+  });
+
+  it('says a tier letter on an unseen title is a guess, and one on a seen title is not', () => {
+    const app = render([
+      card({ title_id: 1, tier: 'S', seen: false }),
+      card({ title_id: 2, tier: 'B', seen: true })
+    ]);
+    const [guess, placed] = target.querySelectorAll('[data-testid="shelf-tier"]');
+    expect(guess.getAttribute('aria-label')).toContain('likely S');
+    expect(guess.dataset.guess).toBe('true');
+    expect(placed.getAttribute('aria-label')).toBe('B on your Rank board');
+    expect(placed.dataset.guess).toBe('false');
+    unmount(app);
+  });
+
+  it('prints the model numbers only when the payload carries them', () => {
+    const off = renderSection({});
+    expect(target.querySelector('[data-testid="shelf-numbers"]')).toBeNull();
+    unmount(off);
+    const on = renderSection({ why_numbers: { beta: 0.62, gate_k: 10, beta_fitted: true } });
+    expect(target.querySelector('[data-testid="shelf-numbers"]').textContent).toBe(
+      'β 0.62 · gate k 10'
+    );
+    unmount(on);
   });
 });

@@ -470,6 +470,16 @@
       </button>
     </div>
   </div>
+{:else if !session.user}
+  <!-- The moment between "the appliance says nobody is signed in" and `guard()` routing to
+       /login or /setup. The authed shell stood here and mounted the surface underneath, so a
+       signed-out load of / fired Home's four authenticated reads and logged four 401s before
+       the redirect landed. Decision 282's seam already made those 401s harmless and still stands;
+       this is additive to it - children never mount for nobody, so the reads never leave -
+       and it is decision 286's rule ("a first admin does not belong on the authed shell either")
+       applied to everyone the appliance has just said is not signed in.
+       [owner instruction of 2026-09-25] -->
+  <div class="boot"><span class="data">connecting…</span></div>
 {:else}
   <div class="shell">
     <header>

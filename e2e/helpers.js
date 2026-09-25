@@ -116,15 +116,24 @@ export async function openAccountMenu(page) {
 }
 
 /**
- * The catalog's kind toggles (owner decision 18): two independent toggles, either or both,
- * never neither.
+ * Home's kind switch (decision 474, replacing decision 18's two toggles on Home): Films, Series
+ * or Both - one position pressed, never none.
  */
 export function kindToggle(page, label) {
-  return page.getByRole('group', { name: 'Kind' }).getByRole('button', { name: label });
+  return page.getByRole('group', { name: 'Kind' }).getByRole('button', { name: label, exact: true });
 }
 
 export async function kindIsOn(page, label) {
   return (await kindToggle(page, label).getAttribute('aria-pressed')) === 'true';
+}
+
+/** The switch position that shows exactly these kinds. */
+export function kindPosition(kinds) {
+  return kinds.includes('Films') && kinds.includes('Series')
+    ? 'Both'
+    : kinds.includes('Series')
+      ? 'Series'
+      : 'Films';
 }
 
 /**
@@ -204,15 +213,14 @@ export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId
  *  - the card is matched by NAME, not by position. The search box is debounced, so clicking
  *    `.card-wrap` first opens whatever the *unfiltered* grid happened to show — which is
  *    Paddington 2, because the catalog is ordered by year descending.
- *  - the kinds it needs go on. Home opens with Films only (owner decision 18), so a series
- *    like Severance is not in the grid at all until Series is switched on. A caller testing
- *    the partition itself passes `['Films']` to leave the default alone.
+ *  - the kinds it needs go on. Home opens with Films only, so a series like Severance is not in
+ *    the grid at all until the switch is on Series or Both (decision 474). A caller testing the
+ *    partition itself passes `['Films']` to leave the default alone.
  */
 export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] } = {}) {
   await page.goto('/');
-  for (const kind of ensureKinds) {
-    if (!(await kindIsOn(page, kind))) await kindToggle(page, kind).click();
-  }
+  const position = kindPosition(ensureKinds);
+  if (!(await kindIsOn(page, position))) await kindToggle(page, position).click();
   await page.getByRole('searchbox', { name: 'Search titles' }).fill(name);
   const card = page.locator('.card-wrap', { hasText: name }).first();
   await card.click();

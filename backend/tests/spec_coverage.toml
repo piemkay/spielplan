@@ -1221,7 +1221,7 @@ id = "library-rate-shelves-partition-both-kinds"
 spec = "§6.0 M2 shelves + §4.1 rule 5 + decision 18"
 milestone = "M2"
 kind = "integration"
-what = "With both Films and Series selected, every ranking shelf in the Home payload comes back as two kind-headed sections and never as one interleaved ranked list; the catalog listing, ordered by year or title, may interleave the two kinds freely."
+what = "With both Films and Series selected, every ranking shelf in the Home payload comes back as two kind-headed sections and never as one interleaved ranked list; the catalog listing, ordered by year - or, under a search, best match first, which is a property of the text and not of a kind - may interleave the two kinds freely."
 why = "Decision 18's precise reading of rule 5: the measured failure is a shared ranking (unpartitioned crowd top-10 is 8/10 series), not a shared screen — so the falsifiable property is the ordering, not the rendering."
 tests = [
     "backend/tests/test_home.py::test_every_shelf_returns_one_section_per_kind_and_no_shelf_has_items",
@@ -6342,7 +6342,7 @@ id = "library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned"
 spec = "§6.0 table row 1 (\"Because you put *{anchor}* in {tier}\") + §6.3"
 milestone = "M4.9"
 kind = "integration"
-what = "Shelf 1's anchor is a seen title with ledger_state.observed true — a synced-seen, never-rated title with a high prior is not eligible and the shelf is suppressed with a reason instead — and the tier the headline names is the most recent tier_edit where one exists, so a title dropped from A to F on Rank reads \"in F\" on Home immediately and after the nightly refit."
+what = "Shelf 1's anchor is a seen title with ledger_state.observed true — a synced-seen, never-rated title with a high prior is not eligible and the shelf is suppressed with a reason instead — and the tier the headline names is the most recent tier_edit where one exists, so a title dropped from A to F on Rank reads \"in F\" on Home immediately and after the nightly refit. Since the owner instruction of 2026-09-25 the \"you put\" headline is said only of a title with a tier_edit; otherwise it reads \"Because you liked {anchor}\" (a live liked verdict) or \"More like {anchor}\"."
 why = "refit_user writes a ledger_state row for every owned title, observed or not, so §7.2's seen-sync makes unrated titles eligible; and the headline's verb is \"you put\", while §6.3 and rank/board.py define where a title renders as its latest tier_edit. Provenance: proposal 24 (decision 295)."
 tests = [
     "backend/tests/test_home.py::test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one",
@@ -6354,12 +6354,17 @@ id = "library-rate-cold-badge-follows-crowd-support-not-placement"
 spec = "§8 stage 10 (\"a 'new — model placement, no crowd data' badge until ratings accrue\")"
 milestone = "M4.9"
 kind = "integration"
-what = "Home shelf cards carry e_source (and item_n) outside the decision-117 model block, so a title with a Backbone row and crowd support below the warm gate does not wear the no-crowd-data badge with the model toggle on or off; PosterCard's expression is unchanged, and ModelNote branches on no field the shelf card's model block stopped carrying."
+what = "Home shelf cards carry e_source (and item_n) outside the decision-117 model block, so a title with a Backbone row and crowd support below the warm gate does not wear the no-crowd-data badge with the model toggle on or off; ModelNote branches on no field the shelf card's model block stopped carrying. A title with any crowd rating (item_n > 0) never wears the badge and never sits on \"New in the library\", whatever its e_source says - PosterCard's pinned expression asks the count first."
+# The last clause is the owner instruction of 2026-09-25's: the bundle's evaluation holdout serves
+# 2,879 crowd-rated rows from the Cold Tower, so on the first household install 182 of 215 badged
+# owned titles had ratings behind them (Raiders of the Lost Ark, 192,061), and "New in the library"
+# was 161 of 180 such films. `_COLD_BADGE` changed with the rule it pins.
 why = "title.placement stopped meaning \"no crowd data\" when warm was defined from §5.1's gate — 0008 stamps cold_tower on any title with a Backbone row and item_n < 90 — and on the reference library 111 of the 130 badges Home draws are false. §8 stage 10's badge is product, not debugging, so it must not ride the model gate. Lifting the two fields out left ModelNote's two hover branches over them unable to fire, so §6.7's tooltip silently stopped naming the crowd support behind the prior; a branch over a key the payload cannot carry reads as an annotation and is not one. [M4.9 review cycle 1: M49-HOME-05]"
 tests = [
     "backend/tests/test_home.py::test_shelf_cards_carry_e_source_outside_the_model_block",
     "backend/tests/test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement",
     "backend/tests/test_static_contracts.py::test_every_field_the_model_note_reads_is_one_the_shelf_card_carries",
+    "backend/tests/test_home.py::test_a_cold_placed_title_with_crowd_ratings_is_not_new",
 ]
 
 [[requirement]]
@@ -11357,4 +11362,129 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# --- Home and the catalog after the first household user test (owner instruction of 2026-09-25) ---
+#
+# Workstream WB's rows. Each `spec` cites the section alone and the decision in `what`/`why`:
+# decisions 472-476 are recorded in docs/spec-v2.2-proposals.md in the same wave, and
+# `_unresolvable_decision_citations` reddens a shipped row whose `spec` cites a decision the file
+# does not yet carry. The merge that records them may append "; decision N" to each `spec`.
+
+# Decision 472. "up" found Up at 131 of 362 and "heat" found Heat tenth: a search kept the
+# catalog's year order. The predicate - and so the count line - is unchanged.
+[[requirement]]
+id = "library-search-best-match-first"
+spec = "§6.0 M0 (\"filter/search on title/alias\")"
+milestone = "M5"
+kind = "integration"
+what = "With a search term, the catalog lists best match first: an exact title, then the phrase starting the title, a word starting the title, the phrase as whole words, a word starting with it anywhere, then any substring; a leading article (the/a/an) is read both ways; a name match outranks an alias match of the same quality; inside a tier an owned title leads, then the crowd's rating count as a percentile within the title's own kind, then year, name and id - a total order, so OFFSET pages neither repeat nor drop a title. Without a term the year order stands. Decision 472."
+why = "Match quality is a property of the text, so the grid stays decision 18's kind-independent list; the crowd tie-break is read within each kind because item_n sits on two scales (film median 265, series median 0) and a raw count is §4.1 rule 5's cross-kind comparison."
+tests = [
+    "backend/tests/test_library_search.py::test_an_exact_title_is_the_first_search_hit",
+    "backend/tests/test_library_search.py::test_search_tiers_run_exact_then_prefix_then_word_then_substring",
+    "backend/tests/test_library_search.py::test_a_leading_article_does_not_bury_the_title",
+    "backend/tests/test_library_search.py::test_a_name_match_outranks_an_alias_match_of_the_same_quality",
+    "backend/tests/test_library_search.py::test_the_household_owned_copy_breaks_a_tie_before_the_crowd_does",
+    "backend/tests/test_library_search.py::test_the_crowd_tie_break_is_read_within_each_kind",
+    "backend/tests/test_library_search.py::test_search_order_is_total_across_pages",
+    "backend/tests/test_library_search.py::test_no_query_keeps_the_year_order",
+    "backend/tests/test_home.py::test_the_catalog_grid_may_interleave_the_two_kinds",
+    "e2e/specs/03-library.spec.js::an exact title is the first search hit",
+]
+
+# Decision 473. The facet was a raw DISTINCT over six sources: 434 values for films, "Action"
+# beside "action", Wikidata's free text (the adult labels among it) and a 37-character option that
+# widened Home past an iPhone.
+[[requirement]]
+id = "library-genre-facet-is-one-canonical-vocabulary"
+spec = "§6.0 M0 (\"filter/search on title/alias/genre/decade/seen-state\") + §6.3 (\"Filters: genre\")"
+milestone = "M5"
+kind = "integration"
+what = "The genre facet offers TMDB's genre names (the movie list without TV Movie, plus Reality, Talk, News and Soap), each once; a genre matches a title any structured source tags with it in any spelling, TMDB's combined TV genres answering both halves; Wikidata's labels are neither offered nor matched; title_genre keeps every per-source row as imported; the catalog route answers a genre outside the vocabulary with a 422; and a long option never widens the page on a phone. Decision 473."
+why = "§4.1 keeps one block per droppable source and normalises at read time; the Cold Tower's genre block reads title_genre as imported, so the mapping cannot be an import-time rewrite."
+tests = [
+    "backend/tests/test_library_search.py::test_the_genre_facet_is_the_canonical_vocabulary",
+    "backend/tests/test_library_search.py::test_a_canonical_genre_matches_every_structured_source",
+    "backend/tests/test_library_search.py::test_a_combined_tmdb_tv_genre_answers_both_halves",
+    "backend/tests/test_library_search.py::test_an_unknown_genre_is_a_422_not_an_empty_grid",
+    "backend/tests/test_library_search.py::test_every_genre_mapping_names_the_canonical_vocabulary",
+    "e2e/specs/03-library.spec.js::the genre control offers one canonical name per genre",
+    "e2e/specs/06-responsive.spec.js::a long genre option does not widen the page",
+]
+
+# Decision 474. Tapping Series with Films on ADDED series under the film shelves.
+[[requirement]]
+id = "library-rate-home-kind-switch"
+spec = "§6.0 (kind control) + §4.1 rule 5"
+milestone = "M5"
+kind = "e2e"
+what = "Home's kind control is one switch - Films, Series, Both - with exactly one position pressed: Series shows series alone, Both shows two kind regions (Films, then Series), each holding that kind's shelves in the table's order and no row of the other kind. Decision 18's never-neither and both-is-a-selection-not-a-merge hold. Decision 474."
+why = "A member on the first household took the additive toggle for a broken switch; the kind-grouped `sections` the payload always carried were never rendered."
+tests = [
+    "e2e/specs/03-library.spec.js::the kind switch selects one kind or both, never neither",
+    "e2e/specs/10-home.spec.js::Series switches to series, and Both shows the two kinds as two regions",
+    "frontend/src/lib/home.test.js::switches rather than adds: Series alone is series alone",
+    "frontend/src/lib/home.test.js::never puts the other kind into a region",
+]
+
+# Decision 475. Three score-ordered shelves drew from the top of one list, and three titles each
+# appeared twice in one render; shelf 1 named Zootopia's most generic pair.
+[[requirement]]
+id = "library-rate-home-shelves-claim-their-titles"
+spec = "§6.0 M2 (the shelf table)"
+milestone = "M5"
+kind = "integration"
+what = "Home's shelves are built in a claim order - \"Your top picks\" first, keeping its whole list, then the table's order - and rendered in the table's order; no title appears on two claiming shelves of one kind (\"New in the library\" is exempt and never thinned); a shelf left under the floor of three by the claim is absent and its reason says so. Shelf 1 shows the unseen owned titles sharing the most of the anchor's terms and names a pair every card carries; the anchor is the seen, rated title with the highest tier the board shows, then the live verdict, before the Ledger's s. The sweet spot's 0.70 floor is read against the owned library. Decision 475."
+why = "§6.0 neither forbids nor requires repeats, and \"Top of your ledger\"'s why-line promises the person's highest, so claim priority is kept apart from display order; the widest-pair rule named an anchor's most generic terms and let the score's extremes pick the cards."
+tests = [
+    "backend/tests/test_home.py::test_a_title_appears_on_at_most_one_shelf_per_kind",
+    "backend/tests/test_home.py::test_your_top_picks_claims_first_and_keeps_its_whole_list",
+    "backend/tests/test_home.py::test_the_floor_applies_after_the_claim_and_says_so",
+    "backend/tests/test_home.py::test_the_payload_keeps_the_tables_order_though_the_claim_runs_in_another",
+    "backend/tests/test_home.py::test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair",
+    "backend/tests/test_home.py::test_the_anchor_is_the_highest_tier_before_the_highest_s",
+    "backend/tests/test_home.py::test_the_sweet_spot_floor_is_read_against_the_owned_library",
+    "backend/tests/test_home.py::test_a_kind_that_loses_a_merged_ranking_still_gets_its_own_section",
+]
+
+# Decision 476, under decision 486's member register. Members read "blended at β 0.20", "cos 0.41",
+# "placed by the Cold Tower", "Because you put Mission: Impossible in S" (nobody had tiered
+# anything) and "You and Patrick both rate these highly" over "neither of you has seen these".
+[[requirement]]
+id = "library-rate-home-speaks-the-member-register"
+spec = "§6.0 M2 (the shelf table) + §6.8 (\"quiet reasons\") + §6.7"
+milestone = "M5"
+kind = "integration"
+what = "With Show the model off no shelf title, why-line, caption or first-week line carries a model number, a model noun (ledger, fold-in, prior, Cold Tower, labels) or a spec reference, and no section carries why_numbers - the numbers each ordering used travel only with the switch on; terms are named by their vocabulary label; \"Because you put {anchor} in {tier}\" is said only of a title with a tier_edit; the sweet spot reads \"You and {other} would both enjoy these\"; the no-crowd-data sentence says so in words. Decision 476."
+why = "Decision 486's register: model numbers behind Show the model, spec references never, terms by label; every restated line states the same fact it replaces."
+tests = [
+    "backend/tests/test_home.py::test_no_shelf_sentence_carries_a_model_word_with_the_switch_off",
+    "backend/tests/test_home.py::test_the_anchor_headline_says_what_the_person_did",
+    "backend/tests/test_home.py::test_the_ledger_shelf_names_the_beta_its_own_ranking_used",
+    "backend/tests/test_home.py::test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss",
+    "backend/tests/test_home.py::test_the_sweet_spot_is_unseen_by_both_and_high_for_both",
+    "backend/tests/test_home.py::test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair",
+    "backend/tests/test_static_contracts.py::test_every_surface_that_draws_the_cold_badge_states_its_reason",
+    "e2e/specs/10-home.spec.js::with the toggle off the rail and every inline number are absent, not merely hidden",
+    "e2e/specs/10-home.spec.js::a shelf term chip prints its term once and wears its facet colour",
+]
+
+# The count line over the shelves counted the whole catalog ("13,330 films · 5,747 series hidden")
+# above shelves of owned titles; catalog cards gave no sign of which titles Play works on. Spec-
+# silent presentation, no decision.
+[[requirement]]
+id = "library-rate-home-counts-and-marks-the-households-library"
+spec = "§6.0 (count line, decision 18) + §7.1"
+milestone = "M5"
+kind = "integration"
+what = "Home's payload names the owned titles per kind and the count line over the shelves states them (\"612 films in your library · 262 series hidden\"); the grid's line counts the catalog it lists; a catalog or search card of an owned title reads \"in library\", and one pill narrows the grid to owned titles; every shelf row states how many titles it holds, and a tier letter on a card is explained once in words and names itself, a guess on an unseen title."
+why = "A count of something the screen is not showing is the silent-truncation failure decision 18's count line exists to prevent, inverted."
+tests = [
+    "backend/tests/test_home.py::test_home_counts_the_library_the_shelves_draw_on",
+    "e2e/specs/03-library.spec.js::films only, and the hidden count names what is missing",
+    "e2e/specs/03-library.spec.js::owned titles are marked in the catalog and one pill narrows to them",
+    "e2e/specs/10-home.spec.js::every shelf says how many titles it holds",
+    "e2e/specs/10-home.spec.js::a tier letter on a shelf card is explained once, in words",
+    "frontend/src/lib/home.test.js::counts the household library over the shelves, not the whole catalog",
 ]

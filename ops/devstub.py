@@ -63,6 +63,7 @@ from spielplan.core.config import settings  # noqa: E402
 from spielplan.curated import adjudications as curated_verdicts  # noqa: E402 - the real refusals
 from spielplan.curated import axes as curated_axes  # noqa: E402
 from spielplan.curated import corrections as curated_corrections  # noqa: E402
+from spielplan.db import genres as genre_vocab  # noqa: E402 - decision 473's real vocabulary
 from spielplan.db.library import normalise_kinds  # noqa: E402 - §4.1 rule 5's real validator
 from spielplan.dna import review as dna_review  # noqa: E402 - the review's real bound
 from spielplan.flywheel import batch as flywheel_batch  # noqa: E402 - decision 441's arithmetic
@@ -831,8 +832,13 @@ def list_titles(
             if decade and not (r["year"] and decade <= r["year"] < decade + 10):
                 continue
             if genre:
+                # Decision 473, as the app reads it: any structured source's spelling of the
+                # canonical genre, Wikidata never.
+                raws = genre_vocab.raw_labels(genre)
                 g = db.execute(
-                    "SELECT 1 FROM title_genre WHERE title_id = ? AND genre = ?", (r["id"], genre)
+                    "SELECT 1 FROM title_genre WHERE title_id = ? AND lower(genre) IN "
+                    f"({','.join('?' * len(raws)) or 'NULL'}) AND source <> 'wikidata'",
+                    (r["id"], *raws),
                 ).fetchone()
                 if not g:
                     continue
@@ -970,12 +976,12 @@ def facets(kind: list[str] = Query(default=["movie"])) -> dict[str, Any]:
     kinds = [k for k in ("movie", "series") if k in kind] or ["movie"]
     marks = ",".join("?" * len(kinds))
     with _db() as db:
-        genres = [
+        genres = genre_vocab.facet({
             r[0] for r in db.execute(
-                "SELECT DISTINCT g.genre FROM title_genre g JOIN title t ON t.id = g.title_id"
-                f" WHERE t.kind IN ({marks}) ORDER BY 1", kinds
+                "SELECT DISTINCT lower(g.genre) FROM title_genre g JOIN title t ON t.id = g.title_id"
+                f" WHERE t.kind IN ({marks}) AND g.source <> 'wikidata'", kinds
             )
-        ]
+        })
         decades = [
             r[0] for r in db.execute(
                 f"SELECT DISTINCT (year/10)*10 FROM title WHERE kind IN ({marks})"
@@ -3414,8 +3420,12 @@ def _because_anchor(user_id, kind, *, vocabulary):
     section = shelves.Section(
         kind=kind,
         heading=shelves.KIND_HEADINGS[kind],
-        title=f"Because you put {anchor['name']} in {tier_set[index]}",
-        why=f"shares {t1.term} + {t2.term} with it",
+        # Decision 476: "you put" only for a title placed on Rank; the harness has no tier edits.
+        title=(
+            f"Because you liked {anchor['name']}"
+            if _verdicts(user_id).get(anchor["id"]) == 2 else f"More like {anchor['name']}"
+        ),
+        why=f"shares {t1.name} + {t2.name} with it",
         why_terms=[t1.with_role("member"), t2.with_role("member")],
         anchor={"title_id": anchor["id"], "name": anchor["name"], "tier": tier_set[index]},
         items=[
@@ -3444,26 +3454,21 @@ def _top_of_ledger(user_id, kind, *, bundle_version, vocabulary):
         key=lambda t: (-scores[t["id"]], t["id"]),
     )[: shelves.SHELF_CAP]
     label_count = sum(_label_counts(user_id, [kind]))
+    # Decision 476's copy, mirrored from `home/shelves.top_of_ledger`.
     why = (
-        f"clean item prior + your fold-in, blended at β {beta:.2f} — your highest, "
-        "rewatches included"
+        "the ones we think you'll enjoy most — rewatches included"
         if fitted
-        else f"clean item prior alone — β {beta:.2f}, no fold-in yet — your highest, "
-             "rewatches included"
+        else "what most people rate highest, until your own ratings take over — rewatches included"
     )
     section = shelves.Section(
         kind=kind,
         heading=shelves.KIND_HEADINGS[kind],
-        title="Top of your ledger",
+        title="Your top picks",
         why=why,
         why_numbers={"beta": beta, "beta_fitted": fitted,
                      "beta_optimum": shelves.DEFAULT_BETA, "label_count": label_count,
                      "gate_k": 10},
-        caption=(
-            None if fitted
-            else f"§5.1's measured optimum is β {shelves.DEFAULT_BETA:.2f}; this profile is "
-                 "not there yet"
-        ),
+        caption=None,
         items=[
             _home_card(t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta)
             for i, t in enumerate(rows)
@@ -3509,13 +3514,11 @@ def _never_watched_term(user_id, kind, *, vocabulary):
         section = shelves.Section(
             kind=kind,
             heading=shelves.KIND_HEADINGS[kind],
-            title=f"You've never watched anything {term.term}",
-            why=("unvisited region of DNA space next to what you like "
-                 f"— sits beside {neighbour.term} · cos 0.50"),
+            title=f"You've never watched anything {term.name}",
+            why=f"close to {neighbour.name}, which you like",
             why_terms=[term.with_role("member"), neighbour.with_role("anchor_side")],
             why_numbers={"cos": 0.5, "affinity": 0.5, "min_seen": shelves.FRONTIER_MIN_SEEN},
-            caption=("one exploratory slot in six · costs about a point of top-hit rate, "
-                     "honestly labelled"),
+            caption="a step outside what you usually watch, on purpose",
             items=[
                 _home_card(t, i + 1, user_id=user_id, tier_set=tier_set,
                            terms=[term.term], beta=beta)
@@ -3550,12 +3553,11 @@ def _shared_sweet_spot(user_id, kind, *, partner, bundle_version, vocabulary):
     section = shelves.Section(
         kind=kind,
         heading=shelves.KIND_HEADINGS[kind],
-        title=f"You and {partner['name']} both rate these highly",
-        why="the shared sweet spot — doubles as the Tonight prior",
+        title=f"You and {partner['name']} would both enjoy these",
+        why="neither of you has seen them — a good pick for a night in together",
         why_numbers={"min_cdf": floor, "partner_user_id": partner["user_id"],
                      "co_seen": partner["co_seen"]},
-        caption=(f"neither of you has seen these — both of you land above {floor:.2f} on your "
-                 "own ledgers, ranked by the plain average that seeds Tonight"),
+        caption=None,
         items=[
             _home_card(
                 t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta,
@@ -3615,7 +3617,7 @@ def _new_in_library(user_id, kind, *, vocabulary):
         kind=kind,
         heading=shelves.KIND_HEADINGS[kind],
         title="New in the library",
-        why="placed by the Cold Tower — no crowd data yet",
+        why="no outside ratings yet, so we placed them by what they're about",
         why_numbers={"gate_k": 10},
         items=[
             _home_card(t, i + 1, user_id=user_id, tier_set=tier_set, terms=[], beta=beta)
@@ -3719,6 +3721,12 @@ def _build_home(user, kinds, *, q=None, person_id=None, limit=60, offset=0) -> d
         "bundle": bundle_version,
         "vocabulary": vocabulary,
         "partner": partner,
+        # The owned titles per kind, which Home's count line states over the shelves. Every
+        # harness title is owned (`list_titles` answers `is_owned: True`).
+        "library": (
+            {k: len(_titles(k)) for k in ("movie", "series") if _titles(k)}
+            if STATE["imported"] else {}
+        ),
         "shelves": [],
         "sections": [],
         "shelves_total": 0,
@@ -3772,7 +3780,7 @@ def home_shelves(
     slim = {
         key: payload[key]
         for key in ("kinds", "shelves", "sections", "shelves_total", "verdict_count",
-                    "degraded", "partner", "bundle", "vocabulary", "suppressed")
+                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library")
         if key in payload
     }
     return rail.redact(slim, show_model=_show_model(user))
@@ -3891,7 +3899,10 @@ def _rank_matches(item: Any, filters: Any) -> bool:
         year = title.get("year")
         if year is None or not (filters.decade <= year < filters.decade + 10):
             return False
-    if filters.genre and filters.genre not in _genres_of(item.title_id):
+    if filters.genre and not (
+        set(genre_vocab.raw_labels(filters.genre))
+        & {g.lower() for g in _genres_of(item.title_id)}
+    ):
         return False
     if filters.dna and not _carries(item.title_id, filters.dna):
         return False

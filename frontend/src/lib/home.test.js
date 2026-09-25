@@ -9,11 +9,16 @@ import {
   facetColour,
   gridReason,
   homeMode,
+  kindChoice,
+  kindRegions,
+  kindsFor,
   kindsOnShelf,
+  libraryLabel,
   plural,
   sectionShips,
   shelfRows,
-  toPosterTitle
+  toPosterTitle,
+  whyNumbersLine
 } from './home.svelte.js';
 
 /**
@@ -54,7 +59,8 @@ describe('the two-mode state machine (§6.0)', () => {
     expect(gridReason({ genre: 'Drama' })).toBe('filter');
     expect(gridReason({ decade: '1990' })).toBe('filter');
     expect(gridReason({ seen: 'unseen' })).toBe('filter');
-    expect(gridReason({ seen: 'any' })).toBeNull();
+    expect(gridReason({ owned: true })).toBe('filter');
+    expect(gridReason({ seen: 'any', owned: false })).toBeNull();
   });
 
   it('names search before person when both are set, so the copy is stable', () => {
@@ -81,6 +87,24 @@ describe('the count line (decision 18)', () => {
 
   it('says "titles" when both kinds are on and reports nothing hidden', () => {
     expect(countLabel({ total: 8, hidden: {}, kinds: ['movie', 'series'] })).toBe('8 titles');
+  });
+
+  it('says "1 title", not "1 titles", with both kinds on', () => {
+    expect(countLabel({ total: 1, hidden: {}, kinds: ['movie', 'series'] })).toBe('1 title');
+  });
+
+  it('counts the household library over the shelves, not the whole catalog', () => {
+    // The first household read "13,330 films · 5,747 series hidden" above owned-only shelves.
+    const library = { movie: 612, series: 262 };
+    expect(libraryLabel({ library, kinds: ['movie'] })).toBe(
+      '612 films in your library · 262 series hidden'
+    );
+    expect(libraryLabel({ library, kinds: ['movie', 'series'] })).toBe(
+      '874 titles in your library'
+    );
+    expect(libraryLabel({ library: { series: 1 }, kinds: ['series'] })).toBe(
+      '1 series in your library'
+    );
   });
 
   it('states the active filters (proposal 152)', () => {
@@ -310,5 +334,76 @@ describe('the data voice (§6.8)', () => {
   it('renders a timestamp, not "3 minutes ago"', () => {
     expect(eventTime('2026-08-30T13:13:39.432117+00:00')).toMatch(/^\d{2}:\d{2}:\d{2}$/);
     expect(eventTime('not a date')).toBe('');
+  });
+
+  it('names every shelf number it prints, and prints nothing without them (decision 486)', () => {
+    expect(whyNumbersLine({ beta: 0.62, beta_optimum: 0.2, gate_k: 10 })).toBe(
+      'β 0.62 · β optimum 0.20 · gate k 10'
+    );
+    expect(whyNumbersLine({ min_cdf: 0.7, partner_user_id: 3 })).toBe('cdf floor 0.70');
+    expect(whyNumbersLine(undefined)).toBe('');
+  });
+});
+
+describe('the kind switch (decision 474)', () => {
+  it('switches rather than adds: Series alone is series alone', () => {
+    expect(kindsFor('series')).toEqual(['series']);
+    expect(kindsFor('movie')).toEqual(['movie']);
+    expect(kindsFor('both')).toEqual(['movie', 'series']);
+  });
+
+  it('reads the position back from the selection, and no position is empty', () => {
+    expect(kindChoice(['movie'])).toBe('movie');
+    expect(kindChoice(['series'])).toBe('series');
+    expect(kindChoice(['series', 'movie'])).toBe('both');
+    // Decision 18's "never neither": an empty selection is read as Films, never as nothing.
+    expect(kindChoice([])).toBe('movie');
+    expect(kindsFor('nonsense')).toEqual(['movie']);
+  });
+});
+
+describe('two kind regions under Both (decision 474)', () => {
+  const card = (id, kind) => ({ title_id: id, name: `T${id}`, kind, rank: 1, seen: false });
+  const section = (kind, id) => ({ kind, why: 'for a school night', items: [card(id, kind)] });
+  const payload = {
+    kinds: ['movie', 'series'],
+    sections: [
+      {
+        kind: 'movie',
+        heading: 'Films',
+        shelves: [
+          { id: 'top_of_ledger', ranking: true, sections: [section('movie', 1)] },
+          { id: 'school_night', ranking: true, sections: [section('movie', 2)] }
+        ]
+      },
+      {
+        kind: 'series',
+        heading: 'Series',
+        shelves: [{ id: 'school_night', ranking: true, sections: [section('series', 9)] }]
+      }
+    ]
+  };
+
+  it('keeps the table order inside each region, Films first', () => {
+    const regions = kindRegions(payload);
+    expect(regions.map((r) => r.kind)).toEqual(['movie', 'series']);
+    expect(regions[0].rows.map((r) => r.shelf)).toEqual(['top_of_ledger', 'school_night']);
+    expect(regions[1].rows.map((r) => r.shelf)).toEqual(['school_night']);
+  });
+
+  it('never puts the other kind into a region', () => {
+    for (const region of kindRegions(payload)) {
+      for (const row of region.rows) {
+        expect(row.section.kind).toBe(region.kind);
+        for (const item of row.section.items) expect(item.kind).toBe(region.kind);
+      }
+    }
+  });
+
+  it('drops a region with nothing to show and survives a payload without sections', () => {
+    expect(kindRegions({ sections: [{ kind: 'series', heading: 'Series', shelves: [] }] })).toEqual(
+      []
+    );
+    expect(kindRegions(null)).toEqual([]);
   });
 });
