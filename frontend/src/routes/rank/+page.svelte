@@ -10,16 +10,24 @@
    * pointer drag, so both end in `drop()` with the same body — a second write path would be a
    * second thing to keep in step, and the phone path is the one that would drift.
    *
+   * A tap on a title opens it; moving is the Move control beside it (decision 496). Each tile is
+   * therefore a group of buttons rather than one button, because the open area, the chip that
+   * opens the queue (§6.3, "the badge is the queue's entry point") and Move are three different
+   * things and a control nested inside another control is none of them reliably.
+   *
    * The board is never re-sorted here. §6.3 forbids snapping back, and the client shape of that
    * failure is optimistic re-sorting: the title lands where you dropped it, the response
    * arrives, and it slides somewhere else under your thumb. So a drop waits, and the response
    * replaces the board whole.
    */
   import { onDestroy, onMount } from 'svelte';
+  import RatePoster from '$lib/components/RatePoster.svelte';
+  import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
   import { session } from '$lib/session.svelte.js';
   import {
     KIND_LABELS,
+    ROUND_END_TEXT,
     SHARPEN_LABEL,
     TAP_FOOTNOTE,
     answer,
@@ -27,12 +35,15 @@
     chooseKind,
     clearFilters,
     closeQueue,
+    closeTitle,
+    dnaTierText,
     draft,
     drop,
     dropLifted,
     emptyState,
     sharpenWhy,
     facets,
+    keepGoing,
     lift,
     load,
     loadFacets,
@@ -40,13 +51,23 @@
     openQueue,
     putDown,
     rank,
-    reset
+    reset,
+    roundLine,
+    tapTile
   } from '$lib/rank.svelte.js';
 
   const showModel = $derived(!!session.user?.show_model);
   const empty = $derived(emptyState());
   const why = $derived(sharpenWhy());
   const lifted = $derived(rank.lifted);
+  // The two titles the last answer was about, marked on the board so the person can find them
+  // once the sheet is down. Placement only, the same on every arm (`read.placements`).
+  const compared = $derived(new Set((rank.placed ?? []).map((p) => p.title_id)));
+
+  // The sheet is fixed over `main`, which is the scroll container (+layout.svelte), and nothing
+  // reserved room for it: the last ~110 px of the board could not be scrolled above it while it
+  // was open. A spacer of the sheet's own measured height is that room. [§6 preamble]
+  let sheetHeight = $state(0);
 
   onMount(() => {
     loadFacets('movie');
@@ -123,16 +144,20 @@
   </header>
 
   <div class="controls">
+    <!-- The first box searches names and aliases and nothing else (`db/library.py`'s `q`), so
+         it claims nothing more: "title or DNA term, e.g. cosy" sent people typing a tag into a
+         box that cannot find one, the lie Home's box shed in M4.9 (finding 19). The tag box is
+         the second one, and it takes a bare tag or a facet-qualified one. [decision 486] -->
     <input
       type="search"
-      placeholder="filter — title or DNA term, e.g. cosy"
+      placeholder="filter by title"
       bind:value={draft.q}
       onchange={() => load(rank.kind)}
       data-testid="rank-filter"
     />
     <input
       type="text"
-      placeholder="DNA term (mood.cosy)"
+      placeholder="tag, e.g. cosy"
       bind:value={draft.dna}
       onchange={() => load(rank.kind)}
       data-testid="rank-dna"
@@ -182,7 +207,9 @@
 
   {#if lifted}
     <!-- Proposals 74 and 75: the banner, the Cancel, and the standing footnote. A modeless
-         lift with an undiscoverable exit is the classic tap-to-move failure. -->
+         lift with an undiscoverable exit is the classic tap-to-move failure. Sticky inside
+         `main`, because a Move tapped on a title deep in a thousand-pixel tier put the banner
+         and its Cancel off-screen above it. -->
     <div class="moving" data-testid="rank-moving" role="status">
       <span>Moving <strong>{lifted.name}</strong> — tap a tier to drop it.</span>
       <button onclick={putDown} data-testid="rank-cancel-lift">Cancel</button>
@@ -217,51 +244,83 @@
         role="group"
         aria-label={tier.label}
       >
+        <!-- The whole height of the row stays the drop target, and the letter sits at its top
+             and stays in view while a long tier scrolls past: a button centres its content, and
+             in a sixteen-title tier on a phone that put the letter ~500 px down the row, so the
+             first household saw letters only on the empty tiers. -->
         <button
-          class="gutter data-lg"
+          class="gutter"
           onclick={() => dropLifted(tier.index)}
           disabled={!lifted || rank.busy}
           data-testid={`rank-tier-${tier.label}`}
-          aria-label={`Drop into ${tier.label}`}>{tier.label}</button
+          aria-label={`Drop into ${tier.label}`}
         >
+          <span class="label">
+            <span class="letter data-lg" data-testid={`rank-letter-${tier.label}`}>{tier.label}</span>
+            <span class="count data">{tier.entries.length}</span>
+          </span>
+        </button>
         <div class="tray">
           {#each tier.entries as entry (entry.title_id)}
             {@const chip = chipFor(entry)}
-            <button
+            <div
               class="tile"
               class:picked={lifted?.title_id === entry.title_id}
               class:dim={lifted && lifted.title_id !== entry.title_id}
+              class:compared={compared.has(entry.title_id)}
               draggable="true"
               ondragstart={(e) => onDragStart(entry, e)}
               ondragend={() => (dragging = null)}
               ondragover={(e) => e.preventDefault()}
               ondrop={(e) => onDropInto(tier.index, e, entry.title_id)}
-              onclick={() => lift(entry)}
-              disabled={rank.busy}
-              aria-pressed={lifted?.title_id === entry.title_id}
+              role="group"
+              aria-label={entry.name}
               data-title={entry.title_id}
               data-testid={`rank-title-${entry.title_id}`}
-              title={entry.badge}
             >
-              <span class="name">{entry.name}</span>
-              <span class="why badge">{entry.badge}</span>
+              <button
+                class="open"
+                onclick={() => tapTile(entry, tier.index)}
+                disabled={rank.busy}
+                data-testid={`rank-open-${entry.title_id}`}
+                title={entry.badge}
+              >
+                <span class="name">{entry.name}</span>
+                <span class="why badge">{entry.badge}</span>
+                <!-- §4.1 rule 1: the two DNA tiers "must stay distinguishable", and a survivor of
+                     a DNA predicate that does not say whether the match was quote-verified or
+                     inferred has merged them where it matters — in the answer a person reads. -->
+                {#if rank.dnaTiers?.[entry.title_id]}
+                  <span class="why tiers" data-testid={`rank-dna-${entry.title_id}`}
+                    >{dnaTierText(rank.dnaTiers[entry.title_id])}</span
+                  >
+                {/if}
+              </button>
               {#if chip}
-                <span
+                <!-- §6.3 (decision 295): "the badge is the queue's entry point". It was a span
+                     inside the tile's one button, so tapping it lifted the title. The tension
+                     chip opens the queue too: it replaces the straddle chip while it holds
+                     (proposal 71), and a queue-eligible title in tension would otherwise have
+                     no door at all. -->
+                <button
                   class="chip"
                   class:tension={chip.kind === 'tension'}
+                  onclick={openQueue}
+                  disabled={rank.busy}
                   data-chip={chip.kind}
-                  data-testid={`rank-chip-${entry.title_id}`}>{chip.text}</span
+                  data-testid={`rank-chip-${entry.title_id}`}
+                  aria-label={`${chip.text} — compare titles to settle it`}>{chip.text}</button
                 >
               {/if}
-              <!-- §4.1 rule 1: the two DNA tiers "must stay distinguishable", and a survivor of
-                   a DNA predicate that does not say whether the match was quote-verified or
-                   inferred has merged them where it matters — in the answer a person reads. -->
-              {#if rank.dnaTiers?.[entry.title_id]}
-                <span class="why tiers" data-testid={`rank-dna-${entry.title_id}`}
-                  >{rank.dnaTiers[entry.title_id].join(' + ')}</span
-                >
-              {/if}
-            </button>
+              <button
+                class="move"
+                onclick={() => lift(entry)}
+                disabled={rank.busy}
+                aria-pressed={lifted?.title_id === entry.title_id}
+                aria-label={`Move ${entry.name}`}
+                data-testid={`rank-move-${entry.title_id}`}>Move</button
+              >
+            </div>
           {/each}
         </div>
       </div>
@@ -283,25 +342,50 @@
       {#each rank.log as line}<li>{line}</li>{/each}
     </ul>
   {/if}
+
+  {#if rank.queueOpen}
+    <div class="sheet-room" style:height={`${sheetHeight}px`} aria-hidden="true"></div>
+  {/if}
 </section>
 
 {#if rank.queueOpen}
   <!-- Proposal 73's screen. §6.3's queue reuses §6.1's Battle pattern: two posters are the
-       buttons, with the mirrored left | about the same | right strip. -->
-  <div class="queue" data-testid="rank-queue">
+       buttons, with the mirrored left | about the same | right strip. The posters are the same
+       component the battle card uses, handed a title with its `id` (decision 483). -->
+  <div class="queue" data-testid="rank-queue" bind:clientHeight={sheetHeight}>
     <div class="queue-head">
       <strong>{SHARPEN_LABEL}</strong>
+      <!-- Decision 495: how far through the round, in the data voice. -->
+      <span class="data round" data-testid="rank-round">{roundLine()}</span>
       <button onclick={closeQueue} data-testid="rank-queue-close">Done</button>
     </div>
-    {#if rank.pair}
+    {#if rank.roundDone}
+      <div class="round-end" data-testid="rank-round-end">
+        <p>{ROUND_END_TEXT}</p>
+        <div class="round-actions">
+          <button onclick={closeQueue} data-testid="rank-round-stop">Done</button>
+          <button class="more" onclick={keepGoing} data-testid="rank-round-more">Keep going</button>
+        </div>
+      </div>
+    {:else if rank.pair}
       <p class="why" data-testid="rank-pair-reason">{rank.pair.reason}</p>
+      <!-- Decision 117 puts "the selection label in the tier queue" behind the toggle, and the
+           route has sent it there since M4.10; nothing rendered it. -->
+      {#if showModel && rank.pair.model}
+        <p class="data" data-testid="rank-pair-arm">
+          {rank.pair.model.arm} · {rank.pair.model.reason}
+        </p>
+      {/if}
       <div class="pair">
         <button
           class="side"
           onclick={() => answer('A')}
           disabled={rank.busy}
-          data-testid="rank-pair-a">{rank.pair.name_a}</button
+          aria-label={`Pick ${rank.pair.name_a}`}
+          data-testid="rank-pair-a"
         >
+          <RatePoster title={{ id: rank.pair.title_a, name: rank.pair.name_a }} />
+        </button>
         <button
           class="tie"
           onclick={() => answer('TIE')}
@@ -312,13 +396,40 @@
           class="side"
           onclick={() => answer('B')}
           disabled={rank.busy}
-          data-testid="rank-pair-b">{rank.pair.name_b}</button
+          aria-label={`Pick ${rank.pair.name_b}`}
+          data-testid="rank-pair-b"
         >
+          <RatePoster title={{ id: rank.pair.title_b, name: rank.pair.name_b }} />
+        </button>
       </div>
     {:else}
       <p class="empty" data-testid="rank-queue-empty">{rank.queueReason}</p>
     {/if}
+    {#if rank.placed.length}
+      <!-- Where the two titles of the last answer sit now, as the board's own badges. The same
+           words whichever arm drew the pair: placement, never "moved" (§13). -->
+      <div class="placed" data-testid="rank-placed">
+        <span class="data">where they sit now</span>
+        {#each rank.placed as spot (spot.title_id)}
+          <span class="why" data-testid={`rank-placed-${spot.title_id}`}
+            >{spot.name}: {spot.badge}</span
+          >
+        {/each}
+      </div>
+    {/if}
   </div>
+{/if}
+
+{#if rank.opened !== null}
+  <!-- Decision 496: the card a tap opens. Home's credit tap filters Home's own list, which
+       Rank does not have, so here it closes the card; a seen-state change re-reads the board,
+       because the board's filters can include seen-state. -->
+  <TitleDetail
+    titleId={rank.opened}
+    onClose={closeTitle}
+    onPerson={closeTitle}
+    onStateChange={() => load(rank.kind)}
+  />
 {/if}
 
 <style>
@@ -371,13 +482,17 @@
   }
 
   .moving {
+    position: sticky;
+    top: 0;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding: 9px 12px;
     border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
+    /* Opaque under the wash, because a sticky banner scrolls over the board. */
+    background: linear-gradient(var(--ember-wash), var(--ember-wash)), var(--ground);
     border-radius: var(--r-sm);
     font-size: 13px;
   }
@@ -405,14 +520,38 @@
   .row.arm {
     border-color: var(--ember-edge);
   }
+  /* The letter at the top of its row, not centred in it: a column laid out from the top, and a
+     label that sticks 8 px below the top of `main` (the scroll container; the app header is
+     outside it) while its tier scrolls past. The button stays the row's full height, because
+     the whole gutter is the tap-to-drop target. */
   .gutter {
     flex: none;
     width: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 10px 0;
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     background: var(--card);
     color: var(--ink-2);
     font-size: 13px;
+  }
+  .gutter .label {
+    position: sticky;
+    top: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .gutter .letter {
+    color: var(--ink);
+  }
+  .gutter .count {
+    font-size: 11px;
+    color: var(--ink-4);
   }
   .gutter:disabled {
     cursor: default;
@@ -434,22 +573,57 @@
    * scoped styles; this one wants a chip, so it does not borrow the name. */
   .tile {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
+    align-items: stretch;
     min-height: var(--touch);
-    max-width: 220px;
-    padding: 6px 9px;
+    max-width: 340px;
     border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
     background: var(--card);
-    text-align: left;
+  }
+  /* On a phone every tile took its own line anyway (a 220 px cap in a ~300 px tray); saying so
+     makes the layout a decision rather than an accident, and gives the name and its badge the
+     room the two controls beside them now take. */
+  @media (max-width: 480px) {
+    .tile {
+      flex: 1 1 100%;
+      max-width: 100%;
+    }
   }
   .tile.picked {
     border-color: var(--ember);
   }
   .tile.dim {
     opacity: 0.5;
+  }
+  .tile.compared {
+    border-color: var(--line-3);
+  }
+  .open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 6px 9px;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .move {
+    flex: none;
+    align-self: stretch;
+    padding: 0 10px;
+    border: none;
+    border-left: 1px solid var(--line);
+    background: none;
+    color: var(--ink-3);
+    font-size: 11px;
+  }
+  .move[aria-pressed='true'] {
+    color: var(--ember-lift);
   }
   .name {
     font-size: 13px;
@@ -459,13 +633,20 @@
     font-size: 10px;
   }
   .chip {
-    margin-top: 2px;
-    padding: 1px 6px;
+    flex: none;
+    align-self: center;
+    margin: 0 4px;
+    padding: 1px 8px;
+    min-height: 28px;
     border: 1px solid var(--line-2);
     border-radius: var(--r-pill);
+    background: none;
     font-family: var(--mono);
     font-size: 10px;
     color: var(--ink-3);
+    max-width: 40%;
+    white-space: normal;
+    text-align: left;
   }
   .chip.tension {
     border-color: var(--ember-edge);
@@ -517,6 +698,8 @@
   .queue {
     position: fixed;
     inset: auto 0 0 0;
+    /* Above the sticky lift banner, below the title card (TitleDetail's 50). */
+    z-index: 10;
     padding: 14px;
     border-top: 1px solid var(--line-2);
     background: var(--card-raised);
@@ -528,31 +711,75 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
   }
-  .queue-head button {
+  .queue-head strong {
+    white-space: nowrap;
+  }
+  .queue-head .round {
+    margin-left: auto;
+    color: var(--ink-3);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .queue-head button,
+  .round-actions button {
     min-height: 36px;
     padding: 0 14px;
     border: 1px solid var(--line-2);
     border-radius: var(--r-pill);
     background: var(--card);
   }
+  .round-end p {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+  .round-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .round-actions .more {
+    border-color: var(--ember-edge);
+    background: var(--ember-wash);
+    color: var(--ember-lift);
+  }
+  /* The posters are held small: the sheet sits over the board it is sharpening, and a pair of
+     full-width 2:3 cards would cover most of a phone's screen. */
   .pair {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 8px;
-    align-items: stretch;
+    grid-template-columns: minmax(0, 100px) auto minmax(0, 100px);
+    justify-content: center;
+    gap: 10px;
+    align-items: center;
   }
   .pair button {
     min-height: var(--touch);
-    padding: 10px;
-    border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
-    background: var(--card);
     font-size: 13px;
   }
+  .pair .side {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+  }
   .pair .tie {
+    padding: 10px;
+    border: 1px solid var(--line-2);
+    background: var(--card);
     color: var(--ink-3);
     font-size: 12px;
+  }
+  .placed {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .placed .data {
+    font-size: 11px;
+    color: var(--ink-4);
   }
 
   /* §6 preamble: "48 px targets". `design.css` sets this globally for `button`/`select`, but a
@@ -569,8 +796,17 @@
     .empty button,
     .empty a,
     .queue-head button,
-    .pair button {
+    .round-actions button,
+    .pair button,
+    .chip {
       min-height: var(--touch);
+    }
+    /* Decision 496's Move and the chip that opens the queue are standalone controls beside the
+       title, so both axes of §6 preamble's floor apply to them — the coarse block above raises
+       the height alone, which is how two overlay exits once shipped 48 tall and 32 wide. */
+    .move,
+    .chip {
+      min-width: var(--touch);
     }
     /* `.empty a` is the same control as `.empty button`, one branch over. `emptyState()` sends
        `no-match` to the button and `fitting`/`unrated`/`thin` to an anchor, and the anchor is the

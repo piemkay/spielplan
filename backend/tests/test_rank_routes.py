@@ -37,7 +37,7 @@ from spielplan.api import rank as rank_api
 from spielplan.home import rail
 from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
-from spielplan.rank import queue
+from spielplan.rank import queue, read
 
 
 def _embedding(title_id: int) -> np.ndarray:
@@ -975,9 +975,9 @@ async def test_the_queue_never_re_serves_a_pair_this_person_has_answered(db, ran
     pair's posterior by the root of ten on the strength of one judgement: §13's reliability
     inflation, reached through the selector. [M4.10 finding 12; cycle 1, M410-REV3]
 
-    The arm is forced because §6.3's mix gives exploration a fifth of the draws and it is the
-    only arm that consults the set — the held-out arm must not (§13), and the boundary arm's own
-    repetition is M3-open-points §3.1's remaining half.
+    The arm is forced because §6.3's mix gives exploration a fifth of the draws. The held-out arm
+    must not consult the set (§13); the boundary arm has consulted it since decision 494, and
+    `test_the_queue_route_never_re_serves_an_answered_boundary_pair` is its route leg.
     """
     client, user_id = ranked
     # The four duels the fixture already wrote, so the set the route reads is non-empty before
@@ -1000,6 +1000,168 @@ async def test_the_queue_never_re_serves_a_pair_this_person_has_answered(db, ran
     assert await db.fetchval(
         "SELECT count(*) FROM duel WHERE user_id = $1 AND context = 'tier_queue'", user_id
     ) == 6
+
+
+async def _every_title_straddles(db, user_id: int) -> None:
+    """Widen every posterior so every title on the fixture board straddles a cut.
+
+    The fixture's fitted σ is small enough that the boundary arm finds nothing and every boundary
+    roll falls through to exploration, which would let a boundary-arm test pass without ever
+    drawing a boundary pair. Re-applied before each draw, because the answer's incremental update
+    re-writes the σ of the two titles it touched."""
+    await db.execute(
+        "UPDATE ledger_state SET sigma_eff = 20.0 WHERE user_id = $1 AND kind = 'movie'", user_id
+    )
+
+
+async def test_the_queue_route_never_re_serves_an_answered_boundary_pair(db, ranked, monkeypatch):
+    """Decision 494 at the seam a person meets: the boundary arm reads `read.asked_pairs` too.
+
+    It used to be the nearest title across the cut with no memory, and `api/rank.py` forwarded
+    the set to the exploration arm alone, so Jenny was served one boundary pair twice in four
+    answers - duels 19 and 22 on the live install, the same answer both times, each an independent
+    Davidson row. Forced onto the boundary arm six times running, on a board where every title
+    straddles, nothing already answered comes back."""
+    client, user_id = ranked
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    asked = {frozenset(pair) for pair in ((1, 2), (3, 4), (5, 6), (1, 5))}
+    arms = []
+    for draw in range(6):
+        await _every_title_straddles(db, user_id)
+        _arm(monkeypatch, BOUNDARY_ROLL)
+        pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+        assert pair is not None, f"draw {draw}: the queue ran dry on a board that all straddles"
+        arms.append(pair["model"]["arm"])
+        key = frozenset((pair["title_a"], pair["title_b"]))
+        assert key not in asked, f"draw {draw}: the route re-served {sorted(key)}"
+        asked.add(key)
+        answered = await client.post(
+            "/api/rank/queue/answer", json={"pair": pair["token"], "outcome": "A"}
+        )
+        assert answered.status_code == 200, answered.text
+    assert arms.count(queue.ARM_BOUNDARY) >= 3, (
+        f"the boundary arm was hardly reached, so this proved little about it: {arms}"
+    )
+
+
+async def test_an_exhausted_queue_says_nothing_is_left_to_settle_not_rate_more(
+    db, ranked, monkeypatch
+):
+    """Decision 495. With every pair on a board answered the adaptive arms have nothing left, and
+    the route used to tell the person to "rate a few more titles and the queue fills up" - the
+    first-sitting sentence, said to somebody who has just answered everything. The thin board
+    keeps that sentence; the settled one says what is true of it. The held-out tenth still draws,
+    because it reads no answered set (§13)."""
+    client, user_id = ranked
+    rated = [1, 2, 3, 4, 5, 6]
+    done = {frozenset(pair) for pair in ((1, 2), (3, 4), (5, 6), (1, 5))}
+    for a in rated:
+        for b in rated:
+            if a < b and frozenset((a, b)) not in done:
+                await observations.record_duel(
+                    db, user_id=user_id, title_a=a, title_b=b, outcome="A",
+                    context="profile_battle", decisive=False, hp=DEFAULTS,
+                )
+    for roll in (BOUNDARY_ROLL, EXPLORATION_ROLL):
+        _arm(monkeypatch, roll)
+        settled = (await client.get("/api/rank/queue?kind=movie")).json()
+        assert settled["pair"] is None, settled
+        assert settled["reason"] == rank_api._QUEUE_SETTLED
+        assert "fills up" not in settled["reason"]
+    _arm(monkeypatch, HOLDOUT_ROLL)
+    assert (await client.get("/api/rank/queue?kind=movie")).json()["pair"] is not None
+
+    await db.execute(
+        "DELETE FROM ledger_state WHERE user_id = $1 AND title_id <> 1", user_id
+    )
+    _arm(monkeypatch, EXPLORATION_ROLL)
+    thin = (await client.get("/api/rank/queue?kind=movie")).json()
+    assert thin["pair"] is None and thin["reason"] == rank_api._QUEUE_THIN, thin
+
+
+async def test_a_queue_answer_returns_both_titles_placement_on_every_arm(db, ranked, monkeypatch):
+    """§6.3's "incremental immediately", made visible. The sheet sits over the board it is
+    sharpening, so the first household answered twenty pairs into a board they never saw move.
+    The answer now says where both titles sit, as the board's own public rows - and in the same
+    shape on every arm, with no "moved" in it, because a held-out answer is never refitted (§13)
+    and a reply that could say "unchanged" would tell the person which answer was held out.
+    Asserted with the toggle off: placement is owed to every member, and carries no model
+    number (decision 117)."""
+    client, _user_id = ranked
+    shapes = []
+    for roll in (BOUNDARY_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL):
+        _arm(monkeypatch, roll)
+        pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+        answered = (
+            await client.post(
+                "/api/rank/queue/answer", json={"pair": pair["token"], "outcome": "B"}
+            )
+        ).json()
+        placed = answered["placed"]
+        assert {p["title_id"] for p in placed} == {pair["title_a"], pair["title_b"]}, placed
+        for spot in placed:
+            assert spot["badge"].startswith(answered_tier_label(spot)), spot
+            assert not {"s", "sigma", "moved", "changed"} & set(spot), spot
+        shapes.append(tuple(sorted(placed[0])))
+    assert len(set(shapes)) == 1, f"the reply's shape differs by arm: {shapes}"
+
+
+def answered_tier_label(spot) -> str:
+    """The badge leads with the tier the row renders in (§6.3, "A — between Heat and Prisoners")."""
+    return list(observations.DEFAULT_TIER_SET)[spot["tier"]]
+
+
+async def test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints(
+    db, ranked, monkeypatch
+):
+    """The board's why-line said "{n} rated · learned cutpoints, refit nightly" - proposal 81's
+    wording, and false on the first household: nobody had moved a title, so the cutpoints were
+    the prior exactly (they learn from `tier_edit` alone), and the board had been moving on every
+    answer. It now says how much the person has told the board and whether the tier lines are
+    still the typical split. The comparison count moves on a held-out answer as on any other -
+    a count that stood still one answer in ten would name the held-out one (M4.10 finding 16)."""
+    client, _user_id = ranked
+    before = (await client.get("/api/rank?kind=movie")).json()
+    n = before["rated_total"]
+    assert before["why"] == (
+        f"{n} rated · 4 compared · tiers follow a typical split until you place a title yourself"
+    )
+    for noun in ("cutpoint", "refit", "learned", "ledger"):
+        assert noun not in before["why"], before["why"]
+
+    for count, roll in ((5, HOLDOUT_ROLL), (6, EXPLORATION_ROLL)):
+        _arm(monkeypatch, roll)
+        pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+        await client.post("/api/rank/queue/answer", json={"pair": pair["token"], "outcome": "A"})
+        why = (await client.get("/api/rank?kind=movie")).json()["why"]
+        assert f"· {count} compared ·" in why, why
+
+    await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    placed = (await client.get("/api/rank?kind=movie")).json()["why"]
+    assert placed.endswith("· 1 placed by you"), placed
+
+
+async def test_the_recent_window_reads_neither_battles_nor_the_held_out_stream(db, ranked):
+    """Decision 494's window is a selector input, so it takes `asked_pairs`' exclusion (§13 keeps
+    the uniform tenth out of the selection rule), and it is about the sitting in front of the
+    person, so a Rate battle is not in it."""
+    _client, user_id = ranked
+
+    async def queued(a, b, selection):
+        await observations.record_duel(
+            db, user_id=user_id, title_a=a, title_b=b, outcome="A",
+            context="tier_queue", selection=selection, decisive=False, hp=DEFAULTS,
+        )
+
+    assert await read.recent_titles(db, user_id=user_id, kind="movie") == set()
+    await queued(1, 2, queue.ARM_BOUNDARY)
+    await queued(3, 4, queue.ARM_HOLDOUT)
+    assert await read.recent_titles(db, user_id=user_id, kind="movie") == {1, 2}
+    await queued(5, 6, queue.ARM_EXPLORATION)
+    await queued(2, 3, queue.ARM_BOUNDARY)
+    await queued(4, 5, queue.ARM_BOUNDARY)
+    # The last three adaptive answers: (4, 5), (2, 3), (5, 6).
+    assert await read.recent_titles(db, user_id=user_id, kind="movie") == {2, 3, 4, 5, 6}
 
 
 # --- §6.3's routes ---------------------------------------------------------------------------
@@ -1077,11 +1239,18 @@ async def test_the_board_route_refuses_an_absent_kind(db, ranked):
 
 async def test_the_tier_set_route_round_trips_and_warns(db, ranked):
     """Decision 11: the control is per-user, and the save "discards that user's learned
-    cutpoints and queues a refit" — a warning the surface can only show if the route sends it."""
+    cutpoints and queues a refit" — a warning the surface can only show if the route sends it.
+
+    Said in the member register since decision 486: the account page is a member surface, so the
+    warning keeps decision 11's two facts - the learned boundaries go, and are fitted again - and
+    loses the model's nouns for them."""
     client, user_id = ranked
     current = (await client.get("/api/rank/tiers")).json()
     assert current["tier_set"] == list(observations.DEFAULT_TIER_SET)
-    assert "queues a refit" in current["warning"]
+    assert "throws away where your tier lines were learned to fall" in current["warning"]
+    assert "works them out again" in current["warning"]
+    for noun in ("cutpoint", "refit", "ledger"):
+        assert noun not in current["warning"].lower(), current["warning"]
 
     saved = (
         await client.put("/api/rank/tiers", json={"tier_set": ["bad", "ok", "good"]})

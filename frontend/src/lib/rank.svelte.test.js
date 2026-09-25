@@ -1,25 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ROUND_END_TEXT,
+  ROUND_SIZE,
+  TAP_FOOTNOTE,
   TIER_THRESHOLD,
   answer,
   apply,
   chipFor,
   chooseKind,
   clearFilters,
+  closeQueue,
+  closeTitle,
+  dnaTierText,
   draft,
   drop,
   dropLifted,
   emptyState,
   facets,
+  keepGoing,
   lift,
   load,
   loadFacets,
   neighboursIn,
+  openQueue,
+  openTitle,
   putDown,
   rank,
   reset,
-  sharpenWhy
+  roundLine,
+  sharpenWhy,
+  tapTile
 } from './rank.svelte.js';
 
 /**
@@ -65,7 +76,7 @@ const board = (over = {}) => ({
           straddle: null,
           straddle_badge: null,
           badge: 'A — just above Prisoners',
-          tension: 'you put it in A — the ledger still reads C'
+          tension: 'you put it in A — your other answers still point to C'
         },
         {
           title_id: 3,
@@ -83,7 +94,7 @@ const board = (over = {}) => ({
   rated: 3,
   rated_total: 3,
   queue_eligible: 1,
-  why: '3 rated · learned cutpoints, refit nightly',
+  why: '3 rated · 0 compared · tiers follow a typical split until you place a title yourself',
   filters: {},
   dna_tiers: null,
   ...over
@@ -95,10 +106,16 @@ beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
   rank.lifted = null;
+  rank.opened = null;
   rank.pair = null;
   rank.error = '';
   rank.notice = '';
   rank.log = [];
+  rank.busy = false;
+  rank.queueOpen = false;
+  rank.roundAnswered = 0;
+  rank.roundDone = false;
+  rank.placed = [];
   // The M3 review found these two sharing state across tests: `draft` is module-level and
   // nothing reset it, so the drop test's query string depended on which filter test ran last.
   draft.q = '';
@@ -273,8 +290,8 @@ describe('the comparison queue', () => {
 
 describe('the badge chip (proposal 71)', () => {
   it('gives tension precedence over the straddle badge', () => {
-    expect(chipFor({ tension: 'you put it in A — the ledger still reads C', straddle_badge: 'A/S' }))
-      .toEqual({ kind: 'tension', text: 'you put it in A — the ledger still reads C' });
+    expect(chipFor({ tension: 'you put it in A — your other answers still point to C', straddle_badge: 'A/S' }))
+      .toEqual({ kind: 'tension', text: 'you put it in A — your other answers still point to C' });
   });
 
   it('falls back to the straddle badge, and to nothing at all', () => {
@@ -300,12 +317,12 @@ describe("proposal 80's states", () => {
     const state = emptyState();
     expect(state.kind).toBe('no-match');
     // Proposal 80: "say so, with the active filters listed" — the value, not just the field.
-    expect(state.text).toBe('Nothing matches DNA term cosy.');
+    expect(state.text).toBe('Nothing matches tag cosy.');
   });
 
   it('names every active filter with its value', () => {
     apply(board({ rated: 0, rated_total: 40, filters: { dna: 'cosy', runtime_max: 110 } }));
-    expect(emptyState().text).toBe('Nothing matches DNA term cosy, under 110 min.');
+    expect(emptyState().text).toBe('Nothing matches tag cosy, under 110 min.');
   });
 
   it('is absent on a board with titles on it', () => {
@@ -638,5 +655,178 @@ describe('sharpenWhy', () => {
     apply({ tiers: [], rated: 5, rated_total: 5, queue_eligible: 0, fitting: false });
     expect(sharpenWhy().kind).toBe('exploring');
     expect(sharpenWhy().text).toMatch(/^5 rated/);
+  });
+});
+
+/** A served queue pair, numbered so a test can tell which one is on the table. */
+const pairN = (i) => ({ title_a: 1, title_b: 2, token: `t${i}`, reason: 'x', name_a: 'Heat', name_b: 'Drive' });
+
+describe('a sitting is a round of fifteen (decision 495)', () => {
+  it('counts every accepted answer, ends the round at fifteen and holds the next pair', async () => {
+    // Both first-household sessions stopped at ten and eleven answers under the same fixed line,
+    // with nothing on the sheet saying how far they had come or where it ended.
+    respond({ kind: 'movie', pair: pairN(0) });
+    await openQueue();
+    expect(rank.queueOpen).toBe(true);
+    expect(roundLine()).toBe(`1 of ${ROUND_SIZE} this round`);
+
+    for (let i = 1; i <= ROUND_SIZE; i++) {
+      respond({ kind: 'movie', pair: pairN(i), reason: '' });
+      respond(board());
+      await answer(i % 3 === 0 ? 'TIE' : 'A');
+    }
+    expect(rank.roundAnswered).toBe(ROUND_SIZE);
+    expect(rank.roundDone).toBe(true);
+    expect(roundLine()).toBe(`${ROUND_SIZE} of ${ROUND_SIZE} this round`);
+    // The pair the fifteenth answer brought is kept for Keep going rather than thrown away.
+    expect(rank.pair.token).toBe(`t${ROUND_SIZE}`);
+    expect(ROUND_END_TEXT).toContain(`${ROUND_SIZE} comparisons`);
+  });
+
+  it('Keep going starts a new round over the pair already on the table, with no request', () => {
+    rank.queueOpen = true;
+    rank.pair = pairN(15);
+    rank.roundAnswered = ROUND_SIZE;
+    rank.roundDone = true;
+    keepGoing();
+    expect(rank.roundDone).toBe(false);
+    expect(rank.roundAnswered).toBe(0);
+    expect(rank.pair.token).toBe('t15');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('closing the queue resets the round, and reopening it starts at one', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 7;
+    rank.placed = [{ title_id: 1, name: 'Heat', badge: 'S — the only one' }];
+    closeQueue();
+    expect(rank.roundAnswered).toBe(0);
+    expect(rank.roundDone).toBe(false);
+    expect(rank.placed).toEqual([]);
+
+    respond({ kind: 'movie', pair: pairN(1) });
+    await openQueue();
+    expect(roundLine()).toBe(`1 of ${ROUND_SIZE} this round`);
+  });
+
+  it('does not count a refused answer', async () => {
+    rank.queueOpen = true;
+    rank.pair = pairN(1);
+    rank.roundAnswered = 4;
+    respond({ detail: { reason: 'stale_pair', message: 'that pair is no longer on the table' } }, 409);
+    respond({ kind: 'movie', pair: pairN(2) });
+    await answer('A');
+    expect(rank.roundAnswered).toBe(4);
+  });
+
+  it('opening the queue again while it is open is not a new round', async () => {
+    // Every chip on the board opens the queue (§6.3, decision 295), so a second tap must not
+    // quietly reset the count the person is reading.
+    rank.queueOpen = true;
+    rank.pair = pairN(3);
+    rank.roundAnswered = 5;
+    await openQueue();
+    expect(rank.roundAnswered).toBe(5);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('puts a lifted title down when the queue opens, writing nothing', async () => {
+    lift(rank.tiers[0].entries[0]);
+    respond({ kind: 'movie', pair: pairN(1) });
+    await openQueue();
+    expect(rank.lifted).toBeNull();
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/rank/queue?');
+  });
+});
+
+describe('after an answer the sheet names where both titles sit', () => {
+  it('keeps the placement the answer route returned', async () => {
+    // The sheet covers the board it sharpens; this line is where the person sees an answer land.
+    rank.queueOpen = true;
+    rank.pair = pairN(1);
+    const placed = [
+      { title_id: 1, name: 'Heat', tier: 6, badge: 'S — just above Drive' },
+      { title_id: 2, name: 'Drive', tier: 6, badge: 'S — just below Heat' }
+    ];
+    respond({ kind: 'movie', pair: pairN(2), placed });
+    respond(board());
+    await answer('A');
+    expect(rank.placed.map((p) => p.title_id)).toEqual([1, 2]);
+    expect(rank.placed[0].badge).toBe('S — just above Drive');
+  });
+
+  it('starts a new round with no placement line', () => {
+    rank.placed = [{ title_id: 1, name: 'Heat', badge: 'S — the only one' }];
+    rank.roundDone = true;
+    keepGoing();
+    expect(rank.placed).toEqual([]);
+  });
+});
+
+describe('a tap opens a title and Move moves it (decision 496)', () => {
+  it('opens the card on a tap and writes nothing', async () => {
+    const drive = rank.tiers[2].entries[0];
+    await tapTile(drive, 4);
+    expect(rank.opened).toBe(2);
+    expect(rank.lifted).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    closeTitle();
+    expect(rank.opened).toBeNull();
+  });
+
+  it('with a title lifted, a tap on a title in another tier drops it there and names no neighbour', async () => {
+    lift(rank.tiers[0].entries[0]);
+    respond(board());
+    await tapTile(rank.tiers[2].entries[1], 4);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/rank/drop');
+    // The same body a tap on the tier's letter posts: a tap names no position (finding 17).
+    expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 4, above: null, below: null });
+    expect(rank.lifted).toBeNull();
+    expect(rank.opened).toBeNull();
+  });
+
+  it('a tap on the lifted title itself puts it down and writes nothing', async () => {
+    const heat = rank.tiers[0].entries[0];
+    lift(heat);
+    await tapTile(heat, 6);
+    expect(rank.lifted).toBeNull();
+    expect(rank.opened).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opening a card puts a lifted title down first', () => {
+    lift(rank.tiers[0].entries[0]);
+    openTitle(rank.tiers[2].entries[0]);
+    expect(rank.lifted).toBeNull();
+    expect(rank.opened).toBe(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reset forgets the open card and the round', () => {
+    openTitle(rank.tiers[2].entries[0]);
+    rank.roundAnswered = 3;
+    reset();
+    expect(rank.opened).toBeNull();
+    expect(rank.roundAnswered).toBe(0);
+  });
+});
+
+describe('the surface speaks the member register (decision 486)', () => {
+  it('the footnote says how to use the board and claims no write', () => {
+    expect(TAP_FOOTNOTE).toContain('tap a title to open it');
+    expect(TAP_FOOTNOTE).toContain('Move');
+    expect(TAP_FOOTNOTE).not.toMatch(/tier_edit|duel|poster/);
+  });
+
+  it('the exploring note says close call, not straddle', () => {
+    apply({ tiers: [], rated: 5, rated_total: 5, queue_eligible: 0, fitting: false });
+    expect(sharpenWhy().text).not.toMatch(/straddl|boundary/);
+    expect(sharpenWhy().text).toContain('close call');
+  });
+
+  it('names the two DNA tiers in words', () => {
+    expect(dnaTierText(['extracted', 'projected'])).toBe('quoted + inferred');
   });
 });

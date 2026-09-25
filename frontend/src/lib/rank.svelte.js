@@ -22,20 +22,43 @@ import { ApiError, get, post, qs } from '$lib/api.js';
 export const KIND_LABELS = { movie: 'Films', series: 'Series' };
 
 /**
- * Proposal 75's standing footnote, amended to be true.
+ * Proposal 75's standing footnote, in decision 496's gestures and the member register.
  *
- * The proposal's own wording is "each move writes a tier_edit plus two duels", and §6.3 does
- * say a drop *between two titles* writes two. A drop at the end of a tier has one neighbour and
- * writes one, and the tap path has no position inside the row at all — so the proposal's
- * sentence is a claim this surface cannot always honour. Copy that overstates a write is worse
- * than copy that is vaguer: §6.8's register is "quiet reasons", not confident ones.
+ * It used to promise "each move writes a tier_edit plus a duel against each new neighbour", which
+ * was model vocabulary on a member surface and false on the phone: since M4.10 finding 17 a tap
+ * into a tier names no neighbour and writes the edit alone. It also said "poster" about a text
+ * chip. What it says now is how to use the board, which is true on every path; what a move
+ * writes is the rail's to say, behind Show the model (decision 486).
  */
 export const TAP_FOOTNOTE =
-  'tap a poster to pick it up, tap a tier to drop · each move writes a tier_edit plus a duel ' +
-  'against each new neighbour';
+  'tap a title to open it · tap Move to pick it up, then tap a tier to drop it';
 
 /** §6.3's control, by the name §6.3 gives it. */
 export const SHARPEN_LABEL = 'sharpen my ranking';
+
+/**
+ * Decision 495: a sitting is a round of fifteen. §6.1's "blocks of 15" is the precedent, and
+ * the Rate counter the same people read ("7 / 15 this block") is the form. It is counted HERE,
+ * from taps, on purpose: a count the server derived from the arm would stand still on a held-out
+ * answer and tell the person which one §13 set aside (M4.10 finding 16), and a sitting is not a
+ * ledger fact - a reload starting a fresh round is the honest reading of a reload.
+ */
+export const ROUND_SIZE = 15;
+
+/** Decision 495's end of a round, true on every arm because it claims nothing about the model. */
+export const ROUND_END_TEXT =
+  `That's ${ROUND_SIZE} comparisons for this round. You can stop here — or keep going for another ${ROUND_SIZE}.`;
+
+/**
+ * §4.1 rule 1: the two DNA tiers must stay distinguishable in the answer a person reads, and
+ * `extracted` / `projected` are the schema's words for them. The member register names what
+ * each one is (decision 486): a tag quoted from a source, or one inferred from similar titles.
+ */
+export const DNA_TIER_LABELS = { extracted: 'quoted', projected: 'inferred' };
+
+export function dnaTierText(tiers) {
+  return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
+}
 
 /**
  * Proposal 80's second state. §6.3's queue estimate — "~10–20 comparisons place a new title" —
@@ -74,10 +97,17 @@ export const rank = $state({
   log: [],
   /** @type {null | {title_id:number, name:string}} the lifted title, on phones */
   lifted: null,
+  /** @type {null | number} decision 496: the title whose card a tap opened */
+  opened: null,
   /** @type {any} the comparison queue's current pair, or null */
   pair: null,
   queueReason: '',
-  queueOpen: false
+  queueOpen: false,
+  /** Decision 495: answers given in this round, and whether the round has ended. */
+  roundAnswered: 0,
+  roundDone: false,
+  /** @type {any[]} where the last answered pair's two titles sit now, from the answer route */
+  placed: []
 });
 
 /** The filter state the person is editing, kept out of `rank` so a redraw cannot clobber typing. */
@@ -206,8 +236,12 @@ export async function chooseKind(kind) {
  */
 export function reset() {
   rank.lifted = null;
+  rank.opened = null;
   rank.pair = null;
   rank.queueOpen = false;
+  rank.roundAnswered = 0;
+  rank.roundDone = false;
+  rank.placed = [];
   rank.log = [];
   rank.error = '';
   rank.notice = '';
@@ -235,7 +269,10 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   }
 }
 
-/** Proposal 74: the lift is a mode, so it needs a visible way out. Re-tapping is one. */
+/**
+ * Decision 496's Move control. Proposal 74: the lift is a mode, so it needs a visible way out,
+ * and tapping Move again on the lifted title is one.
+ */
 export function lift(entry) {
   rank.lifted = rank.lifted?.title_id === entry.title_id ? null : entry;
 }
@@ -243,6 +280,40 @@ export function lift(entry) {
 /** The other way out — the banner's Cancel. Writes nothing, by construction. */
 export function putDown() {
   rank.lifted = null;
+}
+
+/**
+ * Decision 496: a tap on a title opens its card. The first household tapped a title expecting
+ * the card and found themselves moving it, and Rank had no road to the card at all; the move
+ * became its own control. Opening puts a lifted title down first, without writing, so a tap on
+ * a tier behind the card can never drop a title the person has stopped thinking about.
+ */
+export function openTitle(entry) {
+  rank.lifted = null;
+  rank.opened = entry.title_id;
+}
+
+export function closeTitle() {
+  rank.opened = null;
+}
+
+/**
+ * What a tap on a title means, which depends on the mode. With nothing lifted it opens the card.
+ * With a title lifted the rows are armed, and the banner says "tap a tier to drop it": the title
+ * the tap landed on is in a tier, so it drops the lifted one into that tier — naming no
+ * neighbour, exactly as a tap on the letter does (§6.3's same `tier_edit` semantics; M4.10
+ * finding 17). A tap on the lifted title itself puts it down and writes nothing (proposal 74).
+ */
+export function tapTile(entry, tierIndex) {
+  if (!rank.lifted) {
+    openTitle(entry);
+    return Promise.resolve();
+  }
+  if (rank.lifted.title_id === entry.title_id) {
+    putDown();
+    return Promise.resolve();
+  }
+  return dropLifted(tierIndex);
 }
 
 /** Where a tap on a tier row lands: the lifted title, into that tier, between its neighbours. */
@@ -284,14 +355,44 @@ export function neighboursIn(tierIndex, title, beforeTitleId = null) {
   };
 }
 
+/**
+ * §6.3 (decision 295): the badge is the queue's entry point, so the header control and every
+ * chip on the board call this — which is why a second call while the sheet is up is nothing
+ * rather than a new round. A lifted title is put down, writing nothing: the sheet is its own
+ * mode, and a lift left armed behind it would be a pending write nobody is looking at.
+ */
 export async function openQueue() {
+  if (rank.queueOpen) return;
+  rank.lifted = null;
   rank.queueOpen = true;
+  startRound();
   await nextPair();
 }
 
 export function closeQueue() {
   rank.queueOpen = false;
   rank.pair = null;
+  startRound();
+}
+
+function startRound() {
+  rank.roundAnswered = 0;
+  rank.roundDone = false;
+  rank.placed = [];
+}
+
+/**
+ * Decision 495's Keep going: another round of fifteen over the pair the last answer already
+ * brought, so no request is made and nothing is skipped.
+ */
+export function keepGoing() {
+  startRound();
+}
+
+/** Decision 495's count, as the sheet shows it: the pair you are on, of fifteen. */
+export function roundLine() {
+  const slot = rank.roundDone ? ROUND_SIZE : Math.min(rank.roundAnswered + 1, ROUND_SIZE);
+  return `${slot} of ${ROUND_SIZE} this round`;
 }
 
 export async function nextPair() {
@@ -330,6 +431,13 @@ export async function answer(outcome, decisive = false) {
     });
     rank.pair = payload.pair ?? null;
     rank.queueReason = payload.reason ?? '';
+    // Decision 495: every accepted answer is one step of the round, whichever arm drew it — the
+    // arm is sealed and this module never knows it, which is what keeps the count honest (§13).
+    rank.roundAnswered += 1;
+    if (rank.roundAnswered >= ROUND_SIZE) rank.roundDone = true;
+    // Where the two titles sit now, off the refreshed board: the sheet covers the board it is
+    // sharpening, so this is the only place the person sees their answer land.
+    rank.placed = payload.placed ?? [];
     const line = payload.log ?? [];
     // §6.3: "The model refits (incremental immediately)". The board behind the queue has moved,
     // so it is re-read rather than left showing the ranking from before the answer — and the
@@ -372,7 +480,8 @@ const FILTER_LABELS = {
   runtime_max: 'under',
   runtime_min: 'over',
   seen: 'seen state',
-  dna: 'DNA term'
+  // "tag", not "DNA term": the member register's word for a vocabulary term (decision 486).
+  dna: 'tag'
 };
 
 export function activeFilterText() {
@@ -401,9 +510,11 @@ export function sharpenWhy() {
     return { kind: 'thin', text: 'Nothing to compare yet - the queue draws from titles you have rated.' };
   }
   if (rank.queueEligible === 0) {
+    // "straddles a boundary" is the model's phrasing; the member register says what it means
+    // (decision 486) — no title is a close call between two tiers.
     return {
       kind: 'exploring',
-      text: `${rank.ratedTotal} rated - nothing straddles a boundary right now, so the queue is exploring rather than settling one.`
+      text: `${rank.ratedTotal} rated - no title is a close call between two tiers right now, so the pairs explore your board instead.`
     };
   }
   return null;
@@ -427,17 +538,21 @@ export function emptyState() {
       cta: 'Rate some titles'
     };
   }
+  // True as well as plain (decision 486): the board shows its tiers from the first rated title,
+  // so "tiers appear once you've rated about 30" sat directly above a board that already had
+  // them, which the first household read as the page contradicting itself. What 30 buys is a
+  // board worth trusting; that is what the thin state now says.
   if (rank.ratedTotal === 0) {
     return {
       kind: 'unrated',
-      text: `Tiers appear once you've rated about ${TIER_THRESHOLD} titles — you're at 0.`,
+      text: `Your tiers fill in as you rate titles — about ${TIER_THRESHOLD} makes a good start, and you're at 0.`,
       cta: 'Rate some titles'
     };
   }
   if (rank.ratedTotal < TIER_THRESHOLD) {
     return {
       kind: 'thin',
-      text: `Tiers appear once you've rated about ${TIER_THRESHOLD} titles — you're at ${rank.ratedTotal}.`,
+      text: `These tiers are a first guess until you've rated about ${TIER_THRESHOLD} titles — you're at ${rank.ratedTotal}.`,
       cta: 'Rate some titles'
     };
   }

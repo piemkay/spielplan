@@ -29,6 +29,14 @@ THE GUARD IS THE POINT OF THE MODULE. §13: "the 10% uniform-random comparison s
 WHY THIS IS NOT §6.1's BATTLE. §0 row 6: "for *profiles*, no selection rule beats random (best
 +0.0013, CI spans 0); for *ranking*, boundary-targeted selection does help". `rate/battle.py`
 draws uniformly on purpose and this module does not, and the two must not be merged.
+
+WHICH PAIR INSIDE AN ADAPTIVE ARM (decision 494). §6.3 fixes the shares and not the pair, and the
+first household showed what a uniform construction spends them on: fine-vs-fine at the B/A cut,
+which sits in the middle of the verdict arm's "fine" band while the cutpoints are still the prior,
+and disliked-vs-disliked many logits deep in F, where no answer can move a tier. §0 row 2 and §5.2
+place the measured value of a comparison inside the liked class. So both adaptive arms lean toward
+the top of the board and neither re-serves a pair it has already asked; the held-out arm does
+neither, because §13 admits it as evaluation data only while it is uniform and memoryless.
 """
 
 from __future__ import annotations
@@ -56,6 +64,20 @@ SHARES: tuple[tuple[str, float], ...] = (
     (ARM_EXPLORATION, 0.20),
     (ARM_HOLDOUT, 0.10),
 )
+
+# Decision 494's partner rule, which is M3-open-points §3.1's fix shape: "draw the partner from the
+# k nearest". The nearest title across a boundary is the most informative one and also the one
+# every draw lands on, so the partner is the least-compared of the five nearest instead - Patrick's
+# first sitting partnered Ready Player One in four of six boundary draws, and ties on the ~10
+# no-coordinate films that share one `s` all fell to the lowest title id.
+K_NEAREST = 5
+
+# Decision 494's no-repeat window: the titles of the last three answered adaptive pairs wait until
+# another title can take their place, as anchor and as partner. A pair is never served twice
+# (`asked`); a title coming straight back in the next pair is what the person actually noticed
+# (Meet Joe Black in three of Jenny's ten). Soft rather than a filter, so a small board is never
+# emptied by it - M4.10 finding 12 is what a filter on the anchor set does to one.
+RECENT_WINDOW = 3
 
 
 @dataclass(frozen=True)
@@ -135,37 +157,103 @@ def candidates(
     return out
 
 
-def _nearest(
-    pool: Iterable[Candidate], anchor: Candidate, *, asked: set[frozenset[int]] | None = None
+def _jitter(pool: Iterable[Candidate], rng: random.Random) -> dict[int, float]:
+    """One draw-time tie-breaker per title, taken once per draw from the draw's own generator.
+
+    It replaces "ties by id": on a real board about ten films have no coordinate at all and share
+    one `s` set by their verdict alone, so an id tie-break handed every tie to the same film on
+    every draw. Drawn rather than hashed, so a draw stays reproducible from its seed - which is
+    what `api/rank.py::_queue_rng` and every test here depend on."""
+    return {c.title_id: rng.random() for c in pool}
+
+
+def _partner(
+    options: Iterable[Candidate],
+    anchor: Candidate,
+    *,
+    asked: set[frozenset[int]],
+    recent: frozenset[int],
+    jitter: dict[int, float],
 ) -> Candidate | None:
-    """The closest title in `s`, excluding the anchor itself and any pair already answered.
-    Ties by id, so a draw is reproducible from its seed."""
-    already = asked or set()
-    others = [
+    """Decision 494's partner: of the `K_NEAREST` unasked titles nearest the anchor in `s`, the
+    one outside the recent window, then the least-compared, then the draw.
+
+    Nearness picks the neighbourhood, where the answer is least predictable and so most
+    informative; the least-compared title inside it is what makes the arm rotate rather than
+    settle on one partner. An answered pair is never offered again: each repeat is an independent
+    Davidson row, so one judgement asked k times shrinks that pair's posterior by the root of k -
+    §13's reliability inflation, reached through the selector (M3-open-points §3.1)."""
+    fresh = [
         c
-        for c in pool
+        for c in options
         if c.title_id != anchor.title_id
-        and frozenset((anchor.title_id, c.title_id)) not in already
+        and frozenset((anchor.title_id, c.title_id)) not in asked
     ]
-    if not others:
+    if not fresh:
         return None
-    return min(others, key=lambda c: (abs(c.s - anchor.s), c.title_id))
+    nearest = sorted(fresh, key=lambda c: (abs(c.s - anchor.s), jitter[c.title_id]))[:K_NEAREST]
+    return min(
+        nearest, key=lambda c: (c.title_id in recent, c.comparisons, jitter[c.title_id])
+    )
 
 
-def _boundary(pool: Sequence[Candidate], rng: random.Random) -> Pair | None:
+def boundary_height(candidate: Candidate) -> int:
+    """Decision 494's value weight: the index of the upper tier of the boundary a straddler
+    crosses - 1 for F/D up to K-1 for A+/S on §6.3's seven, so S/A+ weighs six times D/F.
+
+    Why the upper tier: a boundary duel can only move titles across a cut, because the cuts
+    themselves learn from `tier_edit` alone (§5.2's tier arm) - so its value is the value of
+    getting that cut's two tiers right, and §0 and §5.2 put the measured value inside the liked
+    class. `model.straddle` only ever names an adjacent tier, so this is never 0."""
+    return max(candidate.tier, int(candidate.straddle if candidate.straddle is not None else 0))
+
+
+def _weighted_order(
+    candidates: Sequence[Candidate], rng: random.Random, *, recent: frozenset[int]
+) -> list[Candidate]:
+    """The straddlers in a random order weighted by `boundary_height`, recent titles last.
+
+    A weighted draw WITHOUT replacement (each key is u ** (1/w), largest first), so an anchor that
+    has no unasked partner left hands over to the next one instead of ending the arm, and every
+    straddler stays reachable - the weight orders the set and never shrinks it, which is the line
+    M4.10 finding 12 drew under a restricted anchor set."""
+    keyed = [
+        (c.title_id in recent, -(rng.random() ** (1.0 / boundary_height(c))), c)
+        for c in candidates
+    ]
+    keyed.sort(key=lambda row: (row[0], row[1]))
+    return [c for _in_recent, _key, c in keyed]
+
+
+def _boundary(
+    pool: Sequence[Candidate],
+    rng: random.Random,
+    *,
+    asked: Iterable[frozenset[int]] | None = None,
+    recent: Iterable[int] | None = None,
+) -> Pair | None:
     """70% — "posterior-straddling pairs".
 
-    §6.3 gives the share and not the construction, so: a straddling title, paired with its
-    nearest neighbour **in the tier its posterior reaches**. A straddler paired with an
-    arbitrary partner would be a comparison about nothing in particular; the pair that settles
-    a boundary is the one that spans it, and the nearest title across it is the one the answer
-    is least predictable for and therefore most informative about.
+    §6.3 gives the share and not the construction, so: a straddling title, paired with a
+    near neighbour **in the tier its posterior reaches**. A straddler paired with an arbitrary
+    partner would be a comparison about nothing in particular; the pair that settles a boundary
+    is the one that spans it, and a title near it across the cut is one the answer is hard to
+    predict for and therefore informative about.
+
+    Which straddler and which partner are decision 494's: the anchor is drawn weighted toward the
+    top of the board (`boundary_height`), the partner by `_partner`, and a pair already answered is
+    never served again - the half of M3-open-points §3.1 this arm used to leave open, which served
+    Jenny the same Rocky Horror / Meet Joe Black pair twice in four answers. An anchor with no
+    unasked partner hands over to the next; when no straddler has one, the arm has nothing left and
+    `draw` falls through to exploration, which says so.
     """
+    already = {frozenset(p) for p in (asked or ())}
+    held = frozenset(recent or ())
+    jitter = _jitter(pool, rng)
     straddlers = [c for c in pool if c.straddle is not None]
-    rng.shuffle(straddlers)
-    for anchor in straddlers:
-        across = [c for c in pool if c.tier == anchor.straddle and c.title_id != anchor.title_id]
-        partner = _nearest(across, anchor)
+    for anchor in _weighted_order(straddlers, rng, recent=held):
+        across = [c for c in pool if c.tier == anchor.straddle]
+        partner = _partner(across, anchor, asked=already, recent=held, jitter=jitter)
         if partner is not None:
             return Pair(
                 title_a=anchor.title_id,
@@ -181,14 +269,22 @@ def _exploration(
     rng: random.Random,
     *,
     asked: Iterable[frozenset[int]] | None = None,
+    recent: Iterable[int] | None = None,
 ) -> Pair | None:
     """20% — "exploration".
 
     §6.3 names the share and nothing else. The arm that is *not* boundary-targeted and *not*
     uniform is the one that reduces uncertainty where no cutpoint is at stake: the title the
-    person has compared least (ties broken by the widest posterior), against its nearest
-    neighbour in `s`. It rotates on its own — answering increments both titles' counts, so the
-    least-compared title is a different one next time.
+    person has compared least, against a near neighbour in `s` (`_partner`). It rotates on its own
+    — answering increments both titles' counts, so the least-compared title is a different one
+    next time.
+
+    TIES GO TO THE TOP OF THE BOARD (decision 494), and no longer to the widest posterior. On a
+    real board the widest σ belonged to titles whose embedding is off-scale, which sit at the far
+    tails of `s` - so "least compared, widest posterior" served Grease against Miss Congeniality
+    at s = -17 and -14, a pair no answer could move out of F. Among equally compared titles the
+    higher tier anchors first; nothing is removed from the order, so a board that is all F and D
+    is still explored, only after everything above it at the same count.
 
     THE WHOLE POOL, and that word is the repair. The anchor used to be chosen inside
     `[c for c in pool if c.straddle is None] or list(pool)`, and §6.3 licenses no such
@@ -212,16 +308,18 @@ def _exploration(
     if len(pool) < 2:
         return None
     already = {frozenset(p) for p in (asked or ())}
-    # Fewest comparisons first, then the widest posterior — both are "where the model knows
-    # least". The shuffle before the sort is what breaks an exact tie on both by the draw rather
-    # than by id order, so a board where everything is equally unexplored (a new one) does not
-    # walk the same prefix every time; `list.sort` is stable, so the ranking decides and the
+    held = frozenset(recent or ())
+    jitter = _jitter(pool, rng)
+    # Fewest comparisons first, then out of the recent window, then the higher tier (decision
+    # 494). The shuffle before the sort is what breaks an exact tie on all three by the draw
+    # rather than by id order, so a board where everything is equally unexplored (a new one) does
+    # not walk the same prefix every time; `list.sort` is stable, so the ranking decides and the
     # shuffle survives only inside the ties.
     order = list(pool)
     rng.shuffle(order)
-    order.sort(key=lambda c: (c.comparisons, -c.item.sigma))
+    order.sort(key=lambda c: (c.comparisons, c.title_id in held, -c.tier))
     for anchor in order:
-        partner = _nearest(pool, anchor, asked=already)
+        partner = _partner(pool, anchor, asked=already, recent=held, jitter=jitter)
         if partner is not None:
             return Pair(
                 title_a=anchor.title_id,
@@ -261,19 +359,23 @@ def draw(
     *,
     rng: random.Random,
     asked: Iterable[frozenset[int]] | None = None,
+    recent: Iterable[int] | None = None,
 ) -> Pair | None:
     """One pair, and the arm that produced it.
 
-    The roll picks an arm by §6.3's shares. A boundary roll on a pool with no straddler falls
-    through to exploration and *says* exploration; nothing ever falls into or out of the
-    held-out arm, because its rate is the one thing §13 needs to be independent of the model.
+    The roll picks an arm by §6.3's shares. A boundary roll on a pool with no straddler — or with
+    no straddler left that has an unasked partner — falls through to exploration and *says*
+    exploration; nothing ever falls into or out of the held-out arm, because its rate is the one
+    thing §13 needs to be independent of the model. When neither adaptive arm has a pair left the
+    draw is None, and the route says there is nothing left to settle.
 
-    `asked` reaches the exploration arm alone. The held-out arm must not consult it — a uniform
-    sample with pairs removed according to what the model has already been told is not a uniform
-    sample, and §13 admits no other evaluation data. The boundary arm's own repetition is
-    M3-open-points §3.1's remaining half and not this milestone's: finding 12 names the
-    exploration arm.
+    `asked` and `recent` reach the two adaptive arms and never the held-out one. A uniform sample
+    with pairs removed according to what the model has already been told is not a uniform sample,
+    and §13 admits no other evaluation data, so the tenth stays memoryless on purpose (decision
+    494).
     """
+    already = {frozenset(p) for p in (asked or ())}
+    held = frozenset(recent or ())
     if len(pool) < 2:
         return None
     roll = rng.random()
@@ -288,17 +390,22 @@ def draw(
     if arm == ARM_HOLDOUT:
         return _holdout(pool, rng)
     if arm == ARM_BOUNDARY:
-        return _boundary(pool, rng) or _exploration(pool, rng, asked=asked)
-    return _exploration(pool, rng, asked=asked)
+        return _boundary(pool, rng, asked=already, recent=held) or _exploration(
+            pool, rng, asked=already, recent=held
+        )
+    return _exploration(pool, rng, asked=already, recent=held)
 
 
 __all__ = [
     "ARM_BOUNDARY",
     "ARM_EXPLORATION",
     "ARM_HOLDOUT",
+    "K_NEAREST",
+    "RECENT_WINDOW",
     "Candidate",
     "Pair",
     "SHARES",
+    "boundary_height",
     "candidates",
     "draw",
     "eligible",

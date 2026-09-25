@@ -1513,7 +1513,7 @@ id = "tonight-rank-straddle-equals-eligible"
 spec = "§6.3 badges and queue; decision 295 (proposals 157 and 76)"
 milestone = "M3"
 kind = "backend"
-what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, the reach is restricted to the two ADJACENT tiers and when the posterior reaches both neighbours it names the nearer cut, and the threshold constant is read from ledger_hyperparams.json rather than hard-coded."
+what = "The set of titles carrying a straddle badge and the set the comparison queue draws from are the same set — the posterior crosses a cutpoint — the badge at either end of the scale names the one adjacent tier that exists (S/A+, F/D) and never repeats the title's own tier, the reach is restricted to the two ADJACENT tiers and when the posterior reaches both neighbours it names the nearer cut, the threshold constant is read from ledger_hyperparams.json rather than hard-coded, and the badge opens the queue: tapping a straddle or tension chip on the board opens the comparison sheet and lifts nothing."
 why = "One predicate doing both jobs; the prototype badged at σ>0.13 and queued at σ>0.09, so a title at σ 0.11 was queue-eligible and unbadged, and an S-tier title rendered 'S/S'."
 # The adjacency half was in the row from the start and nothing asserted it, which is how
 # `model.straddle` came to set the reach to `searchsorted(lo)` whenever it differs from the tier: a
@@ -1545,14 +1545,22 @@ tests = [
     "backend/tests/test_ledger_model.py::test_a_posterior_reaching_both_neighbours_names_the_nearer_cut",
     "backend/tests/test_ledger_model.py::test_restricting_the_named_tier_does_not_narrow_the_straddling_set",
     "backend/tests/test_rank_board.py::test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board",
+    "frontend/src/routes/rank/rank-page.test.js::opens the comparison queue and lifts nothing",
 ]
+# The entry-point clause is the owner instruction of 2026-09-25 after the first household user
+# test: the chip was a <span> inside the tile's one <button>, so tapping the badge §6.3 calls "the
+# queue's entry point" lifted the title instead. The tension chip opens the queue too, because it
+# replaces the straddle chip while it holds (proposal 71) and a queue-eligible title in tension
+# would otherwise have no door. Mounted rather than in Playwright: a chip exists only where the fit
+# puts a posterior across a cut, which the seeded e2e board does not do on demand; the backend ids
+# above are what keep this row off decision 226's vitest-only floor.
 
 [[requirement]]
 id = "tonight-rank-queue-selection-mix"
 spec = "§6.3 comparison queue"
 milestone = "M3"
 kind = "backend"
-what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, the held-out 10% feeds neither the selection rule nor any tier-model quality figure, and the exploration arm's anchor is the least-compared title on the WHOLE pool and never re-serves a pair already asked — in the arm, through `draw`, and through `GET /api/rank/queue`, which is where the set is read and forwarded."
+what = "Over a long draw the comparison queue yields 70% posterior-straddling pairs, 20% exploration and 10% uniform-random pairs tagged as held out, the held-out 10% feeds neither the selection rule nor any tier-model quality figure, the exploration arm's anchor is the least-compared title on the WHOLE pool, and neither adaptive arm re-serves a pair already asked — in the arm, through `draw`, and through `GET /api/rank/queue`, which is where the set is read and forwarded; a boundary arm with no unasked pair left falls through to exploration and says so."
 why = "The adaptive-inflation guard: adaptively selected pairs inflate measured reliability, so the evaluation stream cannot be the selection stream."
 # The exploration clause is M4.10's. `queue.py`'s `away = [c for c in pool if c.straddle is None] or
 # list(pool)` inverts the moment one title leaves the straddle set: the arm then draws from the
@@ -1580,7 +1588,14 @@ tests = [
     "backend/tests/test_rank_queue.py::test_the_selector_reads_no_held_out_comparison",
     "backend/tests/test_rank_integration.py::test_the_asked_set_leaves_the_held_out_stream_out_of_the_selector",
     "backend/tests/test_rank_routes.py::test_the_queue_never_re_serves_a_pair_this_person_has_answered",
+    "backend/tests/test_rank_queue.py::test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked",
+    "backend/tests/test_rank_queue.py::test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so",
+    "backend/tests/test_rank_routes.py::test_the_queue_route_never_re_serves_an_answered_boundary_pair",
 ]
+# The boundary arm's half is the owner instruction of 2026-09-25 after the first household user
+# test (decision 494): the arm paired a shuffled straddler with its nearest title across the cut
+# and had no memory, so Jenny was served one pair twice in four answers (duels 19 and 22 on the
+# live install). M3-open-points §3.1 had recorded it as this row's remaining half since M4.10.
 # The route leg is cycle 1's. The no-repeat property was asserted of `queue._exploration` over 200
 # draws and then, through `draw`, behind `if served.arm == queue.ARM_EXPLORATION:` on a single draw
 # whose roll off that generator's state is 0.968 — the held-out band, so the branch never ran. The
@@ -1677,7 +1692,7 @@ id = "tonight-rank-tap-to-tier-and-cancel"
 spec = "§6.3 phones; decision 295 (proposals 74 and 75)"
 milestone = "M3"
 kind = "e2e"
-what = "On a phone, tapping a title lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes — and no duel: a drop into a tier that names no position writes the edit alone, which is the body the phone's tap actually posts. Re-tapping the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
+what = "On a phone, tapping a title's Move control lifts it and tapping a tier drops it, writing the same tier_edit the pointer path writes — and no duel: a drop into a tier that names no position writes the edit alone, which is the body the phone's tap actually posts. Tapping Move again on the lifted title or tapping Cancel on the 'Moving…' banner puts it down and writes no observation."
 why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift with an undiscoverable exit is the classic tap-to-move failure."
 # The zero-duel clause is M4.10's, and it belongs on this row as much as on
 # `tonight-rank-drop-writes-observations`: on phones — §6.3's primary form factor — tap-to-tier is
@@ -1691,6 +1706,12 @@ why = "Tap-to-tier carries identical semantics to drag-drop, and a modeless lift
 # a board of 44x33 controls passed a test named for a 48 px rule. It now asserts §6's preamble and
 # `--touch` as written -- 48 in BOTH dimensions -- which is the same clause this row has always
 # cited for the phone being §6.3's primary form factor.
+#
+# The lift moved from the title to its Move control under the owner instruction of 2026-09-25
+# after the first household user test (decision 496): a tap on a title opens its card, which the
+# row `tonight-rank-tap-opens-the-title-and-move-lifts` holds. The test names stay, because two
+# rows cite them literally and "a title lifts on a tap" is still what the tap on Move does; their
+# bodies tap Move, and the touch-floor test measures Move as well.
 tests = [
     "e2e/specs/13-rank.spec.js::a title lifts on a tap and puts itself down again, writing nothing",
     "e2e/specs/13-rank.spec.js::tapping a tier drops the lifted title into it, and it stays there",
@@ -6815,13 +6836,17 @@ id = "tonight-rank-queue-arm-is-gated-and-the-pair-is-stable"
 spec = "decision 117 (\"the selection label in the tier queue\") + §13's non-negotiable guard + §6.3"
 milestone = "M4.10"
 kind = "integration"
-what = "`GET /api/rank/queue` returns no `arm` and no arm-naming reason to a member whose model toggle is off — the payload is identical under `rail.redact` — and the user-facing reason never says a pair is held out; thirty consecutive GETs without answering return the identical pair and token, and answering one changes it."
+what = "`GET /api/rank/queue` returns no `arm` and no arm-naming reason to a member whose model toggle is off — the payload is identical under `rail.redact` — and the user-facing reason never says a pair is held out; thirty consecutive GETs without answering return the identical pair and token, and answering one changes it; with the toggle on, the sheet shows the pair's selection label under the pair."
 why = "The one Rank route that calls neither `visible_to` nor `redact` ships the arm and the sentence \"this pair never tunes the model\" to every member, which tells the person which answers do not count; and because the arm is re-rolled per GET, a client can reload into or out of the §13 stream, making the hold-out *rate* a function of the reload count rather than independent of the model."
 tests = [
     "backend/tests/test_rank_routes.py::test_the_queue_ships_no_arm_to_a_member_who_cannot_see_the_model",
     "backend/tests/test_rank_routes.py::test_thirty_draws_return_one_pair_until_it_is_answered",
     "backend/tests/test_rank_routes.py::test_the_answer_route_writes_the_arm_the_server_drew_it_under",
+    "frontend/src/routes/rank/rank-page.test.js::shows the queue's selection label only with Show the model on (decision 117)",
 ]
+# The last clause was found by the first household user test's triage (owner instruction of
+# 2026-09-25): decision 117 puts "the selection label in the tier queue" behind the toggle, the
+# route has sent it under `pair.model` since M4.10, and nothing on the sheet rendered it.
 
 [[requirement]]
 id = "library-rate-hyperparams-loaded-once-and-refused-loudly"
@@ -11357,4 +11382,105 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The owner's instruction of 2026-09-25, after the first household user test, on the Rank surface:
+# both members stopped comparing after ten and eleven answers and said they would not come back.
+# Five rows, one per thing the surface now promises. Each `spec` field cites sections and decisions
+# already recorded; the wave's own decisions (494 which pair, 495 the round, 496 tap opens / Move
+# lifts, 486 the member register) are named in `why` and in the comments, because
+# `_unresolvable_decision_citations` reddens a row whose `spec` cites a number the register does
+# not head yet - the merge that records them appends them to `spec`.
+
+[[requirement]]
+id = "tonight-rank-queue-pairs-that-matter"
+spec = "§6.3 comparison queue + §13 stream (a) + §0 row 2"
+milestone = "M5"
+kind = "backend"
+what = "Inside §6.3's 70/20/10 mix, the boundary arm draws its anchor among the straddlers in proportion to the height of the boundary each one straddles (the index of the cut's upper tier), never removing a straddler, and pairs it with the least-compared of the five unasked titles nearest it across the cut, ties in `s` broken by the draw rather than by title id; the exploration arm breaks least-compared ties toward the higher tier instead of the wider posterior and still explores a board that is all F and D; the titles of the last three answered non-held-out queue pairs wait while another title can take their place; and the held-out arm reads none of this."
+why = "Decision 494 (owner instruction of 2026-09-25): on the first household the uniform construction spent the queue on fine-vs-fine pairs at a B/A cut sitting in the middle of the 'fine' band and on disliked pairs many logits deep in F, re-served one pair twice in four answers, and partnered one film in four of six boundary draws. Replayed over the two real boards, a round of fifteen went from about 2.5 repeated pairs to none and from 18%/36% of pairs touching a liked title to 31%/55%."
+tests = [
+    "backend/tests/test_rank_queue.py::test_the_boundary_arm_favours_boundaries_near_the_top",
+    "backend/tests/test_rank_queue.py::test_a_boundary_partner_is_the_least_compared_of_the_five_nearest_across_the_cut",
+    "backend/tests/test_rank_queue.py::test_a_tie_in_s_is_broken_by_the_draw_and_not_by_the_lowest_id",
+    "backend/tests/test_rank_queue.py::test_the_recent_window_holds_a_title_back_while_another_can_take_its_place",
+    "backend/tests/test_rank_queue.py::test_exploration_breaks_ties_toward_the_top_of_the_board",
+    "backend/tests/test_rank_queue.py::test_exploration_still_explores_a_board_that_is_all_bottom_tiers",
+    "backend/tests/test_rank_queue.py::test_a_board_with_every_adaptive_pair_asked_still_draws_the_held_out_tenth",
+    "backend/tests/test_rank_routes.py::test_the_recent_window_reads_neither_battles_nor_the_held_out_stream",
+    "backend/tests/test_rank_queue.py::test_a_long_draw_is_seventy_twenty_ten",
+    "backend/tests/test_rank_queue.py::test_the_held_out_arm_is_uniform_over_pairs_not_over_strata",
+]
+# The last two are the guard the weighting must not touch, registered again here because this is
+# the row that could break them: §6.3's shares and §13's uniform tenth are why the weight lives
+# inside the two adaptive arms and nowhere else.
+
+[[requirement]]
+id = "tonight-rank-queue-round-and-progress"
+spec = "§6.3 comparison queue + §6.1 blocks of 15 + §6.8 + §13 stream (a)"
+milestone = "M5"
+kind = "e2e"
+what = "The comparison sheet shows its pair as two posters carrying the titles' ids, counts the answers of a round of fifteen in its header ('3 of 15 this round') on every arm alike, ends the round after the fifteenth answer with Done and Keep going and keeps the pair that answer brought for Keep going, and after each answer names where both titles now sit in the board's own badge words, the same shape on every arm and never 'moved'; a board whose adaptive pairs are all asked is told nothing is left to compare rather than to rate more, and a board too thin to pair keeps that sentence."
+why = "Decision 495 (owner instruction of 2026-09-25): §6.3 budgets the queue but never says when a sitting ends, and the shipped sheet showed one fixed line on every pair until both members gave up at ten and eleven answers, with the board it was sharpening hidden under it. The count is client-side and arm-blind, and the placement line is identical in shape on every arm, because anything that stood still on a held-out answer would name it (§13, M4.10 finding 16)."
+tests = [
+    "e2e/specs/13-rank.spec.js::the sharpen sheet shows the pair as posters and counts the round",
+    "backend/tests/test_rank_routes.py::test_a_queue_answer_returns_both_titles_placement_on_every_arm",
+    "backend/tests/test_rank_routes.py::test_an_exhausted_queue_says_nothing_is_left_to_settle_not_rate_more",
+    "frontend/src/lib/rank.svelte.test.js::counts every accepted answer, ends the round at fifteen and holds the next pair",
+    "frontend/src/lib/rank.svelte.test.js::Keep going starts a new round over the pair already on the table, with no request",
+    "frontend/src/lib/rank.svelte.test.js::closing the queue resets the round, and reopening it starts at one",
+    "frontend/src/lib/rank.svelte.test.js::does not count a refused answer",
+    "frontend/src/lib/rank.svelte.test.js::keeps the placement the answer route returned",
+    "frontend/src/routes/rank/rank-page.test.js::shows the pair as two posters carrying their titles, and counts the round",
+    "frontend/src/routes/rank/rank-page.test.js::ends the round with a choice, and Keep going serves the pair it held",
+]
+
+[[requirement]]
+id = "tonight-rank-tap-opens-the-title-and-move-lifts"
+spec = "§6.3 phones; §6.0 title card; decision 295 (proposals 74 and 75)"
+milestone = "M5"
+kind = "e2e"
+what = "On the Rank board a tap on a title opens its title card and writes nothing; moving is the title's own Move control, which lifts it under the 'Moving … Cancel' banner; with a title lifted, a tap on any title drops the lifted one into that title's tier naming no neighbour, and a tap on the lifted title puts it down; opening a card puts a lifted title down first, so nothing behind the card can drop it."
+why = "Decision 496 (owner instruction of 2026-09-25): the first household tapped titles expecting their card and found themselves moving them, and Rank had no road to the card at all. The tap keeps §6.3's tier_edit semantics wherever it drops, and proposal 74's two exits both still write nothing."
+tests = [
+    "e2e/specs/13-rank.spec.js::a tap on a title opens its card and writes nothing",
+    "e2e/specs/13-rank.spec.js::a title lifts on a tap and puts itself down again, writing nothing",
+    "frontend/src/lib/rank.svelte.test.js::opens the card on a tap and writes nothing",
+    "frontend/src/lib/rank.svelte.test.js::with a title lifted, a tap on a title in another tier drops it there and names no neighbour",
+    "frontend/src/lib/rank.svelte.test.js::a tap on the lifted title itself puts it down and writes nothing",
+    "frontend/src/lib/rank.svelte.test.js::opening a card puts a lifted title down first",
+    "frontend/src/routes/rank/rank-page.test.js::opens the title card on a tap and writes nothing",
+    "frontend/src/routes/rank/rank-page.test.js::lifts on Move, and a tap on a title in another tier drops it into that tier",
+]
+
+[[requirement]]
+id = "tonight-rank-tier-letter-at-the-top-of-its-row"
+spec = "§6.3 tiers + §6.8 design language + §6 preamble (phone-first)"
+milestone = "M5"
+kind = "e2e"
+what = "Every tier's letter, with the count of titles in it, sits at the top of its row and stays in view while a long tier scrolls past, and the whole height of the row's gutter remains the tap-to-drop target."
+why = "The gutter was a button as tall as its tier and a button centres its content, so in a sixteen-title tier on a phone the letter sat about 500 px down the row and the first household (owner instruction of 2026-09-25) saw letters on the empty tiers only."
+tests = [
+    "e2e/specs/13-rank.spec.js::every tier letter sits at the top of its row",
+    "frontend/src/routes/rank/rank-page.test.js::puts each tier letter and its count in its gutter",
+]
+
+[[requirement]]
+id = "tonight-rank-copy-in-the-member-register"
+spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209"
+milestone = "M5"
+kind = "integration"
+what = "Every sentence the Rank surface shows a member is true and plain: the board's why-line counts what the person has rated and compared (held-out answers included) and says the tiers follow a typical split until they place a title themselves, never 'learned cutpoints, refit nightly', and keeps decision 209's 'still being fitted' in its window; the tension chip says 'your other answers still point to C', not 'the ledger'; the tier-set warning keeps decision 11's two facts without 'cutpoints' or 'refit'; the footnote says how to use the board and claims no write; the title filter claims only titles and the tag filter says 'tag'; the DNA tiers read 'quoted' and 'inferred'; and none of it names a model noun or a spec reference."
+why = "Decision 486's member register (owner instruction of 2026-09-25): 'learned cutpoints, refit nightly' was false while nobody had moved a title, the footnote promised duels a phone tap never writes, and 'filter - title or DNA term, e.g. cosy' sent people typing a tag into a box that searches names only (M4.9 finding 19's lie, on this surface)."
+tests = [
+    "backend/tests/test_rank_board.py::test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window",
+    "backend/tests/test_rank_routes.py::test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints",
+    "backend/tests/test_rank_board.py::test_a_tension_badge_names_both_tiers",
+    "backend/tests/test_rank_routes.py::test_the_tier_set_route_round_trips_and_warns",
+    "e2e/specs/13-rank.spec.js::the board carries its tiers, a why-line and the standing footnote",
+    "e2e/specs/13-rank.spec.js::the tier set is a per-user preference on the account page",
+    "frontend/src/lib/rank.svelte.test.js::the footnote says how to use the board and claims no write",
+    "frontend/src/lib/rank.svelte.test.js::the exploring note says close call, not straddle",
+    "frontend/src/lib/rank.svelte.test.js::names the two DNA tiers in words",
+    "frontend/src/routes/rank/rank-page.test.js::claims for each filter box only what it searches, and names no DNA or model noun",
 ]

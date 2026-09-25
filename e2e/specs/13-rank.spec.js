@@ -32,22 +32,21 @@ test.describe.configure({ mode: 'serial' });
 
 /**
  * Proposal 75's standing footnote, as `rank.svelte.js` renders it. Verbatim on purpose: the
- * sentence is a promise about what a gesture writes, and the surface has to keep it.
+ * sentence tells a person how the board works, and the surface has to keep it.
  *
- * IT NO LONGER DOES, and the repair is not this file's. M4.10's finding 17 stopped a tap into a
- * tier from naming a neighbour at all — the tier's current last entry was not a position the
- * person had chosen, and §4.2 made every fabricated duel permanent — so "each move writes a
- * tier_edit plus a duel against each new neighbour" is now true of a drop onto a poster and of
- * nothing else. The constant lives in `frontend/src/lib/rank.svelte.js`; changing it there
- * without changing it here reddens this assertion, which is why the two move together or not at
- * all. The test below asserts what the tap actually writes.
+ * It used to promise "each move writes a tier_edit plus a duel against each new neighbour",
+ * which M4.10's finding 17 made false on the phone (a tap names no neighbour) and which was the
+ * model's vocabulary on a member surface besides. Decision 496 made a tap open the title and
+ * gave moving its own control, and the footnote now says exactly that and claims no write
+ * (decision 486). The constant lives in `frontend/src/lib/rank.svelte.js`; the two move together.
  */
-const FOOTNOTE =
-  'tap a poster to pick it up, tap a tier to drop · each move writes a tier_edit plus a duel ' +
-  'against each new neighbour';
+const FOOTNOTE = 'tap a title to open it · tap Move to pick it up, then tap a tier to drop it';
 
 const board = (page) => page.getByTestId('rank-board');
 const moving = (page) => page.getByTestId('rank-moving');
+
+/** Decision 496's Move control on a title, by the title's id. */
+const moveOf = (page, titleId) => page.getByTestId(`rank-move-${titleId}`);
 
 /**
  * A board to rank. §6.3's board is "every **rated** title", so it does not exist until the
@@ -228,28 +227,34 @@ test.describe('rank', () => {
       rows.map((row) => row.getAttribute('data-tier'))
     );
     expect(labels).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
-    await expect(page.getByTestId('rank-why')).toContainText('learned cutpoints, refit nightly');
+    // The why-line in the member register (decision 486): what the person has told the board,
+    // never "learned cutpoints, refit nightly", which was false while nobody had moved a title.
+    await expect(page.getByTestId('rank-why')).toContainText('rated');
+    await expect(page.getByTestId('rank-why')).toContainText('compared');
+    await expect(page.getByTestId('rank-why')).not.toContainText('cutpoints');
     await expect(page.getByText(FOOTNOTE)).toBeVisible();
   });
 
   test('a title lifts on a tap and puts itself down again, writing nothing', async () => {
     // Proposal 74: "a modeless lift with an undiscoverable exit is the classic tap-to-move
-    // failure". Both exits are asserted, and both have to leave the Ledger alone.
+    // failure". Both exits are asserted, and both have to leave the Ledger alone. The tap is on
+    // the title's Move control since decision 496; a tap on the title itself opens it.
     await openRank(page);
     const before = await tierEditCount(page);
 
     const first = board(page).locator('[data-title]').first();
     const titleId = await first.getAttribute('data-title');
-    await first.click();
+    const move = moveOf(page, titleId);
+    await move.click();
     await expect(moving(page)).toBeVisible();
     await expect(moving(page)).toContainText('tap a tier to drop it');
 
-    // Exit one: re-tapping the lifted title.
-    await first.click();
+    // Exit one: tapping Move again on the lifted title.
+    await move.click();
     await expect(moving(page)).toHaveCount(0);
 
     // Exit two: the banner's Cancel.
-    await first.click();
+    await move.click();
     await expect(moving(page)).toBeVisible();
     await page.getByTestId('rank-cancel-lift').click();
     await expect(moving(page)).toHaveCount(0);
@@ -266,7 +271,7 @@ test.describe('rank', () => {
 
     const poster = board(page).locator('[data-title]').first();
     const titleId = await poster.getAttribute('data-title');
-    await poster.click();
+    await moveOf(page, titleId).click();
     await expect(moving(page)).toBeVisible();
 
     const written = page.waitForResponse(
@@ -305,8 +310,7 @@ test.describe('rank', () => {
       const titleId = await titleOutside(page, tier);
       await openRank(page);
       await expect(board(page).locator('[data-tier="S"] [data-title]')).not.toHaveCount(0);
-      const poster = board(page).locator(`[data-title="${titleId}"]`);
-      await poster.click();
+      await moveOf(page, titleId).click();
       await expect(moving(page)).toBeVisible();
 
       const written = page.waitForResponse(
@@ -469,6 +473,67 @@ test.describe('rank', () => {
     await page.getByTestId('rank-queue-close').click();
   });
 
+  test('a tap on a title opens its card and writes nothing', async () => {
+    // Decision 496. The first household tapped a title expecting its card and found themselves
+    // moving it, and the board had no road to the card at all. The tap opens the card now, and
+    // opening it is a read: the Ledger is left exactly as it was.
+    await openRank(page);
+    const before = await tierEditCount(page);
+    const titleId = await board(page).locator('[data-title]').first().getAttribute('data-title');
+
+    await page.getByTestId(`rank-open-${titleId}`).click();
+    const card = page.locator('aside[aria-label="Title detail"]');
+    await expect(card).toBeVisible();
+    await expect(moving(page), 'a tap opens; it does not lift').toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(card).toHaveCount(0);
+    expect(await tierEditCount(page), 'opening a title writes no observation').toBe(before);
+  });
+
+  test('the sharpen sheet shows the pair as posters and counts the round', async () => {
+    // Decisions 483 and 495. The sheet showed two names in grey boxes under one fixed line,
+    // "one more comparison sharpens your board", with no count and no end; both first-household
+    // sittings stopped at ten or eleven answers. The pair is two posters carrying their titles'
+    // ids, the header says how far through the round of fifteen the person is, and each answer
+    // says where its two titles now sit.
+    await openRank(page);
+    await page.getByTestId('rank-sharpen').click();
+    const sheet = page.getByTestId('rank-queue');
+    await expect(sheet).toBeVisible();
+    await expect(page.getByTestId('rank-round')).toHaveText('1 of 15 this round');
+
+    const served = (await (await page.request.get('/api/rank/queue?kind=movie')).json()).pair;
+    expect(served, 'the queue must have a pair to show').toBeTruthy();
+    for (const id of [served.title_a, served.title_b]) {
+      await expect(sheet.locator(`[data-testid="rate-poster"][data-title-id="${id}"]`))
+        .toHaveCount(1);
+    }
+    await expect(page.getByTestId('rank-pair-reason')).not.toContainText('one more comparison');
+
+    await page.getByTestId('rank-pair-a').click();
+    await expect(page.getByTestId('rank-round')).toHaveText('2 of 15 this round');
+    await expect(page.getByTestId(`rank-placed-${served.title_a}`)).toBeVisible();
+    await expect(page.getByTestId(`rank-placed-${served.title_b}`)).toBeVisible();
+    await page.getByTestId('rank-queue-close').click();
+  });
+
+  test('every tier letter sits at the top of its row', async () => {
+    // The gutter is a button the height of its tier, and a button centres what it holds: in a
+    // sixteen-title tier on a phone the letter sat ~500 px down the row, so the first household
+    // saw letters on the empty tiers only. The row stays the drop target; the letter sits at
+    // its top.
+    await openRank(page);
+    for (const row of await board(page).locator('[data-tier]').all()) {
+      const label = await row.getAttribute('data-tier');
+      const rowBox = await row.boundingBox();
+      const letterBox = await page.getByTestId(`rank-letter-${label}`).boundingBox();
+      expect(rowBox && letterBox, `tier ${label} is not laid out`).toBeTruthy();
+      expect(letterBox.y - rowBox.y, `tier ${label}'s letter is not at the top of its row`)
+        .toBeLessThan(48);
+    }
+  });
+
   test('all six filter dimensions in section 6.3 have a control', async () => {
     // "**Filters:** genre, kind (movie/series — separate by default), decade, runtime,
     // seen-state, DNA facet/term predicates". The review found genre and decade wired through
@@ -490,7 +555,8 @@ test.describe('rank', () => {
     test.skip(testInfo.project.name !== 'phone', 'the 48 px rule is about touch');
     await openRank(page);
     const first = board(page).locator('[data-title]').first();
-    await first.click();
+    const firstId = await first.getAttribute('data-title');
+    await moveOf(page, firstId).click();
 
     // 48, and BOTH dimensions. The title has promised 48 since M3 while the assertion admitted
     // 44, and `design.css` has never defined a 44: `--touch` is 48px and no 44-47 px value
@@ -499,12 +565,14 @@ test.describe('rank', () => {
     // low - the coarse block raises `min-height` alone, so a control 48 px tall and 32 px wide
     // passed every 48 px assertion in this suite, which is the shape two overlay exits shipped
     // in. [tq4-48px-rule-asserted-at-44-against-a-48px-token]
+    // Decision 496's Move is a control of its own on every title, so it takes the floor too.
     for (const id of [
       'rank-sharpen',
       'rank-seen',
       'rank-genre',
       'rank-decade',
-      'rank-cancel-lift'
+      'rank-cancel-lift',
+      `rank-move-${firstId}`
     ]) {
       const box = await page.getByTestId(id).boundingBox();
       expect(box, `${id} is not on screen`).not.toBeNull();
@@ -522,11 +590,13 @@ test.describe('rank', () => {
 
   test('the tier set is a per-user preference on the account page', async () => {
     // Decision 11: "The control belongs on the per-user settings page … not on §6.6 Admin",
-    // and "warn on save that it discards that user's learned cutpoints and queues a refit".
+    // and "warn on save that it discards that user's learned cutpoints and queues a refit" -
+    // said in the member register since decision 486, the same two facts without the nouns.
     await page.goto('/account');
     const section = page.getByTestId('tier-set');
     await expect(section).toBeVisible();
-    await expect(section).toContainText('discards your learned cutpoints and queues a refit');
+    await expect(section).toContainText('throws away where your tier lines were learned to fall');
+    await expect(section).toContainText('works them out again shortly');
     await expect(page.getByTestId('tier-set-current')).toContainText('S');
 
     await page.getByTestId('tier-set-input').fill('bad ok good');
