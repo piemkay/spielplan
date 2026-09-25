@@ -109,6 +109,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
       user: null,
       setup: null,
       hasBundle: null,
+      restartRequired: null,
       bundle: null,
       publicUrl: '',
       offline: false
@@ -307,6 +308,35 @@ describe('the shell when it cannot tell where a person belongs', () => {
       expect(target.querySelector('header').textContent).toContain('no bundle imported');
     } finally {
       unmount(app);
+    }
+  });
+
+  it('says a restart is owed rather than that nothing was imported', async () => {
+    // Decision 497's one remaining restart: a bundle IS imported and the backend could not load
+    // it by itself. "no bundle imported" is what the first household's header said over exactly
+    // this, and it was false. A member is told in plain words and given no door; an admin gets
+    // the link to the Data tab, whose banner carries the command.
+    const stuck = { ...CONFIG, has_bundle: false, restart_required: true };
+    wire({ '/config': stuck, '/setup/state': READY, '/auth/me': ME });
+    const member = await open();
+    try {
+      const header = target.querySelector('header');
+      expect(header.textContent).toContain('waiting for a restart');
+      expect(header.textContent).not.toContain('no bundle imported');
+      expect(header.querySelector('a.nobundle')).toBeNull();
+    } finally {
+      unmount(member);
+    }
+
+    const ADMIN = { ...ME, role: 'admin', nav: { surfaces: [], account: [{ key: 'admin' }] } };
+    wire({ '/config': stuck, '/setup/state': READY, '/auth/me': ADMIN });
+    const admin = await open();
+    try {
+      const link = target.querySelector('header a.nobundle');
+      expect(link.getAttribute('href')).toBe('/admin/data');
+      expect(link.textContent).toContain('restart needed');
+    } finally {
+      unmount(admin);
     }
   });
 });

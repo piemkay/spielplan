@@ -28,9 +28,11 @@ import {
   FAILED,
   IDLE,
   IMPORTED,
+  LIVE,
   POLL_DEADLINE_MS,
   POLL_INTERVAL_MS,
   POLL_READ_TIMEOUT_MS,
+  RESTART,
   RUNNING,
   UNKNOWN,
   UNKNOWN_OUTCOME,
@@ -41,6 +43,7 @@ import {
   phaseForImportError,
   phaseOfJob,
   pollImportJob,
+  servedAfterImport,
   stepsLit
 } from './bundleImport.svelte.js';
 
@@ -517,6 +520,80 @@ describe("the Data tab's import control", () => {
     } finally {
       unmount(app);
     }
+  });
+
+  /** Validate, import, and let the one poll read `state` as the terminal payload. */
+  const importTo = async (state) => {
+    vi.mocked(post).mockResolvedValueOnce({ report: report(), text: '' });
+    vi.mocked(post).mockResolvedValueOnce(accepted());
+    vi.mocked(get).mockResolvedValue(state);
+    const app = await open();
+    await press('Validate bundle');
+    await press('Import and activate');
+    return app;
+  };
+
+  it('says the imported bundle is live when the backend has loaded it, and names no restart', async () => {
+    // Decision 497. This screen told every operator to restart backend and worker after every
+    // import, with no command in the sentence, and the first household's wizard ended on it.
+    // The backend now loads the flip on the read that reports it, which is the payload below.
+    const app = await importTo(
+      bundleState({
+        active: 'test-v1',
+        loaded: { version: 'test-v1' },
+        import_job: job({ phase: 'active', ok: true, report: report() })
+      })
+    );
+    try {
+      expect(box().getAttribute('data-phase')).toBe(IMPORTED);
+      expect(target.querySelector('[data-served="live"]').textContent).toContain('test-v1 is live');
+      expect(box().textContent).not.toMatch(/restart backend|docker compose/i);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names the command only when the server says a restart is owed', async () => {
+    const app = await importTo(
+      bundleState({
+        active: 'test-v1',
+        loaded: null,
+        restart_required: true,
+        import_job: job({ phase: 'active', ok: true, report: report() })
+      })
+    );
+    try {
+      const owed = target.querySelector('[data-served="restart"]');
+      expect(owed.textContent).toContain('docker compose restart backend worker');
+      expect(target.querySelector('[data-served="live"]')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('what an import leaves served', () => {
+  it('reads the terminal state payload, and says nothing it cannot read', () => {
+    const state = (over) => bundleState({ active: 'test-v1', ...over });
+    expect(servedAfterImport(state({ loaded: { version: 'test-v1' } }))).toBe(LIVE);
+    expect(servedAfterImport(state({ loaded: null, restart_required: true }))).toBe(RESTART);
+    // Broken is the restore banner's, and an older store still loaded is not "live".
+    expect(servedAfterImport(state({ loaded: null, broken: true }))).toBeNull();
+    expect(servedAfterImport(state({ loaded: { version: 'test-v0' } }))).toBeNull();
+    expect(servedAfterImport(undefined)).toBeNull();
+  });
+
+  it('hands the terminal payload back with the phase, because that read is the one that re-pinned', async () => {
+    const terminal = bundleState({
+      active: 'test-v1',
+      loaded: { version: 'test-v1' },
+      import_job: job({ phase: 'active', ok: true, report: report() })
+    });
+    const outcome = await pollImportJob(async () => terminal, 7, {
+      sleep: async () => {},
+      intervalMs: 0
+    });
+    expect(outcome.state).toBe(terminal);
   });
 });
 

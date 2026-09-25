@@ -4,7 +4,8 @@ import { ADMIN, createAdminThroughWizard, health, setupState } from '../helpers.
 
 /**
  * §3.1 — first boot is a defined sequence, and a bundle-less app is a legal state.
- * §10 — the swap sequence: validate → stage → load → transactionally flip → restart.
+ * §10 — the swap sequence: validate → stage → load → transactionally flip, and the backend loads
+ *       the flipped bundle itself (decision 497), so the restart is owed only when that fails.
  * §12 — the M0 exit criterion: "bundle imports clean".
  *
  * This file needs a database with no admin. `node e2e/reset.mjs` does that, and
@@ -161,7 +162,7 @@ test.describe('first boot @first-boot', () => {
     expect((await health(page.request)).bundle).toBeNull();
   });
 
-  test('import runs the swap sequence and asks for the restart it needs', async () => {
+  test('import runs the swap sequence and serves the bundle without a restart', async () => {
     // The import is no longer this request's to wait for. §5.3 files it as a job with a
     // "minutes" budget and M4.14 moved it there: `POST /api/admin/bundle/import` answers 202
     // the moment validation passes, and the load, the rebuild set and the flip run in the
@@ -203,13 +204,17 @@ test.describe('first boot @first-boot', () => {
     await expect(page.locator('.finding', { hasText: 'vocabulary v1' })).toBeVisible();
     await expect(page.locator('.finding', { hasText: 'authored axis definition' })).toBeVisible();
 
-    // §10: the flip is real in the database and invisible to this process until a restart.
-    // Saying so is the difference between "it worked" and "did it work?".
-    await page.reload();
-    await expect(page.locator(".bundle-active")).toContainText('active: test-v1');
-    await expect(page.locator('.warn')).toContainText(/restart backend and worker/);
+    // Decision 497: the read that reported the flip is the read the backend re-pinned on, so the
+    // screen says the bundle is live and names no command - the first household's wizard ended on
+    // "Restart backend and worker" over a header saying "no bundle imported", and a shell.
+    await expect(page.locator('[data-served="live"]')).toContainText('test-v1 is live');
+    await expect(page.locator('[data-served="restart"]')).toHaveCount(0);
 
-    // The process has not loaded it yet — which is exactly what the banner claims.
-    expect((await health(page.request)).bundle).toBeNull();
+    await page.reload();
+    await expect(page.locator('.bundle-active')).toContainText('active: test-v1');
+    await expect(page.locator('.bundle-active .warn')).toHaveCount(0);
+    // The header's claim moves with it, on the same process that booted bundle-less.
+    await expect(page.getByRole('link', { name: 'no bundle imported' })).toHaveCount(0);
+    expect((await health(page.request)).bundle).toBe('test-v1');
   });
 });

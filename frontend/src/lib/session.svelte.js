@@ -61,6 +61,10 @@ export const session = $state({
   // rather than a rendering of one (decision 271).
   /** @type {boolean | null} */
   hasBundle: null,
+  // A bundle IS imported and the backend could not load it (decision 497), which the header must
+  // not render as §3.1's "no bundle imported". Null until `/config` has said, for 271's reason.
+  /** @type {boolean | null} */
+  restartRequired: null,
   /** @type {any} */
   bundle: null,
   publicUrl: '',
@@ -111,6 +115,7 @@ export async function bootstrap() {
     ]);
     if (config) {
       session.hasBundle = config.has_bundle;
+      session.restartRequired = config.restart_required === true;
       session.bundle = config.bundle;
       session.publicUrl = config.public_url;
     }

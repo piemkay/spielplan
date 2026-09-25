@@ -100,6 +100,23 @@
     return [...grouped].map(([kind, parts]) => ({ kind, line: parts.join(' · ') }));
   }
 
+  /**
+   * The worker's probe of the five `/data` mounts, lifted out of the jobs list (C10.2).
+   *
+   * A job row like any other on the server - `api/admin.JOB_NAMES` names it, so no new key joins
+   * the card - and a fact of its own here, because on the install that needs it every other red
+   * row on this page is this one wearing its own path: the first household's dump failed on
+   * `/data/backups`, its import on `/data/artifacts`, and neither said "chown". The failure text is
+   * the worker's own sentence, which names the directories and the command; the exception's class
+   * name `_tick` prefixes it with is not the operator's to read.
+   */
+  const STORAGE_JOB = 'storage-check';
+  const storageRow = $derived((card?.jobs ?? []).find((job) => job.name === STORAGE_JOB) ?? null);
+  const storageFailure = (job) =>
+    typeof job?.detail?.error === 'string'
+      ? job.detail.error.replace(/^[A-Za-z]+Error: /, '')
+      : 'the check failed without saying why - read the worker log';
+
   // Python's level names as `core/logs` records them; CRITICAL is above ERROR.
   const RANKS = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
   const FLOORS = { all: 0, warning: 30, error: 40 };
@@ -116,9 +133,10 @@
 
 <h1>System</h1>
 <p class="why">
-  Read-only: whether last night's dump happened, which SECRETS_KEY this process holds, how each
-  background job last ended, how much acquisition work is waiting, when each connector last
-  synced successfully, and what this process has logged since it started.
+  Read-only: whether last night's dump happened, which SECRETS_KEY this process holds, whether the
+  app can write its data directories, how each background job last ended, how much acquisition
+  work is waiting, when each connector last synced successfully, and what this process has logged
+  since it started.
 </p>
 
 {#if error}
@@ -182,6 +200,27 @@
         taken, or run <code class="data-lg">spielplan-secrets reset</code> and re-enter the API
         key on Connectors.
       </p>
+    {/if}
+  </section>
+
+  <!-- The `storage-check` row, read as the fact it is (C10.2). Above the jobs list, because a
+       mount the app cannot write explains the failures below it rather than sitting among them. -->
+  <section class="card fact" data-testid="system-storage">
+    <h2>Storage</h2>
+    {#if !storageRow}
+      <div class="data-lg" data-storage="unchecked">
+        not checked yet - the worker checks its five data directories on its first run
+      </div>
+    {:else if outcome(storageRow) === 'ok'}
+      <div class="data-lg" data-storage="ok">
+        all five data directories writable · checked {ago(storageRow.finished_at)}
+      </div>
+    {:else if outcome(storageRow) === 'failed'}
+      <p class="warn" data-storage="unwritable">{storageFailure(storageRow)}</p>
+    {:else}
+      <div class="data-lg" data-storage="unfinished">
+        the last check started {ago(storageRow.started_at)} and never reported
+      </div>
     {/if}
   </section>
 
@@ -311,6 +350,8 @@
     background: var(--ember-wash);
     border-radius: var(--r-md);
     font-size: 13px;
+    /* The storage sentence carries paths and a command with no break opportunity in them. */
+    overflow-wrap: anywhere;
   }
   .jobs {
     list-style: none;

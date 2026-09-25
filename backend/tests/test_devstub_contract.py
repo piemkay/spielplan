@@ -788,12 +788,11 @@ async def test_the_harness_bundle_payloads_carry_the_keys_the_routes_return(fres
         assert set(job) == _returned_keys("_running_import")
         assert [job["report"], job["text"], job["ok"], job["finished_at"]] == [None] * 4, job
 
-        # Polled to the terminal phase and restarted, because §10's flip is invisible to the
-        # process until then and `loaded` is None on every read before it -- the harness's own
-        # `_bundle_live()`, which is the repair M4.7 test-14 made.
+        # Polled to the terminal phase, because `loaded` is None on every read before the flip --
+        # the harness's own `_bundle_live()`. No restart after it: decision 497 ends the swap at
+        # the flip, and the knob that stood in for §10's restart went with it.
         for _ in fresh.IMPORT_PHASES:
             await client.get("/api/admin/bundle/state")
-        await client.post("/_dev/restart")
         settled = (await client.get("/api/admin/bundle/state")).json()
         assert set(settled["loaded"]) == _summary_keys()
         assert set((await client.get("/api/config")).json()["bundle"]) == _summary_keys()
@@ -925,11 +924,10 @@ async def test_the_harness_reports_the_import_phase_until_the_bundle_is_active(f
     * `active` and the phase agree inside one payload. The flip happens on the read that first
       reports the terminal phase, so the page cannot see an active row under a running import,
       which would arm the restart banner over an import that has swapped nothing.
-    * `loaded` follows `_bundle_live()` and not `imported`. §10's flip is real in the database
-      and invisible to the process until the restart, and this is the repair M4.7 test-14 made
-      to `/api/health` and `/api/config` and did not make here: with `loaded` answering for
-      `imported`, `restart_required` is false the moment the import lands and the banner the e2e
-      suite asserts against the real backend is unreachable in the harness.
+    * `loaded` arrives WITH the flip and never before it, and `restart_required` stays false
+      throughout. Decision 497 ends the swap at the flip - the real route re-pins on the read
+      that reports it - so the harness that used to hold `loaded` back until a `/_dev/restart`
+      would now be teaching the Data tab a restart banner the app no longer raises.
     * the stored report arrives with the terminal phase and not before, because it is what the
       screen renders in place of the validation report the 202 carried (decision 253) -- and the
       RENDERED half arrives with it. `worker._finish_bundle_import` closes every import with
@@ -956,15 +954,12 @@ async def test_the_harness_reports_the_import_phase_until_the_bundle_is_active(f
             assert (job["report"] is not None) is terminal, job
             assert (bool(job["text"]) is terminal), job
             assert job["ok"] is (True if terminal else None), job
-            assert state["loaded"] is None, "nothing is loaded until the process restarts"
+            assert (state["loaded"] is not None) is terminal, state["loaded"]
+            assert state["restart_required"] is False, state
         assert seen == list(fresh.IMPORT_PHASES), seen
-        assert state["restart_required"] is True, state
+        assert state["loaded"]["version"] == state["active"] == "test-v1", state
         assert state["broken"] is False and state["missing_path"] is None, state
 
-        # §10's last step, which `POST /_dev/restart` stands in for here. The banner goes out
-        # because the process now holds what the row names, which is the invariant it reports.
-        await client.post("/_dev/restart")
-        settled = (await client.get("/api/admin/bundle/state")).json()
-        assert settled["loaded"]["version"] == settled["active"] == "test-v1", settled
-        assert settled["restart_required"] is False, settled
-        assert settled["import_job"]["phase"] == fresh.IMPORT_ACTIVE, settled["import_job"]
+        # And the shell's two reads agree with the Data tab without anything in between.
+        assert (await client.get("/api/config")).json()["has_bundle"] is True
+        assert (await client.get("/api/health")).json()["bundle"] == "test-v1"

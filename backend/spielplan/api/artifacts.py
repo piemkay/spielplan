@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from spielplan.api.deps import DB, AdminUser
 from spielplan.core.config import settings
 from spielplan.importer import bundle as bundle_import
+from spielplan.models import basis
 
 router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 
@@ -45,9 +46,17 @@ router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 # screen - two descriptions of one state, on one page - and it no longer states the clause at all.
 # The remaining duplicate is the client's, which is the client's to remove.
 # [M4.13 cycle 1, m413-c1-dim1-restart-sentence-written-in-three-places]
+#
+# AND IT IS NO LONGER AN INSTRUCTION TO RESTART, because the restart is no longer what ends a swap:
+# the backend loads the flipped bundle within seconds (decision 497), so the 409 this rides on is
+# a few seconds' window and the sentence says to wait them out. It is read by a MEMBER - Rate and
+# Rank render `detail.message` as it is - so it speaks their register and names no process
+# (decision 486); the operator's half, with the command, is the Data tab's banner and the log line
+# `assert_matches` writes. The constant keeps its name because the rare state it still covers, a
+# load that keeps failing, is the one a restart is owed for.
 RESTART_REQUIRED = (
-    "restart backend and worker — no process may score or refit with a loaded "
-    "bundle version different from the active row"
+    "Spielplan is switching to newly imported library data. Try again in a few seconds - if "
+    "this keeps happening, it needs a restart."
 )
 
 # The other refusal §10's invariant needs, and it is a different instruction: a broken install's
@@ -268,10 +277,16 @@ async def _running_import(conn) -> dict[str, Any] | None:
 async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, Any]:
     """The Data tab's state.
 
-    Reports the DB-active version and the *loaded* version separately, because §10's swap
-    sequence ends in "restart backend + worker" and between the flip and that restart they
-    legitimately disagree. Collapsing them into one field made the page say "no bundle is
-    active" immediately after a successful import — which is the opposite of what happened.
+    Reports the DB-active version and the *loaded* version separately, because between §10's
+    flip and the moment this process loads it they legitimately disagree. Collapsing them into one
+    field made the page say "no bundle is active" immediately after a successful import — which
+    is the opposite of what happened.
+
+    The re-pin is asked for FIRST, and that is decision 497's other trigger beside the timer: this
+    is the route the Data tab and the wizard poll until the import's phase is terminal, so the
+    read that reports the flip is also the read that loads it, and the `bootstrap()` the page
+    fires next finds the bundle served. `restart_required` below therefore describes a load that
+    failed rather than the ordinary end of every import.
 
     Bundles and nothing else. This payload briefly also carried the worker's `job_run` outcomes,
     written while owner decision 2 was still open and its option (A) — "Data tab + Connectors card
@@ -291,6 +306,7 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
     this one. The alternative was a second route beside the one the Data tab is written against,
     which is how two screens come to disagree about one import. [M4.14 step E3, decision 253]
     """
+    await basis.refresh(request.app.state, conn)
     rows = await conn.fetch(
         "SELECT version, state, imported_at, activated_at FROM artifact_bundle "
         "ORDER BY imported_at DESC"

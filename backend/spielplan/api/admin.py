@@ -818,6 +818,10 @@ BACKUP_JOB = "nightly-backup"
 # asks for its newest run as the poll's half of the webhook status (decision 455).
 DELTA_POLL_JOB = "jellyfin-delta-poll"
 
+# The worker's probe of the five `/data` mounts, spelled here for the same reason and pinned by the
+# same test. [C10.2]
+STORAGE_JOB = "storage-check"
+
 # The registry's live job names, in its order, for the same reason and pinned by the same test.
 # They are a *parameter* rather than documentation: the card asks for the newest row of each named
 # job, which the `job_run_name_started` index (0017_ops.sql) answers with one lookup per name.
@@ -864,6 +868,11 @@ JOB_NAMES: tuple[str, ...] = (
     # import's progress there, and a name in this tuple asks only for the newest `job_run` row.
     # [M4.14 step E2, decision 253]
     "bundle-import",
+    # Whether the worker can write the five `/data` mounts, named with the chown that fixes them.
+    # A job row like any other here, and the System page lifts it above the list, because on the
+    # install that needs it every other failure on the card is this one wearing its own path.
+    # [C10.2]
+    STORAGE_JOB,
     BACKUP_JOB,
 )
 

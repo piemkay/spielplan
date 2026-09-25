@@ -120,6 +120,7 @@ describe('bootstrap', () => {
       user: null,
       setup: null,
       hasBundle: null,
+      restartRequired: null,
       bundle: null,
       publicUrl: '',
       offline: false
@@ -242,6 +243,21 @@ describe('bootstrap', () => {
 
     expect(session.hasBundle).toBe(true);
     expect(session.publicUrl).toBe('http://spielplan.local');
+    // A /config without the field is a backend from before decision 497, which never owed one.
+    expect(session.restartRequired).toBe(false);
+  });
+
+  it('carries a restart the backend says is owed, and clears it when the backend stops saying so', async () => {
+    // Decision 497: a bundle imported and not loaded is not "no bundle imported", and the header
+    // can only tell the two apart if the store carries the bit `/config` sends.
+    wire({ ...ANSWERED, '/config': { ...ANSWERED['/config'], has_bundle: false, restart_required: true } });
+    await bootstrap();
+    expect(session.hasBundle).toBe(false);
+    expect(session.restartRequired).toBe(true);
+
+    wire(ANSWERED);
+    await bootstrap();
+    expect(session.restartRequired).toBe(false);
   });
 
   // `refreshUser()` is the other reader of /auth/me, and the offline flag is one fact about the

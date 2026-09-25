@@ -10,10 +10,10 @@ active row.* It is one comparison over two facts, and this module owns both halv
 carries the version it loaded, `active_bundle_version` reads the row every other module used to
 read for itself. Three production callers hold it: `worker._active_store`, through which every
 model job the worker runs acquires its basis (§5.2's Ledger refit among them), and
-`api/rate.py`/`api/rank.py`'s `_assert_active_basis`, where a mismatch is a 409 naming the restart
-§10 asks for rather than a fit against a basis nobody serves. The sentence this paragraph replaces
-claimed those callers while `grep -rn assert_matches` returned the definition, the claim itself,
-one comment and six test lines. [M4.13, arch-03/tq1]
+`api/rate.py`/`api/rank.py`'s `_assert_active_basis`, where a mismatch is a 409 for the seconds
+until the backend re-pins (decision 497) rather than a fit against a basis nobody serves. The
+sentence this paragraph replaces claimed those callers while `grep -rn assert_matches` returned
+the definition, the claim itself, one comment and six test lines. [M4.13, arch-03/tq1]
 
 A BROKEN install is a second state and takes a second guard. An `artifact_bundle` row that is
 active while `/data/artifacts/<version>` is absent used to load as the EMPTY store, so the worker
@@ -27,10 +27,11 @@ WHICH OF THE TWO IS ASKED FIRST IS PER CALLER, and the split is deliberate rathe
 the sentence here used to claim one order for all three, which the grep it was written from does
 not show. `worker._active_store` asks `assert_not_broken` first because it RELOADS the store per
 job, so both facts are fresh and the flag is the one that can see its own state. The two route
-helpers ask it second, because their store was pinned once at boot (`app.py`) and is never
-re-pinned: a process that is both broken on its outgoing version and stale against a new active
-row is fixed by the restart §10 already asks for, and diagnosing it as a swap sends the operator
-at the directory that exists rather than at the superseded one that does not. So the ORDER is
+helpers ask it second, because their store is the one the backend PINNED (`models/basis.py`),
+which follows the active row within seconds rather than at every request (decision 497): a
+process that is both broken on its outgoing version and stale against a new active row is fixed
+by the re-pin that loads the new row, and diagnosing it as a swap sends the operator at the
+directory that exists rather than at the superseded one that does not. So the ORDER is
 load-bearing on the request path and a reader must not level it. `is_empty` stays True either
 way, so every artifact-dependent surface keeps rendering §3.1's no-bundle state instead of
 raising. [M4.13, data-03; cycle 2, M413-C2-D1-02]
@@ -352,9 +353,12 @@ class ArtifactStore:
         working rather than a hole: there is no basis to be wrong about.
         """
         if self.version != active_version:
+            # The backend re-pins on its own within seconds (decision 497), so this names the
+            # restart as the fallback it now is rather than as the step that ends every swap.
             raise RuntimeError(
-                f"loaded bundle {self.version!r} != active bundle {active_version!r}; "
-                "restart backend and worker after a bundle swap (§10 swap sequence)"
+                f"loaded bundle {self.version!r} != active bundle {active_version!r}; the backend "
+                "loads the active bundle within seconds, and if it cannot, restart backend and "
+                "worker (section 10 swap sequence, decision 497)"
             )
 
     def assert_not_broken(self) -> None:
@@ -480,6 +484,22 @@ async def active_bundle_version(conn: asyncpg.Connection) -> str | None:
     literally the same read. [M4.13, arch-03]
     """
     return await conn.fetchval("SELECT version FROM artifact_bundle WHERE state = 'active'")
+
+
+async def active_bundle_key(conn: asyncpg.Connection) -> tuple[str, Any] | None:
+    """(version, activated_at) of the active row: what the backend's re-pin compares against.
+
+    The version alone cannot see a RESTAGE. Decision 253's repair re-imports the active version
+    into its own directory, so the row's version does not move while its files do - and a process
+    that pinned the half tree before it would go on serving `Backbone.empty()` from it. The flip
+    stamps `activated_at` on every import it activates, the restage included, so the pair changes
+    exactly when §10's flip happens and at no other time. Beside `active_bundle_version` because
+    it is the same question asked one column wider. [decision 497]
+    """
+    row = await conn.fetchrow(
+        "SELECT version, activated_at FROM artifact_bundle WHERE state = 'active'"
+    )
+    return None if row is None else (row["version"], row["activated_at"])
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:

@@ -159,6 +159,64 @@ describe("the System card's six facts (decision 454)", () => {
     }
   });
 
+  it("lifts the worker's storage check into a fact of its own, with the chown when it fails", async () => {
+    // C10.2. The row is a job like any other on the server - no seventh key joins the card - and
+    // a fact here, because on the install that needs it every other red row is this one wearing
+    // its own path. The worker's sentence is shown without the exception class `_tick` prefixes.
+    const failing = card();
+    failing.jobs.push({
+      name: 'storage-check',
+      started_at: '2026-09-24T08:00:00+00:00',
+      finished_at: '2026-09-24T08:00:00+00:00',
+      ok: false,
+      detail: {
+        error:
+          'RuntimeError: /data/backups is not writable by this app (PermissionError: Permission ' +
+          'denied). This app runs as uid 1000 and has to write there, so give it the directories: ' +
+          'on the host, in the Spielplan directory, run `sudo chown -R 1000:1000 data/backups`'
+      }
+    });
+    vi.mocked(get).mockResolvedValue(failing);
+    const app = await open();
+    try {
+      const fact = target.querySelector('[data-testid="system-storage"]');
+      const warning = fact.querySelector('[data-storage="unwritable"]');
+      expect(warning.textContent).toContain('sudo chown -R 1000:1000 data/backups');
+      expect(warning.textContent).not.toContain('RuntimeError');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('says the storage check passed, or that it has not run yet, and never invents either', async () => {
+    const passing = card();
+    passing.jobs.push({
+      name: 'storage-check',
+      started_at: '2026-09-24T08:00:00+00:00',
+      finished_at: '2026-09-24T08:00:00+00:00',
+      ok: true,
+      detail: { writable: 'raw artifacts cache import backups' }
+    });
+    vi.mocked(get).mockResolvedValue(passing);
+    const ok = await open();
+    try {
+      expect(target.querySelector('[data-storage="ok"]').textContent).toContain(
+        'all five data directories writable'
+      );
+    } finally {
+      unmount(ok);
+    }
+
+    vi.mocked(get).mockResolvedValue(card());
+    const unchecked = await open();
+    try {
+      expect(target.querySelector('[data-storage="unchecked"]')).not.toBeNull();
+      expect(target.querySelector('[data-storage="ok"]')).toBeNull();
+    } finally {
+      unmount(unchecked);
+    }
+  });
+
   it('carries no control that writes: the level filter is the only one', async () => {
     const app = await open();
     try {

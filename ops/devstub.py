@@ -92,18 +92,11 @@ from tests.fixtures import make_bundle as fx  # noqa: E402
 BUNDLE = ROOT / "data" / "devstub-bundle"
 STATE: dict[str, Any] = {
     "imported": False,
-    # §10's swap sequence ends "restart backend + worker", and `restart_required: true` is what
-    # the real import route answers with — no process may score with a loaded bundle version
-    # different from the active row. This harness flipped `imported` and reported a live bundle
-    # in the same request, so the UI was developed against a one-step import the app does not
-    # have, and `01-first-boot.spec.js` asserts the two-step state the harness contradicted.
-    # `POST /_dev/restart` is the gesture `docker compose restart backend worker` stands in for.
-    # [M4.7 test-14]
-    "restarted": False,
-    # The one `job_run` row the Data tab polls, and the read counter that advances it.
-    # Beside `restarted` because the two are halves of one sequence: M4.14 took the import
-    # off the request (§5.3), so the flip happens while the page polls, and §10's restart
-    # is still owed after it. See `_import_job`. [M4.14 step E5, decision 253]
+    # The one `job_run` row the Data tab polls, and the read counter that advances it. M4.14 took
+    # the import off the request (§5.3), so the flip happens while the page polls. The restart
+    # §10 used to end with - and the `POST /_dev/restart` knob that stood in for it here - went
+    # with decision 497: the backend loads the flipped bundle itself, so this harness serves the
+    # bundle from the read that reports the flip. See `_import_job`. [M4.14 step E5, decision 253]
     "import_job": None,
     "import_reads": 0,
     "next_job_id": 1,
@@ -207,31 +200,22 @@ def _me(sid: str | None) -> dict[str, Any]:
 
 
 def _bundle_live() -> bool:
-    """Whether a bundle is *loaded in this process*, which is not the same as imported.
-
-    `/api/admin/bundle/state` still reports the row as active the moment the import returns —
-    that is the database's answer and it is true. These two answer for the process, and the
-    process has not restarted. See STATE["restarted"]. [M4.7 test-14]
+    """Whether a bundle is *loaded in this process*, which is not the same as imported - and in
+    the app the two now agree within seconds of the flip, because the backend re-pins on the read
+    of `/api/admin/bundle/state` that reports it (decision 497). This harness flips `imported` on
+    exactly that read, so the one-step import M4.7 test-14 took away is the shape the app has
+    again, arrived at by the other route. [M4.7 test-14; decision 497]
     """
-    return STATE["imported"] and STATE["restarted"]
-
-
-@app.post("/_dev/restart", include_in_schema=False)
-def dev_restart() -> dict[str, bool]:
-    """`docker compose restart backend worker`, for a harness that has no containers.
-
-    Out of the schema on purpose: the real app owns no such path, and `test_devstub_contract.py`
-    fails the harness for answering one it does not. This is a knob on the harness itself, in
-    the same category as the `Run:` line at the top of this file — the front end never calls it.
-    """
-    STATE["restarted"] = True
-    return {"ok": True, "bundle_loaded": _bundle_live()}
+    return STATE["imported"]
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    # `storage` in the app's shape (C10.2): this harness writes nothing, so it has nothing it is
+    # unable to write.
     return {"ok": True, "role": "devstub", "bundle": "test-v1" if _bundle_live() else None,
-            "public_url": "http://127.0.0.1:8080"}
+            "public_url": "http://127.0.0.1:8080",
+            "storage": {"ok": True, "unwritable": []}}
 
 
 @app.get("/api/config")
@@ -248,6 +232,9 @@ def config() -> dict[str, Any]:
              "titles": len(fx.TITLES), "cold_eval": None}
             if _bundle_live() else None
         ),
+        # Decision 497's one state the shell renders differently from "no bundle imported": a
+        # bundle the backend could not load. Unreachable here - this harness loads nothing.
+        "restart_required": False,
     }
 
 
@@ -596,10 +583,10 @@ def bundle_state() -> dict[str, Any]:
     job = _import_job()
     active = "test-v1" if STATE["imported"] else None
     # `_bundle_live()` and not `STATE["imported"]`, which is the repair M4.7 test-14 made to
-    # `/api/health` and `/api/config` and did not make here. §10's flip is real in the database
-    # and invisible to this process until the restart; a harness that reports a loaded bundle in
-    # the same breath as an active row makes `restart_required` false and the banner unreachable,
-    # which is the one-step import the app does not have.
+    # `/api/health` and `/api/config` and did not make here. The two are one answer again under
+    # decision 497 - the real route re-pins before it reads, so the payload that reports the flip
+    # reports the bundle loaded and `restart_required` false - and the call stays so the harness
+    # names the process's half of the question the way the app does.
     #
     # Key for key with `ArtifactStore.summary()` as well, which is where the shape is stated.
     # `owned` is not in it: §7.2 makes ownership a Jellyfin fact re-derived per install, so no
@@ -1449,6 +1436,11 @@ def admin_system() -> dict[str, Any]:
             {"name": "nightly-backup", "started_at": now.isoformat(),
              "finished_at": now.isoformat(), "ok": True,
              "detail": {"bytes": 41_235_968, "kept": 14}},
+            # The worker's probe of the five mounts (C10.2), passing: the page lifts this row into
+            # its Storage fact, and the failing shape is the jobs-list shape above.
+            {"name": admin_api.STORAGE_JOB, "started_at": now.isoformat(),
+             "finished_at": now.isoformat(), "ok": True,
+             "detail": {"writable": "raw artifacts cache import backups"}},
         ],
         "backup": {"at": now.isoformat(), "bytes": 41_235_968, "stale": False,
                    "stale_after_hours": 36},

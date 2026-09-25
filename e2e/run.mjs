@@ -1,9 +1,12 @@
 /**
  * Run the whole suite from a cold start, in the two phases the app actually has.
  *
- * §10's swap sequence ends in "restart backend + worker", so a bundle imported in phase one is
- * not *loaded* until the services come back. Without that restart between them, every spec
- * that needs an imported bundle skips — which looks like a pass and proves nothing.
+ * §10's swap sequence used to end in "restart backend + worker", so a bundle imported in phase one
+ * was not *loaded* until the services came back. Decision 497 made the backend load it by itself
+ * (01-first-boot now asserts exactly that), and the restart between the phases stays: phase 2 is
+ * written against freshly started processes, and the health loop after the restart is what
+ * refuses to enter phase 2 without a loaded bundle — a run where every spec that needs one skips
+ * looks like a pass and proves nothing.
  *
  *   node e2e/run.mjs [--project=desktop]
  */

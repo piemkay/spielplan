@@ -413,8 +413,11 @@ async def test_the_state_route_reports_the_phase_until_the_bundle_is_active(
     assert done["import_job"]["ok"] is True
     assert done["import_job"]["report"]["ok"] is True
     assert done["active"] == "test-v1"
-    # §10 step 5: this process still holds the store it pinned at boot, and says so.
-    assert done["restart_required"] is True
+    # §10's last step used to be a restart this process could only ask for, and it said so here.
+    # Decision 497 ends the sequence at the flip: the read that reports it is the read that loads
+    # it, so the process that booted bundle-less now serves the bundle and asks for nothing.
+    assert done["restart_required"] is False
+    assert done["loaded"]["version"] == "test-v1"
 
 
 async def test_a_client_that_disconnects_does_not_change_the_outcome(app, db, bundle_at):

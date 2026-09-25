@@ -50,13 +50,12 @@ from spielplan.api import state as state_api
 from spielplan.api import tonight as tonight_api
 from spielplan.api.deps import carry_slid_session_cookie
 from spielplan.connectors import registry
-from spielplan.core import logs, secrets
+from spielplan.core import logs, secrets, storage
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
-from spielplan.ledger import hyperparams
+from spielplan.models import basis
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.push import keys as push_keys
-from spielplan.scoring import backbone
 
 # The backend process configured no logging at all, so nothing this module reports was visible:
 # uvicorn's `dictConfig` leaves the root logger at WARNING with no handlers, `spielplan` inherits
@@ -230,82 +229,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if await push_keys.ensure_keypair(conn) is None:
             log.info("no web-push keypair — prompts fall back to §6's in-app banner")
         await _report_secret_custody(conn, cfg)
-        # §4.3: artifacts load "when present"; an empty store is legal.
-        app.state.artifacts = await ArtifactStore.load_active(conn, cfg.artifacts_dir)
-        # §5.1's basis, loaded once per process. §10 restarts on a bundle swap, so a process
-        # never has to reload it — and a Backbone that fails to load degrades the scoring
-        # surfaces rather than stopping a boot the admin needs in order to fix the bundle.
-        # §4.3's constants ride with the basis, and for the same reason: §10 makes a bundle swap a
-        # restart, so one read per process is all the spec ever asks for. Every Ledger router had
-        # a `_hyperparams` fallback that re-read the file per request — a read, a `from_mapping`
-        # validation and a note list on every tap of Rate, every board GET and every duel — and
-        # `load_cache` then re-digested the result. One attribute here is the whole repair, and
-        # the notes are logged once instead of being thrown away at DEBUG on every request:
-        # §4.3's provenance ("a number from a default and the same number from a bundle mean
-        # different things when someone is reading a refit report") is a boot fact.
-        #
-        # Ordered after the basis on purpose. `from_mapping` raises `ValueError` on a constant
-        # outside its range, and the attribute is then left UNSET so the routers refuse with a
-        # 503 rather than fit against silently substituted defaults — a different `hp_digest`
-        # invalidates every cached fit in the install, which is a worse failure than a refusal.
-        # Were the constants read first, that same ValueError would skip the basis and degrade
-        # the scoring surfaces for a reason that has nothing to do with them. The boot itself is
-        # not refused: §3.1 keeps a half-configured boot legal and the admin needs these routes
-        # in order to import a bundle that parses. [M4.10 finding 10; ml06, perf-07]
-        #
-        # Two `try` blocks and not one, which is the whole of the ordering argument above and none
-        # of its cost. `BackboneError` is a `RuntimeError`, so in one shared block an unusable
-        # basis — a state the comment three lines up declares supported — took the first handler
-        # and the constants read never ran: `app.state.hyperparams` stayed unset and all three
-        # routers went back to reading, validating and re-digesting the file on every request,
-        # which is the per-request cost (perf-07) this read exists to delete, with §4.3's
-        # provenance notes never logged either. `OSError` joins `ValueError` on the second because
-        # `hyperparams.load` now lets a present-but-unopenable constants file reach `read_text`
-        # rather than reading it as an absent one, and a boot that dies on it would be the one
-        # outcome §3.1 forbids here. [M4.10 cycle 1, M410-R1-02 / M410-R1-04 / M410-C1-HP-1]
-        try:
-            app.state.backbone = backbone.load_for(app.state.artifacts)
-        except backbone.BackboneError:
-            log.exception("backbone.npz is unusable — serving without collaborative scores")
-            app.state.backbone = backbone.Backbone.empty()
-        try:
-            hp, notes = hyperparams.load(app.state.artifacts)
-            app.state.hyperparams = hp
-            for note in notes:
-                log.info("hyperparameters: %s", note)
-            # THE YARDSTICK, ONCE, BESIDE THE CONSTANTS IT IS READ WITH. Spec section 14's first
-            # risk states its own mitigation as "expectations instrumented, not assumed", and
-            # `user_vector.cv_rho` was neither: the fold-in computes a held-out Spearman per
-            # (user, kind), stores it, and nothing in the app knew what a good one looks like. The
-            # corpus ships the reference - `cold_eval.json`'s cold and ceiling figures - and this
-            # is the process's one statement of it, at INFO like the constants above and for the
-            # same reason: section 10 makes a bundle swap a restart, so the pair is a boot fact
-            # and an operator reading `cv_rho` in a later log line has the scale in the same file.
-            # The floor comes from `hp`, not from DEFAULTS, so a bundle that re-tunes the tie band
-            # is reported with its own. [M4.13 step 35, cs-31]
-            yardstick = app.state.artifacts.cold_eval()
-            if yardstick is not None:
-                log.info("fold-in rho reads against cold_eval.json: %s",
-                         yardstick.line(floor=hp.rho_noise_floor))
-            elif not app.state.artifacts.is_empty:
-                log.info(
-                    "bundle %s ships no cold_eval.json - a fitted cv_rho has no reference value "
-                    "in this install (spec section 0 row 1, section 14 risk 1)",
-                    app.state.artifacts.version,
-                )
-        except (ValueError, OSError):
-            # `log.exception` so the key is named twice: once in the message the operator greps
-            # for and once in the traceback that says which check refused it.
-            log.exception(
-                "ledger_hyperparams.json is unusable - the Rate and Rank surfaces will answer "
-                "503 until the bundle is fixed (spec section 4.3)"
-            )
+        # §4.3: artifacts load "when present"; an empty store is legal. The store, §5.1's Backbone
+        # and §4.3's constants are loaded by the one function the re-pin also uses, so the boot
+        # and a hot swap load the same things in the same order (decision 497; the argument for
+        # that order moved with the code, to `models/basis._open`).
+        basis.pin(app.state, await basis.load(conn, cfg.artifacts_dir))
 
     if app.state.artifacts.is_empty:
         log.info("no artifact bundle active — serving setup wizard and admin routes (§3.1)")
+    # The backend's three mounts, probed once here so an unwritable one is a line in the boot log
+    # rather than a failure twenty seconds into an import, and kept for `/api/health`. A report and
+    # never a refusal: §3.1 keeps a half-configured boot legal. [C10.2]
+    app.state.storage = storage.Watch(cfg.data_dir, storage.BACKEND_MOUNTS)
+    if (problem := storage.refusal(app.state.storage.result)) is not None:
+        log.warning("storage: %s", problem)
+    # Decision 497: from here on this process follows the active row instead of waiting for §10's
+    # restart. Armed after the boot pin, so the first comparison is against what was loaded.
+    basis.start(app.state, cfg.artifacts_dir)
     try:
         yield
     finally:
+        await basis.stop(app.state)
+        app.state.storage.close()
         await pool.close_pool()
 
 
@@ -373,7 +318,8 @@ def create_app() -> FastAPI:
         `e2e/run.mjs` tests `res.ok`. A backend that cannot reach the database was therefore
         reported healthy by Docker, by CI and by the e2e harness, because the dict came back with
         `ok: false` and no `status_code`. The body is unchanged on purpose — `run.mjs` reads
-        `.bundle` out of it and §3.1 makes a null bundle a legal, reported state.
+        `.bundle` out of it and §3.1 makes a null bundle a legal, reported state — and `storage`
+        is added beside it rather than folded into `ok` (C10.2).
 
         All three loops wait for success rather than for an answer, so a 503 while the database
         is still starting is read as "not ready yet" and costs one more iteration; nothing in the
@@ -394,6 +340,15 @@ def create_app() -> FastAPI:
         except Exception:
             db_ok = False
         store: ArtifactStore = app.state.artifacts
+        # Whether THIS process can write its three mounts, read from the last probe and never
+        # probed here: this route answers inside `_HEALTH_TIMEOUT_S` on the one loop, and a disk
+        # that hangs must not become a health check that hangs. Names and not paths or errors,
+        # because the body is unauthenticated and the mount names are already README's; the
+        # reason, with the chown that fixes it, is in the boot log and on §6.6's System card.
+        # Not in the status code: its three consumers ask "is the backend serving", and a
+        # read-only cache mount does not stop it serving. [C10.2]
+        watch: storage.Watch | None = getattr(app.state, "storage", None)
+        unwritable = storage.unwritable(watch.current()) if watch is not None else []
         return JSONResponse(
             status_code=200 if db_ok else 503,
             content={
@@ -411,6 +366,7 @@ def create_app() -> FastAPI:
                 # [M4.13, data-03; cycle 2, M413-C2-D1-03]
                 "bundle": None if store.is_empty else store.version,
                 "public_url": cfg.public_url,
+                "storage": {"ok": not unwritable, "unwritable": unwritable},
             },
         )
 
