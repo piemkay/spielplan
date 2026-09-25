@@ -39,6 +39,7 @@ the unpartitioned query rule 5 exists to prevent.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -53,7 +54,7 @@ from pydantic import BaseModel, Field
 from spielplan.api.artifacts import RESTART_REQUIRED, RESTORE_REQUIRED
 from spielplan.api.deps import DB, ActiveUser, write_txn
 from spielplan.core.config import settings
-from spielplan.db import library
+from spielplan.db import genres, library
 from spielplan.home import rail
 from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
@@ -288,6 +289,14 @@ def _filters(
     seen: str,
     dna: str | None,
 ) -> library.RankFilters:
+    # Decision 473: Rank's board answers a genre outside the canonical vocabulary with no titles,
+    # where the catalog refuses it with a 422 - a stale client's raw label then lands in the
+    # board's no-match state, which names it and offers Clear filters, instead of an error the
+    # page has no state for. A known genre in any case is read as its canonical spelling, so that
+    # state names it the way the select does.
+    if genre:
+        with contextlib.suppress(ValueError):
+            genre = genres.canonical(genre)
     return library.RankFilters(
         q=q, genre=genre, decade=decade, runtime_max=runtime_max,
         runtime_min=runtime_min, seen=seen, dna=dna,

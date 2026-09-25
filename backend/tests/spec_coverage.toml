@@ -11772,13 +11772,14 @@ id = "library-genre-facet-is-one-canonical-vocabulary"
 spec = "§6.0 M0 (\"filter/search on title/alias/genre/decade/seen-state\") + §6.3 (\"Filters: genre\"); decision 473"
 milestone = "M5"
 kind = "integration"
-what = "The genre facet offers TMDB's genre names (the movie list without TV Movie, plus Reality, Talk, News and Soap), each once; a genre matches a title any structured source tags with it in any spelling, TMDB's combined TV genres answering both halves; Wikidata's labels are neither offered nor matched; title_genre keeps every per-source row as imported; the catalog route answers a genre outside the vocabulary with a 422; and a long option never widens the page on a phone. Decision 473."
+what = "The genre facet offers TMDB's genre names (the movie list without TV Movie, plus Reality, Talk, News and Soap), each once; a genre matches a title any structured source tags with it in any spelling, TMDB's combined TV genres answering both halves; Wikidata's labels are neither offered nor matched; title_genre keeps every per-source row as imported; the catalog route answers a genre outside the vocabulary with a 422 while Rank's board answers it with no titles and names a known genre in any case by its canonical spelling; and a long option never widens the page on a phone. Decision 473."
 why = "§4.1 keeps one block per droppable source and normalises at read time; the Cold Tower's genre block reads title_genre as imported, so the mapping cannot be an import-time rewrite."
 tests = [
     "backend/tests/test_library_search.py::test_the_genre_facet_is_the_canonical_vocabulary",
     "backend/tests/test_library_search.py::test_a_canonical_genre_matches_every_structured_source",
     "backend/tests/test_library_search.py::test_a_combined_tmdb_tv_genre_answers_both_halves",
     "backend/tests/test_library_search.py::test_an_unknown_genre_is_a_422_not_an_empty_grid",
+    "backend/tests/test_rank_routes.py::test_an_unknown_genre_is_an_empty_board_and_not_an_error",
     "backend/tests/test_library_search.py::test_every_genre_mapping_names_the_canonical_vocabulary",
     "e2e/specs/03-library.spec.js::the genre control offers one canonical name per genre",
     "e2e/specs/06-responsive.spec.js::a long genre option does not widen the page",

@@ -1237,6 +1237,29 @@ async def test_the_board_route_refuses_an_absent_kind(db, ranked):
     assert (await client.get("/api/rank?kind=episode")).status_code == 422
 
 
+async def test_an_unknown_genre_is_an_empty_board_and_not_an_error(db, ranked):
+    """Decision 473: the catalog refuses a genre outside the canonical vocabulary with a 422, and
+    Rank's board answers it with no titles, so a stale client's raw label lands in the page's
+    no-match state (which names it and offers Clear filters) rather than in an error the page has
+    no state for. A known genre in any case is read as its canonical spelling, which is how the
+    no-match state and the select name it. [WB's integration note 6, user test 2026-09-25]"""
+    client, _user_id = ranked
+    await db.executemany(
+        "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, 'tmdb')",
+        [(1, "Science Fiction"), (2, "Drama")],
+    )
+
+    unknown = await client.get("/api/rank", params={"kind": "movie", "genre": "heist film"})
+    assert unknown.status_code == 200, unknown.text
+    assert [e for t in unknown.json()["tiers"] for e in t["entries"]] == []
+    assert unknown.json()["filters"] == {"genre": "heist film"}
+
+    known = await client.get("/api/rank", params={"kind": "movie", "genre": "science FICTION"})
+    assert known.status_code == 200, known.text
+    assert [e["title_id"] for t in known.json()["tiers"] for e in t["entries"]] == [1]
+    assert known.json()["filters"] == {"genre": "Science Fiction"}
+
+
 async def test_the_tier_set_route_round_trips_and_warns(db, ranked):
     """Decision 11: the control is per-user, and the save "discards that user's learned
     cutpoints and queues a refit" — a warning the surface can only show if the route sends it.

@@ -474,6 +474,15 @@
   .controls input[type='number'] {
     max-width: 128px;
   }
+  /* A native select is as wide as its longest option, and one long genre once pushed Home wider
+     than an iPhone 13 (user test 2026-09-25, C7.3). Decision 473's vocabulary keeps Rank's longest
+     at "Science Fiction"; this keeps any future option inside the row, as Home's
+     `.filters select` does. */
+  .controls select {
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
   .sharpen {
     border-color: var(--ember-edge);
     background: var(--ember-wash);
