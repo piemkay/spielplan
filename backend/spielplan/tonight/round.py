@@ -404,8 +404,10 @@ def escape_available(answered: int) -> bool:
 
 def escape(*, answered: int) -> str:
     if not escape_available(answered):
+        # The member reads this as the 409's message (`play.escape` relays it), so it names the
+        # control by the label the round shows, not by 54c's word for it (decision 486).
         raise EscapeTooEarly(
-            f"the escape opens at pair {ESCAPE_FROM_PAIR}; {answered} pairs answered"
+            f'"just pick for us" opens at pair {ESCAPE_FROM_PAIR}; {answered} answered so far'
         )
     return ESCAPE
 

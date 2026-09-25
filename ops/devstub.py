@@ -4715,7 +4715,7 @@ def tonight_escape(
     seat = _tonight_seat(room, participant_id)
     if not tonight_round.escape_available(seat["answered_count"]):
         raise HTTPException(409, {"reason": "too_early",
-                                  "message": "the escape opens at pair 6"})
+                                  "message": '"just pick for us" opens at pair 6'})
     seat["ended_by"] = tonight_round.ESCAPE
     if all(s["ended_by"] for s in room["seats"]):
         _tonight_combine(room)

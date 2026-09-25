@@ -1042,6 +1042,8 @@ async def test_the_escape_is_refused_before_pair_six_and_ends_the_round_after(db
     with pytest.raises(play.RoundError) as early:
         await play.escape(db, seat)
     assert early.value.reason == "too_early"
+    # The member reads the refusal, so it names the control by its label (decision 486).
+    assert "just pick for us" in str(early.value) and "escape" not in str(early.value)
 
     for _ in range(5):
         if await answer_once(db, seat) is None:
