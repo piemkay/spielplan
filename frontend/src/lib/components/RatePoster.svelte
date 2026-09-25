@@ -40,20 +40,27 @@
   data-title-id={titleIdOf(title)}
   style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
 >
-  {#if src && failed !== src}
-    <!-- `alt=""`: the title is printed beside or over the poster, and a screen reader reading it
-         twice is the card saying it twice. Eager, because a Rate card is on screen the moment it
-         is drawn and the next one was preloaded during the reveal hold. -->
-    <img
-      class="art"
-      {src}
-      alt=""
-      loading="eager"
-      decoding="async"
-      draggable="false"
-      onerror={() => (failed = src)}
-    />
-  {/if}
+  <!-- Keyed on the URL: a browser keeps painting an <img>'s old picture until its new `src` has
+       loaded, and this component is reused as a battle, a Tonight pair or the Rank queue moves
+       on - so for the whole fetch the next title's name sat over the last title's art, on a card
+       whose poster is the answer button (§6.1). A fresh element per title shows the tinted panel
+       until the right art arrives. -->
+  {#key src}
+    {#if src && failed !== src}
+      <!-- `alt=""`: the title is printed beside or over the poster, and a screen reader reading
+           it twice is the card saying it twice. Eager, because a Rate card is on screen the
+           moment it is drawn and the next one was preloaded during the reveal hold. -->
+      <img
+        class="art"
+        {src}
+        alt=""
+        loading="eager"
+        decoding="async"
+        draggable="false"
+        onerror={() => (failed = src)}
+      />
+    {/if}
+  {/key}
   {#if showName}
     <span class="scrim"></span>
     <span class="name">{title?.name ?? '—'}</span>

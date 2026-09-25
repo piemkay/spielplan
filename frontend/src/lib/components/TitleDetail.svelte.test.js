@@ -586,6 +586,37 @@ describe("the card's own answer (decision 487)", () => {
     }
   });
 
+  it('writes nothing for a tap on the answer that already stands', async () => {
+    vi.mocked(post).mockResolvedValue({ reveal: null });
+    const rated = await open(
+      { kind: 'movie', seen_state: 'seen' },
+      { my_verdict: { value: 2, label: 'liked' } }
+    );
+    try {
+      target.querySelector('[data-answer="liked"]').click();
+      await settle();
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
+      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
+        'true'
+      );
+      // A change of mind still writes.
+      target.querySelector('[data-answer="fine"]').click();
+      await settle();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'fine' });
+    } finally {
+      unmount(rated);
+    }
+    vi.mocked(post).mockClear();
+    const unseen = await open({ kind: 'movie', seen_state: 'unseen' });
+    try {
+      target.querySelector('[data-answer="not_seen"]').click();
+      await settle();
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
+    } finally {
+      unmount(unseen);
+    }
+  });
+
   it('shows the standing verdict pressed, and Not seen flips the state and keeps it', async () => {
     vi.mocked(post).mockResolvedValue({ reveal: null });
     const app = await open(

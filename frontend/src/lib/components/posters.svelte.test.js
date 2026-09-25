@@ -79,6 +79,21 @@ describe('RatePoster', () => {
     expect(target.querySelector('img').getAttribute('src')).toBe('/api/art/2/poster');
   });
 
+  // A browser keeps an <img>'s old picture on screen until the new src has loaded, so a reused
+  // element put the next battle's names over the last pair's art for the whole fetch.
+  it("draws a fresh image for the next title, so the last title's art never sits under its name", () => {
+    const props = $state({ title: { id: 3, name: 'Paddington 2' } });
+    app = mount(RatePoster, { target, props });
+    flushSync();
+    const first = target.querySelector('img');
+    props.title = { id: 2, name: 'Prisoners' };
+    flushSync();
+    const next = target.querySelector('img');
+    expect(next.getAttribute('src')).toBe('/api/art/2/poster');
+    expect(next).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+  });
+
   it('draws no image for a card with no title to ask about', () => {
     app = mount(RatePoster, { target, props: { title: null } });
     flushSync();

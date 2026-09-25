@@ -584,6 +584,8 @@
    * scoped styles; this one wants a chip, so it does not borrow the name. */
   .tile {
     display: flex;
+    /* For the tension chip alone, which takes a row of its own (see `.chip.tension`). */
+    flex-wrap: wrap;
     align-items: stretch;
     min-height: var(--touch);
     max-width: 340px;
@@ -659,9 +661,19 @@
     white-space: normal;
     text-align: left;
   }
+  /* The tension chip carries Rank's whole sentence ("you put it in S — your other answers still
+     point to C", decision 486), and held to 40% of the tile it wrapped to four lines of 10 px mono
+     inside a pill whose rounded corners the words ran through - 110 px wide on a 390 px phone. It
+     takes its own row under the name and the Move control instead, the tile's full width, with
+     the card's radius: at two lines a pill's curve still cuts the first and last letters. */
   .chip.tension {
     border-color: var(--ember-edge);
     color: var(--ember-lift);
+    order: 1;
+    flex: 1 1 100%;
+    max-width: none;
+    margin: 0 6px 6px;
+    border-radius: var(--r-sm);
   }
   .tiers {
     font-size: 10px;
@@ -712,6 +724,10 @@
     /* Above the sticky lift banner, below the title card (TitleDetail's 50). */
     z-index: 10;
     padding: 14px;
+    /* The installed PWA draws under the home indicator (`viewport-fit=cover`, decision 279), and
+       this sheet covers NavRail, the bar that pads for it - so the sheet pads for it too, or its
+       last row ("where they sit now") sits in the indicator's strip. */
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
     border-top: 1px solid var(--line-2);
     background: var(--card-raised);
     display: flex;

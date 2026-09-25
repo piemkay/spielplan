@@ -136,6 +136,15 @@
    */
   async function answer(choice) {
     if (!data || answering) return;
+    // A tap on the answer already standing changes nothing, so it writes nothing. Posted, it was a
+    // fresh verdict: a journal row, a step of the block counter, a refit, a Played push owed again
+    // and the card parked on Rate replaced - and one more identical ordinal row in the fit, which
+    // counts every non-re-ask verdict (§5.2), for a tap on the pill the row shows pressed.
+    const standing =
+      choice === 'not_seen'
+        ? data.title.seen_state !== 'seen'
+        : data.title.seen_state === 'seen' && data.my_verdict?.label === choice;
+    if (standing) return;
     answering = true;
     answerNote = '';
     try {
@@ -562,12 +571,12 @@
        other by a factor of three. Exit criterion 4 admits exactly one exemption and names it
        (decision 280); this was a second, exempt by silence.
 
-       `align-items` with it, because `baseline` in a box taller than its content puts both spans
-       at the top of the 48 px target instead of in the middle of it.
+       The label is centred in that box by the base `.trailer` rule below, not here: this block
+       comes first in the sheet at the same specificity, so an `align-items` set here lost to the
+       base rule's `baseline` and left the label at the top of the 48 px target.
        [§6 preamble; §6.0; review cycle 3: M415-C3-COMP-01] */
     .trailer {
       min-height: var(--touch);
-      align-items: center;
     }
   }
   /* The right margin reserves the widest the close control is ever drawn, not the widest it used
@@ -615,7 +624,7 @@
   .trailer {
     display: inline-flex;
     gap: 8px;
-    align-items: baseline;
+    align-items: center;
     font-size: 12px;
     padding: 6px 10px;
     border: 1px solid var(--line-2);
