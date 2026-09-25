@@ -134,9 +134,11 @@
   <!-- §6.8's one-line why, on the question as well as on the shelf. -->
   <p class="why" data-testid="rate-battle-reason">{card?.reason ?? ''}</p>
 
+  <!-- A battle only ever stands in for a sweep when there is nothing new to rate (§6.1's drained
+       state), so this line can name its cause, in the member's words (decision 486). -->
   {#if card?.substituted_for}
     <p class="data" data-testid="rate-substituted">
-      the sweep queue is drained for now — sharpening what you have already said
+      Nothing new to rate right now - comparing titles you've already rated.
     </p>
   {/if}
 
@@ -332,6 +334,7 @@
   @media (max-width: 720px) {
     .battle {
       padding: 12px 12px 0;
+      gap: 8px;
     }
     .pair {
       gap: 8px;
@@ -339,8 +342,32 @@
     .vs {
       display: none;
     }
+    /* On an iPhone 13 the card used to stand 589 px tall: two full-width 2:3 posters, then the
+       why-line, and Tie, §6.1's "persistent decisive toggle" and Skip all below the bottom bar.
+       Measured at 390 x 664 the posters are now capped so the pair, the strip and the toggle
+       row fit above it, and the order under the posters is the order a thumb needs them in:
+       the answer strip, the toggle and Skip, then the why-line and the corrections row. The
+       posters are still the buttons (§6.1), and the name sits on each (§6.8's card grammar).
+       [§6 preamble; C5.6 of the 2026-09-25 household test] */
     .pair {
       grid-template-columns: 1fr 1fr;
+      width: 100%;
+      max-width: 200px;
+      margin: 0 auto;
+    }
+    .strip {
+      order: 1;
+    }
+    .knobs {
+      order: 2;
+      gap: 0 12px;
+    }
+    .battle > .why,
+    .battle > .data {
+      order: 3;
+    }
+    .battle > :global(.corrections) {
+      order: 4;
     }
     .cell {
       border-radius: 2px;
@@ -349,6 +376,7 @@
       flex: 0 0 96px;
     }
     .decisive-why {
+      order: 3;
       flex: 1 0 100%;
       min-width: 0;
     }

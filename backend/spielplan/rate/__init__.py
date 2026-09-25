@@ -1,6 +1,6 @@
 """The Rate surface's question-picking half. Spec v2.1 §6.1, §6.8, §13 stream (b).
 
-Four modules, split by which sentence of §6.1 each one answers:
+Five modules, split by which sentence of §6.1 each one answers:
 
 * `queue`   — "P(seen)-ordered (Jellyfin history, popularity, household co-seen), seeded first
               run from the imported 100-title decade-stratified `seed_list`", plus §6.8's
@@ -8,6 +8,7 @@ Four modules, split by which sentence of §6.1 each one answers:
 * `battle`  — "Pairs drawn **at random** from the user's seen titles within verdict bands."
 * `balance` — the "running class-balance widget with its warning copy".
 * `reask`   — §13 stream (b): "~10% of comparisons/verdicts re-asked after >= 3 days".
+* `search`  — the person's own pick: a title they know, pinned to the head of the queue.
 
 Nothing here writes. Every write goes through `spielplan.ledger.observations`, which is §5.2's
 one write-path for taste; these modules only decide *what to ask*. That split is what lets the

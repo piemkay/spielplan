@@ -9,8 +9,8 @@ That copy is 54a's, and the clause it replaced — "the clever ones only pay off
 queue" — was false one surface over: `tonight/round.py` selects adaptively on purpose. 54a's
 argument is that the two rules were never in tension, because the round solves best-arm
 identification inside a pool of tens rather than the global-ranking problem row 6 measured.
-Nothing here changes: this module still draws uniformly over the union of eligible pairs.
-[§6.1, §6.8, proposal 54a; M4.10 finding 22]
+Nothing here changes: this module still draws uniformly over the union of eligible pairs (the
+ones not yet answered -- see below). [§6.1, §6.8, proposal 54a; M4.10 finding 22]
 
 §0 row 6 is the measurement behind that: the best selection rule beat random by +0.0013 with a
 confidence interval spanning zero. So a cleverer sampler here is a measured non-improvement,
@@ -33,25 +33,49 @@ verdicts themselves. And §4.1 rule 5 partitions every ranking surface by kind, 
 one foot in each partition is not evidence about either — `observations.record_duel` refuses to
 write one, and the strata key makes it unreachable here.
 
-ALREADY-DUELLED PAIRS ARE NOT EXCLUDED. Repeating a pair is informative — it is literally what
-§13's re-ask stream does on purpose — and excluding them would put a hole in the uniformity this
-module's coverage row tests. Spec-silent, decided here.
+A PAIR THE PERSON HAS ALREADY ANSWERED IS NOT DRAWN AGAIN. This paragraph used to say the
+opposite -- "repeating a pair is informative" -- and the first household test served S.W.A.T. vs
+The Village three times in Jenny's first eight cards, answered B, A, TIE inside 24 s, each an
+ordinary duel row. `rank/read.asked_pairs` already states the rule Rank and Tonight select under:
+each repeat is an independent Davidson row, so ten repeats shrink one pair's posterior by the root
+of ten on the strength of a single judgement -- §13's reliability inflation reached through the
+selector (M3-open-points §3.1). So the draw is uniform over the eligible pairs NOT YET ANSWERED in
+any context, and §13's re-ask branch below -- spaced at least three days, recorded as a re-ask --
+is the only way a pair comes back. Sampling without replacement is still random, so §0 row 6's
+measured null is untouched. [owner instruction of 2026-09-25 after the first household user test]
+
+THE DISLIKED BAND WAITS FOR A FIRST SITTING (decision 493). Until the person holds
+`EARLY_LABELS` live ratings a profile battle draws from the fine and liked bands only. Both
+members met their first battle comparing two films they had just called disliked (duels 2-5 on
+the v20260925 install), and §5.2 credits comparisons with resolution *within* the liked class.
+Past the first sitting every band is drawn uniformly again, as §6.1 and §0 row 6 have it.
 """
 
 from __future__ import annotations
 
 import logging
 import random
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
 
-from spielplan.rate import LIVE_LABEL, VERDICT_LABELS
+from spielplan.rank import read as rank_read
+from spielplan.rate import LIVE_LABEL, VERDICT_LABELS, balance
 from spielplan.rate import reask as reask_stream
 
 log = logging.getLogger("spielplan.rate.battle")
+
+# Decision 493: the live-rating count below which a profile battle leaves the disliked band out.
+# §6.1's "Aim for 50-100 in your first sitting or two", at its low end -- the first sitting.
+EARLY_LABELS = 50
+DISLIKED = 0
+
+# How many uniform draws over the whole eligible set `draw` tries before it enumerates what is
+# left. Rejection keeps a large pool's draw O(1) and is exactly uniform over the pairs not yet
+# answered; enumeration is only reached when most of a small pool has been compared already.
+_REJECTION_TRIES = 64
 
 
 @dataclass(frozen=True)
@@ -109,16 +133,37 @@ def eligible_pairs(pool: Sequence[PoolMember]) -> list[tuple[int, int]]:
     return sorted(pairs)
 
 
-def draw(pool: Sequence[PoolMember], *, rng: random.Random) -> tuple[int, int, str, int] | None:
-    """One uniform draw over `eligible_pairs(pool)`, as (title_a, title_b, kind, class).
+def _stratum(keys: Sequence[Stratum], weights: Sequence[int], threshold: float) -> Stratum:
+    running = 0
+    for key, weight in zip(keys, weights, strict=True):
+        running += weight
+        if threshold < running:
+            return key
+    return keys[-1]
+
+
+def draw(
+    pool: Sequence[PoolMember],
+    *,
+    rng: random.Random,
+    answered: Collection[frozenset[int]] = frozenset(),
+) -> tuple[int, int, str, int] | None:
+    """One uniform draw over `eligible_pairs(pool)` minus `answered`, as (a, b, kind, class).
 
     None when no single (kind, class) stratum holds two members — the state §6.1 reaches before
-    the first two verdicts of one class exist.
+    the first two verdicts of one class exist — or when every pair the pool holds is in
+    `answered`, the unordered pairs this person has already compared (see the module docstring).
 
     The stratum is chosen with probability proportional to `n*(n-1)/2`, its pair count. Choosing
     uniformly over strata, or proportionally to `n`, would over-serve the small ones: a person
     with 30 liked and 2 disliked titles would spend half their battles on the same single
     disliked pair, and every one of those repeats is a comparison §5.2 says adds nothing.
+
+    An answered pair is rejected and the draw taken again, which keeps it uniform over the pairs
+    that remain: every attempt is uniform over the whole set, so the one that is kept is uniform
+    over what is left. After `_REJECTION_TRIES` refusals the remainder is enumerated and one is
+    chosen uniformly, which is the same distribution reached the slow way. With nothing answered
+    the first attempt is always kept, so the draw spends the RNG exactly as it always has.
 
     `rng.sample` also decides which of the two is A, so the left/right position is randomised
     rather than baked in by, say, id order.
@@ -128,42 +173,44 @@ def draw(pool: Sequence[PoolMember], *, rng: random.Random) -> tuple[int, int, s
         return None
     keys = sorted(live)
     weights = [len(live[key]) * (len(live[key]) - 1) // 2 for key in keys]
-    threshold = rng.random() * sum(weights)
-    running = 0
-    chosen = keys[-1]
-    for key, weight in zip(keys, weights, strict=True):
-        running += weight
-        if threshold < running:
-            chosen = key
-            break
-    a, b = rng.sample(live[chosen], 2)
-    return a, b, chosen[0], chosen[1]
+    total = sum(weights)
+    for _ in range(_REJECTION_TRIES if answered else 1):
+        chosen = _stratum(keys, weights, rng.random() * total)
+        a, b = rng.sample(live[chosen], 2)
+        if frozenset((a, b)) not in answered:
+            return a, b, chosen[0], chosen[1]
+    remaining = [
+        (a, b, key)
+        for key in keys
+        for i, a in enumerate(live[key])
+        for b in live[key][i + 1 :]
+        if frozenset((a, b)) not in answered
+    ]
+    if not remaining:
+        return None
+    a, b, key = rng.choice(remaining)
+    if rng.random() < 0.5:
+        a, b = b, a
+    return a, b, key[0], key[1]
 
 
 def reason_for(verdict_class: int) -> str:
-    """§6.8's one-line why, carrying §6.1's measured-null copy.
+    """§6.8's one-line why, in the member register.
 
     Identical for a re-ask, by construction: it is a function of the band alone, and a re-ask
     pair has a band like any other.
 
-    54a's second clause rides along rather than staying in the rail: §6.8 makes what the app says
-    about its own model a matter of honesty, and this is the line a person reads at the moment
-    they are told the pair was drawn at random. Saying where selection *does* pay off is what
-    keeps that from contradicting the round they will play in §6.2. [finding 22]
-
-    Both halves of that clause, and not only the first. "which of these few" on its own raises
-    54a's question and answers none of it, and the rail card that carries the sentence whole is
-    collapsed below 981 px (`RateRail.svelte`), so on the phone this is the only pair-selection
-    copy there is. Verbatim is not available here — 54a's sentence opens "Random pairs." and this
-    line is composed inside "drawn at random within the class — " — so the adaptation keeps the
-    clause and drops only the opening the sentence structure already supplies.
-    [M4.10 cycle 2, M410-C2-D19-05]
+    It used to carry 54a's whole clause, section references and all ("the tier queue (§6.3) and
+    tonight's round (§6.2)"), about fifty words under two posters: on an iPhone that pushed Tie,
+    the decisive toggle and Skip below the fold, and decision 486 keeps section references off
+    every member surface. The line now says the two things this card is about -- the pair shares
+    the person's own answer, and it was drawn at random -- and §6.1's pair-selection sentence,
+    restated in plain words by decision 491, lives whole in the rail's "why these questions?"
+    card, which the phone reaches with one tap. [decisions 486, 491; C5.6]
     """
     return (
-        f"queued because: both of these you rated {VERDICT_LABELS[verdict_class]}, "
-        "drawn at random within the class — for profiles no selection rule beats random; "
-        "the clever ones pay off where the question is which of these few, not how do you rank "
-        "everything: the tier queue (§6.3) and tonight's round (§6.2)"
+        f"queued because: you rated both {VERDICT_LABELS[verdict_class]} · "
+        "random pairs build your profile best"
     )
 
 
@@ -204,6 +251,29 @@ async def battle_pool(
     ]
 
 
+def open_bands(pool: Sequence[PoolMember], *, labels: int) -> list[PoolMember]:
+    """Decision 493: below `EARLY_LABELS` live ratings the disliked band sits out."""
+    if labels >= EARLY_LABELS:
+        return list(pool)
+    return [member for member in pool if member.verdict_class != DISLIKED]
+
+
+async def answered_pairs(
+    conn: asyncpg.Connection, *, user_id: int, kinds: Sequence[str]
+) -> set[frozenset[int]]:
+    """Every pair this person has already compared, in any context, for the kinds in play.
+
+    `rank_read.asked_pairs` and not a query of this module's own: a pair settled in a Rank
+    comparison or by a drop is a pair the person has answered, and a copy scoped to
+    `profile_battle` would hand it back as a battle. Called once per kind because that helper
+    is partitioned by kind (§4.1 rule 5) and a Rate session may hold both.
+    """
+    pairs: set[frozenset[int]] = set()
+    for kind in kinds:
+        pairs |= await rank_read.asked_pairs(conn, user_id=user_id, kind=kind)
+    return pairs
+
+
 async def next_battle_pair(
     conn: asyncpg.Connection,
     *,
@@ -212,16 +282,23 @@ async def next_battle_pair(
     exclude: Sequence[int] = (),
     rng: random.Random | None = None,
     reask_rate: float = reask_stream.REASK_RATE,
+    labels: int | None = None,
 ) -> BattlePair | None:
-    """The next pair, or None when the user has fewer than two seen+verdicted titles in any one
-    class.
+    """The next pair, or None when no open band holds two seen+verdicted titles that have not
+    already been compared.
 
     About `reask_rate` of pairs are §13 stream (b) re-asks of duels at least three days old,
     served with the stored `(title_a, title_b)` order preserved and with the same why-line as
     any other pair. When no duel qualifies the draw falls through to an ordinary one, so the
-    stream never costs a person a question.
+    stream never costs a person a question. The re-ask is the one path by which a compared pair
+    returns, and it is exempt from decision 493 because it re-asks what was already asked.
+
+    `labels` is the person's live-rating count over `kinds` — the class-balance widget's total —
+    and is read here when the caller has not already read it.
     """
     rng = rng or random.Random()
+    if labels is None:
+        labels = (await balance.class_balance(conn, user_id=user_id, kinds=kinds)).total
     if reask_stream.draws(rng, rate=reask_rate):
         candidates = await reask_stream.duel_candidates(
             conn, user_id=user_id, kinds=kinds, limit=1, exclude=exclude, rng=rng
@@ -235,7 +312,12 @@ async def next_battle_pair(
                 reason=reason_for(again.verdict_class),
                 reask_of=again.duel_id,
             )
-    drawn = draw(await battle_pool(conn, user_id=user_id, kinds=kinds, exclude=exclude), rng=rng)
+    pool = open_bands(
+        await battle_pool(conn, user_id=user_id, kinds=kinds, exclude=exclude), labels=labels
+    )
+    drawn = draw(
+        pool, rng=rng, answered=await answered_pairs(conn, user_id=user_id, kinds=kinds)
+    )
     if drawn is None:
         return None
     title_a, title_b, _kind, verdict_class = drawn
@@ -249,12 +331,15 @@ async def next_battle_pair(
 
 
 __all__ = [
+    "EARLY_LABELS",
     "BattlePair",
     "PoolMember",
+    "answered_pairs",
     "battle_pool",
     "draw",
     "eligible_pairs",
     "next_battle_pair",
+    "open_bands",
     "reason_for",
     "strata",
 ]

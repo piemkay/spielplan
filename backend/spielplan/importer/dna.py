@@ -986,11 +986,12 @@ async def load_seed_list(conn: asyncpg.Connection, path: Path, report: ImportRep
     if not path.is_file():
         # The sharpest of the three, and argued at `load_adjudications`' absent branch: with rows
         # still stored, "falls back to P(seen) ordering alone" is the INVERSE of what happens -
-        # `rate/queue.py` LEFT JOINs the table, orders on `s.seed_position ASC NULLS LAST` ahead
-        # of `p_seen DESC`, counts it for §6.1's first run and prints "seed list position N of M"
-        # on the very next card. The operator was told §6.1's onboarding seed was gone while the
-        # app's own why-line said it was in use, and their remedy - re-export, or restore - is
-        # work against a defect that does not exist.
+        # `rate/queue.py` LEFT JOINs the table and serves every stored seed title ahead of the
+        # rest of the queue (decision 490 orders them by P(seen) among themselves) and names
+        # the list on the very next card ("a starter title from the 1990s"). The operator was
+        # told §6.1's onboarding seed was gone while the app's own why-line said it was in use,
+        # and their remedy - re-export, or restore - is work against a defect that does not
+        # exist.
         # [M4.14 cycle 4, m414-c4-dim247-02, decisions 247 and 266]
         stored = await conn.fetchval("SELECT count(*) FROM seed_list")
         report.warn(
@@ -1084,3 +1085,40 @@ async def load_seed_list(conn: asyncpg.Connection, path: Path, report: ImportRep
         f"{len({d for _, _, d in rows if d is not None})} decade(s); {undated} carry no year",
         titles=len(rows), undated=undated,
     )
+    await _report_thin_seed_cards(conn, report, loaded=len(rows))
+
+
+async def _report_thin_seed_cards(
+    conn: asyncpg.Connection, report: ImportReport, *, loaded: int
+) -> None:
+    """How many onboarding titles will reach the first Rate cards with nothing to recognise.
+
+    The v20260925 list shipped 32 of its 100 titles without a poster and 25 whose only plot is an
+    MPST retelling, which the sweep card will not show (`rate/session.py`'s recall aid) -- and 30
+    of the household's first 127 verdicts landed on posterless cards. The list is the corpus's
+    and decision 247 reloads a corrected one on a models-only import, so the useful thing here is
+    to make a thin list visible on the report before a household meets it. Its own rule name,
+    because `seed-list` findings are counted by what they say about the file. [C9.7 of the
+    2026-09-25 household test]
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT count(*) FILTER (
+                   WHERE t.overview IS NULL OR btrim(t.overview) = ''
+                      OR EXISTS (SELECT 1 FROM title_meta m
+                                  WHERE m.title_id = t.id AND m.source = 'mpst'
+                                    AND btrim(m.payload->>'plot_full') = btrim(t.overview))
+               ) AS no_text,
+               count(*) FILTER (WHERE t.poster_path IS NULL) AS no_poster
+          FROM seed_list sl JOIN title t ON t.id = sl.title_id
+        """
+    )
+    no_text, no_poster = int(row["no_text"]), int(row["no_poster"])
+    if no_text or no_poster:
+        report.warn(
+            "seed-list-cards",
+            f"of the {loaded} onboarding titles, {no_text} carry no plot line a Rate card can "
+            f"show and {no_poster} no poster, so a first rating sitting meets them as bare names "
+            "(section 6.1)",
+            no_text=no_text, no_poster=no_poster, titles=loaded,
+        )

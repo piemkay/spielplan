@@ -44,7 +44,7 @@ vi.mock('$app/stores', () => {
 });
 
 import RatePage from './+page.svelte';
-import { rate } from '$lib/rate.svelte.js';
+import { rate, rateTitle } from '$lib/rate.svelte.js';
 
 const DRAINED = '[data-testid="rate-drained"]';
 const SUBSTITUTED = '[data-testid="rate-substituted"]';
@@ -85,14 +85,14 @@ const CAUSES = {
   pool: {
     cause: 'pool',
     text:
-      'A battle compares two titles you have already rated the same way, and there are not two ' +
-      'of them yet. Rate a few in Sweep and the pairs start arriving.'
+      'A battle compares two titles you rated the same way, and there is no new pair to ' +
+      'compare yet. Rate a few more in Sweep and the pairs start arriving.'
   },
   both: {
     cause: 'both',
     text:
-      "You've rated everything we can queue right now, and no two of your ratings sit in the " +
-      'same band, so there is no pair left to compare either.'
+      "You've rated everything we can queue right now, and there is no new pair of your " +
+      'ratings left to compare either.'
   }
 };
 
@@ -172,10 +172,10 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
 
     const block = target.querySelector(DRAINED);
     expect(block).toBeTruthy();
-    expect(block.textContent).toContain('there are not two of them yet');
+    expect(block.textContent).toContain('no new pair to compare yet');
     // The heading and the CTA are the milestone's own contradiction: the sweep queue is full.
     expect(block.querySelector('h2').textContent).not.toMatch(/left to queue/i);
-    expect(block.textContent).not.toMatch(/comparison queue sharpens/);
+    expect(block.textContent).not.toMatch(/Sharpen my ranking/);
   });
 
   it('sends a person with no pairs to Sweep rather than to an empty tier board', async () => {
@@ -198,12 +198,14 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
 
   it("keeps proposal 37's end state for the queue that really is spent", async () => {
     // Proposal 37 was written for this cause and for no other: the queue drained, the ratings
-    // already given still sharpenable, §6.3 the place that does it.
+    // already given still sharpenable, §6.3 the place that does it -- named by the control a
+    // person taps there, never by its section number (decision 486).
     await open(envelope({ session: { mode: 'sweep' }, drained: CAUSES.queue }));
 
     const block = target.querySelector(DRAINED);
     expect(block.querySelector('h2').textContent).toBe('Nothing left to queue');
-    expect(block.textContent).toContain('comparison queue sharpens');
+    expect(block.textContent).toContain('"Sharpen my ranking" on the Rank page');
+    expect(block.textContent).not.toMatch(/§|\bM[0-7]\b/);
     expect(block.querySelector('a[href="/rank"]')).toBeTruthy();
   });
 
@@ -216,23 +218,93 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
   });
 });
 
-describe('the substitution line (finding 21, M410-D8-07)', () => {
-  it('says the counter wanted a battle without claiming the pool is empty', async () => {
-    // `substituted_for` carries the TYPE the counter called for and nothing about why the flip
-    // happened. Until M4.10 one site set it — the thin-pool substitution — so the line could name
-    // that cause and be right; now the §6.0 banner's head redraw and both correction fallbacks set
-    // it too, and on the banner path the battle pool can be demonstrably full.
+describe('the substitution line (finding 21, M410-D8-07; C4.5 of the household test)', () => {
+  it('prints nothing about the slot over a sweep card that stands in for a battle', async () => {
+    // `substituted_for` stays on the wire, and the sweep card no longer reads it out: "a battle
+    // was due in this slot" told a member about the block machine rather than about the film, and
+    // on a searched-for title it answered the pick with an apology. The counter names the card's
+    // own type, which is the one fact the person needs (decision 486).
     await open(envelope({ card: substitutedSweep }));
 
-    const line = target.querySelector(SUBSTITUTED);
-    expect(line).toBeTruthy();
-    expect(line.textContent).toMatch(/battle/);
-    expect(line.textContent).toMatch(/sweep/);
-    expect(line.textContent).not.toMatch(/no battle pair|not two|pool/i);
+    expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
+    expect(target.querySelector(SUBSTITUTED)).toBeNull();
+    expect(target.textContent).not.toMatch(/was due in this slot/);
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toMatch(/· sweep$/);
   });
 
-  it('says nothing at all when the card is the one the counter called for', async () => {
-    await open(envelope({ card: { ...substitutedSweep, substituted_for: null } }));
-    expect(target.querySelector(SUBSTITUTED)).toBeNull();
+  it('says in plain words why a battle stands in for a sweep', async () => {
+    const battle = {
+      type: 'battle',
+      token: 'tok-2',
+      kind: 'movie',
+      left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
+      right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
+      reason: 'queued because: you rated both liked · random pairs build your profile best',
+      substituted_for: 'sweep',
+      outcomes: ['A', 'B', 'TIE'],
+      corrections: { label: 'not seen', sides: ['left', 'both', 'right'] },
+      controls: ['duel', 'correction', 'skip']
+    };
+    await open(envelope({ card: battle }));
+
+    const line = target.querySelector(SUBSTITUTED);
+    expect(line.textContent).toContain("Nothing new to rate right now - comparing titles you've");
+    expect(line.textContent).not.toMatch(/sweep queue|drained/);
+  });
+});
+
+describe('"a title you know" (C5.2 of the household test)', () => {
+  const hits = {
+    q: 'heat',
+    items: [
+      { id: 41, kind: 'movie', name: 'Heat', year: 1995, rated: null, is_owned: true },
+      { id: 42, kind: 'movie', name: 'The Heat', year: 2013, rated: 'fine', is_owned: false }
+    ]
+  };
+  const other = { ...substitutedSweep, title: { ...substitutedSweep.title, id: 7, name: 'Else' } };
+
+  it('finds a title, offers only the unrated one, and pins the pick into the queue', async () => {
+    await open(envelope({ session: { mode: 'mix' }, card: other }));
+    target.querySelector('[data-testid="rate-find-toggle"]').click();
+    flushSync();
+
+    const input = target.querySelector('[data-testid="rate-find-input"]');
+    expect(input).toBeTruthy();
+    respond(hits);
+    input.value = 'heat';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // The query waits a beat after the last keystroke, then lands.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await settle();
+
+    const [searchUrl] = fetchMock.mock.calls[1];
+    expect(searchUrl).toContain('/api/rate/search?q=heat');
+    const buttons = target.querySelectorAll('[data-testid="rate-find-hit"]');
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].disabled).toBe(false);
+    expect(buttons[1].disabled).toBe(true);
+    expect(buttons[1].textContent).toContain('you rated it fine');
+
+    respond(envelope({ session: { mode: 'mix' }, card: { ...substitutedSweep, substituted_for: null } }));
+    buttons[0].click();
+    await settle();
+
+    const [pinUrl] = fetchMock.mock.calls[2];
+    expect(pinUrl).toContain('/api/rate?head=41');
+    expect(target.querySelector('[data-testid="rate-card-title"]').textContent).toBe('Heat');
+    expect(target.querySelector('[data-testid="rate-find"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-notice"]')).toBeNull();
+  });
+
+  it('says so when a pick could not be put on the table', async () => {
+    await open(envelope({ session: { mode: 'mix' }, card: other }));
+
+    // The server kept the card it had: the pick was rated a moment ago on another device.
+    respond(envelope({ session: { mode: 'mix' }, card: other }));
+    await rateTitle(hits.items[0]);
+    await settle();
+    expect(target.querySelector('[data-testid="rate-notice"]').textContent).toBe(
+      "Heat can't be rated right now."
+    );
   });
 });

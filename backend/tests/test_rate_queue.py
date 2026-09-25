@@ -138,22 +138,100 @@ async def backdate_verdicts(db, user_id, days):
 # --- §6.1: the queue's three ordering rules ---------------------------------------------------
 
 
-async def test_a_fresh_households_first_queue_is_the_imported_seed_list_in_position_order(db, world):
-    """§6.1: "seeded first run from the imported 100-title decade-stratified `seed_list`".
+async def test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first(db, world):
+    """§6.1: "seeded first run from the imported 100-title decade-stratified `seed_list`", and
+    decision 490: inside the list, P(seen) decides the order.
 
-    The fixture's seed order (8, 4, 1, 2, 6) is neither id order nor P(seen) order, so a queue
-    that ignored `seed_list` and fell through to P(seen) would return (1, 3, 7, 2, 4) and fail
-    on the first element.
+    The fixture's file order (8, 4, 1, 2, 6) is neither id order nor P(seen) order, and it is
+    the order the household test was served in: on v20260925 that put the corpus's divisive
+    pre-2010 picks first and a third of the first block came back "not seen". The expected order
+    is computed from `expected_p` -- the formula's third spelling -- rather than pinned, because
+    the age term moves with the calendar.
     """
     cards = await queue.next_sweep_cards(
         db, user_id=world["patrick"], kinds=["movie"], limit=5, rng=random.Random(0)
     )
-    assert [c.title_id for c in cards] == [t for t, _ in SEED]
+    seeds = [t for t, _ in SEED]
+    expected = sorted(seeds, key=expected_p, reverse=True)
+    assert expected != seeds, "the fixture no longer separates P(seen) order from file order"
+    assert [c.title_id for c in cards] == expected
     assert {c.source for c in cards} == {"seed"}
-    assert cards[0].reason == "queued because: seed list position 0 of 5 · 1970s"
-    # §6.1's seed list is a decade-stratified sample, not a P(seen) ordering: a probability the
-    # queue did not use to place the card would be a number with nothing behind it.
-    assert all(c.p_seen is None for c in cards)
+    decades = dict(SEED)
+    for card in cards:
+        # The number that placed the card, on the card -- as on every other card (§6.1's
+        # "queued because: 72% likely you have seen it").
+        assert card.p_seen == pytest.approx(expected_p(card.title_id), abs=1e-9)
+        assert card.reason == (
+            f"queued because: a starter title from the {decades[card.title_id]}s · "
+            f"{round(card.p_seen * 100)}% likely you have seen it"
+        )
+        assert "position" not in card.reason, "a 0-based file index is not a reason"
+
+
+async def test_the_seed_list_still_leads_titles_outside_it_until_it_is_answered(db, world):
+    """Decision 490 keeps all 100: the list is still the first run, only its inside order moved.
+
+    The best-placed film outside the list out-scores some of the five seeds on P(seen), and it
+    still waits for the whole list -- the precedence ends by consumption, as §6.1's "seeded first
+    run" has it, and the corpus's decade stratification is the list's to keep.
+    """
+    cards = await queue.next_sweep_cards(
+        db, user_id=world["patrick"], kinds=["movie"], limit=6, reask_rate=0.0
+    )
+    seeds = {t for t, _ in SEED}
+    outside = max((3, 5, 7), key=expected_p)
+    assert expected_p(outside) > min(expected_p(t) for t in seeds), "the fixture must test it"
+    assert {c.title_id for c in cards[:5]} == seeds
+    assert cards[5].title_id == outside and cards[5].source == "p_seen"
+
+
+async def test_a_seed_title_in_the_library_leads_one_that_is_not(db, world):
+    """Decision 490: "the library" is one of the signals the seed order reads. On v20260925 no
+    household member answered "not seen" on an owned seed, against 43% and 65% on the unowned,
+    less-rated ones. Taking title 2 out of the library costs it §6.1's owned term and moves it
+    behind the two seeds it led."""
+    patrick = world["patrick"]
+    before = [
+        c.title_id
+        for c in await queue.next_sweep_cards(
+            db, user_id=patrick, kinds=["movie"], limit=5, reask_rate=0.0
+        )
+    ]
+    await db.execute("UPDATE title SET is_owned = false WHERE id = 2")
+    after = [
+        c.title_id
+        for c in await queue.next_sweep_cards(
+            db, user_id=patrick, kinds=["movie"], limit=5, reask_rate=0.0
+        )
+    ]
+    assert before.index(2) < before.index(8) and before.index(2) < before.index(6)
+    assert after.index(2) > after.index(8) and after.index(2) > after.index(6), after
+
+
+async def test_a_pinned_title_is_served_even_after_a_not_seen_answer(db, world):
+    """C5.2 of the household test: a person who searched for a film, or tapped "Rate it" on its
+    card, has answered "do you know it" afresh. An earlier "not seen" is the one exclusion a pin
+    lifts; unpinned, the answer still holds, and a rated title stays out pinned or not."""
+    patrick = world["patrick"]
+    await observations.record_not_seen(db, user_id=patrick, title_id=3)
+    await observations.record_verdict(db, user_id=patrick, title_id=5, value=1)
+
+    unpinned = await queue.next_sweep_cards(
+        db, user_id=patrick, kinds=["movie"], limit=8, reask_rate=0.0
+    )
+    assert 3 not in [c.title_id for c in unpinned]
+
+    pinned = await queue.next_sweep_cards(
+        db, user_id=patrick, kinds=["movie"], limit=8, head=[3], reask_rate=0.0
+    )
+    assert pinned[0].title_id == 3
+    assert pinned[0].source == "pinned"
+    assert pinned[0].reason == queue.PINNED_REASON
+
+    rated = await queue.next_sweep_cards(
+        db, user_id=patrick, kinds=["movie"], limit=8, head=[5], reask_rate=0.0
+    )
+    assert 5 not in [c.title_id for c in rated], "a pin never re-opens a rated title"
 
 
 async def test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending_p_seen(db, world):
@@ -528,30 +606,139 @@ def test_no_pair_exists_until_one_class_holds_two_titles():
     assert battle.draw(split, rng=rng) is None, "same class, different kinds, is not a pair"
 
 
-def test_the_pair_selection_why_line_says_where_selection_does_pay_off():
-    """54a's sentence, on the surface a person reads it on.
+def test_the_battle_why_line_names_the_shared_answer_and_the_random_draw_and_no_section():
+    """§6.8's one-line why on the battle card, in decision 486's register.
 
-    §6.1's copy is "Random pairs. For profiles no selection rule beats random - the clever ones
-    pay off where the question is which of these few, not how do you rank everything: the tier
-    queue (§6.3) and tonight's round (§6.2).", and the clause it replaced ("the clever ones only
-    pay off in the tier queue") was false one section over, where §6.2's round selects adaptively.
-    Three of the four sites carry the replacement whole; this one stopped after the first half,
-    which raises the question 54a exists to answer and answers none of it. It is the half that
-    matters most here: `RateRail.svelte` collapses its cards below 981 px, so on the phone — the
-    primary form factor — this line is the only pair-selection copy a person sees.
-
-    Verbatim is not available at this site and never was: the sentence opens "Random pairs." and
-    this line is composed inside "queued because: both of these you rated liked, drawn at random
-    within the class - ". So the clause is pinned rather than the string, and the deleted falsehood
-    is pinned as an absence. Nothing pinned any of the four copies before this.
-    [M4.10 finding 22, cycle 2 M410-C2-D19-05]
+    The line carried 54a's whole clause, "(§6.3)" and "(§6.2)" included, about fifty words under
+    two posters: on an iPhone that pushed Tie, the decisive toggle and Skip below the fold, and a
+    member was shown two section numbers on the surface they rate on. It now says what this card
+    is about -- the pair shares the person's own answer and was drawn at random -- and §6.1's
+    pair-selection sentence, restated by decision 491, lives whole in the rail. The deleted
+    falsehood of finding 22 stays pinned as an absence. [M4.10 finding 22; decisions 486, 491]
     """
-    line = battle.reason_for(2)
-    assert line.startswith("queued because: both of these you rated liked, drawn at random")
-    assert "no selection rule beats random" in line
-    assert "not how do you rank everything" in line, line
-    assert "the tier queue (§6.3) and tonight's round (§6.2)" in line, line
-    assert "only pay off" not in line, "the clause 54a deleted is back"
+    for verdict_class, label in enumerate(("disliked", "fine", "liked")):
+        line = battle.reason_for(verdict_class)
+        assert line.startswith(f"queued because: you rated both {label}"), line
+        assert "random" in line
+        assert "§" not in line and "tier queue" not in line, line
+        assert "only pay off" not in line, "the clause 54a deleted is back"
+        assert len(line) < 80, f"the why-line has to fit a phone card: {len(line)} chars"
+
+
+def test_a_pair_already_answered_is_not_drawn_again():
+    """C5.4: S.W.A.T. vs The Village was served three times in one member's first eight cards,
+    each an ordinary duel row. `rank/read.asked_pairs`' rule -- a repeat is an independent Davidson
+    row on the strength of one judgement -- holds on this surface too; §13's re-ask stream is the
+    one way a compared pair comes back."""
+    rng = random.Random(5)
+    answered = {frozenset(p) for p in battle.eligible_pairs(POOL)[:9]}
+    left = set(battle.eligible_pairs(POOL)) - {tuple(sorted(p)) for p in answered}
+    assert len(left) == 1
+    for _ in range(300):
+        a, b, _kind, _cls = battle.draw(POOL, rng=rng, answered=answered)
+        assert (min(a, b), max(a, b)) in left
+
+    everything = {frozenset(p) for p in battle.eligible_pairs(POOL)}
+    assert battle.draw(POOL, rng=rng, answered=everything) is None, (
+        "a pool whose every pair has been compared has no battle left"
+    )
+
+
+def test_the_sampler_is_uniform_over_the_pairs_not_yet_answered():
+    """Sampling without replacement is still random (§0 row 6 is untouched), so the draw over
+    what remains has to be as uniform as `test_the_battle_sampler_is_uniform_over_every_eligible_
+    in_class_pair` makes the unfiltered one. The answered set here is the whole 6-pair movie/2
+    stratum, which a sampler still weighting strata by their FULL pair count would keep choosing
+    and throwing away -- and the four pairs left are spread over two strata of unequal size.
+
+    20,000 draws over 4 cells, expected 5,000 each; 16.27 is the 0.999 quantile at 3 degrees of
+    freedom, and the seed is fixed.
+    """
+    answered = {frozenset((a, b)) for a in (1, 2, 3, 4) for b in (1, 2, 3, 4) if a < b}
+    remaining = [p for p in battle.eligible_pairs(POOL) if frozenset(p) not in answered]
+    assert len(remaining) == 4
+    counts = dict.fromkeys(remaining, 0)
+    rng = random.Random(20260925)
+    for _ in range(20_000):
+        a, b, _kind, _cls = battle.draw(POOL, rng=rng, answered=answered)
+        counts[(min(a, b), max(a, b))] += 1
+    chi2 = sum((n - 5_000) ** 2 / 5_000 for n in counts.values())
+    assert chi2 < 16.27, f"the remaining pairs are not drawn uniformly: {counts}"
+
+
+def test_the_enumerated_remainder_is_still_randomised_left_and_right():
+    """A big band compared almost to the end sends `draw` past its rejection budget to the
+    enumerated remainder, and the one pair left must still land on either side at random."""
+    pool = [battle.PoolMember(i, "movie", 2) for i in range(1, 21)]
+    pairs = battle.eligible_pairs(pool)
+    answered = {frozenset(p) for p in pairs if p != (7, 13)}
+    rng = random.Random(11)
+    firsts = []
+    for _ in range(400):
+        a, b, _kind, _cls = battle.draw(pool, rng=rng, answered=answered)
+        assert {a, b} == {7, 13}
+        firsts.append(a)
+    # Binomial(400, 0.5): sd 10, so +-6 sd.
+    assert 140 < firsts.count(7) < 260, firsts.count(7)
+
+
+async def test_a_duel_the_person_answered_is_never_redrawn_as_a_battle(db, world):
+    """The same rule through the database: `next_battle_pair` reads every pair this person has
+    compared -- in any context, as `rank/read.asked_pairs` does -- and not only profile battles,
+    so a pair settled on Rank does not come back as a battle either."""
+    patrick = world["patrick"]
+    await rate_all(db, patrick, [1, 2, 3], value=2)
+    await observations.record_duel(
+        db, user_id=patrick, title_a=1, title_b=2, outcome="A", context="profile_battle"
+    )
+    await observations.record_duel(
+        db, user_id=patrick, title_a=3, title_b=2, outcome="B", context="tier_queue",
+        selection="boundary",
+    )
+    for seed in range(40):
+        pair = await battle.next_battle_pair(
+            db, user_id=patrick, kinds=["movie"], rng=random.Random(seed), reask_rate=0.0
+        )
+        assert {pair.title_a, pair.title_b} == {1, 3}, "the only pair nobody has compared"
+    await observations.record_duel(
+        db, user_id=patrick, title_a=1, title_b=3, outcome="TIE", context="profile_battle"
+    )
+    assert await battle.next_battle_pair(
+        db, user_id=patrick, kinds=["movie"], rng=random.Random(0), reask_rate=0.0
+    ) is None, "every pair in the band is compared, so the pool is drained"
+
+
+async def test_a_first_sitting_never_pairs_two_disliked_titles(db, world):
+    """Decision 493: below `EARLY_LABELS` live ratings a profile battle leaves the disliked band
+    out. Duels 2-5 on the v20260925 install were disliked-vs-disliked, met in the first minutes
+    by members who then switched to Sweep; §5.2 credits comparisons with resolution *within* the
+    liked class. Three disliked titles and two liked: every draw is the liked pair."""
+    patrick = world["patrick"]
+    await rate_all(db, patrick, [1, 2, 3], value=0)
+    await rate_all(db, patrick, [4, 6], value=2)
+    for seed in range(40):
+        pair = await battle.next_battle_pair(
+            db, user_id=patrick, kinds=["movie"], rng=random.Random(seed), reask_rate=0.0
+        )
+        assert {pair.title_a, pair.title_b} == {4, 6}, pair
+        assert pair.verdict_class == 2
+
+    # Nothing but disliked titles is no pair at all in a first sitting.
+    mia = world["mia"]
+    await rate_all(db, mia, [1, 2, 3], value=0)
+    assert await battle.next_battle_pair(
+        db, user_id=mia, kinds=["movie"], rng=random.Random(0), reask_rate=0.0
+    ) is None
+
+
+def test_past_the_first_sitting_the_disliked_band_is_drawn_again():
+    """Decision 493 is a first-sitting rule, not a new selection rule: from `EARLY_LABELS` live
+    ratings on every band is drawn uniformly, as §6.1 and §0 row 6 have it."""
+    early = battle.open_bands(POOL, labels=battle.EARLY_LABELS - 1)
+    assert 10 not in {m.title_id for m in early}, "title 10 is the disliked singleton"
+    assert {m.verdict_class for m in early} == {1, 2}
+    later = battle.open_bands(POOL, labels=battle.EARLY_LABELS)
+    assert later == list(POOL)
 
 
 async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(db, world):
@@ -578,7 +765,7 @@ async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(d
     )
     assert {pair.title_a, pair.title_b} == {1, 2}
     assert pair.verdict_class == 2
-    assert pair.reason.startswith("queued because: both of these you rated liked")
+    assert pair.reason.startswith("queued because: you rated both liked")
 
     assert (
         await battle.next_battle_pair(
@@ -596,21 +783,25 @@ async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(d
     [
         ((0, 0, 0), False),
         ((1, 1, 1), False),
-        ((4, 4, 4), False),
-        ((2, 2, 6), False),      # exactly 60% — the measured threshold is not yet exceeded
-        ((2, 2, 7), True),       # 63.6%
-        ((1, 2, 9), True),       # §5.2's 60%-"liked" labeller
-        ((9, 2, 1), True),       # the failure mode is class-generic, not "liked"-specific
+        ((5, 5, 5), False),
+        ((3, 3, 9), False),      # exactly 60% — the measured threshold is not yet exceeded
+        ((3, 3, 10), True),      # 62.5%
+        ((2, 3, 12), True),      # §5.2's 60%-"liked" labeller
+        ((12, 2, 1), True),      # the failure mode is class-generic, not "liked"-specific
         ((0, 61, 39), True),
+        # Decision 491's floor: under fifteen labels no share is a habit yet.
+        ((1, 0, 0), False),
+        ((0, 0, 14), False),
+        ((0, 0, 15), True),
     ],
 )
 def test_the_warning_appears_above_sixty_percent_and_is_absent_below(counts, warns):
     """§5.2: "a 60%-'liked' labeller gives up ~0.07 rho", and §6.1 hangs the widget's warning on
-    exactly that figure.
+    exactly that figure -- once fifteen labels stand (decision 491).
 
     The boundary is the test: at exactly 60% the person has not yet given anything up, so a
-    warning there would be a warning about an inequality sign. (2,2,6) and (2,2,7) differ by one
-    tap and must differ in outcome.
+    warning there would be a warning about an inequality sign. (3,3,9) and (3,3,10) differ by one
+    tap and must differ in outcome, and so do (0,0,14) and (0,0,15) on the other axis.
     """
     result = balance.ClassBalance.of(counts)
     assert result.warn is warns
@@ -619,16 +810,45 @@ def test_the_warning_appears_above_sixty_percent_and_is_absent_below(counts, war
     assert sum(result.shares) == pytest.approx(1.0 if sum(counts) else 0.0)
 
 
+def test_the_warning_does_not_arm_before_fifteen_labels():
+    """Decision 491. The floor was 1, and one label is 100% of a distribution: both household
+    members were told "Heavy on ..." by their first verdict and the warning switched on and off
+    six and ten times in a sitting. A perfectly balanced labeller trips a 60% rule by chance
+    100% of the time at one label, 77.8% at three and 2.6% at fifteen, so the number is one
+    §6.1 block -- and the widget says when the check begins rather than going quiet."""
+    assert balance.WARN_MIN_VERDICTS == 15
+    for total in range(1, 15):
+        assert balance.ClassBalance.of((0, 0, total)).warn is False, total
+    assert balance.ClassBalance.of((0, 0, 15)).warn is True
+    assert balance.ClassBalance.of((0, 0, 3)).as_dict()["arms_at"] == 15
+
+
 def test_the_warning_copy_is_the_measured_sentence_and_names_the_heavy_class():
-    """§6.1 quotes it verbatim: "Heavy on 'liked'. Spreading across all three classes matters
-    about five times more than anything else you can do here." — the measured 5x lever."""
-    result = balance.ClassBalance.of((1, 2, 9))
+    """§6.1's measured sentence, restated by decision 491: "about five times more" is §5.2's 5x
+    lever and stays verbatim, and the tail says how to spread for the class that is heavy."""
+    result = balance.ClassBalance.of((2, 3, 12))
     assert result.copy == (
-        "Heavy on 'liked'. Spreading across all three classes matters about five times more "
-        "than anything else you can do here."
+        "Heavy on 'liked'. Spreading your ratings across all three answers matters about five "
+        "times more than anything else you can do here. Rate some titles you didn't enjoy as "
+        "well - but never change an honest answer to even things out."
     )
-    assert balance.ClassBalance.of((9, 2, 1)).copy.startswith("Heavy on 'disliked'.")
-    assert balance.ClassBalance.of((2, 9, 1)).copy.startswith("Heavy on 'fine'.")
+    disliked = balance.ClassBalance.of((12, 2, 1)).copy
+    assert disliked.startswith("Heavy on 'disliked'.")
+    assert "Rate some titles you enjoyed as well" in disliked
+    fine = balance.ClassBalance.of((2, 12, 1)).copy
+    assert fine.startswith("Heavy on 'fine'.")
+    assert "better or worse than fine, say so" in fine
+
+
+@pytest.mark.parametrize("counts", [(12, 2, 1), (2, 12, 1), (1, 2, 12)])
+def test_the_warning_never_asks_for_a_different_answer(counts):
+    """Decision 491: the old sentence said what mattered and not how, so both members read it
+    as "change your answers". Whatever class is heavy, the copy widens what gets rated and says
+    in so many words that an honest answer stays. ASCII, like every line this surface prints."""
+    copy = balance.ClassBalance.of(counts).copy
+    assert "about five times more" in copy
+    assert "never change an honest answer" in copy
+    assert copy.isascii(), copy
 
 
 async def test_the_widget_counts_one_current_label_per_title(db, world):
@@ -818,7 +1038,9 @@ async def test_a_duel_re_ask_preserves_the_order_it_was_asked_in(db, world):
     preserved so a flip is literally `outcome <> original.outcome` with no normalisation, and
     whatever left/right position bias exists is constant across both asks and cancels out."""
     patrick = world["patrick"]
-    await rate_all(db, patrick, [1, 2], value=2)
+    # Three liked titles, not two: the pair a re-ask repeats is compared by definition, and the
+    # ordinary draw the why-lines are compared against below needs a pair that is not (C5.4).
+    await rate_all(db, patrick, [1, 2, 3], value=2)
     first = await observations.record_duel(
         db, user_id=patrick, title_a=2, title_b=1, outcome="A", context="profile_battle"
     )
@@ -918,6 +1140,44 @@ async def test_the_not_seen_rate_is_the_queue_bug_instrument(db, world):
     assert (await queue.not_seen_rate(db, user_id=patrick)).rate == pytest.approx(0.5)
     assert (await queue.not_seen_rate(db, user_id=patrick)).queue_bug is False
     assert (await queue.not_seen_rate(db, user_id=world["mia"])).rate is None
+
+
+# --- C5.2: the person's own pick --------------------------------------------------------------
+
+
+async def test_the_search_ranks_the_name_a_person_remembers_first_and_says_what_is_rated(db, world):
+    """Rate's "a title you know" (`rate/search.py`). An exact name first, then a name that starts
+    with the query, then the rest; the catalogue grid orders by year and would have put every
+    newer title with "heat" in its name above Heat. A hit already rated says so -- by the
+    person's own label -- because the queue will not serve it and a pin that did nothing is the
+    failure this search exists to end. The needle is matched literally (M4.9 finding 12)."""
+    from spielplan.rate import search
+
+    patrick = world["patrick"]
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned) VALUES "
+        "(51, 'movie', 'Heat', 1995, true), (52, 'movie', 'The Heat', 2013, false), "
+        "(53, 'movie', 'Heatwave Summer', 2020, false), (54, 'series', 'Dead Heat', 2021, false), "
+        "(55, 'movie', '100% Wolf', 2020, false)"
+    )
+    await db.execute(
+        "INSERT INTO title_alias (title_id, alias) VALUES (52, 'Hot Pursuit Heat Edition')"
+    )
+    await observations.record_verdict(db, user_id=patrick, title_id=52, value=0)
+
+    hits = await search.find(db, user_id=patrick, q="  Heat ")
+    ids = [h["id"] for h in hits]
+    assert ids[0] == 51, "the exact name first"
+    assert ids[1] == 53, "then a name that starts with it"
+    assert set(ids[2:]) == {52, 54}, "then every other match, both kinds"
+    by_id = {h["id"]: h for h in hits}
+    assert by_id[52]["rated"] == "disliked"
+    assert by_id[51]["rated"] is None
+    assert by_id[54]["kind"] == "series"
+
+    assert [h["id"] for h in await search.find(db, user_id=patrick, q="100%")] == [55]
+    assert await search.find(db, user_id=patrick, q="   ") == []
+    assert len(await search.find(db, user_id=patrick, q="e", limit=2)) == 2
 
 
 # --- §6's throughput budget -------------------------------------------------------------------

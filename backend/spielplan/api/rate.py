@@ -32,6 +32,7 @@ from spielplan.ledger import hyperparams, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import EmbeddingSource
 from spielplan.models import artifacts
+from spielplan.rate import search as search_rules
 from spielplan.rate import session
 
 log = logging.getLogger("spielplan.api.rate")
@@ -244,7 +245,7 @@ async def current(
     user: ActiveUser,
     head: list[int] = Query(
         default=[],
-        description="§7.3/§6.0: title ids the pending-verdicts banner pinned to the front.",
+        description="§7.3/§6.0: title ids pinned to the front (the banner, Rate it, search).",
     ),
 ) -> dict[str, Any]:
     """Open or resume, then serve the card. Idempotent: a second GET returns the same card
@@ -283,6 +284,21 @@ async def end(conn: DB, user: ActiveUser) -> dict[str, Any]:
     """Close the live session. The journal stays: §4.2 is append-only and the rows are the
     record of what the person actually said."""
     return {"ended": await session.end_session(conn, user_id=user.id)}
+
+
+@router.get("/search")
+async def search(
+    conn: DB,
+    user: ActiveUser,
+    q: str = Query("", max_length=200, description="A title, or part of one, the person knows."),
+    limit: int = Query(search_rules.DEFAULT_LIMIT, ge=1, le=20),
+) -> dict[str, Any]:
+    """Rate's "a title you know": the hits, each saying whether the person already rated it.
+
+    Choosing one is not a write and has no route of its own: the client pins it with `head=`,
+    and the verdict is given on §6.1's card like every other. See `rate/search.py`.
+    """
+    return {"q": q, "items": await search_rules.find(conn, user_id=user.id, q=q, limit=limit)}
 
 
 @router.post("/verdict")

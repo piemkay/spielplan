@@ -200,6 +200,40 @@ async def test_the_onboarding_list_decade_is_derived_from_the_shipped_year(db, b
     assert all(r["decade"] is not None for r in rows)
 
 
+async def test_the_seed_list_import_reports_entries_with_no_card_text(db, bundle_dir):
+    """C9.7 of the 2026-09-25 household test: the v20260925 list shipped 32 of 100 titles with no
+    poster and 25 whose only plot is an MPST retelling the Rate card will not show, and 30 of the
+    household's first 127 verdicts landed on posterless cards. The report says so on import, so
+    a thin list is visible before a household meets it -- under its own rule, because `seed-list`
+    findings are counted by what they say about the file."""
+    await _seed_titles(db)
+    first, second, third = (t[0] for t in fx.TITLES[:3])
+    await db.execute(
+        "UPDATE title SET overview = 'A heist, told straight.', poster_path = 'https://x/p.jpg' "
+        "WHERE id = $1",
+        first,
+    )
+    await db.execute("UPDATE title SET overview = 'Told to the end.' WHERE id = $1", second)
+    await db.execute(
+        "INSERT INTO title_meta (title_id, source, payload) "
+        "VALUES ($1, 'mpst', '{\"plot_full\": \"Told to the end.\"}'::jsonb)",
+        second,
+    )
+    await db.execute("UPDATE title SET overview = 'A quiet film.' WHERE id = $1", third)
+    report = ImportReport()
+
+    await dna.load_seed_list(db, bundle_dir / "artifacts" / "seed_list.json", report)
+
+    thin = [f for f in report.findings if f.rule == "seed-list-cards"]
+    assert [f.severity for f in thin] == ["warn"], report.render()
+    total = len(fx.TITLES)
+    # Everything but `first` lacks a poster; everything but `first` and `third` lacks a line the
+    # card can show, `second` because its only plot is the MPST retelling.
+    assert thin[0].detail == {"no_text": total - 2, "no_poster": total - 1, "titles": total}
+    assert thin[0].message.isascii(), thin[0].message
+    assert not [f for f in report.findings if f.rule == "seed-list" and f.severity == "warn"]
+
+
 async def test_an_onboarding_entry_with_no_year_loads_without_a_decade(db, bundle_dir, tmp_path):
     """A year the corpus never resolved is a hole in the stratification, not a broken bundle:
     §6.1's queue still needs the title. It loads with a NULL decade rather than raising."""
@@ -436,8 +470,8 @@ async def test_an_absent_curated_ledger_names_what_is_still_installed(db, bundle
     All three loaders return before they touch a row, so on the models-only path decision 247
     newly put them on, the install is byte-identical afterwards. The sentences were written for a
     SEED, where the install holds nothing, and read as statements about it: the sharpest is the
-    onboarding list's, because `rate/queue.py` LEFT JOINs the table, orders on `s.seed_position
-    ASC NULLS LAST` ahead of `p_seen DESC` and prints "seed list position N of M" on the very
+    onboarding list's, because `rate/queue.py` LEFT JOINs the table, serves every stored seed
+    title ahead of the rest of the queue and names the list ("a starter title") on the very
     next card - so "the first rating queue falls back to P(seen) ordering alone" is the inverse
     of what happens, and the operator's remedy is work against a defect that does not exist.
     [M4.14 cycle 4, m414-c4-dim247-02, decisions 247 and 266]

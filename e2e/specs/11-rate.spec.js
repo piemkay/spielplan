@@ -24,7 +24,14 @@ import { signedIn } from '../helpers.js';
  * has to: §4.2's verdicts are append-only and `rate.queue` never re-serves a title the user
  * has already rated, so a shared account cannot be rewound between runs — the second run would
  * find a drained queue and quietly assert nothing. A member per run gets a virgin queue, the
- * imported `seed_list` in position order, and a block counter starting at 1.
+ * imported `seed_list` most likely seen first (decision 490), and a block counter starting at 1.
+ *
+ * THREE MEMBERS, NOT ONE, since the 2026-09-25 household test. The fixture bundle holds eight
+ * titles, and three of the rules that test brought in spend them: a pair once compared is not
+ * drawn again (C5.4), a first sitting leaves the disliked band out of its battles (decision 493),
+ * and Mix serves single titles until fifteen ratings stand (decision 492). So the tests that
+ * need a battle pool start a member whose films are all liked, and the fifteen-card block starts
+ * one with the whole fixture unrated -- see `switchToFreshMember`.
  *
  * Serial, and one page: this is a *session*, and Playwright's default fresh context per test
  * would throw away the one the surface is built around.
@@ -56,10 +63,8 @@ const BELIEF_KEYS = [
   'placement'
 ];
 
-/** §6.1's warning copy, verbatim. §5.2's measured 5x lever — a paraphrase is a different claim. */
-const BALANCE_WARNING =
-  "Heavy on 'disliked'. Spreading across all three classes matters about five times more " +
-  'than anything else you can do here.';
+/** Decision 491: the balance check arms at fifteen ratings, and says so until it does. */
+const ARMING = 'A balance check starts at 15 ratings.';
 
 /** Decision 35's sentence for the boundary, which has to be legible next to the dead chip. */
 const BOUNDARY_REASON = 'undo reaches back to the start of this block of 15 and no further';
@@ -213,6 +218,35 @@ async function createMember(page) {
   return { name, otp: (await res.json()).one_time_password };
 }
 
+/**
+ * A member of this file's own with a virgin queue, for the tests that need what the first one has
+ * spent: the fixture's eight titles and the pairs they make. The admin makes them (§3.1), so the
+ * page signs back in as the admin first.
+ */
+async function switchToFreshMember(page) {
+  await page.request.post('/api/auth/logout');
+  await signedIn(page);
+  await signInAsMember(page, await createMember(page));
+}
+
+/**
+ * A fixture title this member has not rated and that is not the card on the table, found through
+ * Rate's own search route: the queue's order depends on the whole household's seen state, so the
+ * title a test can pick is looked up rather than named.
+ */
+async function findUnrated(page) {
+  const onTable = (await envelope(page)).card?.title?.id;
+  for (const name of ['Heat', 'Prisoners', 'Paddington 2', 'Tampopo', 'Severance', 'The Bear']) {
+    const res = await page.request.get(`/api/rate/search?q=${encodeURIComponent(name)}`);
+    expect(res.ok(), 'GET /api/rate/search').toBeTruthy();
+    const hit = (await res.json()).items.find(
+      (item) => item.name === name && !item.rated && item.id !== onTable
+    );
+    if (hit) return hit;
+  }
+  throw new Error('every fixture title is rated or on the table, so there is nothing to find');
+}
+
 async function signInAsMember(page, member) {
   await page.request.post('/api/auth/logout');
   const login = await page.request.post('/api/auth/login', {
@@ -330,47 +364,54 @@ test.describe('rate', () => {
     // this user". Either shape is correct; inventing a class when there is no fit is not.
     if ((await reveal.getAttribute('data-reveal-available')) === 'true') {
       await expect(reveal).toContainText(/we'd have guessed/);
+      // Decisions 486 and 491: the guess, and no model number beside it with the switch off.
+      await expect(reveal).not.toContainText(/cdf|\d\.\d/);
     } else {
-      await expect(reveal).toContainText(/no fitted ranking|no labels of your own/);
+      await expect(reveal).toContainText('no guess yet - rate a few more first');
     }
   });
 
-  test('the class-balance warning appears when a class passes 60%, in the measured words', async () => {
-    // §6.1's widget and §5.2's threshold: "a 60%-'liked' labeller gives up ~0.07 rho". One
-    // 'fine' label already stands; two 'disliked' answers walk the distribution across the
-    // line, and the warning has to be absent on the near side of it.
-    await expect(page.getByTestId('rate-balance')).toHaveAttribute('data-warn', 'true');
+  test('the class-balance widget counts from the first rating and holds its warning until 15', async () => {
+    // §6.1's widget and §5.2's 60% line, armed at fifteen ratings by decision 491. The floor was
+    // one, and one label is 100% of a distribution: both household members were told "Heavy on
+    // ..." by their first verdict, and the warning switched on and off six and ten times in a
+    // sitting. One 'fine' rating stands; two 'disliked' answers put the distribution past 60%, and
+    // the widget still says only when the check begins. The warning's own words are
+    // `test_the_warning_copy_is_the_measured_sentence_and_names_the_heavy_class`: the fixture
+    // bundle holds eight titles, so no member here reaches fifteen ratings.
+    await expect(page.getByTestId('rate-balance-total')).toHaveText('1 rating');
+    await expect(page.getByTestId('rate-balance')).toHaveAttribute('data-warn', 'false');
+    await expect(page.getByTestId('rate-balance-arming')).toHaveText(ARMING);
 
-    await tapAnswer(page, { value: 0 }); // 1 disliked, 1 fine — 50%, under the threshold
-    await expect(page.getByTestId('rate-balance-total')).toHaveText('2 labels');
+    await tapAnswer(page, { value: 0 });
+    await expect(page.getByTestId('rate-balance-total')).toHaveText('2 ratings');
+
+    await tapAnswer(page, { value: 0 }); // 2 disliked of 3 — 66.7%, past the line, under the floor
+    await expect(page.getByTestId('rate-balance-total')).toHaveText('3 ratings');
     await expect(page.getByTestId('rate-balance')).toHaveAttribute('data-warn', 'false');
     await expect(page.getByTestId('rate-balance-warning')).toHaveCount(0);
-
-    await tapAnswer(page, { value: 0 }); // 2 disliked of 3 — 66.7%, over it
-    await expect(page.getByTestId('rate-balance-total')).toHaveText('3 labels');
-    await expect(page.getByTestId('rate-balance')).toHaveAttribute('data-warn', 'true');
-    // Verbatim. The sentence is §5.2's measurement written down, not a message to reword.
-    await expect(page.getByTestId('rate-balance-warning')).toHaveText(BALANCE_WARNING);
-    await expect(page.getByTestId('rate-balance-threshold')).toContainText('60%');
+    await expect(page.getByTestId('rate-balance-arming')).toHaveText(ARMING);
+    expect((await envelope(page)).class_balance.arms_at).toBe(15);
   });
 
-  test('Mix alternates on the counter, so an answered duel is followed by a sweep card', async () => {
-    // §6.1: "Mix (default — alternates sweep and battle)". The card type is a function of the
-    // SLOT, never of the last card served — the bug this guards against is a mode that derives
-    // the next card from what was just answered, where a run of duels never returns a sweep.
+  test('Mix serves single titles until 15 ratings stand, and its counter says so', async () => {
+    // §6.1: "Mix (default — alternates sweep and battle)" -- from the point a person holds a
+    // block of ratings (decision 492). Both household members met their first battle on card 4,
+    // from a pool of three titles, and left Mix for Sweep before card 10. So a new member's second
+    // card is a sweep, the counter calls it one, and nothing on the card apologises for a battle
+    // that was never due. The alternation itself, which this fixture's eight titles cannot reach,
+    // is `test_mix_serves_single_titles_until_a_block_of_ratings_stands` and
+    // `test_mix_keeps_alternating_across_the_block_roll`.
     await openFreshBlock(page);
     await expect(counter(page)).toHaveText(counterLine(1, 'sweep'));
-    await expect(sweepCard(page)).toBeVisible();
+    await expect(page.getByTestId('rate-mode-note')).toContainText('pairs from 15 ratings on');
 
-    expect(await tapAnswer(page, { value: 0 })).toBe('sweep');
-    await expect(counter(page)).toHaveText(counterLine(2, 'battle'));
-    await expect(battleCard(page)).toBeVisible();
-    await expect(sweepCard(page)).toHaveCount(0);
-
-    expect(await tapAnswer(page)).toBe('battle');
-    await expect(counter(page)).toHaveText(counterLine(3, 'sweep'));
+    expect(await tapAnswer(page, { value: 2 })).toBe('sweep');
+    await expect(counter(page)).toHaveText(counterLine(2, 'sweep'));
     await expect(sweepCard(page)).toBeVisible();
     await expect(battleCard(page)).toHaveCount(0);
+    await expect(page.getByTestId('rate-substituted')).toHaveCount(0);
+    expect((await envelope(page)).session.block.serving).toBe('sweep');
   });
 
   test('Undo pops a verdict, restores the exact card, and takes the label back with it', async () => {
@@ -385,8 +426,10 @@ test.describe('rate', () => {
     await tapAnswer(page);
     await expect(page.getByTestId('rate-balance-total')).not.toHaveText(labelsBefore);
     await expect(undoChip(page)).toBeEnabled();
-    // The kind rides along, so "undo verdict" is a promise the person can read before tapping.
+    // The kind rides along, so "undo rating" is a promise the person can read before tapping --
+    // in words (decision 486), with the journal's own kind kept on the attribute.
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'verdict');
+    await expect(undoChip(page)).toContainText('undo rating');
 
     await undoChip(page).click();
     await expect(sweepCard(page)).toBeVisible();
@@ -398,17 +441,60 @@ test.describe('rate', () => {
     await expect(undoChip(page)).toHaveAttribute('data-undo-reason', 'empty');
   });
 
+  test('a title you know can be found on Rate and rated on its own card', async () => {
+    // C5.2 of the household test: the only way to rate a known film was Mark seen, then wait for
+    // the queue to come round -- one member never reached hers. Rate's search pins the pick to
+    // the head of the queue (§6.0's banner mechanism), so the verdict is still given on §6.1's
+    // card, under its token, with its reveal after the tap; a title already rated says so and is
+    // not offered.
+    const unrated = await findUnrated(page);
+    await openRate(page);
+    await page.getByTestId('rate-find-toggle').click();
+    await page.getByTestId('rate-find-input').fill(unrated.name);
+    const hit = page.locator(`[data-testid="rate-find-hit"][data-title-id="${unrated.id}"]`);
+    await expect(hit).toBeEnabled();
+    await hit.click();
+
+    await expect(page.getByTestId('rate-card-title')).toHaveText(unrated.name);
+    await expect(page.getByTestId('rate-queue-reason')).toHaveText('queued because: you picked it');
+    await expect(page.getByTestId('rate-find')).toHaveCount(0);
+    await tapAnswer(page, { value: 1 });
+
+    await page.getByTestId('rate-find-toggle').click();
+    await page.getByTestId('rate-find-input').fill(unrated.name);
+    const rated = page.locator(`[data-testid="rate-find-hit"][data-title-id="${unrated.id}"]`);
+    await expect(rated).toBeDisabled();
+    await expect(rated).toContainText('you rated it fine');
+    await page.getByTestId('rate-find-toggle').click();
+  });
+
   test('Undo pops a duel too, and the same pair comes back rather than a reshuffled one', async () => {
     // Decision 35 again, on the other card type — "the most recent observation of ANY kind".
     // `rate_observation.card` holds the pair verbatim, and a sampler that redrew would put two
     // plausible posters back on screen that the person had never been asked about.
-    await tapAnswer(page); // answer the restored sweep card; slot 2 is a battle
+    //
+    // A second member, whose films are all rated liked over HTTP: the first has spent the
+    // fixture's eight titles, and a first sitting's battles come from the fine and liked bands
+    // only (decision 493). The series are left to sweep, so the duel sits on a verdict and the
+    // pop can be seen to be one pop.
+    await switchToFreshMember(page);
+    await control(page, { restart: true, mode: 'sweep', kinds: ['movie'] });
+    for (let card = (await envelope(page)).card; card?.type === 'sweep'; ) {
+      await answerOverHttp(page, { value: 2 });
+      card = (await envelope(page)).card;
+    }
+
+    await openFreshBlock(page, { mode: 'sweep', kinds: ['movie', 'series'] });
+    await expect(sweepCard(page)).toBeVisible();
+    await tapAnswer(page);
+    await chooseMode(page, 'battle');
     await expect(battleCard(page)).toBeVisible();
+    await expect(counter(page)).toHaveText(counterLine(2, 'battle'));
     const left = await page.getByTestId('rate-battle-left').getAttribute('data-title-id');
     const right = await page.getByTestId('rate-battle-right').getAttribute('data-title-id');
 
     await tapAnswer(page);
-    await expect(counter(page)).toHaveText(counterLine(3, 'sweep'));
+    await expect(counter(page)).toHaveText(counterLine(3, 'battle'));
 
     await undoChip(page).click();
     await expect(battleCard(page)).toBeVisible();
@@ -428,14 +514,9 @@ test.describe('rate', () => {
     // Arrangement first, and it is not incidental. The redraw keeps the half the person did
     // not correct and draws the other from the titles that are *neither* — so a band holding
     // only the two on screen has no opponent left, and the slot honestly falls back to a sweep
-    // rather than inventing one. Draining the sweep queue into one band is what makes the swap
-    // observable *as a swap*; the fallback is `ensure_card`'s own behaviour and has its own
-    // integration coverage.
-    await control(page, { restart: true, mode: 'sweep' });
-    for (let card = (await envelope(page)).card; card?.type === 'sweep'; ) {
-      await answerOverHttp(page, { value: 0 });
-      card = (await envelope(page)).card;
-    }
+    // rather than inventing one. The member the test above started holds all six films in the
+    // liked band, which is what makes the swap observable *as a swap*; the fallback is
+    // `ensure_card`'s own behaviour and has its own integration coverage.
 
     // Films only, so the pair can only come from the one band deep enough to repair itself —
     // §4.1 rule 5's partition doing arrangement work as well as ranking work.
@@ -472,7 +553,8 @@ test.describe('rate', () => {
     // correction and not for a comparison.
     await expect(counter(page)).toHaveText(before);
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'correction');
-    await expect(undoChip(page)).toContainText('undo correction');
+    // In the member's words: a correction is a "not seen" on one side (decision 486).
+    await expect(undoChip(page)).toContainText('undo not seen');
 
     // "covered by the persistent Undo" — which also puts the pair back for `both` below.
     await undoChip(page).click();
@@ -575,6 +657,11 @@ test.describe('rate', () => {
     //
     // The first fourteen are answered over HTTP — they are the arrangement, not the claim. The
     // fifteenth is a tap, because the roll is what has to be visible.
+    //
+    // A third member, with all eight fixture titles unrated: a compared pair is not drawn again
+    // (C5.4), so a block of fifteen needs the eight sweeps and the pairs they make, and the
+    // member the tests above used has compared or spent most of them.
+    await switchToFreshMember(page);
     const opened = await openFreshBlock(page);
     const block = opened.session.block.index;
     for (let i = 0; i < 14; i++) {
@@ -589,10 +676,10 @@ test.describe('rate', () => {
 
     await expect(counter(page)).toContainText('1 / 15 this block');
     expect((await envelope(page)).session.block.index, 'the block rolled').toBe(block + 1);
-    // Decision 200: the roll no longer repeats a card type. Fifteen is odd, so a type derived
-    // from the slot made slot 15 a sweep and the next block's slot 1 a sweep too — eight sweeps
-    // to seven battles per block, in the arm §5.2 credits with within-liked resolution. Derived
-    // from the session's monotone observation index, the alternation carries across the roll.
+    // Eight titles, all rated in the first eight slots, so every card since has been §6.1's
+    // drained state -- battles sharpening what was said -- and the counter names the card's own
+    // type. Decision 200's alternation across the roll needs fifteen ratings (decision 492) and
+    // is `test_mix_keeps_alternating_across_the_block_roll`'s to assert.
     await expect(counter(page)).toContainText('· battle');
 
     // DECISION 199: the roll is not the commit. `advance` moves the block index ON the fifteenth

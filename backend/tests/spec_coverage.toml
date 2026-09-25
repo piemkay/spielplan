@@ -1235,8 +1235,8 @@ id = "library-rate-mix-alternates-blocks"
 spec = "§6.1 (\"Mix (default — alternates sweep and battle); blocks of 15\")"
 milestone = "M2"
 kind = "integration"
-what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and flips the served card type between sweep and battle, so a run of duels still returns sweep cards — including across the block boundary; the counter runs 1..15 and rolls into a new block."
-why = "Mix is the default mode and the block of 15 is the unit Undo's depth and the counter copy both hang off (decision 35)."
+what = "A fresh Rate session serves Mix; each observation (verdict, not-seen, skip, duel, tie) advances the block counter by one and, once the person holds fifteen live ratings over the session's kinds (decision 492), flips the served card type between sweep and battle, so a run of duels still returns sweep cards — including across the block boundary; before that Mix serves sweeps with the counter calling sweep and no substitution marked; the counter runs 1..15 and rolls into a new block."
+why = "Mix is the default mode and the block of 15 is the unit Undo's depth and the counter copy both hang off (decision 35); a first battle from a three-title pool is what sent both household members to Sweep (decision 492)."
 # The boundary clause is M4.10's. `card_type_for` was a pure function of the slot and returned sweep
 # on odd slots, and `advance` rolls slot 15 to slot 1: fifteen is odd, so every block ended and the
 # next began with a sweep — eight sweeps to seven battles and one consecutive-same pair per block,
@@ -1259,10 +1259,12 @@ tests = [
     "backend/tests/test_rate_session.py::test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block",
     "backend/tests/test_rate_session.py::test_the_card_type_is_a_pure_function_of_the_monotone_counter_and_the_block_rolls_at_fifteen",
     "backend/tests/test_rate_session.py::test_mix_keeps_alternating_across_the_block_roll",
+    "backend/tests/test_rate_session.py::test_mix_serves_single_titles_until_a_block_of_ratings_stands",
+    "backend/tests/test_rate_session.py::test_the_warm_up_is_mixes_alone",
     "backend/tests/test_static_contracts.py::test_decision_200_names_the_counter_the_card_type_is_derived_from",
     "backend/tests/test_static_contracts.py::test_the_decision_200_counter_guard_catches_each_way_it_was_said",
     "e2e/specs/11-rate.spec.js::a fresh session opens in Mix, at 1 / 15, on a sweep card that says why it is here",
-    "e2e/specs/11-rate.spec.js::Mix alternates on the counter, so an answered duel is followed by a sweep card",
+    "e2e/specs/11-rate.spec.js::Mix serves single titles until 15 ratings stand, and its counter says so",
     "e2e/specs/11-rate.spec.js::the counter runs to 15 and rolls, and Undo then disables visibly at the boundary",
 ]
 
@@ -1271,7 +1273,7 @@ id = "library-rate-no-prediction-before-tap"
 spec = "§6.1 (\"Prediction reveal strictly after the tap\"; Cosley 2003)"
 milestone = "M2"
 kind = "integration"
-what = "The sweep card payload contains no predicted class, ledger score, σ or tier for the title being rated; the predicted class and its data-voice score appear only in the response to the verdict write."
+what = "The sweep card payload contains no predicted class, ledger score, σ or tier for the title being rated; the predicted class appears only in the response to the verdict write, and its data-voice score beside it only for a viewer whose Show the model is on (decision 491) — a member with the switch off is sent no model number."
 why = "Anchoring: a card that shows the model's belief before the answer contaminates the label it exists to collect."
 tests = [
     "backend/tests/test_rate_session.py::test_the_sweep_card_carries_no_model_belief_and_the_reveal_arrives_with_the_verdict",
@@ -1279,6 +1281,7 @@ tests = [
     "backend/tests/test_rate_session.py::test_the_reveal_is_read_before_the_write_and_not_after_it",
     "backend/tests/test_rate_session.py::test_the_reveal_is_suppressed_rather_than_invented_before_the_first_fit",
     "backend/tests/test_rate_session.py::test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo_state",
+    "backend/tests/test_rate_session.py::test_the_reveal_carries_its_number_only_behind_show_the_model",
     "e2e/specs/11-rate.spec.js::the sweep card carries no model belief, and the reveal arrives only with the write",
 ]
 
@@ -1287,7 +1290,7 @@ id = "library-rate-battle-pairs-within-band"
 spec = "§6.1 (\"drawn at random from the user's seen titles within verdict bands\") + §0 row 6"
 milestone = "M2"
 kind = "backend"
-what = "The battle pair sampler only ever draws titles the user has marked seen that already carry a verdict, and both members of a pair always share a verdict class; over many draws the distribution over eligible in-class pairs is uniform rather than concentrated on any subset."
+what = "The battle pair sampler only ever draws titles the user has marked seen that already carry a verdict, and both members of a pair always share a verdict class; it never draws a pair the person has already compared in any context outside §13's re-ask stream (rank/read.asked_pairs' rule), and over many draws the distribution over the eligible in-class pairs not yet compared is uniform rather than concentrated on any subset; below fifty live ratings a profile battle leaves the disliked band out (decision 493)."
 why = "For profiles no selection rule beats random (best +0.0013, CI spans 0); within-class pairs are what add resolution, cross-class pairs re-derive a boundary the ordered-logit arm already knows."
 tests = [
     "backend/tests/test_rate_queue.py::test_the_battle_sampler_is_uniform_over_every_eligible_in_class_pair",
@@ -1295,17 +1298,30 @@ tests = [
     "backend/tests/test_rate_queue.py::test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted",
     "backend/tests/test_rate_queue.py::test_no_pair_exists_until_one_class_holds_two_titles",
     "backend/tests/test_rate_queue.py::test_which_poster_is_a_and_which_is_b_is_itself_random",
+    "backend/tests/test_rate_queue.py::test_a_pair_already_answered_is_not_drawn_again",
+    "backend/tests/test_rate_queue.py::test_the_sampler_is_uniform_over_the_pairs_not_yet_answered",
+    "backend/tests/test_rate_queue.py::test_the_enumerated_remainder_is_still_randomised_left_and_right",
+    "backend/tests/test_rate_queue.py::test_a_duel_the_person_answered_is_never_redrawn_as_a_battle",
+    "backend/tests/test_rate_queue.py::test_a_first_sitting_never_pairs_two_disliked_titles",
+    "backend/tests/test_rate_queue.py::test_past_the_first_sitting_the_disliked_band_is_drawn_again",
 ]
+# The no-repeat clause is the household test's C5.4: S.W.A.T. vs The Village was served three times
+# in one member's first eight cards, answered B, A, TIE inside 24 s as three ordinary duel rows.
+# `battle.py` had excluded nothing on the claim that repeating a pair is informative, which
+# `rank/read.asked_pairs` refutes for Rank and Tonight on §13's own ground. The disliked-band clause
+# is decision 493, and `spec` cites the sections alone until it is recorded.
 
 [[requirement]]
 id = "library-rate-queue-seed-and-reason"
 spec = "§6.1 (Queue) + §6.8"
 milestone = "M2"
 kind = "integration"
-what = "A user's first queue is the imported 100-title decade-stratified seed_list; subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\")."
+what = "A user's first queue is the imported 100-title decade-stratified seed_list, every title of it ahead of any title outside it, ordered among themselves by descending P(seen) — popularity, the library, age and the household (decision 490); subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\"), a seed card naming its decade and its P(seen) and never a list position."
 why = "The queue's job is to put titles the user has actually seen in front of them (§13 flags >50% not-seen as a queue bug), and §6.8 requires every question to carry its one-line why."
 tests = [
-    "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_imported_seed_list_in_position_order",
+    "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first",
+    "backend/tests/test_rate_queue.py::test_the_seed_list_still_leads_titles_outside_it_until_it_is_answered",
+    "backend/tests/test_rate_queue.py::test_a_seed_title_in_the_library_leads_one_that_is_not",
     "backend/tests/test_rate_queue.py::test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending_p_seen",
     "backend/tests/test_rate_queue.py::test_p_seen_moves_the_queue_when_a_signal_moves",
     "backend/tests/test_rate_queue.py::test_every_card_carries_the_one_line_why_that_names_its_dominant_cause",
@@ -1331,14 +1347,16 @@ id = "library-rate-class-balance"
 spec = "§6.1 (class-balance widget + warning copy) + §5.2"
 milestone = "M2"
 kind = "integration"
-what = "The Rate payload carries the running three-class verdict distribution over the user's labels, and the warning copy (\"Spreading across all three classes matters about five times more than anything else you can do here.\") is present once one class exceeds 60% of that distribution and absent below it."
+what = "The Rate payload carries the running three-class verdict distribution over the user's labels from the first one, and the warning copy — \"Heavy on '{class}'. Spreading your ratings across all three answers matters about five times more than anything else you can do here.\" with a tail for the heavy class that never asks for a different answer (decision 491) — is present once fifteen labels stand and one class exceeds 60% of that distribution, and absent below either line; before fifteen the widget says when the check begins."
 why = "Spreading verdicts across all three classes is the measured 5× lever; §5.2 fixes the 60% figure — a 60%-\"liked\" labeller gives up ~0.07 ρ."
 tests = [
     "backend/tests/test_rate_queue.py::test_the_warning_appears_above_sixty_percent_and_is_absent_below",
     "backend/tests/test_rate_queue.py::test_the_warning_copy_is_the_measured_sentence_and_names_the_heavy_class",
     "backend/tests/test_rate_queue.py::test_the_widget_counts_one_current_label_per_title",
     "backend/tests/test_rate_queue.py::test_a_re_ask_is_not_a_second_observation_for_the_ledger_or_the_widget",
-    "e2e/specs/11-rate.spec.js::the class-balance warning appears when a class passes 60%, in the measured words",
+    "backend/tests/test_rate_queue.py::test_the_warning_does_not_arm_before_fifteen_labels",
+    "backend/tests/test_rate_queue.py::test_the_warning_never_asks_for_a_different_answer",
+    "e2e/specs/11-rate.spec.js::the class-balance widget counts from the first rating and holds its warning until 15",
 ]
 
 [[requirement]]
@@ -11357,4 +11375,93 @@ tests = [
     "backend/tests/test_dna_terms.py::test_label_of_names_a_term_by_its_shipped_label_or_its_leaf_in_plain_words",
     "frontend/src/lib/terms.test.js::falls back to the leaf in plain words when there is no label",
     "frontend/src/lib/terms.test.js::accepts a bare id and never returns one",
+]
+
+# The owner's instruction of 2026-09-25, after the first household user test (C5.2): the only way
+# to rate a film a member already knew was Mark seen, then wait for the queue to come round behind
+# the card on the table - one member's marked title was never reached, another used Mark seen as a
+# "queue this" gesture and wrote a seen state for three titles she then answered "not seen". Rate
+# gains a search and the title card a "Rate it" link, and both pin through §6.0's banner mechanism,
+# so the verdict is still given on §6.1's card under its token, its counter and its Undo. The row
+# holds the pin's four rules: an earlier "not seen" and this sitting's skip are lifted for the title
+# pinned, a pin of the other kind widens the session to it, a pin leads an empty table whatever the
+# slot called for, and a rated title is never re-opened.
+[[requirement]]
+id = "library-rate-a-title-you-know-is-pinned-into-the-queue"
+spec = "§6.1 (Queue) + §6.0 (the pending-verdicts banner's head)"
+milestone = "M5"
+kind = "integration"
+what = "GET /api/rate/search finds titles by name or alias (an exact name first, then a prefix, the library before the rest), each carrying the person's own live label when rated; a title pinned with head= is served on §6.1's card even after an earlier not-seen answer or a skip in this sitting, widens a session that does not hold its kind, and leads an empty table even where the counter called for a battle; a rated title is never served by a pin."
+why = "§6.1 is the only place a verdict is given, and a pin that silently did nothing looked exactly like a search that failed."
+tests = [
+    "backend/tests/test_rate_queue.py::test_the_search_ranks_the_name_a_person_remembers_first_and_says_what_is_rated",
+    "backend/tests/test_rate_queue.py::test_a_pinned_title_is_served_even_after_a_not_seen_answer",
+    "backend/tests/test_rate_session.py::test_the_search_finds_a_title_and_its_pick_is_rated_on_the_card",
+    "backend/tests/test_rate_session.py::test_a_pin_lifts_this_sittings_skip_and_an_earlier_not_seen",
+    "backend/tests/test_rate_session.py::test_a_pin_of_the_other_kind_widens_the_session_to_serve_it",
+    "backend/tests/test_rate_session.py::test_a_pin_is_served_on_an_empty_table_even_where_a_battle_was_due",
+    "e2e/specs/11-rate.spec.js::a title you know can be found on Rate and rated on its own card",
+]
+
+# C9.2 of the same test: 965 titles' only plot is an MPST synopsis, a full retelling with the ending
+# in it and sometimes an IMDb user's editorial note in front, and the sweep card's recall aid was its
+# first 180 characters. The overview rule itself belongs to the workstream that owns title_meta.
+[[requirement]]
+id = "library-rate-the-recall-aid-never-spoils-the-film"
+spec = "§6.1 (the sweep card: \"one title card\") + §6.8"
+milestone = "M5"
+kind = "integration"
+what = "A sweep card's recall aid is absent when the title's overview is its MPST synopsis, and is the overview's opening otherwise."
+why = "The card's task is 'did you see this?'; a retelling that opens with how the film ends answers it for the person."
+tests = [
+    "backend/tests/test_rate_session.py::test_the_recall_aid_never_shows_an_mpst_synopsis",
+]
+
+# C9.7 of the same test: v20260925's onboarding list shipped 32 of 100 titles with no poster and 25
+# whose only plot is an MPST retelling, and 30 of the household's first 127 verdicts landed on
+# posterless cards. The list is the corpus's and decision 247 reloads a corrected one; what the app
+# can do is say so on the import report before a household meets it.
+[[requirement]]
+id = "library-rate-a-thin-onboarding-list-is-named-on-import"
+spec = "§6.1 (Queue: seeded first run) + §10 (the import report)"
+milestone = "M5"
+kind = "integration"
+what = "Loading seed_list.json reports, under its own rule, how many onboarding titles carry no plot line a Rate card can show (no overview, or only the MPST synopsis) and how many carry no poster."
+why = "A thin onboarding list is the first thing a new household rates, and nothing else in the app makes it visible."
+tests = [
+    "backend/tests/test_dna_import.py::test_the_seed_list_import_reports_entries_with_no_card_text",
+]
+
+# C5.6 of the same test: below 720 px the control row scrolled sideways under a hidden scrollbar,
+# so the Series toggle and §6.1's persistent Undo sat off the right edge on an iPhone 13, and the
+# battle card's Tie, decisive toggle and Skip sat below the bottom bar.
+[[requirement]]
+id = "library-rate-phone-controls-are-on-screen"
+spec = "§6 preamble (phone-first, 48 px targets) + §6.1 (persistent Undo, persistent decisive toggle)"
+milestone = "M5"
+kind = "e2e"
+what = "On the phone project, every Rate mode, kind, find and Undo control and the sweep card's verdicts are in the viewport with no sideways scroll on the control row, and on a battle card Tie, the decisive toggle and Skip are in the viewport."
+why = "Decision 35's chip 'disables visibly' only if it can be seen, and a persistent toggle below the fold is not persistent in any sense a thumb can use."
+tests = [
+    "e2e/specs/06-responsive.spec.js::on a phone every Rate control is on screen, and a battle keeps Tie and its toggle in reach",
+]
+
+# Decisions 486 and 491 on the Rate surface: its copy in the member register. No section number,
+# milestone or model noun reaches a member (the battle why-line carried "(§6.3)" and "(§6.2)", the
+# drained state "The §6.3 comparison queue"), the reveal's score only behind Show the model, the
+# undo chip in words, the seed card without its 0-based position. `spec` cites the sections alone
+# until the two decisions are recorded.
+[[requirement]]
+id = "library-rate-member-copy-is-plain-language"
+spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy)"
+milestone = "M5"
+kind = "integration"
+what = "The battle why-line names the shared answer and the random draw and no section; the reveal carries no model number with Show the model off; the seed card names a starter decade and its P(seen); the rail, the balance widget, the undo chip and the drained state speak in ratings and plain words."
+why = "Both household members met section numbers and model nouns on Rate with Show the model off, and neither would open the app again."
+tests = [
+    "backend/tests/test_rate_queue.py::test_the_battle_why_line_names_the_shared_answer_and_the_random_draw_and_no_section",
+    "backend/tests/test_rate_session.py::test_the_reveal_carries_its_number_only_behind_show_the_model",
+    "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first",
+    "frontend/src/lib/rate.svelte.test.js::carries no section number, milestone or model noun in the copy it ships",
+    "frontend/src/lib/components/RateUndo.svelte.test.js::says only \"undo\" while disabled, with the reason beside it",
 ]
