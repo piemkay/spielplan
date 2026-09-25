@@ -14083,9 +14083,9 @@ re-import (decisions 162 and 247), followed by a full refit with priors.
 ranked surface moves, and Tonight's D threshold (decision 478) must be re-read. Formerly held-out
 titles change `e_source` from `cold_tower` to `backbone`; the 'no crowd data' badge had already left
 them at this deploy, because decision 475 admits to it only a title with no crowd rating (`item_n`
-null or 0), whatever `e_source` says. Decision 470's widening finds no uncoordinated seed-list title once this bundle is
-imported, and stays for a rated title with no crowd data of its own, such as an acquired one. §4.3
-gains one paragraph.
+null or 0), whatever `e_source` says. Decision 470's widening finds no uncoordinated seed-list
+title once this bundle is imported, and stays for a rated title with no crowd data of its own, such
+as an acquired one. §4.3 gains one paragraph.
 
 ---
 
