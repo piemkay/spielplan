@@ -105,6 +105,23 @@
         : ''
   );
 
+  // The shell's own test for an admin (the account menu offers the Admin view), so Home and the
+  // header cannot disagree about who reads the operator's words.
+  const canAdmin = $derived(
+    (session.user?.nav?.account ?? []).some((entry) => entry.key === 'admin')
+  );
+  // §3.1 names the bundle-less state "no bundle imported", and that name is the operator's: only
+  // an admin reads it, and a member reads the same fact as "no movie data yet" (decision 486
+  // clause 6). Neither is true while a restart is owed - a bundle IS imported and this server has
+  // not loaded it (decision 497) - and then each reads what the header's pill says.
+  const bundleNote = $derived(
+    session.hasBundle
+      ? ''
+      : session.restartRequired
+        ? canAdmin ? ' · bundle imported · restart needed' : ' · waiting for a restart'
+        : canAdmin ? ' · no bundle imported' : ' · no movie data yet'
+  );
+
   // §2's TZ and proposal 22's four bands are the server's answer; the local one is only a
   // placeholder for the frame before `/api/home` lands.
   const greeting = $derived(
@@ -371,7 +388,7 @@
   </div>
 
   <div class="data count" data-testid="count-line">
-    {count}{session.hasBundle ? '' : ' · no bundle imported'}
+    {count}{bundleNote}
   </div>
 </div>
 
@@ -393,6 +410,36 @@
   </div>
 {/if}
 
+<!-- §3.1's bundle-less state, said rather than crashed on, in the two places Home can meet it.
+     Only an admin reads §3.1's name for it and gets the door to §6.6 Data; a member is told the
+     same fact in the member register and offered no door they would meet a 403 behind (decision
+     486 clause 6), as the header already does. While a restart is owed a bundle IS imported and
+     "No artifact bundle has been imported" would be false (decision 497). -->
+{#snippet noBundle()}
+  <h2>Nothing to show yet</h2>
+  {#if session.restartRequired}
+    {#if canAdmin}
+      <p class="why">
+        A bundle is imported and this server has not loaded it yet. The Data tab says why.
+      </p>
+      <a class="btn-primary" href="/admin/data">Open the Data tab</a>
+    {:else}
+      <p class="why">
+        The movie data is waiting for a restart. Your shelves appear here once it has loaded.
+      </p>
+    {/if}
+  {:else if canAdmin}
+    <p class="why">
+      No artifact bundle has been imported. That is a legal state — the app runs, the setup
+      wizard and admin routes work, and every artifact-dependent surface says so instead of
+      erroring.
+    </p>
+    <a class="btn-primary" href="/admin/data">Import a bundle</a>
+  {:else}
+    <p class="why">There is no movie data yet. Once an admin adds it, your shelves appear here.</p>
+  {/if}
+{/snippet}
+
 {#if mode === 'grid'}
   <div class="modeline data" data-testid="home-mode" data-mode="grid" data-reason={reason}>
     {`${reason === 'person' ? 'filmography' : reason === 'search' ? 'search · best match first' : 'filtered'} · clear it to get your shelves back`}
@@ -403,13 +450,7 @@
   {:else if !items.length && !loading}
     <div class="empty card">
       {#if !session.hasBundle}
-        <h2>Nothing to show yet</h2>
-        <p class="why">
-          No artifact bundle has been imported. That is a legal state — the app runs, the setup
-          wizard and admin routes work, and every artifact-dependent surface says so instead of
-          erroring.
-        </p>
-        <a class="btn-primary" href="/admin/data">Import a bundle</a>
+        {@render noBundle()}
       {:else}
         <h2>No matches</h2>
         <!-- [M4.9 finding 19] This said "try a DNA term — cosy, dread, slow-burn — or check the
@@ -454,13 +495,7 @@
   {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
-    <h2>Nothing to show yet</h2>
-    <p class="why">
-      No artifact bundle has been imported. That is a legal state — the app runs, the setup
-      wizard and admin routes work, and every artifact-dependent surface says so instead of
-      erroring.
-    </p>
-    <a class="btn-primary" href="/admin/data">Import a bundle</a>
+    {@render noBundle()}
   </div>
 {:else}
   <!-- The mode marker stays for the tests that read `data-mode`, and says nothing a member has to
