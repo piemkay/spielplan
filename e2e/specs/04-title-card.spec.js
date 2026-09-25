@@ -94,6 +94,22 @@ test('every extracted tag shows its evidence quote and source', async ({ page })
   }
 });
 
+test('a quote cut mid-sentence says so and a one-source projection is fainter, never dropped', async ({
+  page,
+}) => {
+  // §4.1 rules 1 and 2, and C9.5/C9.6 of the 2026-09-25 user test. Heat's extracted
+  // themes.obsession quotes "the work eats the man and he lets it", a span with neither a sentence's
+  // start nor its end, so it is printed as the fragment it is; the stored quote is untouched. Its
+  // projected tier carries two terms, one on two sources and one on a single source: both are on
+  // the card, and only the single-source one is drawn fainter.
+  const panel = page.getByLabel('Title detail');
+  await expect(panel.locator('.quote', { hasText: 'the work eats the man' })).toHaveText(
+    '“…the work eats the man and he lets it…”'
+  );
+  await expect(panel.locator('.chips .chip')).toHaveCount(2);
+  await expect(panel.locator('.chips .chip.faint')).toHaveCount(1);
+});
+
 test('salience is shown, and nothing is filtered by it', async ({ page }) => {
   // §4.1 rule 2: weights, never filters. Salience is visible next to the tag it weights.
   const panel = page.getByLabel('Title detail');

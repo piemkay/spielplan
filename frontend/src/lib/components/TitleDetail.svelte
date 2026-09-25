@@ -21,6 +21,7 @@
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { dismiss } from '$lib/dismiss.js';
   import RatePoster from '$lib/components/RatePoster.svelte';
+  import { quoteText } from '$lib/quote.js';
 
   let { titleId, onClose, onPerson, onStateChange } = $props();
 
@@ -242,13 +243,14 @@
           >
         </div>
         <div class="people">
-          <!-- Keyed by person AND job, delimited: `credits_for` collapses to one row per
-               (person, job), and the delimiter is what stops person 700 + job `1Actor` colliding
-               with person 7001 + job `Actor`. The undelimited key threw on 1,216 real titles
-               where one person held one job under two department spellings, and with no
-               +error.svelte the whole card died mid-render. Keyed, not unkeyed: the key is what
-               keeps `onPerson` attached to the right person. -->
-          {#each shownCredits as c (c.person_id + ':' + c.job)}
+          <!-- Keyed by person AND class, delimited: `credits_for` collapses to one row per
+               (person, role class), falling back to the job only for a row with no class, and the
+               delimiter is what stops person 700 + `1cast` colliding with person 7001 + `cast`.
+               The undelimited key threw on 1,216 real titles where one person held one job under
+               two department spellings, and with no +error.svelte the whole card died mid-render.
+               Keyed, not unkeyed: the key is what keeps `onPerson` attached to the right person.
+               [C9.3 of the 2026-09-25 user test] -->
+          {#each shownCredits as c (c.person_id + ':' + (c.role_class ?? c.job))}
             <button class="person" onclick={() => onPerson(c)}>
               <span class="dot">{c.name.charAt(0)}</span>
               <span class="pname">{c.name}</span>
@@ -329,7 +331,9 @@
               <span class="data">sal {tag.salience}</span>
             </div>
             {#each tag.evidence as e}
-              <div class="quote">“{e.quote}”</div>
+              <!-- A span cut mid-sentence is marked as a fragment; the stored quote is untouched.
+                   `lib/quote.js` says why. [C9.6 of the 2026-09-25 user test] -->
+              <div class="quote">“{quoteText(e.quote)}”</div>
               <div class="data src">{e.source}</div>
             {/each}
           </div>
@@ -347,8 +351,17 @@
                `dna_projected` is UNIQUE (title_id, version, term), so no second provider can put
                one term on this list twice and the term is a key here on its own merits.
                [M4.9 review cycle 1] -->
+          <!-- A term one source projected is drawn fainter than one several agree on, and never
+               dropped: §4.1 rule 2 makes the weight a weight and never a filter. Heat's
+               teen_protagonist rests on a single tag and used to look as sure as a four-source
+               term. [C9.5 of the 2026-09-25 user test] -->
           {#each data.dna.projected as p (p.facet + ':' + p.term)}
-            <span class="chip" style:color={facetColour(p.facet)} style:border-color={facetColour(p.facet)}>
+            <span
+              class="chip"
+              class:faint={p.weight != null && p.weight <= 1}
+              style:color={facetColour(p.facet)}
+              style:border-color={facetColour(p.facet)}
+            >
               {p.term}
             </span>
           {/each}
@@ -618,6 +631,10 @@
     border: 1px solid;
     border-radius: var(--r-pill);
     opacity: 0.85;
+  }
+  .chip.faint {
+    opacity: 0.55;
+    border-style: dashed;
   }
   .err {
     color: var(--ember-lift);

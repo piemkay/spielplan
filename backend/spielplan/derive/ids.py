@@ -165,6 +165,12 @@ _SUPPORT = (
 # is the same rule in all six.
 CAST_BILLING_LIMIT = 6
 
+# The closed vocabulary `0015_seed.sql:50-56` gives `credit.role_class`. A stored value outside it
+# is not a class: five bundle credits carry the corpus corrections ledger's literal `crew`, which
+# `derive/ledgers.py`'s NAMED CHANGE 4 already refuses to write, and a reader classes those rows
+# by `class_of` below rather than inventing an eighth class. [C9.3 of the 2026-09-25 user test]
+ROLE_CLASSES = frozenset({*_JOB_MAP.values(), "cast"})
+
 
 def classify_role(department: str | None, job: str | None, is_cast: bool = False) -> str | None:
     """The §3.1 role this job holds, or None for everything that is not one of the seven."""
@@ -176,6 +182,14 @@ def classify_role(department: str | None, job: str | None, is_cast: bool = False
     if any(q in j for q in _SUPPORT):
         return None
     return _JOB_MAP.get(j)
+
+
+def class_of(role_class: str | None, department: str | None, job: str | None) -> str | None:
+    """A stored credit's §3.1 class: the stored one when the vocabulary carries it, else what
+    `classify_role` makes of the job, else None."""
+    if role_class in ROLE_CLASSES:
+        return role_class
+    return classify_role(department, job)
 
 
 def keep_credit(role_class: str | None, billing_order: int | None) -> bool:
@@ -198,10 +212,62 @@ _PERSON_EXTRAS = frozenset({"birth_year", "profile_path"})
 
 _PERSON_BY_IMDB = "SELECT id, imdb_id, tmdb_id, birth_year, profile_path FROM person WHERE imdb_id = $1"
 _PERSON_BY_TMDB = "SELECT id, imdb_id, tmdb_id, birth_year, profile_path FROM person WHERE tmdb_id = $1"
+_PERSON_BY_ID = "SELECT id, imdb_id, tmdb_id, birth_year, profile_path FROM person WHERE id = $1"
 _PERSON_BY_NAME = (
     "SELECT id, imdb_id, tmdb_id, birth_year, profile_path FROM person"
     " WHERE name = $1 AND imdb_id IS NULL AND tmdb_id IS NULL"
 )
+
+_CREDITED_ON = """
+    SELECT DISTINCT p.id, p.name, (p.imdb_id IS NOT NULL OR p.tmdb_id IS NOT NULL) AS has_ids,
+           c.role_class, c.department, c.job
+      FROM credit c
+      JOIN person p ON p.id = c.person_id
+     WHERE c.title_id = $1
+     ORDER BY p.id
+"""
+
+# (loose name, §3.1 class) -> the person already credited on ONE title, or None where two people
+# who both carry ids share the key and the title cannot say which one a bare name means.
+Credited = dict[tuple[str, str | None], tuple[int | None, bool]]
+
+
+def note_credited(
+    credited: Credited, name: str | None, role_class: str | None, person_id: int, has_ids: bool
+) -> None:
+    """Record that `person_id` holds `role_class` on the title `credited` describes.
+
+    A person with ids beats a person without, because the id'd row is the one a name-only source
+    was failing to find; two different id'd people under one key are ambiguous and match nothing.
+    Between two people without ids the lower id is kept, so the answer does not depend on the
+    order credits happen to be read in. A name that folds to nothing keys nothing (`loose_name`
+    empties a name written in a script it does not fold, and "" would match every such name).
+    """
+    key = (loose_name(name), role_class)
+    if not key[0]:
+        return
+    held = credited.get(key)
+    if held is None:
+        credited[key] = (person_id, has_ids)
+        return
+    held_id, held_ids = held
+    if held_id == person_id or held_id is None:
+        return
+    if has_ids and held_ids:
+        credited[key] = (None, True)
+    elif has_ids or (not held_ids and person_id < held_id):
+        credited[key] = (person_id, has_ids)
+
+
+async def credited_on(conn: asyncpg.Connection, title_id: int) -> Credited:
+    """Who is already credited on this title, keyed for `upsert_person`'s same-title match."""
+    credited: Credited = {}
+    for row in await conn.fetch(_CREDITED_ON, title_id):
+        note_credited(
+            credited, row["name"], class_of(row["role_class"], row["department"], row["job"]),
+            row["id"], row["has_ids"],
+        )
+    return credited
 
 
 async def upsert_person(
@@ -210,6 +276,8 @@ async def upsert_person(
     name: str,
     imdb_id: str | None = None,
     tmdb_id: int | None = None,
+    role_class: str | None = None,
+    credited: Credited | None = None,
     **extra: Any,
 ) -> int:
     """Find this human's `person` row or create one, filling blanks and clobbering nothing.
@@ -234,6 +302,15 @@ async def upsert_person(
     among the people who carry neither. Falling back to a name match for a person who DOES carry
     an id would merge two humans who share a name, which is the failure `loose_name` exists to
     avoid on the other side.
+
+    ONE NAMED CHANGE TO THAT ORDER, AND IT IS SCOPED TO ONE TITLE. A credit with no id is first
+    matched against `credited` - the people already credited on THIS title in the same §3.1 class,
+    by `loose_name` - and only then against the whole table. TMDB's credits carry a `tmdb_id` and
+    OMDb's only a name, so the corpus's order minted a second, name-only person for every OMDb
+    credit on every acquisition: the seeded install held 76 such splits on its 14 acquired titles
+    (Ali Abbasi as 47626 and as 1000000018 on The Apprentice), and §6.0's card showed each of them
+    twice. One title and one class is what keeps this from being the global name merge the
+    paragraph above refuses. [C9.4 of the 2026-09-25 user test; §4.1 "dedupe at read time"]
     """
     name = clean_name(name) or "?"
     imdb_id = imdb_id if (imdb_id and re.fullmatch(r"nm\d{5,10}", str(imdb_id))) else None
@@ -242,6 +319,10 @@ async def upsert_person(
         row = await conn.fetchrow(_PERSON_BY_IMDB, imdb_id)
     if row is None and tmdb_id:
         row = await conn.fetchrow(_PERSON_BY_TMDB, int(tmdb_id))
+    if row is None and not imdb_id and not tmdb_id and credited is not None:
+        same_title, _has_ids = credited.get((loose_name(name), role_class), (None, False))
+        if same_title is not None:
+            row = await conn.fetchrow(_PERSON_BY_ID, same_title)
     if row is None and not imdb_id and not tmdb_id:
         row = await conn.fetchrow(_PERSON_BY_NAME, name)
 

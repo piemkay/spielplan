@@ -22,13 +22,15 @@ correction is therefore recorded here, where the reads actually are. [M4.16 spec
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import asyncpg
 
 from spielplan.db import dna_terms
+from spielplan.derive import ids as derive_ids
+from spielplan.importer import meta
 
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
@@ -408,12 +410,114 @@ async def get_title(
     return dict(row) if row else None
 
 
+_CREDIT_ROWS = """
+    SELECT c.person_id, p.name, p.imdb_id, p.tmdb_id, c.source, c.department, c.job,
+           c.character, c.billing_order, c.role_class
+      FROM credit c JOIN person p ON p.id = c.person_id
+     WHERE c.title_id = $1
+     -- `p.name` first so the fold can take a person's first appearance as its place in the
+     -- name order: the database's collation sorts the card's names, as it did when this read
+     -- ended in `ORDER BY ..., p.name`, and a Python sort of the same strings would not agree.
+     ORDER BY p.name, c.person_id, c.billing_order NULLS LAST, c.source, c.id
+"""
+
+
+def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One title's credit rows folded to the rows §6.0's card lists. Pure, so `ops/devstub.py`
+    folds its fixture by this function rather than by a copy of it.
+
+    ONE ROW PER (person, §3.1 class), and the job string is no longer the key. Two sources spell
+    one credit two ways - TMDB's 'Original Music Composer' is Wikidata's 'Composer', its 'Writer'
+    is Wikidata's 'Screenplay' - so Heat showed Elliot Goldenthal twice and Michael Mann as Writer
+    and as Screenplay. `role_class` is the corpus's own normalisation and is NULL on none of the
+    seeded install's rows; a stored class outside the closed vocabulary (the five `crew` rows the
+    corpus corrections ledger wrote) is classed by `derive/ids.class_of`, and a row with no class
+    at all keys on its job as before. `job` is the label of the highest-priority source that
+    credited it (`importer/meta.SOURCE_PRIORITY`, so TMDB's wins) and `jobs` keeps every
+    spelling, in that order, because a writer credited for Novel and for Screenplay is two facts.
+
+    AND ONE PERSON WRITTEN AS TWO ON ONE TITLE IS ONE ROW. The corpus mints a person per id it
+    saw, so an imdb-only row and a tmdb-only row for one human (John Williams on Schindler's List)
+    reach this read as two person ids with one name. Within a title and a class, people whose
+    `loose_name` agrees are one row when their ids cannot disagree - at most one imdb id and at
+    most one tmdb id among them - and stay apart when they can. `person_id` is the one carrying
+    the most ids, then the lowest id; `person_ids` lists them all. [C9.3, C9.4 of the 2026-09-25
+    user test; §4.1 "dedupe at read time"]
+    """
+    rank = {source: i for i, source in enumerate(meta.SOURCE_PRIORITY)}
+    order: dict[int, int] = {}
+    people: dict[int, Mapping[str, Any]] = {}
+    groups: dict[tuple[int, Any], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        order.setdefault(row["person_id"], len(order))
+        people.setdefault(row["person_id"], row)
+        cls = derive_ids.class_of(row["role_class"], row["department"], row["job"])
+        groups.setdefault((row["person_id"], cls or ("job", row["job"])), []).append(row)
+
+    buckets: dict[tuple[str, Any], list[tuple[int, Any]]] = {}
+    for key in groups:
+        loose = derive_ids.loose_name(people[key[0]]["name"])
+        buckets.setdefault((loose, key[1]) if loose else ("", key), []).append(key)
+
+    folded = []
+    for keys in buckets.values():
+        members = [people[pid] for pid, _ in keys]
+        agree = all(
+            len({m[field] for m in members if m[field]}) <= 1 for field in ("imdb_id", "tmdb_id")
+        )
+        for part in ([keys] if agree else [[k] for k in keys]):
+            credit = _credit_row([row for key in part for row in groups[key]], part, people, rank)
+            # Directing first, then billing, then name: the order the SQL read used to end in.
+            folded.append(((
+                "Directing" not in credit["departments"], credit["ord"] is None,
+                credit["ord"] or 0, min(order[pid] for pid, _ in part),
+            ), credit))
+    return [credit for _key, credit in sorted(folded, key=lambda f: f[0])]
+
+
+def _credit_row(rows, keys, people, rank) -> dict[str, Any]:
+    lead = min(
+        (people[pid] for pid, _ in keys),
+        key=lambda p: (-(bool(p["imdb_id"]) + bool(p["tmdb_id"])), p["person_id"]),
+    )
+    cls = keys[0][1] if isinstance(keys[0][1], str) else None
+    place = lambda row: rank.get(row["source"], len(rank))  # noqa: E731
+    jobs: dict[str, tuple[int, str]] = {}
+    for row in rows:
+        seen = jobs.get(row["job"])
+        if seen is None or place(row) < seen[0]:
+            jobs[row["job"]] = (place(row), row["job"])
+    billed = [row["billing_order"] for row in rows if row["billing_order"] is not None]
+    characters = sorted(
+        (row for row in rows if row["character"] is not None),
+        key=lambda row: (row["billing_order"] is None, row["billing_order"] or 0, row["source"]),
+    )
+    departments = sorted({row["department"] for row in rows if row["department"] is not None})
+    return {
+        "person_id": lead["person_id"],
+        "person_ids": sorted({pid for pid, _ in keys}),
+        "name": lead["name"],
+        "role_class": cls,
+        "job": min(
+            rows, key=lambda row: (place(row), row["billing_order"] is None,
+                                   row["billing_order"] or 0, row["job"] or "")
+        )["job"],
+        "jobs": [job for _, job in sorted(jobs.values(), key=lambda j: (j[0], j[1] or ""))],
+        "department": departments[0] if departments else None,
+        "departments": departments,
+        "ord": min(billed) if billed else None,
+        "character": characters[0]["character"] if characters else None,
+        "sources": sorted({row["source"] for row in rows}),
+    }
+
+
 async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str, Any]]:
     """§4.1: 'credit (dedupe at read time, never at import)'.
 
     The same person/job can arrive from several sources; import keeps every row so a source can
-    be dropped later. Here we collapse to **one row per (person, job)**, keeping the smallest
-    billing order and listing which sources agreed.
+    be dropped later. Here we collapse to **one row per (person, class)** - `fold_credits` says
+    why the job stopped being the key - keeping the smallest billing order and listing which
+    sources agreed.
 
     NOT per (person, department, job). TMDB records the same job under two department spellings
     — `Acting`/`Actor`, `Directing`/`Director`, `Editing`/`Editor` — and the real export carries
@@ -423,8 +527,8 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
     §4.1's dedupe is a statement about the *person and the job*; the department is how a source
     files it.
 
-    The departments are aggregated rather than chosen between (`array_agg(DISTINCT …)`, the same
-    shape `sources` already has), because §4.1 rule 1 keeps what the sources said, and nothing
+    The departments are aggregated rather than chosen between (a sorted list, the same shape
+    `sources` already has), because §4.1 rule 1 keeps what the sources said, and nothing
     here normalises a spelling: eighteen ship. `department` stays a single string for the callers
     that read it and `min()` is what picks it — an alphabetical accident, not a rule, and the
     corpus is the proof. Of its 7,918 colliding groups, min() lands on the TMDB canonical
@@ -432,33 +536,16 @@ async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str,
     `Director`/`Directing` → Directing) and on the other spelling for 1,353
     (`Writer`/`Writing` → **Writer**, `Sound`/`Music` → Music, `Production Designer`/`Art` →
     Art). Which is why `departments` is what carries the truth and this key is compatibility.
+
+    The response key stays `ord` although 0015 renamed the column `billing_order`, because §6.0's
+    card reads it; and `character` is the lowest billing order's, ties by source, because 2,300
+    (title, person) pairs carry more than one across sources and an unordered pick made the
+    payload a function of COPY order. §6.0's card list does not name the character, so the field
+    ships and no surface shows it (decision 197). The fold is in Python because the class of a
+    `crew` row is `classify_role`'s answer and the name merge is `loose_name`'s, and a second
+    spelling of either in SQL is the drift `derive/ids.py` exists to prevent.
     """
-    rows = await conn.fetch(
-        """
-        SELECT c.person_id, p.name, min(c.department) AS department,
-               array_agg(DISTINCT c.department) AS departments, c.job,
-               -- 0015 renamed `ord` to `billing_order` (the corpus's own column name); the
-               -- response key stays `ord` because §6.0's card reads it.
-               min(c.billing_order)             AS ord,
-               -- Ordered, because a bare `[1]` over an unordered array_agg is COPY order: 2,300
-               -- (title, person) pairs carry more than one distinct character across sources, so
-               -- which one this payload carried depended on the physical row order of the
-               -- import. The PAYLOAD is what the aggregate makes deterministic, not a rendering:
-               -- §6.0's card list does not name the character and `TitleDetail.svelte` prints
-               -- name and job alone, so the field ships and no surface shows it (decision 197).
-               (array_agg(c.character ORDER BY c.billing_order NULLS LAST, c.source)
-                    FILTER (WHERE c.character IS NOT NULL))[1] AS character,
-               array_agg(DISTINCT c.source)     AS sources
-          FROM credit c JOIN person p ON p.id = c.person_id
-         WHERE c.title_id = $1
-         GROUP BY c.person_id, p.name, c.job
-         -- `c.department` is no longer a grouping column, so the directing-first sort has to be
-         -- an aggregate: Postgres rejects the bare column outright rather than mis-sorting.
-         ORDER BY bool_or(c.department = 'Directing') DESC, min(c.billing_order) NULLS LAST, p.name
-        """,
-        title_id,
-    )
-    return [dict(r) for r in rows]
+    return fold_credits([dict(r) for r in await conn.fetch(_CREDIT_ROWS, title_id)])
 
 
 async def dna_for(

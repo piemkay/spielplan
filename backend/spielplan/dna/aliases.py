@@ -24,13 +24,12 @@ bug rather than an argument about which one was meant.
 
 **GAP 1: `kind='lexicon'` ROWS NEVER PROJECT.** The corpus skips them
 (`mdc/dna/project.py:144-149`) for a measured reason, carried verbatim in the skip's own comment
-below. The app's loader reads only `raw_term` and `vocab_term` (`importer/dna.py:200-215`) and
-drops the column entirely, so until the loader fills it a lexicon row is stored indistinguishably
-from a projecting one. `0027` adds `dna_alias.kind` and decision 383 records the one-line loader
-fill as owed rather than taken: `importer/dna.py` belongs to a milestone building in parallel.
-The consequence is stated rather than hidden -- a NULL `kind` reads as "not known to be lexicon",
-which is every shipped row on this install today, so the rule is armed and currently excludes
-nothing.
+below. `0027` added `dna_alias.kind` and decision 383 recorded the loader's fill as owed; decision
+500 took it, so `importer/dna._load_aliases` stores the column as shipped, and `0037` writes
+`lexicon` onto the install seeded before the fill: the corpus's 84 lexicon rows, and the four
+presence keywords ('teenage girl' and three like it) that projected `characters.teen_protagonist`,
+a lead-role term, onto Heat. A NULL `kind` still reads as "not known to be lexicon", which is what
+a map shipping no such column means.
 
 **GAP 2: THE KEY IS THE NORMALISED RAW TERM.** The corpus keys the map on
 `mdc/aspects/prompt.normalise` output because the term pool the map was built from is keyed on it
@@ -194,8 +193,8 @@ async def load_alias_map(
         # The corpus's own comment (`mdc/dna/project.py:144-149`), re-wrapped to this file's
         # width and otherwise verbatim. Two named changes to the test under it: the match is
         # case-folded, because the column is hand-authored in a TSV and `Lexicon` is the same
-        # decision as `lexicon`; and NULL reads as "not known to be lexicon", which is every row
-        # on this install until the loader fills the column (decision 383).
+        # decision as `lexicon`; and NULL reads as "not known to be lexicon", which is what a map
+        # shipping no `kind` column means (decisions 383 and 500).
         if (row["kind"] or "").strip().casefold() == "lexicon":
             continue
         key = alias_key(row["alias"])

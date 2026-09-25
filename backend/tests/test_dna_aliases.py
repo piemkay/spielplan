@@ -162,20 +162,26 @@ async def test_the_four_spellings_of_one_alias_resolve_to_one_term(loaded, keywo
 
 
 async def test_a_row_the_loader_wrote_with_no_kind_is_in_the_map(loaded):
-    """NULL `kind` reads as "not known to be lexicon", and that is every shipped row today.
+    """NULL `kind` reads as "not known to be lexicon", and so does every kind that is not it.
 
-    The measurement rather than the assumption: the bundle's map file carries a `kind` column
-    with `alias` and `spelling` in it, `_load_aliases` reads two columns and drops the rest, so
-    both rows land NULL. A reader that treated NULL as "exclude" would empty the map on every
-    install in existence, which is what getting decision 383's default backwards costs.
+    This test used to measure the debt: the bundle's map file carries a `kind` column with
+    `alias` and `spelling` in it, and `_load_aliases` read two columns and dropped the rest, so
+    both rows landed NULL - on the seeded install, all 4,108 of them. Decision 500 took decision
+    383's owed fill, so the two rows now land as shipped and both still project. A row with no
+    kind at all is what a map shipping no such column writes, and every row of an install seeded
+    before the fill that 0037 does not name: it is inserted directly, because a reader that
+    treated NULL as "exclude" would empty those maps, which is what getting decision 383's default
+    backwards costs. [owner instruction of 2026-09-25 after the first household user test]
     """
     kinds = await loaded.fetch("SELECT alias, kind FROM dna_alias WHERE version = 'v1'")
-    assert {r["alias"]: r["kind"] for r in kinds} == {"slow-burn": None, "cozy": None}
+    assert {r["alias"]: r["kind"] for r in kinds} == {"slow-burn": "alias", "cozy": "spelling"}
+    await _alias(loaded, "slow burner", "pacing.patient", kind=None)
 
     amap = await load_alias_map(loaded, "v1")
 
     assert amap["slow burn"] == ("pacing", "pacing.patient")
     assert amap["cozy"] == ("mood", "mood.cosy")
+    assert amap["slow burner"] == ("pacing", "pacing.patient")
 
 
 async def test_a_lexicon_row_never_enters_the_map(loaded):

@@ -15,18 +15,34 @@ fields another source has.
 The order is the corpus's, not this app's. Decision 162 makes the corpus a one-time seed for
 content, so the seed carries the rule it was assembled under: `BUNDLE.json.source_priority`
 when the bundle ships one, `SOURCE_PRIORITY` below with a report line when it does not.
+
+THREE VALUES THE WALK MAY NOT TAKE, and each is this app's rule rather than the corpus's, so the
+order stays the corpus's and only what is eligible for it narrows. [owner instruction of
+2026-09-25 after the first household user test]
+
+  * An `mpst` synopsis is never the overview (decision 499). On the real bundle the last resort
+    was the only resort for 965 titles, and a card then led with a full retelling, ending
+    included, up to 45,643 characters. The rows stay in `title_meta` (§4.1) and still feed a pack.
+  * A plot another title also carries, from a source matched onto the title by page or dataset
+    row rather than by the provider's own id, is absent (decision 499): 84 MPST synopses and 102
+    Wikipedia pages are each attached to two or more titles, and Moulin Rouge (1952) showed the
+    2001 film's plot. `shared_plot_texts` is the one definition, and `dna/packs.py` reads it too.
+  * An image on a host this app may not serve is absent (decision 501, on decision 483's hosts),
+    so `title.poster_path` is servable by construction: OMDb's IMDb-hosted poster used to win
+    over TVmaze's for 157 titles.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import asyncpg
 
+from spielplan.art.hosts import servable
 from spielplan.importer.report import ImportReport
 
 # `mdc/export.py:34-45`, verbatim. mpst sits last on purpose: its synopses are the longest plot
@@ -41,6 +57,94 @@ SOURCE_PRIORITY: tuple[str, ...] = (
 # `plot_short` exists on exactly one source and is better than nothing.
 _PLOT_FIELDS = ("plot_full", "plot_short")
 _CARD_FIELDS = {"tagline": "tagline", "poster_path": "poster_url", "backdrop_path": "backdrop_url"}
+_IMAGE_FIELDS = ("poster_path", "backdrop_path")
+
+# Decision 499. Still in `SOURCE_PRIORITY`, where it orders nothing now that it cannot win the one
+# field it carries; kept there so the tuple stays the corpus's verbatim.
+NEVER_OVERVIEW = frozenset({"mpst"})
+
+# Decision 499: the sources whose plot is a page or a dataset row MATCHED onto a title - Wikipedia
+# by page title, MPST by an imdb id in a third-party CSV - rather than the provider's own record of
+# it. Measured on the seeded install, those two are where a shared text means a wrong film (177
+# MPST and 210 Wikipedia rows); the 31 shared tmdb texts, and trakt's mirror of them, are one
+# novel's synopsis on each of its adaptations (Jane Eyre 1943/1983/1996), true of every member.
+MATCHED_TEXT_SOURCES = ("wikipedia", "mpst")
+
+# The same text on another title, in the same field, from any source. `btrim` so padding spaces do
+# not make two copies of one synopsis differ. Two branches rather than one over a VALUES list so
+# each EXISTS names the expression 0037's hash index is built on; a derive asks this about one title
+# and would otherwise scan every synopsis in the install to answer.
+_SHARED_PLOT = """
+SELECT m.title_id, m.source, 'plot_full' AS field
+  FROM title_meta m
+ WHERE m.source = ANY($2::text[]) AND ($1::int[] IS NULL OR m.title_id = ANY($1::int[]))
+   AND btrim(m.payload ->> 'plot_full') <> ''
+   AND EXISTS (SELECT 1 FROM title_meta o
+                WHERE btrim(o.payload ->> 'plot_full') = btrim(m.payload ->> 'plot_full')
+                  AND o.title_id <> m.title_id)
+UNION ALL
+SELECT m.title_id, m.source, 'plot_short' AS field
+  FROM title_meta m
+ WHERE m.source = ANY($2::text[]) AND ($1::int[] IS NULL OR m.title_id = ANY($1::int[]))
+   AND btrim(m.payload ->> 'plot_short') <> ''
+   AND EXISTS (SELECT 1 FROM title_meta o
+                WHERE btrim(o.payload ->> 'plot_short') = btrim(m.payload ->> 'plot_short')
+                  AND o.title_id <> m.title_id)
+"""
+
+
+async def shared_plot_texts(
+    conn: asyncpg.Connection, title_ids: Sequence[int] | None = None
+) -> set[tuple[int, str, str]]:
+    """`(title_id, source, field)` for every matched-source plot another title also carries.
+
+    Decision 499's one definition, read by the card resolution below and by `dna/packs.py`, whose
+    pack takes the LONGEST plot and so is where a collided Wikipedia page won most often (157
+    titles). Both members of a pair are flagged, because nothing on the row says which film the
+    text is about; the right one loses a text a better source usually outranks anyway.
+    """
+    ids = None if title_ids is None else list(title_ids)
+    rows = await conn.fetch(_SHARED_PLOT, ids, list(MATCHED_TEXT_SOURCES))
+    return {(r["title_id"], r["source"], r["field"]) for r in rows}
+
+
+def card_fields(
+    by_source: Mapping[str, Mapping[str, Any]],
+    priority: Sequence[str],
+    shared: Collection[tuple[str, str]] = (),
+) -> dict[str, Any]:
+    """One title's card, per field, from its per-source rows: `best()` over what is eligible.
+
+    `shared` is this title's `(source, field)` pairs out of `shared_plot_texts`. Pure, so the
+    import, §8 stage 3 and `ops/devstub.py` resolve a card by one function rather than three.
+    """
+    def eligible(field: str, keep) -> dict[str, Mapping[str, Any]]:
+        return {s: row for s, row in by_source.items() if keep(s, (row or {}).get(field))}
+
+    def plot(field: str) -> Any:
+        return best(
+            eligible(field, lambda s, _v: s not in NEVER_OVERVIEW and (s, field) not in shared),
+            field, priority,
+        )
+
+    card: dict[str, Any] = {
+        "overview": next((v for f in _PLOT_FIELDS if (v := plot(f)) is not None), None),
+        "tagline": best(by_source, _CARD_FIELDS["tagline"], priority),
+    }
+    for pg in _IMAGE_FIELDS:
+        src = _CARD_FIELDS[pg]
+        card[pg] = best(eligible(src, lambda _s, v: servable(v)), src, priority)
+    return card
+
+
+def refused_images(by_source: Mapping[str, Mapping[str, Any]]) -> int:
+    """How many image URLs these rows carry on a host this app may not serve (decision 501)."""
+    return sum(
+        1
+        for row in by_source.values()
+        for pg in _IMAGE_FIELDS
+        if (v := (row or {}).get(_CARD_FIELDS[pg])) not in (None, "", 0) and not servable(v)
+    )
 
 
 def source_priority(bundle_root: Path | None, report: ImportReport | None = None) -> list[str]:
@@ -216,15 +320,25 @@ async def resolve_title_fields(
     for row in rows:
         grouped.setdefault(row["title_id"], {})[row["source"]] = row["payload"]
 
+    # Scoped like the read above. A derive's text is compared against every other title's, and
+    # the other member of a pair it creates keeps its card until its own next resolution: this
+    # function writes the titles it names and no others (decision 375).
+    shared: dict[int, set[tuple[str, str]]] = {}
+    for title_id, source, field in await shared_plot_texts(conn, ids):
+        shared.setdefault(title_id, set()).add((source, field))
+
     updates = []
+    without_overview = refused = 0
     for title_id, by_source in grouped.items():
-        overview = next(
-            (v for f in _PLOT_FIELDS if (v := best(by_source, f, priority)) is not None), None
+        card = card_fields(by_source, priority, shared.get(title_id, ()))
+        without_overview += card["overview"] is None and any(
+            (row or {}).get(f) not in (None, "", 0)
+            for row in by_source.values() for f in _PLOT_FIELDS
         )
-        resolved = {pg: best(by_source, src, priority) for pg, src in _CARD_FIELDS.items()}
+        refused += refused_images(by_source)
         updates.append(
-            (title_id, overview, resolved["tagline"],
-             resolved["poster_path"], resolved["backdrop_path"])
+            (title_id, card["overview"], card["tagline"],
+             card["poster_path"], card["backdrop_path"])
         )
 
     await conn.executemany(
@@ -267,4 +381,14 @@ async def resolve_title_fields(
         f"{len(updates)} title cards resolved per field from title_meta; "
         f"{trailers} carry a trailer key",
         titles=len(updates),
+    )
+    # The two narrowings stated where the operator reads the import, with the counts that make
+    # them checkable: a card that lost its text or its art to a rule looks, on the screen, exactly
+    # like a title no source had anything for.
+    report.note(
+        "title-card",
+        f"{without_overview} titles carry plot text only from MPST or text another title shares, "
+        f"and show no overview (decision 499); {refused} poster/backdrop URLs on hosts this app "
+        "may not serve were skipped (decision 501)",
+        without_overview=without_overview, refused_images=refused,
     )

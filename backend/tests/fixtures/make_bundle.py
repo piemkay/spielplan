@@ -64,15 +64,24 @@ TITLES = [
 # and a plot and a poster, omdb has a poster and no tagline, wikipedia is the only source with
 # plot_short. A whole-block precedence rule blanks fields another source has — which is why the
 # corpus resolves per field, and why this fixture can tell the two rules apart.
+#
+# NO URL HERE IS ONE THE APP WOULD FETCH, on purpose. The e2e and CI bundle is built from this
+# module (`e2e/run.mjs`), and a poster on `image.tmdb.org` or `static.tvmaze.com` resolves onto
+# `title.poster_path`, which the art route (decision 483) fetches from the real internet. So tmdb's
+# are TMDB's bare file paths, and omdb's are the IMDb-hosted URLs OMDb really serves, which
+# decision 501's host rule refuses: the shape that put 157 of them on the seeded install's cards.
+# A test that needs a servable poster writes one into its own copy of the bundle.
 #   (title_id, source, tagline, plot_short, plot_full, poster_url, backdrop_url)
 META = [
     (1, "tmdb", "A Los Angeles crime saga.", None,
      "Heat — a synthetic plot with emoji 🎬 and a ZWSP​.", "/heat.jpg", "/heat-bd.jpg"),
-    (1, "omdb", None, None, "A shorter synthetic plot.", "/heat-omdb.jpg", None),
-    (1, "wikipedia", None, "A one-line synthetic summary.", None, None, None),
+    (1, "omdb", None, None, "A shorter synthetic plot.",
+     "https://m.media-amazon.com/images/M/heat-omdb.jpg", None),
+    (1, "wikipedia", None, "Heat — a one-line synthetic summary.", None, None, None),
     # No tmdb row: the preferred source is simply absent, and the next one carries the fields.
-    (2, "omdb", None, None, "Prisoners — a synthetic plot.", "/prisoners.jpg", None),
-    (2, "wikipedia", None, "A one-line synthetic summary.", None, None, None),
+    (2, "omdb", None, None, "Prisoners — a synthetic plot.",
+     "https://m.media-amazon.com/images/M/prisoners.jpg", None),
+    (2, "wikipedia", None, "Prisoners — a one-line synthetic summary.", None, None, None),
     (3, "tmdb", "This bear has manners.", None, "Paddington 2 — a synthetic plot.",
      "/pad2.jpg", None),
     (4, "tmdb", None, None, "Chungking Express — a synthetic plot.", "/ce.jpg", None),
