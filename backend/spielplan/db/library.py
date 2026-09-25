@@ -195,6 +195,28 @@ async def household_ids(conn: asyncpg.Connection) -> list[int]:
     return [int(r["id"]) for r in rows]
 
 
+def _dna_term_matches(needle: str) -> str:
+    """Whether the `dna_tagged` row `dt` is the term a person typed, as SQL over the bound `needle`
+    (already stripped and lower-cased).
+
+    Four spellings of one term: the id (`era.wwii`), its bare leaf (`wwii`), and the two names a
+    member reads for it (decision 486 clause 4) - the label the vocabulary ships ("World War II",
+    `dna_term.label`) and, where it shipped none, `label_of`'s fallback, the leaf with its
+    underscores as spaces. A member types the word the card and the shelves showed them, and
+    the filter only knew the key, so "World War II" found nothing on a title the card tagged
+    with it. The label is read in the active vocabulary, the one both callers scope `dt` to, and
+    uncorrelated so the label lookup runs once per query rather than once per tag row. Shared by
+    `_filters` and `dna_tiers_for`, which have to agree clause for clause.
+    """
+    leaf = "split_part(lower(dt.term), '.', 2)"
+    return (
+        f"(lower(dt.term) = {needle} OR {leaf} = {needle}"
+        f" OR replace({leaf}, '_', ' ') = {needle}"
+        f" OR dt.term IN (SELECT dm.term FROM dna_term dm WHERE dm.version = {dna_terms.ACTIVE_VERSION}"
+        f" AND lower(btrim(dm.label)) = {needle}))"
+    )
+
+
 def _filters(
     *,
     kinds: Sequence[str],
@@ -284,8 +306,7 @@ def _filters(
         needle = arg(dna.strip().lower())
         where.append(
             "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id"
-            f" AND dt.version = {dna_terms.ACTIVE_VERSION} AND ("
-            f"lower(dt.term) = {needle} OR split_part(lower(dt.term), '.', 2) = {needle}))"
+            f" AND dt.version = {dna_terms.ACTIVE_VERSION} AND {_dna_term_matches(needle)})"
         )
     if owned_only:
         where.append("t.is_owned")
@@ -377,7 +398,7 @@ async def dna_tiers_for(
         FROM dna_tagged dt
         WHERE dt.title_id = ANY($1::int[])
           AND dt.version = {dna_terms.ACTIVE_VERSION}
-          AND (lower(dt.term) = $2 OR split_part(lower(dt.term), '.', 2) = $2)
+          AND {_dna_term_matches("$2")}
         ORDER BY dt.title_id, dt.tier
         """,
         [int(t) for t in title_ids],

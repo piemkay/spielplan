@@ -418,7 +418,9 @@ async def board(
     runtime_max: int | None = Query(None, ge=1),
     runtime_min: int | None = Query(None, ge=1),
     seen: Literal["any", "seen", "unseen"] = "any",
-    dna: str | None = Query(None, description='§6.3: a term, bare or facet-qualified.'),
+    dna: str | None = Query(
+        None, description="§6.3: a term by its id, bare or facet-qualified, or by its label."
+    ),
 ) -> dict[str, Any]:
     """§6.3's board: every rated title of this kind, in tiers, best-first."""
     return await _payload(

@@ -1231,6 +1231,40 @@ async def test_a_dna_predicate_reaches_both_tiers_and_keeps_them_apart(db, tagge
     assert matched[3] == ["projected"]
 
 
+async def test_a_dna_predicate_matches_the_name_a_member_reads(db, tagged):
+    """Decision 486 clause 4 names a term by its shipped label, or by its leaf in words where none
+    was shipped, and never by its id - so that is the word a member types into the tag box. The
+    filter knew only the id and its leaf, and "World War II" found nothing on a title the card
+    tagged with it (WG's integration note of the 2026-09-25 user test). Both names select what
+    the id selects, and `dna_tiers_for` - which has to agree with the filter clause for clause -
+    still reports the tier that admitted each row."""
+    await db.execute("UPDATE dna_term SET label = 'Warm and Snug' WHERE term = 'mood.cosy'")
+    await db.execute(
+        "INSERT INTO dna_term (version, term, facet) VALUES ('v1', 'mood.slow_burn', 'mood')"
+    )
+    await db.execute(
+        "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, n_sources) "
+        "VALUES (2, 'v1', 'mood.slow_burn', 'mood', 2, 0.9, 1)"
+    )
+
+    by_label = await read.items(
+        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="  Warm and snug ")
+    )
+    assert {i.title_id for i in by_label} == {1, 3}
+    matched = await library.dna_tiers_for(db, title_ids=[1, 3], dna="warm and snug")
+    assert matched == {1: ["extracted", "projected"], 3: ["projected"]}
+
+    unlabelled = await read.items(
+        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="slow burn")
+    )
+    assert {i.title_id for i in unlabelled} == {2}, "a term with no label is read by its leaf"
+
+    stranger = await read.items(
+        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="warm")
+    )
+    assert stranger == [], "a label is a name, matched whole, not a substring search"
+
+
 async def test_no_rank_filter_puts_a_threshold_on_a_weight(db, tagged):
     """§4.1 rule 2: a 0.5 confidence cut deletes 44% of the extracted tier. Title 1's tag has
     confidence 0.2 and its projection weight 0.1 — both far under any cut somebody would reach

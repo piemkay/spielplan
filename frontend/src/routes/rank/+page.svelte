@@ -148,7 +148,8 @@
     <!-- The first box searches names and aliases and nothing else (`db/library.py`'s `q`), so
          it claims nothing more: "title or DNA term, e.g. cosy" sent people typing a tag into a
          box that cannot find one, the lie Home's box shed in M4.9 (finding 19). The tag box is
-         the second one, and it takes a bare tag or a facet-qualified one. [decision 486] -->
+         the second one, and it takes a tag by the name the title card shows for it (its label),
+         or by its id, bare or facet-qualified - `db/library._dna_term_matches`. [decision 486] -->
     <input
       type="search"
       placeholder="filter by title"

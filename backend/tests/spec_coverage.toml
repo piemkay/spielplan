@@ -1788,16 +1788,17 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-board-filters"
-spec = "§6.3 Filters (with §4.1 rules 1, 2, 5)"
+spec = "§6.3 Filters (with §4.1 rules 1, 2, 5); decision 486"
 milestone = "M3"
 kind = "integration"
-what = "The Rank board filters on genre, decade, runtime and seen-state, and on a DNA predicate written either bare (`cosy`) or facet-qualified (`mood.cosy`); the predicate matches rows of both DNA tiers and every survivor still reports which tier matched it; no filter applies a threshold to salience, confidence or n_sources; each filter narrows on its own, combining them intersects, and none of them suspends the kind partition."
+what = "The Rank board filters on genre, decade, runtime and seen-state, and on a DNA predicate written either bare (`cosy`) or facet-qualified (`mood.cosy`) or as the name a member reads for the term - its shipped label, or its leaf in words where none was shipped (decision 486 clause 4); the predicate matches rows of both DNA tiers and every survivor still reports which tier matched it; no filter applies a threshold to salience, confidence or n_sources; each filter narrows on its own, combining them intersects, and none of them suspends the kind partition."
 why = "§12's M3 row names \"filters\" as M3 contents and §6.3 names six dimensions, two of which (runtime, DNA facet/term) the M0 catalog filter does not have. `dna_tag` stores the term the way §4.3 spells a vocabulary id -- `facet.term`, already qualified, which is how the corpus ships it -- so it is the BARE form that is derived at query time, and M4.9 finding 9 is that this clause had it backwards and the predicate was written to match; §4.1 rule 2 forbids the confidence cut the obvious implementation reaches for, and rule 1 forbids answering the predicate from a union that has lost the tier."
 tests = [
     "backend/tests/test_rank_integration.py::test_each_rank_filter_narrows_the_board_on_its_own",
     "backend/tests/test_rank_integration.py::test_combining_rank_filters_intersects",
     "backend/tests/test_rank_integration.py::test_a_dna_predicate_matches_bare_and_facet_qualified_alike",
     "backend/tests/test_rank_integration.py::test_a_dna_predicate_reaches_both_tiers_and_keeps_them_apart",
+    "backend/tests/test_rank_integration.py::test_a_dna_predicate_matches_the_name_a_member_reads",
     "backend/tests/test_rank_integration.py::test_no_rank_filter_puts_a_threshold_on_a_weight",
     "backend/tests/test_rank_integration.py::test_no_filter_suspends_the_kind_partition",
     "backend/tests/test_rank_integration.py::test_the_queue_pool_is_the_whole_board_and_not_the_filtered_view",
